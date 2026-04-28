@@ -1,0 +1,12 @@
+source_file,part_number,description,quantity,page_roles,material,thickness_mm,finish,colour,revision,dates,overall_length_mm,overall_width_mm,overall_sizes_mm,dimensions_mm,angles_deg,hole_sizes_mm,slot_sizes_mm,manufacturing_features,operations,process_notes,estimated_cut_length_mm,estimated_hole_count,estimated_slot_like_features,estimated_bend_line_count,blank_length_mm,blank_width_mm,material_cost_gbp,total_time_min,unit_labour_cost_gbp,unit_total_cost_gbp,extended_total_cost_gbp
+9714-GA MX TOWER - DOUBLE [B].PDF,8187C-01,UPPER SECTION,2,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187E-01,UPPER MAIN PANEL,2,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187E-02,UPPER SIDE PANEL,2,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187J-01,SINGLE BATTERY HOLDER,1,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187K-01,DOUBLE BATTERY HOLDER,2,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187L-01,MAIN GRAPHIC,2,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187L-02,SIDE GRAPHIC,1,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,8187L-03,FACT TAG GRAPHIC,8,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,9714-GA-A,MX TOWER,1,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,9714-GA-B,MX TOWER,1,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0
+9714-GA MX TOWER - DOUBLE [B].PDF,9714D-GA- HEADER,ASSEMBLY,1,assembly,,,,,,,,,,,,,,laser=False; fold=False; holes=0; slots=0; bends=0; finish=False,,,0.0,0,0,0,,,,0,0,0.0,0.0

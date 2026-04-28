@@ -7,7 +7,7 @@ from estimate_template_parser import write_estimate_template_parse
 from file_scan import list_input_files, scan_file
 from historical_jobs import build_history_corpus
 from rag_transformer import transform_scan_summary_to_historical_job_record
-from sql_export import export_json_files_to_sqlserver_sql, export_single_json_file_to_sqlserver_sql
+from sql_export import export_json_files_to_sqlserver_sql
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,7 +18,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-history-corpus", action="store_true", help="Build a retrieval corpus from paired historical spreadsheets and drawings.")
     parser.add_argument("--transform-scan-json", type=str, help="Transform an existing scan JSON into a historical_job_record schema.")
     parser.add_argument("--parse-estimate-template", type=str, help="Parse an estimate workbook template and extract formula structures.")
-    parser.add_argument("--export-json-to-sql", type=str, help="Export a single scan JSON file into one SQL Server insert script.")
     parser.add_argument("--export-json-dir-to-sql", type=str, help="Export all scan JSON files in a folder into one SQL Server insert script.")
     parser.add_argument("--sql-output", type=str, help="Optional output path for the generated SQL Server SQL script.")
     return parser.parse_args()
@@ -51,17 +50,6 @@ def main() -> None:
         output_path = workbook_path.with_name(f"{workbook_path.stem}.formula_parse.json")
         written = write_estimate_template_parse(workbook_path, output_path)
         print(f"Estimate template parse written to: {written}")
-        return
-
-    if args.export_json_to_sql:
-        json_path = Path(args.export_json_to_sql)
-        if not json_path.exists():
-            print(f"JSON file not found: {json_path}")
-            return
-        output_path = Path(args.sql_output) if args.sql_output else (OUTPUT_DIR / "sql" / f"{json_path.stem}.sql")
-        written = export_single_json_file_to_sqlserver_sql(json_path, output_path)
-        print(f"SQL Server export written to: {written}")
-        print(f"JSON file included: {json_path.name}")
         return
 
     if args.export_json_dir_to_sql:
