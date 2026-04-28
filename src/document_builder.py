@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List
 
 
@@ -43,7 +44,86 @@ def _is_reference_like_part(part_number: Any) -> bool:
     if not part_number:
         return False
     upper = str(part_number).strip().upper()
-    return upper.startswith(("FIXING", "REF", "PA -", "PA-"))
+    return upper.startswith(("FIXING", "REF", "PA -", "PA-")) or "-REF" in upper or "_REF" in upper
+
+
+def _is_valid_part_identifier(part_number: Any) -> bool:
+    if not part_number:
+        return False
+    upper = str(part_number).strip().upper()
+    if _is_assembly_identifier(upper) or _is_reference_like_part(upper):
+        return False
+    if upper in {
+        "ALUMINIUM",
+        "ALUMINUM",
+        "MILD STEEL",
+        "STAINLESS STEEL",
+        "TIMBER",
+        "TIMBER-BASED",
+        "PLYWOOD",
+        "PVC",
+    }:
+        return False
+    if upper.endswith((" - ALUMINIUM", " - ALUMINUM", " - STEEL", " - TIMBER", " - PLYWOOD")):
+        return False
+    if upper in {"A-A", "B-B", "C-C", "D-D", "E-E", "F-F"}:
+        return False
+    if upper.startswith(("SCALE ", "DRAWING ", "REV ", "DESCRIPTION ")):
+        return False
+    if re.search(r"\s-\s[A-Z]{3,}$", upper):
+        return False
+    if len(upper) > 40:
+        return False
+    return True
+
+
+def _is_component_sheet(
+    page_role: Any,
+    title_block: Dict[str, Any],
+    page_target_part_numbers: List[str],
+    cues: Dict[str, Any],
+    ops: List[str],
+) -> bool:
+    if page_role == "detail":
+        return True
+    if len(page_target_part_numbers) != 1:
+        return False
+    if title_block.get("materials") or title_block.get("surface_finishes") or title_block.get("thicknesses_mm"):
+        return True
+    if cues.get("flat_pattern_detected") or cues.get("angles_deg") or cues.get("hole_sizes_mm"):
+        return True
+    meaningful_ops = [operation for operation in ops if operation != "handling"]
+    return bool(meaningful_ops)
+
+
+def _prefer_local_title_block_values(page_role: Any, values: List[Any], allow_on_assembly: bool = False) -> List[Any]:
+    if not values:
+        return []
+    if page_role == "detail":
+        return values
+    if allow_on_assembly:
+        return values
+    return []
+
+
+def _prefer_local_scalar(page_role: Any, value: Any, allow_on_assembly: bool = False) -> Any:
+    if value in (None, "", []):
+        return None
+    if page_role == "detail":
+        return value
+    if allow_on_assembly:
+        return value
+    return None
+
+
+def _effective_part_page_role(page_role: Any, title_block_drawing_numbers: List[str], component_sheet: bool) -> Any:
+    valid_component_numbers = [
+        value for value in title_block_drawing_numbers
+        if _is_valid_part_identifier(value)
+    ]
+    if component_sheet and len(valid_component_numbers) == 1 and not _is_assembly_identifier(valid_component_numbers[0]):
+        return "detail"
+    return page_role
 
 
 def _first_numeric_thickness(values: List[Any]) -> Any:
@@ -53,6 +133,18 @@ def _first_numeric_thickness(values: List[Any]) -> Any:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _clean_finish_values(values: List[Any]) -> List[Any]:
+    cleaned: List[Any] = []
+    for value in values:
+        if value in (None, "", []):
+            continue
+        upper = str(value).strip().upper()
+        if upper in {"SEE ASSEMBLY DRAWING", "SEE INDIVIDUAL DRAWINGS", "N/A"}:
+            continue
+        cleaned.append(value)
+    return _dedupe(cleaned)
 
 
 def merge_page_analysis(summary: Dict[str, Any], geometry_pages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -306,13 +398,13 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     document_bom_lookup = {
         row["part_number"]: row
         for row in summary.get("document_analysis", {}).get("bom_rows", [])
-        if not _is_assembly_identifier(row.get("part_number"))
+        if _is_valid_part_identifier(row.get("part_number"))
     }
     document_primary_thickness = summary.get("document_analysis", {}).get("primary_fields", {}).get("thickness_mm")
 
     for row in summary.get("document_analysis", {}).get("bom_rows", []):
         pn = row["part_number"]
-        if _is_assembly_identifier(pn) or _is_reference_like_part(pn):
+        if not _is_valid_part_identifier(pn):
             continue
         parts[pn] = _empty_part_record(
             part_number=pn,
@@ -340,24 +432,27 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
             page_target_part_numbers.extend(
                 [
                     value for value in title_block_drawing_numbers
-                    if not _is_assembly_identifier(value) and not _is_reference_like_part(value)
+                    if _is_valid_part_identifier(value)
                 ]
             )
             if not page_target_part_numbers:
                 page_target_part_numbers.extend(
                     [
                         value for value in page_part_numbers
-                        if not _is_assembly_identifier(value) and not _is_reference_like_part(value)
+                        if _is_valid_part_identifier(value)
                     ]
                 )
         else:
-            if len(title_block_drawing_numbers) == 1 and not _is_assembly_identifier(title_block_drawing_numbers[0]) and not _is_reference_like_part(title_block_drawing_numbers[0]):
+            if len(title_block_drawing_numbers) == 1 and _is_valid_part_identifier(title_block_drawing_numbers[0]):
                 page_target_part_numbers.extend(title_block_drawing_numbers)
 
         page_target_part_numbers = _dedupe(page_target_part_numbers)
 
+        component_sheet = _is_component_sheet(page_role, title_block, page_target_part_numbers, cues, ops)
+        effective_page_role = _effective_part_page_role(page_role, title_block_drawing_numbers, component_sheet)
+
         for pn in page_target_part_numbers:
-            if _is_assembly_identifier(pn) or _is_reference_like_part(pn):
+            if not _is_valid_part_identifier(pn):
                 continue
             if pn not in parts:
                 parts[pn] = _empty_part_record(part_number=pn)
@@ -365,20 +460,22 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
             part = parts[pn]
             if page["page_number"] not in part["pages"]:
                 part["pages"].append(page["page_number"])
-            if page_role:
-                part["page_roles"].append(page_role)
+            if effective_page_role:
+                part["page_roles"].append(effective_page_role)
 
-            part["materials"].extend(title_block.get("materials", []))
-            part["surface_finishes"].extend(title_block.get("surface_finishes", []))
-            part["colours"].extend(title_block.get("colours", []))
-            part["revisions"].extend(title_block.get("revisions", []))
-            part["drawing_numbers"].extend([value for value in title_block.get("drawing_numbers", []) if not _is_assembly_identifier(value)])
-            part["thicknesses_mm"].extend(title_block.get("thicknesses_mm", []))
-            part["dates"].extend(title_block.get("dates", []))
-            part["sheet_refs"].extend(title_block.get("sheet_refs", []))
-            part["scales"].extend(title_block.get("scale", []))
-            part["clients"].extend(title_block.get("clients", []))
-            part["project_titles"].extend(title_block.get("project_titles", []))
+            allow_local_component_data = bool(component_sheet)
+
+            part["materials"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("materials", []), allow_on_assembly=allow_local_component_data))
+            part["surface_finishes"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("surface_finishes", []), allow_on_assembly=allow_local_component_data))
+            part["colours"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("colours", []), allow_on_assembly=allow_local_component_data))
+            part["revisions"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("revisions", []), allow_on_assembly=True))
+            part["drawing_numbers"].extend([value for value in _prefer_local_title_block_values(effective_page_role, title_block.get("drawing_numbers", []), allow_on_assembly=True) if _is_valid_part_identifier(value)])
+            part["thicknesses_mm"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("thicknesses_mm", []), allow_on_assembly=allow_local_component_data))
+            part["dates"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("dates", []), allow_on_assembly=True))
+            part["sheet_refs"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("sheet_refs", []), allow_on_assembly=True))
+            part["scales"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("scale", []), allow_on_assembly=True))
+            part["clients"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("clients", []), allow_on_assembly=allow_local_component_data))
+            part["project_titles"].extend(_prefer_local_title_block_values(effective_page_role, title_block.get("project_titles", []), allow_on_assembly=allow_local_component_data))
             part["overall_sizes_mm"].extend(dimensions.get("overall_sizes_mm", []))
             part["all_dimensions_mm"].extend(dimensions.get("all_dimensions_mm", []))
             part["angles_deg"].extend(cues.get("angles_deg", []))
@@ -396,11 +493,11 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
             part["mirrored_detected"] = part["mirrored_detected"] or cues.get("mirrored_detected", False)
             part["hanging_hole_detected"] = part["hanging_hole_detected"] or cues.get("hanging_hole_detected", False)
             part["slot_detected"] = part["slot_detected"] or cues.get("slot_detected", False)
-            part["assembly_candidate"] = part["assembly_candidate"] or page_role == "assembly"
+            part["assembly_candidate"] = part["assembly_candidate"] or effective_page_role == "assembly"
             part["textual_operations"].extend(ops)
-            part["normalized_material"] = part["normalized_material"] or title_block.get("normalized", {}).get("primary_material")
-            part["normalized_finish"] = part["normalized_finish"] or title_block.get("normalized", {}).get("primary_finish")
-            part["normalized_thickness_mm"] = part["normalized_thickness_mm"] or title_block.get("normalized", {}).get("primary_thickness_mm")
+            part["normalized_material"] = part["normalized_material"] or _prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_material"), allow_on_assembly=allow_local_component_data)
+            part["normalized_finish"] = part["normalized_finish"] or _prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_finish"), allow_on_assembly=allow_local_component_data)
+            part["normalized_thickness_mm"] = part["normalized_thickness_mm"] or _prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_thickness_mm"), allow_on_assembly=allow_local_component_data)
 
             if part["description"] is None and pn in document_bom_lookup:
                 part["description"] = document_bom_lookup[pn].get("description")
@@ -438,6 +535,25 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
 
             _rollup_geometry(part["geometry_rollup"], geometry)
 
+    for part in parts.values():
+        if part.get("pages"):
+            continue
+        pn = part.get("part_number")
+        if not pn:
+            continue
+        matching_pages = [
+            page for page in summary["pages"]
+            if pn in (page.get("normalized_text") or "")
+        ]
+        if not matching_pages:
+            continue
+        matching_pages = sorted(matching_pages, key=lambda item: (0 if item.get("page_role", {}).get("primary_role") == "detail" else 1, item.get("page_number", 9999)))
+        chosen_page = matching_pages[0]
+        chosen_role = chosen_page.get("page_role", {}).get("primary_role")
+        part["pages"].append(chosen_page["page_number"])
+        if chosen_role:
+            part["page_roles"].append(chosen_role)
+
     result: List[Dict[str, Any]] = []
     for part in parts.values():
         for key in [
@@ -467,10 +583,16 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
             "textual_operations",
         ]:
             part[key] = _dedupe(part[key])
+        if part.get("normalized_material"):
+            part["materials"] = [part["normalized_material"]]
+        if part.get("normalized_finish"):
+            part["surface_finishes"] = [part["normalized_finish"]]
+        else:
+            part["surface_finishes"] = _clean_finish_values(part.get("surface_finishes", []))
         part["review_flags"] = _dedupe(part["review_flags"])
         if not part.get("drawing_numbers") and not _is_assembly_identifier(part.get("part_number")):
             part["drawing_numbers"] = [part["part_number"]]
-        if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None:
+        if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None and "detail" in part.get("page_roles", []):
             part["normalized_thickness_mm"] = document_primary_thickness
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(document_primary_thickness)]
@@ -500,14 +622,14 @@ def build_document_validation(summary: Dict[str, Any], parts: List[Dict[str, Any
         if len(part.get("surface_finishes", [])) > 2:
             issues.append({"severity": "warning", "code": "mixed_finishes", "part_number": part.get("part_number"), "reason": "Part accumulated multiple finishes, suggesting assembly contamination."})
         if part.get("page_roles") and "assembly" in part.get("page_roles", []) and "detail" not in part.get("page_roles", []):
-            issues.append({"severity": "warning", "code": "assembly_only_part_record", "part_number": part.get("part_number"), "reason": "Part record is derived from assembly pages only."})
+            issues.append({"severity": "info", "code": "assembly_only_part_record", "part_number": part.get("part_number"), "reason": "Part record is derived from assembly pages only."})
         if not part.get("normalized_material") and part.get("manufacturing_features", {}).get("laser_required"):
             issues.append({"severity": "warning", "code": "missing_material_for_fabrication", "part_number": part.get("part_number"), "reason": "Fabrication cues exist but no reliable material was extracted."})
 
     status = "ok_for_pricing"
     if any(issue["severity"] == "error" for issue in issues):
         status = "failed_part_extraction"
-    elif issues:
+    elif any(issue["severity"] == "warning" for issue in issues):
         status = "needs_review"
 
     return {

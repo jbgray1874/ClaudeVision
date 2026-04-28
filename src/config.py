@@ -11,6 +11,7 @@ JSON_DIR = OUTPUT_DIR / "json"
 LOG_DIR = OUTPUT_DIR / "logs"
 TEXT_DIR = OUTPUT_DIR / "text"
 CSV_DIR = OUTPUT_DIR / "csv"
+SQL_DIR = OUTPUT_DIR / "sql"
 PAGE_IMAGES_DIR = OUTPUT_DIR / "page_images"
 HISTORY_JSON_DIR = OUTPUT_DIR / "history_json"
 HISTORY_CSV_DIR = OUTPUT_DIR / "history_csv"
@@ -19,6 +20,7 @@ ARCHIVE_JSON_DIR = ARCHIVE_DIR / "json"
 ARCHIVE_TEXT_DIR = ARCHIVE_DIR / "text"
 ARCHIVE_LOG_DIR = ARCHIVE_DIR / "logs"
 ARCHIVE_CSV_DIR = ARCHIVE_DIR / "csv"
+ARCHIVE_SQL_DIR = ARCHIVE_DIR / "sql"
 
 SUPPORTED_EXTENSIONS = {".pdf"}
 SPREADSHEET_EXTENSIONS = {".xlsx", ".xls", ".csv", ".tsv"}
@@ -261,6 +263,7 @@ def ensure_directories() -> None:
         LOG_DIR,
         TEXT_DIR,
         CSV_DIR,
+        SQL_DIR,
         PAGE_IMAGES_DIR,
         HISTORY_JSON_DIR,
         HISTORY_CSV_DIR,
@@ -269,5 +272,6 @@ def ensure_directories() -> None:
         ARCHIVE_TEXT_DIR,
         ARCHIVE_LOG_DIR,
         ARCHIVE_CSV_DIR,
+        ARCHIVE_SQL_DIR,
     ]:
         path.mkdir(parents=True, exist_ok=True)

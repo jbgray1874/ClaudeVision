@@ -20,6 +20,7 @@ from document_builder import build_document_writeup, merge_page_analysis
 from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_document
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
 from geometry_analysis import analyse_document_geometry
+from sql_export import build_run_metadata, write_postgres_insert_sql
 
 
 def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: str = "*.pdf") -> List[Path]:
@@ -62,6 +63,10 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
     unique_part_numbers = sorted(set(part_numbers))
     detail_cues = any(token in full_text.upper() for token in ["FLAT PATTERN", "DETAIL "])
     drawing_assembly_hint = "ASSEMBLY" in normalize_text(title_block_text).upper()
+    title_block_drawing_numbers = re.findall(config.DRAWING_NUMBER_PATTERN, normalize_text(title_block_text), flags=re.IGNORECASE)
+    title_block_drawing_number_count = len(title_block_drawing_numbers)
+    page_text_upper = normalize_text(page_text).upper()
+    bom_header_detected = all(token in page_text_upper for token in ["ITEM", "DWG NO", "QTY"])
 
     signals: List[str] = []
     primary_role = "detail"
@@ -74,8 +79,16 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
         signals.append("assembly_title_detected")
     if detail_cues:
         signals.append("flat_pattern_detected")
+    if bom_header_detected:
+        signals.append("bom_header_detected")
+    if title_block_drawing_number_count == 1:
+        signals.append("single_title_block_drawing_number")
 
-    if bom_row_count > 0 or len(unique_part_numbers) > 1:
+    if detail_cues and title_block_drawing_number_count == 1:
+        primary_role = "detail"
+    elif bom_header_detected and (bom_row_count > 0 or len(unique_part_numbers) > 1):
+        primary_role = "assembly"
+    elif bom_row_count >= 2 and len(unique_part_numbers) > 1:
         primary_role = "assembly"
     elif detail_cues and len(unique_part_numbers) <= 1:
         primary_role = "detail"
@@ -224,6 +237,7 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
             "log_dir": str(config.LOG_DIR),
             "text_dir": str(config.TEXT_DIR),
             "csv_dir": str(config.CSV_DIR),
+            "sql_dir": str(config.SQL_DIR),
             "page_images_dir": str(config.PAGE_IMAGES_DIR),
         },
         "pages": [],
@@ -273,16 +287,35 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
 
 
 def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
+    metadata = build_run_metadata(summary)
     stem = Path(summary["source_file"]).stem
+    version_label = metadata["source_file_version_label"]
     timestamp = summary.get("scanned_at", datetime.now().isoformat(timespec="seconds")).replace(":", "-").replace("T", "_")
     json_path = config.JSON_DIR / f"{stem}.json"
     text_path = config.TEXT_DIR / f"{stem}.txt"
     log_path = config.LOG_DIR / f"{stem}.log"
     csv_path = config.CSV_DIR / "part_estimate_inputs.csv"
-    archive_json_path = config.ARCHIVE_JSON_DIR / f"{stem}_{timestamp}.json"
-    archive_text_path = config.ARCHIVE_TEXT_DIR / f"{stem}_{timestamp}.txt"
-    archive_log_path = config.ARCHIVE_LOG_DIR / f"{stem}_{timestamp}.log"
-    archive_csv_path = config.ARCHIVE_CSV_DIR / f"{stem}_{timestamp}.csv"
+    sql_path = config.SQL_DIR / f"{stem}.sql"
+    archive_json_path = config.ARCHIVE_JSON_DIR / f"{stem}_{version_label}_{timestamp}.json"
+    archive_text_path = config.ARCHIVE_TEXT_DIR / f"{stem}_{version_label}_{timestamp}.txt"
+    archive_log_path = config.ARCHIVE_LOG_DIR / f"{stem}_{version_label}_{timestamp}.log"
+    archive_csv_path = config.ARCHIVE_CSV_DIR / f"{stem}_{version_label}_{timestamp}.csv"
+    archive_sql_path = config.ARCHIVE_SQL_DIR / f"{stem}_{version_label}_{timestamp}.sql"
+
+    summary["saved_output_paths"] = {
+        "json": str(json_path),
+        "text": str(text_path),
+        "log": str(log_path),
+        "csv": str(csv_path),
+        "sql": str(sql_path),
+    }
+    summary["archived_output_paths"] = {
+        "json": str(archive_json_path),
+        "text": str(archive_text_path),
+        "log": str(archive_log_path),
+        "csv": str(archive_csv_path),
+        "sql": str(archive_sql_path),
+    }
 
     with json_path.open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
@@ -343,15 +376,18 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
                     "archive_text": str(archive_text_path),
                     "archive_log": str(archive_log_path),
                     "archive_csv": str(archive_csv_path),
+                    "archive_sql": str(archive_sql_path),
                 },
                 indent=2,
             )
         )
 
     append_rows_to_csv(csv_path, build_estimate_input_rows(summary))
+    write_postgres_insert_sql(summary, sql_path)
     shutil.copy2(json_path, archive_json_path)
     shutil.copy2(text_path, archive_text_path)
     shutil.copy2(log_path, archive_log_path)
+    shutil.copy2(sql_path, archive_sql_path)
     build_rows = build_estimate_input_rows(summary)
     if build_rows:
         with archive_csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -360,12 +396,6 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
             writer = csv.DictWriter(handle, fieldnames=config.CSV_HEADERS)
             writer.writeheader()
             writer.writerows(build_rows)
-    summary["archived_output_paths"] = {
-        "json": str(archive_json_path),
-        "text": str(archive_text_path),
-        "log": str(archive_log_path),
-        "csv": str(archive_csv_path),
-    }
     return json_path, text_path, log_path, csv_path
 
 

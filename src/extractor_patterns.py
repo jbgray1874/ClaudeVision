@@ -289,7 +289,52 @@ def _looks_like_part_number(value: str) -> bool:
         return False
     if normalized.startswith(("ITEM", "QTY", "DESCRIPTION", "SHEET", "SCALE")):
         return False
+    if normalized in {"A-A", "B-B", "C-C", "D-D", "E-E", "F-F"}:
+        return False
+    if normalized.endswith(("-FLAT", "-ASSEMBLY", "-WELD", "-REV", "-DRAWING")):
+        return False
+    if re.search(r"\b(?:BLACK|WHITE|RAW|RAL|SEMI|GLOSS|MATT|TEXTURED)\b", normalized):
+        return False
+    parts = [item.strip() for item in normalized.split("-")]
+    if len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+        return False
+    if len(parts) == 2 and len(parts[0]) <= 2 and len(parts[1]) <= 2:
+        return False
     return bool(re.fullmatch(r"[A-Z0-9_]+(?:\s*-\s*[A-Z0-9_]+){1,4}", normalized))
+
+
+def _looks_like_noise_description(value: str) -> bool:
+    normalized = normalize_text(value).upper()
+    if not normalized:
+        return True
+    if normalized.startswith(("DWG NO", "DESCRIPTION", "QTY", "ITEM")):
+        return True
+    if "APPROPRIATE CERTIFICATION" in normalized:
+        return True
+    if "RIDGEFIELD" in normalized:
+        return True
+    if "COPT OAK BARN" in normalized:
+        return True
+    if "GENERAL TOLERANCES" in normalized:
+        return True
+    if "THIS DRAWING IS THE PROPERTY" in normalized:
+        return True
+    alpha_count = sum(1 for char in normalized if char.isalpha())
+    digit_count = sum(1 for char in normalized if char.isdigit())
+    if digit_count > alpha_count and digit_count > 4:
+        return True
+    return False
+
+
+def _is_reasonable_hole_size(value: str) -> bool:
+    number = _safe_float(value)
+    if number is None:
+        return False
+    if number < 1.0:
+        return False
+    if number > 50.0:
+        return False
+    return True
 
 
 def _dedupe_strings(values: List[str]) -> List[str]:
@@ -630,13 +675,18 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
     matches = re.findall(QTY_TABLE_ROW_PATTERN, text, flags=re.IGNORECASE)
     for item_no, part_no, description, qty in matches:
         normalized_part = normalize_text(part_no)
+        normalized_description = normalize_text(description)
         if not _looks_like_part_number(normalized_part):
+            continue
+        if _looks_like_noise_description(normalized_description):
+            continue
+        if _safe_int(qty) is None or _safe_int(qty) <= 0 or _safe_int(qty) > 250:
             continue
         rows.append(
             {
                 "item_number": item_no.strip(),
                 "part_number": normalized_part,
-                "description": normalize_text(description),
+                "description": normalized_description,
                 "quantity": _safe_int(qty),
             }
         )
@@ -656,7 +706,9 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
             continue
         if len(normalized_description) < 2:
             continue
-        if normalized_description.upper().startswith(("DWG NO", "DESCRIPTION", "QTY")):
+        if _looks_like_noise_description(normalized_description):
+            continue
+        if _safe_int(qty) is None or _safe_int(qty) <= 0 or _safe_int(qty) > 250:
             continue
         rows.append(
             {
@@ -693,10 +745,8 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
         if number < 5.0 or number > 180.0:
             continue
         angles.append(value)
-    hole_sizes = _dedupe_strings(
-        _findall_unique(HOLE_PATTERN, text, flags=re.IGNORECASE)
-        + _findall_unique(DIAMETER_HOLE_PATTERN, text, flags=re.IGNORECASE)
-    )
+    hole_candidates = _findall_unique(HOLE_PATTERN, text, flags=re.IGNORECASE) + _findall_unique(DIAMETER_HOLE_PATTERN, text, flags=re.IGNORECASE)
+    hole_sizes = _dedupe_strings([value for value in hole_candidates if _is_reasonable_hole_size(value)])
     pitch_values = _findall_unique(PITCH_PATTERN, text, flags=re.IGNORECASE)
     radii = _findall_unique(RADIUS_PATTERN, text, flags=re.IGNORECASE)
     fold_values = _findall_unique(FOLD_VALUE_PATTERN, text, flags=re.IGNORECASE)
