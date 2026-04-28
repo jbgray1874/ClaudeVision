@@ -37,6 +37,17 @@ def _safe_int(value: Any) -> Optional[int]:
 
 
 def infer_primary_dimensions(part: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    normalized_geometry = part.get("normalized_geometry", {})
+    flat_box = normalized_geometry.get("bounding_box_flat_mm", {}) if isinstance(normalized_geometry, dict) else {}
+    flat_length = _safe_float(flat_box.get("length"))
+    flat_width = _safe_float(flat_box.get("width"))
+    if flat_length is not None and flat_width is not None:
+        return {
+            "overall_length_mm": flat_length,
+            "overall_width_mm": flat_width,
+            "all_dimensions_mm": sorted([flat_length, flat_width], reverse=True),
+        }
+
     dims = sorted(
         [_safe_float(value) for value in part.get("all_dimensions_mm", []) if _safe_float(value) is not None],
         reverse=True,
@@ -227,6 +238,11 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
     total_labour_cost = labour.get("total_labour_cost_gbp") or 0.0
     extended_total = round(extended_material_cost + total_labour_cost, 2)
     unit_total = round(extended_total / quantity, 2) if quantity else extended_total
+    margin_options = [
+        {"name": "low", "markup_pct": 10, "unit_sell_price_gbp": round(unit_total * 1.10, 2), "extended_sell_price_gbp": round(extended_total * 1.10, 2)},
+        {"name": "standard", "markup_pct": 20, "unit_sell_price_gbp": round(unit_total * 1.20, 2), "extended_sell_price_gbp": round(extended_total * 1.20, 2)},
+        {"name": "premium", "markup_pct": 35, "unit_sell_price_gbp": round(unit_total * 1.35, 2), "extended_sell_price_gbp": round(extended_total * 1.35, 2)},
+    ]
 
     return {
         "part_number": part.get("part_number"),
@@ -235,6 +251,29 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
         "material_estimate": material,
         "process_estimate": process,
         "labour_estimate": labour,
+        "normalized_geometry": part.get("normalized_geometry", {}),
+        "cost_breakdown": {
+            "material": {
+                "unit_material_mass_kg": material.get("unit_material_mass_kg"),
+                "unit_material_cost_gbp": material.get("unit_material_cost_gbp"),
+                "extended_material_cost_gbp": material.get("extended_material_cost_gbp"),
+            },
+            "labour": {
+                "unit_time_min": process.get("unit_time_min"),
+                "total_time_min": process.get("total_time_min"),
+                "costs_gbp": labour.get("costs_gbp", {}),
+                "total_labour_cost_gbp": labour.get("total_labour_cost_gbp"),
+            },
+            "overhead": {
+                "unit_overhead_cost_gbp": None,
+                "extended_overhead_cost_gbp": None,
+            },
+            "unit_total_cost_gbp": unit_total,
+            "extended_total_cost_gbp": extended_total,
+            "margin_options": margin_options,
+        },
+        "risk_flags": part.get("risk_flags", []),
+        "alternative_processes": [],
         "unit_total_cost_gbp": unit_total,
         "extended_total_cost_gbp": extended_total,
         "notes": [
@@ -246,9 +285,34 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
 
 def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
     part_estimates = [estimate_part(part) for part in parts]
+    material_total = round(sum((item.get("material_estimate", {}).get("extended_material_cost_gbp") or 0.0) for item in part_estimates), 2)
+    labour_total = round(sum((item.get("labour_estimate", {}).get("total_labour_cost_gbp") or 0.0) for item in part_estimates), 2)
+    operation_totals: Dict[str, float] = {}
+    for item in part_estimates:
+        for op, cost in item.get("labour_estimate", {}).get("costs_gbp", {}).items():
+            operation_totals[op] = round(operation_totals.get(op, 0.0) + (cost or 0.0), 2)
+    document_total = round(sum(item["extended_total_cost_gbp"] for item in part_estimates), 2)
     return {
         "part_estimates": part_estimates,
-        "document_total_estimated_cost_gbp": round(sum(item["extended_total_cost_gbp"] for item in part_estimates), 2),
+        "document_total_estimated_cost_gbp": document_total,
+        "cost_breakdown": {
+            "material": {
+                "total": material_total,
+                "per_part": [
+                    {
+                        "part_number": item.get("part_number"),
+                        "extended_material_cost_gbp": item.get("material_estimate", {}).get("extended_material_cost_gbp"),
+                    }
+                    for item in part_estimates
+                ],
+            },
+            "labour": {
+                "total": labour_total,
+                "by_operation": operation_totals,
+            },
+            "overhead": {},
+            "margin_options": ["low", "standard", "premium"],
+        },
     }
 
 

@@ -399,6 +399,50 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     return json_path, text_path, log_path, csv_path
 
 
+def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
+    manufacturing_writeup = summary.get("manufacturing_writeup", {})
+    estimate_summary = summary.get("estimate_summary", {})
+    document_analysis = summary.get("document_analysis", {})
+    parts = manufacturing_writeup.get("parts", [])
+
+    summary["drawing_metadata"] = {
+        "source_file": summary.get("source_file"),
+        "full_path": summary.get("full_path"),
+        "page_count": summary.get("page_count"),
+        "scanned_at": summary.get("scanned_at"),
+        "pdf_metadata": summary.get("pdf_metadata", {}),
+        "document_analysis": document_analysis,
+        "run_metadata": summary.get("run_metadata", {}),
+    }
+    summary["assembly_summary"] = {
+        "document_overview": manufacturing_writeup.get("document_overview", {}),
+        "validation": manufacturing_writeup.get("validation", {}),
+        "assembly_relations": manufacturing_writeup.get("assembly_relations", {}),
+        "manufacturing_observations": manufacturing_writeup.get("manufacturing_observations", []),
+    }
+    summary["parts"] = parts
+    summary["cost_breakdown"] = estimate_summary.get("cost_breakdown", {})
+    summary["risk_flags"] = sorted(
+        {
+            flag
+            for part in parts
+            for flag in part.get("risk_flags", [])
+        }
+    )
+    summary["nesting_recommendations"] = {
+        "part_recommendations": [
+            {
+                "part_number": part.get("part_number"),
+                "requires_flat_blank": part.get("manufacturing_interpretation", {}).get("requires_flat_blank"),
+                "nesting_class": part.get("normalized_geometry", {}).get("nesting_class"),
+                "blank_area_m2": part.get("normalized_geometry", {}).get("blank_area_m2"),
+            }
+            for part in parts
+        ]
+    }
+    summary["alternative_processes"] = []
+
+
 def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
     plumber_pages = extract_with_pdfplumber(pdf_path)
     pypdf_pages = extract_with_pypdf(pdf_path)
@@ -408,6 +452,7 @@ def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, P
     summary = merge_page_analysis(summary, geometry_pages)
     summary["manufacturing_writeup"] = build_document_writeup(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"])
+    _build_additive_summary_sections(summary)
 
     output_paths = write_outputs(summary)
     return summary, output_paths

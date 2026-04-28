@@ -1,4 +1,4 @@
-import re
+import rerunn
 from typing import Any, Dict, List
 
 
@@ -8,6 +8,13 @@ def _dedupe(values: List[Any]) -> List[Any]:
         if value not in seen and value not in (None, "", []):
             seen.append(value)
     return seen
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_assembly_identifier(part_number: Any) -> bool:
@@ -135,6 +142,144 @@ def _first_numeric_thickness(values: List[Any]) -> Any:
     return None
 
 
+def _should_assign_dimensions(page_role: Any, component_sheet: bool) -> bool:
+    return page_role == "detail" or component_sheet
+
+
+def _pick_part_dimensions(part: Dict[str, Any], dimensions: Dict[str, Any]) -> Dict[str, Any]:
+    overall_sizes = dimensions.get("overall_sizes_mm", []) or []
+    if overall_sizes:
+        first_size = overall_sizes[0]
+        match = re.search(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)", str(first_size))
+        if match:
+            left = _safe_float(match.group(1))
+            right = _safe_float(match.group(2))
+            if left is not None and right is not None:
+                ordered = sorted([left, right], reverse=True)
+                return {
+                    "overall_length_mm": ordered[0],
+                    "overall_width_mm": ordered[1],
+                }
+
+    length = _safe_float(dimensions.get("overall_length_mm"))
+    width = _safe_float(dimensions.get("overall_width_mm"))
+    if length is not None and width is not None:
+        ordered = sorted([length, width], reverse=True)
+        return {
+            "overall_length_mm": ordered[0],
+            "overall_width_mm": ordered[1],
+        }
+
+    values = sorted(
+        [
+            _safe_float(value) for value in part.get("all_dimensions_mm", [])
+            if _safe_float(value) is not None and _safe_float(value) >= 10.0
+        ],
+        reverse=True,
+    )
+    return {
+        "overall_length_mm": values[0] if len(values) > 0 else None,
+        "overall_width_mm": values[1] if len(values) > 1 else None,
+    }
+
+
+def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
+    features = part.get("manufacturing_features", {})
+    geometry_confidence = features.get("geometry_reliability", 0.0) or 0.0
+    length = _safe_float(part.get("overall_length_mm"))
+    width = _safe_float(part.get("overall_width_mm"))
+    thickness = _safe_float(part.get("normalized_thickness_mm"))
+
+    flat_length = length
+    flat_width = width
+    if length is not None and width is not None:
+        flat_length = round(length + 20.0, 2)
+        flat_width = round(width + 20.0, 2)
+
+    bend_angles = [value for value in part.get("angles_deg", []) if value not in (None, "")]
+    bend_count = features.get("bend_count", 0) or 0
+    formed_height = None
+    if bend_angles:
+        angle_numbers = [_safe_float(value) for value in bend_angles if _safe_float(value) is not None]
+        if angle_numbers:
+            formed_height = round(max(angle_numbers), 2)
+    if formed_height is None and bend_count > 0 and thickness is not None:
+        formed_height = round(max(5.0, bend_count * thickness * 10.0), 2)
+
+    blank_area_m2 = None
+    if flat_length is not None and flat_width is not None:
+        blank_area_m2 = round((flat_length * flat_width) / 1_000_000.0, 4)
+
+    nesting_class = "unknown"
+    if flat_length is not None and flat_width is not None:
+        if flat_length >= 2000 or flat_width >= 1000:
+            nesting_class = "large_format"
+        elif flat_length >= flat_width * 5:
+            nesting_class = "linear"
+        elif bend_count > 0 or part.get("slot_detected"):
+            nesting_class = "awkward"
+        else:
+            nesting_class = "compact"
+
+    stock_form = part.get("manufacturing_interpretation", {}).get("stock_form") or ("sheet" if part.get("flat_pattern_detected") or flat_length or flat_width else "unknown")
+    profile_type = "flat"
+    if bend_count > 0:
+        profile_type = "folded"
+    elif part.get("hanging_hole_detected"):
+        profile_type = "hook"
+
+    return {
+        "stock_form": stock_form,
+        "profile_type": profile_type,
+        "bounding_box_flat_mm": {
+            "length": flat_length,
+            "width": flat_width,
+            "height": thickness,
+        },
+        "bounding_box_formed_mm": {
+            "length": length,
+            "width": width,
+            "height": formed_height,
+        },
+        "developed_length_mm": flat_length,
+        "developed_width_mm": flat_width,
+        "projected_area_m2": round((length * width) / 1_000_000.0, 4) if length is not None and width is not None else None,
+        "blank_area_m2": blank_area_m2,
+        "smallest_enclosing_rectangle_mm": {
+            "length": flat_length,
+            "width": flat_width,
+        },
+        "longest_edge_mm": length,
+        "cut_length_mm": features.get("cut_length_mm"),
+        "raw_cut_length_mm": features.get("raw_cut_length_mm"),
+        "pierce_count": part.get("geometry_rollup", {}).get("estimated_pierce_count", 0),
+        "hole_count": features.get("hole_count", 0),
+        "slot_count": features.get("slot_count", 0),
+        "bend_count": bend_count,
+        "bend_angles_deg": bend_angles,
+        "major_radii_mm": part.get("radii_mm", []),
+        "nesting_class": nesting_class,
+        "geometry_confidence": round(max(geometry_confidence, part.get("confidence", {}).get("dimensions", 0.0) or 0.0), 2),
+    }
+
+
+def _build_part_risk_flags(part: Dict[str, Any]) -> List[str]:
+    flags: List[str] = []
+    geometry = part.get("normalized_geometry", {})
+    flat = geometry.get("bounding_box_flat_mm", {})
+    length = _safe_float(flat.get("length"))
+    width = _safe_float(flat.get("width"))
+    if length is not None and width is not None and (length >= 2000 or width >= 1000):
+        flags.append("large_flat")
+    if (part.get("manufacturing_features", {}).get("bend_count", 0) or 0) >= 3:
+        flags.append("many_bends")
+    if part.get("hanging_hole_detected"):
+        flags.append("hanging_holes")
+    if part.get("manufacturing_features", {}).get("welding_required"):
+        flags.append("weld_required")
+    return flags
+
+
 def _clean_finish_values(values: List[Any]) -> List[Any]:
     cleaned: List[Any] = []
     for value in values:
@@ -237,6 +382,8 @@ def _empty_part_record(part_number: str, item_number: Any = None, description: A
         },
         "manufacturing_interpretation": {},
         "geometry_rollup": _empty_geometry_rollup(),
+        "normalized_geometry": {},
+        "risk_flags": [],
     }
 
 
@@ -275,8 +422,23 @@ def _build_process_routing(part: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _infer_hole_count(part: Dict[str, Any], geometry_confidence: float) -> int:
     text_hole_sizes = len(part.get("hole_sizes_mm", []))
     geometry_hole_count = part["geometry_rollup"].get("estimated_hole_count", 0) if geometry_confidence >= 0.55 else 0
+    pitch_values = [_safe_float(value) for value in part.get("pitch_values_mm", []) if _safe_float(value) is not None]
+    largest_span = max(
+        [
+            value for value in [
+                _safe_float(part.get("overall_length_mm")),
+                _safe_float(part.get("overall_width_mm")),
+            ] if value is not None
+        ],
+        default=None,
+    )
     if geometry_hole_count:
         return max(text_hole_sizes, geometry_hole_count)
+    if pitch_values and largest_span and (text_hole_sizes or part.get("hanging_hole_detected")):
+        pitch = max(pitch_values)
+        if pitch > 0:
+            estimated_from_pitch = max(1, int(round(largest_span / pitch)) + 1)
+            return max(text_hole_sizes, estimated_from_pitch)
     if "hole_machining" in part.get("textual_operations", []) and text_hole_sizes:
         return max(1, text_hole_sizes)
     return text_hole_sizes
@@ -390,6 +552,8 @@ def _interpret_part(part: Dict[str, Any]) -> Dict[str, Any]:
         "review_required": review_needed,
         "geometry_reliability": geometry_confidence,
     }
+    part["normalized_geometry"] = _build_normalized_geometry(part)
+    part["risk_flags"] = _build_part_risk_flags(part)
     return part
 
 
@@ -520,10 +684,12 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
                     except (TypeError, ValueError):
                         pass
 
-            if part["overall_length_mm"] is None and dimensions.get("overall_length_mm") is not None:
-                part["overall_length_mm"] = dimensions["overall_length_mm"]
-            if part["overall_width_mm"] is None and dimensions.get("overall_width_mm") is not None:
-                part["overall_width_mm"] = dimensions["overall_width_mm"]
+            if _should_assign_dimensions(effective_page_role, component_sheet):
+                page_dims = _pick_part_dimensions(part, dimensions)
+                if part["overall_length_mm"] is None and page_dims.get("overall_length_mm") is not None:
+                    part["overall_length_mm"] = page_dims["overall_length_mm"]
+                if part["overall_width_mm"] is None and page_dims.get("overall_width_mm") is not None:
+                    part["overall_width_mm"] = page_dims["overall_width_mm"]
 
             if part["normalized_thickness_mm"] is None:
                 part["normalized_thickness_mm"] = _first_numeric_thickness(part.get("thicknesses_mm", []))
@@ -592,7 +758,7 @@ def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         part["review_flags"] = _dedupe(part["review_flags"])
         if not part.get("drawing_numbers") and not _is_assembly_identifier(part.get("part_number")):
             part["drawing_numbers"] = [part["part_number"]]
-        if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None and "detail" in part.get("page_roles", []):
+        if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None:
             part["normalized_thickness_mm"] = document_primary_thickness
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(document_primary_thickness)]
