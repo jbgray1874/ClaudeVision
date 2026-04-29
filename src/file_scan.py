@@ -19,8 +19,11 @@ import config
 from document_builder import build_document_writeup, merge_page_analysis
 from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_document
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
-from geometry_analysis import analyse_document_geometry
+from geometry_analysis import analyse_document_geometry, calibrate_document_geometry
+from llm_extraction import reconcile_with_llm
+from reconciliation import reconcile_page_analysis
 from sql_export import build_run_metadata, write_postgres_insert_sql
+from vision_extraction import extract_document_vision
 
 
 def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: str = "*.pdf") -> List[Path]:
@@ -205,7 +208,7 @@ def extract_patterns(text: str) -> Dict[str, Any]:
     }
 
 
-def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypdf_pages: List[str]) -> Dict[str, Any]:
+def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypdf_pages: List[str], vision_pages: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
     joined_text = "\n\n".join(page["text"] for page in plumber_pages if page["text"])
     joined_title_block = "\n\n".join(page["region_text"]["title_block"] for page in plumber_pages if page["region_text"]["title_block"])
     joined_bom = "\n\n".join(
@@ -243,6 +246,7 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
         "pages": [],
         "manual_review_items": [],
     }
+    vision_lookup = {item.get("page_number"): item for item in (vision_pages or [])}
 
     for page in plumber_pages:
         page_text = page["text"]
@@ -255,6 +259,23 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
             notes_text=page["region_text"]["notes"],
             page_role_hint=page["page_role"]["primary_role"],
         )
+        vision_page = vision_lookup.get(page_number)
+        llm_page = reconcile_with_llm(
+            {
+                "page_number": page_number,
+                "page_role": page.get("page_role", {}),
+                "deterministic_page_analysis": page_analysis,
+                "vision_page": vision_page or {},
+            }
+        )
+        page_stub = {
+            "page_number": page_number,
+            "page_role": page["page_role"],
+            "region_text": page["region_text"],
+            "pdfplumber_text": page_text,
+            "page_analysis": page_analysis,
+        }
+        page_analysis = reconcile_page_analysis(page_stub, vision_page=vision_page, llm_page=llm_page)
         summary["pages"].append(
             {
                 "page_number": page_number,
@@ -272,6 +293,7 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
                 "pattern_summary": extract_patterns(page_text),
                 "page_analysis": page_analysis,
                 "text_preview": page_text[:1000],
+                "vision_extraction": vision_page or {},
             }
         )
         if page_analysis.get("review_flags"):
@@ -446,9 +468,11 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
 def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
     plumber_pages = extract_with_pdfplumber(pdf_path)
     pypdf_pages = extract_with_pypdf(pdf_path)
+    vision_pages = extract_document_vision(pdf_path)
 
-    summary = summarise_document(pdf_path, plumber_pages, pypdf_pages)
+    summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
     geometry_pages = analyse_document_geometry(pdf_path)
+    geometry_pages = calibrate_document_geometry(summary, geometry_pages)
     summary = merge_page_analysis(summary, geometry_pages)
     summary["manufacturing_writeup"] = build_document_writeup(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"])

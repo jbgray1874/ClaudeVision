@@ -1,4 +1,4 @@
-import rerunn
+import re
 from typing import Any, Dict, List
 
 
@@ -147,6 +147,22 @@ def _should_assign_dimensions(page_role: Any, component_sheet: bool) -> bool:
 
 
 def _pick_part_dimensions(part: Dict[str, Any], dimensions: Dict[str, Any]) -> Dict[str, Any]:
+    flat_pattern_dims = dimensions.get("flat_pattern_dimensions_mm", []) or []
+    if len(flat_pattern_dims) >= 2:
+        numbers = sorted(
+            [
+                _safe_float(value)
+                for value in flat_pattern_dims[:2]
+                if _safe_float(value) is not None
+            ],
+            reverse=True,
+        )
+        if len(numbers) == 2:
+            return {
+                "overall_length_mm": numbers[0],
+                "overall_width_mm": numbers[1],
+            }
+
     overall_sizes = dimensions.get("overall_sizes_mm", []) or []
     if overall_sizes:
         first_size = overall_sizes[0]
@@ -437,7 +453,9 @@ def _infer_hole_count(part: Dict[str, Any], geometry_confidence: float) -> int:
     if pitch_values and largest_span and (text_hole_sizes or part.get("hanging_hole_detected")):
         pitch = max(pitch_values)
         if pitch > 0:
-            estimated_from_pitch = max(1, int(round(largest_span / pitch)) + 1)
+            # Pitch-based hole series are usually closer to span/pitch + 1 than
+            # a rounded ratio, which tends to overcount on shorter brackets.
+            estimated_from_pitch = max(1, int(largest_span / pitch) + 1)
             return max(text_hole_sizes, estimated_from_pitch)
     if "hole_machining" in part.get("textual_operations", []) and text_hole_sizes:
         return max(1, text_hole_sizes)

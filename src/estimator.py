@@ -1,4 +1,5 @@
 import csv
+from datetime import date
 from math import floor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -122,6 +123,13 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "unit_material_cost_gbp": None,
             "extended_material_cost_gbp": None,
             "stock_estimate": select_sheet_size(material, blank_length, blank_width),
+            "price_source": {
+                "supplier_source": "config_default_material_rates",
+                "price_date": None,
+                "source_type": "config",
+                "unit": "GBP_per_kg",
+                "currency": "GBP",
+            },
         }
 
     area_m2 = (blank_length * blank_width) / 1_000_000.0
@@ -147,6 +155,13 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "stock_estimate": select_sheet_size(material, blank_length, blank_width),
         "stock_form": part.get("manufacturing_interpretation", {}).get("stock_form"),
         "requires_flat_blank": part.get("manufacturing_interpretation", {}).get("requires_flat_blank"),
+        "price_source": {
+            "supplier_source": "config_default_material_rates",
+            "price_date": str(date.today()),
+            "source_type": "config",
+            "unit": "GBP_per_kg",
+            "currency": "GBP",
+        },
     }
 
 
@@ -257,6 +272,8 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
                 "unit_material_mass_kg": material.get("unit_material_mass_kg"),
                 "unit_material_cost_gbp": material.get("unit_material_cost_gbp"),
                 "extended_material_cost_gbp": material.get("extended_material_cost_gbp"),
+                "supplier_source": material.get("price_source", {}).get("supplier_source"),
+                "price_date": material.get("price_source", {}).get("price_date"),
             },
             "labour": {
                 "unit_time_min": process.get("unit_time_min"),
@@ -271,6 +288,11 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
             "unit_total_cost_gbp": unit_total,
             "extended_total_cost_gbp": extended_total,
             "margin_options": margin_options,
+            "assumptions": {
+                "material_price_source": material.get("price_source", {}),
+                "labour_model": "config_default_labour_rules",
+                "geometry_basis": "normalized_geometry",
+            },
         },
         "risk_flags": part.get("risk_flags", []),
         "alternative_processes": [],
@@ -302,6 +324,8 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
                     {
                         "part_number": item.get("part_number"),
                         "extended_material_cost_gbp": item.get("material_estimate", {}).get("extended_material_cost_gbp"),
+                        "supplier_source": item.get("material_estimate", {}).get("price_source", {}).get("supplier_source"),
+                        "price_date": item.get("material_estimate", {}).get("price_source", {}).get("price_date"),
                     }
                     for item in part_estimates
                 ],
@@ -312,6 +336,20 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
             },
             "overhead": {},
             "margin_options": ["low", "standard", "premium"],
+            "pricing_metadata": {
+                "latest_price_date": max(
+                    [item.get("material_estimate", {}).get("price_source", {}).get("price_date") for item in part_estimates if item.get("material_estimate", {}).get("price_source", {}).get("price_date")],
+                    default=None,
+                ),
+                "supplier_sources": sorted(
+                    {
+                        item.get("material_estimate", {}).get("price_source", {}).get("supplier_source")
+                        for item in part_estimates
+                        if item.get("material_estimate", {}).get("price_source", {}).get("supplier_source")
+                    }
+                ),
+                "pricing_basis": "config_default",
+            },
         },
     }
 

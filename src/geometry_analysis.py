@@ -7,6 +7,9 @@ try:
 except ImportError:  # pragma: no cover
     fitz = None
 
+from geometry_calibration import calibrate_page_geometry
+from geometry_features import analyse_vector_features
+
 
 POINT_TO_MM = 25.4 / 72.0
 
@@ -55,6 +58,7 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
     narrow_stroke_path_count = 0
     small_internal_loop_features = 0
     title_block_band_top = page.rect.height * 0.72
+    max_line_length_points = 0.0
 
     for drawing in drawings:
         items = drawing.get("items", [])
@@ -85,6 +89,7 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
                 length = _distance(p1, p2)
                 line_segments += 1
                 approx_total_line_length_points += length
+                max_line_length_points = max(max_line_length_points, length)
                 if _is_axis_aligned_line(p1, p2) and length > 40:
                     long_axis_aligned_lines += 1
                     if _is_dashed(drawing):
@@ -122,6 +127,7 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
     geometry_reliability = round(min(1.0, geometry_reliability), 2)
 
     total_cut_length_mm = round((approx_total_line_length_points + approx_total_curve_length_points) * POINT_TO_MM, 2)
+    vector_features = analyse_vector_features(drawings)
 
     return {
         "vector_path_count": len(drawings),
@@ -141,6 +147,8 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
         "closed_path_count": closed_path_count,
         "long_axis_aligned_lines": long_axis_aligned_lines,
         "dashed_long_axis_lines": dashed_long_axis_lines,
+        "max_line_length_points": round(max_line_length_points, 2),
+        "vector_features": vector_features,
         "raw_geometry": {
             "vector_path_count": len(drawings),
             "line_segments": line_segments,
@@ -188,3 +196,19 @@ def analyse_document_geometry(pdf_path: Path) -> List[Dict[str, Any]]:
     finally:
         document.close()
     return pages
+
+
+def calibrate_document_geometry(summary: Dict[str, Any], geometry_pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    page_lookup = {page.get("page_number"): page for page in summary.get("pages", [])}
+    calibrated: List[Dict[str, Any]] = []
+    for geometry in geometry_pages:
+        page_number = geometry.get("page_number")
+        page_summary = page_lookup.get(page_number, {})
+        calibration = calibrate_page_geometry(
+            page_summary.get("page_analysis", {}),
+            geometry,
+            geometry.get("page_size_points"),
+        )
+        geometry["scale_calibration"] = calibration
+        calibrated.append(geometry)
+    return calibrated

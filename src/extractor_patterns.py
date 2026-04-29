@@ -568,20 +568,59 @@ def _extract_thickness_fallbacks(text: str) -> List[str]:
 
 def _extract_revision_update_thicknesses(text: str) -> List[str]:
     normalized = normalize_text(text)
-    update_patterns = [
-        r"UPDATE\s+TO\s+(\d+(?:\.\d+)?)\s*mm\b",
-        r"MATERIAL\s+UPDATE\s+TO\s+(\d+(?:\.\d+)?)\s*mm\b",
-        r"THICKNESS\s+UPDATE\s+TO\s+(\d+(?:\.\d+)?)\s*mm\b",
-    ]
     updates: List[str] = []
-    for pattern in update_patterns:
-        for value in _findall_unique(pattern, normalized, flags=re.IGNORECASE):
+    for match in re.finditer(r"UPDATE\s+TO\b", normalized, flags=re.IGNORECASE):
+        remainder = normalized[match.end(): match.end() + 120]
+        thickness_matches = re.findall(r"(\d+(?:\.\d+)?)\s*mm\b", remainder, flags=re.IGNORECASE)
+        for value in reversed(thickness_matches):
             number = _safe_float(value)
             if number is None:
                 continue
             if 0.2 <= number <= 20.0 and value not in updates:
                 updates.append(value)
+                break
     return updates
+
+
+def _infer_flat_pattern_dimensions(text: str) -> List[float]:
+    upper = normalize_text(text).upper()
+    if "FLAT PATTERN" not in upper:
+        return []
+    if upper.count("FLAT PATTERN") != 1:
+        # Multi-page/document-level text often contains several flat-pattern callouts.
+        # In that case, a single pair of dimensions is too ambiguous to trust here.
+        return []
+
+    focus = upper.split("DESCRIPTION:")[0]
+    candidates: List[float] = []
+    for match in re.finditer(r"\b(\d+(?:\.\d+)?)\b", focus):
+        value = match.group(1)
+        number = _safe_float(value)
+        if number is None:
+            continue
+        if number < 20.0 or number > 5000.0:
+            continue
+        window = focus[max(0, match.start() - 16): min(len(focus), match.end() + 16)]
+        excluded_tokens = [" EXT", " INT", "PITCH", "HOLE", "SCALE", "ANGLE", "TOLERANCE", "DETAIL", "WEIGHT"]
+        if any(token in window for token in excluded_tokens):
+            continue
+        if re.search(r"\bR\s*\d", window):
+            continue
+        if number not in candidates:
+            candidates.append(number)
+
+    if len(candidates) < 2:
+        return []
+
+    ordered = sorted(candidates, reverse=True)
+    chosen: List[float] = [ordered[0]]
+    for value in ordered[1:]:
+        if abs(value - chosen[0]) <= 15.0:
+            continue
+        chosen.append(value)
+        if len(chosen) == 2:
+            break
+    return chosen if len(chosen) == 2 else []
 
 
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
@@ -778,6 +817,7 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
     pitch_values = [value for value in _findall_unique(PITCH_PATTERN, text, flags=re.IGNORECASE) if value not in tolerance_noise_values]
     radii = _findall_unique(RADIUS_PATTERN, text, flags=re.IGNORECASE)
     fold_values = _findall_unique(FOLD_VALUE_PATTERN, text, flags=re.IGNORECASE)
+    flat_pattern_dims = _infer_flat_pattern_dimensions(text)
 
     overall_pairs = []
     for left, right in overall_sizes_raw:
@@ -792,13 +832,20 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
         [_safe_float(value) for value in all_dimensions_mm if _safe_float(value) is not None and _safe_float(value) >= 10.0],
         reverse=True,
     )
-    overall_length = overall_pairs[0][0] if overall_pairs else (dims_float[0] if len(dims_float) > 0 else None)
-    overall_width = overall_pairs[0][1] if overall_pairs else (dims_float[1] if len(dims_float) > 1 else None)
+    if flat_pattern_dims:
+        overall_length = flat_pattern_dims[0]
+        overall_width = flat_pattern_dims[1]
+        if f"{overall_length} x {overall_width}" not in overall_sizes:
+            overall_sizes = [f"{overall_length} x {overall_width}"] + overall_sizes
+    else:
+        overall_length = overall_pairs[0][0] if overall_pairs else (dims_float[0] if len(dims_float) > 0 else None)
+        overall_width = overall_pairs[0][1] if overall_pairs else (dims_float[1] if len(dims_float) > 1 else None)
 
     return {
         "overall_sizes_mm": overall_sizes,
         "overall_length_mm": overall_length,
         "overall_width_mm": overall_width,
+        "flat_pattern_dimensions_mm": flat_pattern_dims,
         "all_dimensions_mm": all_dimensions_mm[:500],
         "angles_deg": angles,
         "hole_sizes_mm": hole_sizes,
