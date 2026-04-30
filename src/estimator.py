@@ -1,4 +1,6 @@
 import csv
+import os
+import time
 from datetime import date
 from math import floor
 from pathlib import Path
@@ -12,7 +14,10 @@ from config import (
     MATERIAL_PRICE_GBP_PER_KG,
     NESTING_RULES,
     STANDARD_SHEET_SIZES_MM,
+    WORKBOOK_EQUIVALENT_PRICING,
 )
+from price_sources import PriceRequest, get_best_price
+from unit_parsing import is_per_kg_unit, is_per_hour_unit
 
 
 def _first(values: List[Any]) -> Any:
@@ -35,6 +40,115 @@ def _safe_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_price_source_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _extract_selected_price(result: Dict[str, Any]) -> Dict[str, Any]:
+    selected = result.get("selected") or {}
+    return selected if isinstance(selected, dict) else {}
+
+
+def _selected_price_value(selected: Dict[str, Any]) -> Optional[float]:
+    try:
+        price = selected.get("price")
+        return float(price) if price is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _selected_price_unit(selected: Dict[str, Any]) -> str:
+    return str(selected.get("unit") or "").strip().lower()
+
+
+def _build_price_source_metadata(result: Dict[str, Any], fallback_source: str, applied: bool, applied_basis: str | None = None) -> Dict[str, Any]:
+    selected = _extract_selected_price(result)
+    evidence = selected.get("evidence", {}) if isinstance(selected.get("evidence"), dict) else {}
+    metadata = selected.get("metadata", {}) if isinstance(selected.get("metadata"), dict) else {}
+    evidence_row = evidence.get("row", {}) if isinstance(evidence.get("row"), dict) else {}
+    supplier_source = (
+        metadata.get("supplier_name")
+        or metadata.get("supplier_source")
+        or evidence.get("supplier_name")
+        or evidence.get("supplier_source")
+        or evidence_row.get("supplier_name")
+        or evidence_row.get("supplier_source")
+        or selected.get("source")
+        or fallback_source
+    )
+    return {
+        "supplier_source": supplier_source,
+        "supplier_code": metadata.get("supplier_code") or evidence.get("supplier_code") or evidence_row.get("supplier_code"),
+        "price_date": metadata.get("price_date") or evidence.get("price_date") or str(date.today()),
+        "source_type": "external" if selected.get("source") else "config",
+        "source_name": selected.get("source") or fallback_source,
+        "unit": selected.get("unit") or "unknown",
+        "currency": selected.get("currency") or "GBP",
+        "confidence": selected.get("confidence"),
+        "applied": applied,
+        "applied_basis": applied_basis,
+        "selected": selected,
+        "audit_trail": result.get("audit_trail", []),
+        "candidates": result.get("candidates", []),
+    }
+
+
+def _resolve_material_price(material: Optional[str], thickness_mm: Optional[float], quantity: Optional[int]) -> Dict[str, Any]:
+    if not material:
+        return {"result": {}, "applied_price_per_kg": None, "applied_basis": None}
+
+    result = get_best_price(
+        PriceRequest(
+            kind="material_price",
+            material=material,
+            thickness_mm=thickness_mm,
+            quantity=quantity,
+        )
+    )
+    selected = _extract_selected_price(result)
+    price = _selected_price_value(selected)
+    unit = _selected_price_unit(selected)
+    if price is None:
+        return {"result": result, "applied_price_per_kg": None, "applied_basis": None}
+
+    if is_per_kg_unit(unit):
+        return {"result": result, "applied_price_per_kg": price, "applied_basis": "GBP_per_kg"}
+
+    return {"result": result, "applied_price_per_kg": None, "applied_basis": None}
+
+
+def _resolve_labour_rate(operation: str) -> Dict[str, Any]:
+    result = get_best_price(PriceRequest(kind="labour_rate", operation=operation))
+    selected = _extract_selected_price(result)
+    price = _selected_price_value(selected)
+    unit = _selected_price_unit(selected)
+    if price is None:
+        return {"result": result, "applied_hourly_rate": None, "applied_basis": None}
+
+    if is_per_hour_unit(unit):
+        return {"result": result, "applied_hourly_rate": price, "applied_basis": "GBP_per_hour"}
+
+    return {"result": result, "applied_hourly_rate": None, "applied_basis": None}
+
+
+def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
+    part_code = str(part.get("part_number") or part.get("item_number") or "").strip()
+    description = str(part.get("description") or "").strip()
+    if not part_code and not description:
+        return {"result": {}, "applied_unit_cost": None}
+
+    result = get_best_price(
+        PriceRequest(
+            kind="part_system_cost",
+            part_code=part_code,
+            description=description,
+        )
+    )
+    selected = _extract_selected_price(result)
+    price = _selected_price_value(selected)
+    return {"result": result, "applied_unit_cost": price}
 
 
 def infer_primary_dimensions(part: Dict[str, Any]) -> Dict[str, Optional[float]]:
@@ -111,6 +225,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
     blank_length, blank_width = estimate_blank_size(dims)
+    external_price = _resolve_material_price(material, thickness, quantity)
+    external_result = external_price.get("result", {})
 
     if not material or thickness is None or blank_length is None or blank_width is None:
         return {
@@ -123,19 +239,20 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "unit_material_cost_gbp": None,
             "extended_material_cost_gbp": None,
             "stock_estimate": select_sheet_size(material, blank_length, blank_width),
-            "price_source": {
-                "supplier_source": "config_default_material_rates",
-                "price_date": None,
-                "source_type": "config",
-                "unit": "GBP_per_kg",
-                "currency": "GBP",
-            },
+            "price_source": _build_price_source_metadata(
+                external_result,
+                fallback_source="config_default_material_rates",
+                applied=False,
+                applied_basis=None,
+            ),
         }
 
     area_m2 = (blank_length * blank_width) / 1_000_000.0
     thickness_m = thickness / 1000.0
     density = MATERIAL_DENSITY_KG_PER_M3.get(material)
-    price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material)
+    fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material)
+    applied_price_per_kg = external_price.get("applied_price_per_kg")
+    price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
     if density is None or price_per_kg is None:
         mass_kg = None
         material_cost = None
@@ -155,13 +272,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "stock_estimate": select_sheet_size(material, blank_length, blank_width),
         "stock_form": part.get("manufacturing_interpretation", {}).get("stock_form"),
         "requires_flat_blank": part.get("manufacturing_interpretation", {}).get("requires_flat_blank"),
-        "price_source": {
-            "supplier_source": "config_default_material_rates",
-            "price_date": str(date.today()),
-            "source_type": "config",
-            "unit": "GBP_per_kg",
-            "currency": "GBP",
-        },
+        "price_source": _build_price_source_metadata(
+            external_result,
+            fallback_source="config_default_material_rates",
+            applied=applied_price_per_kg is not None,
+            applied_basis=external_price.get("applied_basis") if applied_price_per_kg is not None else "config_fallback_GBP_per_kg",
+        ),
     }
 
 
@@ -232,32 +348,88 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
 def estimate_labour_costs(process: Dict[str, Any]) -> Dict[str, Any]:
     breakdown: Dict[str, float] = {}
+    rate_sources: Dict[str, Any] = {}
+    missing_rate_operations: List[str] = []
     for op, minutes in process.get("times_min", {}).items():
-        rate = HOURLY_RATES_GBP.get(op)
+        external_rate = _resolve_labour_rate(op)
+        applied_hourly_rate = external_rate.get("applied_hourly_rate")
+        rate = applied_hourly_rate if applied_hourly_rate is not None else HOURLY_RATES_GBP.get(op)
         if rate is None:
+            if minutes:
+                missing_rate_operations.append(op)
             continue
         breakdown[op] = round((minutes / 60.0) * rate, 2)
+        rate_sources[op] = _build_price_source_metadata(
+            external_rate.get("result", {}),
+            fallback_source=f"config_default_labour_rate:{op}",
+            applied=applied_hourly_rate is not None,
+            applied_basis=external_rate.get("applied_basis") if applied_hourly_rate is not None else "config_fallback_GBP_per_hour",
+        ) | {"hourly_rate_gbp": rate}
 
     return {
         "costs_gbp": breakdown,
         "total_labour_cost_gbp": round(sum(breakdown.values()), 2),
+        "rate_sources": rate_sources,
+        "missing_rate_operations": missing_rate_operations,
     }
 
 
 def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
+    debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     quantity = _safe_int(part.get("quantity")) or 1
+    part_number = part.get("part_number") or part.get("item_number") or "unknown_part"
+    if debug:
+        print(f"[DEBUG] estimate_part start {part_number}")
     material = estimate_material(part)
+    if debug:
+        print(f"[DEBUG] estimate_part material done {part_number}")
     process = estimate_process_times(part, quantity=quantity)
+    if debug:
+        print(f"[DEBUG] estimate_part process done {part_number}")
     labour = estimate_labour_costs(process)
-    extended_material_cost = material.get("extended_material_cost_gbp") or 0.0
+    if debug:
+        print(f"[DEBUG] estimate_part labour done {part_number}")
+    system_cost = _resolve_part_system_cost(part)
+    if debug:
+        print(f"[DEBUG] estimate_part system_cost done {part_number}")
+    system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
+    system_cost_result = system_cost.get("result", {})
+    material_extended = material.get("extended_material_cost_gbp")
+    extended_material_cost = _safe_float(material_extended) or 0.0
     total_labour_cost = labour.get("total_labour_cost_gbp") or 0.0
-    extended_total = round(extended_material_cost + total_labour_cost, 2)
-    unit_total = round(extended_total / quantity, 2) if quantity else extended_total
+
+    no_ops_except_handling = set(part.get("textual_operations", [])) <= {"handling"}
+    bought_in_candidate = no_ops_except_handling and not part.get("flat_pattern_detected")
+
+    if bought_in_candidate and system_unit_cost is not None:
+        unit_total = round(system_unit_cost, 2)
+        extended_total = round(unit_total * quantity, 2)
+        costing_basis = "system_cost_per_part"
+    else:
+        extended_total = round(extended_material_cost + total_labour_cost, 2)
+        unit_total = round(extended_total / quantity, 2) if quantity else extended_total
+        costing_basis = "computed_material_plus_labour"
     margin_options = [
         {"name": "low", "markup_pct": 10, "unit_sell_price_gbp": round(unit_total * 1.10, 2), "extended_sell_price_gbp": round(extended_total * 1.10, 2)},
         {"name": "standard", "markup_pct": 20, "unit_sell_price_gbp": round(unit_total * 1.20, 2), "extended_sell_price_gbp": round(extended_total * 1.20, 2)},
         {"name": "premium", "markup_pct": 35, "unit_sell_price_gbp": round(unit_total * 1.35, 2), "extended_sell_price_gbp": round(extended_total * 1.35, 2)},
     ]
+
+    # Surface missing price/rate conditions for human review.
+    risk_flags = list(part.get("risk_flags", []))
+    if material.get("extended_material_cost_gbp") is None:
+        if not material.get("material"):
+            risk_flags.append("missing_material_spec")
+        elif material.get("thickness_mm") is None:
+            risk_flags.append("missing_material_thickness")
+        else:
+            risk_flags.append("missing_material_price")
+
+    requested_ops = set((process.get("times_min") or {}).keys())
+    costed_ops = set((labour.get("costs_gbp") or {}).keys())
+    missing_ops = requested_ops - costed_ops
+    for op in sorted(missing_ops):
+        risk_flags.append(f"missing_labour_rate:{op}")
 
     return {
         "part_number": part.get("part_number"),
@@ -280,6 +452,18 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
                 "total_time_min": process.get("total_time_min"),
                 "costs_gbp": labour.get("costs_gbp", {}),
                 "total_labour_cost_gbp": labour.get("total_labour_cost_gbp"),
+                "rate_sources": labour.get("rate_sources", {}),
+            },
+            "system_cost": {
+                "unit_cost_gbp": round(system_unit_cost, 2) if system_unit_cost is not None else None,
+                "extended_cost_gbp": round((system_unit_cost or 0.0) * quantity, 2) if system_unit_cost is not None else None,
+                "source": _build_price_source_metadata(
+                    system_cost_result,
+                    fallback_source="system_cost_not_found",
+                    applied=system_unit_cost is not None,
+                    applied_basis="GBP_each" if system_unit_cost is not None else None,
+                ),
+                "applied_to_total": bought_in_candidate and system_unit_cost is not None,
             },
             "overhead": {
                 "unit_overhead_cost_gbp": None,
@@ -287,14 +471,14 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
             },
             "unit_total_cost_gbp": unit_total,
             "extended_total_cost_gbp": extended_total,
+            "costing_basis": costing_basis,
             "margin_options": margin_options,
             "assumptions": {
                 "material_price_source": material.get("price_source", {}),
-                "labour_model": "config_default_labour_rules",
+                "labour_model": "external_or_config_fallback",
                 "geometry_basis": "normalized_geometry",
             },
         },
-        "risk_flags": part.get("risk_flags", []),
         "alternative_processes": [],
         "unit_total_cost_gbp": unit_total,
         "extended_total_cost_gbp": extended_total,
@@ -302,11 +486,57 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
             "Geometry-derived timings are heuristic until calibrated against known jobs.",
             "Primary dimensions are inferred from extracted values; verify against the drawing before quoting.",
         ],
+        "risk_flags": risk_flags,
+    }
+
+
+def _build_workbook_equivalent_pricing(part_estimates: List[Dict[str, Any]], material_total: float, labour_total: float) -> Dict[str, Any]:
+    cfg = WORKBOOK_EQUIVALENT_PRICING or {}
+    fixed_factor = float(cfg.get("fixed_factor", 0.95))
+    m107 = float(cfg.get("default_m107", 0.0))
+    m109 = float(cfg.get("default_m109", 0.0))
+    m59 = round(material_total, 4)
+    m103 = round(labour_total, 4)
+    denominator_m107 = max(0.0001, 1.0 - m107)
+    denominator_m109 = max(0.0001, 1.0 - m109)
+    m105 = round(((m59 + m103) / denominator_m107) / fixed_factor, 4)
+    l111 = round(m105 / denominator_m109, 4)
+    labour_hours_total = round(
+        sum((_safe_float(item.get("process_estimate", {}).get("total_time_min")) or 0.0) / 60.0 for item in part_estimates),
+        4,
+    )
+    return {
+        "m59_material_subtotal_gbp": m59,
+        "m103_labour_subtotal_gbp": m103,
+        "m107_margin_fraction": m107,
+        "m109_sell_margin_fraction": m109,
+        "m105_total_unit_cost_gbp": m105,
+        "l105_total_unit_cost_gbp": m105,
+        "l111_sell_price_gbp": l111,
+        "labour_hours_total": labour_hours_total,
+        "formula_strings": {
+            "l105": "((M59+M103)/(1-M107))/fixed_factor",
+            "l111": "M105/(1-M109)",
+        },
+        "assumptions": {
+            "fixed_factor": fixed_factor,
+            "source": "workbook_equivalent_pricing",
+        },
     }
 
 
 def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    part_estimates = [estimate_part(part) for part in parts]
+    debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
+    started = time.time()
+    part_estimates: List[Dict[str, Any]] = []
+    for idx, part in enumerate(parts, start=1):
+        part_number = part.get("part_number") or part.get("item_number") or f"part_{idx}"
+        if debug:
+            print(f"[DEBUG] estimate_document start part {idx}/{len(parts)}: {part_number} (+{round(time.time()-started,2)}s)")
+        part_estimate = estimate_part(part)
+        part_estimates.append(part_estimate)
+        if debug:
+            print(f"[DEBUG] estimate_document done part {idx}/{len(parts)}: {part_number} (+{round(time.time()-started,2)}s)")
     material_total = round(sum((item.get("material_estimate", {}).get("extended_material_cost_gbp") or 0.0) for item in part_estimates), 2)
     labour_total = round(sum((item.get("labour_estimate", {}).get("total_labour_cost_gbp") or 0.0) for item in part_estimates), 2)
     operation_totals: Dict[str, float] = {}
@@ -314,9 +544,11 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
         for op, cost in item.get("labour_estimate", {}).get("costs_gbp", {}).items():
             operation_totals[op] = round(operation_totals.get(op, 0.0) + (cost or 0.0), 2)
     document_total = round(sum(item["extended_total_cost_gbp"] for item in part_estimates), 2)
+    workbook_equivalent_pricing = _build_workbook_equivalent_pricing(part_estimates, material_total=material_total, labour_total=labour_total)
     return {
         "part_estimates": part_estimates,
         "document_total_estimated_cost_gbp": document_total,
+        "workbook_equivalent_pricing": workbook_equivalent_pricing,
         "cost_breakdown": {
             "material": {
                 "total": material_total,
@@ -348,7 +580,7 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
                         if item.get("material_estimate", {}).get("price_source", {}).get("supplier_source")
                     }
                 ),
-                "pricing_basis": "config_default",
+                "pricing_basis": "external_or_config_fallback",
             },
         },
     }

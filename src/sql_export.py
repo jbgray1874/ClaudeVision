@@ -1,10 +1,12 @@
 import json
 import re
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import config
+from pricing_variance import build_pricing_variance_rows
 
 
 def _sql_quote(value: Optional[str]) -> str:
@@ -38,7 +40,14 @@ def _first(values: Any) -> Any:
 
 
 def _json_text(value: Any) -> str:
-    payload = json.dumps(value if value is not None else {}, ensure_ascii=False)
+    def _json_default(obj: Any) -> Any:
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, Path):
+            return str(obj)
+        return str(obj)
+
+    payload = json.dumps(value if value is not None else {}, ensure_ascii=False, default=_json_default)
     return _sql_quote(payload)
 
 
@@ -312,6 +321,38 @@ WHEN NOT MATCHED THEN
     );"""
 
 
+def _pricing_variance_insert_sql(row: Dict[str, Any]) -> str:
+    return f"""INSERT INTO dbo.pricing_variance (
+    run_uuid,
+    source_file_name,
+    part_number,
+    comparison_scope,
+    metric_name,
+    manual_value,
+    ai_value,
+    abs_variance,
+    pct_variance,
+    status,
+    notes,
+    manual_source,
+    ai_source
+) VALUES (
+    CAST({_sql_quote(row.get("run_uuid"))} AS uniqueidentifier),
+    {_sql_text(row.get("source_file_name"))},
+    {_sql_text(row.get("part_number"))},
+    {_sql_text(row.get("comparison_scope"))},
+    {_sql_text(row.get("metric_name"))},
+    {_sql_numeric(row.get("manual_value"))},
+    {_sql_numeric(row.get("ai_value"))},
+    {_sql_numeric(row.get("abs_variance"))},
+    {_sql_numeric(row.get("pct_variance"))},
+    {_sql_text(row.get("status"))},
+    {_sql_text(row.get("notes"))},
+    {_sql_text(row.get("manual_source"))},
+    {_sql_text(row.get("ai_source"))}
+);"""
+
+
 def generate_sqlserver_insert_sql(summary: Dict[str, Any], source_json_path: Optional[Path] = None) -> str:
     metadata = build_run_metadata(summary, source_json_path=source_json_path)
     run_uuid = metadata["run_uuid"]
@@ -492,6 +533,13 @@ WHEN NOT MATCHED THEN
 
     for part in summary.get("manufacturing_writeup", {}).get("parts", []):
         statements.append(_part_merge_sql(run_uuid, part))
+
+    variance_rows = summary.get("pricing_variance_rows")
+    if not isinstance(variance_rows, list):
+        variance_rows = build_pricing_variance_rows(summary)
+        summary["pricing_variance_rows"] = variance_rows
+    for row in variance_rows:
+        statements.append(_pricing_variance_insert_sql(row))
 
     statements.append("COMMIT TRANSACTION;")
     return "\n\n".join(statements) + "\n"

@@ -448,15 +448,17 @@ def _infer_hole_count(part: Dict[str, Any], geometry_confidence: float) -> int:
         ],
         default=None,
     )
-    if geometry_hole_count:
-        return max(text_hole_sizes, geometry_hole_count)
+    pitch_hole_count = 0
     if pitch_values and largest_span and (text_hole_sizes or part.get("hanging_hole_detected")):
         pitch = max(pitch_values)
         if pitch > 0:
             # Pitch-based hole series are usually closer to span/pitch + 1 than
             # a rounded ratio, which tends to overcount on shorter brackets.
-            estimated_from_pitch = max(1, int(largest_span / pitch) + 1)
-            return max(text_hole_sizes, estimated_from_pitch)
+            pitch_hole_count = max(1, int(largest_span / pitch) + 1)
+    if pitch_hole_count:
+        return max(text_hole_sizes, geometry_hole_count, pitch_hole_count)
+    if geometry_hole_count:
+        return max(text_hole_sizes, geometry_hole_count)
     if "hole_machining" in part.get("textual_operations", []) and text_hole_sizes:
         return max(1, text_hole_sizes)
     return text_hole_sizes

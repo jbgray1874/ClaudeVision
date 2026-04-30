@@ -230,12 +230,78 @@ HISTORY_CSV_HEADERS = [
 ]
 
 PRICE_SOURCE_PRIORITY = [
+    "sqlserver",
     "spreadsheet",
     "access",
     "web",
 ]
 
 PRICE_SOURCE_CONFIG = {
+    "sqlserver": {
+        "enabled": True,
+        "server": "10.0.0.200",
+        "database": "SDILive",
+        "username": "AIBot",
+        "password": "AIAgentPW2026",
+        "driver": "ODBC Driver 18 for SQL Server",
+        "encrypt": True,
+        "trust_server_certificate": True,
+        # TODO: replace with your real material table query when ready.
+        # Expected params: (normalized_material, thickness_mm, quantity)
+        "material_price_query": """
+SELECT TOP (1)
+    material_code AS material,
+    thickness_mm,
+    price_gbp_per_kg AS price,
+    'GBP' AS currency,
+    'GBP_per_kg' AS unit,
+    0.92 AS confidence,
+    supplier_name AS supplier_source,
+    effective_date AS price_date
+FROM dbo.material_prices
+WHERE UPPER(LTRIM(RTRIM(material_code))) = UPPER(LTRIM(RTRIM(?)))
+  AND (thickness_mm IS NULL OR ABS(thickness_mm - ?) <= 0.15)
+ORDER BY effective_date DESC
+""",
+        # TODO: replace with your real labour table query when ready.
+        # Expected params: (operation)
+        "labour_rate_query": """
+SELECT TOP (1)
+    operation_code AS rate_code,
+    hourly_rate_gbp AS price,
+    'GBP' AS currency,
+    'GBP_per_hour' AS unit,
+    0.92 AS confidence,
+    effective_date AS price_date
+FROM dbo.labour_rates
+WHERE LOWER(LTRIM(RTRIM(operation_code))) = LOWER(LTRIM(RTRIM(?)))
+ORDER BY effective_date DESC
+""",
+        # Active now: System Cost Per + supplier lookup from SDILive.
+        # Expected params: (part_code, description, part_code)
+        "part_system_cost_query": """
+SELECT TOP (1)
+    u.[Part ref] AS part_code,
+    u.[Description] AS description,
+    u.[System cost per] AS system_cost_per,
+    CAST(u.[System cost per] AS decimal(18,4)) AS price,
+    u.[Cus code] AS supplier_code,
+    s.[SUP_NAME] AS supplier_name,
+    'GBP' AS currency,
+    'each' AS unit,
+    0.95 AS confidence,
+    GETDATE() AS price_date
+FROM UDEF_PARTS_TABLE_FOR_ESTIMATING u
+LEFT JOIN SUP_TBL s
+    ON s.[SUP_CODE] = u.[Cus code]
+WHERE
+    UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?)))
+    OR UPPER(u.[Description]) LIKE '%' + UPPER(?) + '%'
+ORDER BY
+    CASE WHEN UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+    u.[System cost per] DESC
+""",
+    },
     "spreadsheet": {
         "enabled": True,
         "template_workbook": str(SPREADSHEETS_DIR / "EmptyEstimating" / "Blank Estimate Sheet 2026.xls"),
@@ -249,6 +315,16 @@ PRICE_SOURCE_CONFIG = {
         "enabled": False,
         "sources": [],
         "user_agent": "CodexPriceCollector/1.0",
+    },
+}
+
+WORKBOOK_EQUIVALENT_PRICING = {
+    "fixed_factor": 0.95,
+    "default_m107": 0.0,
+    "default_m109": 0.0,
+    "variance_thresholds_pct": {
+        "match": 3.0,
+        "warning": 10.0,
     },
 }
 

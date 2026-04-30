@@ -2,7 +2,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import config
-from source_connectors import AccessPriceConnector, SpreadsheetPriceConnector, WebPriceConnector
+from source_connectors import AccessPriceConnector, SpreadsheetPriceConnector, SqlServerPriceConnector, WebPriceConnector
+
+_DEFAULT_CONNECTORS: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -12,6 +14,8 @@ class PriceRequest:
     thickness_mm: Optional[float] = None
     quantity: Optional[int] = None
     operation: Optional[str] = None
+    part_code: Optional[str] = None
+    description: Optional[str] = None
     finish: Optional[str] = None
     colour: Optional[str] = None
 
@@ -54,6 +58,21 @@ def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[
     if spreadsheet_cfg.get("enabled"):
         connectors["spreadsheet"] = SpreadsheetPriceConnector(spreadsheet_cfg.get("template_workbook", ""))
 
+    sqlserver_cfg = cfg.get("sqlserver", {})
+    if sqlserver_cfg.get("enabled"):
+        connectors["sqlserver"] = SqlServerPriceConnector(
+            server=sqlserver_cfg.get("server", ""),
+            database=sqlserver_cfg.get("database", ""),
+            username=sqlserver_cfg.get("username", ""),
+            password=sqlserver_cfg.get("password", ""),
+            material_price_query=sqlserver_cfg.get("material_price_query", ""),
+            labour_rate_query=sqlserver_cfg.get("labour_rate_query", ""),
+            part_system_cost_query=sqlserver_cfg.get("part_system_cost_query", ""),
+            driver=sqlserver_cfg.get("driver", "ODBC Driver 18 for SQL Server"),
+            encrypt=bool(sqlserver_cfg.get("encrypt", True)),
+            trust_server_certificate=bool(sqlserver_cfg.get("trust_server_certificate", True)),
+        )
+
     access_cfg = cfg.get("access", {})
     if access_cfg.get("enabled"):
         connectors["access"] = AccessPriceConnector(
@@ -71,18 +90,27 @@ def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[
     return connectors
 
 
+def _get_default_connectors() -> Dict[str, Any]:
+    global _DEFAULT_CONNECTORS
+    if _DEFAULT_CONNECTORS is None:
+        _DEFAULT_CONNECTORS = build_price_connectors()
+    return _DEFAULT_CONNECTORS
+
+
 def _fetch_candidates_from_connector(connector: Any, request: PriceRequest) -> List[PriceCandidate]:
     rows: List[Dict[str, Any]] = []
     if request.kind == "material_price" and hasattr(connector, "get_material_price"):
         rows = connector.get_material_price(request.material or "", request.thickness_mm, request.quantity)
     elif request.kind == "labour_rate" and hasattr(connector, "get_labour_rate"):
         rows = connector.get_labour_rate(request.operation or "")
+    elif request.kind == "part_system_cost" and hasattr(connector, "get_part_system_cost"):
+        rows = connector.get_part_system_cost(request.part_code or "", request.description or "")
 
     return [_candidate_from_row(row) for row in rows]
 
 
 def get_best_price(request: PriceRequest, connectors: Optional[Dict[str, Any]] = None, source_priority: Optional[List[str]] = None) -> Dict[str, Any]:
-    resolved_connectors = connectors or build_price_connectors()
+    resolved_connectors = connectors or _get_default_connectors()
     priority = source_priority or config.PRICE_SOURCE_PRIORITY
 
     candidates: List[PriceCandidate] = []
