@@ -16,6 +16,7 @@ from config import (
     STANDARD_SHEET_SIZES_MM,
     WORKBOOK_EQUIVALENT_PRICING,
 )
+from estimate_source_extract import build_estimate_source_extract
 from price_sources import PriceRequest, get_best_price
 from unit_parsing import is_per_kg_unit, is_per_hour_unit
 
@@ -134,21 +135,59 @@ def _resolve_labour_rate(operation: str) -> Dict[str, Any]:
 
 
 def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
-    part_code = str(part.get("part_number") or part.get("item_number") or "").strip()
+    part_number = str(part.get("part_number") or "").strip()
+    item_number = str(part.get("item_number") or "").strip()
+    part_code = part_number or item_number
     description = str(part.get("description") or "").strip()
     if not part_code and not description:
-        return {"result": {}, "applied_unit_cost": None}
+        return {"result": {}, "applied_unit_cost": None, "matched_part_code": None}
 
-    result = get_best_price(
-        PriceRequest(
-            kind="part_system_cost",
-            part_code=part_code,
-            description=description,
+    candidate_codes: List[str] = []
+    for code in [part_code, part_number, item_number]:
+        code = str(code or "").strip()
+        if not code:
+            continue
+        candidate_codes.extend(
+            [
+                code,
+                code.replace(" - ", "-"),
+                code.replace(" ", ""),
+                code.upper(),
+                code.replace(" - ", "-").upper(),
+                code.replace(" ", "").upper(),
+            ]
         )
-    )
-    selected = _extract_selected_price(result)
-    price = _selected_price_value(selected)
-    return {"result": result, "applied_unit_cost": price}
+
+    dedup_codes: List[str] = []
+    seen_codes = set()
+    for code in candidate_codes:
+        key = code.upper()
+        if key not in seen_codes:
+            seen_codes.add(key)
+            dedup_codes.append(code)
+
+    best_result: Dict[str, Any] = {}
+    best_price: Optional[float] = None
+    matched_part_code: Optional[str] = None
+
+    for code in dedup_codes or [""]:
+        result = get_best_price(
+            PriceRequest(
+                kind="part_system_cost",
+                part_code=code,
+                description=description,
+            )
+        )
+        selected = _extract_selected_price(result)
+        price = _selected_price_value(selected)
+        if price is not None:
+            return {"result": result, "applied_unit_cost": price, "matched_part_code": code}
+        if not best_result:
+            best_result = result
+            best_price = price
+            matched_part_code = code
+
+    return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
 
 
 def infer_primary_dimensions(part: Dict[str, Any]) -> Dict[str, Optional[float]]:
@@ -182,9 +221,9 @@ def estimate_blank_size(dimensions: Dict[str, Optional[float]]) -> Tuple[Optiona
     if length is None or width is None:
         return None, None
 
-    blank_length = length + (2 * NESTING_RULES["edge_margin_mm"])
-    blank_width = width + (2 * NESTING_RULES["edge_margin_mm"])
-    return round(blank_length, 2), round(blank_width, 2)
+    # Keep part blank equal to extracted flat pattern dimensions.
+    # Sheet-level edge margin is applied in select_sheet_size().
+    return round(length, 2), round(width, 2)
 
 
 def select_sheet_size(material: Optional[str], blank_length: Optional[float], blank_width: Optional[float]) -> Dict[str, Any]:
@@ -295,6 +334,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     holes = manufacturing_features.get("hole_count", max(geom.get("estimated_hole_count", 0) or 0, len(part.get("hole_sizes_mm", []))))
     bends = manufacturing_features.get("bend_count", max(len(part.get("angles_deg", [])), len(part.get("fold_values_mm", [])), part.get("fold_count_textual", 0) or 0))
     bend_length_mm = sum([_safe_float(value) or 0.0 for value in part.get("fold_values_mm", [])])
+    thickness_mm = _safe_float(part.get("normalized_thickness_mm") or _first(part.get("thicknesses_mm", [])))
 
     setup_times_min: Dict[str, float] = {}
     run_times_min: Dict[str, float] = {}
@@ -302,7 +342,16 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if "laser_cutting" in ops:
         rule = LABOUR_RULES["laser_cutting"]
         setup_times_min["laser_cutting"] = round(rule["setup_min"], 2)
-        run_times_min["laser_cutting"] = round(((pierces * rule["pierce_sec_each"]) + (cut_length_mm * rule["cut_sec_per_mm"])) / 60.0, 2)
+        speed_table = rule.get("cutting_speeds_mm_per_sec", {})
+        if speed_table:
+            speed_key = min(speed_table.keys(), key=lambda key: abs(float(key) - (thickness_mm or 1.0)))
+            cutting_speed = float(speed_table[speed_key])
+        else:
+            cutting_speed = 80.0
+        load_unload_sec = float(rule.get("load_unload_sec", 0.0))
+        profile_cutting_sec = (cut_length_mm / cutting_speed) if cutting_speed > 0 else 0.0
+        pierce_sec = pierces * float(rule["pierce_sec_each"])
+        run_times_min["laser_cutting"] = round((load_unload_sec + profile_cutting_sec + pierce_sec) / 60.0, 2)
 
     if "hole_machining" in ops:
         rule = LABOUR_RULES["hole_machining"]
@@ -394,6 +443,7 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[DEBUG] estimate_part system_cost done {part_number}")
     system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
     system_cost_result = system_cost.get("result", {})
+    matched_part_code = system_cost.get("matched_part_code")
     material_extended = material.get("extended_material_cost_gbp")
     extended_material_cost = _safe_float(material_extended) or 0.0
     total_labour_cost = labour.get("total_labour_cost_gbp") or 0.0
@@ -457,6 +507,8 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
             "system_cost": {
                 "unit_cost_gbp": round(system_unit_cost, 2) if system_unit_cost is not None else None,
                 "extended_cost_gbp": round((system_unit_cost or 0.0) * quantity, 2) if system_unit_cost is not None else None,
+                "matched_part_code": matched_part_code,
+                "part_description": part.get("description"),
                 "source": _build_price_source_metadata(
                     system_cost_result,
                     fallback_source="system_cost_not_found",
@@ -545,10 +597,12 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
             operation_totals[op] = round(operation_totals.get(op, 0.0) + (cost or 0.0), 2)
     document_total = round(sum(item["extended_total_cost_gbp"] for item in part_estimates), 2)
     workbook_equivalent_pricing = _build_workbook_equivalent_pricing(part_estimates, material_total=material_total, labour_total=labour_total)
+    estimate_source_extract = build_estimate_source_extract(part_estimates)
     return {
         "part_estimates": part_estimates,
         "document_total_estimated_cost_gbp": document_total,
         "workbook_equivalent_pricing": workbook_equivalent_pricing,
+        "estimate_source_extract": estimate_source_extract,
         "cost_breakdown": {
             "material": {
                 "total": material_total,

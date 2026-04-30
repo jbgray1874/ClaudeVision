@@ -134,13 +134,13 @@ MATERIAL_DENSITY_KG_PER_M3 = {
 }
 
 MATERIAL_PRICE_GBP_PER_KG = {
-    "MILD STEEL": 2.25,
-    "GALVANISED STEEL": 2.55,
-    "GALVANIZED STEEL": 2.55,
-    "ZINTEC": 2.45,
-    "STAINLESS STEEL": 5.80,
-    "ALUMINIUM": 4.20,
-    "ALUMINUM": 4.20,
+    "MILD STEEL": 0.90,
+    "GALVANISED STEEL": 1.05,
+    "GALVANIZED STEEL": 1.05,
+    "ZINTEC": 1.00,
+    "STAINLESS STEEL": 3.10,
+    "ALUMINIUM": 2.75,
+    "ALUMINUM": 2.75,
 }
 
 NESTING_RULES = {
@@ -152,8 +152,19 @@ NESTING_RULES = {
 LABOUR_RULES = {
     "laser_cutting": {
         "setup_min": 3.0,
+        "load_unload_sec": 30.0,
         "pierce_sec_each": 1.2,
-        "cut_sec_per_mm": 0.015,
+        "cutting_speeds_mm_per_sec": {
+            0.7: 118.0,
+            1.0: 105.0,
+            1.2: 100.0,
+            1.5: 91.0,
+            2.0: 75.0,
+            2.5: 60.0,
+            3.0: 55.0,
+            4.0: 45.0,
+            5.0: 28.0,
+        },
     },
     "hole_machining": {
         "setup_min": 1.5,
@@ -173,11 +184,14 @@ LABOUR_RULES = {
 }
 
 HOURLY_RATES_GBP = {
-    "laser_cutting": 48.0,
-    "hole_machining": 42.0,
-    "folding": 45.0,
-    "powder_coating": 38.0,
-    "handling": 35.0,
+    "laser_cutting": 68.19,
+    "hole_machining": 43.77,
+    "folding": 40.47,
+    "powder_coating": 355.43,
+    "handling": 31.18,
+    "assembly": 28.56,
+    "welding": 41.77,
+    "guillotine": 31.29,
 }
 
 CSV_HEADERS = [
