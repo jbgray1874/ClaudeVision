@@ -426,8 +426,11 @@ INSERT INTO dbo.historical_quote_header (
                 date.today(),
                 header.get("total_unit_cost_gbp"),
             )
-        cursor.execute("SELECT CAST(SCOPE_IDENTITY() AS bigint)")
-        quote_id = int(cursor.fetchone()[0])
+        cursor.execute("SELECT quote_id FROM dbo.historical_quote_header WHERE quote_key = ?", qkey)
+        id_row = cursor.fetchone()
+        if not id_row or id_row[0] is None:
+            return json_path.name, "insert_header_missing_quote_id"
+        quote_id = int(id_row[0])
 
     part_json = {
         "role": "workbook_summary",
@@ -451,8 +454,20 @@ INSERT INTO dbo.historical_quote_part (
         header.get("total_unit_cost_gbp"),
         json.dumps(part_json, ensure_ascii=False, indent=2),
     )
-    cursor.execute("SELECT CAST(SCOPE_IDENTITY() AS bigint)")
-    part_id = int(cursor.fetchone()[0])
+    cursor.execute(
+        """
+SELECT TOP 1 quote_part_id
+FROM dbo.historical_quote_part
+WHERE quote_id = ? AND part_code = ?
+ORDER BY quote_part_id DESC;
+""",
+        quote_id,
+        "__WORKBOOK_SUMMARY__",
+    )
+    pr = cursor.fetchone()
+    if not pr or pr[0] is None:
+        return json_path.name, "insert_part_missing_quote_part_id"
+    part_id = int(pr[0])
 
     for op in ops:
         hourly = op.get("hourly_rate_gbp")
