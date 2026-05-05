@@ -259,6 +259,32 @@ def _build_readable_payload(
             for m in mats
         ],
     }
+    historical_comparison_projection = {
+        "schema": "estimate_projection_for_historical.v1",
+        "totals": {
+            "material_subtotal_gbp": header.get("material_subtotal_gbp"),
+            "labour_subtotal_gbp": header.get("labour_subtotal_gbp"),
+            "workbook_equivalent_total_unit_cost_gbp": header.get("total_unit_cost_gbp"),
+            "document_total_estimated_cost_gbp": header.get("total_unit_cost_gbp"),
+        },
+        "parts": [
+            {
+                "part_number": "__WORKBOOK_SUMMARY__",
+                "description": data.get("workbook_name"),
+                "quantity": 1,
+                "unit_total_cost_gbp": header.get("total_unit_cost_gbp"),
+                "extended_total_cost_gbp": header.get("total_unit_cost_gbp"),
+                "material_cost_gbp": header.get("material_subtotal_gbp"),
+                "labour_cost_gbp": header.get("labour_subtotal_gbp"),
+                "costing_basis": "historical_workbook_parse",
+                "operations_costs_gbp": {
+                    str(o.get("operation_code") or f"ROW_{o.get('estimate_row')}"): o.get("operation_cost_gbp")
+                    for o in ops
+                    if o.get("operation_cost_gbp") is not None
+                },
+            }
+        ],
+    }
     return {
         "schema": "historical_quote_readable.v1",
         "source": {
@@ -267,6 +293,7 @@ def _build_readable_payload(
             "workbook_name": data.get("workbook_name"),
         },
         "reconciliation": reconciliation,
+        "historical_comparison_projection": historical_comparison_projection,
         "formula_counts": {
             k: len(v or [])
             for k, v in (data.get("key_formula_summary") or {}).items()

@@ -336,10 +336,52 @@ WORKBOOK_EQUIVALENT_PRICING = {
     "fixed_factor": 0.95,
     "default_m107": 0.0,
     "default_m109": 0.0,
+    "sell_markup_options_pct": {
+        "low": 10.0,
+        "standard": 20.0,
+        "premium": 35.0,
+    },
+    # Workbook parity helper: quantity uplift/discount multipliers.
+    # Applied to computed totals when no direct system_cost_per_part is used.
+    "quantity_breaks": [
+        {"min_qty": 1, "max_qty": 4, "multiplier": 1.00},
+        {"min_qty": 5, "max_qty": 24, "multiplier": 0.97},
+        {"min_qty": 25, "max_qty": 99, "multiplier": 0.94},
+        {"min_qty": 100, "max_qty": None, "multiplier": 0.91},
+    ],
     "variance_thresholds_pct": {
         "match": 3.0,
         "warning": 10.0,
     },
+}
+
+# Explicit freshness and ranking rules for connector selection.
+PRICE_FRESHNESS_RULES = {
+    "default_days_fresh": 30,
+    "default_days_stale": 120,
+    "source_priority": {
+        "sqlserver": 100,
+        "spreadsheet": 80,
+        "access": 60,
+        "web": 40,
+    },
+    # Penalty values are added to a candidate score before sorting; lower is better.
+    "freshness_penalty": {
+        "fresh": 0.0,
+        "stale": 12.0,
+        "unknown": 20.0,
+    },
+}
+
+# Minimal write-back map for Blank Estimate template.
+# Keep this conservative: write to visible totals/output cells only.
+ESTIMATE_TEMPLATE_WRITEBACK = {
+    "output_cells": {
+        "L59": "estimate_summary.workbook_equivalent_pricing.m59_material_subtotal_gbp",
+        "L101": "estimate_summary.workbook_equivalent_pricing.m103_labour_subtotal_gbp",
+        "L105": "estimate_summary.workbook_equivalent_pricing.l105_total_unit_cost_gbp",
+        "L111": "estimate_summary.workbook_equivalent_pricing.l111_sell_price_gbp",
+    }
 }
 
 

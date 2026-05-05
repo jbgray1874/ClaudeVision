@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 import config
@@ -48,6 +49,50 @@ def _candidate_from_row(row: Dict[str, Any]) -> PriceCandidate:
         evidence=row.get("evidence", {}),
         metadata=metadata,
     )
+
+
+def _parse_price_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    # accept YYYY-MM-DD and ISO-like datetime values.
+    text = text.replace("T", " ")
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text[:19], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _freshness_bucket(candidate: PriceCandidate, rules: Dict[str, Any]) -> str:
+    evidence = candidate.evidence or {}
+    metadata = candidate.metadata or {}
+    dt = _parse_price_date(metadata.get("price_date") or evidence.get("price_date"))
+    if dt is None:
+        return "unknown"
+    age_days = max(0, (date.today() - dt).days)
+    fresh_days = int(rules.get("default_days_fresh", 30))
+    stale_days = int(rules.get("default_days_stale", 120))
+    if age_days <= fresh_days:
+        return "fresh"
+    if age_days <= stale_days:
+        return "stale"
+    return "unknown"
+
+
+def _candidate_rank_tuple(candidate: PriceCandidate, rules: Dict[str, Any]) -> tuple:
+    pri = (rules.get("source_priority") or {}).get(candidate.source, 10)
+    bucket = _freshness_bucket(candidate, rules)
+    penalty = float((rules.get("freshness_penalty") or {}).get(bucket, 20.0))
+    # Lower rank tuple is better.
+    return (-pri, penalty, -float(candidate.confidence or 0.0))
 
 
 def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -137,7 +182,8 @@ def get_best_price(request: PriceRequest, connectors: Optional[Dict[str, Any]] =
 
         usable = [candidate for candidate in source_candidates if candidate.price is not None]
         if usable:
-            best_usable = max(usable, key=lambda candidate: candidate.confidence)
+            rules = config.PRICE_FRESHNESS_RULES or {}
+            best_usable = sorted(usable, key=lambda c: _candidate_rank_tuple(c, rules))[0]
             return {
                 "request": request.__dict__,
                 "selected": best_usable.__dict__,

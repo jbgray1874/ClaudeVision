@@ -2,8 +2,10 @@ import argparse
 import json
 from pathlib import Path
 
+import config
 from config import DRAWINGS_DIR, OUTPUT_DIR, ensure_directories
 from estimate_template_parser import write_estimate_template_parse
+from estimate_template_writeback import write_estimate_template_from_summary
 from file_scan import list_input_files, scan_file
 from historical_jobs import build_history_corpus
 from rag_transformer import transform_scan_summary_to_historical_job_record
@@ -18,6 +20,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-history-corpus", action="store_true", help="Build a retrieval corpus from paired historical spreadsheets and drawings.")
     parser.add_argument("--transform-scan-json", type=str, help="Transform an existing scan JSON into a historical_job_record schema.")
     parser.add_argument("--parse-estimate-template", type=str, help="Parse an estimate workbook template and extract formula structures.")
+    parser.add_argument("--write-estimate-template-from-json", type=str, help="Write estimate totals into a copy of the template workbook from a scan summary JSON.")
+    parser.add_argument("--template-workbook", type=str, help="Template workbook path used for write-back (.xlsx required).")
+    parser.add_argument("--output-workbook", type=str, help="Output workbook path for write-back result.")
     parser.add_argument("--export-json-to-sql", type=str, help="Export a single scan JSON file into one SQL Server insert script.")
     parser.add_argument("--export-json-dir-to-sql", type=str, help="Export all scan JSON files in a folder into one SQL Server insert script.")
     parser.add_argument("--sql-output", type=str, help="Optional output path for the generated SQL Server SQL script.")
@@ -51,6 +56,25 @@ def main() -> None:
         output_path = workbook_path.with_name(f"{workbook_path.stem}.formula_parse.json")
         written = write_estimate_template_parse(workbook_path, output_path)
         print(f"Estimate template parse written to: {written}")
+        return
+
+    if args.write_estimate_template_from_json:
+        json_path = Path(args.write_estimate_template_from_json)
+        if not json_path.exists():
+            print(f"JSON file not found: {json_path}")
+            return
+        template_path = Path(args.template_workbook) if args.template_workbook else Path(
+            str(config.PRICE_SOURCE_CONFIG.get("spreadsheet", {}).get("template_workbook", ""))
+        )
+        if not template_path.exists():
+            print(f"Template workbook not found: {template_path}")
+            return
+        with json_path.open("r", encoding="utf-8") as handle:
+            summary = json.load(handle)
+        output_path = Path(args.output_workbook) if args.output_workbook else json_path.with_name(f"{json_path.stem}.estimate_writeback.xlsx")
+        written = write_estimate_template_from_summary(summary, template_path, output_path)
+        print(f"Estimate template write-back written to: {written}")
+        print(f"Write-back audit JSON: {written.with_suffix('.writeback.audit.json')}")
         return
 
     if args.export_json_to_sql:

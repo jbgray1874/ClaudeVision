@@ -6,6 +6,7 @@ from math import floor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import config
 from config import (
     CSV_HEADERS,
     HOURLY_RATES_GBP,
@@ -79,21 +80,67 @@ def _build_price_source_metadata(result: Dict[str, Any], fallback_source: str, a
         or selected.get("source")
         or fallback_source
     )
+    source_name = selected.get("source") or fallback_source
+    source_rank = (config.PRICE_FRESHNESS_RULES or {}).get("source_priority", {}).get(str(source_name), 0)
+    freshness_bucket = _price_freshness_bucket(metadata.get("price_date") or evidence.get("price_date") or evidence_row.get("price_date"))
+    freshness_penalty = (config.PRICE_FRESHNESS_RULES or {}).get("freshness_penalty", {}).get(freshness_bucket, 20.0)
     return {
         "supplier_source": supplier_source,
         "supplier_code": metadata.get("supplier_code") or evidence.get("supplier_code") or evidence_row.get("supplier_code"),
         "price_date": metadata.get("price_date") or evidence.get("price_date") or str(date.today()),
         "source_type": "external" if selected.get("source") else "config",
-        "source_name": selected.get("source") or fallback_source,
+        "source_name": source_name,
+        "source_rank": source_rank,
         "unit": selected.get("unit") or "unknown",
         "currency": selected.get("currency") or "GBP",
         "confidence": selected.get("confidence"),
         "applied": applied,
         "applied_basis": applied_basis,
+        "freshness_bucket": freshness_bucket,
+        "freshness_penalty": freshness_penalty,
         "selected": selected,
         "audit_trail": result.get("audit_trail", []),
         "candidates": result.get("candidates", []),
     }
+
+
+def _price_freshness_bucket(raw_date: Any) -> str:
+    if not raw_date:
+        return "unknown"
+    text = str(raw_date).strip().replace("T", " ")
+    parsed = None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y"):
+        try:
+            parsed = date.fromisoformat(text[:10]) if fmt == "%Y-%m-%d" else None
+            if parsed is None:
+                from datetime import datetime as _dt
+
+                parsed = _dt.strptime(text[:19], fmt).date()
+            break
+        except Exception:
+            continue
+    if parsed is None:
+        return "unknown"
+    age = max(0, (date.today() - parsed).days)
+    fresh_days = int((config.PRICE_FRESHNESS_RULES or {}).get("default_days_fresh", 30))
+    stale_days = int((config.PRICE_FRESHNESS_RULES or {}).get("default_days_stale", 120))
+    if age <= fresh_days:
+        return "fresh"
+    if age <= stale_days:
+        return "stale"
+    return "unknown"
+
+
+def _quantity_break_multiplier(quantity: int) -> float:
+    cfg = WORKBOOK_EQUIVALENT_PRICING or {}
+    breaks = cfg.get("quantity_breaks") or []
+    for br in breaks:
+        qmin = int(br.get("min_qty", 1))
+        qmax = br.get("max_qty")
+        qmax_i = int(qmax) if qmax is not None else None
+        if quantity >= qmin and (qmax_i is None or quantity <= qmax_i):
+            return float(br.get("multiplier", 1.0))
+    return 1.0
 
 
 def _resolve_material_price(material: Optional[str], thickness_mm: Optional[float], quantity: Optional[int]) -> Dict[str, Any]:
@@ -448,22 +495,39 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
     extended_material_cost = _safe_float(material_extended) or 0.0
     total_labour_cost = labour.get("total_labour_cost_gbp") or 0.0
 
-    no_ops_except_handling = set(part.get("textual_operations", [])) <= {"handling"}
-    bought_in_candidate = no_ops_except_handling and not part.get("flat_pattern_detected")
+    op_set = {str(op).strip().lower() for op in (part.get("textual_operations", []) or []) if str(op).strip()}
+    no_ops_except_handling = op_set <= {"handling"}
+    desc_blob = " ".join(
+        [
+            str(part.get("description") or ""),
+            ";".join(part.get("process_notes") or []),
+            ";".join(part.get("textual_operations") or []),
+        ]
+    ).upper()
+    bought_in_keywords = ("BOUGHT IN", "BOUGHT-IN", "PURCHASED", "OFF THE SHELF", "CATALOGUE", "HARDWARE")
+    bought_in_candidate = (no_ops_except_handling and not part.get("flat_pattern_detected")) or any(k in desc_blob for k in bought_in_keywords)
 
     if bought_in_candidate and system_unit_cost is not None:
         unit_total = round(system_unit_cost, 2)
         extended_total = round(unit_total * quantity, 2)
         costing_basis = "system_cost_per_part"
     else:
-        extended_total = round(extended_material_cost + total_labour_cost, 2)
+        qty_multiplier = _quantity_break_multiplier(quantity)
+        extended_total = round((extended_material_cost + total_labour_cost) * qty_multiplier, 2)
         unit_total = round(extended_total / quantity, 2) if quantity else extended_total
-        costing_basis = "computed_material_plus_labour"
-    margin_options = [
-        {"name": "low", "markup_pct": 10, "unit_sell_price_gbp": round(unit_total * 1.10, 2), "extended_sell_price_gbp": round(extended_total * 1.10, 2)},
-        {"name": "standard", "markup_pct": 20, "unit_sell_price_gbp": round(unit_total * 1.20, 2), "extended_sell_price_gbp": round(extended_total * 1.20, 2)},
-        {"name": "premium", "markup_pct": 35, "unit_sell_price_gbp": round(unit_total * 1.35, 2), "extended_sell_price_gbp": round(extended_total * 1.35, 2)},
-    ]
+        costing_basis = f"computed_material_plus_labour_qty_break_x{qty_multiplier:.3f}"
+    markups = (WORKBOOK_EQUIVALENT_PRICING or {}).get("sell_markup_options_pct") or {"low": 10.0, "standard": 20.0, "premium": 35.0}
+    margin_options = []
+    for name, pct in markups.items():
+        factor = 1.0 + (float(pct) / 100.0)
+        margin_options.append(
+            {
+                "name": str(name),
+                "markup_pct": float(pct),
+                "unit_sell_price_gbp": round(unit_total * factor, 2),
+                "extended_sell_price_gbp": round(extended_total * factor, 2),
+            }
+        )
 
     # Surface missing price/rate conditions for human review.
     risk_flags = list(part.get("risk_flags", []))
@@ -598,11 +662,36 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
     document_total = round(sum(item["extended_total_cost_gbp"] for item in part_estimates), 2)
     workbook_equivalent_pricing = _build_workbook_equivalent_pricing(part_estimates, material_total=material_total, labour_total=labour_total)
     estimate_source_extract = build_estimate_source_extract(part_estimates)
+    historical_comparison_projection = {
+        "schema": "estimate_projection_for_historical.v1",
+        "totals": {
+            "material_subtotal_gbp": material_total,
+            "labour_subtotal_gbp": labour_total,
+            "document_total_estimated_cost_gbp": document_total,
+            "workbook_equivalent_total_unit_cost_gbp": workbook_equivalent_pricing.get("l105_total_unit_cost_gbp"),
+            "workbook_equivalent_sell_price_gbp": workbook_equivalent_pricing.get("l111_sell_price_gbp"),
+        },
+        "parts": [
+            {
+                "part_number": p.get("part_number"),
+                "description": p.get("description"),
+                "quantity": p.get("quantity"),
+                "unit_total_cost_gbp": p.get("unit_total_cost_gbp"),
+                "extended_total_cost_gbp": p.get("extended_total_cost_gbp"),
+                "material_cost_gbp": p.get("cost_breakdown", {}).get("material", {}).get("extended_material_cost_gbp"),
+                "labour_cost_gbp": p.get("cost_breakdown", {}).get("labour", {}).get("total_labour_cost_gbp"),
+                "costing_basis": p.get("cost_breakdown", {}).get("costing_basis"),
+                "operations_costs_gbp": p.get("cost_breakdown", {}).get("labour", {}).get("costs_gbp", {}),
+            }
+            for p in part_estimates
+        ],
+    }
     return {
         "part_estimates": part_estimates,
         "document_total_estimated_cost_gbp": document_total,
         "workbook_equivalent_pricing": workbook_equivalent_pricing,
         "estimate_source_extract": estimate_source_extract,
+        "historical_comparison_projection": historical_comparison_projection,
         "cost_breakdown": {
             "material": {
                 "total": material_total,
