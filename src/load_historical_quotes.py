@@ -37,6 +37,15 @@ except ImportError:
     pyodbc = None
 
 
+def _is_sql_permission_error(exc: Exception) -> bool:
+    msg = str(exc).upper()
+    return (
+        "PERMISSION WAS DENIED" in msg
+        or "(229)" in msg
+        or "SQLSTATE=42000" in msg
+    )
+
+
 def _connect():
     if pyodbc is None:
         raise RuntimeError("pyodbc is required for load_historical_quotes")
@@ -66,6 +75,21 @@ WHERE SCHEMA_NAME(t.schema_id) = N'dbo'
 """
     )
     return cur.fetchone() is not None
+
+
+def _detect_detailed_line_tables(conn) -> bool:
+    cur = conn.cursor()
+    cur.execute(
+        """
+SELECT COUNT(*) AS c
+FROM sys.tables t
+INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE s.name = N'dbo'
+  AND t.name IN (N'historical_quote_material_line', N'historical_quote_labour_line');
+"""
+    )
+    row = cur.fetchone()
+    return bool(row and int(row[0]) == 2)
 
 
 def _reconciliation_sidecar_path(json_path: Path) -> Path:
@@ -220,11 +244,289 @@ def _material_lines(key_cells: Dict[str, Any]) -> List[Dict[str, Any]]:
     return lines
 
 
+def _build_estimate_row_index(data: Dict[str, Any]) -> Dict[int, Dict[str, Dict[str, Any]]]:
+    out: Dict[int, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+    for entry in data.get("parsed_entries") or []:
+        if str(entry.get("sheet", "")).upper() != "ESTIMATE":
+            continue
+        addr = str(entry.get("address", ""))
+        row = _row_from_address(addr)
+        col = _col_from_address(addr)
+        if row is None or col is None:
+            continue
+        out[row][col] = entry
+    return out
+
+
+def _numeric_from_cell(cell: Dict[str, Any]) -> Optional[float]:
+    if not isinstance(cell, dict):
+        return None
+    for k in (
+        "value",
+        "numeric_value",
+        "evaluated_value",
+        "formula_value",
+        "computed_value",
+        "calc_value",
+        "result",
+        "resolved_value",
+        "raw_value",
+    ):
+        v = _parse_money(cell.get(k))
+        if v is not None:
+            return v
+    labels = cell.get("labels") or {}
+    for k in ("right", "left_2", "left"):
+        v = _parse_money(labels.get(k))
+        if v is not None:
+            return v
+    return None
+
+
+def _qty_from_description(desc: str) -> Optional[float]:
+    if not desc:
+        return None
+    parts = [p.strip() for p in desc.split("|") if p and p.strip()]
+    for p in reversed(parts):
+        q = _parse_float(p)
+        if q is not None:
+            return q
+    m = re.search(r"(\d+(?:\.\d+)?)\s*$", desc)
+    if m:
+        return _parse_float(m.group(1))
+    return None
+
+
+def _material_lines_detailed(
+    key_cells: Dict[str, Any],
+    estimate_row_index: Optional[Dict[int, Dict[str, Dict[str, Any]]]] = None,
+) -> List[Dict[str, Any]]:
+    by_row: Dict[int, Dict[str, Any]] = defaultdict(dict)
+    for entry in key_cells.get("material_unit_prices") or []:
+        addr = str(entry.get("address", ""))
+        row = _row_from_address(addr)
+        col = _col_from_address(addr)
+        if row is None or col is None:
+            continue
+        by_row[row][col] = entry
+
+    out: List[Dict[str, Any]] = []
+    for row in sorted(by_row):
+        cells = dict(by_row[row])
+        fallback_cells = (estimate_row_index or {}).get(row) or {}
+        for col, fb in fallback_cells.items():
+            if col not in cells:
+                cells[col] = fb
+            else:
+                cur_val = str((cells[col] or {}).get("value") or "").strip()
+                if cur_val in {"", "-", "0"}:
+                    cells[col] = fb
+        primary = cells.get("J") or cells.get("I") or next(iter(cells.values()), {})
+        labels = primary.get("labels") or {}
+        line_desc = " | ".join(
+            v for v in [str(labels.get("left", "")).strip(), str(labels.get("left_2", "")).strip(), str(labels.get("right", "")).strip()] if v
+        )
+        if not line_desc:
+            desc_candidates: List[str] = []
+            for c in ("F", "G", "H", "I", "J", "K"):
+                cell = cells.get(c) or {}
+                raw = str(cell.get("value") or "").strip()
+                if raw and _parse_money(raw) is None and len(raw) <= 200:
+                    desc_candidates.append(raw)
+                cl = cell.get("labels") or {}
+                for lk in ("left", "left_2", "right"):
+                    t = str(cl.get(lk) or "").strip()
+                    if t and _parse_money(t) is None and len(t) <= 200:
+                        desc_candidates.append(t)
+            if desc_candidates:
+                seen = []
+                for t in desc_candidates:
+                    if t not in seen:
+                        seen.append(t)
+                line_desc = " | ".join(seen[:4])
+        unit_price = None
+        for col in ("J", "I", "H", "G", "F", "K", "M", "N", "O", "P"):
+            unit_price = _numeric_from_cell(cells.get(col) or {})
+            if unit_price is not None:
+                break
+        qty_per_unit = _parse_float((cells.get("K") or {}).get("value"))
+        if qty_per_unit is None:
+            qty_per_unit = _numeric_from_cell(cells.get("H") or {})
+        if qty_per_unit is None:
+            qty_per_unit = _qty_from_description(line_desc)
+        if qty_per_unit is None:
+            qty_per_unit = 1.0
+        scrap_raw = _parse_float((cells.get("L") or {}).get("value"))
+        scrap_pct = scrap_raw if scrap_raw is not None and 0 <= scrap_raw <= 100 else 0.0
+        total_val = None
+        for col in ("L", "M", "N"):
+            total_val = _numeric_from_cell(cells.get(col) or {})
+            if total_val is not None:
+                break
+        if total_val is None:
+            # Last-chance: use the largest numeric on the row as likely line total.
+            nums: List[float] = []
+            for col in ("F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"):
+                v = _numeric_from_cell(cells.get(col) or {})
+                if v is not None and v > 0:
+                    nums.append(v)
+            if nums:
+                total_val = max(nums)
+        if total_val is None and unit_price is not None:
+            total_val = round(unit_price * qty_per_unit * (1.0 + (scrap_pct / 100.0)), 4)
+        if unit_price is None and total_val is not None and qty_per_unit not in (None, 0):
+            unit_price = round(float(total_val) / float(qty_per_unit), 6)
+        out.append(
+            {
+                "line_no": row,
+                "source_sheet": "Estimate",
+                "source_cell_ref": f"ROW_{row}",
+                "part_code": None,
+                "line_description": line_desc[:1000] if line_desc else None,
+                "supplier_name": None,
+                "unit": "GBP_per_unit",
+                "unit_price_gbp": unit_price,
+                "qty_per_unit": qty_per_unit,
+                "scrap_pct": scrap_pct,
+                "line_total_gbp": total_val,
+                "raw": cells,
+            }
+        )
+    return out
+
+
+def _labour_lines_detailed(key_cells: Dict[str, Any]) -> List[Dict[str, Any]]:
+    by_row: Dict[int, Dict[str, Any]] = defaultdict(dict)
+    for entry in key_cells.get("operation_rows") or []:
+        addr = str(entry.get("address", ""))
+        row = _row_from_address(addr)
+        col = _col_from_address(addr)
+        if row is None or col is None:
+            continue
+        by_row[row][col] = entry
+
+    out: List[Dict[str, Any]] = []
+    for row in sorted(by_row):
+        cells = by_row[row]
+        op_cell = cells.get("F") or cells.get("E") or {}
+        op_code = str(op_cell.get("value") or "").strip() or None
+        if op_code in {None, "", "-", "0"}:
+            continue
+        labels = op_cell.get("labels") or {}
+        desc = " | ".join(v for v in [str(labels.get("left", "")).strip(), str(labels.get("left_2", "")).strip(), str(labels.get("right", "")).strip()] if v)
+        qty_per = _parse_float((cells.get("H") or {}).get("value")) or 1.0
+        rate = _parse_money((cells.get("J") or {}).get("value"))
+        total_hours = _parse_float((cells.get("I") or {}).get("value"))
+        setup_mins = _parse_float((cells.get("K") or {}).get("value"))
+        line_total = _parse_money((cells.get("L") or {}).get("value"))
+        out.append(
+            {
+                "line_no": row,
+                "source_sheet": "Estimate",
+                "source_cell_ref": f"ROW_{row}",
+                "operation_code": op_code,
+                "department_code": op_code,
+                "part_description": desc[:1000] if desc else None,
+                "qty_per_unit": qty_per,
+                "rate_per_hour_gbp": rate,
+                "total_hours": total_hours,
+                "setup_mins": setup_mins,
+                "line_total_gbp": line_total,
+                "raw": cells,
+            }
+        )
+    return out
+
+
+def _material_lines_from_estimate_formulas(
+    data: Dict[str, Any],
+    estimate_row_index: Dict[int, Dict[str, Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    formulas = ((data.get("estimate_sheet") or {}).get("formulas")) or []
+    out: List[Dict[str, Any]] = []
+    for f in formulas:
+        addr = str(f.get("address", ""))
+        row = _row_from_address(addr)
+        col = _col_from_address(addr)
+        if row is None or col != "L":
+            continue
+        # Material block in these templates is generally above the subtotal band.
+        if row >= 59 or row < 8:
+            continue
+        formula_txt = str(f.get("formula") or "").upper()
+        if "J" not in formula_txt or "K" not in formula_txt:
+            continue
+        cells = estimate_row_index.get(row) or {}
+        desc_parts: List[str] = []
+        for c in ("F", "G", "H", "I"):
+            cell = cells.get(c) or {}
+            raw = str(cell.get("value") or "").strip()
+            if raw and _parse_money(raw) is None:
+                desc_parts.append(raw)
+            labels = cell.get("labels") or {}
+            for lk in ("left", "left_2", "right"):
+                t = str(labels.get(lk) or "").strip()
+                if t and _parse_money(t) is None:
+                    desc_parts.append(t)
+        line_desc = " | ".join(dict.fromkeys(desc_parts))[:1000] if desc_parts else None
+        unit_price = _numeric_from_cell(cells.get("J") or {})
+        qty_per_unit = _numeric_from_cell(cells.get("K") or {})
+        if qty_per_unit is None:
+            qty_per_unit = _parse_float(f.get("label_left_2"))
+        if qty_per_unit is None:
+            qty_per_unit = _qty_from_description(line_desc or "")
+        if qty_per_unit is None:
+            qty_per_unit = 1.0
+        scrap_pct = _parse_float(f.get("label_left"))
+        if scrap_pct is None or scrap_pct < 0 or scrap_pct > 100:
+            scrap_pct = 0.0
+        total_val = _parse_money(f.get("value"))
+        if total_val is None:
+            total_val = _numeric_from_cell(cells.get("L") or {})
+        if unit_price is None and total_val is not None and qty_per_unit not in (None, 0):
+            unit_price = round(float(total_val) / float(qty_per_unit), 6)
+        out.append(
+            {
+                "line_no": row,
+                "source_sheet": "Estimate",
+                "source_cell_ref": f"L{row}",
+                "part_code": None,
+                "line_description": line_desc,
+                "supplier_name": None,
+                "unit": "GBP_per_unit",
+                "unit_price_gbp": unit_price,
+                "qty_per_unit": qty_per_unit,
+                "scrap_pct": scrap_pct,
+                "line_total_gbp": total_val,
+                "raw": {"formula_row": f, "row_cells": cells},
+            }
+        )
+    return out
+
+
+def _merge_material_line_candidates(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    best_by_row: Dict[int, Dict[str, Any]] = {}
+    for line in lines:
+        row = int(line.get("line_no") or 0)
+        if row <= 0:
+            continue
+        prev = best_by_row.get(row)
+        cur_score = int(line.get("unit_price_gbp") is not None) + int(line.get("line_total_gbp") is not None)
+        prev_score = 0
+        if prev is not None:
+            prev_score = int(prev.get("unit_price_gbp") is not None) + int(prev.get("line_total_gbp") is not None)
+        if prev is None or cur_score > prev_score:
+            best_by_row[row] = line
+    return [best_by_row[k] for k in sorted(best_by_row)]
+
+
 def _build_readable_payload(
     data: Dict[str, Any],
     header: Dict[str, Any],
     ops: List[Dict[str, Any]],
     mats: List[Dict[str, Any]],
+    mats_detailed: List[Dict[str, Any]],
+    labour_detailed: List[Dict[str, Any]],
     json_path: Path,
 ) -> Dict[str, Any]:
     """Structured JSON for drawing ↔ spreadsheet reconciliation (kept out of the giant raw parse blob)."""
@@ -257,6 +559,36 @@ def _build_readable_payload(
                 "cell": m.get("address"),
             }
             for m in mats
+        ],
+        "material_lines_detailed": [
+            {
+                "line_no": m.get("line_no"),
+                "part_code": m.get("part_code"),
+                "line_description": m.get("line_description"),
+                "supplier_name": m.get("supplier_name"),
+                "unit": m.get("unit"),
+                "unit_price_gbp": m.get("unit_price_gbp"),
+                "qty_per_unit": m.get("qty_per_unit"),
+                "scrap_pct": m.get("scrap_pct"),
+                "line_total_gbp": m.get("line_total_gbp"),
+                "source_cell_ref": m.get("source_cell_ref"),
+            }
+            for m in mats_detailed
+        ],
+        "labour_lines_detailed": [
+            {
+                "line_no": l.get("line_no"),
+                "operation_code": l.get("operation_code"),
+                "department_code": l.get("department_code"),
+                "part_description": l.get("part_description"),
+                "qty_per_unit": l.get("qty_per_unit"),
+                "rate_per_hour_gbp": l.get("rate_per_hour_gbp"),
+                "total_hours": l.get("total_hours"),
+                "setup_mins": l.get("setup_mins"),
+                "line_total_gbp": l.get("line_total_gbp"),
+                "source_cell_ref": l.get("source_cell_ref"),
+            }
+            for l in labour_detailed
         ],
     }
     historical_comparison_projection = {
@@ -339,6 +671,7 @@ def load_one_json(
     dry_run: bool,
     use_readable_column: bool,
     write_sidecar: bool,
+    use_detailed_tables: bool,
 ) -> Tuple[str, Optional[str]]:
     raw = json_path.read_text(encoding="utf-8")
     data = json.loads(raw)
@@ -351,7 +684,12 @@ def load_one_json(
     key_cells = data.get("key_cells") or {}
     ops = _group_labour_operations(key_cells)
     mats = _material_lines(key_cells)
-    readable_payload = _build_readable_payload(data, header, ops, mats, json_path)
+    estimate_row_index = _build_estimate_row_index(data)
+    mats_detailed_keycells = _material_lines_detailed(key_cells, estimate_row_index=estimate_row_index)
+    mats_detailed_formula = _material_lines_from_estimate_formulas(data, estimate_row_index=estimate_row_index)
+    mats_detailed = _merge_material_line_candidates(mats_detailed_keycells + mats_detailed_formula)
+    labour_detailed = _labour_lines_detailed(key_cells)
+    readable_payload = _build_readable_payload(data, header, ops, mats, mats_detailed, labour_detailed, json_path)
     readable = _readable_json_string(readable_payload)
 
     if dry_run:
@@ -371,6 +709,19 @@ def load_one_json(
             quote_id,
         )
         cursor.execute("DELETE FROM dbo.historical_quote_part WHERE quote_id = ?", quote_id)
+        if use_detailed_tables:
+            try:
+                cursor.execute("DELETE FROM dbo.historical_quote_material_line WHERE quote_id = ?", quote_id)
+                cursor.execute("DELETE FROM dbo.historical_quote_labour_line WHERE quote_id = ?", quote_id)
+            except Exception as exc:
+                if _is_sql_permission_error(exc):
+                    use_detailed_tables = False
+                    print(
+                        "Note: no DELETE permission on detailed line tables; continuing without detailed line table writes.",
+                        file=sys.stderr,
+                    )
+                else:
+                    raise
         if use_readable_column:
             cursor.execute(
                 """
@@ -458,6 +809,61 @@ INSERT INTO dbo.historical_quote_header (
         if not id_row or id_row[0] is None:
             return json_path.name, "insert_header_missing_quote_id"
         quote_id = int(id_row[0])
+
+    if use_detailed_tables:
+        try:
+            for m in mats_detailed:
+                cursor.execute(
+                    """
+INSERT INTO dbo.historical_quote_material_line (
+    quote_id, line_no, source_sheet, source_cell_ref, part_code, line_description, supplier_name,
+    unit, unit_price_gbp, qty_per_unit, scrap_pct, line_total_gbp, raw_line_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+""",
+                    quote_id,
+                    m.get("line_no"),
+                    m.get("source_sheet"),
+                    m.get("source_cell_ref"),
+                    m.get("part_code"),
+                    m.get("line_description"),
+                    m.get("supplier_name"),
+                    m.get("unit"),
+                    m.get("unit_price_gbp"),
+                    m.get("qty_per_unit"),
+                    m.get("scrap_pct"),
+                    m.get("line_total_gbp"),
+                    json.dumps(m.get("raw", {}), ensure_ascii=False),
+                )
+            for l in labour_detailed:
+                cursor.execute(
+                    """
+INSERT INTO dbo.historical_quote_labour_line (
+    quote_id, line_no, source_sheet, source_cell_ref, operation_code, department_code, part_description,
+    qty_per_unit, rate_per_hour_gbp, total_hours, setup_mins, line_total_gbp, raw_line_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+""",
+                    quote_id,
+                    l.get("line_no"),
+                    l.get("source_sheet"),
+                    l.get("source_cell_ref"),
+                    l.get("operation_code"),
+                    l.get("department_code"),
+                    l.get("part_description"),
+                    l.get("qty_per_unit"),
+                    l.get("rate_per_hour_gbp"),
+                    l.get("total_hours"),
+                    l.get("setup_mins"),
+                    l.get("line_total_gbp"),
+                    json.dumps(l.get("raw", {}), ensure_ascii=False),
+                )
+        except Exception as exc:
+            if _is_sql_permission_error(exc):
+                print(
+                    "Note: no INSERT permission on detailed line tables; core historical tables still loaded.",
+                    file=sys.stderr,
+                )
+            else:
+                raise
 
     part_json = {
         "role": "workbook_summary",
@@ -583,10 +989,16 @@ def main() -> None:
     conn = _connect()
     try:
         use_readable = _detect_readable_extract_column(conn)
+        use_detailed_tables = _detect_detailed_line_tables(conn)
         if not use_readable:
             print(
                 "Note: dbo.historical_quote_header.readable_extract_json not found; "
                 "run sql/historical_quote_add_readable_extract.sql to store indented reconciliation JSON in SQL.",
+                file=sys.stderr,
+            )
+        if not use_detailed_tables:
+            print(
+                "Note: detailed line tables not found (historical_quote_material_line/historical_quote_labour_line); skipping detailed inserts.",
                 file=sys.stderr,
             )
         cursor = conn.cursor()
@@ -598,6 +1010,7 @@ def main() -> None:
                     dry_run=False,
                     use_readable_column=use_readable,
                     write_sidecar=args.write_sidecar_reconciliation,
+                    use_detailed_tables=use_detailed_tables,
                 )
                 if err:
                     rejects.append((name, err))
