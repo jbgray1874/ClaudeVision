@@ -297,6 +297,211 @@ def _qty_from_description(desc: str) -> Optional[float]:
     return None
 
 
+def _norm_text(value: str) -> str:
+    s = re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).strip()
+    return re.sub(r"\s+", " ", s)
+
+
+def _token_set(value: str) -> set[str]:
+    return {t for t in _norm_text(value).split(" ") if t and len(t) >= 2}
+
+
+def _build_material_price_break_key_map(data: Dict[str, Any]) -> Dict[str, float]:
+    by_row: Dict[int, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+    for entry in data.get("parsed_entries") or []:
+        if str(entry.get("sheet", "")).upper() != "MATERIAL PRICE BREAK":
+            continue
+        row = _row_from_address(str(entry.get("address", "")))
+        col = _col_from_address(str(entry.get("address", "")))
+        if row is None or col is None:
+            continue
+        by_row[row][col] = entry
+
+    out: Dict[str, float] = {}
+    for row, cols in by_row.items():
+        b = cols.get("B") or {}
+        desc = str(b.get("value") or "").strip()
+        if not desc:
+            continue
+        price_candidates: List[float] = []
+        # Some parses place resolved cost in label_right on B-row.
+        labels = b.get("labels") or {}
+        for k in ("right", "left_2", "left"):
+            v = _parse_money(labels.get(k))
+            if v is not None and v > 0:
+                price_candidates.append(v)
+        # Also inspect C..I row values as possible break prices.
+        for col in ("C", "D", "E", "F", "G", "H", "I"):
+            v = _numeric_from_cell(cols.get(col) or {})
+            if v is not None and v > 0:
+                price_candidates.append(v)
+        if not price_candidates:
+            continue
+        # Prefer smallest positive candidate as unit-ish price.
+        p = min(price_candidates)
+        key = _norm_text(desc)
+        if key:
+            out[key] = p
+    return out
+
+
+def _resolve_missing_material_prices_from_price_break(
+    mats_detailed: List[Dict[str, Any]],
+    price_break_map: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    if not price_break_map:
+        return mats_detailed
+    map_items = [(k, _token_set(k), v) for k, v in price_break_map.items()]
+    resolved: List[Dict[str, Any]] = []
+    for m in mats_detailed:
+        if m.get("unit_price_gbp") is not None and m.get("line_total_gbp") is not None:
+            resolved.append(m)
+            continue
+        desc = str(m.get("line_description") or "")
+        tok = _token_set(desc)
+        best_price: Optional[float] = None
+        best_score = 0.0
+        if tok:
+            for _k, ktok, price in map_items:
+                inter = len(tok.intersection(ktok))
+                if inter == 0:
+                    continue
+                score = inter / max(1, len(tok))
+                if score > best_score:
+                    best_score = score
+                    best_price = price
+        if best_price is not None and best_score >= 0.34:
+            qty = _parse_float(m.get("qty_per_unit"))
+            if qty is None or qty <= 0:
+                qty = 1.0
+            if m.get("unit_price_gbp") is None:
+                m["unit_price_gbp"] = round(float(best_price), 6)
+            if m.get("line_total_gbp") is None:
+                scrap = _parse_float(m.get("scrap_pct")) or 0.0
+                m["line_total_gbp"] = round(float(best_price) * float(qty) * (1.0 + (float(scrap) / 100.0)), 4)
+            raw = m.get("raw") or {}
+            if isinstance(raw, dict):
+                raw["price_break_resolved"] = True
+                raw["price_break_match_score"] = round(float(best_score), 4)
+        resolved.append(m)
+    return resolved
+
+
+def _impute_material_prices_from_historical_db(
+    cursor,
+    mats_detailed: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    # Build lightweight in-memory map from existing loaded rows.
+    cursor.execute(
+        """
+SELECT line_description, unit_price_gbp
+FROM dbo.historical_quote_material_line
+WHERE unit_price_gbp IS NOT NULL
+  AND line_description IS NOT NULL
+  AND LTRIM(RTRIM(line_description)) <> '';
+"""
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return mats_detailed
+    price_by_key: Dict[str, List[float]] = defaultdict(list)
+    for r in rows:
+        desc = str(r[0] or "").strip()
+        price = _parse_float(r[1])
+        if not desc or price is None or price <= 0:
+            continue
+        k = _norm_text(desc)
+        if k:
+            price_by_key[k].append(float(price))
+
+    avg_price_by_key: Dict[str, float] = {
+        k: round(sum(v) / len(v), 6) for k, v in price_by_key.items() if v
+    }
+    keyed = [(k, _token_set(k), p) for k, p in avg_price_by_key.items()]
+
+    out: List[Dict[str, Any]] = []
+    for m in mats_detailed:
+        if m.get("unit_price_gbp") is not None and m.get("line_total_gbp") is not None:
+            out.append(m)
+            continue
+        desc = str(m.get("line_description") or "")
+        tok = _token_set(desc)
+        if not tok:
+            out.append(m)
+            continue
+        best_price: Optional[float] = None
+        best_score = 0.0
+        for _k, ktok, p in keyed:
+            inter = len(tok.intersection(ktok))
+            if inter == 0:
+                continue
+            score = inter / max(1, len(tok))
+            if score > best_score:
+                best_score = score
+                best_price = p
+        if best_price is not None and best_score >= 0.5:
+            qty = _parse_float(m.get("qty_per_unit"))
+            if qty is None or qty <= 0:
+                qty = 1.0
+            if m.get("unit_price_gbp") is None:
+                m["unit_price_gbp"] = round(float(best_price), 6)
+            if m.get("line_total_gbp") is None:
+                scrap = _parse_float(m.get("scrap_pct")) or 0.0
+                m["line_total_gbp"] = round(float(best_price) * float(qty) * (1.0 + (float(scrap) / 100.0)), 4)
+            raw = m.get("raw") or {}
+            if isinstance(raw, dict):
+                raw["historical_imputed_price"] = True
+                raw["historical_imputed_score"] = round(float(best_score), 4)
+        out.append(m)
+    return out
+
+
+def _detect_material_row_upper_bound(data: Dict[str, Any]) -> int:
+    # Default legacy estimate layout material subtotal row.
+    upper = 59
+    totals = ((data.get("key_cells") or {}).get("totals")) or []
+    for t in totals:
+        addr = str(t.get("address", "")).upper()
+        if addr.startswith("L"):
+            row = _row_from_address(addr)
+            if row and 20 <= row <= 120:
+                upper = min(upper, row)
+    entries = data.get("parsed_entries") or []
+    for e in entries:
+        if str(e.get("sheet", "")).upper() != "ESTIMATE":
+            continue
+        blob = " ".join(
+            [
+                str(e.get("value") or ""),
+                str((e.get("labels") or {}).get("left") or ""),
+                str((e.get("labels") or {}).get("left_2") or ""),
+                str((e.get("labels") or {}).get("right") or ""),
+            ]
+        ).upper()
+        if "MATERIAL" in blob and "SUB" in blob and "TOTAL" in blob:
+            row = _row_from_address(str(e.get("address", "")))
+            if row and 20 <= row <= 140:
+                upper = min(upper, row)
+    return upper
+
+
+def _material_price_break_by_row(data: Dict[str, Any]) -> Dict[int, float]:
+    out: Dict[int, float] = {}
+    formulas = ((data.get("estimate_sheet") or {}).get("formulas")) or []
+    for f in formulas:
+        addr = str(f.get("address", "")).upper()
+        row = _row_from_address(addr)
+        if row is None or not addr.startswith("I"):
+            continue
+        formula = str(f.get("formula") or "").upper()
+        if "MATERIAL PRICE BREAK" not in formula:
+            continue
+        v = _parse_money(f.get("value"))
+        if v is not None and v > 0:
+            out[row] = v
+    return out
+
+
 def _material_lines_detailed(
     key_cells: Dict[str, Any],
     estimate_row_index: Optional[Dict[int, Dict[str, Dict[str, Any]]]] = None,
@@ -441,9 +646,12 @@ def _labour_lines_detailed(key_cells: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _material_lines_from_estimate_formulas(
     data: Dict[str, Any],
     estimate_row_index: Dict[int, Dict[str, Dict[str, Any]]],
+    material_row_upper_bound: int,
+    material_price_break_lookup: Dict[int, float],
 ) -> List[Dict[str, Any]]:
     formulas = ((data.get("estimate_sheet") or {}).get("formulas")) or []
     out: List[Dict[str, Any]] = []
+    seen_rows: set[int] = set()
     for f in formulas:
         addr = str(f.get("address", ""))
         row = _row_from_address(addr)
@@ -451,10 +659,7 @@ def _material_lines_from_estimate_formulas(
         if row is None or col != "L":
             continue
         # Material block in these templates is generally above the subtotal band.
-        if row >= 59 or row < 8:
-            continue
-        formula_txt = str(f.get("formula") or "").upper()
-        if "J" not in formula_txt or "K" not in formula_txt:
+        if row >= material_row_upper_bound or row < 8:
             continue
         cells = estimate_row_index.get(row) or {}
         desc_parts: List[str] = []
@@ -470,6 +675,8 @@ def _material_lines_from_estimate_formulas(
                     desc_parts.append(t)
         line_desc = " | ".join(dict.fromkeys(desc_parts))[:1000] if desc_parts else None
         unit_price = _numeric_from_cell(cells.get("J") or {})
+        if unit_price is None:
+            unit_price = material_price_break_lookup.get(row)
         qty_per_unit = _numeric_from_cell(cells.get("K") or {})
         if qty_per_unit is None:
             qty_per_unit = _parse_float(f.get("label_left_2"))
@@ -483,6 +690,8 @@ def _material_lines_from_estimate_formulas(
         total_val = _parse_money(f.get("value"))
         if total_val is None:
             total_val = _numeric_from_cell(cells.get("L") or {})
+        if total_val is None and unit_price is not None and qty_per_unit not in (None, 0):
+            total_val = round(float(unit_price) * float(qty_per_unit) * (1.0 + (float(scrap_pct) / 100.0)), 4)
         if unit_price is None and total_val is not None and qty_per_unit not in (None, 0):
             unit_price = round(float(total_val) / float(qty_per_unit), 6)
         out.append(
@@ -499,6 +708,59 @@ def _material_lines_from_estimate_formulas(
                 "scrap_pct": scrap_pct,
                 "line_total_gbp": total_val,
                 "raw": {"formula_row": f, "row_cells": cells},
+            }
+        )
+        seen_rows.add(row)
+
+    # Fallback for variants where parser does not emit expected L-cell formulas:
+    # inspect estimate row index directly and synthesize material rows from row cells.
+    for row, cells in sorted(estimate_row_index.items()):
+        if row in seen_rows:
+            continue
+        if row >= material_row_upper_bound or row < 8:
+            continue
+        l_cell = cells.get("L") or {}
+        l_total = _numeric_from_cell(l_cell)
+        if l_total is None:
+            continue
+        desc_parts: List[str] = []
+        for c in ("F", "G", "H", "I"):
+            cell = cells.get(c) or {}
+            raw = str(cell.get("value") or "").strip()
+            if raw and _parse_money(raw) is None:
+                desc_parts.append(raw)
+            labels = cell.get("labels") or {}
+            for lk in ("left", "left_2", "right"):
+                t = str(labels.get(lk) or "").strip()
+                if t and _parse_money(t) is None:
+                    desc_parts.append(t)
+        line_desc = " | ".join(dict.fromkeys(desc_parts))[:1000] if desc_parts else None
+        qty_per_unit = _numeric_from_cell(cells.get("K") or {})
+        if qty_per_unit is None:
+            qty_per_unit = _numeric_from_cell(cells.get("H") or {})
+        if qty_per_unit is None:
+            qty_per_unit = _qty_from_description(line_desc or "")
+        if qty_per_unit is None:
+            qty_per_unit = 1.0
+        unit_price = _numeric_from_cell(cells.get("J") or {})
+        if unit_price is None:
+            unit_price = material_price_break_lookup.get(row)
+        if unit_price is None and qty_per_unit not in (None, 0):
+            unit_price = round(float(l_total) / float(qty_per_unit), 6)
+        out.append(
+            {
+                "line_no": row,
+                "source_sheet": "Estimate",
+                "source_cell_ref": f"L{row}",
+                "part_code": None,
+                "line_description": line_desc,
+                "supplier_name": None,
+                "unit": "GBP_per_unit",
+                "unit_price_gbp": unit_price,
+                "qty_per_unit": qty_per_unit,
+                "scrap_pct": 0.0,
+                "line_total_gbp": l_total,
+                "raw": {"row_cells": cells, "fallback_mode": "row_index_l_cell"},
             }
         )
     return out
@@ -685,9 +947,21 @@ def load_one_json(
     ops = _group_labour_operations(key_cells)
     mats = _material_lines(key_cells)
     estimate_row_index = _build_estimate_row_index(data)
+    material_row_upper_bound = _detect_material_row_upper_bound(data)
+    material_price_break_lookup = _material_price_break_by_row(data)
     mats_detailed_keycells = _material_lines_detailed(key_cells, estimate_row_index=estimate_row_index)
-    mats_detailed_formula = _material_lines_from_estimate_formulas(data, estimate_row_index=estimate_row_index)
+    mats_detailed_formula = _material_lines_from_estimate_formulas(
+        data,
+        estimate_row_index=estimate_row_index,
+        material_row_upper_bound=material_row_upper_bound,
+        material_price_break_lookup=material_price_break_lookup,
+    )
     mats_detailed = _merge_material_line_candidates(mats_detailed_keycells + mats_detailed_formula)
+    mats_detailed = _resolve_missing_material_prices_from_price_break(
+        mats_detailed,
+        _build_material_price_break_key_map(data),
+    )
+    mats_detailed = _impute_material_prices_from_historical_db(cursor, mats_detailed)
     labour_detailed = _labour_lines_detailed(key_cells)
     readable_payload = _build_readable_payload(data, header, ops, mats, mats_detailed, labour_detailed, json_path)
     readable = _readable_json_string(readable_payload)
