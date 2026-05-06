@@ -24,6 +24,10 @@ from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_do
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
 from geometry_analysis import analyse_document_geometry, calibrate_document_geometry
 from llm_extraction import reconcile_with_llm
+from layout_zones import zone_boxes as _zone_boxes
+from layout_zones import words_in_box as _words_in_box
+from layout_zones import words_to_text as _words_to_text
+from json_normaliser import normalise_json
 from pricing_variance import build_pricing_variance_rows
 from reconciliation import reconcile_page_analysis
 from sql_export import build_run_metadata, write_postgres_insert_sql
@@ -42,33 +46,6 @@ def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: s
     if not search_root.exists():
         return []
     return sorted([path for path in search_root.glob(drawing_pattern) if path.suffix.lower() in config.SUPPORTED_EXTENSIONS])
-
-
-def _zone_boxes(page_width: float, page_height: float) -> Dict[str, Tuple[float, float, float, float]]:
-    return {
-        "title_block": (page_width * 0.58, page_height * 0.72, page_width, page_height),
-        "bom": (0.0, page_height * 0.55, page_width * 0.55, page_height),
-        "notes": (page_width * 0.55, 0.0, page_width, page_height * 0.5),
-        "revision": (page_width * 0.72, page_height * 0.55, page_width, page_height * 0.8),
-    }
-
-
-def _words_in_box(words: List[Dict[str, Any]], box: Tuple[float, float, float, float]) -> List[Dict[str, Any]]:
-    x0, top, x1, bottom = box
-    selected: List[Dict[str, Any]] = []
-    for word in words:
-        word_x0 = float(word.get("x0", 0.0))
-        word_x1 = float(word.get("x1", 0.0))
-        word_top = float(word.get("top", 0.0))
-        word_bottom = float(word.get("bottom", 0.0))
-        if word_x1 >= x0 and word_x0 <= x1 and word_bottom >= top and word_top <= bottom:
-            selected.append(word)
-    return selected
-
-
-def _words_to_text(words: List[Dict[str, Any]]) -> str:
-    ordered = sorted(words, key=lambda item: (round(float(item.get("top", 0.0)), 1), float(item.get("x0", 0.0))))
-    return normalize_text(" ".join(str(item.get("text", "")) for item in ordered))
 
 
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
@@ -320,6 +297,186 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
     return summary
 
 
+def _write_primary_outputs(
+    summary: Dict[str, Any],
+    json_path: Path,
+    text_path: Path,
+    log_path: Path,
+    csv_path: Path,
+    sql_path: Path,
+    variance_xlsx_path: Path,
+    variance_csv_path: Path,
+    variance_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    failures: List[Dict[str, Any]] = []
+
+    try:
+        with json_path.open("w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2, ensure_ascii=False, default=_json_default)
+    except Exception as exc:
+        failures.append({"stage": "write_json", "error": str(exc)})
+
+    try:
+        with text_path.open("w", encoding="utf-8") as handle:
+            handle.write(f"SOURCE FILE: {summary['source_file']}\n")
+            handle.write(f"PAGE COUNT: {summary['page_count']}\n")
+            handle.write(f"DETECTED LABELS: {', '.join(summary['detected_labels'])}\n")
+            handle.write(f"PART NUMBERS: {', '.join(summary['pattern_summary']['part_numbers'])}\n")
+            handle.write(f"DATES: {', '.join(summary['pattern_summary']['dates'])}\n\n")
+            handle.write("=" * 80 + "\nDOCUMENT ANALYSIS\n" + "=" * 80 + "\n")
+            handle.write(json.dumps(summary.get("document_analysis", {}), indent=2, ensure_ascii=False, default=_json_default))
+            handle.write("\n\n")
+            handle.write("=" * 80 + "\nMANUFACTURING WRITE-UP\n" + "=" * 80 + "\n")
+            handle.write(json.dumps(summary.get("manufacturing_writeup", {}), indent=2, ensure_ascii=False, default=_json_default))
+            handle.write("\n\n")
+            handle.write("=" * 80 + "\nVALIDATION\n" + "=" * 80 + "\n")
+            handle.write(json.dumps(summary.get("manufacturing_writeup", {}).get("validation", {}), indent=2, ensure_ascii=False, default=_json_default))
+            handle.write("\n\n")
+            handle.write("=" * 80 + "\nMANUAL REVIEW\n" + "=" * 80 + "\n")
+            handle.write(json.dumps(summary.get("manual_review_items", []), indent=2, ensure_ascii=False, default=_json_default))
+            handle.write("\n\n")
+            handle.write("=" * 80 + "\nESTIMATE SOURCE EXTRACT (workbook + database + config)\n" + "=" * 80 + "\n")
+            handle.write(json.dumps(summary.get("estimate_source_extract", {}), indent=2, ensure_ascii=False, default=_json_default))
+            handle.write("\n\n")
+            handle.write("=" * 80 + "\nESTIMATE SUMMARY\n" + "=" * 80 + "\n")
+            handle.write(json.dumps(summary.get("estimate_summary", {}), indent=2, ensure_ascii=False, default=_json_default))
+            handle.write("\n\n")
+            for page in summary["pages"]:
+                handle.write("=" * 80 + "\n")
+                handle.write(f"PAGE {page['page_number']}\n")
+                handle.write("=" * 80 + "\n")
+                handle.write("ROLE: " + page.get("page_role", {}).get("primary_role", "unknown") + "\n")
+                handle.write("TITLE BLOCK CALIBRATION: " + json.dumps(page.get("title_block_calibration", {}), ensure_ascii=False, default=_json_default) + "\n")
+                handle.write("LABELS FOUND: " + ", ".join(page["labels_found"]) + "\n")
+                handle.write("PATTERNS: " + json.dumps(page["pattern_summary"], ensure_ascii=False, default=_json_default) + "\n")
+                handle.write("REGIONS: " + json.dumps(page.get("region_text", {}), ensure_ascii=False, default=_json_default) + "\n")
+                handle.write("PAGE ANALYSIS: " + json.dumps(page.get("page_analysis", {}), ensure_ascii=False, default=_json_default) + "\n")
+                handle.write("GEOMETRY: " + json.dumps(page.get("geometry_summary", {}), ensure_ascii=False, default=_json_default) + "\n\n")
+                handle.write(page["pdfplumber_text"] or "[NO TEXT EXTRACTED]")
+                handle.write("\n\n")
+    except Exception as exc:
+        failures.append({"stage": "write_text", "error": str(exc)})
+
+    try:
+        with log_path.open("w", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "source_file": summary["source_file"],
+                        "page_count": summary["page_count"],
+                        "scanned_at": summary["scanned_at"],
+                        "detected_labels": summary["detected_labels"],
+                        "part_numbers": summary["pattern_summary"]["part_numbers"],
+                        "validation_status": summary.get("manufacturing_writeup", {}).get("validation", {}).get("status"),
+                        "output_csv": str(csv_path),
+                    },
+                    indent=2,
+                    default=_json_default,
+                )
+            )
+    except Exception as exc:
+        failures.append({"stage": "write_log", "error": str(exc)})
+
+    try:
+        rows = build_estimate_input_rows(summary)
+        append_rows_to_csv(csv_path, rows)
+    except Exception as exc:
+        failures.append({"stage": "write_csv", "error": str(exc)})
+
+    try:
+        from openpyxl import Workbook  # type: ignore
+
+        workbook = Workbook()
+        ws = workbook.active
+        ws.title = "pricing_variance"
+        headers = [
+            "run_uuid",
+            "source_file_name",
+            "part_number",
+            "comparison_scope",
+            "metric_name",
+            "manual_value",
+            "ai_value",
+            "abs_variance",
+            "pct_variance",
+            "status",
+            "notes",
+            "manual_source",
+            "ai_source",
+        ]
+        ws.append(headers)
+        for row in variance_rows:
+            ws.append([row.get(header) for header in headers])
+        workbook.save(variance_xlsx_path)
+    except Exception:
+        try:
+            import csv
+            with variance_csv_path.open("w", newline="", encoding="utf-8") as handle:
+                headers = [
+                    "run_uuid",
+                    "source_file_name",
+                    "part_number",
+                    "comparison_scope",
+                    "metric_name",
+                    "manual_value",
+                    "ai_value",
+                    "abs_variance",
+                    "pct_variance",
+                    "status",
+                    "notes",
+                    "manual_source",
+                    "ai_source",
+                ]
+                writer = csv.DictWriter(handle, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(variance_rows)
+        except Exception as exc:
+            failures.append({"stage": "write_variance", "error": str(exc)})
+
+    try:
+        write_postgres_insert_sql(summary, sql_path)
+    except Exception as exc:
+        failures.append({"stage": "write_sql", "error": str(exc)})
+
+    return failures
+
+
+def _write_archive_copies(
+    summary: Dict[str, Any],
+    archive_json_path: Path,
+    archive_text_path: Path,
+    archive_log_path: Path,
+    archive_csv_path: Path,
+    archive_sql_path: Path,
+) -> List[Dict[str, Any]]:
+    failures: List[Dict[str, Any]] = []
+    saved = summary.get("saved_output_paths", {})
+    copy_pairs = [
+        (Path(saved.get("json", "")), archive_json_path, "archive_json"),
+        (Path(saved.get("text", "")), archive_text_path, "archive_text"),
+        (Path(saved.get("log", "")), archive_log_path, "archive_log"),
+        (Path(saved.get("sql", "")), archive_sql_path, "archive_sql"),
+    ]
+    for src, dst, stage in copy_pairs:
+        try:
+            if src.exists():
+                shutil.copy2(src, dst)
+        except Exception as exc:
+            failures.append({"stage": stage, "error": str(exc)})
+
+    try:
+        build_rows = build_estimate_input_rows(summary)
+        if build_rows:
+            import csv
+            with archive_csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=config.CSV_HEADERS)
+                writer.writeheader()
+                writer.writerows(build_rows)
+    except Exception as exc:
+        failures.append({"stage": "archive_csv", "error": str(exc)})
+    return failures
+
+
 def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     metadata = build_run_metadata(summary)
     stem = Path(summary["source_file"]).stem
@@ -356,134 +513,26 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     }
     variance_rows = build_pricing_variance_rows(summary)
     summary["pricing_variance_rows"] = variance_rows
-
-    with json_path.open("w", encoding="utf-8") as handle:
-        json.dump(summary, handle, indent=2, ensure_ascii=False, default=_json_default)
-
-    with text_path.open("w", encoding="utf-8") as handle:
-        handle.write(f"SOURCE FILE: {summary['source_file']}\n")
-        handle.write(f"PAGE COUNT: {summary['page_count']}\n")
-        handle.write(f"DETECTED LABELS: {', '.join(summary['detected_labels'])}\n")
-        handle.write(f"PART NUMBERS: {', '.join(summary['pattern_summary']['part_numbers'])}\n")
-        handle.write(f"DATES: {', '.join(summary['pattern_summary']['dates'])}\n\n")
-
-        handle.write("=" * 80 + "\nDOCUMENT ANALYSIS\n" + "=" * 80 + "\n")
-        handle.write(json.dumps(summary.get("document_analysis", {}), indent=2, ensure_ascii=False, default=_json_default))
-        handle.write("\n\n")
-
-        handle.write("=" * 80 + "\nMANUFACTURING WRITE-UP\n" + "=" * 80 + "\n")
-        handle.write(json.dumps(summary.get("manufacturing_writeup", {}), indent=2, ensure_ascii=False, default=_json_default))
-        handle.write("\n\n")
-
-        handle.write("=" * 80 + "\nVALIDATION\n" + "=" * 80 + "\n")
-        handle.write(json.dumps(summary.get("manufacturing_writeup", {}).get("validation", {}), indent=2, ensure_ascii=False, default=_json_default))
-        handle.write("\n\n")
-
-        handle.write("=" * 80 + "\nMANUAL REVIEW\n" + "=" * 80 + "\n")
-        handle.write(json.dumps(summary.get("manual_review_items", []), indent=2, ensure_ascii=False, default=_json_default))
-        handle.write("\n\n")
-
-        handle.write("=" * 80 + "\nESTIMATE SUMMARY\n" + "=" * 80 + "\n")
-        handle.write(json.dumps(summary.get("estimate_summary", {}), indent=2, ensure_ascii=False, default=_json_default))
-        handle.write("\n\n")
-
-        for page in summary["pages"]:
-            handle.write("=" * 80 + "\n")
-            handle.write(f"PAGE {page['page_number']}\n")
-            handle.write("=" * 80 + "\n")
-            handle.write("ROLE: " + page.get("page_role", {}).get("primary_role", "unknown") + "\n")
-            handle.write("TITLE BLOCK CALIBRATION: " + json.dumps(page.get("title_block_calibration", {}), ensure_ascii=False, default=_json_default) + "\n")
-            handle.write("LABELS FOUND: " + ", ".join(page["labels_found"]) + "\n")
-            handle.write("PATTERNS: " + json.dumps(page["pattern_summary"], ensure_ascii=False, default=_json_default) + "\n")
-            handle.write("REGIONS: " + json.dumps(page.get("region_text", {}), ensure_ascii=False, default=_json_default) + "\n")
-            handle.write("PAGE ANALYSIS: " + json.dumps(page.get("page_analysis", {}), ensure_ascii=False, default=_json_default) + "\n")
-            handle.write("GEOMETRY: " + json.dumps(page.get("geometry_summary", {}), ensure_ascii=False, default=_json_default) + "\n\n")
-            handle.write(page["pdfplumber_text"] or "[NO TEXT EXTRACTED]")
-            handle.write("\n\n")
-
-    with log_path.open("w", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    "source_file": summary["source_file"],
-                    "page_count": summary["page_count"],
-                    "scanned_at": summary["scanned_at"],
-                    "detected_labels": summary["detected_labels"],
-                    "part_numbers": summary["pattern_summary"]["part_numbers"],
-                    "validation_status": summary.get("manufacturing_writeup", {}).get("validation", {}).get("status"),
-                    "output_csv": str(csv_path),
-                    "archive_json": str(archive_json_path),
-                    "archive_text": str(archive_text_path),
-                    "archive_log": str(archive_log_path),
-                    "archive_csv": str(archive_csv_path),
-                    "archive_sql": str(archive_sql_path),
-                },
-                indent=2,
-                default=_json_default,
-            )
-        )
-
-    append_rows_to_csv(csv_path, build_estimate_input_rows(summary))
-    try:
-        from openpyxl import Workbook  # type: ignore
-
-        workbook = Workbook()
-        ws = workbook.active
-        ws.title = "pricing_variance"
-        headers = [
-            "run_uuid",
-            "source_file_name",
-            "part_number",
-            "comparison_scope",
-            "metric_name",
-            "manual_value",
-            "ai_value",
-            "abs_variance",
-            "pct_variance",
-            "status",
-            "notes",
-            "manual_source",
-            "ai_source",
-        ]
-        ws.append(headers)
-        for row in variance_rows:
-            ws.append([row.get(header) for header in headers])
-        workbook.save(variance_xlsx_path)
-    except Exception:
-        import csv
-
-        with variance_csv_path.open("w", newline="", encoding="utf-8") as handle:
-            headers = [
-                "run_uuid",
-                "source_file_name",
-                "part_number",
-                "comparison_scope",
-                "metric_name",
-                "manual_value",
-                "ai_value",
-                "abs_variance",
-                "pct_variance",
-                "status",
-                "notes",
-                "manual_source",
-                "ai_source",
-            ]
-            writer = csv.DictWriter(handle, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(variance_rows)
-    write_postgres_insert_sql(summary, sql_path)
-    shutil.copy2(json_path, archive_json_path)
-    shutil.copy2(text_path, archive_text_path)
-    shutil.copy2(log_path, archive_log_path)
-    shutil.copy2(sql_path, archive_sql_path)
-    build_rows = build_estimate_input_rows(summary)
-    if build_rows:
-        with archive_csv_path.open("w", newline="", encoding="utf-8") as handle:
-            import csv
-
-            writer = csv.DictWriter(handle, fieldnames=config.CSV_HEADERS)
-            writer.writeheader()
-            writer.writerows(build_rows)
+    write_failures = _write_primary_outputs(
+        summary,
+        json_path,
+        text_path,
+        log_path,
+        csv_path,
+        sql_path,
+        variance_xlsx_path,
+        variance_csv_path,
+        variance_rows,
+    )
+    archive_failures = _write_archive_copies(
+        summary,
+        archive_json_path,
+        archive_text_path,
+        archive_log_path,
+        archive_csv_path,
+        archive_sql_path,
+    )
+    summary["output_write_failures"] = write_failures + archive_failures
     return json_path, text_path, log_path, csv_path
 
 
@@ -510,6 +559,7 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     }
     summary["parts"] = parts
     summary["cost_breakdown"] = estimate_summary.get("cost_breakdown", {})
+    summary["estimate_source_extract"] = estimate_summary.get("estimate_source_extract", {})
     estimate_risk_flags = {
         flag
         for est_part in estimate_summary.get("part_estimates", [])
@@ -584,6 +634,9 @@ def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, P
     _debug("start _build_additive_summary_sections")
     _build_additive_summary_sections(summary)
     _debug("done _build_additive_summary_sections")
+    _debug("start normalise_json")
+    summary = normalise_json(summary)
+    _debug("done normalise_json")
 
     _debug("start write_outputs")
     output_paths = write_outputs(summary)

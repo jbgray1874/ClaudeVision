@@ -34,9 +34,7 @@ def _is_dashed(path: Dict[str, Any]) -> bool:
     return bool(dashes and dashes != "[] 0")
 
 
-def analyse_page_geometry(page: Any) -> Dict[str, Any]:
-    drawings = page.get_drawings()
-
+def _analyse_drawing_list(drawings: List[Dict[str, Any]], page_height_points: float) -> Dict[str, Any]:
     line_segments = 0
     curve_count = 0
     rect_count = 0
@@ -57,7 +55,7 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
     stroked_path_count = 0
     narrow_stroke_path_count = 0
     small_internal_loop_features = 0
-    title_block_band_top = page.rect.height * 0.72
+    title_block_band_top = page_height_points * 0.72
     max_line_length_points = 0.0
 
     for drawing in drawings:
@@ -109,9 +107,20 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
             elif op in {"c", "v", "y", "qu"}:
                 curve_count += 1
                 approx_total_curve_length_points += 12.0
+                if rect is not None:
+                    rw = abs(rect.width)
+                    rh = abs(rect.height)
+                    if rw > 0 and rh > 0:
+                        aspect_ratio = max(rw, rh) / max(1e-6, min(rw, rh))
+                        # Near-square curve bounds are more likely true circular holes;
+                        # elongated bounds are more likely slots/fillets.
+                        if aspect_ratio <= 1.2:
+                            circle_like_count += 1
+                        elif aspect_ratio >= 1.8:
+                            slot_like_count += 1
 
-    if curve_count:
-        circle_like_count = max(0, round(curve_count * 0.35))
+    if curve_count and circle_like_count == 0:
+        circle_like_count = max(0, round(curve_count * 0.2))
     estimated_hole_count = max(circle_like_count, short_closed_rectangles, small_internal_loop_features)
     internal_feature_count += estimated_hole_count + slot_like_count + small_internal_loop_features
     estimated_pierce_count = max(closed_path_count, internal_feature_count)
@@ -179,6 +188,11 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
         },
         "units_note": "Lengths derived from PDF page points converted to mm; treat as heuristic until calibrated against drawing scale.",
     }
+
+
+def analyse_page_geometry(page: Any) -> Dict[str, Any]:
+    drawings = page.get_drawings()
+    return _analyse_drawing_list(drawings, float(page.rect.height))
 
 
 def analyse_document_geometry(pdf_path: Path) -> List[Dict[str, Any]]:

@@ -19,6 +19,8 @@ class PriceRequest:
     description: Optional[str] = None
     finish: Optional[str] = None
     colour: Optional[str] = None
+    part_confidence_overall: Optional[float] = None
+    part_geometry_reliability: Optional[float] = None
 
 
 @dataclass
@@ -74,7 +76,13 @@ def _parse_price_date(value: Any) -> Optional[date]:
 def _freshness_bucket(candidate: PriceCandidate, rules: Dict[str, Any]) -> str:
     evidence = candidate.evidence or {}
     metadata = candidate.metadata or {}
-    dt = _parse_price_date(metadata.get("price_date") or evidence.get("price_date"))
+    raw_price_date = metadata.get("price_date") or evidence.get("price_date")
+    dt = _parse_price_date(raw_price_date)
+    candidate.evidence = {
+        **evidence,
+        "price_date_raw": raw_price_date,
+        "price_date_parsed": dt.isoformat() if dt else "unparseable",
+    }
     if dt is None:
         return "unknown"
     age_days = max(0, (date.today() - dt).days)
@@ -142,6 +150,25 @@ def _get_default_connectors() -> Dict[str, Any]:
     return _DEFAULT_CONNECTORS
 
 
+def reset_connectors() -> None:
+    global _DEFAULT_CONNECTORS
+    _DEFAULT_CONNECTORS = None
+
+
+def _validate_priority_entries(connectors: Dict[str, Any], priority: List[str]) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    for source_name in priority:
+        if source_name not in connectors:
+            issues.append(
+                {
+                    "source": source_name,
+                    "status": "warning",
+                    "reason": "priority_source_missing_connector",
+                }
+            )
+    return issues
+
+
 def _fetch_candidates_from_connector(connector: Any, request: PriceRequest) -> List[PriceCandidate]:
     rows: List[Dict[str, Any]] = []
     if request.kind == "material_price" and hasattr(connector, "get_material_price"):
@@ -159,7 +186,7 @@ def get_best_price(request: PriceRequest, connectors: Optional[Dict[str, Any]] =
     priority = source_priority or config.PRICE_SOURCE_PRIORITY
 
     candidates: List[PriceCandidate] = []
-    audit_trail: List[Dict[str, Any]] = []
+    audit_trail: List[Dict[str, Any]] = _validate_priority_entries(resolved_connectors, priority)
 
     for source_name in priority:
         connector = resolved_connectors.get(source_name)

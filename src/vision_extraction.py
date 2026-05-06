@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 try:
     import fitz  # type: ignore
@@ -12,20 +12,15 @@ except ImportError:  # pragma: no cover
     np = None
 
 from extractor_patterns import normalize_text
+from layout_zones import bom_rows_to_text, segment_bom_rows
+from layout_zones import zone_boxes as _zone_boxes
+from layout_zones import words_in_box as _words_in_box
+from layout_zones import words_to_text as _words_to_text
 
 
 _OCR_INSTANCE = None
 _OCR_IMPORT_ATTEMPTED = False
 _PADDLEOCR_CLASS = None
-
-
-def _zone_boxes(page_width: float, page_height: float) -> Dict[str, Tuple[float, float, float, float]]:
-    return {
-        "title_block": (page_width * 0.58, page_height * 0.72, page_width, page_height),
-        "bom": (0.0, page_height * 0.55, page_width * 0.55, page_height),
-        "notes": (page_width * 0.55, 0.0, page_width, page_height * 0.5),
-        "revision": (page_width * 0.72, page_height * 0.55, page_width, page_height * 0.8),
-    }
 
 
 def _get_ocr():
@@ -48,6 +43,11 @@ def _get_ocr():
     except Exception:
         _OCR_INSTANCE = None
         return None
+
+
+def reset_ocr_instance() -> None:
+    global _OCR_INSTANCE
+    _OCR_INSTANCE = None
 
 
 def _ocr_page_image(image_array: Any) -> List[Dict[str, Any]]:
@@ -76,28 +76,6 @@ def _ocr_page_image(image_array: Any) -> List[Dict[str, Any]]:
     return words
 
 
-def _words_in_box(words: List[Dict[str, Any]], box: Tuple[float, float, float, float]) -> List[Dict[str, Any]]:
-    x0, top, x1, bottom = box
-    return [
-        word for word in words
-        if word["x1"] >= x0 and word["x0"] <= x1 and word["bottom"] >= top and word["top"] <= bottom
-    ]
-
-
-def _words_to_text(words: List[Dict[str, Any]]) -> str:
-    ordered = sorted(words, key=lambda item: (round(float(item.get("top", 0.0)), 1), float(item.get("x0", 0.0))))
-    return normalize_text(" ".join(str(item.get("text", "")) for item in ordered))
-
-
-def _extract_process_callouts(text: str) -> List[str]:
-    upper = text.upper()
-    callouts: List[str] = []
-    for token in ["WELD", "FOLD", "BEND", "DEBURR", "PEM", "CSK", "TAP", "PITCH", "HOLE", "SLOT"]:
-        if token in upper and token not in callouts:
-            callouts.append(token)
-    return callouts
-
-
 def extract_document_vision(pdf_path: Path) -> List[Dict[str, Any]]:
     if fitz is None or np is None:
         return []
@@ -117,7 +95,18 @@ def extract_document_vision(pdf_path: Path) -> List[Dict[str, Any]]:
             region_text = {name: _words_to_text(items) for name, items in region_words.items()}
             bom_text = normalize_text(f"{region_text.get('bom', '')} {region_text.get('notes', '')}")
             revision_text = normalize_text(region_text.get("revision", ""))
-            process_callouts = _extract_process_callouts(normalize_text(" ".join(region_text.values())))
+            bom_rows_words = segment_bom_rows(region_words.get("bom", []), y_tolerance=5.0)
+            bom_rows = [
+                {
+                    "row_text": _words_to_text(row),
+                    "word_count": len(row),
+                }
+                for row in bom_rows_words
+                if row
+            ]
+            bom_text = normalize_text(
+                f"{bom_rows_to_text(bom_rows_words)} {_words_to_text(region_words.get('notes', []))}"
+            )
             pages.append(
                 {
                     "page_number": idx,
@@ -127,10 +116,14 @@ def extract_document_vision(pdf_path: Path) -> List[Dict[str, Any]]:
                     "ocr_text": _words_to_text(words),
                     "region_text": region_text,
                     "bom_table_text": bom_text,
+                    "bom_rows": bom_rows,
                     "revision_table_text": revision_text,
-                    "process_callouts": process_callouts,
+                    "process_callouts": [],
                     "layout_engine": "layoutparser_ready",
                     "table_engine": "img2table_ready",
+                    "confidence": {
+                        "ocr": round(sum(word.get("confidence", 0.0) for word in words) / len(words), 3) if words else 0.0
+                    },
                 }
             )
     finally:

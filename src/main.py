@@ -4,10 +4,14 @@ from pathlib import Path
 
 import config
 from config import DRAWINGS_DIR, OUTPUT_DIR, ensure_directories
+from estimate_parity_runner import build_part_metric_variance, write_parity_reports
 from estimate_template_parser import write_estimate_template_parse
+from estimate_workbook_parity_report import build_report_rows as build_workbook_parity_rows, write_reports as write_workbook_parity_reports
 from estimate_template_writeback import write_estimate_template_from_summary
 from file_scan import list_input_files, scan_file
 from historical_jobs import build_history_corpus
+from price_sources import reset_connectors
+from pricing_service import PricingService
 from rag_transformer import transform_scan_summary_to_historical_job_record
 from sql_export import export_json_files_to_sqlserver_sql, export_single_json_file_to_sqlserver_sql
 
@@ -23,9 +27,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--write-estimate-template-from-json", type=str, help="Write estimate totals into a copy of the template workbook from a scan summary JSON.")
     parser.add_argument("--template-workbook", type=str, help="Template workbook path used for write-back (.xlsx required).")
     parser.add_argument("--output-workbook", type=str, help="Output workbook path for write-back result.")
+    parser.add_argument("--estimate-workbook-parity-report", type=str, help="Generate mapped-cell parity report from summary JSON against workbook cells.")
+    parser.add_argument("--parity-workbook", type=str, help="Workbook path for parity report.")
+    parser.add_argument("--parity-sheet", type=str, default="Estimate", help="Sheet name for parity report.")
+    parser.add_argument("--parity-out-csv", type=str, help="Output CSV path for parity report.")
+    parser.add_argument("--parity-out-json", type=str, help="Output JSON path for parity report.")
     parser.add_argument("--export-json-to-sql", type=str, help="Export a single scan JSON file into one SQL Server insert script.")
     parser.add_argument("--export-json-dir-to-sql", type=str, help="Export all scan JSON files in a folder into one SQL Server insert script.")
     parser.add_argument("--sql-output", type=str, help="Optional output path for the generated SQL Server SQL script.")
+    parser.add_argument("--price-from-json", type=str, help="Run UDEF-first pricing service on a normalized/scan JSON file.")
+    parser.add_argument("--price-out-json", type=str, help="Output JSON path for priced estimate.")
+    parser.add_argument("--historical-top-k", type=int, default=5, help="Top-k historical matches per part in priced output.")
+    parser.add_argument("--estimate-parity-expected-json", type=str, help="Expected estimate JSON for parity run.")
+    parser.add_argument("--estimate-parity-actual-json", type=str, help="Actual estimate JSON for parity run.")
+    parser.add_argument("--estimate-parity-out-csv", type=str, help="Output CSV path for estimate parity.")
+    parser.add_argument("--estimate-parity-out-json", type=str, help="Output JSON path for estimate parity.")
     return parser.parse_args()
 
 
@@ -77,6 +93,28 @@ def main() -> None:
         print(f"Write-back audit JSON: {written.with_suffix('.writeback.audit.json')}")
         return
 
+    if args.estimate_workbook_parity_report:
+        summary_path = Path(args.estimate_workbook_parity_report)
+        if not summary_path.exists():
+            print(f"JSON file not found: {summary_path}")
+            return
+        wb_path = Path(args.parity_workbook) if args.parity_workbook else Path(
+            str(config.PRICE_SOURCE_CONFIG.get("spreadsheet", {}).get("template_workbook", ""))
+        )
+        if not wb_path.exists():
+            print(f"Workbook for parity report not found: {wb_path}")
+            return
+        with summary_path.open("r", encoding="utf-8") as handle:
+            summary = json.load(handle)
+        rows = build_workbook_parity_rows(summary, wb_path, sheet_name=args.parity_sheet)
+        out_csv = Path(args.parity_out_csv) if args.parity_out_csv else (OUTPUT_DIR / "csv" / f"{summary_path.stem}.workbook_parity.csv")
+        out_json = Path(args.parity_out_json) if args.parity_out_json else (OUTPUT_DIR / "csv" / f"{summary_path.stem}.workbook_parity.json")
+        write_workbook_parity_reports(rows, out_csv, out_json)
+        print(f"Workbook parity CSV: {out_csv}")
+        print(f"Workbook parity JSON: {out_json}")
+        print(f"Parity rows: {len(rows)}")
+        return
+
     if args.export_json_to_sql:
         json_path = Path(args.export_json_to_sql)
         if not json_path.exists():
@@ -100,6 +138,45 @@ def main() -> None:
         print(f"JSON files included: {len(json_files)}")
         return
 
+    if args.price_from_json:
+        input_path = Path(args.price_from_json)
+        if not input_path.exists():
+            print(f"JSON file not found: {input_path}")
+            return
+        with input_path.open("r", encoding="utf-8") as handle:
+            drawing_json = json.load(handle)
+        engine = PricingService()
+        priced = engine.calculate_estimate(drawing_json, historical_top_k=args.historical_top_k)
+        out_json = Path(args.price_out_json) if args.price_out_json else (OUTPUT_DIR / "json" / f"{input_path.stem}.priced_estimate.json")
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        with out_json.open("w", encoding="utf-8") as handle:
+            json.dump(priced, handle, indent=2, ensure_ascii=False)
+        print(f"Priced estimate JSON: {out_json}")
+        print(f"Parts priced: {len(priced.get('parts', []))}")
+        return
+
+    if args.estimate_parity_expected_json and args.estimate_parity_actual_json:
+        expected_path = Path(args.estimate_parity_expected_json)
+        actual_path = Path(args.estimate_parity_actual_json)
+        if not expected_path.exists():
+            print(f"Expected JSON not found: {expected_path}")
+            return
+        if not actual_path.exists():
+            print(f"Actual JSON not found: {actual_path}")
+            return
+        with expected_path.open("r", encoding="utf-8") as handle:
+            expected = json.load(handle)
+        with actual_path.open("r", encoding="utf-8") as handle:
+            actual = json.load(handle)
+        rows = build_part_metric_variance(expected, actual)
+        out_csv = Path(args.estimate_parity_out_csv) if args.estimate_parity_out_csv else (OUTPUT_DIR / "csv" / f"{actual_path.stem}.estimate_parity.csv")
+        out_json = Path(args.estimate_parity_out_json) if args.estimate_parity_out_json else (OUTPUT_DIR / "csv" / f"{actual_path.stem}.estimate_parity.json")
+        write_parity_reports(rows, out_csv, out_json)
+        print(f"Estimate parity CSV: {out_csv}")
+        print(f"Estimate parity JSON: {out_json}")
+        print(f"Parity rows: {len(rows)}")
+        return
+
     if args.pdf:
         files = [Path(args.pdf)]
     else:
@@ -113,6 +190,7 @@ def main() -> None:
 
     for pdf_path in files:
         print(f"[SCAN] {pdf_path.name}")
+        reset_connectors()
         summary, output_paths = scan_file(pdf_path)
 
         print(f"Page count: {summary['page_count']}")

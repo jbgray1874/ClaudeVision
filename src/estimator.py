@@ -143,7 +143,34 @@ def _quantity_break_multiplier(quantity: int) -> float:
     return 1.0
 
 
-def _resolve_material_price(material: Optional[str], thickness_mm: Optional[float], quantity: Optional[int]) -> Dict[str, Any]:
+def _part_ops(part: Dict[str, Any]) -> List[str]:
+    ops: List[str] = []
+    for op in (part.get("textual_operations") or []) + (part.get("inferred_operations") or []):
+        s = str(op).strip()
+        if s and s not in ops:
+            ops.append(s)
+    return ops
+
+
+def _part_confidence_overall(part: Dict[str, Any]) -> Optional[float]:
+    conf = part.get("confidence")
+    if isinstance(conf, dict):
+        v = _safe_float(conf.get("overall"))
+        if v is not None:
+            return v
+        vals = [_safe_float(x) for x in conf.values() if _safe_float(x) is not None]
+        if vals:
+            return round(sum(vals) / len(vals), 4)
+    return None
+
+
+def _part_geometry_reliability(part: Dict[str, Any]) -> Optional[float]:
+    return _safe_float(
+        ((part.get("geometry_rollup") or {}).get("confidence") or {}).get("geometry_reliability")
+    )
+
+
+def _resolve_material_price(material: Optional[str], thickness_mm: Optional[float], quantity: Optional[int], part: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not material:
         return {"result": {}, "applied_price_per_kg": None, "applied_basis": None}
 
@@ -153,6 +180,11 @@ def _resolve_material_price(material: Optional[str], thickness_mm: Optional[floa
             material=material,
             thickness_mm=thickness_mm,
             quantity=quantity,
+            description=str((part or {}).get("description") or ""),
+            finish=_first((part or {}).get("surface_finishes", []) or []),
+            colour=_first((part or {}).get("colours", []) or []),
+            part_confidence_overall=_part_confidence_overall(part or {}),
+            part_geometry_reliability=_part_geometry_reliability(part or {}),
         )
     )
     selected = _extract_selected_price(result)
@@ -311,7 +343,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
     blank_length, blank_width = estimate_blank_size(dims)
-    external_price = _resolve_material_price(material, thickness, quantity)
+    external_price = _resolve_material_price(material, thickness, quantity, part=part)
     external_result = external_price.get("result", {})
 
     if not material or thickness is None or blank_length is None or blank_width is None:
@@ -358,6 +390,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "stock_estimate": select_sheet_size(material, blank_length, blank_width),
         "stock_form": part.get("manufacturing_interpretation", {}).get("stock_form"),
         "requires_flat_blank": part.get("manufacturing_interpretation", {}).get("requires_flat_blank"),
+        "part_confidence_overall": _part_confidence_overall(part),
+        "part_geometry_reliability": _part_geometry_reliability(part),
         "price_source": _build_price_source_metadata(
             external_result,
             fallback_source="config_default_material_rates",
@@ -369,7 +403,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
 
 def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str, Any]:
     geom = part.get("geometry_rollup", {})
-    ops = part.get("textual_operations", [])
+    ops = _part_ops(part)
     manufacturing_features = part.get("manufacturing_features", {})
     geometry_confidence = 0.0
     if isinstance(geom.get("confidence"), dict):
@@ -495,13 +529,13 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
     extended_material_cost = _safe_float(material_extended) or 0.0
     total_labour_cost = labour.get("total_labour_cost_gbp") or 0.0
 
-    op_set = {str(op).strip().lower() for op in (part.get("textual_operations", []) or []) if str(op).strip()}
+    op_set = {str(op).strip().lower() for op in _part_ops(part) if str(op).strip()}
     no_ops_except_handling = op_set <= {"handling"}
     desc_blob = " ".join(
         [
             str(part.get("description") or ""),
             ";".join(part.get("process_notes") or []),
-            ";".join(part.get("textual_operations") or []),
+            ";".join(_part_ops(part) or []),
         ]
     ).upper()
     bought_in_keywords = ("BOUGHT IN", "BOUGHT-IN", "PURCHASED", "OFF THE SHELF", "CATALOGUE", "HARDWARE")
@@ -593,6 +627,9 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
                 "material_price_source": material.get("price_source", {}),
                 "labour_model": "external_or_config_fallback",
                 "geometry_basis": "normalized_geometry",
+                "part_confidence_overall": _part_confidence_overall(part),
+                "part_geometry_reliability": _part_geometry_reliability(part),
+                "part_provenance_source": (part.get("provenance") or {}).get("source"),
             },
         },
         "alternative_processes": [],
@@ -602,6 +639,8 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
             "Geometry-derived timings are heuristic until calibrated against known jobs.",
             "Primary dimensions are inferred from extracted values; verify against the drawing before quoting.",
         ],
+        "part_provenance": part.get("provenance", {}),
+        "part_confidence": part.get("confidence", {}),
         "risk_flags": risk_flags,
     }
 

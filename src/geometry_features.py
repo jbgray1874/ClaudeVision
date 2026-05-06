@@ -10,30 +10,65 @@ def _quantize_point(point: Tuple[float, float], tolerance: float = 1.0) -> Tuple
     return (round(point[0] / tolerance), round(point[1] / tolerance))
 
 
+def _arc_is_circular(item: Any) -> bool:
+    try:
+        points = [item[i] for i in range(1, len(item)) if hasattr(item[i], "x")]
+        if len(points) < 2:
+            return True
+        xs = [p.x for p in points]
+        ys = [p.y for p in points]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        if width <= 0 or height <= 0:
+            return True
+        ratio = width / height
+        return 0.7 <= ratio <= 1.3
+    except Exception:
+        return True
+
+
 def analyse_vector_features(drawings: List[Dict[str, Any]]) -> Dict[str, Any]:
     segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
     circle_candidates = 0
+    arc_items: List[Any] = []
     arc_candidates = 0
     closed_profiles = 0
     line_lengths: List[float] = []
     midpoint_xs: List[float] = []
+    dashed_long_axis_lines = 0
+    stroked_path_count = 0
+    narrow_stroke_path_count = 0
 
     for drawing in drawings:
         if drawing.get("closePath"):
             closed_profiles += 1
+        if drawing.get("type") in {"s", "fs"}:
+            stroked_path_count += 1
+        stroke_width = float(drawing.get("width", 0.0) or 0.0)
+        if stroke_width <= 0.3:
+            narrow_stroke_path_count += 1
         for item in drawing.get("items", []):
             op = item[0]
             if op == "l":
                 p1 = (float(item[1].x), float(item[1].y))
                 p2 = (float(item[2].x), float(item[2].y))
                 segments.append((p1, p2))
-                line_lengths.append(_distance(p1, p2))
+                length = _distance(p1, p2)
+                line_lengths.append(length)
                 midpoint_xs.append((p1[0] + p2[0]) / 2.0)
+                if length > 40:
+                    dx = abs(p2[0] - p1[0])
+                    dy = abs(p2[1] - p1[1])
+                    is_axis_aligned = (dx <= 0.5) or (dy <= 0.5)
+                    dashes = str(drawing.get("dashes", "")).strip()
+                    is_dashed = bool(dashes and dashes != "[] 0")
+                    if is_axis_aligned and is_dashed:
+                        dashed_long_axis_lines += 1
             elif op in {"c", "v", "y", "qu"}:
                 arc_candidates += 1
+                arc_items.append(item)
 
-    if arc_candidates:
-        circle_candidates = max(0, round(arc_candidates * 0.35))
+    circle_candidates = sum(1 for item in arc_items if _arc_is_circular(item))
 
     adjacency: Dict[Tuple[int, int], int] = {}
     for p1, p2 in segments:
@@ -49,12 +84,20 @@ def analyse_vector_features(drawings: List[Dict[str, Any]]) -> Dict[str, Any]:
     symmetry_detected = False
     if len(midpoint_xs) >= 4:
         mean_x = sum(midpoint_xs) / len(midpoint_xs)
-        mirrored = sum(1 for value in midpoint_xs if abs((2 * mean_x) - value - mean_x) <= 5.0)
+        mirrored = sum(1 for value in midpoint_xs if abs((2 * mean_x) - value - mean_x) <= 3.0)
         symmetry_detected = mirrored >= max(2, len(midpoint_xs) // 4)
 
     long_lines = sorted(line_lengths, reverse=True)
     collinear_groups = 1 if long_lines and sum(1 for value in long_lines[:6] if value >= long_lines[0] * 0.7) >= 3 else 0
     feature_clusters = max(1, internal_loops + circle_candidates + 1) if drawings else 0
+    geometry_reliability = 0.0
+    if closed_profiles > 0 or arc_candidates > 0:
+        geometry_reliability += 0.45
+    if dashed_long_axis_lines > 0:
+        geometry_reliability += 0.35
+    if stroked_path_count > 0 and narrow_stroke_path_count < max(10, stroked_path_count * 0.7):
+        geometry_reliability += 0.2
+    geometry_reliability = round(min(1.0, geometry_reliability), 2)
 
     return {
         "connected_contour_groups": connected_contour_groups,
@@ -64,8 +107,14 @@ def analyse_vector_features(drawings: List[Dict[str, Any]]) -> Dict[str, Any]:
         "closed_profiles": closed_profiles,
         "arc_candidates": arc_candidates,
         "circle_candidates": circle_candidates,
+        "dashed_long_axis_lines": dashed_long_axis_lines,
         "collinear_groups": collinear_groups,
         "symmetry_detected": symmetry_detected,
         "feature_clusters": feature_clusters,
         "max_line_length_points": max_line_length_points,
+        "confidence": {
+            "geometry_reliability": geometry_reliability,
+            "circle_candidates": round(0.6 * geometry_reliability, 2) if circle_candidates > 0 else 0.0,
+            "bend_lines": round(0.7 * geometry_reliability, 2) if dashed_long_axis_lines > 0 else 0.0,
+        },
     }

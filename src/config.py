@@ -327,8 +327,17 @@ ORDER BY
     },
     "web": {
         "enabled": False,
+        # Each source item can be a supplier/catalog row, for example:
+        # {"name": "FH Brundle wire mesh", "url": "https://www.fhbrundle.co.uk/mesh/welded-wire-mesh", "material_hint": "WIRE MESH", "unit": "GBP_per_m2"}
         "sources": [],
         "user_agent": "CodexPriceCollector/1.0",
+        # Optional LLM helpers for parsing web/catalog pages into numeric prices.
+        # API keys are read from environment variables:
+        #   XAI_API_KEY   for Grok / xAI SDK
+        #   OPENAI_API_KEY for OpenAI
+        "llm_provider": "xai",  # "xai", "openai", or "none"
+        "xai_model": "grok-2-latest",
+        "openai_model": "gpt-4.1-mini",
     },
 }
 
@@ -378,9 +387,14 @@ PRICE_FRESHNESS_RULES = {
 ESTIMATE_TEMPLATE_WRITEBACK = {
     "output_cells": {
         "L59": "estimate_summary.workbook_equivalent_pricing.m59_material_subtotal_gbp",
+        "M59": "estimate_summary.workbook_equivalent_pricing.m59_material_subtotal_gbp",
         "L101": "estimate_summary.workbook_equivalent_pricing.m103_labour_subtotal_gbp",
+        "M101": "estimate_summary.workbook_equivalent_pricing.m103_labour_subtotal_gbp",
+        "M103": "estimate_summary.workbook_equivalent_pricing.m103_labour_subtotal_gbp",
+        "M105": "estimate_summary.workbook_equivalent_pricing.m105_total_unit_cost_gbp",
         "L105": "estimate_summary.workbook_equivalent_pricing.l105_total_unit_cost_gbp",
         "L111": "estimate_summary.workbook_equivalent_pricing.l111_sell_price_gbp",
+        "M111": "estimate_summary.workbook_equivalent_pricing.l111_sell_price_gbp",
     }
 }
 
