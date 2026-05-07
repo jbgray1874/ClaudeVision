@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 import time
 from datetime import date
 from math import floor
@@ -199,6 +200,49 @@ def _resolve_material_price(material: Optional[str], thickness_mm: Optional[floa
     return {"result": result, "applied_price_per_kg": None, "applied_basis": None}
 
 
+def _parse_section_profile(description: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Parse common section profile from description, e.g.:
+    '25.00 x 25.00 x 1.50mm TUBE' -> (25.0, 25.0, 1.5)
+    """
+    text = str(description or "").upper().replace("MM", "")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[Xx]\s*(\d+(?:\.\d+)?)\s*[Xx]\s*(\d+(?:\.\d+)?)", text)
+    if not m:
+        return None, None, None
+    return _safe_float(m.group(1)), _safe_float(m.group(2)), _safe_float(m.group(3))
+
+
+def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
+    direct = _safe_float(part.get("length_mm"))
+    if direct is not None and direct > 0:
+        return direct
+    geom = part.get("normalized_geometry", {}) or {}
+    developed = _safe_float(geom.get("developed_length_mm"))
+    if developed is not None and developed > 0:
+        return developed
+    overall = _safe_float(part.get("overall_length_mm"))
+    if overall is not None and overall > 0:
+        return overall
+    dims = [_safe_float(v) for v in part.get("all_dimensions_mm", [])]
+    dims = [v for v in dims if v is not None and v > 0]
+    return max(dims) if dims else None
+
+
+def _is_section_or_wire_candidate(part: Dict[str, Any], material: Optional[str]) -> bool:
+    policy = getattr(config, "SECTION_STOCK_POLICY", {}) or {}
+    if not bool(policy.get("enabled", True)):
+        return False
+    tokens = [str(t).upper() for t in policy.get("section_keywords", [])]
+    blob = " ".join(
+        [
+            str(part.get("description") or ""),
+            str(part.get("normalized_material") or ""),
+            str(material or ""),
+        ]
+    ).upper()
+    return any(token in blob for token in tokens)
+
+
 def _resolve_labour_rate(operation: str) -> Dict[str, Any]:
     result = get_best_price(PriceRequest(kind="labour_rate", operation=operation))
     selected = _extract_selected_price(result)
@@ -345,6 +389,49 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     blank_length, blank_width = estimate_blank_size(dims)
     external_price = _resolve_material_price(material, thickness, quantity, part=part)
     external_result = external_price.get("result", {})
+
+    # Section/tube/wire path: uses linear stock mass estimate when profile+length is available.
+    if _is_section_or_wire_candidate(part, material):
+        side_a_mm, side_b_mm, wall_t_mm = _parse_section_profile(str(part.get("description") or ""))
+        length_mm = _infer_section_length_mm(part)
+        if side_a_mm and side_b_mm and wall_t_mm and length_mm:
+            density = MATERIAL_DENSITY_KG_PER_M3.get(material or "", MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL"))
+            # SHS/RHS approximation: A = outer - inner (mm^2)
+            inner_a = max(0.0, side_a_mm - (2.0 * wall_t_mm))
+            inner_b = max(0.0, side_b_mm - (2.0 * wall_t_mm))
+            area_mm2 = max(0.0, (side_a_mm * side_b_mm) - (inner_a * inner_b))
+            kg_per_m = (area_mm2 * (density or 7850.0)) / 1_000_000.0
+            unit_length_m = length_mm / 1000.0
+            unit_mass_kg = kg_per_m * unit_length_m
+            applied_price_per_kg = external_price.get("applied_price_per_kg")
+            fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
+            price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
+            policy = getattr(config, "SECTION_STOCK_POLICY", {}) or {}
+            waste_factor = 1.0 + (float(policy.get("waste_factor_pct", 4.0)) / 100.0)
+            unit_cost = (unit_mass_kg * price_per_kg * waste_factor) if price_per_kg is not None else None
+            extended = (unit_cost * quantity) if unit_cost is not None else None
+            return {
+                "material": material,
+                "thickness_mm": thickness,
+                "blank_length_mm": blank_length,
+                "blank_width_mm": blank_width,
+                "blank_area_m2": None,
+                "unit_material_mass_kg": round(unit_mass_kg, 3),
+                "unit_material_cost_gbp": round(unit_cost, 2) if unit_cost is not None else None,
+                "extended_material_cost_gbp": round(extended, 2) if extended is not None else None,
+                "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)},
+                "stock_form": part.get("manufacturing_interpretation", {}).get("stock_form"),
+                "requires_flat_blank": False,
+                "part_confidence_overall": _part_confidence_overall(part),
+                "part_geometry_reliability": _part_geometry_reliability(part),
+                "price_source": _build_price_source_metadata(
+                    external_result,
+                    fallback_source="config_default_material_rates",
+                    applied=applied_price_per_kg is not None,
+                    applied_basis=external_price.get("applied_basis") if applied_price_per_kg is not None else "config_fallback_GBP_per_kg",
+                )
+                | {"section_profile_mm": {"a": side_a_mm, "b": side_b_mm, "t": wall_t_mm}},
+            }
 
     if not material or thickness is None or blank_length is None or blank_width is None:
         return {
@@ -538,8 +625,27 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
             ";".join(_part_ops(part) or []),
         ]
     ).upper()
-    bought_in_keywords = ("BOUGHT IN", "BOUGHT-IN", "PURCHASED", "OFF THE SHELF", "CATALOGUE", "HARDWARE")
-    bought_in_candidate = (no_ops_except_handling and not part.get("flat_pattern_detected")) or any(k in desc_blob for k in bought_in_keywords)
+    bought_in_keywords = (
+        "BOUGHT IN",
+        "BOUGHT-IN",
+        "PURCHASED",
+        "OFF THE SHELF",
+        "CATALOGUE",
+        "CATALOG",
+        "HARDWARE",
+        "CASTOR",
+        "CASTER",
+        "TENTE",
+        "STEM",
+        "BUSH",
+        "FIXING",
+        "SCREW",
+        "UPC STICKER",
+        "STICKER",
+    )
+    bought_in_candidate = (no_ops_except_handling and not part.get("flat_pattern_detected")) or any(
+        k in desc_blob for k in bought_in_keywords
+    )
 
     if bought_in_candidate and system_unit_cost is not None:
         unit_total = round(system_unit_cost, 2)
@@ -565,6 +671,28 @@ def estimate_part(part: Dict[str, Any]) -> Dict[str, Any]:
 
     # Surface missing price/rate conditions for human review.
     risk_flags = list(part.get("risk_flags", []))
+    section_blob = " ".join(
+        [
+            str(material.get("material") or ""),
+            str(part.get("description") or ""),
+            str(part.get("normalized_material") or ""),
+        ]
+    ).upper()
+    if any(
+        token in section_blob
+        for token in (
+            "TUBE",
+            "RHS",
+            "SHS",
+            "BOX SECTION",
+            "WIRE MESH",
+            "WELDED WIRE",
+            "LINEAR M",
+            "KG/M",
+        )
+    ):
+        risk_flags.append("section_or_wire_stock_pricing_review")
+
     if material.get("extended_material_cost_gbp") is None:
         if not material.get("material"):
             risk_flags.append("missing_material_spec")

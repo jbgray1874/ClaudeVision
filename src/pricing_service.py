@@ -114,38 +114,57 @@ class PricingService:
         return {"bucket": "old", "age_days": age_days, "penalty": 0.2}
 
     def _get_udef_anchor(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
-        part_code = str(part.get("part_number") or "").strip().upper()
-        desc = str(part.get("description") or "").strip().lower()
+        """
+        UDEF anchor: must match SDILive column names on UDEF_PARTS_TABLE_FOR_ESTIMATING.
+        Uses the same shape as PRICE_SOURCE_CONFIG['sqlserver']['part_system_cost_query']:
+        [Part ref], [Description], [System cost per], SUP_TBL join.
+        If your database exposes a price-effective date column, add it to the SELECT list
+        as a 5th column and pass it to _freshness_adjustment().
+        """
+        part_code = str(part.get("part_number") or "").strip()
+        desc = str(part.get("description") or "").strip()
         if not part_code and len(desc) < 8:
             return None
 
         row = self._fetch_one_with_retry(
             """
             SELECT TOP 1
-                part_code, description, supplier_name,
-                unit_price_gbp, system_cost_gbp, effective_date
-            FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
-            WHERE part_code = ?
-               OR (description LIKE ? AND LEN(description) > 5)
+                u.[Part ref],
+                u.[Description],
+                ISNULL(s.[SUP_NAME], CAST(u.[Cus code] AS nvarchar(200))),
+                CAST(u.[System cost per] AS decimal(18,4))
+            FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+            LEFT JOIN dbo.SUP_TBL s
+                ON s.[SUP_CODE] = u.[Cus code]
+            WHERE
+                UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?)))
+                OR (
+                    LEN(LTRIM(RTRIM(?))) >= 8
+                    AND UPPER(u.[Description]) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                )
             ORDER BY
-                CASE WHEN part_code = ? THEN 1 ELSE 2 END,
-                COALESCE(unit_price_gbp, system_cost_gbp, 0) DESC
+                CASE WHEN UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+                u.[System cost per] DESC
             """,
-            [part_code, f"%{desc}%", part_code],
+            [part_code, desc, desc, part_code],
         )
         if not row:
             return None
 
-        price = float(row[3] or row[4] or 0.0)
+        price = float(row[3] or 0.0)
+        if price <= 0:
+            return None
         matched_code = str(row[0] or "").strip().upper()
-        base_confidence = 0.95 if part_code and part_code == matched_code else 0.82
-        freshness = self._freshness_adjustment(row[5])
+        part_code_upper = part_code.strip().upper()
+        base_confidence = 0.95 if part_code_upper and part_code_upper == matched_code else 0.82
+        # No standard effective-date column in the live UDEF query path; treat as unknown freshness.
+        freshness = self._freshness_adjustment(None)
         return {
             "source": "UDEF_PARTS_TABLE_FOR_ESTIMATING",
             "unit_price_gbp": price,
-            "provenance": f"UDEF match on {row[0]} ({row[1]}) age_days={freshness['age_days']}",
+            "provenance": f"UDEF match on {row[0]} ({row[1]}) supplier={row[2]}",
             "confidence": max(0.3, round(base_confidence - freshness["penalty"], 2)),
-            "effective_date": str(row[5]) if row[5] else None,
+            "effective_date": None,
             "supplier_name": row[2] or "Unknown",
             "freshness": freshness,
         }
@@ -248,8 +267,11 @@ class PricingService:
         confidence = float(anchor_price_source.get("confidence", 0.0) or 0.0)
         unit_price = float(anchor_price_source.get("unit_price_gbp", 0.0) or 0.0)
         weight_kg = float((part.get("normalized_geometry") or {}).get("weight_kg") or 0.0)
-        anchor_threshold = 0.90
-        scrap_factor = 1.04
+        policy = getattr(config, "PRICING_SERVICE_POLICY", {}) or {}
+        anchor_threshold = float(
+            policy.get("anchor_override_min_confidence", 0.90)
+        )
+        scrap_factor = float(policy.get("anchor_override_scrap_factor", 1.04))
 
         if confidence >= anchor_threshold and unit_price > 0.0 and weight_kg > 0.0:
             anchor_material_cost = weight_kg * unit_price * quantity * scrap_factor
@@ -381,24 +403,33 @@ class PricingService:
         return result
 
     def _save_to_database(self, priced_result: Dict[str, Any], run_uuid: Optional[str] = None) -> None:
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(
-                """
-                INSERT INTO dbo.drawing_priced_estimate (run_uuid, priced_json, total_cost_gbp, sell_price_gbp)
-                VALUES (?, ?, ?, ?)
-                """,
-                run_uuid or str(uuid.uuid4()),
-                json.dumps(priced_result, ensure_ascii=False),
-                priced_result["summary"]["grand_total_cost_gbp"],
-                priced_result["summary"]["total_sell_price_gbp"],
-            )
-            self.conn.commit()
-        finally:
+        for attempt in range(2):
+            cursor = None
             try:
-                cursor.close()
-            except Exception:
-                pass
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO dbo.drawing_priced_estimate (run_uuid, priced_json, total_cost_gbp, sell_price_gbp)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    run_uuid or str(uuid.uuid4()),
+                    json.dumps(priced_result, ensure_ascii=False),
+                    priced_result["summary"]["grand_total_cost_gbp"],
+                    priced_result["summary"]["total_sell_price_gbp"],
+                )
+                self.conn.commit()
+                return
+            except Exception as exc:
+                if attempt == 0 and self._is_connection_error(exc):
+                    self.conn = self._connection_factory()
+                    continue
+                raise
+            finally:
+                if cursor is not None:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
 
 
 if __name__ == "__main__":

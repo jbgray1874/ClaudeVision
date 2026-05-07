@@ -1,22 +1,42 @@
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
 
-def build_part_index(summary: Dict[str, Any], helpers: Dict[str, Callable[..., Any]]) -> List[Dict[str, Any]]:
-    dedupe = helpers["dedupe"]
-    is_valid_part_identifier = helpers["is_valid_part_identifier"]
-    empty_part_record = helpers["empty_part_record"]
-    is_component_sheet = helpers["is_component_sheet"]
-    effective_part_page_role = helpers["effective_part_page_role"]
-    prefer_local_title_block_values = helpers["prefer_local_title_block_values"]
-    prefer_local_scalar = helpers["prefer_local_scalar"]
-    is_good_description = helpers["is_good_description"]
-    should_assign_dimensions = helpers["should_assign_dimensions"]
-    pick_part_dimensions = helpers["pick_part_dimensions"]
-    first_numeric_thickness = helpers["first_numeric_thickness"]
-    rollup_geometry = helpers["rollup_geometry"]
-    clean_finish_values = helpers["clean_finish_values"]
-    is_assembly_identifier = helpers["is_assembly_identifier"]
-    interpret_part = helpers["interpret_part"]
+@dataclass(frozen=True)
+class PartIndexDeps:
+    dedupe: Callable[..., Any]
+    is_valid_part_identifier: Callable[..., Any]
+    empty_part_record: Callable[..., Any]
+    is_component_sheet: Callable[..., Any]
+    effective_part_page_role: Callable[..., Any]
+    prefer_local_title_block_values: Callable[..., Any]
+    prefer_local_scalar: Callable[..., Any]
+    is_good_description: Callable[..., Any]
+    should_assign_dimensions: Callable[..., Any]
+    pick_part_dimensions: Callable[..., Any]
+    first_numeric_thickness: Callable[..., Any]
+    rollup_geometry: Callable[..., Any]
+    clean_finish_values: Callable[..., Any]
+    is_assembly_identifier: Callable[..., Any]
+    interpret_part: Callable[..., Any]
+
+
+def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
+    dedupe = deps.dedupe
+    is_valid_part_identifier = deps.is_valid_part_identifier
+    empty_part_record = deps.empty_part_record
+    is_component_sheet = deps.is_component_sheet
+    effective_part_page_role = deps.effective_part_page_role
+    prefer_local_title_block_values = deps.prefer_local_title_block_values
+    prefer_local_scalar = deps.prefer_local_scalar
+    is_good_description = deps.is_good_description
+    should_assign_dimensions = deps.should_assign_dimensions
+    pick_part_dimensions = deps.pick_part_dimensions
+    first_numeric_thickness = deps.first_numeric_thickness
+    rollup_geometry = deps.rollup_geometry
+    clean_finish_values = deps.clean_finish_values
+    is_assembly_identifier = deps.is_assembly_identifier
+    interpret_part = deps.interpret_part
 
     parts: Dict[str, Dict[str, Any]] = {}
     document_bom_lookup = {

@@ -26,6 +26,7 @@ class SqlServerPriceConnector:
         driver: str = "ODBC Driver 18 for SQL Server",
         encrypt: bool = True,
         trust_server_certificate: bool = True,
+        source_name: str = "sqlserver",
     ) -> None:
         self.server = server
         self.database = database
@@ -37,6 +38,7 @@ class SqlServerPriceConnector:
         self.driver = driver
         self.encrypt = encrypt
         self.trust_server_certificate = trust_server_certificate
+        self.source_name = source_name
 
     def is_available(self) -> bool:
         return bool(

@@ -107,6 +107,22 @@ def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[
     cfg = config_map or config.PRICE_SOURCE_CONFIG
     connectors: Dict[str, Any] = {}
 
+    udef_cfg = cfg.get("udef_sqlserver", {})
+    if udef_cfg.get("enabled"):
+        connectors["udef_sqlserver"] = SqlServerPriceConnector(
+            server=udef_cfg.get("server", ""),
+            database=udef_cfg.get("database", ""),
+            username=udef_cfg.get("username", ""),
+            password=udef_cfg.get("password", ""),
+            material_price_query=udef_cfg.get("material_price_query", ""),
+            labour_rate_query=udef_cfg.get("labour_rate_query", ""),
+            part_system_cost_query=udef_cfg.get("part_system_cost_query", ""),
+            driver=udef_cfg.get("driver", "ODBC Driver 18 for SQL Server"),
+            encrypt=bool(udef_cfg.get("encrypt", True)),
+            trust_server_certificate=bool(udef_cfg.get("trust_server_certificate", True)),
+            source_name="udef_sqlserver",
+        )
+
     spreadsheet_cfg = cfg.get("spreadsheet", {})
     if spreadsheet_cfg.get("enabled"):
         connectors["spreadsheet"] = SpreadsheetPriceConnector(spreadsheet_cfg.get("template_workbook", ""))
@@ -124,6 +140,7 @@ def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[
             driver=sqlserver_cfg.get("driver", "ODBC Driver 18 for SQL Server"),
             encrypt=bool(sqlserver_cfg.get("encrypt", True)),
             trust_server_certificate=bool(sqlserver_cfg.get("trust_server_certificate", True)),
+            source_name="sqlserver",
         )
 
     access_cfg = cfg.get("access", {})

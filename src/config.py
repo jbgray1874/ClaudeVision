@@ -244,6 +244,7 @@ HISTORY_CSV_HEADERS = [
 ]
 
 PRICE_SOURCE_PRIORITY = [
+    "udef_sqlserver",
     "sqlserver",
     "spreadsheet",
     "access",
@@ -251,6 +252,40 @@ PRICE_SOURCE_PRIORITY = [
 ]
 
 PRICE_SOURCE_CONFIG = {
+    "udef_sqlserver": {
+        "enabled": True,
+        "server": "10.0.0.200",
+        "database": "SDILive",
+        "username": "AIBot",
+        "password": "AIAgentPW2026",
+        "driver": "ODBC Driver 18 for SQL Server",
+        "encrypt": True,
+        "trust_server_certificate": True,
+        # UDEF-first anchor for part/bought-in system cost lookups.
+        # Expected params: (part_code, description, part_code)
+        "part_system_cost_query": """
+SELECT TOP (1)
+    u.[Part ref] AS part_code,
+    u.[Description] AS description,
+    u.[System cost per] AS system_cost_per,
+    CAST(u.[System cost per] AS decimal(18,4)) AS price,
+    u.[Cus code] AS supplier_code,
+    s.[SUP_NAME] AS supplier_name,
+    'GBP' AS currency,
+    'each' AS unit,
+    0.98 AS confidence,
+    GETDATE() AS price_date
+FROM UDEF_PARTS_TABLE_FOR_ESTIMATING u
+LEFT JOIN SUP_TBL s
+    ON s.[SUP_CODE] = u.[Cus code]
+WHERE
+    UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?)))
+    OR UPPER(u.[Description]) LIKE '%' + UPPER(?) + '%'
+ORDER BY
+    CASE WHEN UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+    u.[System cost per] DESC
+""",
+    },
     "sqlserver": {
         "enabled": True,
         "server": "10.0.0.200",
@@ -352,10 +387,13 @@ WORKBOOK_EQUIVALENT_PRICING = {
     },
     # Workbook parity helper: quantity uplift/discount multipliers.
     # Applied to computed totals when no direct system_cost_per_part is used.
+    # Blank Estimate style quantity bands (align breakpoints with 5 / 10 / 25 / 50 where possible).
     "quantity_breaks": [
         {"min_qty": 1, "max_qty": 4, "multiplier": 1.00},
-        {"min_qty": 5, "max_qty": 24, "multiplier": 0.97},
-        {"min_qty": 25, "max_qty": 99, "multiplier": 0.94},
+        {"min_qty": 5, "max_qty": 9, "multiplier": 0.97},
+        {"min_qty": 10, "max_qty": 24, "multiplier": 0.96},
+        {"min_qty": 25, "max_qty": 49, "multiplier": 0.94},
+        {"min_qty": 50, "max_qty": 99, "multiplier": 0.92},
         {"min_qty": 100, "max_qty": None, "multiplier": 0.91},
     ],
     "variance_thresholds_pct": {
@@ -369,6 +407,7 @@ PRICE_FRESHNESS_RULES = {
     "default_days_fresh": 30,
     "default_days_stale": 120,
     "source_priority": {
+        "udef_sqlserver": 110,
         "sqlserver": 100,
         "spreadsheet": 80,
         "access": 60,
@@ -380,6 +419,24 @@ PRICE_FRESHNESS_RULES = {
         "stale": 12.0,
         "unknown": 20.0,
     },
+}
+
+# PricingService policy (explicit so production runs do not rely on hidden defaults).
+# Tuned via calibration / variance reports; see pricing_service._resolve_effective_material_cost.
+PRICING_SERVICE_POLICY = {
+    # Minimum anchor confidence required to override workbook material cost.
+    "anchor_override_min_confidence": 0.90,
+    # Material scrap factor used when anchor pricing overrides workbook material.
+    "anchor_override_scrap_factor": 1.04,
+}
+
+# Section / tube stock costing policy for workbook parity gaps.
+SECTION_STOCK_POLICY = {
+    "enabled": True,
+    # Applied after raw mass*price calculation for cut loss / trim waste.
+    "waste_factor_pct": 4.0,
+    # Regex-hint tokens to classify section-like bought-in fabricated stock.
+    "section_keywords": ["TUBE", "RHS", "SHS", "BOX SECTION", "ANGLE", "CHANNEL", "WIRE MESH"],
 }
 
 # Minimal write-back map for Blank Estimate template.

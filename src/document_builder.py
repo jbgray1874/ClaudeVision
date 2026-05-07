@@ -5,7 +5,7 @@ from feature_synthesis import infer_bend_count as _infer_bend_count_impl
 from feature_synthesis import infer_hole_count as _infer_hole_count_impl
 from feature_synthesis import synthesize_manufacturing_features as _synthesize_manufacturing_features_impl
 from process_router import build_process_routing as _build_process_routing_impl
-from part_index import build_part_index as _build_part_index_impl
+from part_index import PartIndexDeps, build_part_index as _build_part_index_impl
 from document_validation import build_document_validation as _build_document_validation_impl
 
 def _dedupe(values: List[Any]) -> List[Any]:
@@ -481,23 +481,23 @@ def _interpret_part(part: Dict[str, Any]) -> Dict[str, Any]:
 def build_part_index(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     return _build_part_index_impl(
         summary,
-        helpers={
-            "dedupe": _dedupe,
-            "is_valid_part_identifier": _is_valid_part_identifier,
-            "empty_part_record": _empty_part_record,
-            "is_component_sheet": _is_component_sheet,
-            "effective_part_page_role": _effective_part_page_role,
-            "prefer_local_title_block_values": _prefer_local_title_block_values,
-            "prefer_local_scalar": _prefer_local_scalar,
-            "is_good_description": _is_good_description,
-            "should_assign_dimensions": _should_assign_dimensions,
-            "pick_part_dimensions": _pick_part_dimensions,
-            "first_numeric_thickness": _first_numeric_thickness,
-            "rollup_geometry": _rollup_geometry,
-            "clean_finish_values": _clean_finish_values,
-            "is_assembly_identifier": _is_assembly_identifier,
-            "interpret_part": _interpret_part,
-        },
+        deps=PartIndexDeps(
+            dedupe=_dedupe,
+            is_valid_part_identifier=_is_valid_part_identifier,
+            empty_part_record=_empty_part_record,
+            is_component_sheet=_is_component_sheet,
+            effective_part_page_role=_effective_part_page_role,
+            prefer_local_title_block_values=_prefer_local_title_block_values,
+            prefer_local_scalar=_prefer_local_scalar,
+            is_good_description=_is_good_description,
+            should_assign_dimensions=_should_assign_dimensions,
+            pick_part_dimensions=_pick_part_dimensions,
+            first_numeric_thickness=_first_numeric_thickness,
+            rollup_geometry=_rollup_geometry,
+            clean_finish_values=_clean_finish_values,
+            is_assembly_identifier=_is_assembly_identifier,
+            interpret_part=_interpret_part,
+        ),
     )
 
 
