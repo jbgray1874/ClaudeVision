@@ -808,6 +808,189 @@ def _build_workbook_equivalent_pricing(part_estimates: List[Dict[str, Any]], mat
     }
 
 
+def _candidate_summary_list(source_meta: Dict[str, Any], limit: int = 5) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for candidate in (source_meta or {}).get("candidates", [])[:limit]:
+        rows.append(
+            {
+                "source_name": candidate.get("source"),
+                "price": candidate.get("price"),
+                "unit": candidate.get("unit"),
+                "confidence": candidate.get("confidence"),
+                "price_date": candidate.get("metadata", {}).get("price_date") if isinstance(candidate.get("metadata"), dict) else None,
+                "supplier_source": candidate.get("metadata", {}).get("supplier_name") if isinstance(candidate.get("metadata"), dict) else None,
+            }
+        )
+    return rows
+
+
+def _build_part_workbook_rows(part_estimate: Dict[str, Any]) -> Dict[str, Any]:
+    material_estimate = part_estimate.get("material_estimate", {}) or {}
+    process_estimate = part_estimate.get("process_estimate", {}) or {}
+    labour_estimate = part_estimate.get("labour_estimate", {}) or {}
+    cost_breakdown = part_estimate.get("cost_breakdown", {}) or {}
+    material_source = material_estimate.get("price_source", {}) or {}
+    system_cost = (cost_breakdown.get("system_cost") or {})
+    system_source = (system_cost.get("source") or {})
+    quantity = int(part_estimate.get("quantity") or 1)
+    part_number = part_estimate.get("part_number")
+    description = part_estimate.get("description")
+
+    material_rows: List[Dict[str, Any]] = []
+    bought_in_rows: List[Dict[str, Any]] = []
+    labour_rows: List[Dict[str, Any]] = []
+    operation_rows: List[Dict[str, Any]] = []
+
+    if material_estimate.get("material") or material_estimate.get("extended_material_cost_gbp") is not None:
+        material_rows.append(
+            {
+                "row_type": "material",
+                "part_number": part_number,
+                "description": description,
+                "quantity": quantity,
+                "material": material_estimate.get("material"),
+                "thickness_mm": material_estimate.get("thickness_mm"),
+                "blank_length_mm": material_estimate.get("blank_length_mm"),
+                "blank_width_mm": material_estimate.get("blank_width_mm"),
+                "blank_area_m2": material_estimate.get("blank_area_m2"),
+                "unit_material_mass_kg": material_estimate.get("unit_material_mass_kg"),
+                "unit_material_cost_gbp": material_estimate.get("unit_material_cost_gbp"),
+                "extended_material_cost_gbp": material_estimate.get("extended_material_cost_gbp"),
+                "source_name": material_source.get("source_name"),
+                "supplier_source": material_source.get("supplier_source"),
+                "price_date": material_source.get("price_date"),
+                "applied_basis": material_source.get("applied_basis"),
+                "candidate_prices": _candidate_summary_list(material_source),
+            }
+        )
+
+    if system_cost.get("unit_cost_gbp") is not None or system_cost.get("matched_part_code"):
+        bought_in_rows.append(
+            {
+                "row_type": "bought_in",
+                "part_number": part_number,
+                "description": description,
+                "quantity": quantity,
+                "matched_part_code": system_cost.get("matched_part_code"),
+                "unit_cost_gbp": system_cost.get("unit_cost_gbp"),
+                "extended_cost_gbp": system_cost.get("extended_cost_gbp"),
+                "applied_to_total": system_cost.get("applied_to_total"),
+                "source_name": system_source.get("source_name"),
+                "supplier_source": system_source.get("supplier_source"),
+                "price_date": system_source.get("price_date"),
+                "applied_basis": system_source.get("applied_basis"),
+                "candidate_prices": _candidate_summary_list(system_source),
+            }
+        )
+
+    setup_times = process_estimate.get("setup_times_min", {}) or {}
+    run_times = process_estimate.get("run_times_min_per_unit", {}) or {}
+    total_times = process_estimate.get("times_min", {}) or {}
+    labour_costs = labour_estimate.get("costs_gbp", {}) or {}
+    rate_sources = labour_estimate.get("rate_sources", {}) or {}
+
+    for operation in sorted(set(total_times) | set(labour_costs)):
+        rate_source = rate_sources.get(operation, {}) or {}
+        hourly_rate = rate_source.get("hourly_rate_gbp")
+        labour_rows.append(
+            {
+                "row_type": "labour",
+                "part_number": part_number,
+                "description": description,
+                "operation": operation,
+                "department_code": operation,
+                "quantity": quantity,
+                "setup_time_min": setup_times.get(operation, 0.0),
+                "run_time_per_unit_min": run_times.get(operation, 0.0),
+                "total_time_min": total_times.get(operation, 0.0),
+                "hourly_rate_gbp": hourly_rate,
+                "total_value_gbp": labour_costs.get(operation, 0.0),
+                "source_name": rate_source.get("source_name"),
+                "supplier_source": rate_source.get("supplier_source"),
+                "price_date": rate_source.get("price_date"),
+                "applied_basis": rate_source.get("applied_basis"),
+                "candidate_prices": _candidate_summary_list(rate_source),
+            }
+        )
+
+    manufacturing_features = process_estimate.get("manufacturing_features", {}) or {}
+    operation_rows.extend(
+        [
+            {
+                "row_type": "operation_feature",
+                "part_number": part_number,
+                "operation": "laser_cutting",
+                "cut_length_mm": process_estimate.get("cut_length_mm"),
+                "pierce_count": process_estimate.get("pierce_count"),
+                "hole_count": process_estimate.get("hole_count"),
+            },
+            {
+                "row_type": "operation_feature",
+                "part_number": part_number,
+                "operation": "folding",
+                "bend_count": process_estimate.get("bend_count"),
+                "bend_length_mm": process_estimate.get("bend_length_mm"),
+            },
+            {
+                "row_type": "operation_feature",
+                "part_number": part_number,
+                "operation": "manufacturing_flags",
+                "laser_required": manufacturing_features.get("laser_required"),
+                "fold_required": manufacturing_features.get("fold_required"),
+                "weld_required": manufacturing_features.get("weld_required"),
+                "finish_required": manufacturing_features.get("finish_required"),
+            },
+        ]
+    )
+
+    assumptions = {
+        "costing_basis": cost_breakdown.get("costing_basis"),
+        "notes": part_estimate.get("notes", []),
+        "risk_flags": part_estimate.get("risk_flags", []),
+        "material_price_source": material_source,
+        "system_cost_source": system_source,
+        "labour_rate_sources": rate_sources,
+    }
+
+    return {
+        "material_rows": material_rows,
+        "bought_in_rows": bought_in_rows,
+        "labour_rows": labour_rows,
+        "operation_rows": operation_rows,
+        "assumptions": assumptions,
+    }
+
+
+def _build_document_workbook_rows(part_estimates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    material_rows: List[Dict[str, Any]] = []
+    bought_in_rows: List[Dict[str, Any]] = []
+    labour_rows: List[Dict[str, Any]] = []
+    operation_rows: List[Dict[str, Any]] = []
+    assumptions_rows: List[Dict[str, Any]] = []
+
+    for item in part_estimates:
+        workbook_rows = item.get("workbook_rows", {}) or {}
+        material_rows.extend(workbook_rows.get("material_rows", []))
+        bought_in_rows.extend(workbook_rows.get("bought_in_rows", []))
+        labour_rows.extend(workbook_rows.get("labour_rows", []))
+        operation_rows.extend(workbook_rows.get("operation_rows", []))
+        assumptions_rows.append(
+            {
+                "part_number": item.get("part_number"),
+                "description": item.get("description"),
+                "assumptions": workbook_rows.get("assumptions", {}),
+            }
+        )
+
+    return {
+        "material_rows": material_rows,
+        "bought_in_rows": bought_in_rows,
+        "labour_rows": labour_rows,
+        "operation_rows": operation_rows,
+        "assumption_rows": assumptions_rows,
+    }
+
+
 def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     started = time.time()
@@ -817,6 +1000,7 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
         if debug:
             print(f"[DEBUG] estimate_document start part {idx}/{len(parts)}: {part_number} (+{round(time.time()-started,2)}s)")
         part_estimate = estimate_part(part)
+        part_estimate["workbook_rows"] = _build_part_workbook_rows(part_estimate)
         part_estimates.append(part_estimate)
         if debug:
             print(f"[DEBUG] estimate_document done part {idx}/{len(parts)}: {part_number} (+{round(time.time()-started,2)}s)")
@@ -828,6 +1012,7 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
             operation_totals[op] = round(operation_totals.get(op, 0.0) + (cost or 0.0), 2)
     document_total = round(sum(item["extended_total_cost_gbp"] for item in part_estimates), 2)
     workbook_equivalent_pricing = _build_workbook_equivalent_pricing(part_estimates, material_total=material_total, labour_total=labour_total)
+    workbook_input_population = _build_document_workbook_rows(part_estimates)
     estimate_source_extract = build_estimate_source_extract(part_estimates)
     historical_comparison_projection = {
         "schema": "estimate_projection_for_historical.v1",
@@ -857,6 +1042,7 @@ def estimate_document(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
         "part_estimates": part_estimates,
         "document_total_estimated_cost_gbp": document_total,
         "workbook_equivalent_pricing": workbook_equivalent_pricing,
+        "workbook_input_population": workbook_input_population,
         "estimate_source_extract": estimate_source_extract,
         "historical_comparison_projection": historical_comparison_projection,
         "cost_breakdown": {
