@@ -40,11 +40,14 @@ def analyse_vector_features(drawings: List[Dict[str, Any]]) -> Dict[str, Any]:
     narrow_stroke_path_count = 0
 
     for drawing in drawings:
+        stroke_width = float(drawing.get("width", 0.0) or 0.0)
+        # SOLIDWORKS PDFs often include ultra-thin construction/dimension lines.
+        if stroke_width < 0.18:
+            continue
         if drawing.get("closePath"):
             closed_profiles += 1
         if drawing.get("type") in {"s", "fs"}:
             stroked_path_count += 1
-        stroke_width = float(drawing.get("width", 0.0) or 0.0)
         if stroke_width <= 0.3:
             narrow_stroke_path_count += 1
         for item in drawing.get("items", []):
@@ -52,14 +55,16 @@ def analyse_vector_features(drawings: List[Dict[str, Any]]) -> Dict[str, Any]:
             if op == "l":
                 p1 = (float(item[1].x), float(item[1].y))
                 p2 = (float(item[2].x), float(item[2].y))
-                segments.append((p1, p2))
                 length = _distance(p1, p2)
+                if length < 8.0:
+                    continue
+                segments.append((p1, p2))
                 line_lengths.append(length)
                 midpoint_xs.append((p1[0] + p2[0]) / 2.0)
                 if length > 40:
                     dx = abs(p2[0] - p1[0])
                     dy = abs(p2[1] - p1[1])
-                    is_axis_aligned = (dx <= 0.5) or (dy <= 0.5)
+                    is_axis_aligned = (dx <= 2.0) or (dy <= 2.0)
                     dashes = str(drawing.get("dashes", "")).strip()
                     is_dashed = bool(dashes and dashes != "[] 0")
                     if is_axis_aligned and is_dashed:
@@ -91,12 +96,12 @@ def analyse_vector_features(drawings: List[Dict[str, Any]]) -> Dict[str, Any]:
     collinear_groups = 1 if long_lines and sum(1 for value in long_lines[:6] if value >= long_lines[0] * 0.7) >= 3 else 0
     feature_clusters = max(1, internal_loops + circle_candidates + 1) if drawings else 0
     geometry_reliability = 0.0
-    if closed_profiles > 0 or arc_candidates > 0:
-        geometry_reliability += 0.45
+    if closed_profiles >= 3 or len(segments) > 60 or arc_candidates > 0:
+        geometry_reliability += 0.60
     if dashed_long_axis_lines > 0:
         geometry_reliability += 0.35
-    if stroked_path_count > 0 and narrow_stroke_path_count < max(10, stroked_path_count * 0.7):
-        geometry_reliability += 0.2
+    if stroked_path_count > 0 and narrow_stroke_path_count < max(15, stroked_path_count * 0.75):
+        geometry_reliability += 0.25
     geometry_reliability = round(min(1.0, geometry_reliability), 2)
 
     return {

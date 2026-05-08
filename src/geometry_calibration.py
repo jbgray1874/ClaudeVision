@@ -25,7 +25,12 @@ def _parse_scale(scale_text: Optional[str]) -> Optional[float]:
     return den / num
 
 
-def calibrate_page_geometry(page_analysis: Dict[str, Any], geometry_summary: Dict[str, Any], page_size_points: List[float] | None = None) -> Dict[str, Any]:
+def calibrate_page_geometry(
+    page_analysis: Dict[str, Any],
+    geometry_summary: Dict[str, Any],
+    page_size_points: List[float] | None = None,
+    page_role: Optional[str] = None,
+) -> Dict[str, Any]:
     dimensions = page_analysis.get("dimensions", {}) if isinstance(page_analysis, dict) else {}
     overall_length_mm = dimensions.get("overall_length_mm")
     overall_width_mm = dimensions.get("overall_width_mm")
@@ -79,6 +84,14 @@ def calibrate_page_geometry(page_analysis: Dict[str, Any], geometry_summary: Dic
         reference_dimensions_mm.append(float(overall_length_mm))
         matched_vector_spans = 1
         calibration_confidence = min(0.9, 0.55 + 0.45 * geometry_reliability)
+    elif page_role and str(page_role).lower() in {"detail", "section"}:
+        # SOLIDWORKS detail/section pages often use repeated 1:1 or 1:5 conventions.
+        # Use a conservative fallback rather than defaulting all the way to page points.
+        calibrated = True
+        method = "section_view_fallback"
+        serialized = f"{page_analysis} {geometry_summary}".upper()
+        point_to_mm = round((25.4 / 72.0) * (1.0 if "1:1" in serialized else 5.0), 6)
+        calibration_confidence = max(0.45, 0.5 + 0.25 * geometry_reliability)
     elif overall_width_mm and page_size_points:
         longer_page_side = max(page_size_points)
         if longer_page_side:

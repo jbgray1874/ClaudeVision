@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 try:
     import fitz  # type: ignore
@@ -59,6 +59,10 @@ def _analyse_drawing_list(drawings: List[Dict[str, Any]], page_height_points: fl
     max_line_length_points = 0.0
 
     for drawing in drawings:
+        stroke_width = float(drawing.get("width", 0.0) or 0.0)
+        if stroke_width < 0.18:
+            # Ignore ultra-thin construction/dimension lines.
+            continue
         items = drawing.get("items", [])
         rect = drawing.get("rect")
         if drawing.get("fill"):
@@ -68,7 +72,7 @@ def _analyse_drawing_list(drawings: List[Dict[str, Any]], page_height_points: fl
             closed_path_count += 1
         if drawing.get("type") in {"s", "fs"}:
             stroked_path_count += 1
-        if float(drawing.get("width", 0.0) or 0.0) <= 0.3:
+        if stroke_width <= 0.3:
             narrow_stroke_path_count += 1
         if rect is not None:
             rect_width = abs(rect.width)
@@ -85,6 +89,8 @@ def _analyse_drawing_list(drawings: List[Dict[str, Any]], page_height_points: fl
             if op == "l":
                 p1, p2 = item[1], item[2]
                 length = _distance(p1, p2)
+                if length < 8.0:
+                    continue
                 line_segments += 1
                 approx_total_line_length_points += length
                 max_line_length_points = max(max_line_length_points, length)
@@ -195,7 +201,7 @@ def analyse_page_geometry(page: Any) -> Dict[str, Any]:
     return _analyse_drawing_list(drawings, float(page.rect.height))
 
 
-def analyse_document_geometry(pdf_path: Path) -> List[Dict[str, Any]]:
+def _analyse_geometry_from_pdf(pdf_path: Path) -> List[Dict[str, Any]]:
     if fitz is None:
         return []
 
@@ -218,11 +224,72 @@ def calibrate_document_geometry(summary: Dict[str, Any], geometry_pages: List[Di
     for geometry in geometry_pages:
         page_number = geometry.get("page_number")
         page_summary = page_lookup.get(page_number, {})
+        page_analysis = page_summary.get("page_analysis", {})
+        page_role = (page_summary.get("page_role", {}) or {}).get("primary_role")
         calibration = calibrate_page_geometry(
-            page_summary.get("page_analysis", {}),
+            page_analysis,
             geometry,
             geometry.get("page_size_points"),
+            page_role=page_role,
         )
+        # Confidence boost when page has strong BOM cues / detail role.
+        vector_conf = ((geometry.get("vector_features") or {}).get("confidence") or {})
+        base_rel = float(vector_conf.get("geometry_reliability", 0.0) or 0.0)
+        bom_rows = (page_analysis.get("bom_rows") or [])
+        boost = 0.0
+        if len(bom_rows) >= 3:
+            boost += 0.2
+        if page_role == "detail":
+            boost += 0.1
+        if boost > 0:
+            boosted = round(min(1.0, base_rel + boost), 2)
+            vector_conf["geometry_reliability"] = boosted
+            geometry.setdefault("confidence", {})["geometry_reliability"] = boosted
         geometry["scale_calibration"] = calibration
         calibrated.append(geometry)
     return calibrated
+
+
+def _analyse_geometry_from_processed_pages(processed_pages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    results: List[Dict[str, Any]] = []
+    total_reliability = 0.0
+
+    for page in processed_pages:
+        drawings = ((page.get("vision_extraction") or {}).get("drawings")) or []
+        geometry = analyse_vector_features(drawings)
+        page_analysis = page.get("page_analysis", {}) or {}
+        page_role = (page.get("page_role", {}) or {}).get("primary_role")
+        page_size_points = [page.get("page_width", 0.0) or 0.0, page.get("page_height", 0.0) or 0.0]
+        calibration = calibrate_page_geometry(page_analysis, {"vector_features": geometry}, page_size_points, page_role=page_role)
+
+        bom_rows = page_analysis.get("bom_rows") or []
+        if len(bom_rows) > 3:
+            geometry["confidence"]["geometry_reliability"] = round(
+                min(1.0, float(geometry["confidence"].get("geometry_reliability", 0.0)) + 0.25), 2
+            )
+
+        page_result = {
+            "page_number": page.get("page_number"),
+            "geometry": geometry,
+            "calibration": calibration,
+        }
+        results.append(page_result)
+        total_reliability += float(geometry["confidence"].get("geometry_reliability", 0.0) or 0.0)
+
+    avg_reliability = round(total_reliability / len(results), 2) if results else 0.0
+    return {
+        "pages": results,
+        "document_geometry_reliability": avg_reliability,
+        "overall_confidence": round((avg_reliability + 0.3) / 1.3, 2),
+    }
+
+
+def analyse_document_geometry(input_data: Union[Path, List[Dict[str, Any]]]) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Backward-compatible geometry entrypoint:
+    - Path input: returns per-page geometry list (legacy behavior)
+    - Processed page list input: returns document geometry dict (new SOLIDWORKS flow)
+    """
+    if isinstance(input_data, list):
+        return _analyse_geometry_from_processed_pages(input_data)
+    return _analyse_geometry_from_pdf(input_data)

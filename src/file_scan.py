@@ -22,7 +22,9 @@ import config
 from document_builder import build_document_writeup, merge_page_analysis
 from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_document
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
-from geometry_analysis import analyse_document_geometry, calibrate_document_geometry
+from geometry_features import analyse_vector_features
+from geometry_calibration import calibrate_page_geometry
+from geometry_analysis import analyse_document_geometry
 from llm_extraction import reconcile_with_llm
 from layout_zones import zone_boxes as _zone_boxes
 from layout_zones import words_in_box as _words_in_box
@@ -616,14 +618,25 @@ def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, P
     _debug("start summarise_document")
     summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
     _debug("done summarise_document")
-    _debug("start analyse_document_geometry")
-    geometry_pages = analyse_document_geometry(pdf_path)
-    _debug("done analyse_document_geometry")
-    _debug("start calibrate_document_geometry")
-    geometry_pages = calibrate_document_geometry(summary, geometry_pages)
-    _debug("done calibrate_document_geometry")
+    _debug("start improved analyse_document_geometry")
+    processed_pages = summary.get("pages", [])
+    print("   -> Running improved SOLIDWORKS geometry calibration...")
+    geometry_results = analyse_document_geometry(processed_pages)
+    for i, page in enumerate(processed_pages):
+        if i < len(geometry_results.get("pages", [])):
+            page["geometry"] = geometry_results["pages"][i].get("geometry", {})
+            page["calibration"] = geometry_results["pages"][i].get("calibration", {})
+    geometry_summary = {
+        "document_geometry_reliability": geometry_results.get("document_geometry_reliability", 0.0),
+        "overall_confidence": geometry_results.get("overall_confidence", 0.0),
+        "pages": geometry_results.get("pages", []),
+        "notes": "Improved filtering for SOLIDWORKS vectors + title-block scale priority",
+    }
+    summary["geometry_summary"] = geometry_summary
+    print(f"   -> Geometry reliability: {geometry_results.get('document_geometry_reliability', 0.0):.2f} (target >0.75)")
+    _debug("done improved analyse_document_geometry")
     _debug("start merge_page_analysis")
-    summary = merge_page_analysis(summary, geometry_pages)
+    summary = merge_page_analysis(summary, geometry_summary.get("pages", []))
     _debug("done merge_page_analysis")
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
