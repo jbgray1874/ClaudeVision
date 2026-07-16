@@ -1,0 +1,1288 @@
+"""
+wb_populate.py  —  Populate the real Blank Estimating Workbook template with the
+engine's extracted inputs, and let the WB's own formulas do the costing.
+
+WHY THIS EXISTS:
+  The previous xlsx_output.py BUILT a workbook from scratch, re-deriving the cost
+  model in Python — which diverged from the real WB (the £166 vs £99.99 material
+  total). This module instead OPENS the estimators' real template and writes only
+  the INPUT cells (dimensions, quantities, operations, BOM prices). The WB's own
+  formulas (M59 material, laser rate calc, powder calc, labour lookups, M105 unit
+  cost, sell price) then compute everything. One source of truth: the WB.
+
+MODEL (confirmed with JG):
+  Engine supplies INPUTS. WB CALCULATES.
+    - BOM block:   description, code, PRICE (engine-sourced: UDEF/LLM), qty, scrap
+    - Steel block: description, qty, length, width, gauge   -> WB computes cost+laser+powder
+    - Other Sheet: description, qty, length, width, thickness
+    - Labour:      operation, description, qty              -> WB looks up rate
+    - Header:      customer, drawing/job no, ORDER QTY (D6)
+
+LAYOUT CHANGES: every cell address lives in CELL_MAP below. If the estimators hand
+  over a WB with a shifted layout, edit CELL_MAP only — not the logic.
+
+Requires openpyxl.
+"""
+from __future__ import annotations
+import os, json, re, shutil, sys
+from datetime import datetime
+
+# Powder material rate (£/kg). Single source of truth is config.py — the Excel
+# template carries only a static default, which we overwrite on every populate.
+try:
+    from config import POWDER_COST_PER_KG as _POWDER_COST_PER_KG
+except Exception:
+    _POWDER_COST_PER_KG = None  # fall back to whatever the template holds
+# Coverage: kg of powder per m2 of coated surface. The template's own calculator uses
+# 0.1667 (= 6 m2/kg = 100% transfer efficiency, which nothing achieves). See config.py.
+try:
+    from config import POWDER_KG_PER_M2 as _POWDER_KG_PER_M2
+except Exception:
+    _POWDER_KG_PER_M2 = 0.1667
+from typing import Any, Dict, List, Optional
+
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CELL MAP — the ONE place to edit if the WB layout changes.
+# Row ranges are the INPUT rows in each block of the 'Estimate' sheet.
+# Columns are 1-indexed (A=1). Confirmed against Blank Estimate Sheet WB 2026.
+# ═══════════════════════════════════════════════════════════════════════════════
+# Refuse to emit an estimate that has silently dropped bought-in parts.
+# Set False to revert to the old flag-and-drop behaviour.
+STRICT_BOM_OVERFLOW = True
+
+CELL_MAP = {
+    # UNC path (not K:) so it resolves in ANY session regardless of drive mapping.
+    # K: maps to \\sdi-dc01\shareddata$\Shared — using the UNC directly avoids the
+    # drive being unmapped in admin shells / when the engine runs headless via main.py.
+    "template_path": r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx",
+    "output_dir":    r"C:\ClaudeVision\output\estimates",
+    "estimate_sheet": "Estimate",
+    "structural_sheets": ["Labour", "Material Price Break"],  # NEVER overwrite these
+
+    # Header input cells (row, col) or "A1" style
+    "header": {
+        "customer":   "C3",
+        "drawing_no": "C5",
+        "order_qty":  "D6",   # drives $D$6 everywhere — critical
+    },
+
+    # BOM / Standard Materials block. Engine writes desc, code, PRICE, qty, scrap.
+    # Columns from the dump: C=desc, H=code, I=supplier, J=price, K=qty, L=scrap.
+    "bom": {
+        "first_row": 11, "last_row": 50,          # 40 slots  (_CELLMAP_WIDENED_BOM40: was 11..25 = 15; widened in Excel 2026-07-13 after 1282 silently dropped its 16th BOM part)
+        "col_desc": 3, "col_code": 8, "col_supplier": 9,
+        "col_price": 10, "col_qty": 11, "col_scrap": 12,
+    },
+
+    # Tube / Wire block. Engine writes desc, qty, gauge, length.
+    # Header row 27: C=desc, E=qty, F=gauge, G=length (H..M are formula-driven).
+    "tube": {
+        "first_row": 53, "last_row": 60,          # 8 slots (+25: BOM widened)
+        "col_desc": 3, "col_qty": 5, "col_gauge": 6, "col_length": 7,
+    },
+
+    # Sheet Steel block. Engine writes desc, qty, length, width, gauge.
+    # Header row 37: C=desc, E=qty, F=len, G=wid, H=gauge, I=sheetL, J=sheetW (K..=formula).
+    "steel": {
+        "first_row": 63, "last_row": 81,          # 19 slots (+25: BOM widened 2026-07-13)
+        "col_desc": 3, "col_qty": 5, "col_length": 6, "col_width": 7, "col_gauge": 8,
+        "col_sheet_l": 9, "col_sheet_w": 10,      # optional; WB defaults if blank
+        "col_holes": 19, "col_internal_cut": 20,  # S/T: laser-calc inputs (No of holes / Internal Cutting Distance)
+    },
+
+    # Other Sheet Material (board/acrylic/HIPS). desc, qty, length, width, thickness.
+    # Header row 50: C=desc, D=qty, E=len, F=wid, G=thick, H=sheetL, I=sheetW.
+    "other_sheet": {
+        "first_row": 84, "last_row": 91,          # 8 slots (+25: BOM widened 2026-07-13)
+        "col_desc": 3, "col_qty": 4, "col_length": 5, "col_width": 6, "col_thick": 7,
+        "col_sheet_l": 8, "col_sheet_w": 9, "col_cost_per_sheet": 12,
+    },
+
+    # Labour block. Engine writes operation-name (C), qty (H), and THROUGHPUT (I).
+    # The WB looks up rate/dept/setup from the operation name and computes hours+cost
+    # from throughput. Throughput (pieces/hr) = order_qty × qty_per_unit ÷ batch_hours,
+    # which makes the WB's own formulas reproduce the engine's run-time cost, and the
+    # WB then adds setup from its table. Header row 62: C=operation, H=qty, I=Rate Per Hour
+    # (actually throughput/pieces-per-hour, the divisor in the hours & cost formulas).
+    "labour": {
+        "first_row": 96, "last_row": 167,         # 72 slots (+25: BOM widened 2026-07-13)
+        "col_operation": 3, "col_desc": 4, "col_qty": 8, "col_throughput": 9,
+    },
+}
+
+# Map engine operation names -> WB department operation names (col C of labour block).
+# The WB looks up col C against its dept-rate table (rows 115-146). These MUST match
+# the WB's EXACT strings or the LOOKUP returns 0. Confirmed from the dept table dump:
+#   "Fold", "Laser (Metal)", "P.Coat", "Weld (CO2)", "Punch",
+#   "Assemble/pack (Metal)", "Tube", "Saw", "Spotweld", etc.
+OP_NAME_MAP = {
+    "laser_cutting":  "Laser (Metal)",
+    "laser":          "Laser (Metal)",
+    "folding":        "Fold",
+    "fold":           "Fold",
+    "powder_coating": "P.Coat",       # WB table says "P.Coat", not "Powder Coat"
+    "powder_coat":    "P.Coat",
+    "welding":        "Weld (CO2)",
+    "weld":           "Weld (CO2)",
+    "punch":          "Punch",
+    "punching":       "Punch",
+    "handling":       "Assemble/pack (Metal)",   # engine 'handling' -> WB assemble/pack metal
+    "assembly":       "Assemble/pack (Metal)",
+    "assemble":       "Assemble/pack (Metal)",
+    "robomac":        "Robomac",   # WB dept ROBO £31.45/hr — EXACT string or LOOKUP returns 0
+    "wire_forming":   "Robomac",
+    "tube_cutting":   "Tube",
+    "tube":           "Tube",
+    "saw":            "Saw",
+    "sawing":         "Saw",
+    "spotweld":       "Spotweld",
+    "spot_weld":      "Spotweld",
+    "roll":           "Roll",
+    "rolling":        "Roll",
+    "guillotine":     "Guillotine",
+    "linebend":       "Linebend",
+}
+
+# Acrylic/board parts use DIFFERENT (cheaper) labour operations than metal.
+# The WB table has both: "Laser (Acrylic)" £41.21 vs "Laser (Metal)" £68.19,
+# "Assemble/pack (Acrylic)" vs "(Metal)", "Manual labour (Acrylic)" vs "(Metal)".
+# For an acrylic/board part, these OVERRIDE the metal mapping above. Operations
+# with no acrylic variant (fold, powder) fall through to the metal/default name.
+# Acrylic/board operations — override the metal defaults where SDI uses different
+# equipment. NOTE: 'folding' on acrylic is NOT a press-brake fold — SDI heat-bends
+# acrylic on a line-bender (heating element softens it). Map to "Linebend" (LINE).
+OP_NAME_MAP_ACRYLIC = {
+    "laser_cutting":  "Laser (Acrylic)",
+    "laser":          "Laser (Acrylic)",
+    "folding":        "Linebend",        # acrylic: heat/line-bend, not press-brake
+    "fold":           "Linebend",
+    "handling":       "Assemble/pack (Acrylic)",
+    "assembly":       "Assemble/pack (Acrylic)",
+    "assemble":       "Assemble/pack (Acrylic)",
+    "manual":         "Manual labour (Acrylic)",
+    "manual_labour":  "Manual labour (Acrylic)",
+}
+
+# Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
+# The engine correctly retains 'folding' on tubes (SDI does bend them), but the
+# WB operation is "Tubebend" (TBEN £32.84 / 45 min setup), not "Fold" (FOLD £40.47).
+_TUBE_OP_REMAP = {
+    "folding": "Tubebend",
+    "fold":    "Tubebend",
+}
+
+
+def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[str]:
+    """Map an engine operation name to the correct WB department name.
+
+    Priority:
+      1. Tube stock → remap fold/folding to Tubebend (tube-bender, not press-brake)
+      2. Acrylic/board → use acrylic operation variants (Linebend, Laser (Acrylic), etc.)
+      3. Everything else → standard metal mapping
+    """
+    key = str(op).lower()
+    sf = str(stock_form or "").lower()
+    # Tube bending: the engine assigns 'folding' but SDI uses a tube-bender
+    if sf == "tube" and key in _TUBE_OP_REMAP:
+        return _TUBE_OP_REMAP[key]
+    # Acrylic/board operations
+    if is_acrylic and key in OP_NAME_MAP_ACRYLIC:
+        return OP_NAME_MAP_ACRYLIC[key]
+    # Standard metal
+    return OP_NAME_MAP.get(key)
+
+
+# Operations that are genuinely impossible / meaningless for a given stock form
+# regardless of remapping — these are dropped entirely.
+# NOTE: tube-fold and acrylic-fold are NOT in this list — they are REAL operations
+# (tube-bending and line-bending) that get REMAPPED above, not dropped.
+# Only operations that serve no purpose at all go here.
+_SPURIOUS_OPS_BY_STOCK_FORM = {
+    "tube": {"punch", "punching"},   # tubes are not punched (no flat blank to punch)
+    # A solid round bar has NO FLAT BLANK. It cannot be lasered, folded, punched,
+    # line-bent, guillotined or diamond-polished. It is cut (Robomac / Saw) and welded.
+    # 1310-02 STUD (8mm dia x 65) was carrying Laser £4.91 from the original misread
+    # that treated its DIAMETER as an 8mm sheet THICKNESS.
+    "wire": {
+        "laser", "laser_cutting", "laser_metal",
+        "fold", "folding",
+        "punch", "punching",
+        "linebend", "line_bend",
+        "guillotine",
+        "diamond_polish",
+    },
+}
+# Acrylic doesn't get punched either (laser or CNC cut, not punch press).
+_SPURIOUS_OPS_BY_MATERIAL = {
+    "acrylic": {"punch", "punching"},
+}
+
+
+def _is_spurious_operation(op: str, stock_form: str, material: str = "") -> bool:
+    """True if this operation is physically impossible for this stock form / material.
+    Note: fold/folding on tubes and acrylic is NOT spurious — it's remapped to the
+    correct WB operation (Tubebend / Linebend) by _map_operation, not dropped here."""
+    key = str(op).lower()
+    sf = str(stock_form or "").lower()
+    if key in _SPURIOUS_OPS_BY_STOCK_FORM.get(sf, set()):
+        return True
+    mat = str(material or "").lower()
+    for mat_key, bad in _SPURIOUS_OPS_BY_MATERIAL.items():
+        if mat_key in mat and key in bad:
+            return True
+    return False
+
+
+def _safe(v, default=None):
+    try:
+        if v in (None, "", "None"):
+            return default
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_sheet_metal(mat: str) -> bool:
+    m = (mat or "").upper()
+    return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
+
+
+def _is_board(mat: str) -> bool:
+    m = (mat or "").upper()
+    return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD"))
+
+
+def _is_tube(pe: Dict[str, Any]) -> bool:
+    """A part is tube if its description/geometry indicates section/tube stock
+    (no flat-pattern DXF; priced by length). Heuristic: 'tube' in desc, or the
+    part has a length but no width (a bar), or explicit geometry_source hints."""
+    desc = f"{pe.get('part_number','')} {pe.get('description','')}".upper()
+    if "TUBE" in desc or "SECTION" in desc or "BOX SECTION" in desc:
+        return True
+    return False
+
+
+
+def _verify_template_matches_cellmap(ws, cm, flags=None):
+    """The template is the single source of truth for its own layout.
+
+    M92 (Total Material Cost) sums every material block:
+        =(SUM(M11:M50)+SUM(M53:M60)+SUM(M63:M81)+SUM(M84:M91)+AF83)
+    Read it back and check CELL_MAP agrees. If the estimators re-shape the sheet again,
+    we find out HERE — not by writing into merged header cells, and not by silently
+    truncating a block.
+
+    Non-fatal if the formula cannot be found or parsed: we fall back to the constants.
+    """
+    import re as _re
+    try:
+        f = ws["M92"].value
+        if not isinstance(f, str) or "SUM(" not in f:
+            return
+        spans = _re.findall(r"SUM\(M(\d+):M(\d+)\)", f)
+        if not spans:
+            return
+        found = {int(a): int(b) for a, b in spans}
+        for key in ("bom", "tube", "steel", "other_sheet"):  # CELL_MAP names it "tube"
+            blk = cm.get(key)
+            if not blk:
+                continue
+            fr, lr = blk["first_row"], blk["last_row"]
+            if fr in found and found[fr] != lr:
+                raise RuntimeError(
+                    f"[wb_populate] TEMPLATE/CELL_MAP MISMATCH in '{key}': "
+                    f"CELL_MAP says rows {fr}..{lr}, but the template's M92 formula sums "
+                    f"M{fr}:M{found[fr]}. The template layout changed. "
+                    f"Update CELL_MAP — do NOT run with a stale map."
+                )
+    except RuntimeError:
+        raise
+    except Exception:
+        return  # never let the safety check itself break a run
+
+
+def _flag(msg: str, flags: List[str]):
+    flags.append(msg)
+    print(f"   [wb_populate] ⚠ {msg}")
+
+
+def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
+    """Open the template, populate inputs from `summary`, save-as to output dir.
+    `job_folder_name` is the drawing-folder basename, used for the output filename.
+    Returns the output path, or None on failure."""
+    if openpyxl is None:
+        print("   [wb_populate] openpyxl not installed — cannot populate template.")
+        return None
+
+    cm = CELL_MAP
+    tpl = cm["template_path"]
+    if not os.path.exists(tpl):
+        print(f"   [wb_populate] TEMPLATE NOT FOUND: {tpl}")
+        return None
+
+    flags: List[str] = []
+
+    # part estimates live under estimate_summary.part_estimates (or top-level parts)
+    pes = (
+        (summary.get("estimate_summary") or {}).get("part_estimates")
+        or summary.get("part_estimates")
+        or summary.get("parts")
+        or []
+    )
+
+    wb = openpyxl.load_workbook(tpl, data_only=False, keep_vba=False)
+    if cm["estimate_sheet"] not in wb.sheetnames:
+        print(f"   [wb_populate] no '{cm['estimate_sheet']}' sheet in template.")
+        return None
+    ws = wb[cm["estimate_sheet"]]
+    _verify_template_matches_cellmap(ws, cm, flags)
+
+    # Powder £/kg — write the code-controlled rate into the sheet (cell AF82),
+    # overwriting the template's static default. AF83 (=AD82*AF82) then computes
+    # powder material cost at the correct rate. Source: config.POWDER_COST_PER_KG.
+    if _POWDER_COST_PER_KG is not None:
+        try:
+            ws["AF82"] = float(_POWDER_COST_PER_KG)
+        except Exception:
+            pass
+
+    # ── Header ──────────────────────────────────────────────────────────────
+    hdr = cm["header"]
+    order_qty = int(_safe(summary.get("assumed_job_quantity")
+                          or summary.get("order_quantity")
+                          or (summary.get("estimate_summary") or {}).get("assumed_job_quantity")
+                          or 180) or 180)
+    ws[hdr["customer"]]   = summary.get("customer") or summary.get("client") or job_folder_name
+    ws[hdr["drawing_no"]] = re.match(r"\s*(\d+)", job_folder_name).group(1) if re.match(r"\s*(\d+)", job_folder_name) else job_folder_name
+    ws[hdr["order_qty"]]  = order_qty
+
+    # ── Classify parts into blocks — from the FULL part audit ──────────────
+    # Rules, in order, based on the engine's own fields (confirmed by _classify_audit):
+    #   1. PACKAGING / DELIVERY placeholders (£0.00)     -> DROP (estimator adds manually)
+    #   2. weldment/assembly parent (suppressed flag, OR assembly-name + no material)
+    #                                                    -> exclude from material (labour only)
+    #   3. stock_form in (sheet, stated_weight) w/ geom  -> Steel block (WB computes L×W×gauge)
+    #   4. stock_form == tube                            -> BOM (catalogue-priced section)
+    #   5. page_roles 'bought_in'                        -> BOM (price in unit_cost_gbp)
+    #   6. board material                                -> Other Sheet block
+    #   7. has blank geometry (any sheet metal)          -> Steel block
+    #   8. no role, no geom, has ext cost (BI- item)     -> BOM (price = ext / qty)
+    STEEL_STOCK_FORMS = {"sheet", "stated_weight"}
+    DROP_CODES = {"PACKAGING", "DELIVERY"}
+    bom_parts, steel_parts, board_parts, weldment_parts, excluded = [], [], [], [], []
+    wire_parts = []
+    for pe in pes:
+        pn = str(pe.get("part_number") or "").upper()
+        me = pe.get("material_estimate") or {}
+        stock_form = str(me.get("stock_form") or "").lower()
+        rflags = [str(f).lower() for f in (me.get("reliability_flags") or [])]
+        roles = [str(r).lower() for r in (pe.get("page_roles") or [])]
+        mat = str(pe.get("normalized_material") or "").upper()
+        blank_l = _safe(me.get("blank_length_mm"))
+        unit_price = _safe(pe.get("unit_cost_gbp") or pe.get("unit_material_cost_gbp"))
+        ext_total = _safe(pe.get("extended_total_cost_gbp"))
+        cost_method = str(me.get("cost_method") or "").lower()
+        name_is_assembly = bool(re.search(r"-GA\b|ASSEMBL|WELDMENT", pn)
+                                or re.search(r"ASSEMBL|WELDMENT", str(pe.get("description") or "").upper())
+                                or "weldment" in cost_method
+                                or "children" in cost_method)
+
+        # 1. commercial placeholders (PACKAGING / DELIVERY): write as blank-price
+        #    (£0) BOM rows for the estimator to fill in, rather than dropping.
+        #    Saves manual typing. Price is left blank on purpose — delivery/packaging
+        #    cost is order-level (pallets, haulage share) and NOT derivable from the
+        #    drawing, so the engine must not invent it; the BOM writer flags "no price".
+        #    (Reverses the earlier "estimator adds manually" DROP, per estimator request.)
+        if pn in DROP_CODES:
+            bom_parts.append(pe)
+            continue
+
+        # 2. weldment/assembly parent — material carried by children, labour only
+        if "weldment_parent_material_suppressed" in rflags:
+            weldment_parts.append(pe)
+        elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
+            # assembly rollup (e.g. 1453-GA-C kick plate ASSEMBLY, 1455-C-101 weldment):
+            # exclude from material to avoid double-counting its children.
+            excluded.append(pe)
+            print(f"   [wb_populate] excluded assembly rollup: {pn} "
+                  f"(£{ext_total} carried by children)")
+        # 3. steel (sheet or stated-weight, with real geometry)
+        elif stock_form in STEEL_STOCK_FORMS:
+            steel_parts.append(pe)
+        # 3b. wire / round bar -> Wire block (WB prices it from gauge + length)
+        elif stock_form == "wire":
+            wire_parts.append(pe)
+        # 4. tube — catalogue-priced section -> BOM
+        elif stock_form == "tube":
+            bom_parts.append(pe)
+        # 5. priced bought-in
+        elif "bought_in" in roles:
+            bom_parts.append(pe)
+        # 6. board / other sheet
+        elif _is_board(mat):
+            board_parts.append(pe)
+        # 7. sheet metal with geometry but no stock_form set
+        elif _is_sheet_metal(mat) and blank_l is not None:
+            steel_parts.append(pe)
+        # 8. no role, no geometry, has a cost -> a bought-in costed via the full path
+        elif unit_price is None and ext_total is not None and blank_l is None:
+            bom_parts.append(pe)
+        else:
+            _flag(f"part {pe.get('part_number')} unclassifiable "
+                  f"(stock_form={stock_form!r}, role={roles}, unit={unit_price}, "
+                  f"ext={ext_total}, blankL={blank_l}) — skipped.", flags)
+
+    # ── BOM block: desc, code, PRICE (engine), qty, scrap ──────────────────
+    # Holds true bought-ins (fixings, vinyl, electricals) AND tube sections
+    # (catalogue-priced £/EA). All have an engine-sourced price we write directly.
+    # ── Powder on WIRE / BAR — the area the workbook cannot see ─────────────────
+    # The Powder Qty Calculator sums SHEET area over the Sheet Steel block. Wire and bar
+    # live in a different block with no length x width, so they have ALWAYS contributed
+    # zero powder. It only surfaced when a job (7670) was entirely wire and the calculator
+    # returned a clean 0 against Tim's £0.40.
+    #
+    # A wire is a CYLINDER: its whole surface is coated, so area = pi * d * L. (No x2 —
+    # that is a flat sheet, which has two faces.) Gauge and length are already on the
+    # sheet; we read them off the PDF.
+    #
+    # Read from `summary`, NOT from wire_parts: that list may not be built yet at this
+    # point in the file, and an empty loop would silently produce 0.0 and drop the powder
+    # line without a word. `summary` is in scope everywhere.
+    #
+    # Sheet powder stays in the workbook's own AF82/AF83. This adds only what that
+    # calculation cannot see, so nothing is double-counted.
+    _wire_powder_area_m2 = 0.0
+    _wire_powder_diag = []
+    _all_pes_pw = ((summary.get("estimate_summary") or {}).get("part_estimates")
+                   or summary.get("parts") or [])
+    for _wp in _all_pes_pw:
+        _wme = _wp.get("material_estimate") or {}
+        if str(_wme.get("stock_form") or "").lower() not in ("wire", "bar"):
+            continue
+        _wg = _safe(_wme.get("wire_gauge_mm") or _wp.get("wire_gauge_mm"))
+        _wl = _safe(_wme.get("wire_length_mm") or _wp.get("wire_length_mm"))
+        _wq = _safe(_wp.get("quantity"), 1) or 1
+        _wire_powder_diag.append(f"{_wp.get('part_number')}(g={_wg},l={_wl},q={_wq})")
+        if _wg and _wl:
+            _wire_powder_area_m2 += 3.14159265 * (_wg / 1000.0) * (_wl / 1000.0) * float(_wq)
+    _wire_powder_kg = round(_wire_powder_area_m2 * float(_POWDER_KG_PER_M2), 5)
+    if _wire_powder_diag and _wire_powder_kg <= 0:
+        # Never fail silently. If wire parts exist but the area is zero, say what they held.
+        _flag(f"powder: found {len(_wire_powder_diag)} wire/bar part(s) but computed ZERO "
+              f"coated area — {'; '.join(_wire_powder_diag)}. Powder NOT costed on the wire; "
+              f"gauge/length missing from the pricing record.", flags)
+
+    b = cm["bom"]
+    row = b["first_row"]
+    for pe in bom_parts:
+        if row > b["last_row"]:
+            _n_rows = b["last_row"] - b["first_row"] + 1
+            _lost = [str(p.get("part_number") or p.get("description") or "?")
+                     for p in bom_parts[_n_rows:]]
+            _msg = (f"BOM overflow: {len(bom_parts)} BOM/tube parts but only {_n_rows} rows. "
+                    f"Would DROP: {', '.join(_lost)}. Widen the BOM block in the template.")
+            if STRICT_BOM_OVERFLOW:
+                # A dropped bought-in is pure lost money with no visual cue on the sheet.
+                # 1282 lost £27 of LED Downlights this way, behind a flag nobody read.
+                # Refuse to produce a quietly-short estimate.
+                raise RuntimeError("[wb_populate] " + _msg)
+            _flag(_msg + " — extra parts DROPPED.", flags)
+            break
+        me = pe.get("material_estimate") or {}
+        se = me.get("stock_estimate") or {}
+        # description: prefer THIS part's OWN identity (number + description). The catalogue
+        # section-match can borrow a *different job's* tube row (e.g. 11406-02-02M / TUBE0173) when
+        # this tube's own dims weren't extracted — showing another job's part number is misleading.
+        # Keep the catalogue's size text only as a parenthetical REFERENCE, never as the identity.
+        _own_pn = pe.get("part_number")
+        _own_desc = pe.get("description")
+        _cat_desc = se.get("catalogue_description")
+        if _own_pn or _own_desc:
+            desc = f"{_own_pn or ''}  {_own_desc or ''}".strip()
+            # append catalogue size ref (helpful for tubes) without borrowing the foreign identity
+            if _cat_desc and se.get("catalogue_part_code"):
+                # strip any leading "ITEM n - <foreign pn> - " so only the size/length remains
+                import re as _re
+                _size = _re.sub(r"^\s*ITEM\s*\d+\s*-\s*[\w-]+\s*-\s*", "", str(_cat_desc)).strip()
+                _size = _re.sub(r"\s*-\s*LASER TUBE\s*$", "", _size, flags=_re.I).strip()
+                if _size:
+                    desc = f"{desc} (cat ref: {_size})"
+        else:
+            desc = _cat_desc or _own_pn
+        # code: THIS part's own number; fall back to catalogue code only if the part has none
+        code = _own_pn or se.get("catalogue_part_code")
+        # supplier: engine may put it at top level OR in material_estimate
+        supplier = pe.get("supplier") or me.get("supplier") or ""
+        # price: bought-in unit_cost_gbp, or tube's unit_material_cost_gbp (catalogue £/EA),
+        # or — for BI-/fuller-costed items — derive unit from extended_total_cost_gbp / qty
+        qty = int(_safe(pe.get("quantity"), 1))
+        # ── "Not priced" is a DECISION, not a missing value ──────────────────────────
+        # The chain below is built to KEEP LOOKING until it finds a number: four candidate
+        # fields, then a division as a last resort. That is right for a part whose price is
+        # merely recorded somewhere unexpected. It is WRONG for a part the estimator layer
+        # has DELIBERATELY refused to price.
+        #
+        # 7670: the engine correctly refused to invent a powder quantity (a consumable is
+        # sold by weight — "assume 1" means 1kg, and 1kg would coat 6 m2 of a 0.023 m2 wire
+        # frame). It cleared unit_cost_gbp. The chain moved to unit_material_cost_gbp, found
+        # £7.72 still sitting there, and put the £8.03 straight back on the sheet.
+        #
+        # Honour the marker and short-circuit. Whatever stale numbers survive elsewhere on
+        # the record, unpriced means unpriced.
+        if pe.get("_price_explicitly_withheld"):
+            _cat_rate = _safe(pe.get("_catalogue_rate_gbp"))
+            _is_consumable_line = bool(pe.get("_consumable_qty_unknown")) or \
+                                  "POWDER" in str(pe.get("part_number") or "").upper()
+            if _is_consumable_line and _cat_rate and _wire_powder_kg > 0:
+                # We withheld because we could not know the QUANTITY. We now can: the wire's
+                # coated area is real geometry (pi x d x L) that the workbook's sheet-only
+                # calculator cannot see. So cost it — and say exactly how, and how wrong the
+                # rate is.
+                price = _cat_rate
+                qty = _wire_powder_kg
+                _flag(f"POWDER computed from WIRE geometry: {_wire_powder_area_m2:.5f} m2 of "
+                      f"coated surface (pi x dia x length) x {_POWDER_KG_PER_M2} kg/m2 = "
+                      f"{_wire_powder_kg} kg @ £{_cat_rate:.2f}/kg. "
+                      f"COVERAGE RATE IS THE TEMPLATE'S {_POWDER_KG_PER_M2} kg/m2 = 100% "
+                      f"TRANSFER EFFICIENCY, which nothing achieves. Tim's sheet for THIS job "
+                      f"implies 1.70 kg/m2 (an open wire frame lets most of the cloud "
+                      f"through) — about 10x this. His sheets imply 2.7x-4.9x even on FLAT "
+                      f"parts. THIS LINE UNDER-READS until the rate is measured "
+                      f"(config.POWDER_KG_PER_M2). Estimator to check.", flags)
+            else:
+                price = None
+                _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: price WITHHELD by the "
+                      f"engine (quantity not on the drawing and cannot be guessed). Row is on "
+                      f"the sheet with its code and supplier — ESTIMATOR TO PRICE. Not an "
+                      f"error.", flags)
+        else:
+            price = _safe(pe.get("unit_cost_gbp")
+                          or pe.get("unit_material_cost_gbp")
+                          or me.get("unit_material_cost_gbp"))
+            if price is None:
+                ext = _safe(pe.get("extended_total_cost_gbp"))
+                if ext is not None and qty > 0:
+                    price = round(ext / qty, 4)
+        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
+        ws.cell(row=row, column=b["col_code"],     value=code)
+        ws.cell(row=row, column=b["col_supplier"], value=supplier)
+        ws.cell(row=row, column=b["col_price"],    value=price if price is not None else None)
+        ws.cell(row=row, column=b["col_qty"],      value=qty)
+        ws.cell(row=row, column=b["col_scrap"],    value=0.04)  # 4% default; WB applies
+        if price is None:
+            _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
+        row += 1
+
+    # ── Wire block: desc, qty, gauge, length ───────────────────────────────
+    # Round bar / stud / wire. The WB prices it itself:
+    #   gauge -> Metres Per Tonne (lookup) -> Price Per Metre = L3 / m-per-tonne
+    #   cost  = (length_mm / 1000) * price_per_m * qty * (1 + scrap)
+    # 8mm dia: 2534 m/t, L3 £1600/t -> £0.6314/m. 65mm -> £0.041. Tim's sheet: £0.04.
+    # This block existed in the template from day one and had NEVER been populated.
+    #
+    # (Tube sections stay in the BOM block above — they are catalogue-priced £/EA, not
+    #  costed from gauge+length like bar stock.)
+    if wire_parts:
+        w = cm["tube"]
+        row = w["first_row"]
+        for pe in wire_parts:
+            if row > w["last_row"]:
+                _flag(f"Wire overflow: {len(wire_parts)} wire/bar parts but only "
+                      f"{w['last_row']-w['first_row']+1} rows — extras DROPPED.", flags)
+                break
+            me = pe.get("material_estimate") or {}
+            gauge = _safe(me.get("wire_gauge_mm") or pe.get("wire_gauge_mm"))
+            length = _safe(me.get("wire_length_mm") or pe.get("wire_length_mm"))
+            qty = int(_safe(pe.get("quantity"), 1))
+            desc = f"{pe.get('part_number') or ''}  {pe.get('description') or ''}".strip()
+            if gauge is None or length is None:
+                _flag(f"wire part {pe.get('part_number')} missing gauge/length "
+                      f"(gauge={gauge}, length={length}) — line will be £0.", flags)
+            ws.cell(row=row, column=w["col_desc"],   value=str(desc)[:120])
+            ws.cell(row=row, column=w["col_qty"],    value=qty)
+            ws.cell(row=row, column=w["col_gauge"],  value=gauge)
+            ws.cell(row=row, column=w["col_length"], value=length)
+            row += 1
+
+    # ── Steel block: desc, qty, length, width, gauge ───────────────────────
+    s = cm["steel"]
+    row = s["first_row"]
+    for _si, pe in enumerate(steel_parts):
+        if row > s["last_row"]:
+            # Cannot widen: the steel rows are wired 1:1 into hidden laser/CNC rate calculators
+            # with row-locked absolute refs + per-row merged cells (a prior widen was reverted for
+            # 'failed MergedCell'). So make the overflow LOUD ON THE SHEET instead of silently
+            # dropping parts: overwrite the last steel row's description with a marker naming the
+            # count and the dropped part numbers, so the estimator sees the BOM is incomplete.
+            _dropped_pns = [str(x.get("part_number") or x.get("description") or "?")
+                            for x in steel_parts[_si:]]
+            _n = len(_dropped_pns)
+            ws.cell(row=s["last_row"], column=s["col_desc"],
+                    value=f"⚠ +{_n} STEEL PART(S) NOT SHOWN (block full): "
+                          f"{', '.join(_dropped_pns)} — see Decision Report")
+            _flag(f"Steel overflow: {len(steel_parts)} steel parts but only "
+                  f"{s['last_row']-s['first_row']+1} rows — {_n} shown on sheet as LOUD marker "
+                  f"in last row (not silently dropped): {', '.join(_dropped_pns)}", flags)
+            break
+        me = pe.get("material_estimate") or {}
+        ng = pe.get("normalized_geometry") or {}
+        length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
+        width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
+        gauge  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
+        ws.cell(row=row, column=s["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
+        ws.cell(row=row, column=s["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
+        ws.cell(row=row, column=s["col_length"], value=length)
+        ws.cell(row=row, column=s["col_width"],  value=width)
+        ws.cell(row=row, column=s["col_gauge"],  value=gauge)
+        # Laser-calc inputs S (No of holes) and T (Internal Cutting Distance).
+        # Drawing-derived; feeds the sheet's laser calculator display. Honest gaps:
+        # blank (not 0) when not read, so a genuine no-hole part is not a false claim.
+        # Canonical geometry lives in pe["geometry_rollup"] (NOT "geometry").
+        _geom = pe.get("geometry_rollup") or pe.get("normalized_geometry") or {}
+        _holes = _geom.get("estimated_hole_count")
+        if _holes is None:
+            _holes = _geom.get("hole_count")
+        if isinstance(_holes, (int, float)) and int(_holes) > 0:
+            ws.cell(row=row, column=s["col_holes"], value=int(_holes))
+        _cutlen = _safe(_geom.get("estimated_cut_length_mm") or _geom.get("cut_length_mm"))
+        if length and width and _cutlen:
+            _internal = round(max(0.0, float(_cutlen) - 2.0 * (float(length) + float(width))), 1)
+            ws.cell(row=row, column=s["col_internal_cut"], value=_internal)
+            if _internal > 0:
+                _flag(f"steel {pe.get('part_number')}: internal-cut T={_internal}mm is DERIVED "
+                      f"(cut_len {_cutlen} - bounding perim); overshoots on complex profiles.", flags)
+        elif _holes:
+            _flag(f"steel {pe.get('part_number')}: {int(_holes or 0)} holes read but internal-cut T "
+                  f"not derivable (missing L/W/cut_len) — left blank, not 0.", flags)
+        if not (length and width and gauge):
+            _flag(f"steel {pe.get('part_number')} missing dim(s) "
+                  f"(L={length} W={width} G={gauge}) — WB cost will be 0/wrong.", flags)
+        row += 1
+
+    # ── Other Sheet block: desc, qty, length, width, thickness ─────────────
+    o = cm["other_sheet"]
+    row = o["first_row"]
+    for pe in board_parts:
+        if row > o["last_row"]:
+            _flag(f"Other-sheet overflow: {len(board_parts)} board parts, block full — extras DROPPED.", flags)
+            break
+        me = pe.get("material_estimate") or {}
+        ng = pe.get("normalized_geometry") or {}
+        length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
+        width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
+        thick  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
+        ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
+        ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
+        ws.cell(row=row, column=o["col_length"], value=length)
+        ws.cell(row=row, column=o["col_width"],  value=width)
+        ws.cell(row=row, column=o["col_thick"],  value=thick)
+        # sheet size: WB nesting divides by sheet L/W — MUST be non-blank or it
+        # produces #VALUE! that propagates into M59 and poisons the whole total.
+        # Board stock default 2440×1220 (standard sheet); use engine's if present.
+        se = me.get("stock_estimate") or {}
+        sh = se.get("candidate_sheet_size_mm") or [2440, 1220]
+        ws.cell(row=row, column=o["col_sheet_l"], value=_safe(sh[0]) if len(sh) > 0 else 2440)
+        ws.cell(row=row, column=o["col_sheet_w"], value=_safe(sh[1]) if len(sh) > 1 else 1220)
+        # Cost per sheet (col L): the WB formula M=(L/J)*(1+K)*D needs this input, else Cost Per
+        # Part = 0. Prefer the material result's raw pre-scrap sheet price; fall back to
+        # reconstructing it from the per-part cost × parts-per-sheet ÷ (1+scrap). Board parts with
+        # neither are left blank + flagged (honest £0, not a silent guess).
+        _sheet_price = _safe(me.get("sheet_price_gbp"))
+        if not _sheet_price:
+            _cpp = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+            _pps = _safe(me.get("parts_per_sheet"))
+            _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
+            if _cpp and _pps:
+                _sheet_price = round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
+        if _sheet_price:
+            ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)
+        else:
+            _flag(f"Other-sheet {pe.get('part_number')} has no sheet price — Cost Per Part will be 0.", flags)
+        row += 1
+
+    # ── Labour block: one row per (part, operation) ────────────────────────
+    # Operations live in labour_estimate.costs_gbp (its KEYS are the operation names).
+    # We write THREE inputs per row and let the WB compute everything else:
+    #   C = operation name  -> WB looks up rate/dept/setup from its own table
+    #   H = qty per unit
+    #   I = throughput (pieces/hour) = order_qty × qty_per_unit ÷ batch_hours
+    # The WB's hours formula J=(60/I)*H/60*D6 and cost formula M=rate/I*H+setup then
+    # compute using the WB's OWN rate table — reproducing the engine's run-time cost
+    # and adding the WB's setup allowance on top. Every number is WB-calculated.
+    #
+    # THROUGHPUT DEFAULTS (Option B): when the engine's batch_hours is near-zero
+    # (e.g. bend_count=None means fold time ≈ 0 → throughput = 10,810/hr), we fall
+    # back to realistic per-operation shop rates sourced from Tim's manual estimates.
+    # The ceiling is 5× the default; if derived throughput exceeds the ceiling we use
+    # the default instead. Geometry-driven ops (laser) stay engine-derived where valid.
+    # MEASURED from 1,982 historical jobs (dbo.historical_quote_labour_line, 2026-07-13).
+    # Previously these were eyeballed medians. Nearly all were TOO LOW — and a low
+    # throughput means MORE hours, so we were OVER-charging labour on every single job.
+    # Format: op: throughput_per_hr,   # n lines in corpus | was
+    _THROUGHPUT_DEFAULTS = {
+        "Robomac":                  709,    # 34 lines  | WAS MISSING ENTIRELY — bar cutting
+                                            #             cost £0 (1310 stud vs Tim's £0.17)
+        "P.Coat":                   458,    # 316 lines | was 424 — close; my "2-3x too slow"
+                                            #             claim was wrong, this one was fine
+        "Laser (Metal)":            269,    # 305 lines | was 180
+        "Laser (Acrylic)":          252,    # 13 lines  | was 120
+        "Manual labour (Acrylic)":  122,    # 13 lines  | was 40
+        "Linebend":                 118,    # 18 lines  | was 40
+        "Punch":                    116,    # 126 lines | was 100
+        "Salvagnini":               110,    # 26 lines  | was 60
+        "Saw":                      105,    # 10 lines  | was 60
+        "Roll":                     100,    # 12 lines  | was 120
+        "Assemble/pack (Acrylic)":   99,    # 15 lines  | was 35
+        "Fold":                      93,    # 329 lines | was 50
+        "Manual labour (Metal)":     79,    # 23 lines  | was 40
+        "Assemble/pack (Metal)":     58,    # 166 lines | was 40
+        "Spotweld":                  51,    # 41 lines  | was 23
+        "Weld (CO2)":                29,    # 110 lines | was 42 — the ONLY one where we were
+                                            #             too FAST, i.e. UNDER-charging weld.
+                                            #             Correcting it makes weld dearer.
+        # Not present in the corpus sample — left at the previous values, and FLAGGED as
+        # unmeasured rather than quietly presented as if they were derived like the rest.
+        "Tubebend":                  30,    # UNMEASURED
+        "Tube":                      40,    # UNMEASURED
+        "Guillotine":                80,    # UNMEASURED
+        "Drill (Acrylic)":           30,    # UNMEASURED
+    }
+    _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
+    # The ceiling above only catches derived throughputs that are too FAST. A derived
+    # throughput that is too SLOW sails through — and slow means MORE HOURS, which
+    # INFLATES labour. On 1310 the stud's weld derived at 14.85/hr against a default of
+    # 42 (Tim's sheet implies ~50): 2.8x too slow, unguarded, £3.23 vs Tim's £1.25.
+    # Symmetric, and deliberately as conservative as the ceiling: only implausible
+    # outliers are substituted, and every substitution is FLAGGED with both numbers.
+    _THROUGHPUT_FLOOR_DIVISOR = 5        # derived < default ÷ 5 → use default
+    lb = cm["labour"]
+    row = lb["first_row"]
+    labour_overflow = False
+    # Labour applies to FABRICATED parts (steel, board, weldment) plus tubes (which get
+    # powder/handling as real finishing). Bought-in BOM items (fixings, BI-*, NOTE-*,
+    # electricals) are purchased finished goods — they must NOT generate fabrication
+    # labour rows (e.g. BI-ADHESIVECABLE was wrongly getting an 'Assemble/pack' line).
+    labour_parts = list(steel_parts) + list(board_parts) + list(weldment_parts) + list(wire_parts)
+    labour_parts += [p for p in bom_parts
+                     if str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"]
+    # Powder gate: costs_gbp carries powder_coating blind to finish (part_estimates
+    # has finish=None). The reliable drawing-derived signal is textual_operations on
+    # the fuller manufacturing_writeup.parts record. Build {part_number -> is_powder}.
+    # POWDER GATE — reads the DRAWING FINISH, and FOLLOWS POINTERS. (2026-07-13)
+    #
+    # "SEE ASSEMBLY DRAWING" is a POINTER, not an absence. It was being read as "no finish",
+    # so powder was dropped on every part carrying it — including both parts of 1310, where
+    # Tim charges P.Coat £2.00, and four parts of the 1282 Milwaukee bay, which the assembly
+    # drawing states is POWDER COATED - SEMI-GLOSS, RAL3020 TRAFFIC RED.
+    #
+    #   1. finish contains POWDER              -> coat it
+    #   2. finish is a POINTER                 -> resolve against the assembly page's finish
+    #   3. finish is RAW / SCRAPED EDGES / ... -> do NOT coat (explicit; honour it)
+    #   4. no finish text at all               -> fall back to textual_operations (old signal)
+    #
+    # If a part points at an assembly and NO assembly page states a finish, we cost NOTHING
+    # and raise a DRAWING DEFECT flag. An unanswerable drawing goes to Design; it is not
+    # guessed at.
+    #
+    # normalized_finish is empty on some parts (e.g. 1455-C-101 HEADER WELDMENT, which does
+    # carry "POWDER COATED - SEMI-GLOSS" in surface_finishes), so surface_finishes is the
+    # fallback. That alone fixes the one part that unambiguously says "coat me" and wasn't.
+    _POWDER_POINTER_HINTS = ("SEE ASSEMBLY", "SEE GA", "AS ASSEMBLY",
+                             "PER ASSEMBLY", "REFER TO ASSEMBLY")
+
+    def _pg_role(_pg):
+        _r = _pg.get("page_role")
+        if isinstance(_r, dict):
+            return str(_r.get("primary_role") or "")
+        return str(_r or "")
+
+    def _pg_text(_pg):
+        _t = ""
+        for _k in ("pdfplumber_text", "normalized_text", "pypdf_text", "text_preview"):
+            if _pg.get(_k):
+                _t += " " + str(_pg[_k])
+        return _t.upper()
+
+    _assembly_is_powder = False
+    _assembly_finish_seen = False
+    for _pg in (summary.get("pages") or []):
+        if not _pg_role(_pg).lower().startswith("assembl"):
+            continue
+        _at = _pg_text(_pg)
+        if "SURFACE FINISH" in _at or "POWDER" in _at:
+            _assembly_finish_seen = True
+        if "POWDER" in _at:
+            _assembly_is_powder = True
+            break
+
+    _mw_parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    _powder_ok = {}
+    # Resolve each part's finish ONCE, here, and let every later reader use this. The last
+    # attempt at the assembly-level rule re-derived the finish from normalized_finish alone
+    # and missed the surface_finishes fallback below — so it silently found nothing and did
+    # nothing. One value, one home.
+    _fin_by_pn = {}
+    for _mp in _mw_parts:
+        _pn = str(_mp.get("part_number") or "")
+        # ── A TIN OF PAINT IS NOT A PAINTED OBJECT ───────────────────────────────────
+        # The bought-in powder line (TLP-J125-T RYOBI GREEN) carries
+        # surface_finishes = ["POWDER COATED - FINE TEXTURE"] — of course it does, IT IS
+        # POWDER — and its part_number is None. It was landing in the gate as
+        # _powder_ok[""] = True, so the job LOOKED like it already had a coated part. That
+        # silently suppressed the assembly-level finish rule (and both of its diagnostics),
+        # and cost 7670 its entire £1.92 of P.Coat.
+        #
+        # A bought-in consumable is not a fabricated part and cannot be the thing that goes
+        # through the booth. Any job carrying a powder CODE in its BOM had this bug.
+        _pg_roles_boughtin = [str(_r).lower() for _r in (_mp.get("page_roles") or [])]
+        if (not _pn) or ("bought_in" in _pg_roles_boughtin):
+            continue
+        _fin = str(_mp.get("normalized_finish") or "").strip()
+        if not _fin:
+            _fin = " ".join(str(x) for x in (_mp.get("surface_finishes") or [])).strip()
+        _fin_u = _fin.upper()
+        _fin_by_pn[_pn] = _fin_u
+        _tops = _mp.get("textual_operations") or []
+        if isinstance(_tops, str):
+            _tops = [_tops]
+
+        if "POWDER" in _fin_u:
+            _powder_ok[_pn] = True
+        elif any(_h in _fin_u for _h in _POWDER_POINTER_HINTS):
+            _powder_ok[_pn] = _assembly_is_powder
+            if _assembly_is_powder:
+                _flag(f"{_pn}: finish is a POINTER ('{_fin[:38]}') — resolved to POWDER "
+                      f"from the assembly drawing.", flags)
+            else:
+                _flag(f"{_pn}: finish points to the assembly drawing, but NO assembly page "
+                      f"states a finish. DRAWING DEFECT — not coated, and not invented. "
+                      f"Raise with Design.", flags)
+        elif _fin_u:
+            _powder_ok[_pn] = False      # RAW / SCRAPED EDGES / etc — explicit
+        else:
+            _powder_ok[_pn] = any("powder" in str(_o).lower() for _o in _tops)
+
+    # ── ASSEMBLY-LEVEL FINISH ────────────────────────────────────────────────────
+    # A finish belongs to the OBJECT THAT GOES THROUGH THE BOOTH, and that object is often
+    # an ASSEMBLY, not a part. On 7670 you form raw wire, weld the frame, THEN coat it:
+    #
+    #     details  (pages 2-4): SURFACE FINISH: RAW            <- correct
+    #     assembly (page 1)   : POWDER COATED - FINE TEXTURE   <- the thing that gets coated
+    #
+    # The drawings are right; the per-part gate is not. It saw three RAW parts, dropped
+    # powder on all three, and lost Tim's £1.92 of P.Coat.
+    #
+    # THE TRAP: 1282 has the same shape — 1455-C-001..004 are RAW and are welded into
+    # 1455-C-101, which IS powder coated. But 1282's P.Coat group already contains nine
+    # parts INCLUDING that weldment. Flipping its four RAW children to "coated" would hang
+    # ONE OBJECT FIVE TIMES.
+    #
+    # So: apply this ONLY when NOTHING ELSE in the job qualifies for powder.
+    #     7670  nothing coated -> the RAW parts ARE what goes through the booth. Coat them.
+    #     1282  nine coated    -> the weldment already represents its children. Leave them.
+    _assembly_level_powder = False
+    if not any(_powder_ok.values()):
+        if not _assembly_is_powder:
+            _flag("nothing in this job carries a POWDER finish, and no assembly page states "
+                  "one either. If the product IS coated, the drawing does not say so — raise "
+                  "with Design. NOT coating anything, and not guessing.", flags)
+        else:
+            # Read the finish from the ONE place it was resolved. (The previous attempt
+            # re-derived it from normalized_finish only, missed the surface_finishes
+            # fallback, found nothing, and failed silently.)
+            _raw_components = [
+                _pn2 for _pn2, _ok in _powder_ok.items()
+                if (not _ok) and _pn2 and "RAW" in _fin_by_pn.get(_pn2, "")
+            ]
+            if _raw_components:
+                _assembly_level_powder = True
+                for _pn2 in _raw_components:
+                    _powder_ok[_pn2] = True
+                _flag(f"ASSEMBLY-LEVEL FINISH: every detail says RAW, the assembly drawing "
+                      f"says POWDER. The components are formed raw, welded, and the ASSEMBLY "
+                      f"is coated ({', '.join(_raw_components)}). P.Coat applied ONCE, to one "
+                      f"object — not once per component.", flags)
+            else:
+                # Loud, specific, and it prints what it actually saw. No third blind attempt.
+                _flag(f"assembly drawing says POWDER and nothing else in the job qualifies, "
+                      f"but no part's finish reads RAW. Finishes seen: "
+                      f"{ {k: (v[:24] or '<empty>') for k, v in _fin_by_pn.items()} }. "
+                      f"NOT coating anything. Check the drawing finish fields.", flags)
+
+    # Diamond-polish gate: diamond_polish is spurious on powder-coated parts
+    # (mutually exclusive finishes; boilerplate misfire). Build {pn -> finish is
+    # powder} from the fuller record's normalized_finish.
+    _finish_is_powder = {}
+    for _mp in _mw_parts:
+        _pn = str(_mp.get("part_number") or "")
+        _fin = str(_mp.get("normalized_finish") or "").upper()
+        _finish_is_powder[_pn] = "POWDER" in _fin
+
+    # ── LABOUR — GROUPED BY SETUP, NOT BY PART ──────────────────────────────
+    # The WB books SETUP on every row (Fold 30min = £20.24, P.Coat 15min = £88.86,
+    # Weld 30min = £20.89). The engine wrote ONE ROW PER PART, so a ten-part job invented
+    # ten press-brake setups that never happen on the floor.
+    #
+    # Measured across 1,982 historical jobs, on a 6-10 part job the estimators write:
+    #     Assemble/pack 1.21 rows | Weld 1.23 | Fold 2.03 | Laser 1.92 | P.Coat 1.70
+    # Not one per part. But not exactly one per job either — and that tells us the rule:
+    #
+    #     SETUP BELONGS TO A TOOLING CHANGE, NOT TO A PART.
+    #
+    # You set the brake for 1.2mm, run every 1.2mm part, then change for 1.0mm. Two gauges,
+    # two setups — which is exactly why Tim writes ~2 fold lines on a ten-part job.
+    #
+    #     Fold / Laser / Punch / P.Coat  -> group by (operation, material, gauge)
+    #     Assemble/pack                  -> ONE row per job (pack the product once)
+    #     Weld / Spotweld                -> ONE row per job (weld the assembly)
+    #
+    # Every part number in a group is named in the description cell — nothing is lost.
+    # P.Coat belongs here, NOT grouped by gauge. The powder booth does not care how
+    # thick the metal is: one colour, one line, one oven run, ONE setup. On 1310 the stud
+    # is welded to the hook plate and the assembly goes through powder as a single object —
+    # grouping by gauge charged two coating setups to coat one thing (£5.90 vs Tim's £2.00).
+    # Fold/Laser/Punch stay grouped by gauge, where the gauge genuinely IS the tooling.
+    _ONE_ROW_PER_JOB = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)",
+                        "Weld (CO2)", "Spotweld", "Dress Welds",
+                        "P.Coat"}
+    _PACK_OPS = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)"}
+
+    # ── YOU CANNOT SPOT-WELD A BAR TO A PLATE ────────────────────────────────────
+    # Spot welding squeezes two thin OVERLAPPING SHEETS between electrodes. 7670 is three
+    # 4mm wire forms welded to each other — Tim spotwelds it (buttweld 150/hr + spotweld
+    # 45/hr). 1310-02 is an 8mm ROUND STUD welded to a 2mm HOOK PLATE — that is MIG/stud
+    # weld, not spot weld.
+    #
+    # I generalised from 7670 to "any part with stock_form=wire" and it caught 1310's stud:
+    # the number moved closer to Tim's £1.25 while the PHYSICS got worse. A lucky match
+    # hiding a wrong model is the one thing worse than an honest gap.
+    #
+    # The engine cannot see WHICH part is welded to which — the joint list is not in the
+    # geometry. So the honest rule is the conservative one: Spotweld only when EVERYTHING
+    # fabricated in the job is wire/bar. The moment there is sheet present, we cannot tell
+    # what the wire is being joined to, and CO2 is the safe assumption.
+    _fab_forms = [
+        str((_p.get("material_estimate") or {}).get("stock_form") or "").lower()
+        for _p in labour_parts
+    ]
+    _all_fabricated_are_wire = bool(_fab_forms) and all(
+        _f in ("wire", "bar") for _f in _fab_forms
+    )
+    if (not _all_fabricated_are_wire) and any(_f in ("wire", "bar") for _f in _fab_forms):
+        _flag("welding: this job mixes wire/bar with sheet, and the drawing does not say "
+              "which parts are joined to which. Assuming Weld (CO2) — a wire-to-wire joint "
+              "would be Spotweld and cheaper. Estimator to check.", flags)
+    # A solid round bar is cut on the Robomac. This is a MANUFACTURING ROUTE (material form
+    # -> machine), the same class of rule as "sheet steel gets lasered" — which the engine
+    # already infers without anyone writing it on a drawing. document_builder does add
+    # 'robomac' to the part's operations, but wb_populate reads ops from the PRICING record
+    # (part_estimate.labour_estimate.costs_gbp), and the op was written to the WRITE-UP
+    # record. Rather than plumb the pricing layer — which has no bar time model to offer
+    # anyway — inject the row here from stock_form.
+    _ROBOMAC_STOCK_FORMS = {"wire"}
+    # Robomac is ONE ROW PER WIRE FORM, not one per job. Tim's 7670 sheet:
+    #     Robomac  main frame    qty 1  100/hr  setup 15  £0.47
+    #     Robomac  back wire     qty 2  450/hr  setup 15  £0.30
+    #     Robomac  bottom frame  qty 1  300/hr  setup 15  £0.26
+    # Three rows, three setups, throughput swinging 100 -> 450. Each wire form is a
+    # different bend program on the machine, so each is a genuine separate setup.
+    # Grouping these into one row UNDER-charges — the failure mode we cannot see.
+    _PER_PART_OPS = {"Robomac"}
+
+    _groups = {}
+    for pe in labour_parts:
+        le = pe.get("labour_estimate") or {}
+        costs = le.get("costs_gbp") or {}
+        batch_hours = le.get("batch_hours") or {}
+        ops = list(costs.keys())
+        if not ops:
+            continue
+        _pn = str(pe.get("part_number") or "")
+        _qty_pu = int(_safe(pe.get("quantity"), 1))
+        _is_acr = _is_board(str(pe.get("normalized_material") or ""))
+        _sf = (pe.get("material_estimate") or {}).get("stock_form")
+        _mat = pe.get("normalized_material") or ""
+        _me2 = pe.get("material_estimate") or {}
+        _ng2 = pe.get("normalized_geometry") or {}
+        _thk = _safe(pe.get("normalized_thickness_mm") or _me2.get("thickness_mm"), 0)
+
+        for op in ops:
+            if _is_spurious_operation(op, _sf, _mat):
+                _flag(f"dropped spurious op '{op}' on {_pn} "
+                      f"(stock_form={_sf}, material={_mat})", flags)
+                continue
+            if "powder" in str(op).lower():
+                if _pn in _powder_ok and not _powder_ok[_pn]:
+                    _flag(f"dropped powder on {_pn} — drawing finish is not powder "
+                          f"(RAW/assembly/weldment); costs_gbp over-applied it.", flags)
+                    continue
+            if "diamond" in str(op).lower() or ("polish" in str(op).lower()
+                                                and "edge" not in str(op).lower()):
+                if _finish_is_powder.get(_pn):
+                    _flag(f"dropped diamond_polish on {_pn} — part is POWDER COATED "
+                          f"(diamond-polish is spurious/boilerplate on a powder finish).", flags)
+                    continue
+
+            wb_op = _map_operation(op, _is_acr, _sf or "")
+            if wb_op is None:
+                _flag(f"labour op '{op}' ({_pn}) not in OP_NAME_MAP — WB rate lookup will "
+                      f"return 0 for it. Add mapping.", flags)
+                wb_op = str(op)
+
+            # Wire frames go on the SPOT WELDER — but ONLY when the whole job is wire.
+            # 7670 (3 wire forms welded to each other): Spotweld, £1.61 on Tim's sheet.
+            # 1310 (8mm stud welded to a 2mm plate):    CO2 — you cannot spot-weld a bar
+            #                                           to a plate, whatever the number says.
+            if (wb_op == "Weld (CO2)"
+                    and str(_sf or "").lower() in ("wire", "bar")
+                    and _all_fabricated_are_wire):
+                wb_op = "Spotweld"
+
+            if wb_op in _PER_PART_OPS:
+                key = (wb_op, _pn, "")         # one setup PER PART (per wire form)
+            elif wb_op in _ONE_ROW_PER_JOB:
+                key = (wb_op, "", "")          # one setup for the whole job
+            else:
+                key = (wb_op, str(_mat), "%g" % (_thk or 0))   # one setup per tooling change
+
+            g = _groups.setdefault(key, {
+                "wb_op": wb_op, "material": _mat, "thickness": _thk,
+                "qty": 0, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
+            })
+            g["qty"] += _qty_pu
+            _bh = _safe(batch_hours.get(op))
+            if _bh and _bh > 0:
+                g["bh"] += float(_bh)
+            if _pn and _pn not in g["parts"]:
+                g["parts"].append(_pn)
+
+        # Robomac: a solid bar has to be CUT, and no upstream record delivers that op to the
+        # pricing layer. Inject it from the stock form — same manufacturing-route reasoning
+        # that already gives sheet steel its laser. Throughput 709/hr is the corpus median
+        # (34 lines), NOT back-solved from Tim's £0.17.
+        # Inject Robomac ONLY if the pricing record did not already carry the op.
+        # 1310's stud had no robomac op at all, so the row was missing and I injected it
+        # unconditionally. On 7670 the op IS present — and the unconditional injection
+        # produced TWO Robomac rows for the same work (one keyed ("Robomac","",""), one
+        # keyed ("Robomac","MILD_STEEL","4")). Check before injecting.
+        if str(_sf or "").lower() in _ROBOMAC_STOCK_FORMS:
+            _has_robo = any(
+                _map_operation(_o, _is_acr, _sf or "") == "Robomac" for _o in ops
+            )
+            if not _has_robo:
+                _rg = _groups.setdefault(("Robomac", _pn, ""), {
+                    "wb_op": "Robomac", "material": _mat, "thickness": 0,
+                    "qty": 0, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
+                })
+                _rg["qty"] += _qty_pu
+                if _pn and _pn not in _rg["parts"]:
+                    _rg["parts"].append(_pn)
+            _ol = str(op).lower()
+            if _ol == "folding":
+                g["bends"] += int(_safe((_ng2 or {}).get("estimated_bend_line_count"), 0)) * _qty_pu
+            elif _ol in ("hole_machining", "drilling", "punch"):
+                g["holes"] += int(_safe((_ng2 or {}).get("estimated_hole_count"), 0)) * _qty_pu
+
+    for _key in sorted(_groups.keys()):
+        g = _groups[_key]
+        if row > lb["last_row"]:
+            labour_overflow = True
+            break
+        wb_op = g["wb_op"]
+
+        # Assemble/pack is PER PRODUCT: you pack the finished product once, not once per
+        # part. Tim books qty 1 (1298: "Poly bag & bulk pack", qty 1, 90/hr).
+        # Assemble/pack is PER PRODUCT: you pack the finished product once, not once per part.
+        # P.Coat is the same WHEN THE COAT HAPPENS AT ASSEMBLY LEVEL: one welded frame goes
+        # on the hook, not three loose components. Tim books exactly that — P.Coat qty 1.
+        # (When the parts themselves carry POWDER, they are coated individually before
+        #  assembly and the per-part count is right — so this only applies to the
+        #  assembly-level case.)
+        _qty = 1 if (wb_op in _PACK_OPS
+                     or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
+
+        _matx = str(g["material"] or "").replace("_", " ").strip()
+        _spec = []
+        if g["thickness"]:
+            _spec.append(("%g" % g["thickness"]) + "mm")
+        if _matx:
+            _spec.append(_matx)
+        _detail = ""
+        if g["bends"]:
+            _detail = " (%d bend%s)" % (g["bends"], "" if g["bends"] == 1 else "s")
+        elif g["holes"]:
+            _detail = " (%d hole%s)" % (g["holes"], "" if g["holes"] == 1 else "s")
+        _pl = g["parts"]
+        _ptxt = ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6) if len(_pl) > 6 else "")
+        _rd = str(wb_op)
+        if _spec:
+            _rd += " — " + " ".join(_spec)
+        if _ptxt:
+            _rd += " (" + _ptxt + ")"
+        _rd += _detail
+
+        ws.cell(row=row, column=lb["col_operation"], value=wb_op)
+        ws.cell(row=row, column=lb["col_desc"],      value=_rd[:200])
+        ws.cell(row=row, column=lb["col_qty"],       value=_qty)
+
+        default_tp = _THROUGHPUT_DEFAULTS.get(wb_op or "")
+
+        # Assembly, packing and welding time is NOT in the DXF. There is no geometry from
+        # which to derive "how long does it take to pack this" — the engine's derived value
+        # for those ops is fiction dressed as measurement (1310's weld derived at 14.85/hr
+        # against a corpus average of 29). Use the MEASURED default and say so.
+        # For laser (cut path) and fold (bend count) the geometry genuinely does carry the
+        # information, so the derived value is kept.
+        if (wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp:
+            ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
+        else:
+            bh = g["bh"]
+            if bh and bh > 0:
+                _total_pieces = order_qty * _qty
+                _derived = _total_pieces / bh
+                throughput = _derived
+                if default_tp:
+                    _ceiling = default_tp * _THROUGHPUT_CEILING_MULTIPLIER
+                    _floor = default_tp / _THROUGHPUT_FLOOR_DIVISOR
+                    if _derived > _ceiling:
+                        throughput = float(default_tp)
+                        _flag(f"throughput CEILING hit on '{wb_op}': derived {_derived:.2f}/hr "
+                              f"is {_derived/default_tp:.1f}x the default {default_tp}/hr "
+                              f"— using default (was UNDER-charging).", flags)
+                    elif _derived < _floor:
+                        throughput = float(default_tp)
+                        _flag(f"throughput FLOOR hit on '{wb_op}': derived {_derived:.2f}/hr "
+                              f"is {default_tp/_derived:.1f}x SLOWER than the default "
+                              f"{default_tp}/hr — using default (was OVER-charging).", flags)
+                ws.cell(row=row, column=lb["col_throughput"], value=round(throughput, 4))
+            elif default_tp:
+                ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
+            else:
+                _flag(f"labour op '{wb_op}' has no batch_hours and no default throughput — "
+                      f"WB hours/cost will be #DIV/0! for this row.", flags)
+        row += 1
+
+    _flag(f"labour: {len(_groups)} grouped row(s) — setup is booked once per tooling group, "
+          f"not once per part.", flags)
+    if labour_overflow:
+        _flag(f"Labour overflow: more operations than {lb['last_row']-lb['first_row']+1} rows — extras DROPPED.", flags)
+
+    # ── Append AI supplementary sheets (renamed to avoid clashing with WB) ──
+    _append_ai_sheets(wb, summary, flags)
+
+    # ── Force Excel to recalc on open ──────────────────────────────────────
+    try:
+        wb.calculation.fullCalcOnLoad = True
+    except Exception:
+        try:
+            from openpyxl.workbook.properties import CalcProperties
+            wb.calculation = CalcProperties(fullCalcOnLoad=True)
+        except Exception:
+            _flag("could not set fullCalcOnLoad — estimator may need to press F9.", flags)
+
+    # ── Save-As to output dir with folder-name + timestamp ─────────────────
+    os.makedirs(cm["output_dir"], exist_ok=True)
+    safe_name = re.sub(r'[<>:"/\\|?*]', "_", job_folder_name).strip()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(cm["output_dir"], f"{safe_name}_{stamp}.xlsx")
+    wb.save(out_path)
+
+    print(f"   [wb_populate] Populated template saved: {out_path}")
+    print(f"   [wb_populate] Parts: {len(bom_parts)} BOM (incl. tube sections), "
+          f"{len(wire_parts)} wire/bar, "
+          f"{len(steel_parts)} steel, {len(board_parts)} other-sheet, "
+          f"{len(weldment_parts)} weldment (labour-only)")
+    if flags:
+        print(f"   [wb_populate] {len(flags)} flag(s) raised — see above.")
+    print(f"   [wb_populate] NOTE: totals compute when opened in Excel (calc-on-load).")
+    return out_path
+
+
+def _flag_to_text(rf):
+    """review_flags is meant to be a list of strings, but something upstream sometimes
+    appends a dict — which killed populate_workbook on 7670 (TypeError in str.join) and
+    sent the whole job down the xlsx_output fallback path SILENTLY, producing the wrong
+    workbook with no loud failure.
+
+    Coerce to text without losing the content. A dict is rendered compactly rather than
+    dumped as a raw Python repr into the estimator's review column.
+
+    The upstream producer writing structured data into a list-of-strings field is a
+    separate defect and still needs fixing at source.
+    """
+    if isinstance(rf, str):
+        return rf
+    if isinstance(rf, dict):
+        for _k in ("message", "msg", "text", "reason", "flag", "detail", "description"):
+            if rf.get(_k):
+                _code = rf.get("code") or rf.get("type") or rf.get("name")
+                return f"{_code}: {rf[_k]}" if _code else str(rf[_k])
+        return "; ".join(f"{k}={v}" for k, v in rf.items() if v not in (None, "", []))
+    if isinstance(rf, (list, tuple)):
+        return " / ".join(_flag_to_text(x) for x in rf)
+    return str(rf)
+
+def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
+    """Append the engine's own detail/provenance sheets under NON-colliding names,
+    so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
+    # AI Labour Detail — the engine's own labour breakdown (informational)
+    pes = (summary.get("estimate_summary") or {}).get("part_estimates") or summary.get("parts") or []
+
+    def _add(title: str, header: List[str], rows: List[List[Any]]):
+        # ensure name doesn't clash with structural sheets
+        if title in CELL_MAP["structural_sheets"] or title in wb.sheetnames:
+            title = "AI " + title
+        ws = wb.create_sheet(title=title[:31])  # Excel 31-char sheet name limit
+        ws.append(header)
+        for r in rows:
+            ws.append(r)
+
+    # AI Material Detail
+    mat_rows = []
+    for pe in pes:
+        me = pe.get("material_estimate") or {}
+        mat_rows.append([
+            pe.get("part_number"), pe.get("description"),
+            pe.get("normalized_material"),
+            (me.get("blank_length_mm")), (me.get("blank_width_mm")),
+            pe.get("normalized_thickness_mm"),
+            me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
+            (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
+            "dxf" if (pe.get("geometry_source") == "dxf_flat_pattern") else "pdf",
+        ])
+    _add("AI Material Detail",
+         ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
+          "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
+         mat_rows)
+
+    # AI Provenance — where each bought-in price came from
+    prov_rows = []
+    for pe in pes:
+        if "bought_in" in [str(r).lower() for r in (pe.get("page_roles") or [])]:
+            prov_rows.append([
+                pe.get("part_number"), pe.get("description"),
+                pe.get("unit_cost_gbp"),
+                pe.get("cost_source") or pe.get("source"),
+                "verified" if pe.get("price_verified") else "UNVERIFIED",
+                pe.get("supplier") or "",
+                " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
+            ])
+    _add("AI Provenance",
+         ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier", "Review Flags"],
+         prov_rows)
+
+
+# ── standalone test entry ──────────────────────────────────────────────────
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python wb_populate.py <run_json_path> <job_folder_name>")
+        print('Example: python wb_populate.py "C:\\ClaudeVision\\output\\json\\1282 - Milwaukee Wall Bay.json" "1282 - Milwaukee Wall Bay"')
+        sys.exit(1)
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        summary = json.load(fh)
+    populate_workbook(summary, sys.argv[2])

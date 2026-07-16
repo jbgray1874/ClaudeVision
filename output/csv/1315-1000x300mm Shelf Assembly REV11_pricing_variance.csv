@@ -1,5 +1,0 @@
-run_uuid,source_file_name,part_number,comparison_scope,metric_name,manual_value,ai_value,abs_variance,pct_variance,status,notes,manual_source,ai_source
-5346a351-7463-51f5-b8ae-ba7a4d113e7c,1315-1000x300mm Shelf Assembly REV11.PDF,,document,total_unit_cost,,84.2105,,,missing_manual,manual benchmark not provided,,workbook_equivalent_pricing
-5346a351-7463-51f5-b8ae-ba7a4d113e7c,1315-1000x300mm Shelf Assembly REV11.PDF,,document,sell_price,,84.2105,,,missing_manual,manual benchmark not provided,,workbook_equivalent_pricing
-5346a351-7463-51f5-b8ae-ba7a4d113e7c,1315-1000x300mm Shelf Assembly REV11.PDF,,document,labour_hours_total,,0.6805,,,missing_manual,manual benchmark not provided,,estimate_summary.cost_breakdown.labour
-5346a351-7463-51f5-b8ae-ba7a4d113e7c,1315-1000x300mm Shelf Assembly REV11.PDF,,document,material_subtotal,,13.11,,,missing_manual,manual benchmark not provided,,estimate_summary.cost_breakdown.material

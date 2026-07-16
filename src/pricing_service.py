@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import config
-from estimator import estimate_document
+from estimator import estimate_document, generate_client_quote_pack
 from json_normaliser import normalise_json
 
 try:
@@ -52,6 +53,21 @@ class PricingService:
         message = str(exc).lower()
         tokens = ("connection", "closed", "08s01", "08003", "communication link failure")
         return any(token in message for token in tokens)
+
+    def _rounding_mode(self) -> str:
+        policy = getattr(config, "ROUNDING_POLICY", {}) or {}
+        return str(policy.get("mode", "final_total_only")).strip().lower()
+
+    def _money_decimals(self) -> int:
+        policy = getattr(config, "ROUNDING_POLICY", {}) or {}
+        return int(policy.get("money_decimals", 2))
+
+    def _round_money(self, value: Any) -> float:
+        try:
+            numeric = float(value or 0.0)
+        except (TypeError, ValueError):
+            numeric = 0.0
+        return round(numeric, self._money_decimals())
 
     def _fetch_one_with_retry(self, query: str, params: List[Any]) -> Any:
         for attempt in range(2):
@@ -113,13 +129,37 @@ class PricingService:
             return {"bucket": "stale", "age_days": age_days, "penalty": 0.08}
         return {"bucket": "old", "age_days": age_days, "penalty": 0.2}
 
+    _BOUGHT_IN_PART_NUMBER_RE = re.compile(
+        r"^(M\d|ESSENTRA|ESS-|LED|LAMP|SCREW|NUT|BOLT|WASHER|RIVET|PIN|STUD|CLIP|SPRING|BEARING|WHEEL|CASTOR|SWIVEL)",
+        re.IGNORECASE,
+    )
+    _BOUGHT_IN_DESC_KEYWORDS = (
+        "SCREW", "NUT", "BOLT", "WASHER", "RIVET", "FASTENER",
+        "LED LIGHT", "LED PANEL", "LIGHT PANEL", "LENS COVER", "GRAPHIC",
+        "ESSENTRA", "NYLON", "THUMB SCREW", "KNURLED",
+        "CASTOR", "WHEEL", "BEARING", "SPRING",
+    )
+
+    @staticmethod
+    def _is_bought_in_heuristic(part: Dict[str, Any]) -> bool:
+        pn = str(part.get("part_number") or "").strip().upper()
+        desc = str(part.get("description") or "").strip().upper()
+        if PricingService._BOUGHT_IN_PART_NUMBER_RE.match(pn):
+            return True
+        return any(kw in desc for kw in PricingService._BOUGHT_IN_DESC_KEYWORDS)
+
     def _get_udef_anchor(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
         """
-        UDEF anchor: must match SDILive column names on UDEF_PARTS_TABLE_FOR_ESTIMATING.
-        Uses the same shape as PRICE_SOURCE_CONFIG['sqlserver']['part_system_cost_query']:
-        [Part ref], [Description], [System cost per], SUP_TBL join.
-        If your database exposes a price-effective date column, add it to the SELECT list
-        as a 5th column and pass it to _freshness_adjustment().
+        UDEF anchor lookup against dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING.
+
+        Live column names (confirmed via sp_help 2026-05-15):
+          [Part code], [Part rev], [Description], [UOM], [System cost per],
+          [Supplier code], [Supplier name], [WO Est lab cost], [WO Est mat cost],
+          [WO Actual lab cost], [WO Actual mat cost]
+
+        Collation: Latin1_General_BIN (binary, case-sensitive).
+        [Supplier name] exists directly on UDEF — no SUP_TBL join needed.
+        WO cost columns are surfaced for parity comparison.
         """
         part_code = str(part.get("part_number") or "").strip()
         desc = str(part.get("description") or "").strip()
@@ -129,21 +169,24 @@ class PricingService:
         row = self._fetch_one_with_retry(
             """
             SELECT TOP 1
-                u.[Part ref],
+                u.[Part code],
                 u.[Description],
-                ISNULL(s.[SUP_NAME], CAST(u.[Cus code] AS nvarchar(200))),
-                CAST(u.[System cost per] AS decimal(18,4))
+                u.[Supplier name],
+                CAST(u.[System cost per] AS decimal(18,4)),
+                u.[UOM],
+                u.[WO Est lab cost],
+                u.[WO Est mat cost],
+                u.[WO Actual lab cost],
+                u.[WO Actual mat cost]
             FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
-            LEFT JOIN dbo.SUP_TBL s
-                ON s.[SUP_CODE] = u.[Cus code]
             WHERE
-                UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?)))
+                u.[Part code] = LTRIM(RTRIM(?))
                 OR (
                     LEN(LTRIM(RTRIM(?))) >= 8
-                    AND UPPER(u.[Description]) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                    AND u.[Description] LIKE '%' + LTRIM(RTRIM(?)) + '%'
                 )
             ORDER BY
-                CASE WHEN UPPER(LTRIM(RTRIM(u.[Part ref]))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+                CASE WHEN u.[Part code] = LTRIM(RTRIM(?)) THEN 0 ELSE 1 END,
                 u.[System cost per] DESC
             """,
             [part_code, desc, desc, part_code],
@@ -154,108 +197,686 @@ class PricingService:
         price = float(row[3] or 0.0)
         if price <= 0:
             return None
-        matched_code = str(row[0] or "").strip().upper()
-        part_code_upper = part_code.strip().upper()
-        base_confidence = 0.95 if part_code_upper and part_code_upper == matched_code else 0.82
-        # No standard effective-date column in the live UDEF query path; treat as unknown freshness.
-        freshness = self._freshness_adjustment(None)
+
+        matched_code = str(row[0] or "").strip()
+        is_exact_code = bool(part_code) and part_code.upper() == matched_code.upper()
+
+        # Fix A: UDEF's loose arms (part-code prefix LIKE, or description LIKE) can match a
+        # generic stem to an unrelated expensive row, and the price-DESC tiebreaker then picks
+        # the dearest (e.g. token "ELECTRICS" -> "ELECTRICS001" TTi LED panels £539.42;
+        # "Foam Tape" -> "3M 5952F VHB roll" £131.50). For NON-exact matches, require genuine
+        # token overlap between the query and the matched description, exactly as RAG does, so
+        # a loose mismatch is rejected (-> falls through to RAG / LLM estimate) rather than
+        # returning a wrong, expensive price. Exact part-code matches bypass the guard.
+        if not is_exact_code:
+            _query_tokens = self._tokenize(f"{desc} {str(part.get('normalized_material') or '')}")
+            _match_score = self._token_overlap_score(_query_tokens, str(row[1] or ""))
+            if _match_score < 0.45:
+                return None
+
+        base_confidence = 0.95 if is_exact_code else 0.82
+        freshness = self._freshness_adjustment(None)  # UDEF has no effective_date column
+
+        wo_parity: Dict[str, Any] = {}
+        wo_est_lab = float(row[5]) if row[5] is not None else None
+        wo_est_mat = float(row[6]) if row[6] is not None else None
+        wo_act_lab = float(row[7]) if row[7] is not None else None
+        wo_act_mat = float(row[8]) if row[8] is not None else None
+        if any(v is not None for v in [wo_est_lab, wo_est_mat, wo_act_lab, wo_act_mat]):
+            wo_parity = {
+                "wo_est_lab_cost": wo_est_lab,
+                "wo_est_mat_cost": wo_est_mat,
+                "wo_actual_lab_cost": wo_act_lab,
+                "wo_actual_mat_cost": wo_act_mat,
+                "wo_total_est": (wo_est_lab or 0) + (wo_est_mat or 0) if wo_est_lab or wo_est_mat else None,
+                "wo_total_actual": (wo_act_lab or 0) + (wo_act_mat or 0) if wo_act_lab or wo_act_mat else None,
+            }
+
         return {
             "source": "UDEF_PARTS_TABLE_FOR_ESTIMATING",
             "unit_price_gbp": price,
-            "provenance": f"UDEF match on {row[0]} ({row[1]}) supplier={row[2]}",
+            "provenance": f"UDEF: {row[0]} — {row[1]} | supplier={row[2] or 'Unknown'} | uom={row[4] or 'each'}",
             "confidence": max(0.3, round(base_confidence - freshness["penalty"], 2)),
             "effective_date": None,
-            "supplier_name": row[2] or "Unknown",
+            "supplier_name": str(row[2] or "Unknown"),
+            "uom": str(row[4] or "each"),
             "freshness": freshness,
+            "wo_parity": wo_parity,
+        }
+
+    # ── TOKEN OVERLAP SCORING HELPERS ────────────────────────────────────────
+    @staticmethod
+    def _tokenize(text: str) -> set:
+        """
+        Split text into meaningful tokens for overlap scoring.
+        Strips short/generic words common across SDI descriptions.
+        """
+        _STOP = {
+            "the", "a", "an", "of", "for", "and", "or", "with", "to", "at",
+            "in", "on", "by", "mm", "x", "thru", "all", "see", "do", "not",
+            "drawing", "scale", "sheet", "rev", "date", "mild", "steel",
+            "aluminium", "aluminum", "material", "matl", "finish", "colour",
+        }
+        tokens = re.findall(r"[A-Za-z0-9]+", str(text or "").upper())
+        return {t for t in tokens if len(t) >= 2 and t.lower() not in _STOP}
+
+    @staticmethod
+    def _token_overlap_score(query_tokens: set, candidate_text: str) -> float:
+        """Jaccard token overlap: intersection / union (0.0–1.0)."""
+        if not query_tokens:
+            return 0.0
+        cand_tokens = PricingService._tokenize(candidate_text)
+        if not cand_tokens:
+            return 0.0
+        intersection = len(query_tokens & cand_tokens)
+        union = len(query_tokens | cand_tokens)
+        return round(intersection / union, 4) if union else 0.0
+
+    @staticmethod
+    def _match_quality_label(score: float) -> str:
+        if score >= 0.35:
+            return "strong"
+        if score >= 0.15:
+            return "moderate"
+        return "weak"
+
+    def _get_pma_purchased(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        """
+        Tier 1.5 — dbo.PMA_TBL (Access Supply Chain parts master).
+
+        Purchased items: ``PMA_PROC_CODE = 'P'``. Unit material cost: ``PMA_COST_MAT`` (per unit).
+
+        Match: exact ``PMA_PART_ONLY``, else token overlap on ``PMA_DESC_3`` (min score 0.35).
+        """
+        part_code = (part.get("part_number") or "").strip()
+        description = (part.get("description") or "").strip()
+        if not part_code and not description:
+            return None
+
+        query = """
+            SELECT TOP (60)
+                PMA_PART_ONLY,
+                PMA_DESC_3,
+                PMA_COST_MAT,
+                PMA_PRIME_SUP
+            FROM dbo.PMA_TBL
+            WHERE PMA_PROC_CODE = 'P'
+              AND PMA_COST_MAT IS NOT NULL
+              AND PMA_COST_MAT > 0
+              AND (
+                  LTRIM(RTRIM(PMA_PART_ONLY)) = LTRIM(RTRIM(?))
+                  OR PMA_DESC_3 LIKE '%' + LTRIM(RTRIM(?)) + '%'
+              )
+            ORDER BY
+                CASE WHEN LTRIM(RTRIM(PMA_PART_ONLY)) = LTRIM(RTRIM(?)) THEN 0 ELSE 1 END,
+                PMA_COST_MAT DESC
+        """
+        desc_keyword = description[:60] if description else part_code
+        try:
+            rows = self._fetch_all_with_retry(query, [part_code, desc_keyword, part_code])
+        except Exception:
+            return None
+        if not rows:
+            return None
+
+        query_tokens = self._tokenize(f"{part_code} {description}")
+        best_row = None
+        best_score = 0.0
+
+        for row in rows:
+            pn, desc3, cost_mat, supplier = row
+            if pn and pn.strip().upper() == part_code.upper():
+                best_row = row
+                best_score = 1.0
+                break
+            candidate_text = f"{pn or ''} {desc3 or ''}"
+            score = self._token_overlap_score(query_tokens, candidate_text)
+            if score > best_score:
+                best_score = score
+                best_row = row
+
+        if best_row is None or best_score < 0.35:
+            return None
+
+        pn, desc3, cost_mat, supplier = best_row
+        unit_price = float(cost_mat)
+        if unit_price <= 0:
+            return None
+
+        match_label = self._match_quality_label(best_score)
+        confidence = min(0.88, 0.55 + best_score * 0.35)
+
+        return {
+            "source": "PMA_TBL",
+            "source_type": "erp_parts_master",
+            "unit_price_gbp": round(unit_price, 4),
+            "confidence": round(confidence, 3),
+            "provenance": (
+                f"ERP Parts Master [{match_label}]: {pn} — {(desc3 or '')[:60]}"
+                f" | supplier={supplier or 'SDI'} | PMA_COST_MAT={unit_price:.4f}"
+            ),
+            "supplier_name": supplier or "SDI",
+            "part_code": pn,
+            "review_required": best_score < 0.65,
+            "review_reason": (
+                None
+                if best_score >= 0.65
+                else f"PMA match confidence {best_score:.0%} — verify part number"
+            ),
         }
 
     def _get_historical_rag(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
-        desc = str(part.get("description") or "").strip().lower()
-        if not desc:
+        """
+        RAG lookup against dbo.historical_quote_material_line with token overlap scoring.
+
+        Fetches up to 40 LIKE candidates from SQL then re-ranks in Python by
+        Jaccard token overlap against the part description + material.
+        """
+        # With the broad per-token candidate fetch above, a low threshold lets weak/wrong
+        # matches through (e.g. "Earth strap" -> "Strap Mount" at 0.33, "GU10 downlight" ->
+        # "LED Support" at 0.25). 0.45 cleanly keeps genuine matches (loom 0.75, adhesive
+        # cable / dome rivet / foam tape all 0.50) while rejecting the junk so those items
+        # correctly fall through to the LLM/market estimate instead of a wrong historical price.
+        _MIN_OVERLAP = 0.45
+        _CANDIDATES = 80
+
+        desc = str(part.get("description") or "").strip()
+        material = str(part.get("normalized_material") or "").strip()
+        if not desc and not material:
             return None
-        row = self._fetch_one_with_retry(
-            """
-            SELECT TOP 1 line_description, unit_price_gbp, line_total_gbp
-            FROM dbo.historical_quote_material_line
-            WHERE line_description LIKE ?
-            ORDER BY COALESCE(line_total_gbp, 0) DESC
-            """,
-            [f"%{desc}%"],
+
+        query_tokens = self._tokenize(f"{desc} {material}")
+        if not query_tokens:
+            return None
+
+        # Fetch candidates by ANY individual significant token (broad fetch), then let the
+        # Jaccard scorer below rank precisely. The previous whole-phrase LIKE required the
+        # entire description as one contiguous substring, so near-perfect matches were never
+        # even fetched (e.g. "ELECTRICS - 50cm LOOM" does not contain the full phrase
+        # "50cm LOOM LIGHTING ELECTRICS"). Broad fetch + precise score is the correct design.
+        # Use the longest tokens first (most distinctive) and cap how many drive the OR.
+        like_tokens = sorted(query_tokens, key=len, reverse=True)[:6]
+        if not like_tokens:
+            return None
+        like_clause = " OR ".join(
+            ["UPPER(hml.line_description) LIKE '%' + UPPER(?) + '%'"] * len(like_tokens)
         )
-        if not row or row[1] is None:
+
+        try:
+            rows = self._fetch_all_with_retry(
+                f"""
+                SELECT TOP (?)
+                    hml.line_description,
+                    hml.unit_price_gbp,
+                    hml.line_total_gbp,
+                    hh.drawing_number,
+                    hh.quote_date,
+                    hml.part_code,
+                    hml.supplier_name
+                FROM dbo.historical_quote_material_line hml
+                LEFT JOIN dbo.historical_quote_header hh
+                    ON hml.quote_id = hh.quote_id
+                WHERE hml.unit_price_gbp IS NOT NULL
+                  AND hml.unit_price_gbp > 0
+                  AND ({like_clause})
+                ORDER BY
+                    CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
+                    hh.quote_date DESC,
+                    COALESCE(hml.line_total_gbp, 0) DESC
+                """,
+                [_CANDIDATES] + like_tokens,
+            )
+        except Exception:
             return None
+
+        if not rows:
+            return None
+
+        scored: List[tuple] = []
+        for row in rows:
+            score = self._token_overlap_score(query_tokens, str(row[0] or ""))
+            if score >= _MIN_OVERLAP and row[1] is not None and float(row[1] or 0) > 0:
+                scored.append((score, row))
+
+        # No "take the first priced row anyway" fallback: with the broad per-token fetch,
+        # the first fetched row is often unrelated. If nothing clears _MIN_OVERLAP, return
+        # None so the item correctly falls through to the LLM/market estimate rather than
+        # being assigned a wrong historical price.
+        if not scored:
+            return None
+
+        best_score, best_row = max(scored, key=lambda x: x[0])
+        price = float(best_row[1] or 0.0)
+        freshness = self._freshness_adjustment(best_row[4])
+
         return {
             "source": "historical_quote_material_line",
-            "unit_price_gbp": float(row[1]),
-            "provenance": f"Historical match: {row[0]}",
-            "confidence": 0.75,
+            "unit_price_gbp": price,
+            "provenance": (
+                f"Historical RAG [{best_score:.0%} match]: {best_row[0]} "
+                f"| Drawing: {best_row[3] or 'unknown'} "
+                f"| Date: {str(best_row[4] or 'unknown')[:10]} "
+                f"| Part: {best_row[5] or 'unknown'} "
+                f"| Supplier: {best_row[6] or 'unknown'}"
+            ),
+            "confidence": max(0.3, round((0.75 + best_score * 0.15) - freshness["penalty"], 2)),
+            "token_overlap_score": best_score,
+            "effective_date": str(best_row[4])[:10] if best_row[4] else None,
+            "drawing_number": best_row[3],
+            "part_code": best_row[5],
+            "supplier_name": best_row[6],
+            "freshness": freshness,
         }
 
     def get_top_historical_matches(self, part: Dict[str, Any], k: int) -> List[Dict[str, Any]]:
-        desc = str(part.get("description") or "").strip().lower()
-        if not desc:
+        """
+        Top-k historical material line matches for parity reporting (overlap-ranked).
+        """
+        desc = str(part.get("description") or "").strip()
+        part_code = str(part.get("part_number") or "").strip()
+        material = str(part.get("normalized_material") or "").strip()
+        search_term = desc or part_code or material
+        if not search_term:
             return []
         top_k = max(1, min(25, int(k)))
-        rows = self._fetch_all_with_retry(
-            """
-            SELECT TOP (?)
-                line_description,
-                unit_price_gbp,
-                line_total_gbp
-            FROM dbo.historical_quote_material_line
-            WHERE line_description LIKE ?
-              AND unit_price_gbp IS NOT NULL
-            ORDER BY COALESCE(line_total_gbp, 0) DESC
-            """,
-            [top_k, f"%{desc}%"],
-        )
-        matches: List[Dict[str, Any]] = []
-        for row in rows:
-            matches.append(
-                {
-                    "line_description": row[0],
-                    "unit_price_gbp": float(row[1]),
-                    "line_total_gbp": float(row[2] or 0.0),
-                    "confidence": 0.65,
-                    "source": "historical_quote_material_line",
-                }
+        fetch_n = max(top_k, 40)
+        try:
+            rows = self._fetch_all_with_retry(
+                """
+                SELECT TOP (?)
+                    hml.line_description,
+                    hml.unit_price_gbp,
+                    hml.line_total_gbp,
+                    hml.part_code,
+                    hh.drawing_number,
+                    hh.quote_date,
+                    hh.customer_name,
+                    hml.qty_per_unit,
+                    hml.supplier_name
+                FROM dbo.historical_quote_material_line hml
+                LEFT JOIN dbo.historical_quote_header hh
+                    ON hml.quote_id = hh.quote_id
+                WHERE hml.unit_price_gbp IS NOT NULL
+                  AND hml.unit_price_gbp > 0
+                  AND UPPER(hml.line_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                ORDER BY
+                    CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
+                    hh.quote_date DESC,
+                    COALESCE(hml.line_total_gbp, 0) DESC
+                """,
+                [fetch_n, search_term],
             )
+        except Exception:
+            try:
+                rows = self._fetch_all_with_retry(
+                    """
+                    SELECT TOP (?)
+                        line_description, unit_price_gbp, line_total_gbp,
+                        part_code, NULL, NULL, NULL, qty_per_unit, supplier_name
+                    FROM dbo.historical_quote_material_line
+                    WHERE unit_price_gbp IS NOT NULL AND unit_price_gbp > 0
+                      AND UPPER(line_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                    ORDER BY COALESCE(line_total_gbp, 0) DESC
+                    """,
+                    [fetch_n, search_term],
+                )
+            except Exception:
+                return []
+
+        query_tokens = self._tokenize(f"{desc} {material}")
+        scored_rows: List[tuple] = []
+        for row in rows:
+            score = self._token_overlap_score(query_tokens, str(row[0] or "")) if query_tokens else 0.0
+            scored_rows.append((score, row))
+        scored_rows.sort(key=lambda x: -x[0])
+
+        matches: List[Dict[str, Any]] = []
+        for score, row in scored_rows[:top_k]:
+            freshness = self._freshness_adjustment(row[5])
+            matches.append({
+                "line_description": row[0],
+                "unit_price_gbp": float(row[1]),
+                "line_total_gbp": float(row[2] or 0.0),
+                "part_code": row[3],
+                "drawing_number": row[4],
+                "quote_date": str(row[5])[:10] if row[5] else None,
+                "customer_name": row[6],
+                "qty_per_unit": float(row[7]) if row[7] else None,
+                "supplier_name": row[8],
+                "token_overlap_score": score,
+                "match_quality": self._match_quality_label(score),
+                "confidence": max(0.3, round((0.65 + score * 0.15) - freshness["penalty"], 2)),
+                "freshness": freshness,
+                "source": "historical_quote_material_line",
+            })
         return matches
 
-    def _get_supplier_catalog(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
-        material_hint = str(part.get("normalized_material") or "").strip().lower()
-        if not material_hint:
+    def _get_bought_in_part(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        part_code = str(part.get("part_number") or "").strip()
+        desc = str(part.get("description") or "").strip()
+        if not part_code and len(desc) < 5:
             return None
         row = self._fetch_one_with_retry(
             """
-            SELECT TOP 1 catalog_url, material_hint, unit_price_gbp
-            FROM dbo.estimating_supplier_catalog_url
-            WHERE material_hint LIKE ?
-            ORDER BY sort_order ASC
+            SELECT TOP 1 part_code, description, unit_price_gbp, supplier_name
+            FROM dbo.bought_in_parts
+            WHERE is_active = 1
+              AND (
+                  UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?)))
+                  OR (LEN(LTRIM(RTRIM(?))) >= 5 AND UPPER(description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%')
+              )
+            ORDER BY
+                CASE WHEN UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+                effective_date DESC
             """,
-            [f"%{material_hint}%"],
+            [part_code, desc, desc, part_code],
         )
         if not row or row[2] is None:
             return None
+        price = float(row[2] or 0.0)
+        if price <= 0:
+            return None
+        matched = str(row[0] or "").strip().upper()
+        base_confidence = 0.93 if part_code.strip().upper() == matched else 0.80
+        return {
+            "source": "bought_in_parts",
+            "unit_price_gbp": price,
+            "provenance": f"Bought-in: {row[0]} ({row[1]}) supplier={row[3]}",
+            "confidence": base_confidence,
+            "supplier_name": row[3] or "Unknown",
+        }
+
+    def _get_supplier_catalog(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        material_hint = str(part.get("normalized_material") or "").strip()
+        desc = str(part.get("description") or "").strip()
+        search = material_hint or desc
+        if not search:
+            return None
+        try:
+            row = self._fetch_one_with_retry(
+                """
+                SELECT TOP 1
+                    catalog_url,
+                    material_hint,
+                    unit_price_gbp,
+                    sort_order
+                FROM dbo.estimating_supplier_catalog_url
+                WHERE UPPER(material_hint) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                ORDER BY sort_order ASC
+                """,
+                [search],
+            )
+        except Exception:
+            return None
+        if not row or row[2] is None:
+            return None
+        price = float(row[2] or 0.0)
+        if price <= 0:
+            return None
         return {
             "source": "estimating_supplier_catalog_url",
-            "unit_price_gbp": float(row[2]),
-            "provenance": f"Catalog: {row[1]} ({row[0]})",
+            "unit_price_gbp": price,
+            "provenance": f"Supplier catalog: {row[1]} — {row[0]}",
+            "catalog_url": row[0],
+            "material_hint": row[1],
+            "sort_order": row[3],
             "confidence": 0.65,
+            "review_flag": True,
+            "review_reason": "Indicative catalog price — verify against current supplier quote.",
         }
 
     def _select_anchor_price_source(self, part: Dict[str, Any]) -> Dict[str, Any]:
-        return (
-            self._get_udef_anchor(part)
-            or self._get_historical_rag(part)
-            or self._get_supplier_catalog(part)
-            or {
-                "source": "fallback",
-                "unit_price_gbp": 0.0,
-                "confidence": 0.3,
-                "provenance": "No price source found",
-            }
+        udef = self._get_udef_anchor(part)
+        if udef:
+            return udef
+        pma = self._get_pma_purchased(part)
+        if pma:
+            return pma
+        bought = self._get_bought_in_part(part)
+        if bought:
+            return bought
+        historical = self._get_historical_rag(part)
+        if historical:
+            return historical
+        catalog = self._get_supplier_catalog(part)
+        if catalog:
+            return catalog
+        fallback_policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+        if fallback_policy.get("enable_web_ai_fallback"):
+            web_result = self._get_web_ai_fallback(part)
+            if web_result:
+                return web_result
+        is_bought_in = self._is_bought_in_heuristic(part)
+        return {
+            "source": "fallback",
+            "unit_price_gbp": 0.0,
+            "confidence": 0.0,
+            "provenance": "No price source found — add to bought_in_parts or UDEF_PARTS_TABLE_FOR_ESTIMATING",
+            "review_required": True,
+            "review_reason": (
+                "Standard bought-in item with no price in UDEF or bought_in_parts. "
+                "Add to Access Supply Chain or enable web/AI fallback."
+                if is_bought_in else
+                "No price found in any source. Add material to material_prices table or enable web/AI fallback."
+            ),
+        }
+
+    def _get_web_ai_fallback(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        try:
+            from web_ai_price_lookup import lookup_web_ai_price
+        except ImportError:
+            return None
+        fallback_policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+        conf_cap = float(fallback_policy.get("fallback_confidence_cap", 0.68))
+        geom = part.get("normalized_geometry") or {}
+        ops = list(dict.fromkeys(
+            (part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
+        ))
+        result = lookup_web_ai_price(
+            {
+                "material": part.get("normalized_material") or part.get("material"),
+                "description": part.get("description"),
+                "thickness_mm": part.get("thickness_mm"),
+                "part_code": part.get("part_number"),
+                "finish": next(iter(part.get("surface_finishes") or []), None),
+                "colour": next(iter(part.get("colours") or []), None),
+                "quantity": part.get("quantity"),
+                "length_mm": geom.get("blank_length_mm") or part.get("length_mm"),
+                "width_mm": geom.get("blank_width_mm") or part.get("width_mm"),
+                "weight_kg": geom.get("weight_kg"),
+                "operations": ops[:6],
+            },
+            enable_web_search=True,
+            enable_llm_estimate=True,
         )
+        if not result.get("found") or not result.get("price_gbp"):
+            return None
+        capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
+        return {
+            "source": result.get("source_type", "web_ai_fallback"),
+            "source_type": "web_ai_fallback",
+            "unit_price_gbp": float(result["price_gbp"]),
+            "confidence": capped_conf,
+            "provenance": (
+                f"Web/AI fallback: {result.get('source_type')} — "
+                f"{result.get('price_basis', '')[:80]}"
+            ),
+            "review_flag": True,
+            "review_reason": result.get("review_reason", "Indicative web/AI price — verify before quoting."),
+            "web_query": result.get("web_query"),
+            "supplier_name": result.get("supplier_name", "web/AI estimate"),
+            "price_date": result.get("price_date"),
+            "low_estimate_gbp": result.get("low_estimate_gbp"),
+            "high_estimate_gbp": result.get("high_estimate_gbp"),
+            "verify_against": result.get("verify_against", []),
+        }
+
+    def _get_labour_rate_from_db(self, operation_code: str) -> Dict[str, Any] | None:
+        if not operation_code:
+            return None
+        op_map = {
+            "laser_cutting": "LASM",
+            "folding": "FOLD",
+            "welding": "WELD",
+            "powder_coating": "P/C",
+            "wet_spray": "SPRY",
+            "hole_machining": "DRIL",
+            "cnc": "CNC",
+            "bench_work": "BENC",
+            "diamond_polish": "DPOL",
+            "dress_welds": "DRES",
+            "glue": "GLUE",
+            "handling": "PACM",
+            "assembly": "PACM",
+        }
+        dept_code = op_map.get(operation_code, operation_code.upper())
+        try:
+            row = self._fetch_one_with_retry(
+                """
+                SELECT TOP 1
+                    operation_code,
+                    hourly_rate_gbp,
+                    department_code,
+                    effective_date
+                FROM dbo.labour_rates
+                WHERE is_active = 1
+                  AND (
+                      LOWER(LTRIM(RTRIM(operation_code))) = LOWER(LTRIM(RTRIM(?)))
+                      OR UPPER(LTRIM(RTRIM(department_code))) = UPPER(LTRIM(RTRIM(?)))
+                  )
+                ORDER BY effective_date DESC
+                """,
+                [operation_code, dept_code],
+            )
+        except Exception:
+            return None
+        if not row or row[1] is None:
+            return None
+        rate = float(row[1] or 0.0)
+        if rate <= 0:
+            return None
+        freshness = self._freshness_adjustment(row[3])
+        return {
+            "source": "dbo.labour_rates",
+            "operation_code": row[0],
+            "department_code": row[2],
+            "hourly_rate_gbp": rate,
+            "effective_date": str(row[3])[:10] if row[3] else None,
+            "freshness": freshness,
+            "confidence": max(0.5, round(0.95 - freshness["penalty"], 2)),
+        }
+
+    def _get_historical_operations(self, part: Dict[str, Any], k: int = 3) -> List[Dict[str, Any]]:
+        desc = str(part.get("description") or "").strip()
+        if not desc:
+            return []
+        try:
+            rows = self._fetch_all_with_retry(
+                """
+                SELECT TOP (?)
+                    hqo.operation_code,
+                    hqo.department_code,
+                    hqo.run_min_per_unit,
+                    hqo.hourly_rate_gbp,
+                    hqo.operation_cost_gbp,
+                    hqo.setup_min,
+                    hh.drawing_number,
+                    hh.quote_date
+                FROM dbo.historical_quote_operation hqo
+                JOIN dbo.historical_quote_part hqp
+                    ON hqo.quote_part_id = hqp.quote_part_id
+                JOIN dbo.historical_quote_header hh
+                    ON hqp.quote_id = hh.quote_id
+                WHERE UPPER(hqp.normalized_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                  AND hqo.operation_cost_gbp IS NOT NULL
+                ORDER BY hh.quote_date DESC, hqo.operation_cost_gbp DESC
+                """,
+                [k, desc],
+            )
+        except Exception:
+            return []
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            result.append({
+                "operation_code": row[0],
+                "department_code": row[1],
+                "run_min_per_unit": float(row[2]) if row[2] else None,
+                "hourly_rate_gbp": float(row[3]) if row[3] else None,
+                "operation_cost_gbp": float(row[4]) if row[4] else None,
+                "setup_min": float(row[5]) if row[5] else None,
+                "drawing_number": row[6],
+                "quote_date": str(row[7])[:10] if row[7] else None,
+                "source": "historical_quote_operation",
+            })
+        return result
+
+    def estimate_assembly_pack_labour(self, quantity: int = 1) -> Dict[str, Any]:
+        """E2: per-bay assembly/pack labour, learned from dbo.historical_quote_operation.
+        Takes the median run_min_per_unit of ASSEMBLE/PACK/COLLATE/PALLET/BULK operations
+        and applies the config PACM (Assemble/pack) rate. History-derived and flagged;
+        falls back to a config default, or flags 'not costed' — never a free guess."""
+        pacm_rate = float((getattr(config, "HOURLY_RATES_GBP", {}) or {}).get("assembly") or 28.56)
+        pol = getattr(config, "ASSEMBLY_LABOUR_POLICY", {}) or {}
+        default_min = float(pol.get("default_minutes_per_bay") or 0.0)
+        rows = []
+        try:
+            rows = self._fetch_all_with_retry(
+                """
+                SELECT TOP 400 hqo.operation_code, hqo.run_min_per_unit
+                FROM dbo.historical_quote_operation hqo
+                WHERE hqo.run_min_per_unit IS NOT NULL AND hqo.run_min_per_unit > 0
+                  AND (UPPER(hqo.operation_code) LIKE '%ASSEMBLE%'
+                    OR UPPER(hqo.operation_code) LIKE '%PACK%'
+                    OR UPPER(hqo.operation_code) LIKE '%COLLATE%'
+                    OR UPPER(hqo.operation_code) LIKE '%PALLET%'
+                    OR UPPER(hqo.operation_code) LIKE '%BULK%')
+                """,
+                [],
+            ) or []
+        except Exception:
+            rows = []
+        mins = sorted(float(r[1]) for r in rows if r[1] and float(r[1]) > 0)
+        if mins:
+            median, basis, flag, sample = mins[len(mins) // 2], "historical_quote_operation_median", None, len(mins)
+        elif default_min > 0:
+            median, basis, flag, sample = default_min, "config_default", \
+                "ASSEMBLY LABOUR PROVISIONAL \u2014 no history match; using config default", 0
+        else:
+            return {
+                "assembly_minutes_per_bay": None, "rate_gbp_per_hour": pacm_rate,
+                "cost_per_bay_gbp": None, "sample_size": 0, "basis": "unavailable",
+                "flag": "ASSEMBLY LABOUR NOT COSTED \u2014 no history and no config default",
+            }
+        return {
+            "assembly_minutes_per_bay": round(median, 1),
+            "rate_gbp_per_hour": pacm_rate,
+            "cost_per_bay_gbp": round(median / 60.0 * pacm_rate, 2),
+            "sample_size": sample, "basis": basis, "flag": flag,
+        }
+
+    def _add_missing_weld_time(self, part: Dict[str, Any], wb_part: Dict[str, Any]) -> None:
+        risk_flags = part.get("risk_flags") or []
+        if "weld_required" not in risk_flags:
+            return
+        proc = wb_part.get("process_estimate") or {}
+        times = proc.get("times_min") or {}
+        if times.get("welding") or times.get("spot_welding"):
+            return
+        weld_policy = getattr(config, "WELD_TIME_POLICY", {}) or {}
+        default_weld_min = float(weld_policy.get("default_weld_minutes_per_weldment", 15.0))
+        default_dress_min = float(weld_policy.get("default_dress_weld_minutes", 10.0))
+        fold_count = len(part.get("fold_values_mm") or []) or int(part.get("fold_count_textual") or 0)
+        desc_upper = str(part.get("description") or "").upper()
+        if "WELDMENT" in desc_upper or "ASSEMBLY" in desc_upper:
+            weld_min = default_weld_min * max(1, min(fold_count, 4))
+        else:
+            weld_min = default_weld_min
+        times["welding"] = round(weld_min, 1)
+        if not times.get("dress_welds"):
+            times["dress_welds"] = round(default_dress_min, 1)
+        proc["times_min"] = times
+        proc["weld_time_injected"] = True
+        wb_part["process_estimate"] = proc
 
     def _resolve_effective_material_cost(
         self,
@@ -272,6 +893,64 @@ class PricingService:
             policy.get("anchor_override_min_confidence", 0.90)
         )
         scrap_factor = float(policy.get("anchor_override_scrap_factor", 1.04))
+
+        is_bought_in = self._is_bought_in_heuristic(part)
+        src = str(anchor_price_source.get("source") or "").lower()
+        per_each_sources = (
+            "udef_parts_table_for_estimating",
+            "bought_in_parts",
+            "pma_tbl",
+        )
+
+        if src == "pma_tbl" and unit_price > 0.0 and confidence >= 0.55:
+            system_cost = unit_price * quantity
+            return {
+                "material_cost_gbp": float(system_cost),
+                "material_pricing_mode": "pma_cost_mat_each",
+                "anchor_applied": True,
+                "anchor_threshold": anchor_threshold,
+                "anchor_inputs": {
+                    "confidence": confidence,
+                    "unit_price_gbp": unit_price,
+                    "weight_kg": weight_kg,
+                    "note": "PMA_TBL PMA_COST_MAT — purchased part, per unit not per kg",
+                },
+            }
+
+        if (
+            is_bought_in
+            and src in per_each_sources
+            and unit_price > 0.0
+            and confidence >= 0.70
+        ):
+            system_cost = unit_price * quantity
+            return {
+                "material_cost_gbp": float(system_cost),
+                "material_pricing_mode": "system_cost_bought_in",
+                "anchor_applied": True,
+                "anchor_threshold": anchor_threshold,
+                "anchor_inputs": {
+                    "confidence": confidence,
+                    "unit_price_gbp": unit_price,
+                    "weight_kg": weight_kg,
+                    "note": "bought-in item — priced each, not by weight",
+                },
+            }
+
+        if src == "web_ai_fallback" and unit_price > 0.0:
+            system_cost = unit_price * quantity
+            return {
+                "material_cost_gbp": float(system_cost),
+                "material_pricing_mode": "web_ai_fallback",
+                "anchor_applied": True,
+                "anchor_threshold": anchor_threshold,
+                "anchor_inputs": {
+                    "confidence": confidence,
+                    "unit_price_gbp": unit_price,
+                    "weight_kg": weight_kg,
+                    "note": "indicative web/AI price — verify before quoting",
+                },
+            }
 
         if confidence >= anchor_threshold and unit_price > 0.0 and weight_kg > 0.0:
             anchor_material_cost = weight_kg * unit_price * quantity * scrap_factor
@@ -308,23 +987,50 @@ class PricingService:
         save_to_db: bool = True,
     ) -> Dict[str, Any]:
         drawing_json = normalise_json(drawing_json)
+        from config import WORKBOOK_INPUT_DEFAULTS, DEFAULT_JOB_QUANTITY
+        default_qty = int(
+            (WORKBOOK_INPUT_DEFAULTS or {}).get("default_job_quantity", DEFAULT_JOB_QUANTITY)
+            or DEFAULT_JOB_QUANTITY or 1
+        )
+        if not drawing_json.get("assumed_job_quantity") and not drawing_json.get("quantity"):
+            drawing_json["assumed_job_quantity"] = default_qty
         parts = drawing_json.get("manufacturing_writeup", {}).get("parts") or drawing_json.get("parts", [])
-        workbook_estimate = estimate_document(parts)
+        workbook_estimate = estimate_document(parts, summary=drawing_json)
         part_estimates = workbook_estimate.get("part_estimates", [])
         estimate_lookup = {
             str(item.get("part_number") or ""): item for item in part_estimates if item.get("part_number")
         }
         priced_parts: List[Dict[str, Any]] = []
 
+        rounding_mode = self._rounding_mode()
         for part in parts:
             part_number = str(part.get("part_number") or "")
             qty = max(1, int(round(float(part.get("quantity", 1) or 1))))
             wb = estimate_lookup.get(part_number, {})
+            self._add_missing_weld_time(part, wb)
             historical_matches = self.get_top_historical_matches(part, k=historical_top_k)
-            anchor_price_source = self._select_anchor_price_source(part)
+            historical_operations = self._get_historical_operations(part, k=3)
             wb_breakdown = wb.get("cost_breakdown", {})
             wb_material = wb_breakdown.get("material", {})
             wb_labour = wb_breakdown.get("labour", {})
+            db_rate_validation: Dict[str, Any] = {}
+            for op_code in (wb_labour.get("costs_gbp") or {}).keys():
+                db_rate = self._get_labour_rate_from_db(op_code)
+                if db_rate:
+                    config_rate = float(
+                        (getattr(config, "HOURLY_RATES_GBP", {}) or {}).get(op_code) or 0.0
+                    )
+                    db_rate_validation[op_code] = {
+                        "db_rate_gbp_hr": db_rate["hourly_rate_gbp"],
+                        "config_rate_gbp_hr": config_rate,
+                        "dept_code": db_rate.get("department_code"),
+                        "rate_source": db_rate["source"],
+                        "variance_pct": round(
+                            abs(db_rate["hourly_rate_gbp"] - config_rate) / max(config_rate, 0.01) * 100, 1
+                        ) if config_rate else None,
+                        "effective_date": db_rate.get("effective_date"),
+                    }
+            anchor_price_source = self._select_anchor_price_source(part)
             workbook_unit_total_cost = float(wb.get("unit_total_cost_gbp") or 0.0)
             workbook_extended_total_cost = float(wb.get("extended_total_cost_gbp") or 0.0)
             workbook_material_cost = float(wb_material.get("extended_material_cost_gbp") or 0.0)
@@ -343,16 +1049,20 @@ class PricingService:
             if str(pricing_basis or "").startswith("system_cost_per_part"):
                 computed_extended_total_cost = workbook_extended_total_cost
                 unit_total_cost = workbook_unit_total_cost
+            raw_extended_total_cost = float(computed_extended_total_cost)
+            raw_unit_total_cost = float(unit_total_cost)
 
             priced_parts.append(
                 {
                     "part_number": part_number,
                     "description": part.get("description"),
                     "quantity": qty,
-                    "material_cost_gbp": round(material_cost, 2),
-                    "labour_cost_gbp": round(labour_cost, 2),
-                    "unit_total_cost_gbp": round(unit_total_cost, 2),
-                    "extended_total_cost_gbp": round(computed_extended_total_cost, 2),
+                    "material_cost_gbp": self._round_money(material_cost),
+                    "labour_cost_gbp": self._round_money(labour_cost),
+                    "unit_total_cost_gbp": self._round_money(unit_total_cost),
+                    "extended_total_cost_gbp": self._round_money(computed_extended_total_cost),
+                    "unit_total_cost_raw_gbp": raw_unit_total_cost,
+                    "extended_total_cost_raw_gbp": raw_extended_total_cost,
                     "pricing_basis": pricing_basis,
                     "price_source": anchor_price_source,
                     "joined_sources": {
@@ -366,18 +1076,37 @@ class PricingService:
                         "material_decision": effective_material,
                     },
                     "top_historical_matches": historical_matches,
+                    "historical_operations": historical_operations,
+                    "db_labour_rate_validation": db_rate_validation,
                 }
             )
 
         workbook_equivalent = workbook_estimate.get("workbook_equivalent_pricing", {})
-        material_total = sum(float(item.get("material_cost_gbp") or 0.0) for item in priced_parts)
-        labour_total = sum(float(item.get("labour_cost_gbp") or 0.0) for item in priced_parts)
-        grand_total_cost = sum(float(item.get("extended_total_cost_gbp") or 0.0) for item in priced_parts)
-        workbook_sell_price = float(workbook_equivalent.get("l111_sell_price_gbp") or 0.0)
-        sell_price = workbook_sell_price if workbook_sell_price > 0 else grand_total_cost * 1.30
-        order_qty = max(1, int(round(float(drawing_json.get("quantity", 1) or 1))))
+        if rounding_mode == "per_line":
+            material_total_raw = sum(float(item.get("material_cost_gbp") or 0.0) for item in priced_parts)
+            labour_total_raw = sum(float(item.get("labour_cost_gbp") or 0.0) for item in priced_parts)
+            grand_total_cost_raw = sum(float(item.get("extended_total_cost_gbp") or 0.0) for item in priced_parts)
+        else:
+            material_total_raw = sum(float(item.get("material_cost_gbp") or 0.0) for item in priced_parts)
+            labour_total_raw = sum(float(item.get("labour_cost_gbp") or 0.0) for item in priced_parts)
+            grand_total_cost_raw = sum(float(item.get("extended_total_cost_raw_gbp") or item.get("extended_total_cost_gbp") or 0.0) for item in priced_parts)
+        if rounding_mode == "per_section":
+            grand_total_cost_raw = material_total_raw + labour_total_raw
+        material_total = self._round_money(material_total_raw)
+        labour_total = self._round_money(labour_total_raw)
+        grand_total_cost = self._round_money(grand_total_cost_raw)
+        workbook_sell_price = workbook_equivalent.get("l111_sell_price_gbp")
+        manufacturing_only = bool(getattr(config, "OUTPUT_MANUFACTURING_COST_ONLY", False))
+        if manufacturing_only:
+            sell_price = grand_total_cost
+            margin_pct = None
+        else:
+            ws = float(workbook_sell_price or 0.0)
+            sell_price = ws if ws > 0 else grand_total_cost * 1.30
+            margin_pct = round(((sell_price - grand_total_cost) / sell_price) * 100.0, 1) if sell_price else None
+        default_job_qty = int((getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}).get("default_job_quantity", 1))
+        order_qty = max(1, int(round(float(drawing_json.get("quantity", default_job_qty) or default_job_qty))))
         run_uuid = drawing_json.get("run_uuid") or str(uuid.uuid4())
-        margin_pct = round(((sell_price - grand_total_cost) / sell_price) * 100.0, 1) if sell_price else None
 
         result = {
             "schema": "priced_estimate.v1",
@@ -386,16 +1115,26 @@ class PricingService:
             "run_uuid": run_uuid,
             "parts": priced_parts,
             "summary": {
-                "total_material_gbp": round(material_total, 2),
-                "total_labour_gbp": round(labour_total, 2),
-                "grand_total_cost_gbp": round(grand_total_cost, 2),
-                "sell_price_per_unit_gbp": round(sell_price / order_qty, 2) if order_qty else 0.0,
-                "total_sell_price_gbp": round(sell_price, 2),
+                "total_material_gbp": self._round_money(material_total),
+                "total_labour_gbp": self._round_money(labour_total),
+                "grand_total_cost_gbp": self._round_money(grand_total_cost),
+                "sell_price_per_unit_gbp": None
+                if manufacturing_only
+                else (self._round_money(sell_price / order_qty) if order_qty else 0.0),
+                "total_sell_price_gbp": None if manufacturing_only else self._round_money(sell_price),
                 "margin_pct": margin_pct,
+                "rounding_mode": rounding_mode,
+                "ignored_markup_cells": list(getattr(config, "WORKBOOK_IGNORED_MARKUP_CELLS", [])),
+                "output_manufacturing_cost_only": manufacturing_only,
             },
             "workbook_equivalent_pricing": workbook_equivalent,
             "estimate_source_extract": workbook_estimate.get("estimate_source_extract", {}),
             "historical_comparison_projection": workbook_estimate.get("historical_comparison_projection", {}),
+            "powder_coating_summary": workbook_estimate.get("powder_coating_summary", {}),
+            "estimate_policy_manifest": workbook_estimate.get("estimate_policy_manifest", {}),
+            "estimate_review_signals": workbook_estimate.get("estimate_review_signals", {}),
+            "estimate_workbook_inputs": workbook_estimate.get("estimate_workbook_inputs", {}),
+            "client_quote_pack": generate_client_quote_pack({**drawing_json, "estimate_summary": workbook_estimate}),
             "provenance": "reverse-engineered workbook first, with UDEF/historical/catalog joined as anchors",
         }
         if save_to_db:
@@ -415,7 +1154,9 @@ class PricingService:
                     run_uuid or str(uuid.uuid4()),
                     json.dumps(priced_result, ensure_ascii=False),
                     priced_result["summary"]["grand_total_cost_gbp"],
-                    priced_result["summary"]["total_sell_price_gbp"],
+                    priced_result["summary"]["total_sell_price_gbp"]
+                    if priced_result["summary"].get("total_sell_price_gbp") is not None
+                    else priced_result["summary"]["grand_total_cost_gbp"],
                 )
                 self.conn.commit()
                 return

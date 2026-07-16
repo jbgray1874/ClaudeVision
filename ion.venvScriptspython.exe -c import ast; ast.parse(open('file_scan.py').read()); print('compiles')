@@ -1,0 +1,79 @@
+warning: in the working copy of 'sdi-intelligence-backend/.env', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'sdi-intelligence-backend/hr_brighthr.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'sdi-intelligence-backend/hr_config.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'sdi-intelligence-backend/hr_pull.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'sdi-intelligence-backend/hr_routes.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'sdi-intelligence-backend/sdi-intelligence-portal.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/ai_estimating_rag_stores.sql', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/diag_page.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/diag_parts.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/distill_estimate.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/document_builder.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/dxf_reader.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/dxf_reader.py.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/estimate_template_parser.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/estimate_template_writeback.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/estimation_report.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/estimator.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/extract_workbook_constants.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/extractor_patterns.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/file_scan.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/geometry_analysis.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/geometry_calibration.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/geometry_features.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/historical_jobs.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/json_normaliser.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/layout_zones.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/learning_engine.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/load_historical_quotes.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/part_index.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/price_sources.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/process_router.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/source_connectors/spreadsheet_prices.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/source_connectors/sqlserver_prices.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/source_connectors/web_prices.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/spreadsheet_formula_parser.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/vision_extraction.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/web_ai_price_lookup.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/web_scrape_price_lookup.py', LF will be replaced by CRLF the next time Git touches it
+ ...1282 - Milwaukee Wall Bay_pricing_variance.xlsx |  Bin [31m5308[m -> [32m5308[m bytes
+ output/csv/FOTM Belly Basket_pricing_variance.xlsx |  Bin [31m5306[m -> [32m5305[m bytes
+ output/csv/part_estimate_inputs.csv                | 2422 [32m++++++++++++++++++++[m
+ output/sql/1282 - Milwaukee Wall Bay.sql           | 1621 [32m++++++++++++[m[31m-[m
+ output/sql/FOTM Belly Basket.sql                   |  380 [32m+[m[31m--[m
+ sdi-intelligence-backend/.env                      |   16 [32m+[m[31m-[m
+ sdi-intelligence-backend/hr_brighthr.py            |   11 [32m+[m[31m-[m
+ sdi-intelligence-backend/hr_config.py              |    2 [32m+[m
+ sdi-intelligence-backend/hr_pull.py                |   79 [32m+[m[31m-[m
+ sdi-intelligence-backend/hr_routes.py              |   24 [32m+[m
+ .../sdi-intelligence-portal.html                   | 1557 [32m++++++++++++[m[31m-[m
+ src/ai_estimating_rag_stores.sql                   |  118 [32m+[m[31m-[m
+ src/bay_rollup.py                                  |  463 [32m+++[m[31m-[m
+ src/config.py                                      |  134 [32m+[m[31m-[m
+ src/diag_parts2.py                                 |   40 [31m-[m
+ src/document_builder_V1.py                         |  204 [31m--[m
+ src/document_builder_V2.py                         |  243 [31m--[m
+ src/drawing_job_merge.py                           |   12 [32m+[m[31m-[m
+ src/drawing_job_merge.py.bak                       |    4 [32m+[m
+ src/dxf_reader.py.py                               |    4 [32m+[m
+ src/estimate_full_parity_report.py                 |  199 [32m+[m[31m-[m
+ src/estimate_parity_pretty_report.py               |  208 [32m+[m[31m-[m
+ src/estimator.py                                   |  398 [32m+++[m[31m-[m
+ src/estimator.py.bak                               |   98 [32m+[m[31m-[m
+ src/file_scan.py                                   |   52 [32m+[m[31m-[m
+ src/job_analysis_report.py                         |  873 [31m-------[m
+ src/job_bought_in_materials.sql                    |    2 [32m+[m[31m-[m
+ src/json_normaliser.py                             |   15 [32m+[m
+ src/layout_zones.py                                |  244 [32m+[m[31m-[m
+ src/main.py                                        |   67 [32m+[m[31m-[m
+ src/operation_normaliserX.py                       |  303 [31m---[m
+ src/pricing_service.py                             |   44 [32m+[m[31m-[m
+ src/sdi-intelligence-portal (1).html               |  938 [31m--------[m
+ src/tim_assembly_labour_ingest.py                  |  146 [31m--[m
+ src/tim_standard_materials_ingest.py               |  121 [31m-[m
+ src/video_analyzer_old.py                          |   69 [31m-[m
+ src/web_ai_price_lookup.py                         |   66 [32m+[m[31m-[m
+ src/xlsx_output.py                                 |   91 [32m+[m[31m-[m
+ src/xlsx_output_.py                                |  652 [31m------[m
+ src/xlsx_output_new.py                             |  616 [31m-----[m
+ 40 files changed, 7519 insertions(+), 5017 deletions(-)

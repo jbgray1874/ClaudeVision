@@ -6,7 +6,7 @@ import time
 from decimal import Decimal
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     import pdfplumber  # type: ignore
@@ -24,6 +24,13 @@ from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_do
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
 from geometry_features import analyse_vector_features
 from geometry_calibration import calibrate_page_geometry
+from drawing_job_merge import (
+    augment_summary_with_dxf,
+    collect_dxf_paths_for_job,
+    collect_dxf_paths_for_pdf_scan,
+    is_flat_part_dxf,
+)
+from dxf_reader import analyse_dxf_document_geometry, extract_dxf_metadata, extract_dxf_pages, is_dxf_path
 from geometry_analysis import analyse_document_geometry
 from llm_extraction import reconcile_with_llm
 from layout_zones import zone_boxes as _zone_boxes
@@ -44,15 +51,300 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
-def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: str = "*.pdf") -> List[Path]:
+def _is_excluded_doc(path: Path) -> bool:
+    """A7: True if the file is a non-part document (setup/route/MO sheet) that must
+    never be ingested as a drawing. Driven by config so future patterns inherit."""
+    name = path.name.upper()
+    pats = [str(p).upper() for p in getattr(config, "EXCLUDE_DOC_FILENAME_PATTERNS", [])]
+    return any(p in name for p in pats)
+
+
+def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: str = "*") -> List[Path]:
     if not search_root.exists():
         return []
-    return sorted([path for path in search_root.glob(drawing_pattern) if path.suffix.lower() in config.SUPPORTED_EXTENSIONS])
+    paths = sorted(
+        [
+            path
+            for path in search_root.glob(drawing_pattern)
+            if path.is_file() and path.suffix.lower() in config.SUPPORTED_EXTENSIONS
+            and not _is_excluded_doc(path)
+        ]
+    )
+    job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
+    if job_cfg.get("exclude_flat_dxf_from_batch", True):
+        paths = [path for path in paths if not is_flat_part_dxf(path)]
+    return paths
+
+
+def group_input_files_by_folder(files: Sequence[Path]) -> Dict[Path, List[Path]]:
+    """Group PDF paths by parent directory for folder-as-job scanning."""
+    groups: Dict[Path, List[Path]] = {}
+    for path in files:
+        if path.suffix.lower() != ".pdf":
+            continue
+        if _is_excluded_doc(path):  # A7: skip setup/route/MO sheets
+            continue
+        key = path.parent.resolve()
+        groups.setdefault(key, []).append(path)
+    for folder in groups:
+        groups[folder] = sorted(groups[folder], key=lambda p: p.name.lower())
+    return groups
+
+
+def _normalize_bom_part_key(part_number: Any) -> str:
+    try:
+        from part_identity import normalize_part_code
+
+        return normalize_part_code(part_number)
+    except Exception:
+        pn = re.sub(r"\s*-\s*", "-", str(part_number or "").strip())
+        return re.sub(r"\s+", "", pn).upper()
+
+
+def _score_primary_job_pdf(pdf_path: Path, summary: Dict[str, Any]) -> int:
+    """Prefer the top-level GA / richest BOM as the job anchor PDF."""
+    name = pdf_path.name.upper()
+    score = 0
+    if re.search(r"\bGA\b", name) or "- GA" in name or "_GA" in name:
+        score += 20
+    if re.search(r"\b\d{4}\b", name):
+        score += 5
+    if "WALL BAY" in name or "STANDARD" in name:
+        score += 3
+    bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
+    score += min(len(bom_rows), 30)
+    score += min(int(summary.get("page_count") or 0), 10)
+    return score
+
+
+def _bom_row_merge_preferred(
+    row: Dict[str, Any],
+    existing: Dict[str, Any],
+    row_pdf: Path,
+    primary_pdf: Path,
+) -> bool:
+    if row_pdf.resolve() == primary_pdf.resolve() and existing.get("source_pdf") != primary_pdf.name:
+        return True
+    if existing.get("source_pdf") == primary_pdf.name and row_pdf.resolve() != primary_pdf.resolve():
+        return False
+    if row.get("quantity") and not existing.get("quantity"):
+        return True
+    if len(str(row.get("description") or "")) > len(str(existing.get("description") or "")):
+        return True
+    return False
+
+
+def merge_job_pdf_summaries(
+    partials: Sequence[Tuple[Path, Dict[str, Any]]],
+    job_folder: Path,
+) -> Tuple[Dict[str, Any], Path]:
+    """Merge per-PDF extract summaries into one job-level summary before writeup/estimate."""
+    if not partials:
+        raise ValueError("merge_job_pdf_summaries requires at least one PDF summary")
+
+    primary_pdf, primary_summary = max(
+        partials,
+        key=lambda item: _score_primary_job_pdf(item[0], item[1]),
+    )
+
+    merged: Dict[str, Any] = {
+        "source_file": f"{job_folder.name}.json",
+        "full_path": str(job_folder.resolve()),
+        "job_folder": str(job_folder.resolve()),
+        "job_output_stem": job_folder.name,
+        "scan_mode": "folder_as_job",
+        "scanned_at": datetime.now().isoformat(timespec="seconds"),
+        "job_source_pdfs": [],
+        "pages": [],
+        "manual_review_items": [],
+        "detected_labels": [],
+        "pattern_summary": {"part_numbers": [], "dates": [], "revision_matches": [], "dimensions_mm": []},
+        "document_analysis": dict(primary_summary.get("document_analysis") or {}),
+        "output_targets": dict(primary_summary.get("output_targets") or {}),
+        "pdf_metadata": dict(primary_summary.get("pdf_metadata") or {}),
+    }
+
+    bom_by_key: Dict[str, Dict[str, Any]] = {}
+    part_numbers: set[str] = set()
+    dates: set[str] = set()
+    revisions: set[str] = set()
+    dimensions: set[str] = set()
+    labels: set[str] = set()
+    geom_pages: List[Dict[str, Any]] = []
+    job_page = 0
+
+    for pdf_path, summary in sorted(partials, key=lambda item: item[0].name.lower()):
+        merged["job_source_pdfs"].append(
+            {
+                "name": pdf_path.name,
+                "path": str(pdf_path.resolve()),
+                "page_count": summary.get("page_count"),
+            }
+        )
+        # Global page numbers assigned to this PDF's pages, in order. Used below
+        # to re-align this PDF's geometry pages onto the same canonical scheme.
+        pdf_global_pages: List[int] = []
+        for page in summary.get("pages") or []:
+            job_page += 1
+            page_copy = dict(page)
+            page_copy["source_pdf_path"] = str(pdf_path.resolve())
+            page_copy["source_pdf_name"] = pdf_path.name
+            # Canonical page number for the merged job. Each source PDF numbers
+            # its own pages from 1, so without this every PDF's page 1/2 collides
+            # in document_builder's page_lookup (keyed on page_number) and the
+            # last PDF in wins — cross-wiring one part's text/geometry onto
+            # another (the folder-as-job "Led"/bought_in regression). Make the
+            # job-wide number canonical and keep the per-PDF original for display.
+            page_copy["source_page_number"] = page_copy.get("page_number")
+            page_copy["page_number"] = job_page
+            page_copy["job_page_number"] = job_page
+            pdf_global_pages.append(job_page)
+            merged["pages"].append(page_copy)
+        for item in summary.get("manual_review_items") or []:
+            review = dict(item)
+            review["source_pdf"] = pdf_path.name
+            merged["manual_review_items"].append(review)
+
+        doc = summary.get("document_analysis") or {}
+        for row in doc.get("bom_rows") or []:
+            key = _normalize_bom_part_key(row.get("part_number"))
+            if not key:
+                continue
+            row_copy = dict(row)
+            row_copy["source_pdf"] = pdf_path.name
+            existing = bom_by_key.get(key)
+            if existing is None or _bom_row_merge_preferred(row_copy, existing, pdf_path, primary_pdf):
+                bom_by_key[key] = row_copy
+
+        ps = summary.get("pattern_summary") or {}
+        part_numbers.update(ps.get("part_numbers") or [])
+        dates.update(ps.get("dates") or [])
+        revisions.update(ps.get("revision_matches") or [])
+        dimensions.update(str(v) for v in (ps.get("dimensions_mm") or []))
+        labels.update(summary.get("detected_labels") or [])
+
+        gs = summary.get("geometry_summary") or {}
+        for gi, gp in enumerate(gs.get("pages") or []):
+            gpc = dict(gp)
+            gpc["source_pdf_path"] = str(pdf_path.resolve())
+            gpc["source_pdf_name"] = pdf_path.name
+            # Geometry pages are produced in the same order as this PDF's pages,
+            # so align them to the same canonical numbers by position. Without
+            # this the geometry pages keep per-PDF numbers and re-collide.
+            gpc["source_page_number"] = gpc.get("page_number")
+            if gi < len(pdf_global_pages):
+                gpc["page_number"] = pdf_global_pages[gi]
+            geom_pages.append(gpc)
+
+    merged["page_count"] = len(merged["pages"])
+    merged["detected_labels"] = sorted(labels)
+    merged["pattern_summary"] = {
+        "part_numbers": sorted(part_numbers),
+        "dates": sorted(dates),
+        "revision_matches": sorted(revisions),
+        "dimensions_mm": sorted(dimensions, key=lambda v: float(v) if re.match(r"^\d", str(v)) else 0),
+    }
+    merged_doc = dict(merged.get("document_analysis") or {})
+    merged_doc["bom_rows"] = list(bom_by_key.values())
+    merged["document_analysis"] = merged_doc
+
+    primary_gs = primary_summary.get("geometry_summary") or {}
+    merged["geometry_summary"] = {
+        **primary_gs,
+        "pages": geom_pages,
+        "notes": f"Merged geometry from {len(partials)} PDF(s) in {job_folder.name}",
+        "job_folder": str(job_folder.resolve()),
+    }
+    merged["primary_pdf"] = {
+        "name": primary_pdf.name,
+        "path": str(primary_pdf.resolve()),
+    }
+    if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+        print(
+            f"[DEBUG] folder-as-job page renumber: {len(merged['pages'])} page(s), "
+            f"job_page_number is canonical page_number",
+            flush=True,
+        )
+    return merged, primary_pdf
+
+
+def extract_pdf_summary(pdf_path: Path) -> Dict[str, Any]:
+    """PDF extract + geometry only — no writeup, DXF merge, or estimate."""
+    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
+    plumber_pages = extract_with_pdfplumber(pdf_path)
+    pypdf_pages = extract_with_pypdf(pdf_path)
+    vision_pages = [] if skip_vision else extract_document_vision(pdf_path)
+    summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
+    processed_pages = summary.get("pages", [])
+    geometry_results = analyse_document_geometry(processed_pages, pdf_path=pdf_path)
+    for i, page in enumerate(processed_pages):
+        if i < len(geometry_results.get("pages", [])):
+            page["geometry"] = geometry_results["pages"][i].get("geometry", {})
+            page["calibration"] = geometry_results["pages"][i].get("calibration", {})
+    summary["geometry_summary"] = {
+        "document_geometry_reliability": geometry_results.get("document_geometry_reliability", 0.0),
+        "overall_confidence": geometry_results.get("overall_confidence", 0.0),
+        "pages": geometry_results.get("pages", []),
+        "fitz_available": geometry_results.get("fitz_available", False),
+        "pdf_path_recovered": geometry_results.get("pdf_path_recovered", False),
+        "pages_with_fitz_drawings": geometry_results.get("pages_with_fitz_drawings", 0),
+        "notes": "Fitz vector drawings + title-block/text scale calibration",
+        "source_pdf_path": str(pdf_path.resolve()),
+    }
+    return summary
+
+
+def scan_folder_job(
+    job_folder: Path,
+    pdf_paths: Sequence[Path],
+    *,
+    attach_dxf_paths: Optional[Sequence[Path]] = None,
+    auto_discover_dxf: Optional[bool] = None,
+) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
+    """Scan all PDFs in a folder as one job — pooled BOM, one DXF pass, one estimate."""
+    debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
+    started = time.time()
+    pdfs = [Path(p) for p in pdf_paths if Path(p).suffix.lower() == ".pdf"]
+    if not pdfs:
+        raise ValueError(f"No PDF files to scan in job folder {job_folder}")
+
+    print(f"   -> Folder-as-job: {job_folder.name} ({len(pdfs)} PDF(s))")
+    partials: List[Tuple[Path, Dict[str, Any]]] = []
+    for pdf_path in sorted(pdfs, key=lambda p: p.name.lower()):
+        print(f"      • Extracting {pdf_path.name}")
+        partials.append((pdf_path, extract_pdf_summary(pdf_path)))
+
+    merged, anchor_pdf = merge_job_pdf_summaries(partials, job_folder)
+    bom_count = len((merged.get("document_analysis") or {}).get("bom_rows") or [])
+    print(f"   -> Pooled BOM: {bom_count} line(s); anchor PDF: {anchor_pdf.name}")
+
+    return _finalize_scan_summary(
+        merged,
+        started,
+        debug,
+        geometry_summary=merged.get("geometry_summary"),
+        pdf_path=anchor_pdf,
+        job_folder=job_folder,
+        attach_dxf_paths=attach_dxf_paths,
+        auto_discover_dxf=auto_discover_dxf,
+    )
 
 
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
     full_text = normalize_text(f"{page_text} {bom_text} {title_block_text}")
     part_numbers = re.findall(config.PART_NUMBER_PATTERN, full_text, flags=re.IGNORECASE)
+    _junk_sfx = (
+        " - ALUMINIUM", " - ALUMINUM", " - STEEL", " - TIMBER", " - PLYWOOD",
+        " - CLEAR", " - COATED", " - MATT", " - BLACK", " - WHITE",
+    )
+    _junk_tokens = [str(t).upper() for t in getattr(config, "JUNK_PART_TOKENS", [])]
+    part_numbers = [
+        p for p in part_numbers
+        if not any(p.upper().endswith(s.upper()) for s in _junk_sfx)
+        and not re.match(r"^\d{4}\s*-\s*[A-Z]{2,}$", p.upper())
+        and not p.upper().startswith(("C-C", "MMM", "UPC-", "RAL"))
+        and not any(tok in p.upper() for tok in _junk_tokens)   # A9: drop title-block artifacts
+    ]
     bom_row_count = len(re.findall(config.QTY_TABLE_ROW_PATTERN, full_text, flags=re.IGNORECASE))
     unique_part_numbers = sorted(set(part_numbers))
     detail_cues = any(token in full_text.upper() for token in ["FLAT PATTERN", "DETAIL "])
@@ -191,12 +483,73 @@ def find_labels(text: str) -> List[str]:
 
 def extract_patterns(text: str) -> Dict[str, Any]:
     normalized = normalize_text(text)
+    _junk_sfx = (
+        " - ALUMINIUM", " - ALUMINUM", " - STEEL", " - TIMBER", " - PLYWOOD",
+        " - CLEAR", " - COATED", " - MATT", " - BLACK", " - WHITE",
+    )
+
+    def _valid_pn(pn: str) -> bool:
+        up = pn.upper()
+        if up in {
+            "TIMBER-BASED",
+            "TIMBER BASED",
+            "ALUMINIUM-BASED",
+            "MILD STEEL",
+            "STAINLESS STEEL",
+            "ALUMINIUM",
+            "ALUMINUM",
+        }:
+            return False
+        if any(up.endswith(s.upper()) for s in _junk_sfx):
+            return False
+        if any(up.startswith(s.upper()) for s in ("C-C", "MMM-YY", "UPC-", "RAL")):
+            return False
+        if re.match(r"^\d{4}\s*-\s*[A-Z]{2,}$", up):
+            return False
+        if "-" in pn and len(pn) < 6:
+            return False
+        return True
+
+    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, normalized, flags=re.IGNORECASE)
     return {
-        "part_numbers": sorted(set(re.findall(config.PART_NUMBER_PATTERN, normalized, flags=re.IGNORECASE))),
+        "part_numbers": sorted(set(p for p in _raw_pns if _valid_pn(p))),
         "dates": sorted(set(re.findall(config.DATE_PATTERN, normalized, flags=re.IGNORECASE))),
         "revision_matches": sorted(set(re.findall(config.REVISION_PATTERN, normalized, flags=re.IGNORECASE))),
         "dimensions_mm": sorted(set(re.findall(config.DIMENSION_PATTERN, normalized, flags=re.IGNORECASE)))[:500],
     }
+
+
+def _is_revision_table_noise(text: str) -> bool:
+    """
+    Return True if a colour/finish string is revision-table or instruction text,
+    not a real finish or colour specification.
+    """
+    if not text:
+        return False
+    upper = text.upper().strip()
+    noise_markers = [
+        "REFER TO ASSEMBLY LEVEL",
+        "SEE ASSEMBLY DRAWING",
+        "DO NOT SCALE",
+        "UNLESS OTHERWISE STATED",
+        "CHANGED TO ",
+        "MECHANISM CHANGED",
+        "NOTE REMOVED",
+        "NOTE ADDED",
+        "BRACKET ADJUSTED",
+        "CODES ADDED",
+        "FIRST ISSUE",
+        "DRG NO DESCRIPTION DATE",
+        "REVISION TABLE",
+    ]
+    return any(marker in upper for marker in noise_markers) or len(text) > 120
+
+
+def _clean_field_list(values: List[str], field: str) -> List[str]:
+    """Filter out revision-table noise from colour/finish fields."""
+    if field not in ("colours", "surface_finishes"):
+        return values
+    return [v for v in (values or []) if not _is_revision_table_noise(v)]
 
 
 def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypdf_pages: List[str], vision_pages: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
@@ -216,6 +569,11 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
         notes_text=joined_notes,
         page_role_hint="document",
     )
+
+    tb = document_analysis.get("title_block") or {}
+    for field in ("colours", "surface_finishes"):
+        if field in tb:
+            tb[field] = _clean_field_list(tb[field], field)
 
     summary: Dict[str, Any] = {
         "source_file": pdf_path.name,
@@ -259,6 +617,10 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
                 "vision_page": vision_page or {},
             }
         )
+        pa_tb = page_analysis.get("title_block") or {}
+        for field in ("colours", "surface_finishes"):
+            if field in pa_tb:
+                pa_tb[field] = _clean_field_list(pa_tb[field], field)
         page_stub = {
             "page_number": page_number,
             "page_role": page["page_role"],
@@ -270,6 +632,7 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
         summary["pages"].append(
             {
                 "page_number": page_number,
+                "source_pdf_path": str(pdf_path.resolve()),
                 "pdfplumber_text": page_text,
                 "normalized_text": page["normalized_text"],
                 "pypdf_text": pypdf_pages[page_number - 1] if page_number - 1 < len(pypdf_pages) else "",
@@ -481,7 +844,7 @@ def _write_archive_copies(
 
 def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     metadata = build_run_metadata(summary)
-    stem = Path(summary["source_file"]).stem
+    stem = str(summary.get("job_output_stem") or Path(summary["source_file"]).stem)
     version_label = metadata["source_file_version_label"]
     timestamp = summary.get("scanned_at", datetime.now().isoformat(timespec="seconds")).replace(":", "-").replace("T", "_")
     json_path = config.JSON_DIR / f"{stem}.json"
@@ -538,11 +901,118 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     return json_path, text_path, log_path, csv_path
 
 
+def _inherit_document_material_to_parts(
+    parts: List[Dict[str, Any]],
+    document_analysis: Dict[str, Any],
+) -> None:
+    """
+    Propagate document-level material to parts that have no material of their own.
+    GA/assembly drawings state material once in the title block, not per BOM row.
+    """
+    if not parts:
+        return
+    pf = document_analysis.get("primary_fields") or {}
+    doc_mat_norm = (
+        pf.get("normalized_material_majority")
+        or pf.get("normalized_material")
+        or None
+    )
+    tb_norm = (document_analysis.get("title_block") or {}).get("normalized") or {}
+    doc_mat_raw = tb_norm.get("primary_material") or None
+    if not doc_mat_norm and not doc_mat_raw:
+        return
+    for part in parts:
+        # Display boards (VINYL-* / DISPLAY BOARD) must NOT inherit the assembly's
+        # document-level material (typically MILD STEEL). They are printed boards,
+        # costed by the display-board recogniser. Skip inheritance for them.
+        # NOTE: do not key on "GRAPHIC" — "GRAPHIC CHANNEL" parts are real steel.
+        _pn_u = str(part.get("part_number") or "").upper()
+        _desc_u = str(part.get("description") or "").upper()
+        if _pn_u.startswith("VINYL-") or "DISPLAY BOARD" in _desc_u:
+            continue
+        existing = str(part.get("normalized_material") or "").strip()
+        if existing and existing not in ("?", "", "None", "UNKNOWN"):
+            continue
+        if part.get("materials"):
+            continue
+        if doc_mat_norm:
+            part["normalized_material"] = doc_mat_norm
+            part.setdefault("material_inherited_from", "document_level")
+        if doc_mat_raw and not part.get("materials"):
+            part["materials"] = [doc_mat_raw]
+            part.setdefault("material_inherited_from", "document_level")
+
+
+def _fill_part_revisions_from_pages(summary: Dict[str, Any]) -> None:
+    """Populate each part's revision from its OWN drawing's title block.
+
+    Must run BEFORE DXF matching so the matcher's revision-aware flat selection
+    (_pick_best_flat: +3 for a matching rev letter) can fire. Without this the part
+    reaches the matcher with revision=None and a stale/older DXF variant in the folder
+    can win over the correct current-revision flat (1282 base plate: the 0-bend "500mm"
+    DXF bound instead of the 6-bend "REV A" flat).
+
+    Reads the revision from each part's own source pages, never another drawing's, by
+    matching the title-block "DWG NO ... <part-number> <REV>" pattern in that page's
+    text. Only fills when the part has no revision; never overwrites.
+    """
+    mw = summary.get("manufacturing_writeup") or {}
+    parts = mw.get("parts") or []
+    pages = summary.get("pages") or []
+    if not parts or not pages:
+        return
+
+    # page_number -> page text (prefer pdfplumber text, fall back to normalized)
+    page_text_by_num: Dict[int, str] = {}
+    for pg in pages:
+        try:
+            num = int(pg.get("page_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if num:
+            page_text_by_num[num] = str(
+                pg.get("pdfplumber_text") or pg.get("normalized_text") or ""
+            )
+
+    def _rev_for_part(part: Dict[str, Any]) -> Optional[str]:
+        pn = str(part.get("part_number") or "").strip()
+        if not pn:
+            return None
+        # Build a tolerant pattern: the title block reads e.g. "... 1450-01C A"
+        # The part number may carry a trailing letter; the revision is a single
+        # standalone capital following the part number (allow trailing '-').
+        pn_pat = re.escape(pn).replace(r"\-", r"[\s\-]*")
+        rev_re = re.compile(pn_pat + r"\s*[\-]?\s*([A-Z])\b")
+        for pgnum in (part.get("pages") or []):
+            try:
+                txt = page_text_by_num.get(int(pgnum), "")
+            except (TypeError, ValueError):
+                continue
+            if not txt:
+                continue
+            m = rev_re.search(txt)
+            if m:
+                return m.group(1).upper()
+        return None
+
+    for part in parts:
+        existing = str(part.get("revision") or part.get("drawing_revision") or "").strip()
+        if existing and existing not in ("?", "", "None", "UNKNOWN"):
+            continue
+        rev = _rev_for_part(part)
+        if rev:
+            part["revision"] = rev
+            part.setdefault("revision_inherited_from", "page_title_block")
+            print(f"   [revision] {part.get('part_number')} revision -> {rev}", flush=True)
+
+
 def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     manufacturing_writeup = summary.get("manufacturing_writeup", {})
     estimate_summary = summary.get("estimate_summary", {})
     document_analysis = summary.get("document_analysis", {})
     parts = manufacturing_writeup.get("parts", [])
+
+    _inherit_document_material_to_parts(parts, document_analysis)
 
     summary["drawing_metadata"] = {
         "source_file": summary.get("source_file"),
@@ -589,9 +1059,32 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     summary["alternative_processes"] = []
 
 
-def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
+def scan_file(
+    drawing_path: Path,
+    *,
+    attach_dxf_paths: Optional[Sequence[Path]] = None,
+    auto_discover_dxf: Optional[bool] = None,
+) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
+    if is_dxf_path(drawing_path):
+        return scan_dxf_file(
+            drawing_path,
+            attach_dxf_paths=attach_dxf_paths,
+            auto_discover_dxf=auto_discover_dxf,
+        )
+    return scan_pdf_file(
+        drawing_path,
+        attach_dxf_paths=attach_dxf_paths,
+        auto_discover_dxf=auto_discover_dxf,
+    )
+
+
+def scan_dxf_file(
+    dxf_path: Path,
+    *,
+    attach_dxf_paths: Optional[Sequence[Path]] = None,
+    auto_discover_dxf: Optional[bool] = None,
+) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
-    skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
     started = time.time()
 
     def _debug(stage: str) -> None:
@@ -599,29 +1092,23 @@ def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, P
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")
 
-    _debug("start extract_with_pdfplumber")
-    plumber_pages = extract_with_pdfplumber(pdf_path)
-    _debug("done extract_with_pdfplumber")
-
-    _debug("start extract_with_pypdf")
-    pypdf_pages = extract_with_pypdf(pdf_path)
-    _debug("done extract_with_pypdf")
-
-    if skip_vision:
-        vision_pages = []
-        _debug("skip extract_document_vision (SKIP_VISION_EXTRACTION=1)")
-    else:
-        _debug("start extract_document_vision")
-        vision_pages = extract_document_vision(pdf_path)
-        _debug("done extract_document_vision")
+    print("   -> DXF source: exact model-space geometry (ezdxf)")
+    _debug("start extract_dxf_pages")
+    plumber_pages = extract_dxf_pages(dxf_path)
+    _debug("done extract_dxf_pages")
 
     _debug("start summarise_document")
-    summary = summarise_document(pdf_path, plumber_pages, pypdf_pages, vision_pages=vision_pages)
+    summary = summarise_document(dxf_path, plumber_pages, [""], vision_pages=[])
+    summary["source_format"] = "dxf"
+    summary["pdf_metadata"] = extract_dxf_metadata(dxf_path)
     _debug("done summarise_document")
-    _debug("start improved analyse_document_geometry")
+
     processed_pages = summary.get("pages", [])
-    print("   -> Running improved SOLIDWORKS geometry calibration...")
-    geometry_results = analyse_document_geometry(processed_pages)
+    for page in processed_pages:
+        page["source_dxf_path"] = str(dxf_path.resolve())
+
+    _debug("start analyse_dxf_document_geometry")
+    geometry_results = analyse_dxf_document_geometry(processed_pages, dxf_path)
     for i, page in enumerate(processed_pages):
         if i < len(geometry_results.get("pages", [])):
             page["geometry"] = geometry_results["pages"][i].get("geometry", {})
@@ -630,20 +1117,561 @@ def scan_file(pdf_path: Path) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, P
         "document_geometry_reliability": geometry_results.get("document_geometry_reliability", 0.0),
         "overall_confidence": geometry_results.get("overall_confidence", 0.0),
         "pages": geometry_results.get("pages", []),
-        "notes": "Improved filtering for SOLIDWORKS vectors + title-block scale priority",
+        "fitz_available": False,
+        "pdf_path_recovered": False,
+        "dxf_path": geometry_results.get("dxf_path"),
+        "pages_with_dxf_geometry": geometry_results.get("pages_with_dxf_geometry", 0),
+        "notes": "DXF model-space geometry via ezdxf (native mm)",
+        "source": "dxf",
     }
     summary["geometry_summary"] = geometry_summary
-    print(f"   -> Geometry reliability: {geometry_results.get('document_geometry_reliability', 0.0):.2f} (target >0.75)")
-    _debug("done improved analyse_document_geometry")
+    print(
+        f"   -> Geometry reliability: {geometry_results.get('document_geometry_reliability', 0.0):.2f} "
+        f"(DXF native units)"
+    )
+    _debug("done analyse_dxf_document_geometry")
+    return _finalize_scan_summary(
+        summary,
+        started,
+        debug,
+        geometry_summary=geometry_summary,
+        attach_dxf_paths=attach_dxf_paths,
+        auto_discover_dxf=auto_discover_dxf,
+    )
+
+
+def scan_pdf_file(
+    pdf_path: Path,
+    *,
+    attach_dxf_paths: Optional[Sequence[Path]] = None,
+    auto_discover_dxf: Optional[bool] = None,
+) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
+    debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
+    started = time.time()
+
+    def _debug(stage: str) -> None:
+        if debug:
+            elapsed = round(time.time() - started, 2)
+            print(f"[DEBUG] {stage} (+{elapsed}s)")
+
+    _debug("start extract_pdf_summary")
+    summary = extract_pdf_summary(pdf_path)
+    geometry_summary = summary.get("geometry_summary") or {}
+    print(
+        f"   -> Geometry reliability: {geometry_summary.get('document_geometry_reliability', 0.0):.2f} "
+        f"(target >0.75)"
+    )
+    print(
+        f"   -> Fitz vector pages: {int(geometry_summary.get('pages_with_fitz_drawings', 0) or 0)}/"
+        f"{len(summary.get('pages') or [])}  "
+        f"PDF path recovered: {bool(geometry_summary.get('pdf_path_recovered'))}"
+    )
+    _debug("done extract_pdf_summary")
+    return _finalize_scan_summary(
+        summary,
+        started,
+        debug,
+        geometry_summary=geometry_summary,
+        pdf_path=pdf_path,
+        attach_dxf_paths=attach_dxf_paths,
+        auto_discover_dxf=auto_discover_dxf,
+    )
+
+
+def _finalize_scan_summary(
+    summary: Dict[str, Any],
+    started: float,
+    debug: bool,
+    geometry_summary: Dict[str, Any] | None = None,
+    *,
+    pdf_path: Path | None = None,
+    job_folder: Path | None = None,
+    attach_dxf_paths: Optional[Sequence[Path]] = None,
+    auto_discover_dxf: Optional[bool] = None,
+) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
+    def _debug(stage: str) -> None:
+        if debug:
+            elapsed = round(time.time() - started, 2)
+            print(f"[DEBUG] {stage} (+{elapsed}s)")
+
+    geom_pages = (geometry_summary or summary.get("geometry_summary") or {}).get("pages", [])
     _debug("start merge_page_analysis")
-    summary = merge_page_analysis(summary, geometry_summary.get("pages", []))
+    summary = merge_page_analysis(summary, geom_pages)
     _debug("done merge_page_analysis")
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
     _debug("done build_document_writeup")
+
+    # Fill each part's revision from its own drawing's title block BEFORE DXF matching,
+    # so revision-aware flat selection can prefer the current-revision DXF over stale variants.
+    _fill_part_revisions_from_pages(summary)
+
+    job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
+    discover = job_cfg.get("auto_discover_on_pdf_scan", True) if auto_discover_dxf is None else bool(auto_discover_dxf)
+    source_pdf = pdf_path or Path(summary.get("full_path") or summary.get("source_file") or "")
+    dxf_paths: List[Path] = []
+    if job_folder and summary.get("scan_mode") == "folder_as_job":
+        dxf_paths = collect_dxf_paths_for_job(
+            Path(job_folder),
+            summary,
+            attach_dxf_paths=attach_dxf_paths,
+            auto_discover_dxf=discover,
+        )
+    elif source_pdf and str(source_pdf).lower().endswith(".pdf"):
+        dxf_paths = collect_dxf_paths_for_pdf_scan(
+            Path(source_pdf),
+            summary,
+            attach_dxf_paths=attach_dxf_paths,
+            auto_discover_dxf=discover,
+        )
+    elif attach_dxf_paths:
+        dxf_paths = collect_dxf_paths_for_pdf_scan(
+            Path(summary.get("full_path") or "."),
+            summary,
+            attach_dxf_paths=attach_dxf_paths,
+            auto_discover_dxf=False,
+        )
+
+    if dxf_paths:
+        print(f"   -> Augmenting {len(dxf_paths)} flat DXF file(s) into PDF parts...")
+        for dxf_path in dxf_paths:
+            print(f"      + {dxf_path.name}")
+        _debug("start augment_summary_with_dxf")
+        summary = augment_summary_with_dxf(summary, dxf_paths, reestimate=False)
+        _debug("done augment_summary_with_dxf")
+
+    # ── Pre-estimate normalisation ────────────────────────────────────────────
+    # Must run BEFORE estimate_document so BOUGHT_IN materials price at £0,
+    # and boilerplate-sourced operations are stripped before routing is costed.
+    _pre_estimate_parts = summary.get("manufacturing_writeup", {}).get("parts") or []
+    if _pre_estimate_parts:
+        from json_normaliser import normalise_material_for_part, _strip_spec_boilerplate, infer_operations
+        # Junk part descriptions from title block — filter before normalisation
+        _JUNK_DESC_PATTERNS = re.compile(
+            r"^[\.\s]*BY[\.\s]*$"              # ". BY." / "BY."
+            r"|^DRAWN\s+BY"                    # "DRAWN BY"
+            r"|^CHECKED\s+BY"                  # "CHECKED BY"
+            r"|^APPROVED\s+BY"                 # "APPROVED BY"
+            r"|^DATE[\.\s]*$"                  # "DATE."
+            r"|^REV(ISION)?[\.\s]*$"           # "REV." / "REVISION"
+            r"|^SCALE[\s:]"                    # "SCALE:"
+            r"|^SHEET\s+\d+"                   # "SHEET 1 OF"
+            r"|GENERAL\s*TOLERANCES?"          # "GENERAL TOLERANCES: FINISH SPE..."
+            r"|FINISH\s*SPEC(IFICATION)?"      # "FINISH SPECIFICATION"
+            r"|^G\s*E\s*N\s*E\s*R\s*A\s*L"     # Spaced-out "G E N E R A L"
+            r"|^\s*F\s*I\s*N\s*I\s*S\s*H"      # Spaced-out "F I N I S H"
+            r"|SDI\s*DISPLAYS?\s*LTD"          # "SDI DISPLAYS LIMITED" in descriptions
+            r"|^SURFACE\s+FINISH"              # "SURFACE FINISH:"
+            r"|^MATERIAL\s*:?\s*$"             # bare "MATERIAL"
+            r"|^UNLESS\s+OTHERWISE"            # "UNLESS OTHERWISE STATED"
+            r"|^ALL\s+DIMS?\s+IN\s+MM"         # "ALL DIMS IN MM"
+            r"|DO\s+NOT\s+SCALE",              # "DO NOT SCALE"
+            re.IGNORECASE,
+        )
+        # Patterns that mean a "part number" is actually surface finish / boilerplate text
+        _FAKE_PN_PATTERNS = re.compile(
+            r"""
+            ^(
+                POWDER\s+COAT(ED)?               # "POWDER COATED"
+                | SEMI[-\s]GLOSS                 # "SEMI-GLOSS"
+                | COATED?\s*[-–]                 # "COATED -"
+                | RAL\s*\d{4}                    # "RAL 9005"
+                | GENERAL\s+TOLERANCES?          # "GENERAL TOLERANCES"
+                | FINISH\s+SPEC                  # "FINISH SPEC"
+                | SEE\s+ASSEMBLY                 # "SEE ASSEMBLY DRAWING"
+                | CUSTOMER\s+SUPPLY              # "CUSTOMER SUPPLY"
+                | DRAWN\s+BY                     # "DRAWN BY"
+                | CHECKED\s+BY                   # "CHECKED BY"
+                | APPROVED\s+BY                  # "APPROVED BY"
+                | DATE[\s\.]*$                   # "DATE."
+                | REV(ISION)?[\s\.]*$            # "REV." / "REVISION"
+                | SCALE[\s:]+                    # "SCALE:"
+                | SHEET[\s]+\d+                  # "SHEET 1"
+            )
+            """,
+            re.IGNORECASE | re.VERBOSE,
+        )
+
+        def _is_valid_part_number(pn: str) -> bool:
+            """
+            Return True only if the string looks like a genuine SDI part number.
+            Rejects surface finishes, boilerplate title-block text, RAL codes etc.
+            """
+            if not pn or not pn.strip():
+                return False
+            pn_stripped = pn.strip()
+            if len(pn_stripped) < 3:
+                return False
+            if _FAKE_PN_PATTERNS.match(pn_stripped):
+                return False
+            # Real part numbers always have digits
+            if not re.search(r'\d', pn_stripped):
+                return False
+            upper = pn_stripped.upper()
+            _finish_words = ("COATED", "SEMI-GLOSS", "POWDER", "GLOSS", "MATT", "PRIMER")
+            if any(w in upper for w in _finish_words):
+                return False
+            return True
+
+        def _normalise_part_number(pn):
+            """Strip, collapse spaces around dashes ('8172- 1' -> '8172-1'), upper-case."""
+            if not pn:
+                return pn
+            pn = str(pn).strip()
+            pn = re.sub(r'\s*-\s*', '-', pn)
+            pn = re.sub(r'\s+', ' ', pn)
+            return pn.upper()
+
+        # Drop parts whose identity is pure title-block boilerplate.
+        _pre_estimate_parts = [
+            p for p in _pre_estimate_parts
+            if not _JUNK_DESC_PATTERNS.match(
+                str(p.get("description") or p.get("part_number") or "").strip()
+            )
+        ]
+        # Normalise + validate each part_number: reject finish/boilerplate text.
+        for _p in _pre_estimate_parts:
+            _pn = _normalise_part_number(_p.get("part_number"))
+            if _pn is not None:
+                _p["part_number"] = _pn
+            if _p.get("part_number") and not _is_valid_part_number(_p["part_number"]):
+                _bad = _p["part_number"]
+                _p["part_number"] = None
+                _p.setdefault("review_flags", []).append({
+                    "severity": "warning",
+                    "flag": "invalid_part_number",
+                    "detail": f"Rejected part_number '{_bad}' — looks like boilerplate/finish text",
+                })
+        # Write filtered list back so estimate_document() sees clean parts
+        # Suppress stated_weight_g on assembly/overview pages to prevent
+        # double-counting sub-part weights into parent assembly material cost.
+        for _part in _pre_estimate_parts:
+            _page_roles = _part.get("page_roles") or []
+            _pages = _part.get("pages") or []
+            _has_desc = bool(str(_part.get("description") or "").strip())
+            _is_assembly_page = (
+                "assembly" in str(_page_roles).lower()
+                or (len(_pages) > 1 and not _has_desc)
+                or not _has_desc
+            )
+            if _part.get("stated_weight_g") and _is_assembly_page:
+                _part["stated_weight_g"] = None
+                _part["weights"] = []
+
+        # Strip year-values from dimension fields (e.g. date 07/04/2021 -> 2021mm)
+        for _part in _pre_estimate_parts:
+            for _dim_field in ('overall_length_mm', 'overall_width_mm'):
+                _v = _part.get(_dim_field)
+                if _v is not None and 1900.0 <= float(_v) <= 2100.0:
+                    _part[_dim_field] = None
+        summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
+
+        # Drop None-PN BOM artefacts whose description is a qty-suffixed duplicate
+        # of a named part (e.g. "OUTER TUBE 1" when 10777-01-01 is "OUTER TUBE").
+        def _desc_core(d: Any) -> str:
+            return re.sub(r"\s+\d+$", "", str(d or "").strip().upper())
+
+        _named_cores = {
+            _desc_core(p.get("description"))
+            for p in _pre_estimate_parts if p.get("part_number")
+        }
+        _pre_estimate_parts = [
+            p for p in _pre_estimate_parts
+            if p.get("part_number") or _desc_core(p.get("description")) not in _named_cores
+        ]
+
+        # Deduplicate None-PN parts sharing page+geometry with a named part
+        _by_geom: Dict[tuple, int] = {}
+        _drop_idx: set = set()
+        for _di, _dp in enumerate(_pre_estimate_parts):
+            _gr = _dp.get("geometry_rollup") or _dp.get("geometry") or {}
+            _cut = round(float(_gr.get("estimated_cut_length_mm") or 0))
+            if _cut <= 0:
+                continue
+            _dk = (tuple(sorted(_dp.get("pages") or [])), _cut)
+            if _dk not in _by_geom:
+                _by_geom[_dk] = _di
+                continue
+            _prev_i = _by_geom[_dk]
+            _prev_p = _pre_estimate_parts[_prev_i]
+            if _dp.get("part_number") and not _prev_p.get("part_number"):
+                _drop_idx.add(_prev_i)
+                _by_geom[_dk] = _di
+            elif not _dp.get("part_number") and _prev_p.get("part_number"):
+                _drop_idx.add(_di)
+            elif not _dp.get("part_number") and not _prev_p.get("part_number"):
+                _drop_idx.add(_di)
+        if _drop_idx:
+            _pre_estimate_parts = [_p for _i, _p in enumerate(_pre_estimate_parts) if _i not in _drop_idx]
+            summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
+
+        for _part in _pre_estimate_parts:
+            # DXF filename thickness — override tolerance-table noise (0.5/1.0/…)
+            _dfn_thk = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "")
+            if _dfn_thk:
+                _tm_thk = re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn_thk, re.IGNORECASE)
+                if _tm_thk:
+                    _tv_thk = float(_tm_thk.group(1))
+                    if 0.3 <= _tv_thk <= 25.0:
+                        _part["normalized_thickness_mm"] = _tv_thk
+            # 1. Set correct normalized_material (BOUGHT_IN, VENEERED_MDF etc.)
+            _mat = normalise_material_for_part(_part)
+            if _mat:
+                _part["normalized_material"] = _mat
+            # Fabricated MS flat patterns must not stay BOUGHT_IN (e.g. GRAPHIC CHANNEL).
+            if (_part.get("normalized_material") or "").upper() == "BOUGHT_IN":
+                _dfn_chk = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "").upper()
+                if _part.get("flat_pattern_detected") and ("_MS_" in _dfn_chk or " MS_" in _dfn_chk
+                        or re.search(r"\d+\.?\d*\s*MM\s*MS", _dfn_chk)):
+                    _part["normalized_material"] = "MILD_STEEL"
+            # DXF filename material fallback
+            if not _part.get("normalized_material"):
+                _dfn = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "").upper()
+                _dgs = str(_part.get("geometry_source") or "")
+                if "dxf" in _dgs.lower() and _dfn:
+                    if "_MS_" in _dfn or "MS_" in _dfn or "_MS." in _dfn:
+                        _part["normalized_material"] = "MILD_STEEL"
+                    elif "PETG" in _dfn:
+                        _part["normalized_material"] = "ACRYLIC"
+                    elif ("_ACR_" in _dfn or "ACRYLIC" in _dfn or "HI ACR" in _dfn
+                            or "HI_ACR" in _dfn or "HIGH IMPACT" in _dfn or "HIGH_IMPACT" in _dfn
+                            or "PERSPEX" in _dfn or "PMMA" in _dfn):
+                        _part["normalized_material"] = "ACRYLIC"
+                    elif "JOINERY" in _dfn or "_MDF_" in _dfn:
+                        _part["normalized_material"] = "MDF"
+                    elif "DISPA" in _dfn or "PAPER" in _dfn:
+                        _part["normalized_material"] = "BOUGHT_IN"
+            # 2. Strip spec boilerplate from process_notes then re-derive ops
+            _clean_notes = [_strip_spec_boilerplate(str(n)) for n in (_part.get("process_notes") or [])]
+            _part["process_notes"] = _clean_notes
+            # 3. Extract WEIGHT from PDF title block text -> feeds stated-weight
+            #    material cost path in estimator (WEIGHT: 140.69g -> £0.11 steel)
+            if not (_part.get("weights") and any(_part["weights"])):
+                _all_page_text = " ".join(
+                    str(
+                        p.get("pdfplumber_text")
+                        or p.get("text_preview")
+                        or p.get("normalized_text")
+                        or ""
+                    )
+                    for p in (summary.get("pages") or [])
+                    if p.get("page_number") in (_part.get("pages") or [])
+                )
+                _weight_matches = re.findall(
+                    r"WEIGHT\s*(?:\([^)]*\))?\s*[:\s]+([0-9]+(?:\.[0-9]+)?)\s*(KG|G)\b",
+                    _all_page_text.upper(),
+                )
+                if _weight_matches:
+                    # Take the largest weight found on the part's pages
+                    _best = max(
+                        (float(v) / 1000.0 if u == "G" else float(v) for v, u in _weight_matches),
+                        default=None,
+                    )
+                    if _best and 0.001 <= _best <= 500.0:
+                        _part["weights"] = [f"{round(_best * 1000, 2)}g"]
+                        # Also set stated_weight_g for direct use in material costing
+                        _part["stated_weight_g"] = round(_best * 1000, 2)
+            # Important: infer only from free text notes, never from existing
+            # operation codes (e.g. "welding") to avoid self-trigger loops.
+            # Re-infer from clean notes and merge with existing upstream ops.
+            # Do NOT replace entirely — upstream ops from document layout analysis
+            # (e.g. "Weld and Dress" callouts) are legitimate and must be kept.
+            _clean_text = _strip_spec_boilerplate(" ".join(_clean_notes))
+            _clean_ops = set(infer_operations(_clean_text))
+            _existing_ops = list(_part.get("textual_operations") or [])
+            # Merge: start from clean inference, add any upstream ops not in result
+            _merged = list(_clean_ops)
+            for _op in _existing_ops:
+                if _op not in _merged:
+                    _merged.append(_op)
+            # Finish-aware filter: remove ops physically impossible for this finish
+            _finish_upper = " ".join(
+                str(f) for f in (_part.get("surface_finishes") or [])
+            ).upper()
+            _raw_finishes = {"RAW", "BRIGHT DRAWN", "BRIGHT ZINC", "UNPAINTED"}
+            _is_raw = any(r in _finish_upper for r in _raw_finishes)
+            if _is_raw:
+                _merged = [o for o in _merged if o not in
+                           {"powder_coating", "diamond_polish", "wet_spray"}]
+            _part["textual_operations"] = _merged
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # SDI Intelligence — Learning Engine pre-scan
+    # Runs AFTER augment_summary_with_dxf + pre-estimate normalisation,
+    # BEFORE estimate_document, so knowledge-base / LiveOverrides corrections
+    # (PartKnowledge material/thickness) are applied before costing.
+    try:
+        from learning_engine import get_engine
+        summary = get_engine().pre_scan(summary, dxf_paths)
+    except Exception:
+        pass
+
+    # SDI Intelligence — infer dimensions for BOM parts with no DXF, so they
+    # cost provisionally instead of £0. Every value is flagged as inferred.
+    try:
+        from geometry_inference import infer_missing_geometry
+        try:
+            import corrections_db as _db
+        except Exception:
+            _db = None
+        _inf = infer_missing_geometry(summary, db=_db)
+        summary.setdefault("ai_inference", {})["geometry"] = _inf
+        if _inf.get("inferred") or _inf.get("still_missing"):
+            print(f"   [inference] {len(_inf.get('inferred', []))} no-DXF part(s) given provisional dimensions; {len(_inf.get('still_missing', []))} still £0")
+    except Exception as _e:
+        print(f"   [inference] skipped: {_e}", flush=True)
+
     _debug("start estimate_document")
-    summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"])
+    if not summary.get("quantity") and not summary.get("assumed_job_quantity"):
+        summary["assumed_job_quantity"] = getattr(config, "DEFAULT_JOB_QUANTITY", 180)
+
+    # FINAL phantom-duplicate sweep — runs AFTER inference and any late description
+    # merges, immediately before costing. The earlier pre-estimate passes can miss
+    # phantoms because (a) PDF geometry rollups populate during estimate_document
+    # (so cut_length was still 0 then), and (b) named-part descriptions may not be
+    # final yet. This pass uses raw geometry + final descriptions and is the
+    # authoritative drop point for None-PN artefacts like "OUTER TUBE 1".
+    try:
+        _fp = summary.get("manufacturing_writeup", {}).get("parts") or []
+
+        def _pd_core(d: Any) -> str:
+            # Strip a trailing qty suffix: "OUTER TUBE 1" -> "OUTER TUBE"
+            return re.sub(r"\s+\d+$", "", str(d or "").strip().upper())
+
+        def _pd_cut(p: Dict[str, Any]) -> int:
+            g = p.get("geometry_rollup") or p.get("geometry") or {}
+            c = g.get("estimated_cut_length_mm")
+            if not c:
+                c = (g.get("_raw") or {}).get("estimated_cut_length_mm")
+            try:
+                return round(float(c or 0))
+            except Exception:
+                return 0
+
+        _named = [p for p in _fp if p.get("part_number")]
+        _named_cores = {_pd_core(p.get("description")) for p in _named if p.get("description")}
+        _named_sigs = set()
+        for p in _named:
+            c = _pd_cut(p)
+            if c > 0:
+                for pg in (p.get("pages") or []):
+                    _named_sigs.add((pg, c))
+
+        _kept = []
+        _dropped = []
+        for p in _fp:
+            if p.get("part_number"):
+                _kept.append(p)
+                continue
+            # Never drop a part that carries its own flat DXF — it is a real part.
+            if p.get("dxf_augmented") or str(p.get("geometry_source") or "").lower().startswith("dxf"):
+                _kept.append(p)
+                continue
+            _core = _pd_core(p.get("description"))
+            if _core and _core in _named_cores:
+                _dropped.append(p.get("description"))
+                continue
+            _c = _pd_cut(p)
+            if _c > 0 and any((pg, _c) in _named_sigs for pg in (p.get("pages") or [])):
+                _dropped.append(p.get("description"))
+                continue
+            _kept.append(p)
+
+        if _dropped:
+            summary["manufacturing_writeup"]["parts"] = _kept
+            print(f"   [dedup] dropped {len(_dropped)} phantom duplicate part(s): "
+                  f"{', '.join(str(d) for d in _dropped)}", flush=True)
+    except Exception as _e:
+        print(f"   [dedup] final phantom sweep skipped: {_e}", flush=True)
+
+    # -- BOM tree: stamp effective per-bay quantities onto parts --
+    # Runs BEFORE estimate_document so quantities feed into costing correctly.
+    # Multiplies parent GA qty into children (e.g. 3886-GA x2 -> children x2 per bay).
+    try:
+        import re as _re_bt
+        from bom_tree import resolve_effective_quantities as _resolve_eff_qty
+        from bom_tree import merge_table_bom_rows as _merge_bom_rows
+        _bt_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
+        _bt_rows = _merge_bom_rows(_bt_rows, summary)
+        _effmap = (_resolve_eff_qty(_bt_rows) or {}).get("effective") or {}
+        if _effmap:
+            _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+            for _p in _parts:
+                _code = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
+                _eff = _effmap.get(_code)
+                if _eff is not None and _eff != _p.get("quantity"):
+                    _prev = _p.get("quantity")
+                    _p["quantity"] = _eff
+                    print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+    except Exception as _bte:
+        print(f"   [bom_tree] skipped: {_bte}", flush=True)
+
+    summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
+
+    try:
+        import bay_rollup
+        import estimator as _estimator_mod
+
+        bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
+        part_estimates = (summary.get("estimate_summary") or {}).get("part_estimates") or []
+        if summary.get("scan_mode") == "folder_as_job" and part_estimates:
+            bom_rows = bay_rollup.synthesize_folder_job_bom_rows(summary, part_estimates)
+            summary.setdefault("document_analysis", {})["bay_bom_rows"] = bom_rows
+        try:
+            from part_identity import inject_missing_bay_rows
+
+            bom_rows = inject_missing_bay_rows(bom_rows, summary)
+        except Exception:
+            pass
+        if bom_rows and part_estimates:
+            order_qty = (
+                summary.get("quantity")
+                or summary.get("assumed_job_quantity")
+                or getattr(config, "DEFAULT_JOB_QUANTITY", 180)
+            )
+            pricer = bay_rollup.make_system_cost_pricer(_estimator_mod._resolve_part_system_cost)
+            try:
+                import bought_in_pricing as _bip
+
+                _pb_cache = getattr(config, "PRICE_BOOK_CACHE", config.OUTPUT_DIR / "price_book.json")
+                _book = _bip.load_cached_price_book(_pb_cache)
+                if _book:
+                    pricer = _bip.combine_pricers(
+                        _bip.make_price_book_pricer(_book, int(order_qty)), pricer
+                    )
+                    print(f"   [bay] price book applied: {len(_book)} bought-in item(s)")
+            except Exception as _pb_err:
+                _debug(f"[bay] price book not applied: {_pb_err}")
+            bay_out = bay_rollup.build_bay_estimate(
+                bom_rows,
+                part_estimates,
+                order_quantity=int(order_qty),
+                catalogue_pricer=pricer,
+            )
+            if summary.get("scan_mode") == "folder_as_job" and not bay_rollup.job_has_costing_root(bom_rows, summary):
+                bay_out["headline_suppressed"] = True
+                bay_out["bay_unit_total_gbp"] = None
+                bay_out.setdefault("flags", []).append(
+                    {
+                        "severity": "warning",
+                        "line": "costing_root",
+                        "detail": "No top-level bay GA PDF in folder — BOM synthesized from sub-drawings; verify lines",
+                    }
+                )
+            summary["bay_estimate"] = bay_out
+            _be = summary["bay_estimate"]
+            print(
+                f"   [bay] provisional £{_be.get('bay_unit_total_provisional_gbp')} "
+                f"confident £{_be.get('bay_unit_total_confident_gbp')} "
+                f"coverage {_be.get('line_coverage')} "
+                f"({_be.get('provisional_lines', 0)} provisional, "
+                f"{_be.get('uncosted_lines', 0)} uncosted)",
+                flush=True,
+            )
+    except Exception as _be_err:
+        print(f"   [bay] rollup skipped: {_be_err}", flush=True)
+
     _debug("start _build_additive_summary_sections")
     _build_additive_summary_sections(summary)
     _debug("done _build_additive_summary_sections")

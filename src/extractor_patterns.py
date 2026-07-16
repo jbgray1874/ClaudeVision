@@ -138,6 +138,33 @@ def _normalize_thicknesses(values: List[str]) -> List[float]:
     return normalized
 
 
+# Standard SDI sheet metal gauges — validate thickness extraction.
+# Values outside this set on steel are often hole diameters, radii, or grid refs.
+_STEEL_STANDARD_GAUGES_MM = {
+    0.5, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0
+}
+_ACRYLIC_STANDARD_GAUGES_MM = {
+    1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0
+}
+
+
+def _validate_thickness_for_material(thickness_mm: Optional[float], material: str) -> Optional[float]:
+    """
+    Return thickness if plausible for material; None if likely a parsing artefact
+    (e.g. 8.0 mm on mild steel is usually a dimension, not gauge stock).
+    """
+    if thickness_mm is None:
+        return None
+    mat = (material or "").upper()
+    is_steel = any(m in mat for m in ("MILD STEEL", "STAINLESS", "GALVAN", "ZINTEC", "CRS"))
+    is_acrylic = any(m in mat for m in ("ACRYLIC", "PERSPEX", "PETG", "POLYCARBONATE"))
+    if is_steel and thickness_mm not in _STEEL_STANDARD_GAUGES_MM:
+        return None
+    if is_acrylic and thickness_mm not in _ACRYLIC_STANDARD_GAUGES_MM:
+        return None
+    return thickness_mm
+
+
 def _normalize_finish(value: str) -> str:
     normalized = normalize_text(value).upper()
     aliases = {
@@ -731,7 +758,12 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
 
 
 def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
-    text = normalize_text(text)
+    try:
+        from part_identity import normalize_bom_row, preprocess_bom_text
+
+        text = preprocess_bom_text(normalize_text(text))
+    except Exception:
+        text = normalize_text(text)
     rows: List[Dict[str, Any]] = []
     matches = re.findall(QTY_TABLE_ROW_PATTERN, text, flags=re.IGNORECASE)
     for item_no, part_no, description, qty in matches:
@@ -752,7 +784,12 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
             }
         )
     if rows:
-        return rows
+        try:
+            from part_identity import normalize_bom_row
+
+            return [normalize_bom_row(r) for r in rows]
+        except Exception:
+            return rows
 
     token_matches = re.finditer(
         r"\b(\d+)\b\s+([A-Z0-9_]+(?:\s*-\s*[A-Z0-9_]+){1,4})\s+(.+?)\s+\b(\d+)\b",
@@ -787,7 +824,12 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
             continue
         seen_keys.add(key)
         deduped_rows.append(row)
-    return deduped_rows
+    try:
+        from part_identity import normalize_bom_row
+
+        return [normalize_bom_row(r) for r in deduped_rows]
+    except Exception:
+        return deduped_rows
 
 
 def classify_dimensions(text: str) -> Dict[str, Any]:
@@ -979,24 +1021,125 @@ def extract_process_notes(text: str) -> Dict[str, Any]:
     }
 
 
-def infer_operations_from_text(text: str) -> List[str]:
+def infer_operations_from_text(
+    text: str,
+    material: str = "",
+    finishes: Optional[List[str]] = None,
+    has_fold_geometry: bool = False,
+    has_cut_length: bool = False,
+    page_role: Optional[str] = None,
+) -> List[str]:
+    """
+    Infer manufacturing operations from drawing text and geometry signals.
+
+    Evidence-based: each operation needs a positive signal from text, material,
+    finish list, or geometry — not blanket rules per page type.
+    """
+    del page_role  # reserved for future assembly-only rules
     text = normalize_text(text).upper()
+    mat = material.upper() if material else ""
+    fin_text = " ".join(finishes or []).upper()
     operations: List[str] = []
 
-    if "FLAT PATTERN" in text or "LASER" in text or "PROFILE CUT" in text:
+    is_sheet_steel = any(
+        m in mat
+        for m in (
+            "MILD STEEL",
+            "MILD_STEEL",
+            "GALVANISED",
+            "GALVANIZED",
+            "STAINLESS",
+            "ZINTEC",
+            "CRS",
+            "MS",
+        )
+    )
+
+    laser_text = "FLAT PATTERN" in text or "LASER" in text or "PROFILE CUT" in text
+    laser_steel = is_sheet_steel and (
+        has_fold_geometry
+        or has_cut_length
+        or "FOLD" in text
+        or "BEND" in text
+        or re.search(ANGLE_PATTERN, text, flags=re.IGNORECASE)
+    )
+    if laser_text or laser_steel:
         operations.append("laser_cutting")
-    if "HOLE" in text or "DRILL" in text or "PUNCH" in text:
+
+    # Assembly-join weld instructions ("WELD THROUGH HOLES TO SECURE LEFT FOOTBASE
+    # AND RIGHT FOOTBASE TOGETHER") describe joining separate parts at a downstream
+    # assembly stage — not a fab operation on THIS flat detail. Costing them as
+    # welding + hole_machining over-states the part by an order of magnitude; the
+    # join belongs to the assembly/weldment, not the blank.
+    assembly_join_weld = bool(
+        re.search(r"WELD\b[^.]*\bTOGETHER\b", text, flags=re.IGNORECASE)
+        or re.search(r"SECURE\b[^.]*\bTOGETHER\b", text, flags=re.IGNORECASE)
+    )
+
+    hole_cue = "HOLE" in text or "DRILL" in text or "PUNCH" in text
+    # Do not read "WELD THROUGH HOLES" (weld-locating holes joined at assembly) as a
+    # machining op unless there is an independent drill/punch callout.
+    if hole_cue and assembly_join_weld and "DRILL" not in text and "PUNCH" not in text:
+        hole_cue = False
+    # Metal holes are laser-cut (fold into the laser profile) — no separate op, matching
+    # shop practice and Tim's sheets (metal has no hole op; only "Drill (Acrylic)" exists).
+    # Only acrylic/plastic parts (not is_sheet_steel) get a genuine separate drilling op.
+    if hole_cue and not is_sheet_steel:
         operations.append("hole_machining")
-    if "FOLD" in text or "BEND" in text or re.search(ANGLE_PATTERN, text, flags=re.IGNORECASE):
+
+    if (
+        "FOLD" in text
+        or "BEND" in text
+        or has_fold_geometry
+        or re.search(ANGLE_PATTERN, text, flags=re.IGNORECASE)
+    ):
         operations.append("folding")
-    if "POWDER COAT" in text:
+
+    powder_text = "POWDER COAT" in text or "POWDER COATED" in text or "P/C" in text
+    powder_finish = any(
+        kw in fin_text for kw in ("POWDER COAT", "POWDER COATED", "POLYESTER", "EPOXY COAT")
+    )
+    if powder_text or powder_finish:
         operations.append("powder_coating")
-    if re.search(WELD_PATTERN, text, flags=re.IGNORECASE):
+
+    weld_keywords = (
+        "WELD" in text
+        or re.search(r"\bMIG\b", text, flags=re.IGNORECASE)
+        or re.search(r"\bTIG\b", text, flags=re.IGNORECASE)
+        or "WELD INT" in text
+        or "WELD FLUSH" in text
+        or "WELD CLOSED" in text
+        or "WELD CORNER" in text
+        or re.search(WELD_PATTERN, text, flags=re.IGNORECASE)
+    )
+    if weld_keywords and not assembly_join_weld:
         operations.append("welding")
+
+    if ("DRESS" in text and "WELD" in text) or "DRESS WELD" in text or "DRESS FLUSH" in text:
+        operations.append("dress_welds")
+
+    if "WET SPRAY" in text or "SPRAY PAINT" in text or "PAINT" in fin_text:
+        operations.append("wet_spray")
+
     if re.search(TAP_PATTERN, text, flags=re.IGNORECASE):
         operations.append("tapping")
+
     if re.search(CSK_PATTERN, text, flags=re.IGNORECASE):
         operations.append("countersinking")
+
+    is_acrylic = any(m in mat for m in ("ACRYLIC", "PERSPEX", "PETG", "POLYCARBONATE"))
+    if is_acrylic and "laser_cutting" not in operations:
+        operations.append("laser_cutting")
+
+    if "DIAMOND POLISH" in text or "MATT POLISH" in text or "POLISH" in text:
+        operations.append("diamond_polish")
+
+    if "GLUE" in text or "BONDING" in text or "BONDED" in text:
+        operations.append("glue")
+
+    if "CNC" in text and is_sheet_steel:
+        operations.append("cnc")
+
     operations.append("handling")
 
     return list(dict.fromkeys(operations))
@@ -1039,6 +1182,7 @@ def build_textual_manufacturing_summary(
     bom_text: str = "",
     notes_text: str = "",
     page_role_hint: Optional[str] = None,
+    has_cut_length: bool = False,
 ) -> Dict[str, Any]:
     full_text = normalize_text(text)
     title_text = normalize_text(title_block_text) or full_text
@@ -1050,7 +1194,21 @@ def build_textual_manufacturing_summary(
     dimensions = classify_dimensions(full_text)
     feature_cues = extract_feature_cues(full_text)
     process_notes = extract_process_notes(notes_source)
-    inferred_operations = infer_operations_from_text(full_text + " " + notes_source)
+    page_material = " ".join(title_block.get("materials", []))
+    finishes = list(title_block.get("surface_finishes") or [])
+    has_fold_geometry = bool(
+        feature_cues.get("fold_values_mm")
+        or feature_cues.get("angles_deg")
+        or feature_cues.get("fold_count_textual")
+    )
+    inferred_operations = infer_operations_from_text(
+        full_text + " " + notes_source,
+        material=page_material,
+        finishes=finishes,
+        has_fold_geometry=has_fold_geometry,
+        has_cut_length=has_cut_length,
+        page_role=page_role_hint,
+    )
     operations_with_features = list(dict.fromkeys(inferred_operations + process_notes["operations_from_notes"]))
     review_flags = build_review_flags(title_block, dimensions, feature_cues, process_notes, page_role_hint)
     confidence = {
@@ -1072,7 +1230,11 @@ def build_textual_manufacturing_summary(
     primary_revision = _first_or_none(title_block["revisions"])
     primary_drawing_number = _first_or_none(title_block["drawing_numbers"])
     primary_quantity = _first_or_none(title_block["quantities"])
-    primary_thickness = _first_or_none(title_block["thicknesses_mm"])
+    primary_thickness_raw = _first_or_none(title_block["thicknesses_mm"])
+    primary_thickness = _validate_thickness_for_material(
+        _safe_float(primary_thickness_raw),
+        primary_material or page_material,
+    )
 
     return {
         "title_block": title_block,
@@ -1098,8 +1260,8 @@ def build_textual_manufacturing_summary(
             "normalized_finish": _normalize_finish(primary_finish) if primary_finish else None,
             "colour": primary_colour,
             "quantity": _safe_int(primary_quantity),
-            "thickness_mm": _safe_float(primary_thickness),
-            "normalized_thickness_mm": _safe_float(primary_thickness),
+            "thickness_mm": primary_thickness,
+            "normalized_thickness_mm": primary_thickness,
             "overall_length_mm": dimensions["overall_length_mm"],
             "overall_width_mm": dimensions["overall_width_mm"],
         },

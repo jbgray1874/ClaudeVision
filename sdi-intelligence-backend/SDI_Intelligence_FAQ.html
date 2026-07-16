@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Intelligence — FAQ</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0d0d0f;--bg2:#141417;--surface:#17171b;--surface2:#1d1d22;--line:#2a2a31;--ink:#f3f2ee;--dim:#a3a3aa;--faint:#6b6b73;--acc:#ffd400;--ok:#5fd08a;--warn:#ff9d42;--fail:#ff5d5d;--info:#6db3ff;--disp:'Archivo',sans-serif;--body:'Hanken Grotesk',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;padding:0 0 80px}
+.hdr{background:linear-gradient(135deg,#101013,#17171b);border-bottom:2px solid var(--acc);padding:36px 60px 32px}
+.mark{width:38px;height:38px;background:var(--acc);border-radius:4px;display:grid;place-items:center;margin-bottom:14px}
+.mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:22px;letter-spacing:-1px}
+.hdr h1{font-family:var(--disp);font-weight:800;font-size:24px;letter-spacing:-.02em;margin-bottom:4px}
+.hdr .sub{color:var(--dim);font-size:13px}
+.body{max-width:900px;margin:0 auto;padding:44px 60px 0}
+h2{font-family:var(--disp);font-weight:700;font-size:15px;letter-spacing:.05em;color:var(--acc);text-transform:uppercase;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+
+details
+details.faq summary{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;list-style:none;font-size:14px;font-weight:600;color:var(--ink)}
+details.faq summary::-webkit-details-marker{}
+details.faq summary::after{content:'+';color:var(--acc);font-size:20px;font-weight:300;flex:none}
+details.faq[open] summary{border-radius:6px 6px 0 0;border-color:rgba(255,212,0,.3)}
+details.faq[open] summary::after{content:'−'}
+details.faq summary:hover{border-color:rgba(255,212,0,.3)}
+.faq-a{background:var(--bg2);border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;padding:16px 18px;font-size:13.5px;color:var(--dim)}
+.faq-a b{color:var(--ink)}
+.faq-a code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--acc)}
+.faq-a ul,.faq-a ol{margin:8px 0 8px 18px}
+.faq-a li{margin-bottom:5px}
+.chip{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:2px 7px;border-radius:100px;border:1px solid;vertical-align:middle}
+.c-ok{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
+.c-warn{background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)}
+.c-fail{background:rgba(255,93,93,.12);color:var(--fail);border-color:rgba(255,93,93,.3)}
+.footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:11px;color:var(--faint)}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div class="mark"><b>S</b></div>
+  <h1>SDI Intelligence — Frequently Asked Questions</h1>
+  <div class="sub">For estimators, managers and the technical team &nbsp;·&nbsp; 11 June 2026</div>
+</div>
+<div class="body">
+
+<h2>General</h2>
+
+<details class="faq">
+  <summary>What does the engine actually do?</summary>
+  <div class="faq-a"><p>It reads SolidWorks drawing packs — PDFs and DXF flat patterns — and produces a costed estimate workbook without any manual data entry. It identifies every part, determines its material and thickness from the drawings and SDI's naming conventions, calculates material cost from the price book and ERP, and calculates labour cost from the rate card using the geometry it measured from the DXF files.</p><p>The output is a five-sheet Excel workbook: Estimate, Labour, Material Price Break, Decision Report, and AI Provenance. The Decision Report shows every decision the engine made and why — so you can check its reasoning, not just its answer.</p></div>
+</details>
+
+<details class="faq">
+  <summary>Is it replacing the estimators?</summary>
+  <div class="faq-a"><p><b>No.</b> The engine produces a starting point — a first-pass estimate based on the drawings and SDI's own historical pricing. The estimator reviews it, applies their knowledge of the customer, the job complexity and SDI's current capacity, and produces the quotable number. The engine handles the time-consuming part (reading every drawing, looking up every material price, applying every rate) so the estimator can focus on the judgement calls that actually require experience.</p></div>
+</details>
+
+<details class="faq">
+  <summary>How accurate is it?</summary>
+  <div class="faq-a"><p>On clean DXF-backed steel jobs — the engine's strongest territory — the target is <b>within 15% of a manual estimate</b>. On reference jobs tested so far, variance has been 5–15%. Mixed-material jobs (timber, acrylic, steel) are more variable. Jobs with no DXFs or wire/mesh parts are suppressed rather than estimated, so you'll never get a confident wrong number on those.</p><p>Accuracy improves continuously — every correction from an estimator feeds back into the learning engine and fires automatically on future jobs.</p></div>
+</details>
+
+<h2>The Output Workbook</h2>
+
+<details class="faq">
+  <summary>Why does a part show £0 cost?</summary>
+  <div class="faq-a"><p>There are three possible reasons — check the Decision Report WHY column for that part:</p><ul><li><b>No geometry and no price source found.</b> The engine couldn't measure the part and couldn't find it in any price database. The cost is genuinely unknown — flag it with James so it can be added to the price book.</li><li><b>The part is a bought-in flagged for review.</b> The price exceeded the £750 bought-in sanity check (very high bought-in prices are rejected and flagged rather than applied — to avoid a supplier catalogue typo inflating a job).</li><li><b>The part has no DXF and no PDF dimensions.</b> Nothing to cost from. Check if a drawing exists and add it to the folder.</li></ul></div>
+</details>
+
+<details class="faq">
+  <summary>What does ⚠ INSUFFICIENT DATA mean?</summary>
+  <div class="faq-a"><p>The engine has suppressed the headline total because it doesn't have enough confident information to produce a number it would stand behind. The credibility percentage shown tells you how much of the job's cost was reliably priced.</p><p><b>Common reasons:</b></p><ul><li>Fewer than ~60% of parts have a DXF flat pattern</li><li>The job contains wire/mesh parts that structurally have no flat DXFs</li><li>Most parts are assemblies with no individual child drawings</li><li>Material could not be determined for most parts</li></ul><p><b>What to do:</b> look at the flags column in the Decision Report — it lists every suppressed part and why. Request the missing DXFs from the drawing office and re-run. The ✅ parts don't need re-doing.</p></div>
+</details>
+
+<details class="faq">
+  <summary>What do the confidence scores mean in practice?</summary>
+  <div class="faq-a">
+    <p>Each part in the Decision Report has a confidence score. Here's how to read them:</p>
+    <ul>
+      <li><b style="color:var(--ok)">0.85–1.0 (High):</b> DXF geometry confirmed, price from price book or ERP. Use the number.</li>
+      <li><b style="color:var(--acc)">0.60–0.84 (Medium):</b> PDF dimensions or partial geometry. Reasonable — review the WHY if the number looks off.</li>
+      <li><b style="color:var(--warn)">0.30–0.59 (Low):</b> Historical RAG match or inferred geometry. Treat as a guide — check manually.</li>
+      <li><b style="color:var(--fail)">&lt;0.30 (Very low):</b> Minimal information. Don't rely on this cost without manual check.</li>
+    </ul>
+    <p>A simple flat steel part should score ≥0.85. If it scores below 0.6, something is missing — usually a DXF or a price book entry. Flag it.</p>
+  </div>
+</details>
+
+<details class="faq">
+  <summary>The engine has the wrong material for a part. Why?</summary>
+  <div class="faq-a"><p>Material is determined from the DXF filename, part number suffix, or AI inference — in that order. Common causes of a wrong material:</p><ul><li><b>DXF filename doesn't contain a material token.</b> If the file is named "12345-01-03.DXF" with no material code, the engine falls back to part number suffix and then inference. Check the naming convention.</li><li><b>PET/PETG parts.</b> Known issue currently in fix — PET/PETG plastic parts are being misrouted to MILD_STEEL on some jobs. This is being resolved in <code>json_normaliser.py</code>.</li><li><b>Mixed-material assemblies.</b> Parent assemblies sometimes inherit the wrong material from child context. Check the Decision Report WHY column.</li></ul><p>In all cases: log the correction to James. Part number, field = "material", correct value. It'll be fixed permanently.</p></div>
+</details>
+
+<details class="faq">
+  <summary>The labour time looks too high / too low on a part. What do I check?</summary>
+  <div class="faq-a"><p>Open the Labour sheet. Find the part — it will have one row per operation. Check:</p><ul><li><b>Are the right operations applied?</b> A flat laser-cut part should have: laser cut, possibly fold, powder coat, handle. If it has weld time or CNC time, that's wrong.</li><li><b>Is geometry the source?</b> For DXF-backed parts, time is calculated from measured cut length and area. If the DXF was correctly read, the time should be proportionate to the part size.</li><li><b>Is it a no-DXF part?</b> For parts without a DXF, the engine estimates geometry from PDF dimensions — which can inflate area (and therefore time) significantly. These are flagged <code>pdf_geometry_inflation_suspected</code>.</li></ul><p>Log the correct time if you know it — or flag which operation is wrong. James will investigate and correct.</p></div>
+</details>
+
+<h2>The Parallel Run</h2>
+
+<details class="faq">
+  <summary>How should I use the engine output during the parallel run?</summary>
+  <div class="faq-a"><p>For live enquiries: <b>do your manual estimate first, before opening the engine output.</b> This stops the AI number anchoring your judgement. Then compare side by side with James.</p><p>For historical jobs: open both workbooks and work through the check list together. Note every difference — it doesn't matter whether the engine is wrong or your manual estimate is worth questioning. Both outcomes are useful.</p><p>The goal isn't to find the engine failing. It's to find the systematic patterns — the things it consistently gets wrong — so they can be fixed before go-live.</p></div>
+</details>
+
+<details class="faq">
+  <summary>How do I submit a correction?</summary>
+  <div class="faq-a"><p>Tell James. Capture:</p><ul><li>Job number</li><li>Part number</li><li>Field (material / thickness / operation / price)</li><li>What the engine said</li><li>What it should be</li><li>Source (title block, supplier quote, your knowledge)</li></ul><p>James logs it to <code>AIEstimating.Corrections</code>. At three occurrences of the same correction, it auto-promotes to <code>LiveOverrides</code> and fires on every future scan — permanently fixed without any code change.</p></div>
+</details>
+
+<details class="faq">
+  <summary>What happens if the engine and my manual estimate are very different?</summary>
+  <div class="faq-a"><p>Don't assume the engine is wrong — investigate first. Open the Decision Report and find the parts driving the biggest difference. Ask:</p><ul><li>Is the material classification correct for those parts?</li><li>Is the thickness correct?</li><li>Are the right operations applied?</li><li>Is there a bought-in part with an outdated price?</li></ul><p>Sometimes the engine is wrong and needs correcting. Sometimes the investigation reveals the manual estimate had an error or a different assumption. Both outcomes improve the process. Log whichever way it goes.</p></div>
+</details>
+
+<h2>Known Limitations</h2>
+
+<details class="faq">
+  <summary>Why won't the engine price wire/mesh goods?</summary>
+  <div class="faq-a"><p>Wire baskets, grids and mesh frames don't have flat DXF patterns — they're 3D by nature and can't be "unfolded" into a flat pattern. The engine currently has no wire costing model, so it suppresses rather than guess. A dedicated wire costing model (<code>wire_costing.py</code>) is built and being wired in. Until then, wire goods jobs will always suppress and need manual pricing.</p></div>
+</details>
+
+<details class="faq">
+  <summary>The powder coat cost looks very low / very high. Is that a bug?</summary>
+  <div class="faq-a"><p>The powder coat throughput model has been built and verified against the production line spec (319 bars/hr standard, £355.43/hr line rate) but is not yet wired into the estimator. Current powder numbers will <b>move materially</b> once the new model goes live. Don't rely on powder coat costs from the current output as final — flag any job where powder is a significant cost line and wait for the updated model. Re-runs of all benchmark jobs are planned after wiring.</p></div>
+</details>
+
+<details class="faq">
+  <summary>Can the engine handle jobs with no DXFs at all?</summary>
+  <div class="faq-a"><p>It will attempt to extract dimensions from PDFs and produce a suppressed estimate. The suppressed estimate shows what it could work out but makes clear it should not be quoted. This is intentional — a loud honest failure is far safer than a confident wrong number. For PDF-only jobs, the estimate gives you a rough shape of cost but you'll need to price it manually.</p></div>
+</details>
+
+<h2>Technical</h2>
+
+<details class="faq">
+  <summary>Where does the engine write its output?</summary>
+  <div class="faq-a"><p>Output workbooks and JSON files go to <code>C:\ClaudeVision\output\reports\</code>. This folder is one of the three file roots the portal serves — you can browse and download outputs directly from the portal under Files &amp; Directories.</p></div>
+</details>
+
+<details class="faq">
+  <summary>How does the engine get better over time?</summary>
+  <div class="faq-a"><p>Three ways:</p><ul><li><b>Estimator corrections:</b> logged to <code>AIEstimating.Corrections</code>, promoted to <code>LiveOverrides</code> at 3 occurrences. The engine literally learns from your feedback.</li><li><b>Historical ingest:</b> every historical estimate workbook loaded into <code>dbo.historical_quote_material_line</code> gives the engine more comparable pricing data (Tier 4 RAG). More history = better pricing on novel jobs.</li><li><b>Price book seeding:</b> bought-in parts identified during estimates get added to <code>AIEstimating.vCurrentBoughtIn</code> and promoted to the main price book, so the engine prices them from the book on future jobs rather than estimating.</li></ul></div>
+</details>
+
+<details class="faq">
+  <summary>The service isn't responding / the portal shows Backend Offline. What do I do?</summary>
+  <div class="faq-a"><p>Check with James first. If the Windows Service has stopped:</p><code style="display:block;padding:10px;margin:8px 0;border-radius:4px">Restart-Service SDIIntelligence</code><p>Or from the sdi-intelligence-backend folder:</p><code style="display:block;padding:10px;margin:8px 0;border-radius:4px">.\.venv\Scripts\uvicorn.exe app:app --host 0.0.0.0 --port 8071</code><p>If the DB shows as unreachable — check VPN connectivity to 10.0.0.200. The engine needs VPN to reach SDILive.</p></div>
+</details>
+
+
+
+<div class="footer">
+  <span>SDI Intelligence · FAQ · 11 June 2026</span>
+  <span>James Gray · AI &amp; Systems Controller · SDI Displays Ltd</span>
+</div>
+</div>
+</body>
+</html>

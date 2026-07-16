@@ -1,0 +1,454 @@
+"""
+SDI Intelligence — Learning Database
+======================================
+Connects to SDILive on 10.0.0.200.
+All learning data stored under AIEstimating schema.
+
+SETUP: python src\corrections_db.py
+       → creates all tables + seeds known corrections
+
+CONNECTION: Edit _UID and _PWD below to match your SA credentials.
+            Or use the dedicated sdi_intelligence SQL user (recommended).
+"""
+
+import json
+import logging
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+
+log = logging.getLogger("corrections_db")
+
+try:
+    import pyodbc
+    _PYODBC_OK = True
+except ImportError:
+    _PYODBC_OK = False
+
+# ── Connection settings — edit these ──────────────────────────────────────────
+_SERVER   = "10.0.0.200"
+_DATABASE = "SDILive"
+_UID      = "AIBot"
+_PWD      = "AIAgentPW2026"
+
+# Auto-detect best available ODBC driver
+def _best_driver() -> str:
+    if not _PYODBC_OK:
+        return ""
+    drivers = pyodbc.drivers()
+    for preferred in [
+        "ODBC Driver 18 for SQL Server",
+        "ODBC Driver 17 for SQL Server",
+        "ODBC Driver 13 for SQL Server",
+        "SQL Server Native Client 11.0",
+        "SQL Server",
+    ]:
+        if preferred in drivers:
+            return preferred
+    return drivers[0] if drivers else "SQL Server"
+
+def _build_conn_str() -> str:
+    driver = _best_driver()
+    return (
+        f"DRIVER={{{driver}}};"
+        f"SERVER={_SERVER};"
+        f"DATABASE={_DATABASE};"
+        f"UID={_UID};"
+        f"PWD={_PWD};"
+        "TrustServerCertificate=yes;"
+        "Encrypt=yes;"
+    )
+
+def _connect() -> "pyodbc.Connection":
+    if not _PYODBC_OK:
+        raise RuntimeError("pyodbc not installed: pip install pyodbc --break-system-packages")
+    return pyodbc.connect(_build_conn_str(), timeout=15)
+
+def test_connection() -> bool:
+    """Test connection to SDILive. Returns True if successful."""
+    try:
+        conn = _connect()
+        ver = conn.cursor().execute("SELECT @@VERSION").fetchval()
+        conn.close()
+        print(f"[SDI Intelligence] Connected to SDILive on {_SERVER}")
+        print(f"  SQL Server: {str(ver)[:60]}...")
+        print(f"  ODBC Driver: {_best_driver()}")
+        return True
+    except Exception as e:
+        print(f"[SDI Intelligence] Connection failed: {e}")
+        print()
+        print("Check:")
+        print(f"  Server:   {_SERVER}")
+        print(f"  Database: {_DATABASE}")
+        print(f"  User:     {_UID}")
+        print(f"  Driver:   {_best_driver()}")
+        return False
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCHEMA
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SCHEMA = [
+    "IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name='AIEstimating') EXEC('CREATE SCHEMA AIEstimating')",
+
+    """IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id
+       WHERE s.name='AIEstimating' AND t.name='Corrections')
+    CREATE TABLE AIEstimating.Corrections (
+        Id            INT IDENTITY(1,1) PRIMARY KEY,
+        ScanId        NVARCHAR(255),
+        PartNumber    NVARCHAR(100),
+        JobNumber     NVARCHAR(50),
+        FieldName     NVARCHAR(100) NOT NULL,
+        AiValue       NVARCHAR(500),
+        CorrectValue  NVARCHAR(500),
+        CorrectedBy   NVARCHAR(100),
+        Confidence    FLOAT DEFAULT 1.0,
+        Notes         NVARCHAR(1000),
+        Processed     BIT DEFAULT 0,
+        CreatedAt     DATETIME2 DEFAULT GETDATE()
+    )""",
+
+    """IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id
+       WHERE s.name='AIEstimating' AND t.name='PartKnowledge')
+    CREATE TABLE AIEstimating.PartKnowledge (
+        PartNumber      NVARCHAR(100) PRIMARY KEY,
+        Description     NVARCHAR(500),
+        Material        NVARCHAR(100),
+        ThicknessMm     FLOAT,
+        Operations      NVARCHAR(500),
+        TypicalUnitCost FLOAT,
+        MinCost         FLOAT,
+        MaxCost         FLOAT,
+        Confidence      FLOAT DEFAULT 0.5,
+        Source          NVARCHAR(200),
+        CorrectionCount INT DEFAULT 0,
+        LastCorrectedBy NVARCHAR(100),
+        JobNumbersSeen  NVARCHAR(1000),
+        LastUpdated     DATETIME2 DEFAULT GETDATE()
+    )""",
+
+    """IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id
+       WHERE s.name='AIEstimating' AND t.name='LiveOverrides')
+    CREATE TABLE AIEstimating.LiveOverrides (
+        Id                INT IDENTITY(1,1) PRIMARY KEY,
+        RuleName          NVARCHAR(200) NOT NULL,
+        PatternType       NVARCHAR(100) NOT NULL,
+        TriggerField      NVARCHAR(100),
+        TriggerValue      NVARCHAR(500),
+        TriggerContext    NVARCHAR(1000),
+        CorrectionField   NVARCHAR(100) NOT NULL,
+        CorrectionValue   NVARCHAR(500) NOT NULL,
+        Confidence        FLOAT DEFAULT 1.0,
+        Active            BIT DEFAULT 1,
+        AutoGenerated     BIT DEFAULT 0,
+        TriggerCount      INT DEFAULT 0,
+        SourceCorrections NVARCHAR(1000),
+        CreatedAt         DATETIME2 DEFAULT GETDATE(),
+        LastFired         DATETIME2
+    )""",
+
+    """IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id
+       WHERE s.name='AIEstimating' AND t.name='DrawingPatterns')
+    CREATE TABLE AIEstimating.DrawingPatterns (
+        Id              INT IDENTITY(1,1) PRIMARY KEY,
+        PatternText     NVARCHAR(500) NOT NULL,
+        PatternType     NVARCHAR(100),
+        Meaning         NVARCHAR(500),
+        Action          NVARCHAR(100),
+        MappedValue     NVARCHAR(200),
+        Confidence      FLOAT DEFAULT 1.0,
+        OccurrenceCount INT DEFAULT 1,
+        FirstSeenJob    NVARCHAR(50),
+        CreatedAt       DATETIME2 DEFAULT GETDATE()
+    )""",
+
+    """IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id
+       WHERE s.name='AIEstimating' AND t.name='HistoricalEstimates')
+    CREATE TABLE AIEstimating.HistoricalEstimates (
+        Id              INT IDENTITY(1,1) PRIMARY KEY,
+        SourceFile      NVARCHAR(500),
+        JobNumber       NVARCHAR(50),
+        DrawingNumber   NVARCHAR(100),
+        PartNumber      NVARCHAR(100),
+        Description     NVARCHAR(500),
+        Material        NVARCHAR(100),
+        ThicknessMm     FLOAT,
+        Quantity        INT,
+        UnitCost        FLOAT,
+        TotalCost       FLOAT,
+        Estimator       NVARCHAR(100),
+        Customer        NVARCHAR(200),
+        EstimateDate    DATE,
+        IngestedAt      DATETIME2 DEFAULT GETDATE()
+    )""",
+
+    """IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id
+       WHERE s.name='AIEstimating' AND t.name='ScanLog')
+    CREATE TABLE AIEstimating.ScanLog (
+        Id               INT IDENTITY(1,1) PRIMARY KEY,
+        ScanId           NVARCHAR(255) NOT NULL,
+        JobNumber        NVARCHAR(50),
+        PdfPath          NVARCHAR(1000),
+        DxfCount         INT DEFAULT 0,
+        PartsCount       INT DEFAULT 0,
+        PartsEstimated   INT DEFAULT 0,
+        TotalEstimate    FLOAT,
+        QualityScore     NVARCHAR(20),
+        OverridesApplied INT DEFAULT 0,
+        ScanDate         DATETIME2 DEFAULT GETDATE()
+    )""",
+
+    # Indices (safe to re-run)
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Corr_Part')     CREATE INDEX IX_Corr_Part     ON AIEstimating.Corrections(PartNumber)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Corr_Field')    CREATE INDEX IX_Corr_Field    ON AIEstimating.Corrections(FieldName,AiValue)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Over_Active')   CREATE INDEX IX_Over_Active   ON AIEstimating.LiveOverrides(Active,PatternType)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Hist_Part')     CREATE INDEX IX_Hist_Part     ON AIEstimating.HistoricalEstimates(PartNumber)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Hist_Drawing')  CREATE INDEX IX_Hist_Drawing  ON AIEstimating.HistoricalEstimates(DrawingNumber)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Scan_Job')      CREATE INDEX IX_Scan_Job      ON AIEstimating.ScanLog(JobNumber)",
+]
+
+# ── Seed data ─────────────────────────────────────────────────────────────────
+_SEED_OVERRIDES = [
+    ("led_ocr_to_mild_steel",      "material_value", "normalized_material", "LED",
+     '{"geometry_source_contains":"dxf"}', "normalized_material", "MILD_STEEL",  0.95),
+    ("led_raw_material_to_steel",  "material_value", "materials_raw",       "Led",
+     '{"geometry_source_contains":"dxf"}', "normalized_material", "MILD_STEEL",  0.95),
+    ("dxf_ms_filename_material",   "dxf_filename",   "dxf_source_file",     "_MS_",
+     "{}", "normalized_material", "MILD_STEEL", 1.0),
+    ("dxf_petg_filename_material", "dxf_filename",   "dxf_source_file",     "PETG",
+     "{}", "normalized_material", "ACRYLIC",    1.0),
+    ("dxf_joinery_filename_mdf",   "dxf_filename",   "dxf_source_file",     "JOINERY",
+     "{}", "normalized_material", "MDF",        0.95),
+]
+
+_SEED_PARTS = [
+    ("10886-25-01", "140DEG CORNER PROTECTOR", "MILD_STEEL", 1.5, 0.95, "scan_20260529"),
+    ("10886-25-02", "130DEG CORNER PROTECTOR", "MILD_STEEL", 1.5, 0.95, "scan_20260529"),
+    ("10886-09-01", "CLAD BRACKET PANEL",      "MILD_STEEL", 1.5, 0.90, "scan_20260529"),
+    ("10886-35-03", "FOOT PLATE",              "MILD_STEEL", 1.5, 0.95, "scan_20260529"),
+    ("10886-01-005","STRIKE PLATE",            "MILD_STEEL", 2.0, 0.95, "scan_20260529"),
+]
+
+def init_db() -> None:
+    """Create AIEstimating schema + all tables + seed known corrections."""
+    if not test_connection():
+        print()
+        print("Fix connection settings in corrections_db.py then re-run.")
+        return
+
+    conn   = _connect()
+    cursor = conn.cursor()
+    errors = 0
+
+    print("\nCreating AIEstimating schema and tables...")
+    for stmt in _SCHEMA:
+        try:
+            cursor.execute(stmt)
+            conn.commit()
+        except Exception as e:
+            log.debug(f"Schema stmt skipped (may exist): {e}")
+            errors += 1
+
+    print("Seeding override rules...")
+    for (rn,pt,tf,tv,tc,cf,cv,conf) in _SEED_OVERRIDES:
+        try:
+            if not cursor.execute(
+                "SELECT Id FROM AIEstimating.LiveOverrides WHERE RuleName=?", rn
+            ).fetchone():
+                cursor.execute("""
+                    INSERT INTO AIEstimating.LiveOverrides
+                    (RuleName,PatternType,TriggerField,TriggerValue,
+                     TriggerContext,CorrectionField,CorrectionValue,Confidence)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, rn,pt,tf,tv,tc,cf,cv,conf)
+                conn.commit()
+        except Exception as e:
+            log.warning(f"Override seed: {e}")
+
+    print("Seeding part knowledge...")
+    for (pn,desc,mat,thk,conf,src) in _SEED_PARTS:
+        try:
+            if not cursor.execute(
+                "SELECT PartNumber FROM AIEstimating.PartKnowledge WHERE PartNumber=?", pn
+            ).fetchone():
+                cursor.execute("""
+                    INSERT INTO AIEstimating.PartKnowledge
+                    (PartNumber,Description,Material,ThicknessMm,Confidence,Source,CorrectionCount)
+                    VALUES (?,?,?,?,?,?,1)
+                """, pn,desc,mat,thk,conf,src)
+                conn.commit()
+        except Exception as e:
+            log.warning(f"Part seed: {e}")
+
+    conn.close()
+    print()
+    print("SDI Intelligence — Database Setup Complete")
+    print("=" * 50)
+    stats = get_learning_stats()
+    for k, v in stats.items():
+        print(f"  {k:<38} {v}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# READ / WRITE — called by learning_engine.py
+# ══════════════════════════════════════════════════════════════════════════════
+
+def lookup_part(part_number: str) -> Optional[Dict[str, Any]]:
+    if not part_number: return None
+    try:
+        conn = _connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM AIEstimating.PartKnowledge WHERE PartNumber=?",
+                       part_number.upper().strip())
+        row = cursor.fetchone()
+        if row:
+            cols = [c[0] for c in cursor.description]
+            conn.close()
+            return dict(zip(cols, row))
+        conn.close()
+    except Exception as e:
+        log.warning(f"lookup_part: {e}")
+    return None
+
+def get_active_overrides(pattern_type: Optional[str] = None) -> List[Dict]:
+    try:
+        conn = _connect()
+        cursor = conn.cursor()
+        if pattern_type:
+            cursor.execute(
+                "SELECT * FROM AIEstimating.LiveOverrides WHERE Active=1 AND PatternType=?",
+                pattern_type)
+        else:
+            cursor.execute("SELECT * FROM AIEstimating.LiveOverrides WHERE Active=1")
+        rows = cursor.fetchall()
+        cols = [c[0] for c in cursor.description]
+        conn.close()
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception as e:
+        log.warning(f"get_active_overrides: {e}")
+        return []
+
+def get_historical_cost(part_number: str = None,
+                        drawing_number: str = None) -> Optional[List[Dict]]:
+    try:
+        conn = _connect()
+        cursor = conn.cursor()
+        if part_number:
+            cursor.execute("""
+                SELECT Material,
+                       AVG(UnitCost) AS AvgCost,
+                       MIN(UnitCost) AS MinCost,
+                       MAX(UnitCost) AS MaxCost,
+                       COUNT(*)      AS SampleCount
+                FROM AIEstimating.HistoricalEstimates
+                WHERE PartNumber=? AND UnitCost>0
+                GROUP BY Material
+            """, part_number)
+            rows = cursor.fetchall()
+            if rows:
+                cols = [c[0] for c in cursor.description]
+                conn.close()
+                return [dict(zip(cols, r)) for r in rows]
+        conn.close()
+    except Exception as e:
+        log.warning(f"get_historical_cost: {e}")
+    return None
+
+def log_correction(scan_id, part_number, job_number, field_name,
+                   ai_value, correct_value,
+                   corrected_by="estimator", notes="") -> int:
+    try:
+        conn = _connect()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO AIEstimating.Corrections
+            (ScanId,PartNumber,JobNumber,FieldName,AiValue,CorrectValue,CorrectedBy,Notes)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, scan_id, part_number, job_number, field_name,
+             str(ai_value), str(correct_value), corrected_by, notes)
+        new_id = cursor.execute("SELECT SCOPE_IDENTITY()").fetchval()
+        conn.commit(); conn.close()
+        return int(new_id or 0)
+    except Exception as e:
+        log.error(f"log_correction: {e}"); return 0
+
+def update_part_knowledge(part_number, field, value,
+                          source="estimator_correction",
+                          corrected_by="estimator"):
+    if not part_number: return
+    pn = part_number.upper().strip()
+    field_map = {
+        "normalized_material": "Material", "material":     "Material",
+        "thickness_mm":        "ThicknessMm",
+        "unit_cost":           "TypicalUnitCost",
+        "operations":          "Operations",
+    }
+    db_field = field_map.get(field.lower(), field)
+    try:
+        conn = _connect(); cursor = conn.cursor()
+        if cursor.execute(
+            "SELECT PartNumber FROM AIEstimating.PartKnowledge WHERE PartNumber=?", pn
+        ).fetchone():
+            cursor.execute(f"""
+                UPDATE AIEstimating.PartKnowledge
+                SET {db_field}=?,
+                    Confidence=CASE WHEN Confidence+0.15>1.0 THEN 1.0
+                                    ELSE Confidence+0.15 END,
+                    CorrectionCount=CorrectionCount+1,
+                    LastCorrectedBy=?, Source=?, LastUpdated=GETDATE()
+                WHERE PartNumber=?
+            """, value, corrected_by, source, pn)
+        else:
+            cursor.execute(f"""
+                INSERT INTO AIEstimating.PartKnowledge
+                (PartNumber,{db_field},Confidence,Source,CorrectionCount,LastCorrectedBy)
+                VALUES (?,?,0.7,?,1,?)
+            """, pn, value, source, corrected_by)
+        conn.commit(); conn.close()
+    except Exception as e:
+        log.error(f"update_part_knowledge: {e}")
+
+def log_scan(scan_id, job_number, pdf_path, dxf_count,
+             parts_count, parts_estimated, total_estimate,
+             quality_score, overrides_applied=0):
+    try:
+        conn = _connect()
+        conn.cursor().execute("""
+            INSERT INTO AIEstimating.ScanLog
+            (ScanId,JobNumber,PdfPath,DxfCount,PartsCount,
+             PartsEstimated,TotalEstimate,QualityScore,OverridesApplied)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, scan_id, job_number, pdf_path, dxf_count, parts_count,
+             parts_estimated, total_estimate, quality_score, overrides_applied)
+        conn.commit(); conn.close()
+    except Exception as e:
+        log.warning(f"log_scan: {e}")
+
+def fire_override(override_id: int):
+    try:
+        conn = _connect()
+        conn.cursor().execute("""
+            UPDATE AIEstimating.LiveOverrides
+            SET TriggerCount=TriggerCount+1, LastFired=GETDATE()
+            WHERE Id=?
+        """, override_id)
+        conn.commit(); conn.close()
+    except Exception as e:
+        log.warning(f"fire_override: {e}")
+
+def get_learning_stats() -> Dict[str, Any]:
+    try:
+        conn = _connect(); c = conn.cursor()
+        stats = {
+            "known_parts_high_confidence":  c.execute("SELECT COUNT(*) FROM AIEstimating.PartKnowledge WHERE Confidence>=0.8").fetchval(),
+            "total_parts_in_kb":            c.execute("SELECT COUNT(*) FROM AIEstimating.PartKnowledge").fetchval(),
+            "total_corrections_logged":     c.execute("SELECT COUNT(*) FROM AIEstimating.Corrections").fetchval(),
+            "active_override_rules":        c.execute("SELECT COUNT(*) FROM AIEstimating.LiveOverrides WHERE Active=1").fetchval(),
+            "overrides_fired_total":        c.execute("SELECT ISNULL(SUM(TriggerCount),0) FROM AIEstimating.LiveOverrides").fetchval(),
+            "historical_estimates":         c.execute("SELECT COUNT(*) FROM AIEstimating.HistoricalEstimates").fetchval(),
+            "total_scans_logged":           c.execute("SELECT COUNT(*) FROM AIEstimating.ScanLog").fetchval(),
+        }
+        conn.close(); return stats
+    except Exception as e:
+        log.error(f"get_learning_stats: {e}"); return {}
+
+if __name__ == "__main__":
+    init_db()

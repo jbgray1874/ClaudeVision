@@ -1,12 +1,111 @@
-import re
-from typing import Any, Dict, List
+from __future__ import annotations
 
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from estimator import extract_bought_in_items_from_assembly
+try:
+    from extractor_patterns import infer_operations_from_text as _infer_ops_from_text
+except ImportError:
+    _infer_ops_from_text = None
 from feature_synthesis import infer_bend_count as _infer_bend_count_impl
 from feature_synthesis import infer_hole_count as _infer_hole_count_impl
 from feature_synthesis import synthesize_manufacturing_features as _synthesize_manufacturing_features_impl
 from process_router import build_process_routing as _build_process_routing_impl
 from part_index import PartIndexDeps, build_part_index as _build_part_index_impl
 from document_validation import build_document_validation as _build_document_validation_impl
+
+
+_SECTION_HOLLOW_KW = ("TUBE", "RHS", "SHS", "BOX SECTION", "BOX-SECTION", "HOLLOW SECTION")
+_SECTION_PROFILE_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[xX\u00d7]\s*(\d+(?:\.\d+)?)\s*[xX\u00d7]\s*(\d+(?:\.\d+)?)(?:\s*MM)?",
+    re.IGNORECASE,
+)
+
+
+def _detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
+    """Pull a hollow-section profile + cut length from page / cutting-list text.
+
+    Two genuine detection paths, both reading the drawing's own text:
+
+    PATH 1 — canonical cutting-list form, e.g. '30 x 60 x 1.50mm TUBE 1125'.
+      Gated on a hollow-section keyword AND a parseable a x b x t profile.
+      High confidence.
+
+    PATH 2 — 'WALL'-notation detail form, e.g. a leg detail that states
+      '60.0 EXT  30.0 EXT  1.5 WALL ... 1072.0 EXT' with no 'TUBE' keyword and
+      no 'AxBxC' string (common on SDI leg/upright detail sheets). The 'n.n WALL'
+      callout is an unambiguous tube signal (only hollow sections have a wall
+      thickness). Section sides are read as the unqualified 'EXT' dimensions
+      adjacent to WALL, EXCLUDING feature callouts tagged FROM TOP / FROM BOTTOM /
+      PITCH (those are hole offsets, not section dims), and excluding the large
+      (>300mm) EXT which is the cut length. Lower confidence than PATH 1 → carries
+      review_section_profile=True so the estimate flags it for human verification.
+
+    Returns None when neither path can read a profile (honest gap — caller flags).
+    """
+    if not text:
+        return None
+    up = str(text).upper()
+
+    # ── PATH 1: canonical 'AxBxC <keyword>' ─────────────────────────────────
+    if any(kw in up for kw in _SECTION_HOLLOW_KW):
+        m = _SECTION_PROFILE_RE.search(up)
+        if m:
+            dims = sorted(float(m.group(i)) for i in (1, 2, 3))
+            wall, side_a, side_b = dims[0], dims[1], dims[2]
+            if not (wall <= 0 or wall > 12 or side_a <= wall * 2 or side_b <= wall * 2):
+                tail_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up[m.end():])]
+                length = next((n for n in tail_nums if n >= max(side_a, side_b) * 2), None)
+                if length is None:
+                    all_nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", up)]
+                    cand = [n for n in all_nums if n >= max(side_a, side_b) * 3]
+                    length = max(cand) if cand else None
+                return {
+                    "a": side_a,
+                    "b": side_b,
+                    "t": wall,
+                    "length_mm": length,
+                    "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS",
+                    "keyword": next(kw for kw in _SECTION_HOLLOW_KW if kw in up),
+                    "detection_path": "canonical_profile",
+                    "source_text": text[m.start():m.start() + 60].strip(),
+                }
+
+    # ── PATH 2: 'n.n WALL' notation (no keyword / no AxBxC) ──────────────────
+    wm = re.search(r"(\d+(?:\.\d+)?)\s*WALL", up)
+    if wm:
+        wall = float(wm.group(1))
+        if 0 < wall <= 12:
+            # All 'EXT' dimensions with any trailing qualifier captured.
+            ext_tokens = []  # (value, qualifier)
+            for em in re.finditer(r"(\d+(?:\.\d+)?)\s*EXT(\s+(?:FROM\s+\w+|TOP|BOTTOM))?", up):
+                ext_tokens.append((float(em.group(1)), (em.group(2) or "").strip()))
+            # Section sides: unqualified EXT dims, larger than 2x wall, section-sized (<=300mm).
+            side_vals = sorted(
+                {v for (v, q) in ext_tokens if not q and wall * 2 < v <= 300},
+                reverse=True,
+            )[:2]
+            # Cut length: the large unqualified EXT (>300mm).
+            length_cands = [v for (v, q) in ext_tokens if not q and v > 300]
+            if len(side_vals) >= 2:
+                side_a, side_b = sorted(side_vals)
+                length = max(length_cands) if length_cands else None
+                return {
+                    "a": side_a,
+                    "b": side_b,
+                    "t": wall,
+                    "length_mm": length,
+                    "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS",
+                    "keyword": "WALL",
+                    "detection_path": "wall_notation",
+                    "review_section_profile": True,  # less certain than canonical — flag for verify
+                    "source_text": text[max(0, wm.start() - 40):wm.start() + 20].strip(),
+                }
+
+    return None
+
 
 def _dedupe(values: List[Any]) -> List[Any]:
     seen: List[Any] = []
@@ -139,12 +238,32 @@ def _effective_part_page_role(page_role: Any, title_block_drawing_numbers: List[
     return page_role
 
 
+# Values that appear in M&S/SDI GENERAL TOLERANCES blocks (+/-0.5mm, +/-1.0mm etc.)
+# and must not be treated as actual sheet thicknesses.
+_TOLERANCE_TABLE_VALUES = {0.5, 1.0, 1.5, 2.0}
+
+# Minimum plausible sheet metal thickness — filters sub-0.8mm noise
+_MIN_SHEET_THICKNESS_MM = 0.8
+
+
 def _first_numeric_thickness(values: List[Any]) -> Any:
-    for value in values:
+    """Return first plausible sheet thickness, skipping tolerance-table bleed."""
+    floats = []
+    for v in values:
         try:
-            return float(value)
+            floats.append(float(v))
         except (TypeError, ValueError):
             continue
+
+    # If every value is a tolerance-table value the list is contaminated —
+    # return the most common sheet thickness (1.5mm) if present, else None.
+    if floats and all(f in _TOLERANCE_TABLE_VALUES for f in floats):
+        return 1.5 if 1.5 in floats else None
+
+    # Otherwise return first value that isn't a sub-0.8mm noise reading
+    for f in floats:
+        if f >= _MIN_SHEET_THICKNESS_MM:
+            return f
     return None
 
 
@@ -276,9 +395,9 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
             "width": flat_width,
         },
         "longest_edge_mm": length,
-        "cut_length_mm": features.get("cut_length_mm"),
+        "cut_length_mm": features.get("cut_length_mm") or part.get("geometry_rollup", {}).get("_raw", {}).get("estimated_cut_length_mm") or features.get("raw_cut_length_mm"),
         "raw_cut_length_mm": features.get("raw_cut_length_mm"),
-        "pierce_count": part.get("geometry_rollup", {}).get("estimated_pierce_count", 0),
+        "pierce_count": part.get("geometry_rollup", {}).get("_raw", {}).get("estimated_pierce_count") or part.get("geometry_rollup", {}).get("estimated_pierce_count", 0),
         "hole_count": features.get("hole_count", 0),
         "slot_count": features.get("slot_count", 0),
         "bend_count": bend_count,
@@ -319,9 +438,19 @@ def _clean_finish_values(values: List[Any]) -> List[Any]:
 
 
 def merge_page_analysis(summary: Dict[str, Any], geometry_pages: List[Dict[str, Any]]) -> Dict[str, Any]:
-    geo_lookup = {item["page_number"]: item for item in geometry_pages}
+    geo_lookup = {item["page_number"]: item for item in geometry_pages if item.get("page_number") is not None}
     for page in summary["pages"]:
-        page["geometry_summary"] = geo_lookup.get(page["page_number"], {})
+        pkey = page.get("page_number")
+        if summary.get("scan_mode") == "folder_as_job" and page.get("job_page_number") is not None:
+            pkey = page.get("job_page_number")
+        page_geo = geo_lookup.get(pkey, {})
+        # Support both legacy geometry page shape (flat metrics) and
+        # new improved shape {"page_number", "geometry", "calibration"}.
+        if isinstance(page_geo, dict) and "geometry" in page_geo:
+            page["geometry_summary"] = page_geo.get("geometry", {}) or {}
+            page["scale_calibration"] = page_geo.get("calibration", {}) or {}
+        else:
+            page["geometry_summary"] = page_geo if isinstance(page_geo, dict) else {}
     return summary
 
 
@@ -351,6 +480,7 @@ def _empty_geometry_rollup() -> Dict[str, Any]:
             "estimated_slot_like_features": 0.0,
             "estimated_bend_line_count": 0.0,
         },
+        "_raw": {},
     }
 
 
@@ -368,6 +498,7 @@ def _empty_part_record(part_number: str, item_number: Any = None, description: A
         "revisions": [],
         "drawing_numbers": [],
         "thicknesses_mm": [],
+        "weights": [],
         "dates": [],
         "sheet_refs": [],
         "scales": [],
@@ -414,6 +545,12 @@ def _empty_part_record(part_number: str, item_number: Any = None, description: A
 
 
 def _rollup_geometry(target: Dict[str, Any], geometry: Dict[str, Any]) -> None:
+    raw_in = geometry.get("_raw") or {}
+    if isinstance(raw_in, dict) and raw_in:
+        raw_tgt = target.setdefault("_raw", {})
+        for subkey, value in raw_in.items():
+            if isinstance(value, (int, float)):
+                raw_tgt[subkey] = max(float(raw_tgt.get(subkey, 0) or 0), float(value))
     for key in target:
         if isinstance(target[key], dict):
             source = geometry.get(key, {})
@@ -465,10 +602,16 @@ def _interpret_part(part: Dict[str, Any]) -> Dict[str, Any]:
     part["manufacturing_interpretation"] = {
         "routing": routing,
         "stock_form": "sheet" if part.get("flat_pattern_detected") else "unknown",
-        "requires_flat_blank": bool(part.get("flat_pattern_detected") or part.get("overall_length_mm") or part.get("overall_width_mm")),
+        "requires_flat_blank": bool(
+            part.get("flat_pattern_detected")
+            or part.get("overall_length_mm")
+            or part.get("overall_width_mm")
+            or (part.get("geometry_rollup", {}).get("_raw", {}).get("estimated_cut_length_mm") or 0.0) > 0
+            or (part.get("geometry_rollup", {}).get("estimated_cut_length_mm") or 0.0) > 0
+        ),
         "process_family": "fabrication" if operations else "review_required",
         "setup_driven_operations": [step["operation"] for step in routing if step["operation"] in {"laser_cutting", "hole_machining", "folding", "tapping", "countersinking", "welding"}],
-        "run_driven_operations": [step["operation"] for step in routing if step["operation"] in {"laser_cutting", "hole_machining", "folding", "powder_coating", "handling"}],
+        "run_driven_operations": [step["operation"] for step in routing if step["operation"] in {"laser_cutting", "hole_machining", "folding", "powder_coating", "wet_spray", "cnc", "handling"}],
         "routing_confidence": round(sum(part.get("confidence", {}).values()) / max(1, len(part.get("confidence", {}))), 2) if part.get("confidence") else 0.0,
         "review_required": review_needed,
         "geometry_reliability": geometry_confidence,
@@ -505,8 +648,1119 @@ def build_document_validation(summary: Dict[str, Any], parts: List[Dict[str, Any
     return _build_document_validation_impl(summary, parts)
 
 
+def _get_page_text(page: Dict[str, Any]) -> str:
+    """
+    Text for post-build fixes (Fix 3 non-metal, assembly callouts).
+
+    During ``build_document_writeup``, ``pdfplumber_text`` / ``normalized_text`` are
+    sometimes still empty on the in-memory page dict; ``text_preview`` and
+    ``region_text.bom`` are populated earlier from layout zones and carry
+    ``MATERIAL: PETG`` style callouts.
+    """
+    page_analysis = page.get("page_analysis", {}) or {}
+    title_block = page_analysis.get("title_block", {}) or {}
+    region_text = page.get("region_text") or {}
+    pa_region = page_analysis.get("region_text") or {}
+    vision = page.get("vision_extraction", {}) or {}
+    chunks = [
+        # Reliable at scan time (read these first)
+        str(page.get("text_preview") or ""),
+        str(region_text.get("bom") or ""),
+        str(region_text.get("title_block") or ""),
+        str(region_text.get("notes") or ""),
+        str(region_text.get("revision") or ""),
+        str(region_text.get("general") or ""),
+        str(pa_region.get("bom") or ""),
+        str(pa_region.get("title_block") or ""),
+        str(pa_region.get("notes") or ""),
+        str(vision.get("bom_table_text") or ""),
+        # Full-page extracts (may be filled only when JSON is written)
+        str(page.get("pdfplumber_text") or ""),
+        str(page_analysis.get("pdfplumber_text") or ""),
+        str(title_block.get("raw_text") or ""),
+        str(page.get("normalized_text") or ""),
+        str(page.get("pypdf_text") or ""),
+        str(page.get("raw_text") or ""),
+        str(page.get("text") or ""),
+        str(page.get("fitz_text") or ""),
+        str(page.get("page_text") or ""),
+        str((page.get("page_analysis") or {}).get("raw_text") or ""),
+        str(vision.get("ocr_text") or ""),
+        str(vision.get("ocr_text_reconciled") or ""),
+    ]
+    return " ".join(chunk for chunk in chunks if chunk.strip())
+
+
+def _non_metal_label_from_text(*text_blobs: str) -> str | None:
+    """Return a display material label when a non-metal keyword is present."""
+    joined = " ".join(t for t in text_blobs if t).upper()
+    if not joined:
+        return None
+    if "200GSM" in joined or ("GSM" in joined and "PAPER" in joined):
+        return "200GSM CARD"
+    priority = (
+        "PETG", "POLYCARBONATE", "PERSPEX", "ACRYLIC", "HIPS", "NYLON", "PVC",
+        "LIGHT PANEL", "LED", "DIFFUSER", "VINYL", "FOAM", "HDPE", "UHMW",
+        "ACETAL", "DELRIN", "PAPER", "CARD", "CARDBOARD",
+    )
+    for kw in priority:
+        if kw in joined:
+            return kw.title() if " " not in kw else kw.title()
+    for kw in _NON_METAL_KEYWORDS:
+        if kw in joined:
+            return kw.title()
+    return None
+
+
+_NON_METAL_KEYWORDS = {
+    "PETG", "POLYCARBONATE", "POLYPROP", "POLYSTYRENE", "NYLON",
+    "PVC", "ACETAL", "DELRIN", "HDPE", "UHMW", "HIPS",
+    "200GSM", "GSM", "PAPER", "CARD", "CARDBOARD", "BACK LIT", "BACKLIT",
+    "VINYL", "FOAM",
+    "LED", "LIGHT PANEL", "DIFFUSER",
+    "PERSPEX",
+}
+
+_ASSEMBLY_WELD_PHRASES = [
+    "ALL WELD",
+    "WELD ALL",
+    "WELD INT",
+    "WELD AND DRESS",
+    "DRESS WELD",
+    "DRESS ALL EXTERNAL WELD",
+    "FILLET WELD",
+    "SEAM WELD",
+    "SPOT WELD",
+    "CORNERS TO BE WELDED",
+    "TO BE WELDED",
+    "WELDED CLOSED",
+]
+
+_ASSEMBLY_PC_PHRASES = [
+    "POWDER COAT",
+    "POWDER-COAT",
+    "POLYESTER SEMI",
+    "POLYESTER GLOSS",
+    "POLYESTER MATT",
+    "POWDER COATED",
+    " P/C ",
+    "PC MATT",
+    "PC GLOSS",
+    "EPOXY COAT",
+]
+
+
+def _page_lookup_key(page: Dict[str, Any], summary: Dict[str, Any]) -> Optional[int]:
+    """Stable page key for merged folder jobs — job_page_number wins over colliding PDF locals."""
+    if summary.get("scan_mode") == "folder_as_job":
+        jpn = page.get("job_page_number")
+        if jpn is not None:
+            return int(jpn)
+    pnum = page.get("page_number")
+    return int(pnum) if pnum is not None else None
+
+
+def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Post-build fixes after part_index and bought-in merge.
+
+    1. Zero-geometry text inference for parts with page text but no vector ops.
+    2. Assembly weld / powder coat propagation from assembly page callouts.
+    3. Wire parts — strip sheet-metal ops; add wire_forming, welding, deburring, resistance_welding.
+    4. Non-metal identification — clear inherited MILD STEEL on bought-in graphics.
+    """
+    if _infer_ops_from_text is None:
+        return parts
+
+    doc_page_text_upper = " ".join(
+        str(_get_page_text(page)) for page in summary.get("pages", [])
+    ).upper()
+
+    page_lookup: Dict[int, Dict[str, Any]] = {}
+    for page in summary.get("pages", []):
+        pnum = _page_lookup_key(page, summary)
+        if pnum is None:
+            continue
+        merged = _get_page_text(page)
+        page_lookup[pnum] = {
+            "text": merged,
+            "role": (page.get("page_role") or {}).get("primary_role", ""),
+        }
+        if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"} and "PETG" in merged.upper():
+            bom = (page.get("region_text") or {}).get("bom") or ""
+            print(
+                f"[DEBUG] page {pnum} _get_page_text has PETG; "
+                f"region_text.bom len={len(str(bom))} preview_len={len(str(page.get('text_preview') or ''))}"
+            )
+
+    for part in parts:
+        page_nums: List[int] = part.get("pages", [])
+        page_roles: List[str] = part.get("page_roles", [])
+        materials: List[str] = part.get("materials", [])
+
+        combined_text = " ".join(
+            page_lookup[pn]["text"] for pn in page_nums if pn in page_lookup
+        )
+        combined_upper = combined_text.upper()
+
+        # Linear stock (tube / RHS / SHS / box section): capture the cutting-list
+        # profile + cut length from the page text so the estimator's section path
+        # fires even when the BOM line is the title-block name (e.g. the 3886-01
+        # base upright leg, a 30x60x1.5mm tube listed only on its detail page).
+        if not part.get("section_stock"):
+            _sec = _detect_section_stock(combined_text)
+            if _sec:
+                part["section_stock"] = _sec
+
+        geo_reliability = float(
+            (part.get("geometry_rollup") or {})
+            .get("confidence", {})
+            .get("geometry_reliability", 0.0)
+            or 0.0
+        )
+
+        mat_upper_joined = " ".join(str(m).upper() for m in materials)
+        _is_wire_part = any(
+            kw in mat_upper_joined for kw in ("WIRE", "MILD STEEL WIRE", "STEEL WIRE")
+        ) or (
+            "MILD STEEL WIRE" in doc_page_text_upper
+            or ("WIRE" in doc_page_text_upper and "LOOP" in doc_page_text_upper)
+        )
+
+        # ROUND BAR / STUD (added 2026-07-13). The test above keys on the literal word
+        # "WIRE", so a solid bar whose drawing says "STUD" and "MILD STEEL" was never
+        # recognised: 1310-02 (8mm dia x 65) was read as 8mm-THICK SHEET and priced at
+        # £6.69 against Tim's £0.04.
+        #
+        # PER-PART, not document-level. doc_page_text_upper covers the WHOLE drawing set,
+        # so testing it would make the HOOK PLATE wire as well — one stud would turn every
+        # part in the job into a bar. We look ONLY at this part's own pages.
+        _bar_sched = []
+        if not _is_wire_part and not part.get("flat_pattern_detected"):
+            _own_pages = set(part.get("pages") or [])
+            if _own_pages:
+                _own_text = " ".join(
+                    str(_get_page_text(pg))
+                    for pg in summary.get("pages", [])
+                    if (pg.get("page_number") or pg.get("page")) in _own_pages
+                )
+                _bar_sched = _parse_bar_schedule(_own_text)
+        if _bar_sched:
+            _is_wire_part = True
+            _b0 = _bar_sched[0]
+            part["wire_gauge_mm"] = _b0["gauge_mm"]
+            part["wire_length_mm"] = _b0["length_mm"]
+            part["bar_schedule"] = _bar_sched
+            # The "8" in "8mm DIA" is a DIAMETER, not a sheet thickness. Leaving it set is
+            # exactly what let this part masquerade as 8mm sheet steel.
+            part["normalized_thickness_mm"] = None
+            part.setdefault("_bar_recognised", True)
+        # Sheet mild steel inheritance — wire detection wins over bare MILD STEEL on drawing
+        inherited_steel = (
+            "MILD STEEL" in mat_upper_joined
+            and "WIRE" not in mat_upper_joined
+            and not _is_wire_part
+        )
+
+        # Assembly-only, zero-geometry parts: page text is for the whole weldment, not this line.
+        # Skip Fix 1 (text inference) and Fix 2 (weld/P/C propagation) — keep ops/cost at zero.
+        # Wire hooks still run (document may label wire pages as assembly).
+        if (
+            geo_reliability == 0.0
+            and page_roles
+            and all(r == "assembly" for r in page_roles)
+            and not _is_wire_part
+        ):
+            continue
+
+        current_ops: List[str] = part.get("textual_operations", [])
+        if geo_reliability == 0.0 and not current_ops and combined_text.strip():
+            finishes = part.get("surface_finishes", [])
+            try:
+                inferred = _infer_ops_from_text(
+                    combined_text,
+                    finishes=finishes,
+                    has_fold_geometry=False,
+                    has_cut_length=False,
+                )
+            except TypeError:
+                try:
+                    inferred = _infer_ops_from_text(combined_text)
+                except Exception:
+                    inferred = []
+            except Exception:
+                inferred = []
+            if inferred:
+                part["textual_operations"] = list(inferred)
+                _interpret_part(part)
+
+        is_assembly_part = (
+            "assembly" in page_roles
+            or part.get("assembly_candidate", False)
+        )
+        if is_assembly_part and combined_text.strip():
+            ops_set = set(part.get("textual_operations", []))
+            changed = False
+
+            if any(phrase in combined_upper for phrase in _ASSEMBLY_WELD_PHRASES):
+                for op in ("welding", "dress_welds"):
+                    if op not in ops_set:
+                        ops_set.add(op)
+                        changed = True
+
+            if any(phrase in combined_upper for phrase in _ASSEMBLY_PC_PHRASES):
+                if "powder_coating" not in ops_set:
+                    ops_set.add("powder_coating")
+                    changed = True
+
+            if changed:
+                part["textual_operations"] = list(ops_set)
+                # intentionally NOT calling _interpret_part here — assembly weld callouts
+                # are recorded for visibility but NOT re-costed. Re-running routing on the
+                # assembly over-estimates weld time (Drawing 1 went 4.9%→14.4% over).
+
+        # Wire parts — replace sheet-metal ops with wire route (robomac / weld / spot)
+        if _is_wire_part and not inherited_steel:
+            _sheet_metal_ops = {
+                "laser_cutting",
+                "folding",
+                "diamond_polish",
+                "linebend",
+                "hole_machining",
+                "guillotine",
+            }
+            _ops = set(part.get("textual_operations") or [])
+            _ops -= _sheet_metal_ops
+            _ops.add("wire_forming")
+            _ops.add("welding")
+            if part.get("_bar_recognised"):
+                # Bars are cut on the Robomac (WB dept ROBO, £31.45/hr) — Tim charges
+                # £0.17 on 1310. Not a forming op: a solid bar is cut, not looped.
+                _ops.discard("wire_forming")
+                _ops.add("robomac")
+            if "SHARP" in doc_page_text_upper:
+                _ops.add("deburring")
+            if "CONTACT POINT" in doc_page_text_upper:
+                _ops.add("resistance_welding")
+            if "POWDER" in doc_page_text_upper or "P/C" in doc_page_text_upper:
+                _ops.add("powder_coating")
+            _ops.add("handling")
+            part["textual_operations"] = list(_ops)
+            # Do NOT call _interpret_part — it re-adds laser_cutting/folding from geometry
+            part["operations"] = sorted(_ops)
+            part["_wire_part_override"] = True
+            if part.get("_bar_recognised"):
+                _me = part.setdefault("material_estimate", {})
+                _me["stock_form"] = "wire"
+                _me["wire_gauge_mm"] = part.get("wire_gauge_mm")
+                _me["wire_length_mm"] = part.get("wire_length_mm")
+            # ── Wire schedule: read the part's OWN pages, not the whole document ──
+            # Was: " ".join(every page) -> all three schedule rows stapled onto EVERY wire
+            # part AND onto the bought-in powder record. No part knew its own length, so
+            # none set stock_form, none reached the wire pricing route, and all three fell
+            # into the BOM at their LABOUR cost (£25.18/£12.27/£27.07 vs Tim's £0.29 total).
+            #
+            # The drawings make this easy — one schedule row per detail page:
+            #     page 2  MAIN FRAME     ITEM QTY DESCRIPTION LENGTH -> 1 1 4mm DIA 975.4
+            #     page 3  HOOK                                       -> 1 1 4mm DIA 233.4
+            #     page 4  BOTTOM FRAME                               -> 1 1 4mm DIA 424.8
+            # (Tim: 976 / 234 / 425mm at 4mm. The extraction was already right to 0.6mm —
+            #  it was only ever attached to the wrong record.)
+            #
+            # Same per-part gate that fixed the 1310 stud. Then hand off to the bar chain
+            # that already exists: _bar_recognised -> workbook_bar_formula -> Wire block ->
+            # Robomac -> sheet-ops dropped.
+            _own_wire_pages = set(part.get("pages") or [])
+            if _own_wire_pages:
+                _ws_text = " ".join(
+                    str(_get_page_text(pg))
+                    for pg in summary.get("pages", [])
+                    if (pg.get("page_number") or pg.get("page")) in _own_wire_pages
+                )
+            else:
+                # No page ownership (bought-in stubs, doc-level records): read NOTHING.
+                # A record with no pages has no wire schedule of its own — that is exactly
+                # how the powder line ended up holding all three rows.
+                _ws_text = ""
+            _wire_sched = _parse_wire_schedule(_ws_text) if _ws_text else []
+            if _wire_sched:
+                part["wire_schedule"] = _wire_sched
+                part["wire_total_length_mm"] = round(
+                    sum(r["total_length_mm"] for r in _wire_sched), 2
+                )
+                # One schedule row on the part's own page = this part IS that wire form.
+                # Feed the bar chain built for the 1310 stud; everything downstream is
+                # already in place and verified.
+                if len(_wire_sched) == 1:
+                    _r0 = _wire_sched[0]
+                    _g = _r0.get("gauge_mm")
+                    _l = _r0.get("length_mm") or _r0.get("total_length_mm")
+                    if _g and _l:
+                        part["_bar_recognised"] = True
+                        part["wire_gauge_mm"] = float(_g)
+                        part["wire_length_mm"] = float(_l)
+                        # A DIAMETER is not a sheet THICKNESS. 4mm dia was being read as
+                        # 4mm plate — the same misread that costed the 1310 stud as sheet.
+                        part["normalized_thickness_mm"] = None
+                        _me = part.setdefault("material_estimate", {})
+                        _me["stock_form"] = "wire"
+                        _me["wire_gauge_mm"] = float(_g)
+                        _me["wire_length_mm"] = float(_l)
+                else:
+                    # More than one row on a single part's pages: we do NOT pick one and
+                    # hope. Silently binding the wrong length is worse than an admitted gap.
+                    part.setdefault("review_flags", []).append(
+                        f"{part.get('part_number')}: {len(_wire_sched)} wire-schedule rows on "
+                        f"this part's own page(s) — cannot tell which belongs to the part. "
+                        f"NOT costed as wire. Estimator to confirm."
+                    )
+
+        # Fix C: clean fabrication ops from non-metal parts (MDF, timber, acrylic, etc.)
+        _is_non_metal_mat = any(
+            kw in mat_upper_joined
+            for kw in (
+                "MDF",
+                "TIMBER",
+                "VENEER",
+                "BOARD",
+                "PLYWOOD",
+                "ACRYLIC",
+                "PETG",
+                "POLYCARB",
+                "LAMINATE",
+            )
+        )
+        if _is_non_metal_mat and not inherited_steel:
+            _raw_thick = part.get("thicknesses_mm") or []
+            _valid_thick = [
+                t for t in _raw_thick
+                if _safe_float(t) is not None and _safe_float(t) >= 5.0
+            ]
+            if _valid_thick:
+                part["thicknesses_mm"] = _valid_thick
+                part["normalized_thickness_mm"] = _safe_float(_valid_thick[0])
+            elif not part.get("normalized_thickness_mm"):
+                _thick_defaults = {
+                    "MDF": 18.0,
+                    "TIMBER": 18.0,
+                    "PLYWOOD": 18.0,
+                    "BOARD": 18.0,
+                    "VENEER": 3.0,
+                    "ACRYLIC": 3.0,
+                    "PETG": 3.0,
+                    "POLYCARB": 3.0,
+                }
+                for _mk, _mv in _thick_defaults.items():
+                    if _mk in mat_upper_joined:
+                        part["normalized_thickness_mm"] = _mv
+                        part["thicknesses_mm"] = [
+                            str(int(_mv)) if float(_mv) == int(_mv) else str(_mv)
+                        ]
+                        break
+            _blank_l = _safe_float(part.get("blank_length_mm"))
+            _blank_w = _safe_float(part.get("blank_width_mm"))
+            # DETERMINISTIC FIX: before scanning the whole document for the two LARGEST numbers
+            # (context-blind — gave RISER a garbage 2026x2026 square), prefer THIS part's own
+            # measured overall dims (from its DXF/geometry). Only fall through to the doc-text
+            # scan when the part has no overall dims of its own either.
+            if (not _blank_l or not _blank_w):
+                _own_l = _safe_float(part.get("overall_length_mm"))
+                _own_w = _safe_float(part.get("overall_width_mm"))
+                if _own_l and _own_w:
+                    part["blank_length_mm"] = _own_l
+                    part["blank_width_mm"] = _own_w
+                    _blank_l, _blank_w = _own_l, _own_w
+            if not _blank_l or not _blank_w:
+                _pt_dims = re.findall(
+                    r"\b(\d{3,4}(?:\.\d{1,2})?)\b",
+                    " ".join(str(_get_page_text(p)) for p in summary.get("pages", [])),
+                )
+                _nums = sorted(
+                    [float(v) for v in _pt_dims if 50 <= float(v) <= 3000],
+                    reverse=True,
+                )
+                if len(_nums) >= 2 and not _blank_l:
+                    part["blank_length_mm"] = _nums[0]
+                    part["blank_width_mm"] = _nums[1]
+                    part["overall_length_mm"] = _nums[0]
+                    part["overall_width_mm"] = _nums[1]
+                elif len(_nums) == 1 and not _blank_l:
+                    part["blank_length_mm"] = _nums[0]
+                    part["overall_length_mm"] = _nums[0]
+
+        if _is_non_metal_mat and not inherited_steel:
+            _fab_ops = {
+                "laser_cutting",
+                "folding",
+                "welding",
+                "hole_machining",
+                "tapping",
+                "countersinking",
+                "dress_welds",
+                "powder_coating",
+                "diamond_polish",
+                "robomac",
+                "roll",
+                "guillotine",
+            }
+            _kept = [op for op in (part.get("textual_operations") or []) if op not in _fab_ops]
+            if _kept != part.get("textual_operations", []):
+                part["textual_operations"] = _kept
+                _interpret_part(part)
+
+        # Fix D: METAL parts do not get a separate hole/drill op — metal holes are
+        # laser-cut (they fold into the laser profile). Matches shop practice, Tim's
+        # sheets (no metal hole op; only "Drill (Acrylic)"), and job 1282 (all metal,
+        # no hole ops). The extractor guard alone is insufficient because hole_machining
+        # also arrives via the DXF/normalisation path, so strip it here at finalisation.
+        # ACRYLIC/plastic keep drilling (handled by the non-metal branch above).
+        _is_metal_mat = any(
+            kw in mat_upper_joined
+            for kw in ("MILD STEEL", "STEEL", "CR4", "ZINTEC", "GALVAN",
+                       "ALUMIN", "STAINLESS", "S355", "SPCC", "MS")
+        )
+        if (_is_metal_mat or inherited_steel) and not _is_non_metal_mat:
+            _metal_hole_ops = {"hole_machining", "drilling"}
+            _kept_m = [op for op in (part.get("textual_operations") or []) if op not in _metal_hole_ops]
+            _kept_ops = [op for op in (part.get("operations") or []) if op not in _metal_hole_ops]
+            if _kept_m != (part.get("textual_operations") or []) or _kept_ops != (part.get("operations") or []):
+                # Set BOTH fields (mirror the wire-part branch). part["operations"] is what
+                # the sheet/costing reads; textual_operations alone is insufficient. Do NOT
+                # call _interpret_part — it does not rewrite part["operations"].
+                part["textual_operations"] = _kept_m
+                part["operations"] = sorted(_kept_ops)
+            if any(k in mat_upper_joined for k in ("MDF", "TIMBER", "PLYWOOD", "BOARD")):
+                _joinery = set(part.get("textual_operations") or [])
+                if "EDGING" in combined_upper or "EDGE BAND" in combined_upper:
+                    _joinery.add("edge_banding")
+                _joinery.add("cnc_routing")
+                _joinery.add("handling")
+                part["textual_operations"] = sorted(_joinery)
+                _interpret_part(part)
+
+        if inherited_steel:
+            page_mat_match = re.search(
+                r"MATERIAL[:\s]+([A-Z0-9\s\-/]+?)(?:\s{2,}|\bDO NOT\b|$)",
+                combined_upper,
+            )
+            declared_mat = page_mat_match.group(1).strip() if page_mat_match else ""
+
+            # Also check description and part_number — bought-in lines with no pages
+            # (e.g. Essentra nylon screw, LED panel).
+            desc_upper = str(part.get("description") or "").upper()
+            pn_upper = str(part.get("part_number") or "").upper()
+            extra_text = f"{desc_upper} {pn_upper}"
+
+            is_non_metal = (
+                any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
+                or any(kw in combined_upper for kw in _NON_METAL_KEYWORDS)
+                or any(kw in extra_text for kw in _NON_METAL_KEYWORDS)
+            )
+            # The MATERIAL: field is authoritative. Steel fab drawings routinely
+            # mention non-metal terms incidentally — vinyl-logo application notes
+            # ("WITH OR WITHOUT VINYL - CHECK ORDER"), LED bend-tabs / foam tape on
+            # an assembly callout — and the free-text scan above wrongly flips the
+            # part on those. If the part's own MATERIAL field declares a metal,
+            # trust it over the free text. (Subsumes the LE12/LED postcode guard.)
+            if declared_mat and any(
+                m in declared_mat
+                for m in (
+                    "MILD STEEL", "STEEL", "CR4", "ZINTEC", "GALVAN",
+                    "ALUMIN", "STAINLESS", "S355", "SPCC",
+                )
+            ):
+                is_non_metal = False
+            # LE12 postcode OCR often lands as materials=["Led"] on steel fab drawings.
+            # Do not relabel DXF-backed sheet parts as LED panels when title block says MS.
+            _led_postcode_ocr = (
+                is_non_metal
+                and str(part.get("materials", [""])[0] if part.get("materials") else "").strip().upper() == "LED"
+                and "MILD STEEL" in combined_upper
+                and (part.get("dxf_augmented") or part.get("flat_pattern_detected"))
+            )
+            if _led_postcode_ocr:
+                is_non_metal = False
+
+            if is_non_metal:
+                cleaned_materials = [
+                    m for m in materials
+                    if "MILD STEEL" not in str(m).upper()
+                ]
+                non_metal_label = _non_metal_label_from_text(
+                    combined_upper, declared_mat, extra_text
+                )
+                if non_metal_label:
+                    cleaned_materials = _dedupe(cleaned_materials + [non_metal_label])
+                part["materials"] = cleaned_materials
+                part["normalized_material"] = (
+                    non_metal_label.replace(" ", "_").upper() if non_metal_label else None
+                )
+                part["normalized_thickness_mm"] = None
+                part["material_inherited_from"] = None
+                fabrication_ops = {
+                    "laser_cutting", "folding", "welding", "hole_machining",
+                    "tapping", "countersinking", "dress_welds", "powder_coating",
+                }
+                kept_ops = [
+                    op
+                    for op in (part.get("textual_operations") or [])
+                    if op not in fabrication_ops
+                ]
+                if kept_ops != part.get("textual_operations"):
+                    part["textual_operations"] = kept_ops
+                if "bought_in" not in page_roles:
+                    part["page_roles"] = list(page_roles) + ["bought_in"]
+                part.setdefault("review_flags", [])
+                if "non_metal_material_corrected" not in part["review_flags"]:
+                    part["review_flags"].append("non_metal_material_corrected")
+                _interpret_part(part)
+
+    return parts
+
+
+_THREAD_SPEC_RE = re.compile(
+    r"^M\d{1,2}(\s*[-xX]\s*\d|\s+-\s*\d+H|\s+THRU|\s+FINE|\s+COARSE|\s*$)",
+    re.IGNORECASE,
+)
+
+_FASTENER_PREFIXES = (
+    "SCREW -", "SCREW-", "BOLT -", "NUT -", "WASHER -",
+    "KNURLED THUMB SCREW", "KNURLED SCREW",
+)
+
+
+_WIRE_SCHED_RE = re.compile(
+    r"(?:^|\s)(\d{1,3})\s+"
+    r"(TOP\s+LOOP|BOTTOM\s+LOOP|X\s+LOOP|Z\s+LOOP|LOOP)\s+"
+    r"(\d{1,3})\s+"
+    r"(\d{1,2}\.?\d*)\s*mm\s*DIA\s*"
+    r"(\d{3,6}\.?\d*)\s+"
+    r"(\d{1,3})",
+    re.IGNORECASE,
+)
+
+# Bar / stud schedule on a DETAIL page, e.g. 1310-02:
+#       ITEM  QTY  DESCRIPTION  LENGTH
+#         1    1    8mm DIA      65
+# Anchored on the TABLE STRUCTURE (item + qty + dia + length), NOT on a bare
+# "<N>mm DIA <number>". Widening _WIRE_SIMPLE_RE's length to \d{2,6} instead would make
+# "8mm DIA 12 HOLES" match as a phantom 12mm wire — a silent invention. This does not.
+_WIRE_BAR_SCHED_RE = re.compile(
+    r"(?:^|\s)(\d{1,2})\s+(\d{1,3})\s+(\d{1,2}\.?\d*)\s*mm\s*DIA\s+(\d{2,5}\.?\d*)(?:\s|$)",
+    re.IGNORECASE,
+)
+
+
+def _parse_bar_schedule(page_text: str):
+    """Round bar / stud rows from a part's OWN page. Returns [{gauge_mm, length_mm, qty}]."""
+    out, seen = [], set()
+    for m in _WIRE_BAR_SCHED_RE.finditer(page_text or ""):
+        qty = int(m.group(2))
+        gauge = float(m.group(3))
+        length = float(m.group(4))
+        if not (1.0 <= gauge <= 25.0):      # a plausible bar diameter
+            continue
+        if not (5.0 <= length <= 6000.0):   # a plausible cut length
+            continue
+        key = (gauge, length, qty)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"gauge_mm": gauge, "length_mm": length, "qty": qty})
+    return out
+
+
+_WIRE_SIMPLE_RE = re.compile(
+    r"(\d{1,2}\.?\d*)\s*mm\s*DIA\s+(\d{3,6}\.?\d*)",
+    re.IGNORECASE,
+)
+
+
+def _parse_wire_schedule(page_text: str) -> List[Dict[str, Any]]:
+    """Extract wire loop schedule from assembly page text."""
+    results: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    for mm in _WIRE_SCHED_RE.finditer(page_text):
+        desc = mm.group(2).strip()
+        qty_loops = int(mm.group(3))
+        gauge = float(mm.group(4))
+        length = float(mm.group(5))
+        qty_unit = int(mm.group(6))
+        key = (round(gauge, 1), round(length, 1), qty_loops)
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "description": desc,
+            "qty_loops": qty_loops,
+            "gauge_mm": gauge,
+            "length_mm": length,
+            "qty_per_unit": qty_unit,
+            "total_length_mm": round(qty_loops * length, 2),
+        })
+
+    if not results:
+        for mm in _WIRE_SIMPLE_RE.finditer(page_text):
+            gauge = float(mm.group(1))
+            length = float(mm.group(2))
+            key = (round(gauge, 1), round(length, 1))
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({
+                "description": f"{gauge}mm wire",
+                "qty_loops": 1,
+                "gauge_mm": gauge,
+                "length_mm": length,
+                "qty_per_unit": 1,
+                "total_length_mm": length,
+            })
+
+    return results
+
+
+def _is_false_part_number(pn: str) -> bool:
+    """Thread callouts and fastener specs mistaken as SDI part numbers."""
+    if not pn:
+        return False
+    pn_s = pn.strip()
+    if _THREAD_SPEC_RE.match(pn_s):
+        return True
+    if any(pn_s.upper().startswith(pfx) for pfx in _FASTENER_PREFIXES):
+        return True
+    return False
+
+
+def _suppress_pn_fragments(
+    parts: List[Dict[str, Any]], summary: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Drop a part whose number is a trailing fragment of a longer, co-located
+    part number — e.g. a rotated title block on a detail page yields both the
+    real '1455-C-001' (BOM + DXF) and a mangled 'C-001' that then picks up the
+    page's PDF geometry and double-counts. Conditions, all required:
+      • the fragment's PN is a proper suffix of the longer PN on a separator
+        boundary ('1455-C-001' ends '-C-001'), so it's a tail segment not a
+        coincidence ('002' is not a suffix of '001');
+      • the two parts share a page (same drawing — not a cross-job collision);
+      • the longer/kept part is canonical: DXF-backed or present in the BOM.
+    The last guard means we never drop a fragment that holds the only good data;
+    if the longer PN isn't canonical we leave both untouched.
+    """
+    bom_pns = {
+        str(r.get("part_number") or "").strip().upper()
+        for r in (summary.get("document_analysis") or {}).get("bom_rows") or []
+    }
+
+    def _pages(p: Dict[str, Any]) -> set:
+        return set(p.get("pages") or [])
+
+    def _is_canonical(p: Dict[str, Any]) -> bool:
+        gs = str(p.get("geometry_source") or "").lower()
+        pn = str(p.get("part_number") or "").strip().upper()
+        return ("dxf" in gs) or bool(p.get("dxf_augmented")) or (pn in bom_pns)
+
+    drop: set = set()
+    for i, frag in enumerate(parts):
+        fpn = str(frag.get("part_number") or "").strip().upper()
+        if not fpn:
+            continue
+        for j, full in enumerate(parts):
+            if i == j:
+                continue
+            cpn = str(full.get("part_number") or "").strip().upper()
+            if len(cpn) <= len(fpn) or not cpn.endswith(fpn):
+                continue
+            if cpn[len(cpn) - len(fpn) - 1] not in "-_/ ":
+                continue
+            if not (_pages(frag) & _pages(full)):
+                continue
+            if not _is_canonical(full):
+                continue
+            drop.add(i)
+            break
+
+    if not drop:
+        return parts
+    import logging
+
+    logging.getLogger(__name__).info(
+        "[FILTER] Dropped PN fragments (suffix of a co-located canonical part): %s",
+        [str(parts[k].get("part_number")) for k in sorted(drop)],
+    )
+    return [p for k, p in enumerate(parts) if k not in drop]
+
+
+# ── Fallback BOM parser (fires when file_scan bom_rows = []) ──────────────────
+
+_BOM_HEADER_RE = re.compile(
+    # Column between ITEM and DESCRIPTION may be 'DWG NO' (detail/header GAs) or
+    # 'PartNo'/'PART NO'/'PART NUMBER' (top-level bay GA, e.g. 1282-GA).
+    r"ITEM\s+(?:DWG\s*NO|PART\s*NO|PART\s*NUMBER|PARTNO|NO)\b[\w\s\.\-]*?\bDESCRIPTION\s+QTY",
+    re.IGNORECASE,
+)
+
+
+def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
+    """
+    Fallback BOM extractor. Truncates at end-of-table markers before parsing.
+    Handles SDI rows (NNNN-NN-NNN) and non-SDI brand/product rows.
+    Deduplicates by part_number. Rejects tolerance/spec/OCR junk.
+    """
+    rows: List[Dict[str, Any]] = []
+    m = _BOM_HEADER_RE.search(page_text)
+    if not m:
+        return rows
+
+    tail = page_text[m.end():]
+
+    # Truncate at BOM end-markers — prevents tolerance/spec text bleed
+    _end = re.search(
+        r"\bPROTOTYPE\b|\bMAX LOADING\b|\bSPECIFICATION[:\s]"
+        r"|\bGENERAL TOLERANCES\b|\bFINISH SPECIFICATIONS\b"
+        r"|\bREVISION TABLE\b|\bREV\s+DRG\s*NO\b",
+        tail,
+        re.IGNORECASE,
+    )
+    if _end:
+        tail = tail[: _end.start()]
+
+    seen_pns: set[str] = set()
+
+    _sdi_re = re.compile(
+        r"(?:^|\s)(\d{1,3})\s+"
+        r"(\d{4,5}-\d{2}-\d{2,3}[A-Z]?)"
+        r"\s+([A-Z][A-Z0-9 /\-\.&()]{0,60}?)"
+        r"\s+(\d{1,4})"
+        r"(?=\s+\d|\s*$|\s+[A-Z])",
+        re.IGNORECASE,
+    )
+    for mm in _sdi_re.finditer(tail):
+        pn = mm.group(2).strip()
+        if pn in seen_pns:
+            continue
+        seen_pns.add(pn)
+        rows.append({
+            "item_number": mm.group(1),
+            "part_number": pn,
+            "description": mm.group(3).strip() or None,
+            "quantity": int(mm.group(4)),
+            "_source": "page_text_fallback",
+        })
+
+    _JUNK_KW = (
+        "MICRON", "THICKNESS", "PLATING", "COPYRIGHT", "TOLERANCE",
+        "DIMENSION", "MARKS &", "SPENCER", "USING TAPE", "TICKET TAPED",
+        "COVERAGE", "NICKEL", "CHROME", "POWDERCOAT", "PROTOTYPE",
+        "TIMBER-BASED", "TIMBER BASED", "ALUMINIUM-BASED",
+    )
+
+    # Assembly / GA rows: the PN is NNNN-GA / NNNN-NNC / NNNN-CGA (not the strict
+    # NNNN-NN-NNN detail form the SDI pass matches), and the description often
+    # starts with a digit ("500mm ..."), which the detail/non-SDI passes reject.
+    # This pass captures the top-level bay GA BOM (e.g. 1282-GA's seven lines).
+    _ga_re = re.compile(
+        r"(?:^|\s)(\d{1,3})\s+"
+        r"(\d{4,5}(?:-[A-Z0-9]{1,4}|\s-\s[A-Z0-9]{1,4}){1,3})-?"
+        r"\s+([A-Z0-9][A-Z0-9 /\-\.&()']{2,60}?)"
+        r"\s+(\d{1,4})"
+        r"(?=\s+\d|\s*$|\s+[A-Z])",
+        re.IGNORECASE,
+    )
+    _existing_items = {r["item_number"] for r in rows}
+    for mm in _ga_re.finditer(tail):
+        pn = re.sub(r"\s*-\s*", "-", mm.group(2).strip()).rstrip("-")
+        if pn in seen_pns or mm.group(1) in _existing_items:
+            continue
+        desc = mm.group(3).strip()
+        if any(kw in desc.upper() for kw in _JUNK_KW):
+            continue
+        seen_pns.add(pn)
+        rows.append({
+            "item_number": mm.group(1),
+            "part_number": pn,
+            "description": desc or None,
+            "quantity": int(mm.group(4)),
+            "_source": "page_text_fallback_assembly",
+        })
+
+    _nonsdi_re = re.compile(
+        r"(?:^|\s)(\d{1,3})\s+([A-Za-z]\S[^\n]{2,118}?)\s+(\d{1,4})"
+        r"(?=\s+\d+\s+[A-Za-z]|\s*$|\s+[A-Z]{2,})",
+        re.IGNORECASE,
+    )
+    sdi_items = {r["item_number"] for r in rows}
+    for mm in _nonsdi_re.finditer(tail):
+        item_no = mm.group(1)
+        content_raw = mm.group(2).strip()
+        qty = int(mm.group(3))
+        if item_no in sdi_items:
+            continue
+        if re.match(r"^[A-Za-z\d]\s[A-Za-z\d]\s", content_raw):
+            continue
+        if any(kw in content_raw.upper() for kw in _JUNK_KW):
+            continue
+        if not re.search(r"[A-Z]{2,}", content_raw):
+            continue
+        if re.match(r"^[\d\.\+\-/: ]+$", content_raw):
+            continue
+        if len(content_raw) < 4:
+            continue
+        pn = content_raw[:40]
+        if pn in seen_pns:
+            continue
+        seen_pns.add(pn)
+        rows.append({
+            "item_number": item_no,
+            "part_number": pn,
+            "description": content_raw,
+            "quantity": qty,
+            "_source": "page_text_fallback_nonsdi",
+        })
+
+    rows.sort(key=lambda r: int(r.get("item_number") or 0))
+    return rows
+
+
+# Dedicated extractor for SDI-coded fixing/vinyl/etc BOM rows. These live in SECONDARY BOM
+# tables on detail/assembly pages (e.g. page 20 "4 FIXING 236 M8 FLANGED NUTSERT 2", page 10
+# "4 FIXING5 4.0x10mm DOME RIVET 2") that the main GA-table parser doesn't reach. It reads the
+# quantity GENUINELY from the row's table structure (item-no | code | description | qty), not a
+# loose trailing-number scrape — verified against the real flattened page text. Additive: it
+# does NOT touch the working GA rows, only contributes fixing/vinyl rows so downstream qty
+# lookups read a real column instead of defaulting to 1.
+_FIXING_BOM_ROW_RE = re.compile(
+    r"(?:^|\s)(\d{1,3})\s+"                                       # item number
+    r"((?:FIXING|VINYL|PRINT|SUBPLAS|POWDER)[ \-]?\d{1,5})"       # the SDI code
+    r"\s+(.+?)"                                                   # description (lazy)
+    r"\s+(\d{1,3})"                                               # quantity
+    r"(?=\s+\d{1,3}\s|\s+[A-Z]|\s*$)",                            # next item-no / cap word / end
+    re.IGNORECASE,
+)
+
+
+def _parse_fixing_bom_rows_from_page_text(page_text: str) -> List[Dict[str, Any]]:
+    """Extract FIXING/VINYL/etc coded BOM rows with genuine quantities from a page's table text."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for mm in _FIXING_BOM_ROW_RE.finditer(page_text or ""):
+        code = re.sub(r"[ \-]", "", mm.group(2)).upper()
+        if code in seen:
+            continue
+        seen.add(code)
+        try:
+            qty = int(mm.group(4))
+        except (TypeError, ValueError):
+            qty = 1
+        if qty <= 0 or qty > 999:
+            qty = 1
+        out.append({
+            "item_number": mm.group(1),
+            "part_number": code,
+            "description": mm.group(3).strip() or code,
+            "quantity": qty,
+            "_source": "fixing_bom_row",
+        })
+    return out
+
+
 def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = build_part_index(summary)
+
+    # Fallback: populate bom_rows from raw page text when file_scan returned []
+    if not summary.get("document_analysis"):
+        summary["document_analysis"] = {}
+    _doc_analysis = summary["document_analysis"]
+    if not _doc_analysis.get("bom_rows"):
+        _fallback_rows: List[Dict[str, Any]] = []
+        _global_seen: set[str] = set()
+        for page in summary.get("pages", []):
+            _pt = _get_page_text(page)
+            if "ITEM" in _pt.upper() and ("DWG NO" in _pt.upper() or "QTY" in _pt.upper()):
+                for row in _parse_bom_from_page_text(_pt):
+                    pn = str(row.get("part_number") or "").strip()
+                    if pn and pn not in _global_seen:
+                        _global_seen.add(pn)
+                        _fallback_rows.append(row)
+        if _fallback_rows:
+            _doc_analysis["bom_rows"] = _fallback_rows
+            if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+                print(
+                    f"[DEBUG] Fallback BOM parser found {len(_fallback_rows)} rows: "
+                    f"{[r['part_number'] for r in _fallback_rows]}"
+                )
+
+    # ALWAYS scan for SDI-coded fixing/vinyl rows in secondary BOM tables (page-20 fixings,
+    # page-10 dome rivet) and merge them into bom_rows with genuine table-read quantities.
+    # Additive — never overwrites the GA rows; only adds codes not already present. This is what
+    # lets the downstream bought-in recogniser read a real qty column instead of defaulting to 1.
+    _existing_codes = {str(r.get("part_number") or "").strip().upper()
+                       for r in (_doc_analysis.get("bom_rows") or [])}
+    _fixing_rows: List[Dict[str, Any]] = []
+    _fix_seen: set = set()
+    for page in summary.get("pages", []):
+        _pt = _get_page_text(page)
+        for row in _parse_fixing_bom_rows_from_page_text(_pt):
+            code = str(row.get("part_number") or "").strip().upper()
+            if code and code not in _existing_codes and code not in _fix_seen:
+                _fix_seen.add(code)
+                _fixing_rows.append(row)
+    if _fixing_rows:
+        _doc_analysis.setdefault("bom_rows", [])
+        _doc_analysis["bom_rows"].extend(_fixing_rows)
+        if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+            print(
+                f"[DEBUG] Fixing/vinyl BOM rows captured (genuine qty): "
+                f"{[(r['part_number'], r['quantity']) for r in _fixing_rows]}"
+            )
+
+    # Fix A: back-fill missing descriptions from BOM rows
+    _bom_desc: Dict[str, str] = {}
+    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
+        pn = str(row.get("part_number") or "").strip()
+        dsc = str(row.get("description") or "").strip()
+        if pn and dsc and _is_good_description(dsc):
+            _bom_desc[pn.upper()] = dsc
+    # Fix A2 (SDI Intelligence) v2: the pooled document_analysis.bom_rows is built from the
+    # anchor GA and can MISS parts whose description lives only in a sub-assembly BOM on a
+    # detail page (12532-02-03M FRONT PANEL page 4, 12532-03-03M SHELF BODY page 17). Those
+    # descriptions sit in region_text.NOTES (clean), while region_text.bom holds mangled OCR
+    # text. v1 concatenated the fields and the mangled prefix broke QTY_TABLE_ROW_PATTERN, so
+    # nothing parsed. v2 runs extract_bom_rows on EACH field SEPARATELY (notes first — it is the
+    # clean one), so the clean rows are recovered. Pooled keys win (added first); per-page fills
+    # only gaps, so jobs with a complete pooled BOM (1282/1298) are unchanged.
+    try:
+        from extractor_patterns import extract_bom_rows as _extract_bom_rows_perpage
+        for _pg in summary.get("pages", []) or []:
+            _rt = _pg.get("region_text") or {}
+            for _fld in ("notes", "bom", "general"):
+                _txt = str(_rt.get(_fld) or "").strip()
+                if not _txt:
+                    continue
+                try:
+                    _rows = _extract_bom_rows_perpage(_txt)
+                except Exception:
+                    continue
+                for _row in _rows or []:
+                    _pn = str(_row.get("part_number") or "").strip().upper()
+                    _dsc = str(_row.get("description") or "").strip()
+                    if _pn and _dsc and _pn not in _bom_desc and _is_good_description(_dsc):
+                        _bom_desc[_pn] = _dsc
+    except Exception:
+        pass
+    for p in parts:
+        if not p.get("description"):
+            p["description"] = _bom_desc.get(str(p.get("part_number") or "").upper())
+
+    bought_in_items = extract_bought_in_items_from_assembly(summary, existing_part_records=parts)
+    if bought_in_items:
+        parts.extend(bought_in_items)
+        if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+            print(
+                f"[DEBUG] Bought-in merged from assembly/BOM text: {len(bought_in_items)} "
+                f"-> {[b.get('part_number') for b in bought_in_items]}"
+            )
+
+    # Fix B: bought_in records for non-SDI BOM rows (e.g. WINDMILL 1164: WSF45 ticket strip)
+    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts}
+    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
+    _non_sdi_bought_in: List[Dict[str, Any]] = []
+    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
+        pn = str(row.get("part_number") or "").strip()
+        dsc = str(row.get("description") or "").strip()
+        qty = row.get("quantity") or 1
+        if not pn or pn.upper() in _existing_pns:
+            continue
+        if _SDI_PN_RE.match(pn) or pn.upper().endswith("-GA"):
+            continue
+        if not _is_valid_part_identifier(pn):
+            continue
+        if not _is_good_description(pn) and not _is_good_description(dsc):
+            continue
+        effective_pn = pn if len(pn) >= 3 else dsc[:40]
+        effective_desc = dsc or pn
+        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=qty)
+        rec["page_roles"] = ["bought_in"]
+        rec["pages"] = []
+        rec["materials"] = []
+        rec["source"] = "non_sdi_bom_row"
+        _non_sdi_bought_in.append(rec)
+        _existing_pns.add(effective_pn.upper())
+    if _non_sdi_bought_in:
+        parts.extend(_non_sdi_bought_in)
+        if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+            print(
+                f"[DEBUG] Non-SDI BOM rows added as bought_in: "
+                f"{[b['part_number'] for b in _non_sdi_bought_in]}"
+            )
+
+    # Fix C: SDI fabricated parts that never produced a geometry-backed record
+    # (no detail page / no DXF) are still real parts. Capture every such line so
+    # the whole drawing set is costed, not just the parts that happened to have
+    # a DXF. Candidates come from the BOM table AND the detected part-number
+    # list; we require the SDI material-suffix convention (ends in a letter,
+    # e.g. -02M / -05A / -10G) so welded-assembly codes (-201) and -GA/-SA
+    # overviews are excluded. Material is inferred downstream from the suffix;
+    # missing geometry is flagged for manual dimensioning.
+    _bom_meta: Dict[str, Dict[str, Any]] = {}
+    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
+        _rpn = str(row.get("part_number") or "").strip().upper()
+        if _rpn:
+            _bom_meta[_rpn] = row
+    _candidate_pns: List[str] = [str(r.get("part_number") or "").strip()
+                                 for r in (summary.get("document_analysis") or {}).get("bom_rows") or []]
+    _candidate_pns += [str(p) for p in (summary.get("pattern_summary") or {}).get("part_numbers") or []]
+    _sdi_bom_added: List[Dict[str, Any]] = []
+    _seen_candidates: set[str] = set()
+    for pn in _candidate_pns:
+        pn = (pn or "").strip()
+        key = pn.upper()
+        if not pn or key in _existing_pns or key in _seen_candidates:
+            continue
+        _seen_candidates.add(key)
+        if not _SDI_PN_RE.match(pn) or not pn[-1].isalpha():
+            continue  # welded-assembly / GA / SA / non-SDI handled elsewhere
+        _meta = _bom_meta.get(key, {})
+        dsc = str(_meta.get("description") or "").strip()
+        qty = _meta.get("quantity") or 1
+        # Exclude parent/assembly lines to avoid double-counting their
+        # children. "MAIN BODY"/"BODY"/"UNIT" are weldment parents that the
+        # individual panels assemble into — costing both double-counts.
+        _PARENT_KW = ("ASSEMBLY", "WELDED", "WELDMENT", "MAIN BODY",
+                      "BODY", "UNIT", "SUB-ASSY", "SUBASSY", "WELD ASSY")
+        if any(k in dsc.upper() for k in _PARENT_KW):
+            continue  # parent / sub-assembly — its components are costed individually
+        rec = _empty_part_record(pn, item_number=_meta.get("item_number"),
+                                 description=dsc or pn, quantity=qty)
+        rec["page_roles"] = ["bom_only"]
+        rec["source"] = "sdi_bom_row_no_geometry"
+        rec["review_flags"] = ["no_geometry_estimate_incomplete"]
+        _sdi_bom_added.append(rec)
+        _existing_pns.add(key)
+    if _sdi_bom_added:
+        parts.extend(_sdi_bom_added)
+        if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+            print(
+                f"[DEBUG] SDI BOM rows added without geometry (review needed): "
+                f"{[b['part_number'] for b in _sdi_bom_added]}"
+            )
+
+    parts = _apply_post_build_fixes(parts, summary)
+
+    filtered = [p for p in parts if not _is_false_part_number(str(p.get("part_number") or ""))]
+    if len(filtered) < len(parts):
+        import logging
+
+        removed = [
+            str(p.get("part_number"))
+            for p in parts
+            if _is_false_part_number(str(p.get("part_number") or ""))
+        ]
+        logging.getLogger(__name__).info("[FILTER] Removed false part numbers: %s", removed)
+    parts = filtered
+
+    parts = _suppress_pn_fragments(parts, summary)
+
     observations: List[str] = []
     manual_review_items: List[Dict[str, Any]] = []
     assembly_pages = [page["page_number"] for page in summary["pages"] if page.get("page_role", {}).get("primary_role") == "assembly"]
@@ -537,7 +1791,7 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
             observations.append(f"{pn}: slot-like geometry or text cues detected.")
         if part["process_notes"]:
             observations.append(f"{pn}: process notes detected ({'; '.join(part['process_notes'][:3])}).")
-        if part["review_flags"]:
+        if part.get("review_flags"):
             manual_review_items.append(
                 {
                     "part_number": pn,

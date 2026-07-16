@@ -1,5 +1,0 @@
-run_uuid,source_file_name,part_number,comparison_scope,metric_name,manual_value,ai_value,abs_variance,pct_variance,status,notes,manual_source,ai_source
-64933a5e-5135-5d3a-8ef1-1a3e41467813,0351808_HORTI MIDFLOOR LH CORNER SECTION_11234_revB.PDF,,document,total_unit_cost,,863.6211,,,missing_manual,manual benchmark not provided,,workbook_equivalent_pricing
-64933a5e-5135-5d3a-8ef1-1a3e41467813,0351808_HORTI MIDFLOOR LH CORNER SECTION_11234_revB.PDF,,document,sell_price,,863.6211,,,missing_manual,manual benchmark not provided,,workbook_equivalent_pricing
-64933a5e-5135-5d3a-8ef1-1a3e41467813,0351808_HORTI MIDFLOOR LH CORNER SECTION_11234_revB.PDF,,document,labour_hours_total,,4.3917,,,missing_manual,manual benchmark not provided,,estimate_summary.cost_breakdown.labour
-64933a5e-5135-5d3a-8ef1-1a3e41467813,0351808_HORTI MIDFLOOR LH CORNER SECTION_11234_revB.PDF,,document,material_subtotal,,0.04,,,missing_manual,manual benchmark not provided,,estimate_summary.cost_breakdown.material

@@ -1,0 +1,131 @@
+<!-- ============================================================================
+     DROP-IN: replace the existing Labour table in 1310_parity_report_v2.html
+     with this block. Every row now explains WHERE its Rate Per Hour comes from,
+     which of the four mechanisms produced it, and who owns it.
+     ============================================================================ -->
+
+<h2><span class="n">3</span>Labour — every Rate Per Hour explained</h2>
+<p class="lede">The engine writes four cells per row: operation, description, quantity, and the
+   <strong>Rate Per Hour</strong> (pieces/hour). Everything else — department, £/hr, setup, hours, value —
+   is computed by SDI's own template. So the Rate Per Hour is the <em>only</em> number the engine
+   decides, and it is the one to scrutinise. Below, each row states exactly how that number was
+   arrived at.</p>
+
+<div class="box good">
+  <h4>There are only four ways to know a throughput, and each row uses the right one</h4>
+  <p><span class="tag t-good">Formula</span> the template computes it from geometry — we read it.<br>
+     <span class="tag t-good">Derived</span> the drawing carries the driver — we compute it in Python.<br>
+     <span class="tag t-warn">Banded</span> only part size drives it — we use the median of past jobs of that size.<br>
+     <span class="tag t-bad">Estimator</span> only Tim knows it — we cannot derive it, and we flag it.</p>
+</div>
+
+<table>
+  <thead>
+    <tr><th>Operation</th><th class="r">Engine /hr</th><th class="r">Tim /hr</th>
+        <th class="r">£</th><th>How the Rate Per Hour is decided</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Laser (Metal)</strong></td>
+      <td class="r mono">311.1</td><td class="r mono">300</td><td class="r mono">0.45</td>
+      <td><span class="tag t-good">Formula</span>
+        The template's own <strong>Laser Rate Calculator</strong> takes the cutting speed for 2mm
+        (75&nbsp;mm/s), the blank perimeter, 2 holes and the internal cut distance and returns
+        <strong>3600 ÷ 11.6&nbsp;sec = 311/hr</strong>. The engine writes a formula pointing at that cell,
+        so it tracks any change you make to your cutting speeds. <em>Within 4% of Tim.</em></td>
+    </tr>
+    <tr>
+      <td><strong>Fold</strong></td>
+      <td class="r mono">93.8</td><td class="r mono">90</td><td class="r mono">0.84</td>
+      <td><span class="tag t-good">Derived</span>
+        There is no fold calculator in the template — Tim judges it. The engine derives it from the
+        <strong>bend count read out of the DXF</strong> (2 bends), plus a per-bend handling time.
+        <em>Within 4% of Tim, with no calculator to read — the geometry alone was enough.</em></td>
+    </tr>
+    <tr>
+      <td><strong>Robomac</strong></td>
+      <td class="r mono">709</td><td class="r mono">3,000</td><td class="r mono">0.20</td>
+      <td><span class="tag t-warn">Substituted → to be Derived</span>
+        Currently a flat default. It should be <strong>derived from wire length and bend count</strong>, exactly
+        like Fold — the driver is in the geometry. Tim books 3,000/hr to cut this straight 65mm stud
+        and 100/hr to form a 975mm wire frame on 7670: <strong>same operation, 30× apart</strong>, because it
+        is about the wire, not an average. On this job the cost impact is 3p, so it is low priority,
+        but the method is wrong and will be fixed.</td>
+    </tr>
+    <tr>
+      <td><strong>P.Coat</strong></td>
+      <td class="r mono">458</td><td class="r mono">957</td><td class="r mono">2.55</td>
+      <td><span class="tag t-warn">Banded by size</span>
+        No formula can compute how many parts hang on a bar — it depends on the part. We use the
+        <strong>median of past jobs of the same size</strong>. 1310 is a small part, and small parts hang more
+        per bar, so they coat faster: our size band measures <strong>638/hr</strong> for parts this size against
+        the blended 458 we shipped. <em>Wiring that in takes £2.55 → £2.33.</em> The rest of the gap to
+        Tim's £2.00 is the <strong>rate</strong> — see the two-rate-cards note.</td>
+    </tr>
+    <tr>
+      <td><strong>Assemble/pack</strong></td>
+      <td class="r mono">58</td><td class="r mono">120</td><td class="r mono">0.64</td>
+      <td><span class="tag t-warn">Banded by size</span>
+        Same as P.Coat — there is nothing in the geometry that says how long a part takes to bag and
+        box, so we use the median of past jobs of that size. Our size band measures <strong>90/hr</strong> for
+        small parts against the blended 58. <em>£0.64 → £0.46.</em> The residual to Tim's £0.29 is
+        <strong>setup</strong>: our template books 15&nbsp;min, Tim's books 5 — the template-version issue, not the
+        throughput.</td>
+    </tr>
+    <tr>
+      <td><strong>Weld (CO2)</strong></td>
+      <td class="r mono">29</td><td class="r mono">50</td><td class="r mono">1.86</td>
+      <td><span class="tag t-bad">Estimator only</span>
+        Weld time depends on the <strong>number of welds</strong>, which appears on <em>no drawing</em>. It cannot
+        be derived from geometry and it is not a function of part size — the size band for weld is
+        noise (20&nbsp;/&nbsp;12&nbsp;/&nbsp;7.5&nbsp;/&nbsp;15 across the bands). The engine uses a placeholder
+        default and flags it. <strong>This is the single largest gap on the job (£0.61) and it needs a rule
+        from Tim</strong> — see the questions.</td>
+    </tr>
+    <tr class="total">
+      <td>Total labour</td><td></td><td></td><td class="r mono">6.53</td>
+      <td>vs Tim £4.91 — over by £1.62, of which £0.61 is weld alone</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="box warn">
+  <h4>What this table is really showing</h4>
+  <p>The two rows the engine <strong>reads</strong> (Laser, Fold) are within 4%. The four it
+     <strong>substitutes</strong> are all wrong, and all in the same direction. Two of those four
+     (Pack, P.Coat) we can fix from your own history today. One (Robomac) we will fix by deriving it.
+     And one (Weld) we cannot fix at all without a rule from Tim, because the information is on no
+     drawing.</p>
+  <p><strong>The goal is that no row on this table is ever a "substituted" number.</strong> Every one should
+     be read from the template, derived from the drawing, banded from measured history, or — where
+     only the estimator knows — visibly carrying the estimator's own figure with a flag saying so.</p>
+</div>
+
+<h3>And for operations not on this job</h3>
+<p>1310 uses six operations. The engine can emit around two dozen. Each one is being classified into
+   the same four mechanisms:</p>
+<table>
+  <thead><tr><th>Mechanism</th><th>Operations</th><th>State</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tag t-good">Formula</span> read the template</td>
+        <td>Laser (Metal) ✓ &nbsp; Laser (Acrylic) &nbsp; likely Punch, CNC</td>
+        <td>Metal done; Acrylic needs the CNC Rate Calculator read (job 12439 will force it)</td></tr>
+    <tr><td><span class="tag t-good">Derived</span> from geometry</td>
+        <td>Fold ✓ &nbsp; Robomac &nbsp; Tubebend &nbsp; Roll</td>
+        <td>Fold done; the rest are length/bend driven and derivable the same way</td></tr>
+    <tr><td><span class="tag t-warn">Banded</span> by part size</td>
+        <td>Assemble/pack &nbsp; P.Coat &nbsp; likely Guillotine, Saw</td>
+        <td>Pack & P.Coat measured; wiring in now</td></tr>
+    <tr><td><span class="tag t-bad">Estimator</span> only</td>
+        <td>Weld &nbsp; Spotweld &nbsp; Dress Welds</td>
+        <td>Placeholder + flag until Tim gives the rule</td></tr>
+    <tr><td style="color:var(--muted)">Not yet examined</td>
+        <td style="color:var(--muted)">Linebend, Tube, Guillotine, Punch, Roll, Saw, Glue,
+            Diamond Polish, Wet Spray, Edge Banding, and ~6 more</td>
+        <td style="color:var(--muted)">Still a flat default; flagged on any job that uses one, and
+            classified as each new benchmark job reaches them</td></tr>
+  </tbody>
+</table>
+<p>Until an operation is classified and built, it uses a flat default <strong>and says so on the sheet</strong> —
+   an honest placeholder, not a hidden guess. The report will always tell you which rows are read,
+   which are derived, which are banded, and which are still waiting.</p>
