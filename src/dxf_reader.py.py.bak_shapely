@@ -751,81 +751,15 @@ def _shoelace_area(pts: List[Tuple[float, float]]) -> float:
     return abs(area) / 2.0
 
 
-def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbox_area_mm2):
-    """Reconstruct true net blank area (outer contour minus holes) from loose LINE+ARC
-    cut geometry using shapely polygonize. Returns (area_mm2, method, fill_pct).
-
-    Replaces _order_segments/_shoelace_area (endpoint-walk of LINES only, ignored ARCs)
-    which collapsed to ~0 on curved/perforated profiles. ABSTAIN GATE: no ring, or net
-    area not a sane fraction of bbox (fill 30-100%) -> return bbox flagged, never garbage.
-    Falls back to bbox if shapely is unavailable. Proven on all 14 job-1282 DXFs.
-    """
-    try:
-        from shapely.ops import polygonize, unary_union, snap as _snap
-        from shapely.geometry import LineString, Point
-        import math as _m
-    except Exception:
-        return (bbox_area_mm2, "bbox_no_shapely", 100.0)
-
-    segs = []
-    _sag = 0.20 / max(scale, 1e-9)
-    for e in cut_lines:
-        a = (e.dxf.start.x * scale, e.dxf.start.y * scale)
-        b = (e.dxf.end.x * scale, e.dxf.end.y * scale)
-        if _m.dist(a, b) > 1e-6:
-            segs.append(LineString([a, b]))
-    for e in cut_arcs:
-        try:
-            pts = [(v.x * scale, v.y * scale) for v in e.flattening(_sag)]
-        except Exception:
-            continue
-        for i in range(len(pts) - 1):
-            if _m.dist(pts[i], pts[i + 1]) > 1e-6:
-                segs.append(LineString([pts[i], pts[i + 1]]))
-    if not segs:
-        return (bbox_area_mm2, "bbox_no_segments", 100.0)
-
-    net = unary_union(segs)
-    try:
-        net = _snap(net, net, 0.05)           # weld sub-micron CAD endpoint gaps (mm)
-    except Exception:
-        pass
-    polys = list(polygonize(unary_union(net)))
-    if not polys:
-        return (bbox_area_mm2, "bbox_polygonize_empty", 0.0)
-
-    outer = max(polys, key=lambda p: p.area)
-    interior = [p for p in polys if p is not outer]
-    net_area = max(0.0, outer.area - sum(p.area for p in interior))
-
-    for e in (cut_circs or []):
-        try:
-            r = float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
-            if r < 0.5:
-                continue
-            c = (e.dxf.center.x * scale, e.dxf.center.y * scale)
-            disc = Point(c).buffer(r, resolution=16)
-            if outer.contains(disc.representative_point()):
-                net_area = max(0.0, net_area - disc.area)
-        except Exception:
-            continue
-
-    fill = (100.0 * net_area / bbox_area_mm2) if bbox_area_mm2 > 0 else 0.0
-    if not (30.0 <= fill <= 100.5):
-        return (bbox_area_mm2, "bbox_fill_out_of_band", round(fill, 1))
-    return (round(net_area, 2), "shapely_polygonize", round(fill, 1))
-
-
 def _exact_perimeter_and_area(
     cut_lines: List[Any],
     cut_arcs:  List[Any],
     scale: float,
-    cut_circs: List[Any] = None,
 ) -> Dict[str, float]:
     """
     Compute exact perimeter (laser cut length) and polygon area from the
-    cut-outline layer.  Net area comes from shapely polygonize (outer contour minus
-    holes); arc-length is added to the perimeter (laser cut length).
+    cut-outline layer.  Lines are ordered for the shoelace; arcs add their
+    arc-length to perimeter but are not included in the polygon.
     """
     line_length = sum(
         _dist2d(
@@ -854,17 +788,13 @@ def _exact_perimeter_and_area(
 
     bbox_area = blank_length * blank_width
 
-    # Net area via shapely polygonize (outer contour minus holes). Replaces the
-    # _order_segments endpoint-walk, which ignored ARCs and collapsed to ~0 on any
-    # profile with curved corners/holes (peg panel 90mm2 for a 553x525 part). Proven on
-    # all 14 job-1282 DXFs: 14/14 close, fill 83-100%. Abstains to bbox (flagged) if the
-    # reconstruction is implausible, so a bad export never poisons area/weight/powder.
-    area, _area_method, fill_pct = _shapely_net_area_mm2(
-        cut_lines, cut_arcs, cut_circs, scale, bbox_area
-    )
+    # Shoelace area
+    pts  = _order_segments(cut_lines, scale=scale)
+    area = _shoelace_area(pts)
     if area < 1.0 and bbox_area > 0:
-        area = bbox_area                      # last-resort guard (function already abstains)
-        _area_method = "bbox_guard"
+        area = bbox_area          # fallback if ordering failed
+
+    fill_pct = round(100.0 * area / bbox_area, 1) if bbox_area > 0 else 0.0
 
     return {
         "perimeter_mm":   round(perimeter, 3),
@@ -873,7 +803,6 @@ def _exact_perimeter_and_area(
         "blank_length_mm": blank_length,
         "blank_width_mm":  blank_width,
         "bbox_fill_pct":   fill_pct,
-        "area_method":     _area_method,
     }
 
 
@@ -1163,7 +1092,7 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
     cut_arcs  = _get_layer_entities(msp, CUT_LAYERS, {"ARC"})
     cut_circs = _get_layer_entities(msp, CUT_LAYERS, {"CIRCLE"})
 
-    outline  = _exact_perimeter_and_area(cut_lines, cut_arcs, scale, cut_circs)
+    outline  = _exact_perimeter_and_area(cut_lines, cut_arcs, scale)
     notches  = _detect_corner_notches(cut_lines, scale)
 
     # Holes — circles on CUT_LAYERS or all layers (excluding tiny features)

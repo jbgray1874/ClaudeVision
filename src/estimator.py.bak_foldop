@@ -2147,26 +2147,6 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_times_min["hole_machining"] = round(rule["setup_min"], 2)
         run_times_min["hole_machining"] = round((holes * rule["sec_per_hole"]) / 60.0, 2)
 
-    # ---- Fold operation inference (general, evidence-based) ----------------------
-    # A part folds if it carries fold evidence — PDF callouts (UP/DOWN + angle -> angles_deg
-    # / fold_count_textual), a DXF BENDLINES bend count, or textual bend mentions — even when
-    # the extractor did not emit "folding" in textual_operations (folds often live ONLY in the
-    # PDF, not a DXF layer). Add the op so it is costed. Same shape as the laser/punch
-    # inference above. Sheet metal / board ONLY: a tube is bent on a tubebender (its own op),
-    # a bought section is not press-folded. Uses `bends` (already set from PDF fold evidence).
-    if "folding" not in ops and (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and not _section_no_dxf:
-        _fold_evidence = (
-            (bends or 0) > 0
-            or len(part.get("angles_deg") or []) > 0
-            or int(part.get("fold_count_textual") or 0) > 0
-            or int((part.get("manufacturing_features") or {}).get("bend_count") or 0) > 0
-        )
-        if _fold_evidence:
-            ops = list(ops) + ["folding"]
-            part.setdefault("inferred_operations", [])
-            if "folding" not in part["inferred_operations"]:
-                part["inferred_operations"].append("folding")
-
     if "folding" in ops:
         rule = LABOUR_RULES["folding"]
         setup_times_min["folding"] = round(rule["setup_min"], 2)

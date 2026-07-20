@@ -31,14 +31,6 @@ def infer_hole_count(part: Dict[str, Any], geometry_confidence: float) -> int:
 
 
 def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
-    # DXF flat-pattern is what the press brake actually bends from — it is ground
-    # truth for bend count. When a genuine flat-pattern DXF is present, its bend
-    # count is authoritative and WINS over the text / dashed-line proxies below
-    # (which can mistake a dashed centre line or a shared 'fold' note for a real
-    # bend). A DXF-confirmed 0 must mean 0 folds — not fall through to proxies.
-    if part.get("flat_pattern_detected") and part.get("geometry_source") == "dxf_flat_pattern":
-        _gr = part.get("geometry_rollup") or {}
-        return int(_gr.get("estimated_bend_line_count", 0) or 0)
     angle_count = len(part.get("angles_deg", []))
     fold_value_count = len(part.get("fold_values_mm", []))
     fold_text_count = part.get("fold_count_textual", 0)

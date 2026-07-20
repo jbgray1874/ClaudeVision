@@ -1,0 +1,2 @@
+job,date,qty,drawing,rev,manual_material,manual_labour,manual_unit,engine_material,engine_labour,engine_doc_total,engine_status,miss_packing,miss_tube,miss_board,miss_fixings,miss_edging,miss_powder,miss_other
+1282 - Milwaukee Wall Bay,2026-07-20,100.0,1282.0,7.0,90.6,55.92,168.67976498261524,108.63,69.25,187.43,ok,5.36,15.18,0,1.8,0,3.33,37.47

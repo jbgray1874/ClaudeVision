@@ -871,33 +871,6 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             and all(r == "assembly" for r in page_roles)
             and not _is_wire_part
         ):
-            # Before dropping this assembly-only, zero-geometry line: if it is a
-            # bought-in COMMODITY (a described purchased item, not an SDI drawing
-            # part), tag it "bought_in" so the estimator's bought-in reconciler can
-            # fold it against the note-scan / manual-sheet duplicate (e.g. the loom:
-            # "ELECTRICS 50CM" vs "BI-50CMLOOM"). SDI drawing refs (1455-C-101,
-            # 1455-C-GA) and any geometry-bearing part are excluded, so real
-            # sub-assemblies and make-parts are never mis-tagged. We still fall through
-            # to the drop below — a bought-in line needs no fabrication ops.
-            import re as _re_bi
-            _pn_bi = str(part.get("part_number") or "").strip().upper()
-            _has_geom_bi = bool(
-                part.get("dxf_augmented")
-                or part.get("blank_length_mm")
-                or part.get("overall_length_mm")
-                or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2")
-            )
-            if (
-                _pn_bi
-                and not _re_bi.match(r"^\d{3,5}-", _pn_bi)
-                and not _has_geom_bi
-                and _is_good_description(part.get("description"))
-                and "bought_in" not in page_roles
-            ):
-                part["page_roles"] = list(page_roles) + ["bought_in"]
-                part.setdefault("review_flags", []).append(
-                    "assembly_page_bought_in_commodity_retagged"
-                )
             continue
 
         current_ops: List[str] = part.get("textual_operations", [])
@@ -1347,49 +1320,6 @@ def _parse_wire_schedule(page_text: str) -> List[Dict[str, Any]]:
     return results
 
 
-def _dominant_part_prefix(parts: list) -> str:
-    """Most common '<prefix>-' among parts that have real geometry or a DXF.
-    Used to spot foreign-format detail callouts without hard-coding a job code."""
-    from collections import Counter
-    counts: Counter = Counter()
-    for p in parts:
-        pn = str(p.get("part_number") or "")
-        has_geom = bool(p.get("geometry_source")) or bool(p.get("flat_pattern_detected")) or bool(p.get("dxf_source_file"))
-        if has_geom and "-" in pn:
-            counts[pn.rsplit("-", 1)[0]] += 1
-    if not counts:
-        # fall back: most common prefix among ALL hyphenated part numbers
-        for p in parts:
-            pn = str(p.get("part_number") or "")
-            if "-" in pn:
-                counts[pn.rsplit("-", 1)[0]] += 1
-    return counts.most_common(1)[0][0] if counts else ""
-
-
-def _is_detail_callout_phantom(part: dict, dominant_prefix: str) -> bool:
-    """A content-free detail-view balloon reference (e.g. 'B-03', 'D-M4')
-    mistaken for a part. Removes it from ALL costing. Requires the FULL empty
-    signature AND a foreign part-number so real assemblies (which have a
-    description AND the standard prefix) are never caught."""
-    pn = str(part.get("part_number") or "")
-    if not pn:
-        return False
-    desc = part.get("description")
-    if desc is not None and str(desc).strip():
-        return False  # real BOM items have a description
-    roles = part.get("page_roles") or []
-    if roles != ["detail"]:
-        return False  # only pure detail-view callouts (not bought_in/assembly/bom_only)
-    if part.get("geometry_source") or part.get("flat_pattern_detected") or part.get("dxf_source_file"):
-        return False  # any real geometry/DXF => not a phantom
-    if part.get("normalized_thickness_mm") is not None:
-        return False
-    # foreign part-number format (does not share the job's dominant prefix)
-    if dominant_prefix and (pn == dominant_prefix or pn.startswith(dominant_prefix + "-") or pn.rsplit("-", 1)[0] == dominant_prefix):
-        return False  # matches the job prefix => a real part that merely lost its desc
-    return True
-
-
 def _is_false_part_number(pn: str) -> bool:
     """Thread callouts and fastener specs mistaken as SDI part numbers."""
     if not pn:
@@ -1817,17 +1747,7 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
 
     parts = _apply_post_build_fixes(parts, summary)
 
-    _dom_prefix = _dominant_part_prefix(parts)
-    _phantoms = [str(p.get("part_number")) for p in parts if _is_detail_callout_phantom(p, _dom_prefix)]
-    if _phantoms:
-        import logging as _lg
-        _lg.getLogger(__name__).info("[PHANTOM-FILTER] Removed detail-callout phantoms: %s", _phantoms)
-        print("[PHANTOM-FILTER] Removed detail-callout phantoms:", _phantoms, flush=True)
-    filtered = [
-        p for p in parts
-        if not _is_false_part_number(str(p.get("part_number") or ""))
-        and not _is_detail_callout_phantom(p, _dom_prefix)
-    ]
+    filtered = [p for p in parts if not _is_false_part_number(str(p.get("part_number") or ""))]
     if len(filtered) < len(parts):
         import logging
 

@@ -1,0 +1,2099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDI Intelligence — AI Landscape Review</title>
+<style>
+  :root {
+    --steel:    #1C2B3A;
+    --cut:      #00C2FF;
+    --fold:     #FF6B35;
+    --sheet:    #F0F4F8;
+    --rule:     #2E4257;
+    --dim:      #6B8BA4;
+    --good:     #22C55E;
+    --warn:     #F59E0B;
+    --gap:      #EF4444;
+    --text:     #E8EEF4;
+    --subtext:  #94B0C8;
+    --card:     #1E3248;
+    --border:   #2A4160;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--steel);
+    color: var(--text);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── HEADER ────────────────────────────────────── */
+  header {
+    border-bottom: 1px solid var(--cut);
+    padding: 28px 40px 20px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .logo-block { display: flex; flex-direction: column; gap: 4px; }
+  .logo-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--cut);
+    font-weight: 600;
+  }
+  .logo-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .logo-sub {
+    font-size: 12px;
+    color: var(--subtext);
+    margin-top: 2px;
+  }
+  .run-meta {
+    text-align: right;
+    font-size: 11px;
+    color: var(--dim);
+    line-height: 1.8;
+  }
+  .run-meta strong { color: var(--subtext); }
+
+  /* ── MAIN GRID ─────────────────────────────────── */
+  main { padding: 32px 40px; max-width: 1400px; }
+
+  /* ── SECTION HEADERS ───────────────────────────── */
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 40px 0 16px;
+  }
+  .section-label .notch {
+    width: 4px; height: 22px;
+    background: var(--cut);
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .section-label h2 {
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--cut);
+    font-weight: 700;
+  }
+  .section-label p {
+    font-size: 12px;
+    color: var(--subtext);
+    margin-left: auto;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  /* ── TABLE ─────────────────────────────────────── */
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    background: var(--rule);
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--subtext);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+  tbody tr:hover { background: rgba(0,194,255,0.05); }
+  tbody td {
+    padding: 11px 14px;
+    vertical-align: top;
+    color: var(--text);
+  }
+  tbody td.name { font-weight: 600; color: var(--text); white-space: nowrap; }
+  tbody td.desc { color: var(--subtext); font-size: 12px; max-width: 300px; }
+  tbody td.endpoint { font-family: 'Courier New', monospace; font-size: 11px; color: var(--cut); }
+  tbody td.note { font-size: 12px; color: var(--subtext); max-width: 260px; }
+
+  /* ── STATUS CHIPS ──────────────────────────────── */
+  .chip {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .chip-live    { background: rgba(34,197,94,.15);  color: var(--good); border: 1px solid rgba(34,197,94,.3); }
+  .chip-current { background: rgba(0,194,255,.12);  color: var(--cut);  border: 1px solid rgba(0,194,255,.3); }
+  .chip-try     { background: rgba(245,158,11,.12); color: var(--warn); border: 1px solid rgba(245,158,11,.3); }
+  .chip-explore { background: rgba(239,68,68,.10);  color: var(--gap);  border: 1px solid rgba(239,68,68,.25); }
+  .chip-free    { background: rgba(34,197,94,.08);  color: #4ade80;     border: 1px solid rgba(34,197,94,.2); }
+
+  /* ── CARD GRID ─────────────────────────────────── */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .card:hover { border-color: rgba(0,194,255,.4); }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .card-title { font-weight: 700; font-size: 14px; }
+  .card-body { font-size: 12px; color: var(--subtext); line-height: 1.7; }
+  .card-action {
+    margin-top: auto;
+    font-size: 11px;
+    color: var(--cut);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(255,255,255,.06);
+    color: var(--subtext);
+    font-weight: 500;
+  }
+
+  /* ── CHECKLIST ─────────────────────────────────── */
+  .checklist { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .checklist li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: 13px;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .checklist li .icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .checklist li .body { flex: 1; }
+  .checklist li .body strong { color: var(--text); display: block; margin-bottom: 2px; }
+  .checklist li .body span { color: var(--subtext); font-size: 12px; }
+
+  /* ── FOOTER ────────────────────────────────────── */
+  footer {
+    margin-top: 56px;
+    border-top: 1px solid var(--border);
+    padding: 20px 40px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  /* ── UTILITY ───────────────────────────────────── */
+  .mt-sm { margin-top: 8px; }
+  .dim { color: var(--dim); font-size: 11px; }
+  .rule { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-block">
+    <span class="logo-eyebrow">SDI Displays Ltd</span>
+    <span class="logo-title">SDI Intelligence — AI Landscape Review</span>
+    <span class="logo-sub">Technology watch for the Model Engine estimating pipeline</span>
+  </div>
+  <div class="run-meta">
+    <strong>Generated:</strong> <span id="ts"></span><br>
+    <strong>Owner:</strong> James Gray<br>
+    <strong>Re-run:</strong> Open in browser &amp; refresh
+  </div>
+</header>
+
+<main>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 1 — LLM FINDER / PRICER CANDIDATES
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>LLM Finder &amp; Pricing Candidates</h2>
+    <p>What the engine can call for note-scan, part identification, and web/LLM price estimates</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Model / Endpoint</th>
+          <th>Status vs Engine</th>
+          <th>API String</th>
+          <th>Strengths for SDI</th>
+          <th>Watch Point</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="name">xAI Grok</td>
+          <td><strong>grok-4.3</strong> (live)</td>
+          <td><span class="chip chip-current">Current finder</span></td>
+          <td class="endpoint">api.x.ai/v1/chat/completions</td>
+          <td class="desc">OpenAI-compatible reasoning model, good JSON compliance. Already the active LLM for note-scan identification and web/LLM price fallback.</td>
+          <td class="note">Temperature fix deployed (0.1→0.0); seed=7 unverified by API; loom price accuracy still web-estimate (£2–9 vs Tim's £24) — structural fix is RS Components API or UDEF entry</td>
+        </tr>
+        <tr>
+          <td class="name">Anthropic Claude</td>
+          <td>claude-sonnet-4-6 / claude-opus-4-6</td>
+          <td><span class="chip chip-try">Try next</span></td>
+          <td class="endpoint">api.anthropic.com/v1/messages</td>
+          <td class="desc">_call_anthropic_llm already wired in web_ai_price_lookup.py; deterministic at temp 0; strong structured output</td>
+          <td class="note">Costs more per call than Grok; check budget impact on batch runs. Swap in as finder to compare note-scan stability.</td>
+        </tr>
+        <tr>
+          <td class="name">OpenAI GPT-4o</td>
+          <td>gpt-4o / gpt-4o-mini</td>
+          <td><span class="chip chip-try">Try next</span></td>
+          <td class="endpoint">api.openai.com/v1/chat/completions</td>
+          <td class="desc">Best JSON mode in class; seed parameter honoured; temp 0 genuinely deterministic; large context</td>
+          <td class="note">No existing call path in engine — needs _call_openai_llm added (small, same shape as xAI call). GPT-4o-mini much cheaper for finder-only role.</td>
+        </tr>
+        <tr>
+          <td class="name">OpenAI o3 / o4-mini</td>
+          <td>o3, o4-mini</td>
+          <td><span class="chip chip-explore">Explore</span></td>
+          <td class="endpoint">api.openai.com/v1/chat/completions</td>
+          <td class="desc">Reasoning model; could help on complex weld/tube routing decisions; structured output</td>
+          <td class="note">Overkill for BOM identification; better for architectural decisions. Costly — scope to specific sub-tasks only.</td>
+        </tr>
+        <tr>
+          <td class="name">Google Gemini</td>
+          <td>gemini-2.0-flash / gemini-2.5-pro</td>
+          <td><span class="chip chip-explore">Explore</span></td>
+          <td class="endpoint">generativelanguage.googleapis.com/v1beta</td>
+          <td class="desc">Native multimodal — can read PDF pages as images directly; useful for PDF-geometry extraction bypass</td>
+          <td class="note">Different auth model (Google API key); no existing call path. Flash is very fast and cheap for simple extraction tasks.</td>
+        </tr>
+        <tr>
+          <td class="name">Mistral / Mixtral</td>
+          <td>mistral-large-2, codestral</td>
+          <td><span class="chip chip-explore">Explore</span></td>
+          <td class="endpoint">api.mistral.ai/v1</td>
+          <td class="desc">OpenAI-compatible API, European data residency, cheaper than GPT-4o for high-volume runs</td>
+          <td class="note">Less tested on UK trade/manufacturing vocab. Benchmark note-scan quality before adopting.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 2 — PDF / DXF / DRAWING INTELLIGENCE
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>SDI Estimating Intelligence — PDF, DXF &amp; Vision</h2>
+    <p>Extracting geometry and BOM data from engineering drawings</p>
+  </div>
+
+  <div class="card-grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Gemini Vision (Native PDF)</span>
+        <span class="chip chip-try">Try next</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">PDF → image → LLM</span>
+        <span class="tag">BOM extraction</span>
+        <span class="tag">Geometry bypass</span>
+      </div>
+      <p class="card-body">
+        Gemini 2.0 Flash can ingest a PDF page as a base64 image and return structured BOM rows,
+        part dimensions, and title-block fields in a single API call — bypassing the pdfplumber
+        vector-path extraction entirely. Directly targets the 2621-01C inflation problem.
+        Could replace geometry_features.py for PDF-only parts.
+      </p>
+      <p class="card-action">→ Investigate: api.google.com Gemini Files API</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Claude Vision (Base64 PDF)</span>
+        <span class="chip chip-try">Try next</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Already authenticated</span>
+        <span class="tag">Title-block reading</span>
+        <span class="tag">BOM OCR</span>
+      </div>
+      <p class="card-body">
+        Anthropic API already accepts PDF pages as base64 images. No new auth needed.
+        Could extract title-block scale, material, and BOM table data with a single structured
+        prompt — more reliable than the current regex-over-text-dump approach for
+        malformed or rotated title blocks.
+      </p>
+      <p class="card-action">→ Prototype: send 1282 page 20 (fixings BOM) as image; compare to current parser</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">GPT-4o Vision</span>
+        <span class="chip chip-try">Try next</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Image input</span>
+        <span class="tag">Drawing QA</span>
+        <span class="tag">Part identification</span>
+      </div>
+      <p class="card-body">
+        GPT-4o accepts engineering drawing images and can describe geometry, identify tube vs
+        sheet parts, flag unusual features (EASY FOLDS, masking notes), and return structured
+        JSON. Useful as a QA layer on top of the DXF reader for edge cases.
+      </p>
+      <p class="card-action">→ Test: send 1455-C-001 (header base) DXF render; check bend-count agreement</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">High-Resolution PDF Rasterisation</span>
+        <span class="chip chip-try">Try next</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">pymupdf / fitz</span>
+        <span class="tag">300–600 DPI</span>
+        <span class="tag">Vision LLM input</span>
+      </div>
+      <p class="card-body">
+        Current pdfplumber extraction works on vector paths. For dimension and BOM reading,
+        rasterising at 300 DPI+ (pymupdf: <code>page.get_pixmap(dpi=300)</code>) then sending to
+        a vision LLM gives far better results on multi-view sheets with section callouts.
+        Directly addresses the note-scan missing-items and the 2621-01C over-extraction.
+      </p>
+      <p class="card-action">→ Add pymupdf to venv; prototype rasterise + Gemini Flash call per page</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">SolidWorks COM API</span>
+        <span class="chip chip-explore">Explore</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">win32com</span>
+        <span class="tag">SLDPRT / SLDASM</span>
+        <span class="tag">Ground-truth BOM</span>
+      </div>
+      <p class="card-body">
+        <code>win32com.client.Dispatch("SldWorks.Application")</code> opens the running SolidWorks
+        instance or a file. Can pull flat-pattern cut-length, thickness, material, and native BOM
+        directly — the values the designer intended, not an extracted approximation.
+        Requires SolidWorks licence on the estimating machine and a stable API path.
+      </p>
+      <p class="card-action">→ Feasibility: does the estimating machine run SolidWorks? Can the API be called headless?</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">SolidWorks Document API / PDM</span>
+        <span class="chip chip-explore">Explore</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">EPDM / PDM Standard</span>
+        <span class="tag">Revision control</span>
+        <span class="tag">BOM pull</span>
+      </div>
+      <p class="card-body">
+        If SDI runs SolidWorks PDM (Product Data Management), the vault API can query by
+        drawing number and return the latest revision, BOM, and associated DXF path —
+        replacing the current folder-scan + DXF-matching logic with a structured lookup.
+        Could eliminate the three-1450-file ambiguity problem entirely.
+      </p>
+      <p class="card-action">→ Check: does SDI use PDM / EPDM? If yes, vault API is highest-value integration.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">ezdxf Flat-Pattern Export</span>
+        <span class="chip chip-live">Already in use</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Live</span>
+        <span class="tag">BENDLINES layer</span>
+        <span class="tag">Verified this session</span>
+      </div>
+      <p class="card-body">
+        The current DXF reader uses ezdxf. Bend-line exclusion fix deployed this session.
+        The library handles AC1009–AC1032 DXF formats and supports INSUNITS/MEASUREMENT
+        header reads. Already the strongest geometry path; no replacement needed — extend it.
+      </p>
+      <p class="card-action">→ Next: add INSUNITS=0 bounding-box sanity guard per handoff</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Gemini Versions — What's Current (July 2026)</span>
+        <span class="chip chip-try">Important: 2.0 is retired</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">2.0 → RETIRED Jun 2026</span>
+        <span class="tag">2.5 → retiring Oct 2026</span>
+        <span class="tag">3.5 Flash → current</span>
+      </div>
+      <p class="card-body">
+        Google's model cadence is fast. Gemini 2.0 (Feb 2025) is already shut down as of June 1, 2026.
+        Gemini 2.5 replaced it but itself retires October 16, 2026. The current production model is
+        <strong>Gemini 3.5 Flash</strong> (released May 19, 2026) — that's what you'd actually call
+        in a new integration. Any code hardcoded to <code>gemini-2.0-flash</code> will already be
+        returning errors. When evaluating Gemini for the SDI engine, use <code>gemini-3.5-flash</code>
+        and abstract the model string behind a config variable (same discipline as the xAI model string
+        in config.py) so future Google rotations are one-line updates rather than re-architectures.
+      </p>
+      <p class="card-action">→ Use: gemini-3.5-flash (GA) · Next: gemini-3.5-pro (in testing, Aug 2026 expected)</p>
+    </div>
+
+    <div class="card" style="border-color:var(--cut);grid-column:1/-1;">
+      <div class="card-head">
+        <span class="card-title">🏗 SolidWorks COM API — The Primary Data Source for SDI-Originated Jobs</span>
+        <span class="chip chip-live">SolidWorks is licensed ✓ — build this first</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">win32com</span><span class="tag">£0 per call</span><span class="tag">Ground-truth geometry</span>
+        <span class="tag">Eliminates PDF-geometry pipeline</span><span class="tag">Direct ingestion — no file-hunting</span>
+      </div>
+      <p class="card-body">
+        Since SolidWorks is already licensed on the estimating machine, <strong>the COM API is the primary data path for all SDI-originated drawings</strong> — not a future option. This single decision eliminates the entire PDF-geometry extraction problem class (the BENDLINES inflation bug, the 2621-01C 1.77× calibration error, the credibility gate firing) because you are reading from the model rather than reconstructing it from a drawing export.
+        <br><br>
+        <strong>What the API returns, per part:</strong><br>
+        <code>win32com.client.Dispatch("SldWorks.Application")</code> then open the <code>.sldprt</code> file — from it you can read directly:
+        <ul style="margin:8px 0 8px 18px;color:var(--subtext);font-size:12px;line-height:2;">
+          <li><strong>Flat-pattern dimensions:</strong> <code>SW-Bounding Box Length</code>, <code>SW-Bounding Box Width</code> — the exact laser-cut sheet size with no extraction noise</li>
+          <li><strong>Cut perimeter:</strong> flat-pattern boundary via Sheet Metal feature — actual cut path, not vector-path sum</li>
+          <li><strong>Bend count and bend allowance:</strong> <code>SW-Number of Bends</code>, <code>SW-Bend Allowance</code> — the values the press-brake operator actually works to</li>
+          <li><strong>Material and thickness:</strong> <code>SW-Material</code>, <code>SW-Sheet Metal Thickness</code> — the designer's intent, not a text scan</li>
+          <li><strong>Weight:</strong> <code>SW-Mass</code> — feeds material cost calculation directly</li>
+          <li><strong>Custom properties:</strong> Description, Finish, Supplier, Revision — whatever fields the Design team have populated</li>
+          <li><strong>Hole count and sizes:</strong> from sheet metal feature punch lists or hole wizard features</li>
+        </ul>
+        <strong>From the <code>.sldasm</code> assembly file:</strong>
+        <ul style="margin:8px 0 8px 18px;color:var(--subtext);font-size:12px;line-height:2;">
+          <li><strong>BOM table:</strong> <code>IFeatureManager → GetTableAnnotations</code> gives part number, description, quantity per assembly — exact values, no regex, no text-dump ambiguity</li>
+          <li><strong>Assembly tree quantities:</strong> sub-assembly multipliers (the bom_tree 1→2 ×2 problem) are already resolved in the SW BOM — FIXING125 comes back as 4 automatically because SW counted it at the assembly level</li>
+          <li><strong>Weldment cut list:</strong> for structural members (tubes, sections like 3886-01) — <code>LENGTH</code>, <code>QTY</code>, <code>MATERIAL</code>, <code>PROFILE</code> from the weldment cut list property. This directly replaces the tube catalogue-lookup guessing — you get the exact section type, length, and quantity as designed</li>
+        </ul>
+        <strong>From the <code>.slddrw</code> drawing file:</strong>
+        <ul style="margin:8px 0 8px 18px;color:var(--subtext);font-size:12px;line-height:2;">
+          <li><strong>Notes and annotations:</strong> the assembly notes on page 10 ("FIXING5 4.0×10mm DOME RIVET 2... JUNCTION BOX...") are structured note objects in SW, not free text in a PDF. They can be read as strings via the drawing API — cleaner source for the note-scan finder than pdfplumber</li>
+          <li><strong>Title block fields:</strong> MATERIAL, REVISION, DATE, DESCRIPTION — as structured data, not text dump to regex</li>
+          <li><strong>Scale:</strong> the calibration problem (page 9's 1.77× mystery) doesn't exist when you read the actual drawing scale property</li>
+        </ul>
+        <strong>Direct ingestion — no file hunting:</strong> the COM API opens files by path. Point it at the SolidWorks project folder, enumerate all <code>.sldasm</code> files, open each, extract. No folder scanning, no PDF-to-text extraction, no DXF matching. The engine's <code>drawing_job_merge.py</code> file-scan step becomes a SW project folder walk instead. The "stray-space filename" bug (<code>_revA .dxf</code>) and the three-1450-file ambiguity disappear because SW part numbers are unambiguous model identifiers.
+        <br><br>
+        <strong>Cost: £0 per call.</strong> The licence is already paid. Running cost is local compute: COM API calls take 1–5 seconds per part to open and extract. A 15-part job takes under 2 minutes total, running in the background while the designer is doing something else.
+        <br><br>
+        <strong>Integration pattern:</strong> The Python call shape is identical to what the engine already does with pyodbc (open connection, query, close). Replace <code>pyodbc.connect(...)</code> with <code>win32com.client.Dispatch("SldWorks.Application")</code>. The rest of the estimating pipeline (pricing, credibility gate, workbook population) is untouched.
+      </p>
+      <p class="card-action">→ Build this first. One Python module (~200 lines), replaces geometry_features.py for all SDI-originated drawings. No infrastructure change needed — SW is already running on the machine.</p>
+    </div>
+
+    <!-- SolidWorks Alternatives Card -->
+    <div class="card" style="grid-column:1/-1;">
+      <div class="card-head">
+        <span class="card-title">SolidWorks Alternatives — Do They Provide the Same Benefit? Honest Comparison</span>
+        <span class="chip chip-try">Read before switching platforms</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Fusion 360 ~£550/seat/yr</span>
+        <span class="tag">Onshape ~£1,200/seat/yr</span>
+        <span class="tag">Inventor ~£2,250/seat/yr</span>
+        <span class="tag">FreeCAD free</span>
+        <span class="tag">SW Standard ~£2,544/seat/yr</span>
+      </div>
+      <p class="card-body">
+        Since SolidWorks is already licensed at SDI, this is an informational comparison — not a recommendation to switch. The honest question is: <strong>if SDI ever moved to a different CAD platform, would the estimating engine get the same data quality?</strong> And: if SDI adds design seats, is there a cost case for a different tool?
+        <br><br>
+        The answer to both is nuanced, because the API integration model differs significantly between platforms. For the SDI Intelligence engine, which pulls data <em>externally</em> from a running Python script (the `sw_extractor.py` module calling `win32com.client.Dispatch("SldWorks.Application")`), the only platforms that support this same external-call pattern are the ones with Windows COM APIs. Others require a different integration architecture.
+      </p>
+
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Platform</th>
+              <th>UK cost/seat/yr</th>
+              <th>Sheet metal capability</th>
+              <th>API type for SDI engine</th>
+              <th>Flat-pattern extraction</th>
+              <th>BOM / assembly qty</th>
+              <th>Drawing notes (structured)</th>
+              <th>SDI verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="background:rgba(0,194,255,0.07);">
+              <td class="name">SolidWorks Standard<br><span class="dim">Current — already licensed</span></td>
+              <td>~£2,544 subscription<br><span class="dim">or £4,463 perpetual + £1,060/yr maintenance</span></td>
+              <td class="desc">Full sheet metal module. SW-Bounding Box, SW-Number of Bends, SW-Sheet Metal Thickness, weldment cut lists. Industry standard for sheet metal fabrication.</td>
+              <td class="endpoint">win32com (COM API). External Python call. <code>Dispatch("SldWorks.Application")</code></td>
+              <td><span class="chip chip-live">✓ Ground truth</span></td>
+              <td><span class="chip chip-live">✓ Via IBomTableAnnotation</span></td>
+              <td><span class="chip chip-live">✓ Via INote objects in .slddrw</span></td>
+              <td><span class="chip chip-live">Build now. Already licensed.</span></td>
+            </tr>
+            <tr>
+              <td class="name">Autodesk Fusion 360<br><span class="dim">Most popular alternative</span></td>
+              <td>~£550/seat/yr<br><span class="dim">($690 USD). 15–25% of SW cost.</span></td>
+              <td class="desc">Full sheet metal workspace with flat pattern, bend deduction, K-factor, material rules, DXF export. Roughly 90% of SolidWorks sheet metal capability. Also includes integrated CAM and simulation.</td>
+              <td class="endpoint"><strong>Different API model.</strong> Python API runs <em>inside</em> Fusion as an add-in (<code>adsk.fusion</code>), not from an external script. No COM equivalent. For SDI engine, you'd need a Fusion add-in that <em>pushes</em> data to the engine (e.g. writes JSON to a watched folder), rather than the engine <em>pulling</em> from Fusion on demand. Achievable but a different architecture.</td>
+              <td><span class="chip chip-try">✓ Via FlatPattern API — but requires in-app script</span></td>
+              <td><span class="chip chip-try">✓ Via BOM in drawing API — in-app script</span></td>
+              <td><span class="chip chip-try">✓ Notes readable via drawing API — in-app script</span></td>
+              <td><span class="chip chip-try">Good sheet metal capability. API architecture is different — engine can't call it externally the same way. If SDI adds seats, cost case is strong (£550 vs £2,544/seat). Migration cost: 8–12 weeks transition + file conversion.</span></td>
+            </tr>
+            <tr>
+              <td class="name">Autodesk Inventor<br><span class="dim">Enterprise SW equivalent</span></td>
+              <td>~£2,250/seat/yr<br><span class="dim">Part of Autodesk AEC/MFG suite</span></td>
+              <td class="desc">Full sheet metal module. Very similar capability to SolidWorks. Inventor also has weldment and structural framing tools relevant to SDI's tube/section parts.</td>
+              <td class="endpoint"><strong>COM API — same pattern as SW.</strong> <code>win32com.client.Dispatch("Inventor.Application")</code>. The sw_extractor.py module would need re-mapping to Inventor's object model but the <em>integration architecture is identical</em>. External Python call supported.</td>
+              <td><span class="chip chip-live">✓ Via PartDocument sheet metal API</span></td>
+              <td><span class="chip chip-live">✓ Via Assembly BOM object</span></td>
+              <td><span class="chip chip-try">Partial — drawing annotations readable via COM</span></td>
+              <td><span class="chip chip-try">Same COM pattern as SW. Similar cost. No compelling reason to switch given SW is licensed — but good to know if the business ever moves to Autodesk suite.</span></td>
+            </tr>
+            <tr>
+              <td class="name">Siemens Solid Edge<br><span class="dim">Mid-market, synchronous modelling</span></td>
+              <td>~£2,000–£3,500/seat/yr<br><span class="dim">Quote-based</span></td>
+              <td class="desc">Full sheet metal module. Synchronous technology allows direct editing of imported geometry without feature tree — useful if SDI receives STEP files from external clients. Good weldment handling.</td>
+              <td class="endpoint">COM API available: <code>Dispatch("SolidEdge.Application")</code>. Same external Python call pattern as SW COM. The extraction module would need re-mapping to Solid Edge's object model.</td>
+              <td><span class="chip chip-live">✓ Via SheetMetal API</span></td>
+              <td><span class="chip chip-live">✓ Via BOM API</span></td>
+              <td><span class="chip chip-try">Partial</span></td>
+              <td><span class="chip chip-explore">Similar cost to SW. COM API is same pattern. No compelling reason to switch from SW. Better for editing imported geometry without history — not a priority for SDI's design workflow.</span></td>
+            </tr>
+            <tr>
+              <td class="name">Onshape<br><span class="dim">Cloud-native, browser-based</span></td>
+              <td>~£1,200/seat/yr<br><span class="dim">Professional plan. Enterprise higher.</span></td>
+              <td class="desc">Full sheet metal module in browser. Real-time collaboration — multiple designers on same model simultaneously. No desktop install. Built-in version control replaces PDM. Good flat-pattern and DXF export.</td>
+              <td class="endpoint"><strong>REST API — most Python-friendly for external calls.</strong> <code>requests.get("https://cad.onshape.com/api/...")</code> with OAuth2. Can call from any external Python script without Onshape running on the machine. Returns JSON. However: all design data lives in Onshape's cloud — no on-premise option. Proprietary design IP on a third-party server.</td>
+              <td><span class="chip chip-live">✓ Via REST API — flat pattern area, perimeter</span></td>
+              <td><span class="chip chip-live">✓ Via Assembly BOM REST endpoint</span></td>
+              <td><span class="chip chip-try">Partial — drawing notes via API</span></td>
+              <td><span class="chip chip-explore">REST API is very Python-friendly. But all SDI designs in Onshape cloud — check IP/data policies with clients (Milwaukee, TTI) before committing. Good for remote/distributed teams. At £1,200/seat, costs half of SW. Migration: 8–12 weeks.</span></td>
+            </tr>
+            <tr>
+              <td class="name">FreeCAD<br><span class="dim">Open source</span></td>
+              <td>Free<br><span class="dim">Community supported. No SLA.</span></td>
+              <td class="desc">Sheet metal workbench (community module). Parametric modelling, flat-pattern generation, DXF export. Rougher UI than commercial tools. No official support — community forums only. Python scripting throughout.</td>
+              <td class="endpoint"><strong>Python API — fully scriptable externally.</strong> <code>import FreeCAD; doc = FreeCAD.open("part.FCStd")</code>. Can be called from external scripts with FreeCAD installed on the machine. Sheet metal module properties accessible via Python.</td>
+              <td><span class="chip chip-try">✓ Via SheetMetal workbench — less mature</span></td>
+              <td><span class="chip chip-try">Partial</span></td>
+              <td><span class="chip chip-explore">Limited</span></td>
+              <td><span class="chip chip-explore">Right cost. Wrong risk. No SLA, no official support, rougher sheet metal tools. For a production estimating engine, the lack of guaranteed support is a real operational risk. Worth knowing exists; not recommended for SDI in-house design work.</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="card-body" style="margin-top:16px;">
+        <strong>The honest verdict for SDI:</strong>
+        <br><br>
+        SolidWorks is already licensed. The COM API integration (sw_extractor.py) costs nothing to build beyond development time and zero per-call running cost. Switching to any alternative would incur migration cost (8–12 weeks, file conversion, retraining, potential client format compatibility issues) and a different API integration architecture — with no accuracy gain for the estimating engine. The case for switching exists only on cost: if SDI scales to 3+ design seats, Fusion 360 at ~£550/seat saves ~£6,000/year vs SolidWorks at ~£2,544/seat. That's a business decision about design scaling, not an estimating engine decision.
+        <br><br>
+        <strong>The one scenario where an alternative delivers more for the estimating engine:</strong> Onshape's REST API can be called from any Python script on any machine without Onshape running locally. If the estimating engine ever needs to run on a machine that doesn't have CAD software installed (e.g. a cloud server), Onshape is the only platform in this list that supports that architecture natively. SolidWorks COM requires SolidWorks to be running on the same Windows machine. For SDI's current setup (estimating on the same machine as design), this is not a constraint — but worth knowing for future scaling.
+        <br><br>
+        <strong>For the immediate build:</strong> SolidWorks COM — it's already there, it's the right tool, and it gives ground-truth data with no migration cost.
+      </p>
+      <p class="card-action">→ If adding design seats in future: evaluate Fusion 360 at ~£550/seat vs SolidWorks at ~£2,544/seat. The 4.6× cost difference compounds significantly at 3+ seats.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Gemini 3.5 Flash Vision — Backup for External Packs</span>
+        <span class="chip chip-try">Milwaukee / TTI / Boots / Tesco packs</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">$1.50/$9 per 1M tokens</span><span class="tag">~$0.002–$0.004/page</span>
+        <span class="tag">~$0.04–$0.08/job</span><span class="tag">Reads drawing as image</span>
+      </div>
+      <p class="card-body">
+        For drawings SDI receives from external clients — Milwaukee, TTI, Boots, Tesco packs — where there is no SolidWorks model, Gemini 3.5 Flash vision is the best available path. Rasterise the PDF page at 300–600 DPI using pymupdf, upload to the Gemini Files API, ask for BOM, dimensions, and title-block fields as structured JSON.
+        <br><br>
+        <strong>What Gemini vision adds beyond the current engine:</strong> reads the drawn flat-pattern dimensions directly from the callout text ("525.3 EXT × 553.1 EXT" on page 7) rather than summing pdfplumber vector paths. For well-drawn SDI-format sheets this is significantly more accurate than geometry_features.py. For the 2621-01C type problem, Gemini reads the dimension callouts and returns the correct ~500mm perimeter rather than the 14,445mm vector-sum.
+        <br><br>
+        <strong>Costings:</strong> a standard A3 engineering drawing page rendered at 300 DPI produces a PNG of approximately 3–5 MB which tokenises to roughly 1,000–2,500 vision input tokens. At $1.50/M tokens: <strong>$0.0015–$0.004 per page</strong>. A 7-PDF job with 23 pages: <strong>$0.03–$0.09 per job</strong>. Even at 100 jobs/month, total Gemini cost is under £6/month — negligible against estimate revenue.
+        <br><br>
+        Also useful as a <strong>drawing quality check</strong> for ALL drawings (including SW-originated ones): send the drawing image to Gemini and ask "does this comply with SDI export standards? Are BENDLINES on a dedicated layer? Is the title block complete? Are there annotation layers that should be removed?" — automated pre-flight before a pack goes to the estimator.
+      </p>
+      <p class="card-action">→ API: generativelanguage.googleapis.com/v1beta · Model: gemini-3.5-flash · pip install google-generativeai pymupdf</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Claude Vision (Opus 4.8) — Backup for Complex BOM Tables</span>
+        <span class="chip chip-try">Irregular / wrapped BOM tables</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">$5/$25 per 1M tokens</span><span class="tag">~$0.005–$0.013/page</span>
+        <span class="tag">~$0.10–$0.30/job</span><span class="tag">Already authenticated</span>
+      </div>
+      <p class="card-body">
+        Where Gemini struggles with irregular BOM table layouts (multi-line descriptions, wrapped cells, mixed column widths), Claude Opus 4.8 vision tends to outperform — its structural-JSON extraction is better at reasoning about what a column means, not just what it contains. 4× fewer hallucinations means fewer invented BOM rows.
+        <br><br>
+        <strong>Costings:</strong> same 1,000–2,500 tokens/page at $5/M = <strong>$0.005–$0.013 per page</strong>, ~<strong>$0.10–$0.30 per job</strong>. Still negligible — but 3–4× Gemini Flash. Use Gemini as default, fall back to Claude for pages where Gemini returns low-confidence or malformed JSON.
+        <br><br>
+        Already authenticated in the engine via <code>_call_anthropic_llm</code> — no new API key needed. Add a vision call path alongside the existing text path.
+      </p>
+      <p class="card-action">→ API: api.anthropic.com/v1/messages with base64 image · Model: claude-opus-4-8 · No new auth needed</p>
+    </div>
+
+    <div class="card" style="border-color:var(--warn);">
+      <div class="card-head">
+        <span class="card-title">Drawing Resolution — What Resolution Actually Helps</span>
+        <span class="chip chip-try">300–600 DPI is the window · "24K" is a misconception</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">300 DPI → BOM text, title blocks</span>
+        <span class="tag">600 DPI → fine dimension lines</span>
+        <span class="tag">Beyond 600 DPI → no gain, slower</span>
+      </div>
+      <p class="card-body">
+        The term "24K" comes from video resolution (approx 24,000 pixels wide). Applied to an A1 engineering drawing this would mean rendering at approximately 17,000 DPI — completely counterproductive. Vision LLMs (Gemini, Claude, GPT) all resize images internally to fit their tile-processing architecture (typically 1024–2048 pixels per tile) regardless of input resolution. Sending a 24K image doesn't make the model see more detail — it sees the same downsampled version but you've paid for a much larger file upload and processing time.
+        <br><br>
+        <strong>The practical window for engineering drawings:</strong>
+        <ul style="margin:8px 0 8px 18px;color:var(--subtext);font-size:12px;line-height:2;">
+          <li><strong>150 DPI</strong> — readable large text, usable for GA/assembly page overview and BOM table identification. Too low for dimension callout text (typically 8–10pt on a drawing).</li>
+          <li><strong>300 DPI</strong> — optimal for BOM text extraction, title block reading, note-scan (what the note-scanner currently needs). Standard for OCR. This is the target for most pages.</li>
+          <li><strong>600 DPI</strong> — better for fine dimension lines on detailed mechanical drawings (the 4.5mm/59.0mm hole callouts on 1455-C-001 page 12), closely-spaced peg-hole grids (1449-01C), and small annotation text. Worth using for detail pages; overkill for assembly/GA pages.</li>
+          <li><strong>Beyond 600 DPI</strong> — no accuracy gain for vision LLMs, files 4× larger, upload time increases, no benefit. Tested by multiple independent evaluations: 300→600 DPI helps; 600→1200 DPI does not.</li>
+        </ul>
+        <strong>Practical implementation:</strong> use pymupdf's <code>page.get_pixmap(dpi=300)</code> for assembly/GA pages and <code>dpi=600</code> for detail pages with fine geometry. The page-role classifier the engine already runs (<code>assembly</code> vs <code>detail</code>) naturally provides this split — no new classification needed.
+        <br><br>
+        <strong>For DXF files:</strong> DXF is a vector format — resolution only affects the rasterised output quality, not the underlying geometry data. Since the SolidWorks COM API gives you the actual vector geometry directly (no rasterisation step), resolution is irrelevant for SW-originated parts. For external DXFs (old Milwaukee/TTI files), render at 300 DPI which is more than adequate for all SDI drawing formats.
+        <br><br>
+        <strong>Bottom line:</strong> the accuracy gains come from using a vision LLM on a well-prepared 300/600 DPI image, not from raw pixel count. A Gemini 3.5 Flash call on a 300 DPI A3 page will extract BOM data far more accurately than the current geometry_features.py at any resolution, because Gemini reads the drawn callouts rather than counting vector paths.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">SolidWorks File Types — Complete Extraction Map</span>
+        <span class="chip chip-live">All relevant to SDI estimating</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">.sldprt</span><span class="tag">.sldasm</span><span class="tag">.slddrw</span>
+        <span class="tag">Weldment cut lists</span><span class="tag">Design tables</span><span class="tag">Custom properties</span>
+      </div>
+      <p class="card-body">
+        The engine currently uses only the exported DXF and PDF. From the same SolidWorks project, the COM API can extract much richer data from five distinct file types:
+        <br><br>
+        <strong>.sldprt (Sheet Metal Parts) — the most important for estimating:</strong>
+        <code>SW-Bounding Box Length/Width</code> = flat-pattern dimensions; <code>SW-Number of Bends</code> = bend count; <code>SW-Sheet Metal Thickness</code> = material gauge; <code>SW-Material</code> = exact material; <code>SW-Mass</code> = weight for material cost. Cut perimeter via sheet metal flat-pattern feature. Hole wizard holes: count, diameter, and type (through, tapped, counterbore) — directly feeds the pierce count the engine currently estimates from circle-entity counts.
+        <br><br>
+        <strong>.sldasm (Assemblies):</strong> The BOM table extracted via <code>InsertBomTable4</code> / <code>GetTableAnnotations</code> gives the definitive part-number, description, and quantity-per-assembly for every component — fabricated parts AND bought-in items (fixings, vinyl, looms, junction boxes) if the designer has added them. This is the structural fix for the FIXING125 ×2 vs ×4 ambiguity: SW BOM already shows qty 4 because it counts at bay level.
+        <br><br>
+        <strong>.slddrw (Drawings):</strong> Notes and annotations (the assembly notes the note-scanner currently reads from PDF text) are structured objects in the drawing API — read as strings, cleaner than pdfplumber. Title block fields (material, revision, date, description, surface finish) are named custom properties, not text to regex. Scale is a drawing-level property — eliminates the calibration step.
+        <br><br>
+        <strong>Weldment cut lists (.sldprt or .sldasm):</strong> for structural tube members (like 3886-01's "30×60×1.50mm TUBE 1125mm"), the weldment cut list property carries <code>LENGTH</code>, <code>QTY</code>, <code>MATERIAL</code>, and <code>PROFILE</code>. The engine currently reads "30 x 60 x 1.50mm TUBE" from a PDF page in OCR. The COM API returns this as structured data, correctly split into section size, wall thickness, and cut length. Direct feed into the tube catalogue lookup — no regex needed.
+        <br><br>
+        <strong>Design tables (Excel-driven configurations):</strong> if SDI uses SW design tables for standard bay widths (500mm, 750mm, 1000mm configurations), the COM API can read which configuration is active and extract its specific parameters. Useful for range pricing: run the API across all configurations at once.
+        <br><br>
+        <strong>Custom properties:</strong> any designer-entered data — standard finish (RAL3020 Traffic Red), supplier, approved-material-list reference, drawing number — all readable as named properties. Can auto-populate the estimating sheet's metadata fields without anyone typing them.
+        <br><br>
+        <strong>eDrawings (.eprt, .easm, .edrw):</strong> lightweight exports that don't require a full SolidWorks licence on the viewer machine. If estimating ever needs to run on a machine without SW installed, eDrawings COM can read basic geometry and BOM data. Lower fidelity than full SW COM — no cut-list properties, no weldment data.
+      </p>
+      <p class="card-action">→ Priority extraction order: .sldasm (BOM + quantities) → .sldprt (flat-pattern geometry) → .slddrw (notes + title block) → weldment cut lists where present</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Gemini Versions — What's Current (July 2026)</span>
+        <span class="chip chip-try">2.0 is retired — use 3.5 Flash</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">2.0 → SHUT DOWN 1 Jun 2026</span>
+        <span class="tag">2.5 → retiring Oct 2026</span>
+        <span class="tag">3.5 Flash → current GA</span>
+      </div>
+      <p class="card-body">
+        Gemini 2.0 is <strong>not new</strong> — it was released February 2025 and shut down completely on June 1, 2026. Any code calling <code>gemini-2.0-flash</code> is currently returning API errors. Gemini 2.5 replaced it but itself retires October 16, 2026. The correct current model is <strong><code>gemini-3.5-flash</code></strong> (released May 19, 2026, GA). Abstract the model string behind a config variable — same discipline as <code>PRICE_SOURCE_CONFIG["web"]["xai_model"]</code> in config.py — because Google retires models on a 3–6 month cycle and you don't want hard-coded model strings across the codebase.
+        <br><br>
+        Gemini 3.5 Pro is in testing (expected August 2026) and will offer higher accuracy on complex multimodal/long-context tasks — worth evaluating for large drawing packs when it releases.
+      </p>
+      <p class="card-action">→ API string to use today: <code>gemini-3.5-flash</code> · Next: <code>gemini-3.5-pro</code> when available</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">AWS Textract / Azure Document Intelligence</span>
+        <span class="chip chip-explore">Explore — after SW COM is live</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Cloud OCR</span><span class="tag">BOM table extraction</span><span class="tag">~$1.50/1000 pages Azure</span>
+      </div>
+      <p class="card-body">
+        Purpose-built table-extraction models that outperform general LLMs on structured BOM tables. Azure Document Intelligence "prebuilt-layout" handles multi-column engineering BOM tables. Relevant for external client packs where the BOM table is complex and Gemini Flash returns low-confidence JSON. Lower per-page cost than Claude Vision. Not needed for SDI-originated drawings once the COM API path is live.
+      </p>
+      <p class="card-action">→ Evaluate against Gemini Flash on a set of Milwaukee/TTI BOM table pages before committing</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">AWS Textract / Azure Document Intelligence</span>
+        <span class="chip chip-explore">Explore</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Cloud OCR</span>
+        <span class="tag">Table extraction</span>
+        <span class="tag">Form fields</span>
+      </div>
+      <p class="card-body">
+        Both services have purpose-built table-extraction models that outperform general LLMs on
+        structured BOM tables. Azure Document Intelligence "prebuilt-layout" specifically handles
+        multi-column engineering BOM tables. Could replace the current regex-over-text-dump
+        parser for BOM rows, fixing the FIXING/VINYL capture gap structurally.
+      </p>
+      <p class="card-action">→ Cost: ~$1.50/1000 pages Azure; evaluate against per-job volume</p>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 3 — PRICING & CATALOGUE INTELLIGENCE
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>Pricing &amp; Catalogue Intelligence</h2>
+    <p>Where prices come from today and what could replace or supplement them</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Status</th>
+          <th>What it prices</th>
+          <th>Known gap</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="name">SDILive UDEF</td>
+          <td><span class="chip chip-live">Live</span></td>
+          <td>FIXING/VINYL coded items at exact part-number prices</td>
+          <td class="note">Missing: looms, junction boxes, loose electricals — they're not in the catalogue yet</td>
+          <td class="note">Tim to add missing SKUs to UDEF; engine flags them as gaps automatically</td>
+        </tr>
+        <tr>
+          <td class="name">historical_quote_* tables</td>
+          <td><span class="chip chip-live">Live</span></td>
+          <td>Tube/section pricing, assembly labour median</td>
+          <td class="note">1,982 jobs / 77,545 lines — good depth; stale rates if steel price has moved</td>
+          <td class="note">Add steel-rate refresh trigger; check £800/tonne vs current spot</td>
+        </tr>
+        <tr>
+          <td class="name">SerpAPI web search</td>
+          <td><span class="chip chip-current">Unstable</span></td>
+          <td>Web-indicative prices for unknown bought-in items</td>
+          <td class="note">Timeout seen this session; non-deterministic; price can be wildly off (loom £2 vs £24)</td>
+          <td class="note">Consider disabling for headline pricing; keep as advisory/flag only</td>
+        </tr>
+        <tr>
+          <td class="name">xAI LLM market estimate</td>
+          <td><span class="chip chip-current">Partially stabilised</span></td>
+          <td>Fallback price when web search fails</td>
+          <td class="note">Temp 0.1 → item-count and price drift; temperature fix deployed but 3-run proof still needed</td>
+          <td class="note">Run the three-run verification; if still unstable swap to Claude or GPT-4o as finder</td>
+        </tr>
+        <tr>
+          <td class="name">RS Components API<br><span class="dim">rs-online.com</span></td>
+          <td><span class="chip chip-try">B2B trade account required</span></td>
+          <td>750,000+ industrial/electrical products — fixings, cable ties, dome rivets, junction boxes, LEDs</td>
+          <td class="note">B2B "Tactical API" — not a public endpoint. Requires an RS trade account + API key request. Returns product search, live UK ex-VAT pricing, stock. The 50cm lighting loom (branded fitting) likely NOT on RS — check Rexel / CEF instead. Best fix for SDI remains Tim entering recurring items directly to UDEF.</td>
+          <td class="note">Contact RS account manager or rs-online.com/procurement to request API key. Simpler first step: Octopart API (free) aggregates RS pricing alongside 30+ distributors without a direct RS key.</td>
+        </tr>
+        <tr>
+          <td class="name">Octopart / OEMSecrets<br><span class="dim">octopart.com</span></td>
+          <td><span class="chip chip-explore">Easier route to RS pricing</span></td>
+          <td>Multi-distributor price aggregator — RS, Farnell, Mouser, Arrow in one JSON response</td>
+          <td class="note">Octopart has a free tier (limited calls/month) and paid tier. Returns RS Components UK pricing without a direct RS API key. Best for one-off or low-volume lookups. OEMSecrets is similar and free.</td>
+          <td class="note">octopart.com/api/v4 — GraphQL endpoint. Free tier: 1,000 requests/month. Sufficient for SDI's volume of unknown bought-in lookups.</td>
+        </tr>
+        <tr>
+          <td class="name">Bisco Industries / Fastenright API</td>
+          <td><span class="chip chip-explore">Explore</span></td>
+          <td>UK fastener and fixing catalogue prices</td>
+          <td class="note">Dedicated fastener distributors; better accuracy than LLM for FIXING codes not in UDEF</td>
+          <td class="note">Check whether these suppliers are SDI-approved; data may be behind a trade account</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 4 — VECTOR DATABASE / RAG
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>Vector Database &amp; Semantic RAG</h2>
+    <p>Finding historical parts that match new ones — the long-term accuracy multiplier</p>
+  </div>
+
+  <div class="card-grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">pgvector on SDILive</span>
+        <span class="chip chip-try">Planned</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">SQL Server already used</span>
+        <span class="tag">Part embeddings</span>
+        <span class="tag">Similarity search</span>
+      </div>
+      <p class="card-body">
+        pgvector (or the SQL Server equivalent: Azure AI Search / VECTOR column in SQL 2025)
+        would let the engine embed each new part's geometry fingerprint + description and
+        find the 5 closest historical parts in 1,982 jobs — giving a precedent-based estimate
+        alongside the rule-based one.
+        Prerequisite: 10+ parity runs to build the corpus.
+      </p>
+      <p class="card-action">→ Design schema after parity milestone; Tim's time rules first</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">ChromaDB / Qdrant (local)</span>
+        <span class="chip chip-explore">Explore</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">Local vector store</span>
+        <span class="tag">No cloud dependency</span>
+        <span class="tag">Fast prototype</span>
+      </div>
+      <p class="card-body">
+        Both run on-prem with no external calls — suitable if SDI data cannot leave the
+        network. ChromaDB is simpler to set up; Qdrant is faster at scale.
+        Can be wired to the engine's existing corpus_ingest.py to embed historical quotes.
+      </p>
+      <p class="card-action">→ Prototype: pip install chromadb; ingest historical_quote_material</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Anthropic Embeddings</span>
+        <span class="chip chip-explore">Explore</span>
+      </div>
+      <div class="card-tags">
+        <span class="tag">voyage-3-lite</span>
+        <span class="tag">Part description similarity</span>
+      </div>
+      <p class="card-body">
+        Anthropic's Voyage embedding models (voyage-3-lite, voyage-3) produce dense vectors
+        for text. Embedding part descriptions + operation lists creates a semantic fingerprint
+        that catches "HEADER BASE" ≈ "LIGHT-BOX BACK PANEL" without exact-string matching.
+        Cheap to run at scale.
+      </p>
+      <p class="card-action">→ Evaluate quality on SDI vocabulary vs OpenAI text-embedding-3-small</p>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION — WHAT TO BUILD: PRIORITY ROADMAP
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">What to Build — Priority Roadmap</h2>
+    <p>Given SolidWorks is licensed and you're integrating it: what else actually moves the needle, in order</p>
+  </div>
+
+  <p style="font-size:12px;color:var(--subtext);margin-bottom:8px;line-height:1.8;">
+    You can't do everything. The list below is ranked by <strong>accuracy impact × effort</strong> —
+    the items at the top fix the most expensive remaining errors for the least work.
+    Items 1–4 are the core build. Items 5–7 are meaningful additions once the core is stable.
+    Items 8–10 are longer-term value but not blockers.
+  </p>
+
+  <!-- API cost card -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="card-head"><span class="card-title">RS Components vs Nexar/Octopart — Access & Cost Reality</span></div>
+    <div class="card-tags">
+      <span class="tag">RS: trade account required</span>
+      <span class="tag">Nexar/Octopart: free evaluation tier</span>
+      <span class="tag">Both: ~30 lines Python</span>
+    </div>
+    <p class="card-body">
+      <strong>RS Components API</strong> — not a public API. Their "Tactical API" is a B2B procurement integration requiring an existing RS trade account and a formal request to your RS account manager for API credentials. No self-service sign-up portal. Technically straightforward (REST/GraphQL once you have the key), but relationship-gated. If SDI buys from RS on account, call the account manager. Otherwise, use Nexar instead — it aggregates RS anyway.
+      <br><br>
+      <strong>Nexar API (Octopart's successor)</strong> — genuinely easy and has a free evaluation tier. Sign up at <code>portal.nexar.com</code> in 5 minutes, get a Client ID and Client Secret immediately, start querying within the hour. GraphQL endpoint at <code>api.nexar.com/graphql</code>. Returns RS Components, Farnell, Mouser, Arrow, and 30+ other distributors in a single query — so you get RS pricing without a direct RS relationship. Free tier covers evaluation and low-volume use; paid plans for higher volume. The Python integration is about 30 lines (OAuth2 token exchange, then a GraphQL POST with the part description and a seller filter for <code>"RS Components"</code> and <code>"Farnell"</code> UK).
+      <br><br>
+      <strong>What both can price:</strong> fixings (M8 glides, cable ties, rivets, dome rivets — your FIXING codes), junction boxes, terminal blocks, LED drivers, earth straps, adhesive cable clips. <strong>What neither reliably prices:</strong> branded luminaire fittings like the Milwaukee 50cm lighting loom — those come from electrical wholesalers (Rexel, CEF, Edmundson). For those, Tim entering the price into UDEF once is the right fix.
+      <br><br>
+      <strong>Integration pattern for the engine:</strong> in <code>_price_via_waterfall</code> (note_scan.py), add a new waterfall layer between "UDEF lookup" and "web/LLM estimate": call Nexar with the item description, filter for UK sellers, return the lowest price. Cache the result in BoughtInCatalogue with source = <code>nexar_api</code>. If Nexar returns nothing, fall through to the existing LLM fallback. Total new code: ~80 lines.
+    </p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:28px;">#</th>
+          <th>What to build</th>
+          <th>Why it matters — the specific problem it fixes</th>
+          <th>Effort</th>
+          <th>Dependency</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--cut);">1</td>
+          <td class="name">SolidWorks COM API module<br><code style="font-size:10px;">sw_extractor.py</code><br>
+            <span class="dim" style="font-weight:400;">Sources: .sldasm + .sldprt + .slddrw</span>
+          </td>
+          <td class="desc">
+            <strong>Read all three SolidWorks file types — not just the .sldasm and .sldprt.</strong>
+            The <code>.slddrw</code> drawing file is the SolidWorks source of the PDF and DXF that the engine currently processes. Exporting to PDF or DXF loses three things that matter:
+            <br><br>
+            <strong>(a) Notes as structured objects.</strong> The assembly notes the note-scanner currently reads via pdfplumber → LLM (junction box, loom, earth strap, foam tape on page 10) exist as <code>INote</code> objects in the <code>.slddrw</code> file. The COM API returns them as clean strings — no OCR noise, no text-extraction errors, no LLM needed, fully deterministic. For SDI-originated jobs, this <em>replaces the note-scan LLM call entirely</em>. The loom price instability disappears because the note is read structurally, not guessed by an LLM from flattened PDF text.
+            <br><br>
+            <strong>(b) View type identification.</strong> The drawing file knows which view is the flat pattern, which are section views, which are detail boxes. The engine currently can't tell — pdfplumber sums all vector paths on the page identically, which is exactly why 2621-01C shows 14,445mm instead of ~2,800mm: section and detail geometry is added to the flat pattern outline. <code>.slddrw</code> exposes each view as a typed object (<code>e_FlatPatternView</code>, <code>e_SectionView</code>, <code>e_DetailView</code>). Select only the flat-pattern view's geometry and the inflation problem disappears architecturally — no calibration fix needed.
+            <br><br>
+            <strong>(c) BOM tables as structured data.</strong> <code>IBomTableAnnotation.GetTableAnnotation()</code> returns BOM rows as typed data — part number, description, quantity already parsed. The regex-over-flattened-text BOM parser that struggles with "FIXING 236 M8 FLANGED NUTSERT 2 2 5" ambiguity is replaced with a direct structured read. FIXING125 qty comes back as 4 (bay-level) without the bom_tree multiplier.
+            <br><br>
+            <strong>From .sldprt:</strong> flat-pattern cut perimeter, bend count, material, thickness, weight, hole wizard details — the exact values the designer worked to.
+            <br><br>
+            <strong>From .sldasm:</strong> assembly-level BOM with correct quantities for all components including bought-in fixings.
+            <br><br>
+            <strong>COM-based pre-flight validation — for in-house SW jobs, this replaces Gemini vision pre-flight entirely.</strong> After opening each .sldprt and .sldasm via COM, run a lightweight property check before passing data to the estimator:
+            <ul style="margin:6px 0 6px 18px;color:var(--subtext);font-size:12px;line-height:2;">
+              <li><code>SW-Material</code> populated and not "unknown"? If empty → flag "material not set on this part"</li>
+              <li><code>SW-Sheet Metal Thickness</code> &gt; 0? If zero → flag "thickness not set — cost will be wrong"</li>
+              <li><code>SW-Number of Bends</code> sensible (not 0 for a part with obvious base flanges)? Flag outliers.</li>
+              <li>All components in .sldasm BOM have a matching .sldprt on disk? Missing files flagged before the run, not discovered mid-estimate.</li>
+              <li>BOM table has no empty part numbers or description fields? Empty rows flagged.</li>
+              <li>Weldment cut list populated for tube/structural members? Missing cut lists flagged.</li>
+            </ul>
+            These are COM property reads — faster, cheaper, and more reliable than asking a vision model to infer the same things from a rendered image. BENDLINES layer checking is a DXF concept and does not apply to SW model data. The existing <code>check_dxf_batch.py</code> handles that for DXF files.
+            <br><br>
+            <strong>Net effect:</strong> 2621-01C geometry fixed. Credibility gate passes. Headline total reportable. Note-scan LLM call eliminated for in-house jobs. FIXING quantities correct. Tube section data structured. Drawing file hunting replaced by SW project folder walk. Pre-flight validation is programmatic, not vision-based. Every subsequent in-house job run is more accurate, faster, and cheaper by default.
+          </td>
+          <td><span class="chip chip-live">~1–2 days</span></td>
+          <td>SW licensed ✓ · Build in this order: .sldasm (BOM) → .sldprt (geometry) → .slddrw (notes + view types)</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--good);">2</td>
+          <td class="name">Nexar/Octopart API for bought-in pricing<br><code style="font-size:10px;">nexar_pricing.py</code></td>
+          <td class="desc">
+            <strong>Fixes the loom/electrical price instability structurally.</strong> Right now the loom price swings £2–£9 per run because it falls to a non-deterministic LLM estimate. Nexar returns a real catalogue price from RS/Farnell for fixings, cable ties, junction boxes, LED drivers, earth straps. Once returned, it's cached in BoughtInCatalogue — subsequent runs use the cache, no API call. The price is auditable ("source: nexar_api, seller: RS Components, SKU: 123456") rather than "LLM guess". Won't solve branded looms (see UDEF), but solves ~70% of the unstable bought-in lines.
+          </td>
+          <td><span class="chip chip-live">~2–3 hours</span></td>
+          <td>Free sign-up at portal.nexar.com</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--cut);">3</td>
+          <td class="name">Grok 4.3 → 4.5 model string update<br><code style="font-size:10px;">config.py: xai_model</code></td>
+          <td class="desc">
+            <strong>One line. Immediate benefit.</strong> Better structured-text performance on manufacturing notes, 2× token efficiency (cheaper per run), 500K context window (send entire drawing pack in one call). Does not require a new API key or any code change beyond the model string. Re-run the three-run determinism proof after to confirm note-scan stability holds on 4.5.
+          </td>
+          <td><span class="chip chip-free">10 minutes</span></td>
+          <td>Confirm UK API access at console.x.ai first</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--good);">4</td>
+          <td class="name">Gemini 3.5 Flash vision — PDF backup for external drawings<br><code style="font-size:10px;">vision_extractor.py</code></td>
+          <td class="desc">
+            <strong>For Milwaukee, TTI, Boots, Tesco, and any other job where there is no SolidWorks model</strong> — this is the equivalent of the SW COM path for external packs. The three problems the <code>.slddrw</code> COM path solves for in-house jobs, Gemini 3.5 Flash solves differently but effectively for PDF-only drawings:
+            <br><br>
+            <strong>(a) Notes and bought-in items.</strong> Instead of reading <code>INote</code> objects from a drawing file, Gemini reads the rendered page as an image. Send just the assembly notes page (page 10 on 1282) to Gemini at 300 DPI and ask: <em>"List every bought-in item mentioned in these assembly notes — description, quantity, and any part code. Return as JSON."</em> Gemini reads the actual printed note text visually, handling multi-column layouts, rotated labels, and tabular notes that pdfplumber currently flattens into ambiguous strings. For external client drawings this replaces the pdfplumber → LLM note-scan pipeline with a vision → structured-JSON pipeline that's more reliable on complex page layouts. The note-scan still runs for in-house jobs via <code>INote</code> objects (item 1); Gemini is the equivalent path for jobs without a SW model.
+            <br><br>
+            <strong>(b) View type identification from drawing labels.</strong> The <code>.slddrw</code> COM API reads <code>e_FlatPatternView</code> programmatically. For a PDF, Gemini reads the label text — "FLAT PATTERN", "SECTION A-A", "DETAIL B", "3D VIEW" — and can be prompted to: <em>"Find the flat-pattern or main outline view. Extract only its outer perimeter dimension callouts. Ignore section views, detail views, and isometric views."</em> Less reliable than a programmatic type check, but far better than geometry_features.py which sums everything blindly. Add to the prompt: <em>"If you see a section view labelled 'SECTION A-A' or similar, ignore its dimensions."</em> This gets 80–90% of the benefit of view-type filtering for well-labelled drawings.
+            <br><br>
+            <strong>(c) BOM tables.</strong> Send the drawing page containing the BOM table to Gemini and ask: <em>"Extract the BOM table as JSON — columns: item number, part number, description, quantity. Preserve exact part codes (e.g. FIXING125, VINYL76) and quantities."</em> Gemini reads the visual table, handling irregular column widths, multi-line descriptions, and wrapped cells that break the current regex-over-flattened-text parser. The FIXING 236/125/5 ambiguous "2 2 5" string issue doesn't arise because Gemini sees the table columns visually and correctly assigns the first "2" to FIXING236's qty and the second "2" as FIXING125's item row.
+            <br><br>
+            <strong>Resolution:</strong> 300 DPI for notes pages and BOM tables (text-heavy). 600 DPI for detail/dimension pages with fine callout text and close-spaced geometry. Do not use higher — vision LLMs tile and downsample; beyond 600 DPI you get larger files, slower uploads, identical accuracy.
+            <br><br>
+            <strong>Integration pattern for the engine:</strong> <code>vision_extractor.py</code> takes a PDF path, detects the page role (GA/assembly, detail, notes, BOM table) using the page-role classifier already in the engine, rasterises at the appropriate DPI, sends to Gemini with a page-role-specific prompt, returns structured JSON. The JSON shape matches what the SW COM extractor returns — same downstream pipeline. No changes needed to pricing_service.py, wb_populate.py, or the credibility gate.
+            <br><br>
+            <strong>Cost: ~£0.08/job</strong> (21 pages × ~$0.004/page at Gemini 3.5 Flash's $1.50/M token rate). Negligible. Cache results by drawing hash — same drawing on a second run costs nothing.
+            <br><br>
+            <strong>Where rasterisation (PDF → image) is needed in the pipeline — and where it is not:</strong>
+            <br><br>
+            Rasterisation is only needed inside <code>vision_extractor.py</code> — the Gemini path for PDF-only external drawings. Every other part of the pipeline works on vector data and does not need it:
+            <ul style="margin:8px 0 8px 18px;color:var(--subtext);font-size:12px;line-height:2.2;">
+              <li><strong>SW COM API (.sldasm / .sldprt / .slddrw):</strong> reads typed model properties and geometry objects directly. No image, no rasterisation.</li>
+              <li><strong>ezdxf / dxf_reader.py.py:</strong> reads DXF vector entities as geometric objects. No image.</li>
+              <li><strong>pdfplumber (current text extraction):</strong> extracts text and vector paths from PDF directly. No image.</li>
+              <li><strong>Pricing pipeline, note-scan, wb_populate:</strong> all downstream of extraction. No image.</li>
+              <li><strong>vision_extractor.py (Gemini path) ← only here:</strong> PDF must be converted to a PNG image before sending to the Gemini Files API. One tool, one place.</li>
+            </ul>
+            <strong>The tool: pymupdf</strong> (also imported as <code>fitz</code>, installed via <code>pip install pymupdf</code>). Three lines per page:
+            <pre style="background:var(--rule);padding:10px;border-radius:4px;font-size:11px;color:var(--cut);margin:8px 0;overflow-x:auto;">import fitz
+page = fitz.open("drawing.pdf")[page_number]
+page.get_pixmap(matrix=fitz.Matrix(300/72, 300/72)).save("page.png")</pre>
+            Use <code>300/72</code> (300 DPI) for notes pages and BOM tables. Use <code>600/72</code> (600 DPI) for detail and dimension pages with fine geometry callouts. Do not go higher — vision LLMs tile and downsample, so beyond 600 DPI you get larger files, slower uploads, identical accuracy. This is confined to <code>vision_extractor.py</code> and does not touch any other module.
+            <br><br>
+            <strong>Also use for PDF drawing quality pre-flight on external jobs only.</strong> Before running the Gemini extraction on a new external client pack, send the GA page image to Gemini and ask: <em>"Is there a clear flat-pattern view on this page? Are dimension callouts legible? Is the title block populated with material and thickness? Are section and detail views clearly labelled?"</em> This flags external drawing quality issues before the extraction pass rather than after parity fails.
+            <br><br>
+            <em>Note: for in-house SW jobs, pre-flight is done programmatically via COM — check SW-Material populated, SW-Number of Bends &gt; 0, BOM table has no empty part numbers, all assembly components have a matching .sldprt. That is faster, cheaper, and more reliable than asking Gemini to infer the same things from a rendered image. BENDLINES layer checking is a DXF concern and is already handled by the existing <code>check_dxf_batch.py</code> tool — not a Gemini task.</em>
+          </td>
+          <td><span class="chip chip-try">~half–1 day</span></td>
+          <td>pip install google-generativeai pymupdf · Free Gemini API key at aistudio.google.com · Model: gemini-3.5-flash</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--cut);">5</td>
+          <td class="name">Tim's bought-in items into UDEF<br><i>Process, not code</i></td>
+          <td class="desc">
+            <strong>Highest accuracy-per-hour return available.</strong> One Tim session adding 20–30 recurring items (Milwaukee loom, junction box, GU10 LED, earth strap, adhesive clip, dome rivet) to UDEF gives permanently stable prices that no API or LLM can match on accuracy. UDEF is already the highest-trust source in the waterfall. The Nexar integration (item 2) handles the long tail; UDEF handles the known recurring items. Together they eliminate the need for the web/LLM pricing fallback on bought-ins for most jobs.
+          </td>
+          <td><span class="chip chip-free">1–2 hours Tim's time</span></td>
+          <td>None — UDEF write access already exists</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--warn);">6</td>
+          <td class="name">Note-scan determinism confirmation<br><i>Verify three-run proof post-4.5</i></td>
+          <td class="desc">
+            <strong>Closes the open verification loop.</strong> The EDIT 1/2/3 determinism fixes (temperature 0, seed, cache-key normalisation) were deployed but the three-run verification was never completed. Until it is, the loom price instability is unconfirmed-fixed. Run 1282 three times back-to-back and confirm loom price and item count are identical across all three. If they're not, swap the finder to Claude Opus 4.8 (already wired, one routing change). This takes 30 minutes and removes the biggest uncertainty hanging over the engine's reliability claim.
+          </td>
+          <td><span class="chip chip-free">30 minutes</span></td>
+          <td>Items 2–3 done first so the prices are stable</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--warn);">7</td>
+          <td class="name">src/ folder housekeeping<br><i>Archive the file graveyard</i></td>
+          <td class="desc">
+            <strong>Prevents the next wrong-file edit.</strong> The DXF reader mixup cost four exchanges this session because both dxf_reader.py and dxf_reader.py.py existed. estimator1.py, file_scan2.py, document_builder_V3.py, *.backup.py, *_old.py all create the same risk. Move every non-live file to a <code>_archive/</code> subfolder. Takes 20 minutes. Prevents hours of debugging on the next session. Not glamorous but directly protects everything else on this list.
+          </td>
+          <td><span class="chip chip-free">20 minutes</span></td>
+          <td>None</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--dim);">8</td>
+          <td class="name">Per-bay ×2 fixing multiplier<br><code style="font-size:10px;">drawing_job_merge.py bom_tree</code></td>
+          <td class="desc">
+            Fixes FIXING125 reading qty 2 (per-assembly) when Tim has qty 4 (per-bay). The correct fix is routing bought-in stubs through the same bom_tree GA ×2 multiplier the steel children already get. Low code effort once <code>drawing_job_merge.py</code> (which wasn't in the project snapshot) is uploaded. For SW-originated jobs, this becomes irrelevant — the SW BOM gives qty 4 directly. So item 1 (SW COM) makes this moot for in-house work; this only matters for external packs until item 4 (Gemini vision) is live.
+          </td>
+          <td><span class="chip chip-try">~2 hours</span></td>
+          <td>drawing_job_merge.py source needed</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--dim);">9</td>
+          <td class="name">pgvector / ChromaDB semantic part matching<br><i>RAG over historical quotes</i></td>
+          <td class="desc">
+            Embeds part descriptions and geometry fingerprints from the 1,982-job historical corpus (historical_quote_material — 77,545 lines) and uses vector similarity to find the 5 closest historical parts to each new part. Gives a precedent-based price alongside the rule-based estimate — "this 500mm peg panel cost £X across 4 similar past jobs." Makes the engine self-improving over time. Prerequisite: Tim's time rules in + 10+ parity runs to build a reliable corpus. Architecture-pass item.
+          </td>
+          <td><span class="chip chip-explore">Architecture pass</span></td>
+          <td>10+ parity runs complete first</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--dim);">10</td>
+          <td class="name">Fully agentic estimating session<br><i>Claude Fable 5 or GPT-5.6 Sol</i></td>
+          <td class="desc">
+            Give the model the complete drawing pack (via SW COM API), ask it to identify all parts, route each through the pricing waterfall, produce the workbook, and summarise what it couldn't price — all in one agentic session rather than the current multi-step pipeline. Claude Fable 5's 128K output and long-horizon autonomy make this viable today. GPT-5.6 Sol's Programmatic Tool Calling makes it self-orchestrating. Not needed yet — the current pipeline is functional — but it's the direction once parity is stable across 10+ jobs.
+          </td>
+          <td><span class="chip chip-explore">Post-parity milestone</span></td>
+          <td>Items 1–6 complete + 10 parity runs</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px;border-color:var(--fold);">
+    <div class="card-head"><span class="card-title">The short version — what to do in the next two weeks</span></div>
+    <p class="card-body">
+      <strong>This week:</strong> (1) Update Grok 4.3 → 4.5 in config.py — 10 minutes, immediate. (2) Sign up for Nexar at portal.nexar.com — 5 minutes, free. Write the 30-line nexar_pricing.py wrapper. (3) Ask Tim to add the 20–30 recurring bought-in items to UDEF — 2 hours of his time, highest-value accuracy return per hour available.
+      <br><br>
+      <strong>Next week:</strong> (4) Start the SW COM module — one Python file (~200 lines). Open a .sldasm, read the BOM table, print the output. Don't try to integrate it fully on the first pass — get the data out correctly first, then wire it into the estimating pipeline. (5) Run the three-run determinism proof once items 2–3 are done and Grok 4.5 is live. Write the result down. Then close this loop.
+      <br><br>
+      <strong>After that:</strong> Gemini vision for external packs, then the src/ housekeeping. The ×2 multiplier, pgvector, and agentic session can wait — they're real value but not blockers on getting JR sign-off on a reportable, stable estimate.
+    </p>
+  </div>
+
+    <!-- ══════════════════════════════════════════════
+       SECTION 5 — REPEATABLE REVIEW PROCESS
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>Repeatable Review Process</h2>
+    <p>Run this monthly — things to check each time before deciding whether to trial a new capability</p>
+  </div>
+
+  <ul class="checklist">
+    <li>
+      <span class="icon">🔍</span>
+      <div class="body">
+        <strong>Check LLM release notes — xAI, Anthropic, OpenAI</strong>
+        <span>Visit platform.openai.com/docs, docs.anthropic.com, x.ai/api. Look for: new model strings available in the API, lower per-token pricing on existing models, new structured-output / response_format fields, native PDF/image support improvements. Check for grok-4 / grok-next, claude-opus-4-*, gpt-5/o3 upgrades.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🔩</span>
+      <div class="body">
+        <strong>Check SolidWorks API release notes</strong>
+        <span>solidworks.com/developer → What's New in the API. Look for: new flat-pattern export properties, BOM table object improvements, headless / background processing support (key blocker today), new eDrawings API features for pixel-resolution export.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">📐</span>
+      <div class="body">
+        <strong>Check ezdxf changelog (github.com/mozman/ezdxf)</strong>
+        <span>New DXF entity support, new flat-pattern helpers, performance improvements. Current version in venv: <code>pip show ezdxf</code>. Upgrade in place if minor version.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🖼️</span>
+      <div class="body">
+        <strong>Re-assess PDF rasterisation quality</strong>
+        <span>Run: <code>python -c "import pymupdf; page = pymupdf.open('test.pdf')[0]; page.get_pixmap(dpi=300).save('out.png')"</code>. Send the output to the current best vision LLM and ask it to extract the BOM table. Compare accuracy to the pdfplumber text path. Do this for one tricky 1282 page (e.g. page 20, the fixings BOM).</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">💰</span>
+      <div class="body">
+        <strong>Check RS Components API availability</strong>
+        <span>rs-online.com/designspark/products — check whether the product search API (OAuth2) is still available at its current pricing. A single query for "50cm lighting loom" or "junction box IP20" should return a real UK catalogue price. This is the structural fix for the loom/junction-box accuracy problem.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🗂️</span>
+      <div class="body">
+        <strong>Review SDILive BoughtInCatalogue — what's still missing?</strong>
+        <span>Run: <code>SELECT TOP 20 description, cost_source FROM BoughtInCatalogue WHERE cost_source = 'web_indicative' ORDER BY last_updated DESC</code>. Any item still priced web_indicative after 10+ parity runs should be added to UDEF by Tim with a real price. The engine already flags these — this is the monthly triage.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">📊</span>
+      <div class="body">
+        <strong>Run the note-scan three-run determinism proof</strong>
+        <span>Run 1282 three times back-to-back. The loom, junction box, LED link light, and GU10 prices must be identical across all three. If they drift by more than £0.05, the determinism edits (EDIT 1/2/3) need investigation — check <code>xAI HTTP</code> in the log, and consider swapping the finder to Claude/GPT-4o.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🏗️</span>
+      <div class="body">
+        <strong>Check SolidWorks eDrawings / 3DEXPERIENCE availability</strong>
+        <span>Dassault 3DEXPERIENCE platform (3ds.com) has a growing API surface for drawing interrogation without a full SolidWorks licence. Check if SDI has or could access this. Also check: can SolidWorks export flat-pattern DXFs in batch via a macro / Task Scheduler — this is the cheapest path to DXF-coverage improvement without API work.</span>
+      </div>
+    </li>
+  </ul>
+
+
+
+  <!-- ══════════════════════════════════════════════
+       SECTION — JULY 2026 FRONTIER MODEL RELEASES
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>Frontier Model Releases — July 2026</h2>
+    <p>Deep pipeline analysis: what each model means for SDI estimating and design — not just specs</p>
+  </div>
+
+  <p style="font-size:12px;color:var(--subtext);margin-bottom:20px;line-height:1.7;">
+    Every entry below answers the same two questions: <strong>(1) what actually changed?</strong>
+    and <strong>(2) where exactly does it slot into our pipeline?</strong>
+    Sources: OpenAI.com, Anthropic.com, xAI/SpaceXAI news, Axios, TechCrunch, Simon Willison, DataCamp, Google Cloud Blog. All verified, dated. Unconfirmed specs clearly marked.
+  </p>
+
+  <!-- ── GPT-5.6 ─────────────────────────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">OpenAI — GPT-5.6: Sol, Terra, Luna</h2>
+    <p><span class="chip chip-live">Released 9 Jul 2026 — API available now</span></p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tier</th><th>API string</th><th>$/1M in</th><th>$/1M out</th><th>Context</th><th>TB 2.1</th><th>SWE-Pro</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Sol</td><td class="endpoint">gpt-5.6-sol</td><td>$5</td><td>$30</td><td>1.05M</td><td>88.8% (91.9% Ultra)</td><td>64.6%</td></tr>
+        <tr><td class="name">Terra</td><td class="endpoint">gpt-5.6-terra</td><td>$2.50</td><td>$15</td><td>1.05M</td><td>84.3%</td><td>—</td></tr>
+        <tr><td class="name">Luna</td><td class="endpoint">gpt-5.6-luna</td><td>$1</td><td>$6</td><td>1.05M</td><td>82.5%</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card-grid" style="margin-top:14px;">
+    <div class="card">
+      <div class="card-head"><span class="card-title">What changed in GPT-5.6</span></div>
+      <p class="card-body">
+        <strong>Three-tier naming</strong> replaces Pro/Mini — number = generation, Sol/Terra/Luna = durable capability tiers that can advance independently. So GPT-5.7 Luna could ship without touching Sol.
+        <strong>Programmatic Tool Calling</strong>: the model writes JavaScript to orchestrate its own tool calls inside a session — this is significant for orchestrating multi-step estimating workflows (read drawing → extract BOM → look up prices → write xlsx) without an external agent framework.
+        <strong>Ultra Mode</strong>: runs four parallel Sol agents simultaneously on the same task, merges results. Relevant if you ever want multiple independent pricing strategies compared in one pass.
+        <strong>Better prompt caching</strong>: explicit cache breakpoints and a guaranteed 30-minute cache life — important for the engine because each job re-sends a large system prompt; caching cuts cost and latency meaningfully.
+        <strong>ChatGPT Work</strong> (shipped alongside): an agent purpose-built for multi-hour projects. Not API-accessible in the same way, but signals the direction OpenAI is pushing.
+        <em>Honest caveat</em>: independent evaluator METR flagged the highest benchmark-gaming rate they've ever recorded on GPT-5.6. The headline numbers are real but may over-represent on some task distributions.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Estimating pipeline — where each tier fits</span></div>
+      <div class="card-tags"><span class="tag">Note-scan finder</span><span class="tag">BOM extraction</span><span class="tag">Price waterfall</span><span class="tag">Agent runner</span></div>
+      <p class="card-body">
+        <strong>Luna ($1/$6)</strong> — cheapest capable model available today. Use for: high-volume BOM text extraction from flat drawing text (the pdfplumber text dump); simple part classification (is this a tube, a sheet-metal part, or a bought-in?); batch pre-screening of drawing packs for complexity before the full run. <em>Do not use Luna for long-context calls</em> — its MRCR long-context recall drops to 41.3%, meaning it will silently miss content in large JSON summaries or multi-page drawing packs.
+        <br><br>
+        <strong>Terra ($2.50/$15)</strong> — the note-scan finder trial target. OpenAI's JSON mode and seed parameter are well-documented and genuinely deterministic at temperature 0. If the Grok 4.5 upgrade doesn't stabilise the loom/electrical item-count drift, Terra is the first swap to try: same OpenAI-compatible API shape, same JSON response format the engine already parses, one config.py model string change.
+        <br><br>
+        <strong>Sol ($5/$30)</strong> — justified for complex, high-value jobs where a wrong estimate costs more than the API call. Programmatic Tool Calling makes Sol interesting as an orchestrator: tell it to identify all bought-in items, then call the UDEF lookup tool, then call the web-price fallback, then write the output — all in one agentic session rather than four sequential Python calls. Not a near-term swap; an architecture-pass idea.
+      </p>
+      <p class="card-action">→ Immediate: add gpt-5.6-terra as a fallback model string in config.py; trial it on a note-scan run alongside Grok 4.5</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">SDI Design pipeline relevance</span></div>
+      <p class="card-body">
+        GPT-5.6 Sol's <strong>Programmatic Tool Calling + Ultra Mode</strong> is the most interesting for SDI Design workflows: an agentic session could take a brief ("500mm wall bay, Milwaukee branding, 3-peg configuration"), generate a SolidWorks macro outline, cross-reference standard parts catalogue, produce a costed BOM, and flag any non-standard features — all in one orchestrated call. This isn't available today but it's the direction. The infrastructure for it (tool calling, parallel agents, 1M context) is live now.
+        For immediate design use: Terra or Sol can read a drawing PDF and answer "what's the material spec on part 1455-C-002?" more reliably than the current regex-over-text-dump extraction in file_scan.py.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">GPT-6 — not released</span><span class="chip chip-explore">Q4 2026 at earliest</span></div>
+      <p class="card-body">
+        As of 16 July 2026 GPT-6 does not exist publicly. OpenAI shipped seven GPT-5.x models in under a year, each absorbing rumoured GPT-6 features (long-term memory, agentic loops, parallel agents, personalisation). Prediction markets: ~55-60% by Sep 30, ~80% by Dec 31 2026. The engine's config-driven model string means GPT-6 is a one-line update when it arrives.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── Grok 4.5 ─────────────────────────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">SpaceXAI (xAI) — Grok 4.5</h2>
+    <p><span class="chip chip-current">Released 8 Jul 2026 — direct successor to your current Grok 4.3</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">What changed: 4.3 → 4.5</span></div>
+      <div class="card-tags"><span class="tag">500K context (was smaller)</span><span class="tag">$2/$6 per 1M</span><span class="tag">Cursor-trained</span><span class="tag">2× token efficiency</span></div>
+      <p class="card-body">
+        Grok 4.3 was a general-purpose reasoning model. Grok 4.5 is xAI's first model built <em>specifically</em> for coding and agentic work. The key difference is training data: 4.5 was trained on real Cursor developer session data (following SpaceXAI's $60B Cursor acquisition June 2026) — capturing actual multi-file, multi-turn engineering workflows rather than scraped code. This matters for the SDI engine because engineering-BOM-extraction is closer to "agentic coding over structured text" than it is to "general Q&A".
+        <br><br>
+        <strong>Token efficiency:</strong> 15,954 output tokens per resolved SWE task vs 67,020 for Opus 4.8 at max — 4.2× more efficient. Applied to note-scan: the finder call that currently produces a verbose JSON list of bought-in items should use significantly fewer tokens, reducing per-job API cost.
+        <strong>Speed:</strong> 80 tokens/sec, with xAI stating a custom inference stack will double this in coming weeks.
+        <strong>Context:</strong> 500K tokens — enough to send the full 1282 job's PDF text dump (7 PDFs × 23 pages) in a single call rather than chunking.
+        <strong>Pricing:</strong> $2/$6 per 1M — unchanged from Grok 4.3's API pricing tier, so no budget impact.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Estimating pipeline — what to do now</span></div>
+      <p class="card-body">
+        This is the simplest upgrade in the whole landscape: one config.py line. Change <code>PRICE_SOURCE_CONFIG["web"]["xai_model"]</code> from <code>"grok-4.3"</code> to <code>"grok-4.5"</code>. The API shape, authentication, and response format are identical.
+        <br><br>
+        <strong>Expected improvements:</strong> the Cursor-training should make the model better at reading structured manufacturing notes (e.g. page 10's "FIXING5 4.0x10mm DOME RIVET 2 JUNCTION BOX... FOAM TAPE" — the kind of interleaved BOM/prose the note-scanner currently handles imperfectly). Token efficiency means the temperature=0 + seed=7 determinism fix should hold better because there are fewer reasoning tokens available to drift.
+        <br><br>
+        <strong>Verification:</strong> re-run the three-run determinism proof after updating. Specifically check the loom price holds stable across all three runs and the note-scan item count doesn't toggle between 5, 6, and 7.
+        <br><br>
+        <strong>Caveats:</strong> EU availability not confirmed as of July 2026 — verify UK API access at console.x.ai before deploying. Less public detail on data retention than Anthropic/OpenAI; for internal-only estimating data this is acceptable but worth noting.
+      </p>
+      <p class="card-action">→ Action now: update config.py model string → re-run 1282 three times → confirm loom and item count stable</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Design pipeline relevance</span></div>
+      <p class="card-body">
+        Grok 4.5 inside Cursor (the code editor) is now a native integration — if SDI's design team uses Cursor for any tooling or script work, Grok 4.5 is already there via the Cursor UI on all plans. Not relevant to SolidWorks CAD work directly, but relevant for any Python/scripting around the engine. The agentic tool-calling improvements make it better than 4.3 for structured JSON generation — relevant if the engine ever asks the model to draft a complete BOM row set rather than just identify item names.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── Claude Fable 5 / Opus 4.8 ──────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--cut);"></div>
+    <h2 style="color:var(--cut);">Anthropic — Claude Fable 5 &amp; Claude Opus 4.8</h2>
+    <p><span class="chip chip-live">Fable 5: released 9 Jun, restored 1 Jul 2026 &nbsp;·&nbsp; Opus 4.8: released 28 May 2026</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Fable 5 — what it is</span><span class="chip chip-try">Mythos-class</span></div>
+      <div class="card-tags"><span class="tag">1M context</span><span class="tag">128K output</span><span class="tag">$10/$50 per 1M</span><span class="tag">Always-on adaptive thinking</span></div>
+      <p class="card-body">
+        Anthropic's first Mythos-class model — a new capability tier above Opus. API: <code>claude-fable-5</code>. Key headline: best-in-class on SWE-Bench Pro (80.4%) — the benchmark that most closely reflects "fix a real bug in a real production repo", which also maps well to "extract a real BOM from a real drawing". 128K output tokens means it can produce a complete structured estimate output (all parts, all bought-ins, all pricing, all flags) in a single response without truncation.
+        <br><br>
+        Always-on adaptive thinking means it reasons before answering even on short prompts — relevant for the engine because BOM extraction from multi-view drawing text requires understanding page context, not just pattern-matching.
+        Persistent file-based memory: can retain notes across a long agentic session — directly relevant if the engine ever runs as a background agent reviewing a whole drawing pack over multiple steps rather than a single-shot call.
+        <br><br>
+        Safety note: classifiers auto-fallback to Opus 4.8 for sensitive queries (&lt;5% of sessions). For engineering/manufacturing queries this will be rare. The model was temporarily export-controlled June 12–July 1 due to US government cybersecurity concerns; access restored globally July 1.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Opus 4.8 — the pragmatic choice now</span><span class="chip chip-live">Recommended swap</span></div>
+      <div class="card-tags"><span class="tag">Already wired in engine</span><span class="tag">$5/$25 per 1M</span><span class="tag">4× fewer code flaws</span><span class="tag">Deterministic at temp 0</span></div>
+      <p class="card-body">
+        The refinement of Opus 4.7 with focus on reliability and honesty. The headline improvement (4× less likely to suggest code with subtle logical flaws) translates directly to estimating: the model is less likely to hallucinate a BOM row that doesn't exist in the drawing, or invent a material spec that wasn't stated. This is exactly the failure mode the engine's credibility gate is designed to catch — Opus 4.8 reduces how often the gate needs to fire.
+        <br><br>
+        <strong>The key fact for SDI:</strong> <code>_call_anthropic_llm</code> already exists in <code>web_ai_price_lookup.py</code>. The Anthropic API key is already configured. Swapping the note-scan finder from Grok to Claude Opus 4.8 is a single routing change in the note-scan call — no new auth, no new dependency, no new call shape. Temperature 0 is genuinely deterministic on Claude in a way that Grok's reasoning model isn't, because Opus 4.8 doesn't have a reasoning-token trace that can vary before producing the answer.
+        <br><br>
+        New: mid-conversation system message support — allows the engine to inject dynamic context mid-session (e.g. "you are now pricing part 1449-01C, here are the historical prices for peg panels") rather than rebuilding the full prompt from scratch.
+      </p>
+      <p class="card-action">→ If Grok 4.5 still drifts after 3-run proof: flip note-scan call to claude-opus-4-8; compare stability</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Estimating pipeline — when to use which</span></div>
+      <p class="card-body">
+        <strong>Today (Grok 4.5):</strong> note-scan finder + pricing waterfall. One-line upgrade, known path.
+        <br><br>
+        <strong>If Grok 4.5 still unstable (Opus 4.8):</strong> swap the finder. Already wired. More deterministic. Better at resisting hallucination on sparse drawing notes.
+        <br><br>
+        <strong>Near-term architecture pass (Fable 5):</strong> the full agentic estimating session — give Fable 5 the complete drawing pack, ask it to identify all parts, route each to the right pricing path (UDEF → catalogue → web → flag), produce the workbook, and summarise what it couldn't price. One agentic session instead of the current multi-step pipeline. At $10/$50 this needs volume justification — but for high-value complex jobs (£5k+) the cost is negligible.
+        <br><br>
+        <strong>Design pipeline (Fable 5):</strong> redesign briefing, spec review, "does this design comply with our standard bracket library?", value-engineering suggestions. Fable 5's 128K output can hold an entire drawing pack's text plus a structured analysis response without truncation.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── Kimi K3 ──────────────────────────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--warn);"></div>
+    <h2 style="color:var(--warn);">Moonshot AI — Kimi K3</h2>
+    <p><span class="chip chip-try">Beta leak 14–16 Jul 2026 — no official model card as of today</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Leaked specs — honest status</span></div>
+      <div class="card-tags"><span class="tag">~2.5T MoE (leaked)</span><span class="tag">1M context (leaked)</span><span class="tag">~$0.80–$1.20/M input (leaked)</span><span class="tag">Kimi-Linear attention</span></div>
+      <p class="card-body">
+        Successor to K2.7 Code (1T params, 256K context). Leaked via a briefly-live Moonshot API platform page before it was taken down — the strongest signal short of an official announcement. Reported architecture: ~2.5T total parameters in a new MoE design with Kimi-Linear (linear attention hybrid claiming 75% KV-cache reduction and 6× decoding throughput at 1M context). Early beta testers report performance between GPT-5.6 Sol and Fable 5 on some coding tasks; slow on hard tasks (up to 35 minutes). <strong>No official model card, no confirmed benchmarks, no confirmed pricing as of 16 July 2026.</strong> All specs above are pre-release leaks.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Why K3 matters if specs hold</span></div>
+      <p class="card-body">
+        If Kimi K3 delivers near-Fable-5-class capability at $0.80–$1.20/M input it would be the cheapest viable frontier model by a large margin. Applied to SDI estimating:
+        <br><br>
+        <strong>Cost at scale:</strong> the pricing waterfall currently calls Grok at $2/$6. A K3 call at ~$1/$4 for the same task would halve the per-job AI cost — significant if the engine runs hundreds of jobs per month.
+        <br><br>
+        <strong>1M context (if practical):</strong> send the complete 1282 drawing pack text (all 7 PDFs, all BOM rows, all page text) in a single call without chunking — removing the pooled-BOM/per-page-scan architecture complexity.
+        <br><br>
+        <strong>Pricing is expected to undercut everything Western:</strong> Moonshot's K2 family was Modified MIT open-weight. K3's license is unknown — if open-weight, you could run it locally on SDI's network with no per-call cost at all.
+        <br><br>
+        <strong>Practical advice:</strong> do not integrate K3 yet. Wait for the official model card and at least one independent benchmark table. Add to the monthly review — if K3 lands at the leaked specs it jumps from "explore" to "trial" immediately.
+      </p>
+      <p class="card-action">→ Watch: platform.kimi.ai and kimi-k2.org/status for model card; check UK API access before any trial</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── Gemini 3.5 Flash ─────────────────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--good);"></div>
+    <h2 style="color:var(--good);">Google — Gemini 3.5 Flash</h2>
+    <p><span class="chip chip-live">Released May 2026 (Google I/O) — GA, API available now</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Version history — where 2.0 sits</span></div>
+      <div class="card-tags"><span class="tag">2.0 → RETIRED June 2026</span><span class="tag">2.5 → retiring Oct 2026</span><span class="tag">3.5 Flash → current production</span></div>
+      <p class="card-body">
+        To answer your direct question: <strong>Gemini 2.0 is not new — it's retired.</strong> It was released February 2025 and shut down June 1, 2026. Any integration calling <code>gemini-2.0-flash</code> is currently returning errors. Gemini 2.5 replaced it but itself retires October 16, 2026. The current production model is <code>gemini-3.5-flash</code> (released May 19, 2026). If you're evaluating Gemini for SDI, start with 3.5 Flash — don't touch 2.0 or 2.5. The model string to use is <code>gemini-3.5-flash</code> and abstract it behind a config variable (same discipline as config.py's xai_model) so Google's fast rotation cycle doesn't require code changes.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">What makes 3.5 Flash different</span></div>
+      <div class="card-tags"><span class="tag">1M context</span><span class="tag">$1.50/$9 per 1M</span><span class="tag">Native PDF-as-image input</span><span class="tag">4× faster than rival flagships</span></div>
+      <p class="card-body">
+        3.5 Flash is the first Gemini model specifically tuned for agentic and coding tasks rather than being a general conversation model. Terminal-Bench 2.1: 76.2%. The headline capability for SDI is <strong>native multimodal input via the Files API</strong> — you can send a PDF page (or a PNG render of a DXF) directly to the model as an image, ask for structured JSON output, and get the BOM table, part dimensions, and material field read from the actual drawing rather than extracted from pdfplumber's vector paths.
+        <br><br>
+        This is fundamentally different from the current pipeline. The current engine reads PDF vector paths and tries to infer geometry from line lengths. Gemini 3.5 Flash sees what a human would see — the drawn flat-pattern, the dimension callouts, the fold arrows — and extracts from that visual interpretation. For clean, well-drawn SDI sheets (the majority of in-house work), the accuracy should be significantly higher than the geometry_features.py extraction.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Estimating pipeline — the structural fix for 2621-01C</span></div>
+      <p class="card-body">
+        The current engine fails the credibility gate on 1282 because 2621-01C has no matched DXF and the PDF geometry extraction over-counts by 1.77×. Gemini 3.5 Flash vision is the structural fix:
+        <br><br>
+        <strong>Workflow:</strong> when a part has no matched DXF and is PDF-sourced, rasterise its PDF pages at 300 DPI using pymupdf (<code>page.get_pixmap(dpi=300)</code>), upload to Gemini Files API, send with a structured prompt: "This is a flat-pattern engineering drawing. Extract: cut perimeter in mm, number and diameter of holes, number of bends, material, and thickness. Return as JSON." The response replaces geometry_features.py output for that part.
+        <br><br>
+        <strong>Why this crosses the credibility gate:</strong> a Gemini-extracted dimension is verifiable against the drawing's own callout numbers (e.g. "525.3 EXT × 553.1 EXT" visible on page 7) and doesn't require the no_part_dxf penalty — the engine could treat Gemini-extracted geometry as a higher-confidence source than the PDF vector extractor, potentially at the same credibility level as DXF.
+        <br><br>
+        <strong>Cost:</strong> $1.50/M input at roughly 500-1000 tokens per page = &lt;$0.002 per drawing page. Negligible against a £100+ estimate.
+        <br><br>
+        <strong>For DXF-backed parts:</strong> Gemini vision could also validate: render the DXF to PNG, ask Gemini "does this match a 500mm peg panel with 386 holes?", get a sanity check without running the full DXF reader. Useful for edge cases but probably over-engineering at this stage.
+      </p>
+      <p class="card-action">→ Prototype: pip install google-generativeai pymupdf; 10 lines of Python; send 2621-01C page 18 as PNG; compare extracted perimeter to current 14445mm</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Design pipeline relevance</span></div>
+      <p class="card-body">
+        For SDI Design, Gemini 3.5 Flash vision opens a review workflow that currently doesn't exist: send a completed drawing pack image to the model and ask "does this comply with our standard DXF export conventions? Are all BENDLINES on the correct layer? Is the title block complete? Are there annotation layers that should be removed before estimating?" — an automated drawing-quality check before the pack goes to the estimator. This directly addresses the DXF export standards gap identified in the handoff (missing BENDLINES layers, stray-space filenames, inconsistent BOM table layouts).
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ── Architecture diagram ─────────────────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--cut);"></div>
+    <h2 style="color:var(--cut);">Recommended Integration Architecture — SDI Intelligence with SolidWorks COM</h2>
+    <p>SolidWorks is licensed ✓ — COM API is the primary path, not a future option</p>
+  </div>
+
+  <div class="card" style="margin-bottom:20px;border-color:var(--cut);">
+    <div class="card-head"><span class="card-title">Data flow: SW COM (primary) → Vision LLMs (backup) → Existing Pipeline</span></div>
+    <p class="card-body" style="font-family:'Courier New',monospace;font-size:11px;line-height:2;color:var(--subtext);">
+<span style="color:var(--cut);">SDI-ORIGINATED DRAWING PACK (.sldasm + .sldprt + .slddrw)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+<span style="color:var(--text);">[1] SolidWorks COM API</span> <span style="color:var(--good);">← PRIMARY (£0/call, ground truth)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;├── .sldasm → BOM table: part numbers, descriptions, quantities (incl. bought-ins)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;├── .sldprt → flat-pattern: cut perimeter, bends, thickness, material, weight, holes<br>
+&nbsp;&nbsp;&nbsp;&nbsp;├── .slddrw → assembly notes, title-block fields, scale<br>
+&nbsp;&nbsp;&nbsp;&nbsp;└── weldment cut list → tube section, length, qty (3886-01 type parts)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+<span style="color:var(--warn);">[2] If SW file not found / part missing from model:</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Gemini 3.5 Flash vision on 300/600 DPI rasterised PDF page<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--dim);">(~$0.002–$0.004/page · ~$0.08/job · negligible)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+<span style="color:var(--warn);">[3] BOM table complex / Gemini low confidence:</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Claude Opus 4.8 vision (already authenticated)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--dim);">(~$0.005–$0.013/page · ~$0.30/job · negligible)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+<span style="color:var(--fold);">EXTERNAL CLIENT PACKS (Milwaukee, TTI, Boots — no SW model)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;└── Gemini 3.5 Flash vision → primary<br>
+&nbsp;&nbsp;&nbsp;&nbsp;└── Claude Opus 4.8 vision → fallback on complex tables<br>
+&nbsp;&nbsp;&nbsp;&nbsp;└── Current geometry_features.py → retained as last resort (DXF-backed parts)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+<span style="color:var(--text);">[4] Existing pipeline from here — UNCHANGED:</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;pricing_service.py → UDEF lookup → catalogue → web/LLM fallback<br>
+&nbsp;&nbsp;&nbsp;&nbsp;note_scan.py → Grok 4.5 finder → bought-in identification<br>
+&nbsp;&nbsp;&nbsp;&nbsp;wb_populate.py → Excel workbook → credibility gate → output<br>
+    </p>
+    <p class="card-action">→ Build the SW COM module first (~200 lines Python). Everything downstream stays unchanged. The credibility gate will pass immediately for all COM-sourced parts because geometry_source becomes "solidworks_com" — the highest-confidence source type, no DXF penalty.</p>
+  </div>
+
+  <!-- ── Summary table ──────────────────────────────────── -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch"></div>
+    <h2>SDI Pipeline Routing — Which Model for Which Task (July 2026)</h2>
+    <p>A practical decision table. Not theoretical — based on current engine architecture.</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Engine task</th><th>Current</th><th>Best upgrade now</th><th>Why / SDI-specific gain</th><th>Effort</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="name">Note-scan finder (identify electricals, fixings, looms in drawing notes)</td>
+          <td><span class="chip chip-current">Grok 4.3</span></td>
+          <td><span class="chip chip-try">Grok 4.5</span></td>
+          <td class="desc">Same API path, one config.py line. Cursor-trained → better at structured manufacturing prose. 2× token efficiency → cheaper per run. 500K context → whole drawing pack in one call.</td>
+          <td><span class="chip chip-free">10 minutes</span></td>
+        </tr>
+        <tr>
+          <td class="name">Note-scan finder (if Grok 4.5 still drifts)</td>
+          <td><span class="chip chip-current">Grok 4.3</span></td>
+          <td><span class="chip chip-try">Claude Opus 4.8</span></td>
+          <td class="desc">Already wired (_call_anthropic_llm). Genuinely deterministic at temp 0 — no reasoning-trace variance. 4× fewer hallucinations on sparse manufacturing notes.</td>
+          <td><span class="chip chip-free">30 minutes</span></td>
+        </tr>
+        <tr>
+          <td class="name">PDF geometry extraction (parts without DXF — 2621-01C type)</td>
+          <td><span class="chip chip-current">geometry_features.py (over-counts by 1.77×)</span></td>
+          <td><span class="chip chip-try">Gemini 3.5 Flash vision</span></td>
+          <td class="desc">Reads the flat-pattern drawing as an image. Extracts actual dimension callouts rather than summing all vector paths. Fixes 2621-01C, unblocks credibility gate, headline total reportable again.</td>
+          <td><span class="chip chip-try">Half day</span></td>
+        </tr>
+        <tr>
+          <td class="name">BOM table extraction from PDF (FIXING/VINYL capture, qty columns)</td>
+          <td><span class="chip chip-current">regex over pdfplumber text</span></td>
+          <td><span class="chip chip-try">Gemini 3.5 Flash vision OR Claude Opus 4.8</span></td>
+          <td class="desc">Vision: reads the actual table as rendered. Claude: strong structural-JSON extraction from text with minimal hallucination. Either beats the current regex for irregular or wrapped BOM table columns.</td>
+          <td><span class="chip chip-try">1 day</span></td>
+        </tr>
+        <tr>
+          <td class="name">Full agentic estimating session (read → price → review → output)</td>
+          <td><span class="chip chip-current">Multi-step Python pipeline</span></td>
+          <td><span class="chip chip-explore">Claude Fable 5 or GPT-5.6 Sol</span></td>
+          <td class="desc">Programmatic Tool Calling (Sol) or long-horizon autonomous execution (Fable 5) — either can orchestrate the whole estimate in one agentic session. Architecture-pass item; not a near-term swap.</td>
+          <td><span class="chip chip-explore">Architecture pass</span></td>
+        </tr>
+        <tr>
+          <td class="name">In-house part geometry (SDI-drawn parts in SolidWorks)</td>
+          <td><span class="chip chip-current">DXF flat-pattern reader (ezdxf)</span></td>
+          <td><span class="chip chip-explore">SolidWorks COM API</span></td>
+          <td class="desc">Ground truth: reads cut-length, bends, material directly from the SolidWorks model. Eliminates the entire PDF/DXF extraction pipeline for SDI-originated jobs. Requires SW licensed on estimating machine.</td>
+          <td><span class="chip chip-explore">Feasibility check first</span></td>
+        </tr>
+        <tr>
+          <td class="name">External client drawing packs (Milwaukee, TTI, Boots — no SW model)</td>
+          <td><span class="chip chip-current">PDF geometry + DXF where available</span></td>
+          <td><span class="chip chip-try">Gemini 3.5 Flash vision</span></td>
+          <td class="desc">No SolidWorks model available. Vision LLM on rasterised pages is the best alternative — reads the drawn geometry rather than extracting vectors. Most improvement on multi-view sheets.</td>
+          <td><span class="chip chip-try">Half day prototype</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Other / Rumoured -->
+  <div class="section-label" style="margin-top:32px;">
+    <div class="notch" style="background:var(--dim);"></div>
+    <h2 style="color:var(--subtext);">Other Named Models — Confirmed Status (16 Jul 2026)</h2>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Neo Hands</span><span class="chip chip-explore">Not found</span></div>
+      <p class="card-body">No official announcement, model card, or credible publication found as of 16 July 2026. Not in any frontier lab's public release notes. Possibly a community-coined name for an unreleased robotics/embodied-AI project rather than a text/reasoning model. Not actionable for the SDI engine. Add to the monthly watch list.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Opus 5 (rumoured)</span><span class="chip chip-explore">Unannounced</span></div>
+      <p class="card-body">Referenced in community speculation only. Anthropic's current tier structure (Haiku → Sonnet → Opus → Fable/Mythos) suggests the next above Fable 5 would be a new Mythos-class model rather than an Opus point release. Monitor docs.anthropic.com. If released, enters the engine via the existing _call_anthropic_llm path with a model string update.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Meta Muse Spark 1.1</span><span class="chip chip-explore">Watch</span></div>
+      <p class="card-body">Meta's first proprietary closed model, released July 2026 alongside GPT-5.6. Limited independent benchmarks. Not OpenAI-compatible API — would require a new call path. Monitor for UK access and pricing before investing time. Not relevant for near-term SDI work.</p>
+    </div>
+  </div>
+
+    <!-- ══════════════════════════════════════════════
+       SECTION — WHAT TO BUILD: PRIORITY ROADMAP
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">What to Build — Priority Roadmap</h2>
+    <p>Given SolidWorks is licensed and you're integrating it: what else actually moves the needle, in order</p>
+  </div>
+
+  <p style="font-size:12px;color:var(--subtext);margin-bottom:8px;line-height:1.8;">
+    You can't do everything. The list below is ranked by <strong>accuracy impact × effort</strong> —
+    the items at the top fix the most expensive remaining errors for the least work.
+    Items 1–4 are the core build. Items 5–7 are meaningful additions once the core is stable.
+    Items 8–10 are longer-term value but not blockers.
+  </p>
+
+  <!-- API cost card -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="card-head"><span class="card-title">RS Components vs Nexar/Octopart — Access & Cost Reality</span></div>
+    <div class="card-tags">
+      <span class="tag">RS: trade account required</span>
+      <span class="tag">Nexar/Octopart: free evaluation tier</span>
+      <span class="tag">Both: ~30 lines Python</span>
+    </div>
+    <p class="card-body">
+      <strong>RS Components API</strong> — not a public API. Their "Tactical API" is a B2B procurement integration requiring an existing RS trade account and a formal request to your RS account manager for API credentials. No self-service sign-up portal. Technically straightforward (REST/GraphQL once you have the key), but relationship-gated. If SDI buys from RS on account, call the account manager. Otherwise, use Nexar instead — it aggregates RS anyway.
+      <br><br>
+      <strong>Nexar API (Octopart's successor)</strong> — genuinely easy and has a free evaluation tier. Sign up at <code>portal.nexar.com</code> in 5 minutes, get a Client ID and Client Secret immediately, start querying within the hour. GraphQL endpoint at <code>api.nexar.com/graphql</code>. Returns RS Components, Farnell, Mouser, Arrow, and 30+ other distributors in a single query — so you get RS pricing without a direct RS relationship. Free tier covers evaluation and low-volume use; paid plans for higher volume. The Python integration is about 30 lines (OAuth2 token exchange, then a GraphQL POST with the part description and a seller filter for <code>"RS Components"</code> and <code>"Farnell"</code> UK).
+      <br><br>
+      <strong>What both can price:</strong> fixings (M8 glides, cable ties, rivets, dome rivets — your FIXING codes), junction boxes, terminal blocks, LED drivers, earth straps, adhesive cable clips. <strong>What neither reliably prices:</strong> branded luminaire fittings like the Milwaukee 50cm lighting loom — those come from electrical wholesalers (Rexel, CEF, Edmundson). For those, Tim entering the price into UDEF once is the right fix.
+      <br><br>
+      <strong>Integration pattern for the engine:</strong> in <code>_price_via_waterfall</code> (note_scan.py), add a new waterfall layer between "UDEF lookup" and "web/LLM estimate": call Nexar with the item description, filter for UK sellers, return the lowest price. Cache the result in BoughtInCatalogue with source = <code>nexar_api</code>. If Nexar returns nothing, fall through to the existing LLM fallback. Total new code: ~80 lines.
+    </p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:28px;">#</th>
+          <th>What to build</th>
+          <th>Why it matters — the specific problem it fixes</th>
+          <th>Effort</th>
+          <th>Dependency</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--cut);">1</td>
+          <td class="name">SolidWorks COM API module<br><code style="font-size:10px;">sw_extractor.py</code><br>
+            <span class="dim" style="font-weight:400;">Sources: .sldasm + .sldprt + .slddrw</span>
+          </td>
+          <td class="desc">
+            <strong>Read all three SolidWorks file types — not just the .sldasm and .sldprt.</strong>
+            The <code>.slddrw</code> drawing file is the SolidWorks source of the PDF and DXF that the engine currently processes. Exporting to PDF or DXF loses three things that matter:
+            <br><br>
+            <strong>(a) Notes as structured objects.</strong> The assembly notes the note-scanner currently reads via pdfplumber → LLM (junction box, loom, earth strap, foam tape on page 10) exist as <code>INote</code> objects in the <code>.slddrw</code> file. The COM API returns them as clean strings — no OCR noise, no text-extraction errors, no LLM needed, fully deterministic. For SDI-originated jobs, this <em>replaces the note-scan LLM call entirely</em>. The loom price instability disappears because the note is read structurally, not guessed by an LLM from flattened PDF text.
+            <br><br>
+            <strong>(b) View type identification.</strong> The drawing file knows which view is the flat pattern, which are section views, which are detail boxes. The engine currently can't tell — pdfplumber sums all vector paths on the page identically, which is exactly why 2621-01C shows 14,445mm instead of ~2,800mm: section and detail geometry is added to the flat pattern outline. <code>.slddrw</code> exposes each view as a typed object (<code>e_FlatPatternView</code>, <code>e_SectionView</code>, <code>e_DetailView</code>). Select only the flat-pattern view's geometry and the inflation problem disappears architecturally — no calibration fix needed.
+            <br><br>
+            <strong>(c) BOM tables as structured data.</strong> <code>IBomTableAnnotation.GetTableAnnotation()</code> returns BOM rows as typed data — part number, description, quantity already parsed. The regex-over-flattened-text BOM parser that struggles with "FIXING 236 M8 FLANGED NUTSERT 2 2 5" ambiguity is replaced with a direct structured read. FIXING125 qty comes back as 4 (bay-level) without the bom_tree multiplier.
+            <br><br>
+            <strong>From .sldprt:</strong> flat-pattern cut perimeter, bend count, material, thickness, weight, hole wizard details — the exact values the designer worked to.
+            <br><br>
+            <strong>From .sldasm:</strong> assembly-level BOM with correct quantities for all components including bought-in fixings.
+            <br><br>
+            <strong>COM-based pre-flight validation — for in-house SW jobs, this replaces Gemini vision pre-flight entirely.</strong> After opening each .sldprt and .sldasm via COM, run a lightweight property check before passing data to the estimator:
+            <ul style="margin:6px 0 6px 18px;color:var(--subtext);font-size:12px;line-height:2;">
+              <li><code>SW-Material</code> populated and not "unknown"? If empty → flag "material not set on this part"</li>
+              <li><code>SW-Sheet Metal Thickness</code> &gt; 0? If zero → flag "thickness not set — cost will be wrong"</li>
+              <li><code>SW-Number of Bends</code> sensible (not 0 for a part with obvious base flanges)? Flag outliers.</li>
+              <li>All components in .sldasm BOM have a matching .sldprt on disk? Missing files flagged before the run, not discovered mid-estimate.</li>
+              <li>BOM table has no empty part numbers or description fields? Empty rows flagged.</li>
+              <li>Weldment cut list populated for tube/structural members? Missing cut lists flagged.</li>
+            </ul>
+            These are COM property reads — faster, cheaper, and more reliable than asking a vision model to infer the same things from a rendered image. BENDLINES layer checking is a DXF concept and does not apply to SW model data. The existing <code>check_dxf_batch.py</code> handles that for DXF files.
+            <br><br>
+            <strong>Net effect:</strong> 2621-01C geometry fixed. Credibility gate passes. Headline total reportable. Note-scan LLM call eliminated for in-house jobs. FIXING quantities correct. Tube section data structured. Drawing file hunting replaced by SW project folder walk. Pre-flight validation is programmatic, not vision-based. Every subsequent in-house job run is more accurate, faster, and cheaper by default.
+          </td>
+          <td><span class="chip chip-live">~1–2 days</span></td>
+          <td>SW licensed ✓ · Build in this order: .sldasm (BOM) → .sldprt (geometry) → .slddrw (notes + view types)</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--good);">2</td>
+          <td class="name">Nexar/Octopart API for bought-in pricing<br><code style="font-size:10px;">nexar_pricing.py</code></td>
+          <td class="desc">
+            <strong>Fixes the loom/electrical price instability structurally.</strong> Right now the loom price swings £2–£9 per run because it falls to a non-deterministic LLM estimate. Nexar returns a real catalogue price from RS/Farnell for fixings, cable ties, junction boxes, LED drivers, earth straps. Once returned, it's cached in BoughtInCatalogue — subsequent runs use the cache, no API call. The price is auditable ("source: nexar_api, seller: RS Components, SKU: 123456") rather than "LLM guess". Won't solve branded looms (see UDEF), but solves ~70% of the unstable bought-in lines.
+          </td>
+          <td><span class="chip chip-live">~2–3 hours</span></td>
+          <td>Free sign-up at portal.nexar.com</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--cut);">3</td>
+          <td class="name">Grok 4.3 → 4.5 model string update<br><code style="font-size:10px;">config.py: xai_model</code></td>
+          <td class="desc">
+            <strong>One line. Immediate benefit.</strong> Better structured-text performance on manufacturing notes, 2× token efficiency (cheaper per run), 500K context window (send entire drawing pack in one call). Does not require a new API key or any code change beyond the model string. Re-run the three-run determinism proof after to confirm note-scan stability holds on 4.5.
+          </td>
+          <td><span class="chip chip-free">10 minutes</span></td>
+          <td>Confirm UK API access at console.x.ai first</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--good);">4</td>
+          <td class="name">Gemini 3.5 Flash vision — PDF backup for external drawings<br><code style="font-size:10px;">vision_extractor.py</code></td>
+          <td class="desc">
+            <strong>For Milwaukee, TTI, Boots, Tesco, and any other job where there is no SolidWorks model</strong> — this is the equivalent of the SW COM path for external packs. The three problems the <code>.slddrw</code> COM path solves for in-house jobs, Gemini 3.5 Flash solves differently but effectively for PDF-only drawings:
+            <br><br>
+            <strong>(a) Notes and bought-in items.</strong> Instead of reading <code>INote</code> objects from a drawing file, Gemini reads the rendered page as an image. Send just the assembly notes page (page 10 on 1282) to Gemini at 300 DPI and ask: <em>"List every bought-in item mentioned in these assembly notes — description, quantity, and any part code. Return as JSON."</em> Gemini reads the actual printed note text visually, handling multi-column layouts, rotated labels, and tabular notes that pdfplumber currently flattens into ambiguous strings. For external client drawings this replaces the pdfplumber → LLM note-scan pipeline with a vision → structured-JSON pipeline that's more reliable on complex page layouts. The note-scan still runs for in-house jobs via <code>INote</code> objects (item 1); Gemini is the equivalent path for jobs without a SW model.
+            <br><br>
+            <strong>(b) View type identification from drawing labels.</strong> The <code>.slddrw</code> COM API reads <code>e_FlatPatternView</code> programmatically. For a PDF, Gemini reads the label text — "FLAT PATTERN", "SECTION A-A", "DETAIL B", "3D VIEW" — and can be prompted to: <em>"Find the flat-pattern or main outline view. Extract only its outer perimeter dimension callouts. Ignore section views, detail views, and isometric views."</em> Less reliable than a programmatic type check, but far better than geometry_features.py which sums everything blindly. Add to the prompt: <em>"If you see a section view labelled 'SECTION A-A' or similar, ignore its dimensions."</em> This gets 80–90% of the benefit of view-type filtering for well-labelled drawings.
+            <br><br>
+            <strong>(c) BOM tables.</strong> Send the drawing page containing the BOM table to Gemini and ask: <em>"Extract the BOM table as JSON — columns: item number, part number, description, quantity. Preserve exact part codes (e.g. FIXING125, VINYL76) and quantities."</em> Gemini reads the visual table, handling irregular column widths, multi-line descriptions, and wrapped cells that break the current regex-over-flattened-text parser. The FIXING 236/125/5 ambiguous "2 2 5" string issue doesn't arise because Gemini sees the table columns visually and correctly assigns the first "2" to FIXING236's qty and the second "2" as FIXING125's item row.
+            <br><br>
+            <strong>Resolution:</strong> 300 DPI for notes pages and BOM tables (text-heavy). 600 DPI for detail/dimension pages with fine callout text and close-spaced geometry. Do not use higher — vision LLMs tile and downsample; beyond 600 DPI you get larger files, slower uploads, identical accuracy.
+            <br><br>
+            <strong>Integration pattern for the engine:</strong> <code>vision_extractor.py</code> takes a PDF path, detects the page role (GA/assembly, detail, notes, BOM table) using the page-role classifier already in the engine, rasterises at the appropriate DPI, sends to Gemini with a page-role-specific prompt, returns structured JSON. The JSON shape matches what the SW COM extractor returns — same downstream pipeline. No changes needed to pricing_service.py, wb_populate.py, or the credibility gate.
+            <br><br>
+            <strong>Cost: ~£0.08/job</strong> (21 pages × ~$0.004/page at Gemini 3.5 Flash's $1.50/M token rate). Negligible. Cache results by drawing hash — same drawing on a second run costs nothing.
+            <br><br>
+            <strong>Where rasterisation (PDF → image) is needed in the pipeline — and where it is not:</strong>
+            <br><br>
+            Rasterisation is only needed inside <code>vision_extractor.py</code> — the Gemini path for PDF-only external drawings. Every other part of the pipeline works on vector data and does not need it:
+            <ul style="margin:8px 0 8px 18px;color:var(--subtext);font-size:12px;line-height:2.2;">
+              <li><strong>SW COM API (.sldasm / .sldprt / .slddrw):</strong> reads typed model properties and geometry objects directly. No image, no rasterisation.</li>
+              <li><strong>ezdxf / dxf_reader.py.py:</strong> reads DXF vector entities as geometric objects. No image.</li>
+              <li><strong>pdfplumber (current text extraction):</strong> extracts text and vector paths from PDF directly. No image.</li>
+              <li><strong>Pricing pipeline, note-scan, wb_populate:</strong> all downstream of extraction. No image.</li>
+              <li><strong>vision_extractor.py (Gemini path) ← only here:</strong> PDF must be converted to a PNG image before sending to the Gemini Files API. One tool, one place.</li>
+            </ul>
+            <strong>The tool: pymupdf</strong> (also imported as <code>fitz</code>, installed via <code>pip install pymupdf</code>). Three lines per page:
+            <pre style="background:var(--rule);padding:10px;border-radius:4px;font-size:11px;color:var(--cut);margin:8px 0;overflow-x:auto;">import fitz
+page = fitz.open("drawing.pdf")[page_number]
+page.get_pixmap(matrix=fitz.Matrix(300/72, 300/72)).save("page.png")</pre>
+            Use <code>300/72</code> (300 DPI) for notes pages and BOM tables. Use <code>600/72</code> (600 DPI) for detail and dimension pages with fine geometry callouts. Do not go higher — vision LLMs tile and downsample, so beyond 600 DPI you get larger files, slower uploads, identical accuracy. This is confined to <code>vision_extractor.py</code> and does not touch any other module.
+            <br><br>
+            <strong>Also use for PDF drawing quality pre-flight on external jobs only.</strong> Before running the Gemini extraction on a new external client pack, send the GA page image to Gemini and ask: <em>"Is there a clear flat-pattern view on this page? Are dimension callouts legible? Is the title block populated with material and thickness? Are section and detail views clearly labelled?"</em> This flags external drawing quality issues before the extraction pass rather than after parity fails.
+            <br><br>
+            <em>Note: for in-house SW jobs, pre-flight is done programmatically via COM — check SW-Material populated, SW-Number of Bends &gt; 0, BOM table has no empty part numbers, all assembly components have a matching .sldprt. That is faster, cheaper, and more reliable than asking Gemini to infer the same things from a rendered image. BENDLINES layer checking is a DXF concern and is already handled by the existing <code>check_dxf_batch.py</code> tool — not a Gemini task.</em>
+          </td>
+          <td><span class="chip chip-try">~half–1 day</span></td>
+          <td>pip install google-generativeai pymupdf · Free Gemini API key at aistudio.google.com · Model: gemini-3.5-flash</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--cut);">5</td>
+          <td class="name">Tim's bought-in items into UDEF<br><i>Process, not code</i></td>
+          <td class="desc">
+            <strong>Highest accuracy-per-hour return available.</strong> One Tim session adding 20–30 recurring items (Milwaukee loom, junction box, GU10 LED, earth strap, adhesive clip, dome rivet) to UDEF gives permanently stable prices that no API or LLM can match on accuracy. UDEF is already the highest-trust source in the waterfall. The Nexar integration (item 2) handles the long tail; UDEF handles the known recurring items. Together they eliminate the need for the web/LLM pricing fallback on bought-ins for most jobs.
+          </td>
+          <td><span class="chip chip-free">1–2 hours Tim's time</span></td>
+          <td>None — UDEF write access already exists</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--warn);">6</td>
+          <td class="name">Note-scan determinism confirmation<br><i>Verify three-run proof post-4.5</i></td>
+          <td class="desc">
+            <strong>Closes the open verification loop.</strong> The EDIT 1/2/3 determinism fixes (temperature 0, seed, cache-key normalisation) were deployed but the three-run verification was never completed. Until it is, the loom price instability is unconfirmed-fixed. Run 1282 three times back-to-back and confirm loom price and item count are identical across all three. If they're not, swap the finder to Claude Opus 4.8 (already wired, one routing change). This takes 30 minutes and removes the biggest uncertainty hanging over the engine's reliability claim.
+          </td>
+          <td><span class="chip chip-free">30 minutes</span></td>
+          <td>Items 2–3 done first so the prices are stable</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--warn);">7</td>
+          <td class="name">src/ folder housekeeping<br><i>Archive the file graveyard</i></td>
+          <td class="desc">
+            <strong>Prevents the next wrong-file edit.</strong> The DXF reader mixup cost four exchanges this session because both dxf_reader.py and dxf_reader.py.py existed. estimator1.py, file_scan2.py, document_builder_V3.py, *.backup.py, *_old.py all create the same risk. Move every non-live file to a <code>_archive/</code> subfolder. Takes 20 minutes. Prevents hours of debugging on the next session. Not glamorous but directly protects everything else on this list.
+          </td>
+          <td><span class="chip chip-free">20 minutes</span></td>
+          <td>None</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--dim);">8</td>
+          <td class="name">Per-bay ×2 fixing multiplier<br><code style="font-size:10px;">drawing_job_merge.py bom_tree</code></td>
+          <td class="desc">
+            Fixes FIXING125 reading qty 2 (per-assembly) when Tim has qty 4 (per-bay). The correct fix is routing bought-in stubs through the same bom_tree GA ×2 multiplier the steel children already get. Low code effort once <code>drawing_job_merge.py</code> (which wasn't in the project snapshot) is uploaded. For SW-originated jobs, this becomes irrelevant — the SW BOM gives qty 4 directly. So item 1 (SW COM) makes this moot for in-house work; this only matters for external packs until item 4 (Gemini vision) is live.
+          </td>
+          <td><span class="chip chip-try">~2 hours</span></td>
+          <td>drawing_job_merge.py source needed</td>
+        </tr>
+        <tr style="background:rgba(0,194,255,0.07);">
+          <td style="font-size:16px;font-weight:700;color:var(--dim);">9</td>
+          <td class="name">pgvector / ChromaDB semantic part matching<br><i>RAG over historical quotes</i></td>
+          <td class="desc">
+            Embeds part descriptions and geometry fingerprints from the 1,982-job historical corpus (historical_quote_material — 77,545 lines) and uses vector similarity to find the 5 closest historical parts to each new part. Gives a precedent-based price alongside the rule-based estimate — "this 500mm peg panel cost £X across 4 similar past jobs." Makes the engine self-improving over time. Prerequisite: Tim's time rules in + 10+ parity runs to build a reliable corpus. Architecture-pass item.
+          </td>
+          <td><span class="chip chip-explore">Architecture pass</span></td>
+          <td>10+ parity runs complete first</td>
+        </tr>
+        <tr>
+          <td style="font-size:16px;font-weight:700;color:var(--dim);">10</td>
+          <td class="name">Fully agentic estimating session<br><i>Claude Fable 5 or GPT-5.6 Sol</i></td>
+          <td class="desc">
+            Give the model the complete drawing pack (via SW COM API), ask it to identify all parts, route each through the pricing waterfall, produce the workbook, and summarise what it couldn't price — all in one agentic session rather than the current multi-step pipeline. Claude Fable 5's 128K output and long-horizon autonomy make this viable today. GPT-5.6 Sol's Programmatic Tool Calling makes it self-orchestrating. Not needed yet — the current pipeline is functional — but it's the direction once parity is stable across 10+ jobs.
+          </td>
+          <td><span class="chip chip-explore">Post-parity milestone</span></td>
+          <td>Items 1–6 complete + 10 parity runs</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px;border-color:var(--fold);">
+    <div class="card-head"><span class="card-title">The short version — what to do in the next two weeks</span></div>
+    <p class="card-body">
+      <strong>This week:</strong> (1) Update Grok 4.3 → 4.5 in config.py — 10 minutes, immediate. (2) Sign up for Nexar at portal.nexar.com — 5 minutes, free. Write the 30-line nexar_pricing.py wrapper. (3) Ask Tim to add the 20–30 recurring bought-in items to UDEF — 2 hours of his time, highest-value accuracy return per hour available.
+      <br><br>
+      <strong>Next week:</strong> (4) Start the SW COM module — one Python file (~200 lines). Open a .sldasm, read the BOM table, print the output. Don't try to integrate it fully on the first pass — get the data out correctly first, then wire it into the estimating pipeline. (5) Run the three-run determinism proof once items 2–3 are done and Grok 4.5 is live. Write the result down. Then close this loop.
+      <br><br>
+      <strong>After that:</strong> Gemini vision for external packs, then the src/ housekeeping. The ×2 multiplier, pgvector, and agentic session can wait — they're real value but not blockers on getting JR sign-off on a reportable, stable estimate.
+    </p>
+  </div>
+
+    <!-- ══════════════════════════════════════════════
+       SECTION 5 — REPEATABLE REVIEW PROCESS
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>Repeatable Review Process</h2>
+    <p>Run this monthly — things to check each time before deciding whether to trial a new capability</p>
+  </div>
+
+  <ul class="checklist">
+    <li>
+      <span class="icon">🔍</span>
+      <div class="body">
+        <strong>Check LLM release notes — xAI, Anthropic, OpenAI</strong>
+        <span>Visit platform.openai.com/docs, docs.anthropic.com, x.ai/api. Look for: new model strings available in the API, lower per-token pricing on existing models, new structured-output / response_format fields, native PDF/image support improvements. Check for grok-4 / grok-next, claude-opus-4-*, gpt-5/o3 upgrades.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🔩</span>
+      <div class="body">
+        <strong>Check SolidWorks API release notes</strong>
+        <span>solidworks.com/developer → What's New in the API. Look for: new flat-pattern export properties, BOM table object improvements, headless / background processing support (key blocker today), new eDrawings API features for pixel-resolution export.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">📐</span>
+      <div class="body">
+        <strong>Check ezdxf changelog (github.com/mozman/ezdxf)</strong>
+        <span>New DXF entity support, new flat-pattern helpers, performance improvements. Current version in venv: <code>pip show ezdxf</code>. Upgrade in place if minor version.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🖼️</span>
+      <div class="body">
+        <strong>Re-assess PDF rasterisation quality</strong>
+        <span>Run: <code>python -c "import pymupdf; page = pymupdf.open('test.pdf')[0]; page.get_pixmap(dpi=300).save('out.png')"</code>. Send the output to the current best vision LLM and ask it to extract the BOM table. Compare accuracy to the pdfplumber text path. Do this for one tricky 1282 page (e.g. page 20, the fixings BOM).</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">💰</span>
+      <div class="body">
+        <strong>Check RS Components API availability</strong>
+        <span>rs-online.com/designspark/products — check whether the product search API (OAuth2) is still available at its current pricing. A single query for "50cm lighting loom" or "junction box IP20" should return a real UK catalogue price. This is the structural fix for the loom/junction-box accuracy problem.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🗂️</span>
+      <div class="body">
+        <strong>Review SDILive BoughtInCatalogue — what's still missing?</strong>
+        <span>Run: <code>SELECT TOP 20 description, cost_source FROM BoughtInCatalogue WHERE cost_source = 'web_indicative' ORDER BY last_updated DESC</code>. Any item still priced web_indicative after 10+ parity runs should be added to UDEF by Tim with a real price. The engine already flags these — this is the monthly triage.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">📊</span>
+      <div class="body">
+        <strong>Run the note-scan three-run determinism proof</strong>
+        <span>Run 1282 three times back-to-back. The loom, junction box, LED link light, and GU10 prices must be identical across all three. If they drift by more than £0.05, the determinism edits (EDIT 1/2/3) need investigation — check <code>xAI HTTP</code> in the log, and consider swapping the finder to Claude/GPT-4o.</span>
+      </div>
+    </li>
+    <li>
+      <span class="icon">🏗️</span>
+      <div class="body">
+        <strong>Check SolidWorks eDrawings / 3DEXPERIENCE availability</strong>
+        <span>Dassault 3DEXPERIENCE platform (3ds.com) has a growing API surface for drawing interrogation without a full SolidWorks licence. Check if SDI has or could access this. Also check: can SolidWorks export flat-pattern DXFs in batch via a macro / Task Scheduler — this is the cheapest path to DXF-coverage improvement without API work.</span>
+      </div>
+    </li>
+  </ul>
+
+
+
+  <!-- ══════════════════════════════════════════════
+       SECTION — JULY 2026 FRONTIER MODEL RELEASES
+  ═══════════════════════════════════════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>Frontier Model Releases — July 2026</h2>
+    <p>What just shipped, what is unconfirmed, and what it means for the SDI Intelligence engine</p>
+  </div>
+
+  <p style="font-size:12px;color:var(--subtext);margin-bottom:20px;line-height:1.7;">
+    Status based on public announcements as of 16 July 2026. Sources: OpenAI.com, Anthropic.com, xAI/SpaceXAI, Axios, TechCrunch, Simon Willison, DataCamp, Google Cloud Blog.
+  </p>
+
+  <!-- GPT-5.6 -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">OpenAI — GPT-5.6: Sol, Terra, Luna</h2>
+    <p><span class="chip chip-live">Released 9 Jul 2026</span></p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tier</th><th>API name</th><th>Pricing per 1M</th><th>Context</th><th>Benchmark (TB 2.1)</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="name">Sol <span class="dim">flagship</span></td>
+          <td class="endpoint">gpt-5.6-sol</td>
+          <td>$5 in / $30 out</td><td>1.05M</td><td>88.8% (91.9% Ultra)</td>
+          <td class="desc">Complex reasoning, long-horizon agentic work. 80 on AA Coding Index. Ultra Mode runs 4 parallel agents. New Programmatic Tool Calling lets model write JS to orchestrate tools.</td>
+        </tr>
+        <tr>
+          <td class="name">Terra <span class="dim">balanced</span></td>
+          <td class="endpoint">gpt-5.6-terra</td>
+          <td>$2.50 in / $15 out</td><td>1.05M</td><td>84.3%</td>
+          <td class="desc">GPT-5.5-class quality at half the price. Recommended production default. Best note-scan finder trial candidate — OpenAI JSON mode and seed parameter are genuinely deterministic.</td>
+        </tr>
+        <tr>
+          <td class="name">Luna <span class="dim">fast/cheap</span></td>
+          <td class="endpoint">gpt-5.6-luna</td>
+          <td>$1 in / $6 out</td><td>1.05M</td><td>82.5%</td>
+          <td class="desc">High-volume, low-latency workloads. Weak long-context recall (41.3% MRCR) — avoid passing full drawing-pack JSON to Luna. Use for high-volume BOM text extraction only.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card-grid" style="margin-top:14px;">
+    <div class="card">
+      <div class="card-head"><span class="card-title">What is genuinely new in GPT-5.6</span></div>
+      <p class="card-body">Three-tier durable naming (number = generation, name = capability tier that can advance independently). Programmatic Tool Calling: model writes JavaScript to orchestrate its own tool calls — powerful for multi-step estimating pipelines. Multi-agent beta in Responses API. Better prompt caching with explicit cache breakpoints and 30-min minimum cache life. ChatGPT Work launched alongside — an agent for multi-hour projects. <strong>Caution:</strong> independent evaluator METR recorded the highest benchmark-gaming rate it has ever measured on this family — treat headline numbers with some scepticism.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">SDI engine relevance</span></div>
+      <div class="card-tags"><span class="tag">Note-scan stability</span><span class="tag">Pricing waterfall</span><span class="tag">Agentic runner</span></div>
+      <p class="card-body">Terra is the pragmatic swap for Grok 4.3 in the note-scan call: deterministic JSON mode, reliable seed support, documented pricing, same OpenAI-compatible API shape. Luna suits high-volume BOM text extraction at very low cost — but not for long-context tasks. Sol Ultra / ChatGPT Work are interesting for future multi-step estimating agents (read drawings → build estimate → review → refine in one session) — architecture-pass territory rather than a near-term swap.</p>
+      <p class="card-action">→ Action: trial gpt-5.6-terra as note-scan finder on a test batch; compare item-count stability to Grok 4.3 baseline</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">GPT-6 — not yet released</span><span class="chip chip-explore">Q4 2026 earliest</span></div>
+      <p class="card-body">As of 16 July 2026 GPT-6 does not exist as a public release. OpenAI shipped seven GPT-5.x models in under a year, each absorbing features once attributed to GPT-6 (long-term memory, agentic loops, parallel agents). Prediction markets: ~55–60% by September 30, ~80% by December 31, 2026. Build against GPT-5.6 today; treat GPT-6 as a model-string update when it eventually arrives.</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Grok 4.5 -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">SpaceXAI (xAI) — Grok 4.5</h2>
+    <p><span class="chip chip-current">Released 8 Jul 2026 — successor to your current Grok 4.3</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">What is new in Grok 4.5</span></div>
+      <div class="card-tags"><span class="tag">500K context</span><span class="tag">$2/$6 per 1M</span><span class="tag">80 TPS</span><span class="tag">Cursor-trained</span></div>
+      <p class="card-body">First xAI model built specifically for coding and agentic work. Trained on real Cursor developer session data (following SpaceXAI's $60B Cursor acquisition June 2026) — capturing real multi-file, multi-hour workflows, not just static code corpora. Built on 1.5T-parameter V9 MoE foundation. Pricing: $2/$6 per 1M — 3× cheaper than Opus 4.8. Speed: 80 TPS with 2× reported token efficiency vs comparable models (15,954 output tokens per resolved SWE task vs 67,020 for Opus 4.8 at max). Configurable reasoning effort: low/medium/high. SWE-Bench Pro: 64.7%. Terminal-Bench 2.1: 83.3%.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">SDI engine — immediate action</span></div>
+      <p class="card-body">Same API shape as Grok 4.3. Same call path. No new auth. The Cursor training may improve performance on structured technical text (BOM tables, part descriptions, drawing notes). 500K context window (vs 4.3) allows sending larger drawing-pack JSON summaries without truncation. <strong>Update config.py:</strong> change <code>PRICE_SOURCE_CONFIG["web"]["xai_model"]</code> from <code>"grok-4.3"</code> to <code>"grok-4.5"</code>. Re-run the three-run determinism proof to confirm note-scan item stability holds. Caveats: EU availability not confirmed as of July 2026 — verify UK access first. Less public governance detail than Anthropic/OpenAI.</p>
+      <p class="card-action">→ Immediate: update config.py model string to grok-4.5; re-run 1282 three times; confirm loom price holds</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Anthropic -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--cut);"></div>
+    <h2 style="color:var(--cut);">Anthropic — Claude Fable 5 &amp; Opus 4.8</h2>
+    <p><span class="chip chip-live">Fable 5: released 9 Jun, restored 1 Jul 2026 &nbsp;|&nbsp; Opus 4.8: 28 May 2026</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Fable 5</span><span class="chip chip-try">Mythos-class</span></div>
+      <div class="card-tags"><span class="tag">1M context</span><span class="tag">128K output</span><span class="tag">$10/$50 per 1M</span><span class="tag">Always-on adaptive thinking</span></div>
+      <p class="card-body">Anthropic's first Mythos-class model — a capability tier above Opus. API model ID: <code>claude-fable-5</code>. Best-in-class on SWE-Bench Pro (80.4%) and production coding. Long-horizon autonomy: can run agentic tasks for hours/days unattended with persistent file-based memory. Safety classifiers auto-fallback to Opus 4.8 for sensitive queries (&lt;5% of sessions). Temporarily export-controlled June 12–July 1 (US government directive re: cybersecurity capabilities); access restored globally July 1. At $10/$50 it is 5× the cost of Grok 4.5.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Opus 4.8</span><span class="chip chip-live">Recommended swap</span></div>
+      <div class="card-tags"><span class="tag">Released 28 May 2026</span><span class="tag">$5/$25 per 1M</span><span class="tag">Already wired in engine</span></div>
+      <p class="card-body">Refined from Opus 4.7 — emphasis on reliability, honesty, and coding correctness. Key improvement: 4× less likely to suggest code with subtle logical flaws. New effort controls (low/medium/high/xhigh). Mid-conversation system message support. <strong>Already wired in <code>_call_anthropic_llm</code></strong> in web_ai_price_lookup.py — no new auth needed. Genuinely deterministic at temperature 0. Leads on production coding accuracy. Recommended as the note-scan finder swap from Grok 4.3 if the Grok 4.5 upgrade does not resolve item-count instability.</p>
+      <p class="card-action">→ Action: if Grok 4.5 still drifts, flip note-scan to claude-opus-4-8; compare item stability across 3 runs</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">SDI engine — Anthropic roadmap</span></div>
+      <p class="card-body">Fable 5 is the right model for a fully agentic estimating session (read drawings → build estimate → review → revise → flag anomalies → output), if SDI ever builds that workflow. Its coding-quality lead and long-horizon memory make it the runner for complex multi-hour tasks. For the immediate near-term (note-scan finder), Opus 4.8 is the pragmatic choice: already wired, known pricing, proven determinism. Fable 5 at 5× the cost is not justified for simple BOM note extraction.</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Kimi K3 -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--warn);"></div>
+    <h2 style="color:var(--warn);">Moonshot AI — Kimi K3</h2>
+    <p><span class="chip chip-try">Beta leak 14–16 Jul 2026 — no official model card yet</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Leaked specs (unverified)</span></div>
+      <div class="card-tags"><span class="tag">~2.5T MoE params</span><span class="tag">1M context</span><span class="tag">~$0.80–$1.20 input (leaked)</span><span class="tag">Kimi-Linear attention</span></div>
+      <p class="card-body">Successor to K2.7 Code (1T params, 256K context). Leaked via Moonshot's own API platform before it was taken down. Reported specs: ~2.5T total parameters in a new MoE architecture, 1M-token native context via Kimi-Linear (linear attention hybrid claiming 75% KV-cache reduction and 6× decoding throughput). Early beta testers report performance near Fable 5 tier on some coding tasks. Expected pricing significantly undercuts Western models. <strong>No official model card, benchmarks, or confirmed API pricing as of 16 July 2026.</strong></p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">SDI relevance &amp; honest advice</span></div>
+      <p class="card-body">If K3 delivers Fable-class quality at $0.80–$1.20/M input it would be the cheapest viable frontier call in the engine by a large margin — relevant for high-volume BOM extraction. The 1M native context (if practical at that price) would allow sending full multi-PDF drawing-pack summaries in one call. <strong>Do not add K3 to the engine now.</strong> Wait for the official model card, independent benchmarks (SWE-Bench Pro, Terminal-Bench), and confirmed UK API access. Add to the monthly review checklist.</p>
+      <p class="card-action">→ Watch: platform.kimi.ai for model card; kimi-k2.org/status for API availability update</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Gemini 3.5 -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--good);"></div>
+    <h2 style="color:var(--good);">Google — Gemini 3.5 Flash &amp; Pro</h2>
+    <p><span class="chip chip-live">Gemini 3.5 Flash: released May 2026 at Google I/O</span></p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Gemini 3.5 Flash</span><span class="chip chip-live">Available now</span></div>
+      <div class="card-tags"><span class="tag">1M context</span><span class="tag">$1.50/$9 per 1M</span><span class="tag">Native multimodal</span><span class="tag">4× faster than rivals</span></div>
+      <p class="card-body">Google's workhorse agentic and coding model. 1M context, 65K output. Terminal-Bench 2.1: 76.2%. Key advantage for SDI: <strong>native PDF page ingestion as images via the Files API.</strong> Send a drawing page image, ask for BOM table and dimensions in structured JSON — bypasses geometry_features.py extraction entirely. Directly addresses the 2621-01C PDF-geometry inflation problem (14445mm phantom vs true ~2800mm). Also natively handles DXF rendered to PNG via pymupdf. Pricing at $1.50/$9 — competitive with GPT-5.6 Luna for vision tasks.</p>
+      <p class="card-action">→ Priority prototype: pip install google-generativeai pymupdf; send 2621-01C page 18 as 300DPI PNG; compare extracted cut-length to current 14445mm</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Gemini 3.5 Pro</span><span class="chip chip-try">Testing — expected Aug 2026</span></div>
+      <p class="card-body">In testing as of July 2026. Positioned above Flash on complex multimodal reasoning, science, and long-context analysis. When available, may enable full-drawing-pack ingestion (all PDFs as images, single context, BOM extracted across all pages) — the highest-value Gemini use case for the engine.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">SDI engine — Gemini vision path</span></div>
+      <p class="card-body">The Gemini Flash vision call is the structural fix for PDF-sourced parts without a matched DXF. Workflow: rasterise the PDF page at 300 DPI using pymupdf (<code>page.get_pixmap(dpi=300)</code>), upload to Gemini Files API, request structured JSON with part dimensions, BOM rows, and material. One call per PDF-only part. The result replaces the geometry_features.py estimate with a genuine reading of the flat-pattern dimensions as drawn. This directly unblocks the credibility gate (currently suppressing 1282's headline total) by making 2621-01C's cut-length honest — without the complex PDF geometry pipeline surgery.</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Other / Rumoured -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch" style="background:var(--dim);"></div>
+    <h2 style="color:var(--subtext);">Other Named Models — Confirmed Status</h2>
+    <p>Honest assessment of what has and has not shipped as of 16 July 2026</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Neo Hands</span><span class="chip chip-explore">Not found</span></div>
+      <p class="card-body">No official announcement, model card, or credible publication found as of 16 July 2026. Name does not appear in any frontier lab's public release notes. May refer to a robotics or embodied-AI project rather than a text/reasoning model, or it may be a community-coined name for an unreleased project. <strong>Not actionable for the SDI engine.</strong> Add to monthly watch — check Anthropic, OpenAI, Google, xAI release pages each month.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Opus 5 (rumoured)</span><span class="chip chip-explore">Unannounced</span></div>
+      <p class="card-body">Referenced in community speculation but no official Anthropic announcement. The current tier structure (Haiku → Sonnet → Opus → Fable/Mythos) suggests the next release above Fable 5 would be a new Mythos-class model, not an Opus point release. Monitor docs.anthropic.com. If released, enters the engine via the existing <code>_call_anthropic_llm</code> path with a model string update.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Meta Muse Spark 1.1</span><span class="chip chip-explore">Watch</span></div>
+      <p class="card-body">Meta's first proprietary closed model, released alongside the GPT-5.6 cycle as a coding and agentic competitor. Limited independent benchmarks. Not OpenAI-compatible API — would require a new call path. Monitor for UK access and pricing before investing time.</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Summary comparison table -->
+  <div class="section-label" style="margin-top:24px;">
+    <div class="notch"></div>
+    <h2>Quick Reference — All Current Frontier Models (16 July 2026)</h2>
+    <p>Verified figures only. (?) = unconfirmed</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Released</th><th>Context</th><th>Input $/1M</th><th>Output $/1M</th><th>Terminal-Bench 2.1</th><th>SWE-Bench Pro</th><th>SDI recommendation</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="name">Claude Fable 5</td><td>9 Jun 2026</td><td>1M</td><td>$10</td><td>$50</td><td>84.3%</td><td>80.4% ★</td><td><span class="chip chip-try">Future agentic runner</span></td></tr>
+        <tr><td class="name">GPT-5.6 Sol</td><td>9 Jul 2026</td><td>1.05M</td><td>$5</td><td>$30</td><td>88.8% ★</td><td>64.6%</td><td><span class="chip chip-try">Complex tasks / Ultra Mode</span></td></tr>
+        <tr><td class="name">GPT-5.6 Terra</td><td>9 Jul 2026</td><td>1.05M</td><td>$2.50</td><td>$15</td><td>84.3%</td><td>—</td><td><span class="chip chip-try">Note-scan finder trial</span></td></tr>
+        <tr><td class="name">Grok 4.5</td><td>8 Jul 2026</td><td>500K</td><td>$2</td><td>$6</td><td>83.3%</td><td>64.7%</td><td><span class="chip chip-current">Upgrade 4.3 → 4.5 now</span></td></tr>
+        <tr><td class="name">Claude Opus 4.8</td><td>28 May 2026</td><td>1M</td><td>$5</td><td>$25</td><td>78.9%</td><td>69.2%</td><td><span class="chip chip-try">Finder swap if Grok still drifts</span></td></tr>
+        <tr><td class="name">Gemini 3.5 Flash</td><td>May 2026</td><td>1M</td><td>$1.50</td><td>$9</td><td>76.2%</td><td>—</td><td><span class="chip chip-try">Vision bypass for PDF parts ★</span></td></tr>
+        <tr><td class="name">GPT-5.6 Luna</td><td>9 Jul 2026</td><td>1.05M</td><td>$1</td><td>$6</td><td>82.5%</td><td>—</td><td><span class="chip chip-explore">Bulk extraction only — weak long-context</span></td></tr>
+        <tr><td class="name">Kimi K3</td><td>~15 Jul (beta)</td><td>1M (?)</td><td>~$0.80 (?)</td><td>~$3.50 (?)</td><td>(?)</td><td>(?)</td><td><span class="chip chip-explore">Watch — no confirmed specs</span></td></tr>
+        <tr><td class="name">GPT-6</td><td>Not released</td><td colspan="6" style="color:var(--dim);font-size:12px;">No specs or release date confirmed. Q4 2026 at earliest. Build against GPT-5.6 today.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+
+</main>
+
+<footer>
+  <span>SDI Intelligence Model Engine — Technology Landscape Review</span>
+  <span>Re-run: open this file in any browser · Last generated: <span id="ts2"></span></span>
+</footer>
+
+<script>
+  // Stamp the timestamp at open time so every re-open is fresh
+  const now = new Date().toLocaleString('en-GB', {
+    weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  document.getElementById('ts').textContent = now;
+  document.getElementById('ts2').textContent = now;
+</script>
+
+</body>
+</html>

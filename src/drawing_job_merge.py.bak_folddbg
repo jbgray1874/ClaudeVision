@@ -291,23 +291,6 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
     part["dxf_augmented"] = True
     part["dxf_geometry_reliability"] = reliability
     part["dxf_raw_geometry"] = dxf_raw
-    # DXF flat-pattern is ground truth for folding: a genuine flat-pattern part
-    # whose resolved DXF bend count is 0 does NOT fold. Strip a stale 'folding'
-    # op that a shared/document note baked into the ops upstream. Runs at the
-    # augment convergence point, so it applies regardless of which geometry
-    # branch handled the part; the downstream routing reads this ops list.
-    try:
-        _gr = part.get("geometry_rollup") or {}
-        _bcx = part.get("bend_count_dxf")
-        _ebl = _gr.get("estimated_bend_line_count")
-        _resolved_bends = int((_bcx if _bcx is not None else (_ebl if _ebl is not None else 0)) or 0)
-        if part.get("flat_pattern_detected") and _resolved_bends == 0:
-            for _k in ("operations", "textual_operations"):
-                _ops = part.get(_k)
-                if isinstance(_ops, list) and "folding" in _ops:
-                    part[_k] = [_o for _o in _ops if _o != "folding"]
-    except Exception:
-        pass
 
     # DXF-only flats with no detail page (e.g. a kick-plate assembly stub bound only via
     # its flat DXF) arrive here with flat geometry but no PRIMARY CUT operation, so they

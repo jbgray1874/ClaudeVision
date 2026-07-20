@@ -503,7 +503,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         return _m in _ACR_NO_POWDER or bool(_p.get("acrylic_no_powder"))
     for _sp in _all_pes_pw:
         _sme = _sp.get("material_estimate") or {}
-        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: it is coated steel routed by weight, must not drop from the powder sum (aligns with STEEL_STOCK_FORMS routing filter). Powder basis stays GROSS L x W; this only keeps steel parts in the sum when a valid blank area flips them onto the weight path.
+        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", ""):
             continue
         if _is_acrylic_pw(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area

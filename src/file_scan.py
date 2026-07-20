@@ -1198,6 +1198,30 @@ def _finalize_scan_summary(
     _debug("start merge_page_analysis")
     summary = merge_page_analysis(summary, geom_pages)
     _debug("done merge_page_analysis")
+
+    # -- Dual-path BOM override (flagged, default OFF) --------------------------
+    # When SDI_DUALPATH_BOM is set, the deterministic (pdfplumber) + vision (Grok)
+    # reconciled reader becomes the authoritative source of the bom_rows that
+    # build_document_writeup consumes below. Flag OFF => byte-identical to baseline.
+    # Any failure leaves the existing rows untouched (a scan never breaks on this).
+    if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
+        try:
+            from bom_pipeline import reconciled_bom_rows_for_job
+            if job_folder and summary.get("scan_mode") == "folder_as_job":
+                _dp = reconciled_bom_rows_for_job(folder=job_folder)
+            elif pdf_path:
+                _dp = reconciled_bom_rows_for_job(pdfs=[pdf_path])
+            else:
+                _fp_src = summary.get("full_path") or summary.get("source_file")
+                _dp = reconciled_bom_rows_for_job(pdfs=[_fp_src]) if _fp_src else {"rows": []}
+            if _dp.get("rows"):
+                _da = summary.setdefault("document_analysis", {})
+                _da["bom_rows"] = _dp["rows"]
+                _da["bom_code_quality_findings"] = _dp.get("findings", [])
+                _debug(f"dual-path bom_rows applied: {len(_dp['rows'])} rows")
+        except Exception as _dp_err:
+            _debug(f"dual-path bom_rows hook skipped: {_dp_err}")
+
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
     _debug("done build_document_writeup")

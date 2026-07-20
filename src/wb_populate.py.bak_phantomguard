@@ -503,7 +503,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         return _m in _ACR_NO_POWDER or bool(_p.get("acrylic_no_powder"))
     for _sp in _all_pes_pw:
         _sme = _sp.get("material_estimate") or {}
-        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: it is coated steel routed by weight, must not drop from the powder sum (aligns with STEEL_STOCK_FORMS routing filter). Powder basis stays GROSS L x W; this only keeps steel parts in the sum when a valid blank area flips them onto the weight path.
+        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", ""):
             continue
         if _is_acrylic_pw(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area
@@ -757,9 +757,6 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # part_number -> the Sheet Steel row it was written to. Used below so the Laser
     # labour row can reference the template's OWN rate calculator instead of our model.
     _steel_row_by_pn = {}
-    # Parts excluded from fabrication (empty detail/callout artefacts): keep them
-    # out of the Sheet Steel block (blank gauge -> #DIV/0!) AND the labour groups.
-    _skip_pns = set()
 
     # ── Steel block: desc, qty, length, width, gauge ───────────────────────
     s = cm["steel"]
@@ -783,22 +780,6 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             break
         me = pe.get("material_estimate") or {}
         ng = pe.get("normalized_geometry") or {}
-        # Guard: an empty detail/callout artefact (no gauge, no geometry, no DXF)
-        # is not a fabricatable steel part. It must not reach the Sheet Steel cost
-        # row (blank gauge -> #DIV/0!). Skip it here and record it so the labour
-        # loop drops its phantom ops too. Catches e.g. 'D-M4' regardless of how it
-        # entered the part-estimate flow (upstream false-part filter missed it).
-        _pn_g = str(pe.get("part_number") or "")
-        _len_g = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
-        _wid_g = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
-        _gau_g = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
-        _dxf_g = (pe.get("geometry_source") == "dxf_flat_pattern")
-        if (not _gau_g) and (not _len_g) and (not _wid_g) and (not _dxf_g):
-            _skip_pns.add(_pn_g)
-            _flag("excluded non-fabricatable part '" + _pn_g + "' from Sheet Steel "
-                  "(no gauge, no geometry, no DXF) - detail/callout artefact, "
-                  "estimator to verify", flags)
-            continue
         length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
         width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
         gauge  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
@@ -1212,8 +1193,6 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     _groups = {}
     for pe in labour_parts:
-        if str(pe.get("part_number") or "") in _skip_pns:
-            continue   # phantom excluded from Sheet Steel — drop its ops too
         le = pe.get("labour_estimate") or {}
         costs = le.get("costs_gbp") or {}
         batch_hours = le.get("batch_hours") or {}
