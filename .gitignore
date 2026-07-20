@@ -1,29 +1,49 @@
-# Python
+# ── Python ───────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments (never commit these)
+venv/
 .venv/
- 
-# Output data (VERY IMPORTANT) 
-output /
+env/
+.env
+!config/*.example.env
+
+# ── Output data (VERY IMPORTANT) ─────────────────────────────────────────
+output/
 *.json
+*.jsonl
 *.log
 *.txt
 
-# Input data ( optional but recommended )
+# ── Input data (drawings, spreadsheets) ──────────────────────────────────
 input/
 
-#PDFs and images (CRITICAL)
+# PDFs, images and workbooks (CRITICAL — job data, never commit)
 *.pdf
 *.png
 *.jpg
 *.jpeg
+*.xls
+*.xlsx
 
-# OS
+# ── Backups / scratch ────────────────────────────────────────────────────
+*.bak
+*.bak_*
+*.backup
+*~
+
+# SQL dumps (schema lives in versioned .sql under sql/ if needed)
+*.sql
+
+# ── OS ───────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-output/
-*.bak
-*.xlsx
-
-*.sql
+# ── Explicit keeps (override the broad ignores above) ────────────────────
+!requirements.txt
+!corpus/*.jsonl

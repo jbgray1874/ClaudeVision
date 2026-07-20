@@ -1,0 +1,24 @@
+# ClaudeVision / SDI Intelligence — Python dependencies
+# Derived from the imports actually used across src/*.py.
+# Install:  pip install -r requirements.txt
+
+# ── Core pipeline (required) ─────────────────────────────────────────────
+openpyxl        # read/write the .xlsx estimate workbook
+xlrd            # read legacy .xls manual estimate sheets
+pyodbc          # SQL Server (SDILive) access via ODBC Driver 18
+ezdxf           # DXF (flat-pattern) geometry extraction
+shapely         # geometry / net-area calculations
+pdfplumber      # PDF text extraction
+PyMuPDF         # PDF rendering / text (imported as `fitz`)
+pandas          # tabular data handling
+python-dotenv   # load configuration from .env (imported as `dotenv`)
+requests        # web / LLM price-lookup calls
+Pillow          # image handling (imported as `PIL`)
+
+# ── Optional / feature-specific ──────────────────────────────────────────
+# Uncomment as needed; these are heavier and not on the core estimate path.
+# numpy                    # numerics (usually pulled in transitively)
+# opencv-python            # vision helpers (imported as `cv2`)
+# pytesseract              # OCR fallback (requires system Tesseract)
+# qdrant-client            # vector DB for RAG (roadmap)
+# sentence-transformers    # embeddings for RAG (roadmap)
