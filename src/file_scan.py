@@ -43,6 +43,61 @@ from sql_export import build_run_metadata, write_postgres_insert_sql
 from vision_extraction import extract_document_vision
 
 
+def _find_manual_workbook(summary: Optional[Dict[str, Any]] = None, scan_label: Optional[str] = None):
+    """Locate a manual estimate workbook for this job via the UNC share convention:
+    <share>\\<year>\\<customer>\\<jobfolder>\\*.xls  — returns the first .xls found, else None.
+
+    Summary-driven so the client-quote customer derivation
+    (client_quote_html._customer_from_manual_path, which calls this as
+    _find_manual_workbook(summary)) can resolve the manual — and therefore the real
+    customer name — without needing the scan_label main.py has. Uses the SAME loosened
+    job-number-token matching as main._find_manual_workbook (match on the numeric job
+    number within the customer/year tree, not the exact folder name). Never raises.
+
+    NOTE: main.py keeps its own copy of this lookup for the parity path. The two are
+    intentionally kept in sync; consolidating them into a single source is a follow-up
+    (deliberately not refactoring the working parity path here). See STATUS doc §6.
+    """
+    try:
+        import glob
+        share_root = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
+        if not os.path.isdir(share_root):
+            print(f"   [manual-lookup:customer] share not reachable: {share_root}", flush=True)
+            return None
+        # Derive the job number from the scan_label (if given) and the summary's job folder.
+        cands_labels = []
+        if scan_label:
+            cands_labels.append(str(scan_label))
+        if isinstance(summary, dict):
+            _jf = summary.get("job_folder") or summary.get("job_output_stem")
+            if _jf:
+                cands_labels.append(os.path.basename(str(_jf)))
+        job_nums = []
+        for lab in cands_labels:
+            jn = str(lab).split("-")[0].strip()
+            jn = jn.split()[0] if jn else jn  # leading numeric token only
+            if jn and jn not in job_nums:
+                job_nums.append(jn)
+        if not job_nums:
+            print("   [manual-lookup:customer] no job number derivable from summary -> None", flush=True)
+            return None
+        candidates = []
+        for year_dir in sorted(glob.glob(os.path.join(share_root, "20*")), reverse=True):
+            for jn in job_nums:
+                candidates += glob.glob(os.path.join(year_dir, "*", "*" + jn + "*", "*.xls"))
+                candidates += glob.glob(os.path.join(year_dir, "*" + jn + "*", "*.xls"))
+        seen = []
+        for c in candidates:
+            if os.path.basename(c).startswith("~$"):  # skip Excel lock files
+                continue
+            if c not in seen:
+                seen.append(c)
+        return seen[0] if seen else None
+    except Exception as _mexc:
+        print(f"   [manual-lookup:customer] error ({type(_mexc).__name__}: {_mexc}) -> None", flush=True)
+        return None
+
+
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
