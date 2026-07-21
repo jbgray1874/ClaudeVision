@@ -1971,13 +1971,20 @@ def _finalize_scan_summary(
     if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
         try:
             _dp_after = _dp  # defined above when SDI_DUALPATH_BOM ran; NameError-guarded
+            # DIAGNOSTIC (temporary): show the runtime inputs so a silent no-op is explainable.
+            _dp_rows_diag = (_dp_after.get("rows") or []) if isinstance(_dp_after, dict) else None
+            _pe_diag = (summary.get("estimate_summary") or {}).get("part_estimates")
+            _fast_diag = [str(r.get("description") or r.get("part_number") or "?")
+                          for r in (_dp_rows_diag or [])][:14]
+            print(f"   [dual-path recon:diag] _dp rows={len(_dp_rows_diag) if _dp_rows_diag is not None else 'NOT-A-DICT'} "
+                  f"part_estimates={len(_pe_diag) if isinstance(_pe_diag, list) else 'NONE'} "
+                  f"dp_row_descs={_fast_diag}", flush=True)
             _u, _a = _reconcile_dualpath_into_part_estimates(summary, _dp_after)
-            if _u or _a:
-                print(f"   [dual-path recon] part_estimates: {_u} qty-corrected, {_a} added from BOM table read")
+            print(f"   [dual-path recon] part_estimates: {_u} qty-corrected, {_a} added from BOM table read", flush=True)
         except NameError:
-            pass  # _dp not defined on this path — dual-path reader did not run
+            print("   [dual-path recon:diag] _dp is NOT DEFINED at reconcile point (dual-path reader did not run this path)", flush=True)
         except Exception as _dpr2_err:
-            _debug(f"dual-path part_estimates reconcile (post-estimate) skipped: {_dpr2_err}")
+            print(f"   [dual-path recon:diag] reconcile errored: {type(_dpr2_err).__name__}: {_dpr2_err}", flush=True)
 
     try:
         import bay_rollup
