@@ -791,19 +791,37 @@ def main() -> None:
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
 
-                # 2) Parity report — only if a manual estimate workbook is found
+                # 2) Parity report — only if a manual estimate workbook is found.
+                #    An explicit --parity-workbook pins the EXACT manual sheet (there can be
+                #    several per job / multiple revisions), overriding the fuzzy share lookup;
+                #    it falls back to the auto-lookup when not supplied. This is also the seam
+                #    the portal will use (user picks the sheet to compare against).
                 try:
-                    _manual = _find_manual_workbook(str(scan_label), summary)
+                    _manual = None
+                    _explicit = getattr(args, "parity_workbook", None)
+                    if _explicit:
+                        _ep = Path(_explicit)
+                        if _ep.exists():
+                            _manual = str(_ep)
+                            print(f"   [deliverables] parity: using --parity-workbook {_manual}", flush=True)
+                        else:
+                            print(f"   [deliverables] parity: --parity-workbook not found ({_ep}) — trying auto-lookup", flush=True)
+                    if not _manual:
+                        _manual = _find_manual_workbook(str(scan_label), summary)
                     if _manual:
                         from estimate_full_parity_report import generate_and_write as _gen_bundle
                         from parity_report_html import generate_report_files as _gen_parity_html
                         _bundle_json = Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_parity_bundle.json")
                         _bundle_csv = _bundle_json.with_suffix(".csv")
-                        _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv, read_via_excel=False)
+                        # .xls reads via xlrd (computed values); an .xlsx manual may need Excel COM
+                        # to resolve formulas — honour --full-parity-read-via-excel when set.
+                        _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv,
+                                    read_via_excel=bool(getattr(args, "full_parity_read_via_excel", False)))
                         _phtml = _gen_parity_html(str(_bundle_json), out_dir=_out_dir, job_stem=str(scan_label))
                         print(f"   [deliverables] parity report -> {_phtml}", flush=True)
                     else:
-                        print("   [deliverables] no manual estimate found — parity skipped (new job).", flush=True)
+                        print("   [deliverables] no manual estimate found — parity skipped (new job). "
+                              "Pass --parity-workbook <path> to pin one.", flush=True)
                 except Exception as _p_exc:
                     print(f"   [deliverables] parity report skipped ({_p_exc}) — run continues.", flush=True)
 
