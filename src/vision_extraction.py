@@ -126,8 +126,20 @@ def extract_document_vision(pdf_path: Path) -> List[Dict[str, Any]]:
     document = fitz.open(str(pdf_path))
     pages: List[Dict[str, Any]] = []
     try:
+        # Render DPI for OCR + llava. 300 DPI is the OCR sweet spot (was 144 via Matrix(2,2)).
+        # Both consumers are local (no token cost); cap the long side for memory on huge sheets.
+        _vis_dpi = float(os.getenv("VISION_RENDER_DPI", "300") or "300")
+        _vis_max_side = float(os.getenv("VISION_MAX_SIDE", "4000") or "4000")
         for idx, page in enumerate(document, start=1):
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            _zoom = _vis_dpi / 72.0
+            try:
+                _rect = page.rect
+                _long_pts = max(float(_rect.width), float(_rect.height))
+                if _long_pts * _zoom > _vis_max_side and _long_pts > 0:
+                    _zoom = _vis_max_side / _long_pts
+            except Exception:
+                pass
+            pix = page.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom), alpha=False)
             image_bytes = pix.samples
             image = np.frombuffer(image_bytes, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
             words = _ocr_page_image(image)
