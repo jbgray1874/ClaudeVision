@@ -98,6 +98,146 @@ def _find_manual_workbook(summary: Optional[Dict[str, Any]] = None, scan_label: 
         return None
 
 
+def _reconcile_dualpath_into_part_estimates(summary, dp):
+    """Push dual-path BOM-table fastener quantities/identities into the FINAL
+    estimate_summary.part_estimates (the list the sheet actually reads).
+
+    MUST be called AFTER estimate_document() — that is what builds part_estimates.
+    The previous inline placement ran BEFORE estimate_document, so part_estimates
+    did not exist yet, the isinstance guard skipped the block, and the corrections
+    (self-clinch 1->4, knob 1->2, add BI-PEMSTUD) never reached the sheet. See the
+    STATUS doc S3.3. Failure-isolated; fabricated parts are never touched.
+    Returns (updated, added) counts.
+    """
+    import estimator as _E_recon
+    import re as _re_recon
+
+    rows = (dp or {}).get("rows") or []
+    if not rows:
+        return (0, 0)
+    _es_recon = summary.get("estimate_summary") or {}
+    _parts_recon = _es_recon.get("part_estimates")
+    if _parts_recon is None:
+        _parts_recon = summary.get("part_estimates")
+    if not isinstance(_parts_recon, list):
+        return (0, 0)
+
+    def _is_fastener_row(_r):
+        _d = (str(_r.get("description") or "") + " " +
+              str(_r.get("part_code") or _r.get("code") or _r.get("part_number") or "")).upper()
+        return any(_k in _d for _k in ("CLINCH", "NUT", "KNURL", "KNOB", "THUMB", "SCREW",
+                   "PEM", "STUD", "RIVET", "THUM", "WASHER", "BOLT", "GLIDE"))
+
+    def _dp_code(_r):
+        return str(_r.get("part_code") or _r.get("code") or _r.get("part_number") or "").strip()
+
+    def _dp_qty(_r):
+        _q = _r.get("qty") or _r.get("quantity") or _r.get("qty_per_unit")
+        try:
+            return int(float(_q)) if _q is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _p_code(_p):
+        return str(_p.get("part_number") or "").strip().upper()
+
+    def _clean_code(_desc, _fallback):
+        _dU = (_desc or "").upper()
+        _fb = (_fallback or "").upper().strip()
+        _VAGUE = ("STD PART", "FIXING", "FIXINGTBC", "TBC", "STDPART", "")
+        if _fb not in _VAGUE and _re_recon.search(r"\d", _fb):
+            return _fallback
+        _MAP = [
+            (r"SELF[\s-]?CLINCH.*NUT|CLINCH.*NUT", "BI-SELFCLINCHNUT"),
+            (r"KNURLED.*KNOB", "BI-KNURLEDKNOB"),
+            (r"KNURLED.*NUT", "BI-KNURLEDNUT"),
+            (r"THREADED.*PEM.*STUD|PEM.*STUD", "BI-PEMSTUD"),
+            (r"KEYHOLE.*PEM", "BI-KEYHOLEPEM"),
+            (r"MUSHROOM.*THUMB|THUMB.*SCREW", "BI-THUMBSCREW"),
+            (r"BUTTON.*HEAD.*SCREW", "BI-BUTTONSCREW"),
+            (r"DOME.*RIVET|POP.*RIVET|RIVET", "BI-RIVET"),
+            (r"NUT", "BI-NUT"), (r"SCREW", "BI-SCREW"),
+            (r"WASHER", "BI-WASHER"), (r"BOLT", "BI-BOLT"),
+        ]
+        for _pat, _code in _MAP:
+            if _re_recon.search(_pat, _dU):
+                return _code
+        return _fallback or "BI-FIXING"
+
+    _added = _updated = 0
+    for _r in rows:
+        if not _is_fastener_row(_r):
+            continue
+        _code = _dp_code(_r)
+        _qty = _dp_qty(_r)
+        _desc = str(_r.get("description") or _code)
+        if _qty is None or _qty <= 0:
+            _qty = 1
+
+        # 1) CODE match -> update qty, no add
+        _cm = None
+        if _code:
+            for _p in _parts_recon:
+                if _p_code(_p) == _code.upper():
+                    _cm = _p
+                    break
+        if _cm is not None:
+            if _cm.get("quantity") != _qty:
+                _cm["quantity"] = _qty
+                _cm.setdefault("review_flags", []).append(
+                    f"Quantity set to {_qty} from dual-path BOM table read")
+                _updated += 1
+            continue
+
+        # 2) TOKEN match vs bought-in parts -> dual-path qty wins
+        _ctoks = _E_recon._bought_in_token_set({"description": _desc})
+        _tm = None
+        if _ctoks is not None:
+            for _p in _parts_recon:
+                _roles = _p.get("page_roles") or []
+                if not ("bought_in" in _roles or _p_code(_p).startswith("BI-")):
+                    continue
+                _ptoks = _E_recon._bought_in_token_set(_p)
+                if _ptoks is not None and _E_recon._bought_in_same_item(_ctoks, _ptoks):
+                    _tm = _p
+                    break
+        if _tm is not None:
+            if _tm.get("quantity") != _qty:
+                _old = _tm.get("quantity")
+                _tm["quantity"] = _qty
+                _tm.setdefault("review_flags", []).append(
+                    f"Quantity corrected {_old} -> {_qty} from dual-path BOM table read (matched '{_desc}')")
+                _updated += 1
+            continue
+
+        # 3) No match -> ADD clean bought-in row
+        _cc = _clean_code(_desc, _code)
+        if any(_p_code(_p) == _cc.upper() for _p in _parts_recon):
+            continue
+        _parts_recon.append({
+            "part_number": _cc, "description": _desc, "quantity": _qty,
+            "pages": [], "page_roles": ["bought_in"], "materials": [],
+            "surface_finishes": [], "colours": [], "thicknesses_mm": [],
+            "weights": [], "textual_operations": ["handling"],
+            "inferred_operations": [], "flat_pattern_detected": False,
+            "assembly_candidate": False, "process_notes": [],
+            "review_flags": [
+                f"Added from dual-path BOM table read (code '{_code}' -> '{_cc}'), "
+                f"qty {_qty} - price via waterfall, estimator to verify"],
+            "confidence": {"overall": 0.0}, "source": "non_sdi_bom_row",
+        })
+        _added += 1
+
+    if _es_recon.get("part_estimates") is not None:
+        _es_recon["part_estimates"] = _parts_recon
+    elif isinstance(summary.get("estimate_summary"), dict) and \
+            summary["estimate_summary"].get("part_estimates") is not None:
+        summary["estimate_summary"]["part_estimates"] = _parts_recon
+    else:
+        summary["part_estimates"] = _parts_recon
+    return (_updated, _added)
+
+
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
@@ -1282,7 +1422,7 @@ def _finalize_scan_summary(
         # Push dual-path fastener quantities/identities into part_estimates so they reach
         # the sheet. Failure-isolated; fabricated parts never touched.
         try:
-            if _dp.get("rows"):
+            if False and _dp.get("rows"):  # SUPERSEDED: reconcile moved to AFTER estimate_document (see _reconcile_dualpath_into_part_estimates). This early copy always skipped — part_estimates did not exist yet.
                 import estimator as _E_recon
                 import re as _re_recon
 
@@ -1823,6 +1963,21 @@ def _finalize_scan_summary(
 
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
+
+    # Dual-path -> part_estimates reconcile: runs HERE, AFTER estimate_document has built
+    # part_estimates, so the fastener corrections (self-clinch 1->4, knob 1->2, add
+    # BI-PEMSTUD) land on the FINAL list the sheet reads. The earlier inline copy ran
+    # before part_estimates existed and silently no-op'd (STATUS doc S3.3).
+    if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
+        try:
+            _dp_after = _dp  # defined above when SDI_DUALPATH_BOM ran; NameError-guarded
+            _u, _a = _reconcile_dualpath_into_part_estimates(summary, _dp_after)
+            if _u or _a:
+                print(f"   [dual-path recon] part_estimates: {_u} qty-corrected, {_a} added from BOM table read")
+        except NameError:
+            pass  # _dp not defined on this path — dual-path reader did not run
+        except Exception as _dpr2_err:
+            _debug(f"dual-path part_estimates reconcile (post-estimate) skipped: {_dpr2_err}")
 
     try:
         import bay_rollup
