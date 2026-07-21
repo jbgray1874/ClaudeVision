@@ -187,7 +187,9 @@ class PricingService:
                 )
             ORDER BY
                 CASE WHEN u.[Part code] = LTRIM(RTRIM(?)) THEN 0 ELSE 1 END,
-                u.[System cost per] DESC
+                u.[System cost per] DESC,
+                u.[Part code] ASC,
+                u.[Supplier name] ASC
             """,
             [part_code, desc, desc, part_code],
         )
@@ -567,7 +569,9 @@ class PricingService:
               )
             ORDER BY
                 CASE WHEN UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
-                effective_date DESC
+                effective_date DESC,
+                unit_price_gbp ASC,
+                bought_in_id ASC
             """,
             [part_code, desc, desc, part_code],
         )
@@ -602,7 +606,7 @@ class PricingService:
                     sort_order
                 FROM dbo.estimating_supplier_catalog_url
                 WHERE UPPER(material_hint) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
-                ORDER BY sort_order ASC
+                ORDER BY sort_order ASC, unit_price_gbp ASC, catalog_url_id ASC
                 """,
                 [search],
             )
@@ -744,7 +748,7 @@ class PricingService:
                       LOWER(LTRIM(RTRIM(operation_code))) = LOWER(LTRIM(RTRIM(?)))
                       OR UPPER(LTRIM(RTRIM(department_code))) = UPPER(LTRIM(RTRIM(?)))
                   )
-                ORDER BY effective_date DESC
+                ORDER BY effective_date DESC, hourly_rate_gbp ASC, labour_rate_id ASC
                 """,
                 [operation_code, dept_code],
             )

@@ -199,7 +199,22 @@ class PricingService:
             return None
 
         matched_code = str(row[0] or "").strip()
-        base_confidence = 0.95 if part_code and part_code == matched_code else 0.82
+        is_exact_code = bool(part_code) and part_code.upper() == matched_code.upper()
+
+        # Fix A: UDEF's loose arms (part-code prefix LIKE, or description LIKE) can match a
+        # generic stem to an unrelated expensive row, and the price-DESC tiebreaker then picks
+        # the dearest (e.g. token "ELECTRICS" -> "ELECTRICS001" TTi LED panels £539.42;
+        # "Foam Tape" -> "3M 5952F VHB roll" £131.50). For NON-exact matches, require genuine
+        # token overlap between the query and the matched description, exactly as RAG does, so
+        # a loose mismatch is rejected (-> falls through to RAG / LLM estimate) rather than
+        # returning a wrong, expensive price. Exact part-code matches bypass the guard.
+        if not is_exact_code:
+            _query_tokens = self._tokenize(f"{desc} {str(part.get('normalized_material') or '')}")
+            _match_score = self._token_overlap_score(_query_tokens, str(row[1] or ""))
+            if _match_score < 0.45:
+                return None
+
+        base_confidence = 0.95 if is_exact_code else 0.82
         freshness = self._freshness_adjustment(None)  # UDEF has no effective_date column
 
         wo_parity: Dict[str, Any] = {}

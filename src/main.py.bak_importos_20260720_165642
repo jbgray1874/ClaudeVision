@@ -4,6 +4,25 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# Load environment variables from .env file (project root: C:\ClaudeVision\.env)
+# This makes XAI_API_KEY, OPENAI_API_KEY, etc. available without having to set
+# them manually in each shell session. Must happen BEFORE any module that reads
+# os.environ (note_scan, web_ai_price_lookup, etc.).
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    if _env_path.exists():
+        _load_dotenv(_env_path)
+        print(f"[env] Loaded {_env_path}", flush=True)
+    else:
+        # Also try same directory as main.py (src/.env)
+        _env_src = Path(__file__).resolve().parent / ".env"
+        if _env_src.exists():
+            _load_dotenv(_env_src)
+            print(f"[env] Loaded {_env_src}", flush=True)
+except ImportError:
+    pass  # python-dotenv not installed — env vars must be set manually
+
 # Windows consoles default to cp1252, which cannot encode characters like the
 # warning sign (U+26A0). Any such print would raise UnicodeEncodeError and abort
 # the run *before* the estimate xlsx is written. Force UTF-8 on the console
@@ -30,6 +49,49 @@ from price_sources import reset_connectors
 from pricing_service import PricingService
 from rag_transformer import transform_scan_summary_to_historical_job_record
 from sql_export import export_json_files_to_sqlserver_sql, export_single_json_file_to_sqlserver_sql
+
+
+def _find_manual_workbook(scan_label: str, summary: dict):
+    """Locate a manual estimate workbook for this job via the UNC share convention.
+    <share>\\<year>\\<customer>\\<jobfolder>\\*.xls  — returns the first .xls found, else None.
+    Instrumented: prints [manual-lookup] diagnostics so a skip is explainable. Never raises."""
+    try:
+        import glob
+        share_root = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
+        if not os.path.isdir(share_root):
+            print(f"   [manual-lookup] share not reachable at run time: {share_root}", flush=True)
+            return None
+        # derive job number from BOTH scan_label and the job_folder in summary (more robust)
+        cands_labels = [str(scan_label)]
+        _jf = summary.get("job_folder") or summary.get("job_output_stem")
+        if _jf:
+            cands_labels.append(os.path.basename(str(_jf)))
+        job_nums = []
+        for lab in cands_labels:
+            jn = str(lab).split("-")[0].strip()
+            # keep only a leading numeric token (job numbers are numeric); strip any trailing words
+            jn = jn.split()[0] if jn else jn
+            if jn and jn not in job_nums:
+                job_nums.append(jn)
+        print(f"   [manual-lookup] scan_label={scan_label!r} job_nums={job_nums}", flush=True)
+        candidates = []
+        for year_dir in sorted(glob.glob(os.path.join(share_root, "20*")), reverse=True):
+            for jn in job_nums:
+                candidates += glob.glob(os.path.join(year_dir, "*", "*" + jn + "*", "*.xls"))
+                candidates += glob.glob(os.path.join(year_dir, "*" + jn + "*", "*.xls"))
+        print(f"   [manual-lookup] raw glob hits: {len(candidates)}", flush=True)
+        seen = []
+        for c in candidates:
+            if os.path.basename(c).startswith("~$"):
+                continue
+            if c not in seen:
+                seen.append(c)
+        print(f"   [manual-lookup] after temp-filter: {len(seen)}"
+              + (f" -> using {seen[0]}" if seen else " -> none"), flush=True)
+        return seen[0] if seen else None
+    except Exception as _mexc:
+        print(f"   [manual-lookup] error ({type(_mexc).__name__}: {_mexc}) -> None", flush=True)
+        return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,6 +212,11 @@ def parse_args() -> argparse.Namespace:
         "--ai-spreadsheet-out",
         type=str,
         help="Optional output .xlsx path for --generate-ai-spreadsheet.",
+    )
+    parser.add_argument(
+        "--deliverables",
+        action="store_true",
+        help="After populate, generate client quote (always) + parity report (if a manual estimate is found).",
     )
     return parser.parse_args()
 
@@ -688,6 +755,56 @@ def main() -> None:
                 print(f"   -> Decision Report + AI Provenance sheets added")
             except Exception as _rep_exc:
                 print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
+
+        # ── Price read-back: stamp the REAL Excel-computed totals into the JSON ──
+        # wb_populate writes Excel FORMULAS; the true unit cost is computed by Excel on load,
+        # not in Python. The JSON's workbook_equivalent_pricing is a reconstruction that can
+        # drift from the spreadsheet. Open the populated .xlsx via Excel COM, read the real
+        # Material/Labour/Unit totals, and write them into the JSON so every consumer agrees.
+        # Failure-isolated: any error leaves the JSON unchanged and never breaks the run.
+        if xlsx_path:
+            try:
+                from wep_readback_from_xlsx import stamp_real_totals_into_json as _stamp_wep
+                _canon_json = (summary.get("saved_output_paths") or {}).get("json")
+                if _canon_json and Path(_canon_json).exists():
+                    _stamp_wep(str(xlsx_path), str(_canon_json))
+                else:
+                    print("   [wep-readback] canonical JSON path not found — readback skipped.", flush=True)
+            except Exception as _wep_exc:
+                print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
+
+        # ── Deliverables: client quote (always) + parity report (if a manual exists) ──
+        # Opt-in via --deliverables. Each generator is failure-isolated: a report error logs and
+        # the run continues — it never breaks the estimate. Manual lookup uses the UNC share root
+        # (the K: mapping is session-dependent and fails) and skips gracefully when absent.
+        if getattr(args, "deliverables", False) and xlsx_path:
+            _canon_json2 = (summary.get("saved_output_paths") or {}).get("json")
+            _out_dir = str(Path(str(xlsx_path)).parent)
+
+            # 1) Client quote — always (needs only the summary JSON)
+            if _canon_json2 and Path(_canon_json2).exists():
+                try:
+                    from client_quote_html import generate_quote_files as _gen_quote
+                    _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label))
+                    print(f"   [deliverables] client quote -> {_qpath}", flush=True)
+                except Exception as _q_exc:
+                    print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
+
+                # 2) Parity report — only if a manual estimate workbook is found
+                try:
+                    _manual = _find_manual_workbook(str(scan_label), summary)
+                    if _manual:
+                        from estimate_full_parity_report import generate_and_write as _gen_bundle
+                        from parity_report_html import generate_report_files as _gen_parity_html
+                        _bundle_json = Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_parity_bundle.json")
+                        _bundle_csv = _bundle_json.with_suffix(".csv")
+                        _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv, read_via_excel=False)
+                        _phtml = _gen_parity_html(str(_bundle_json), out_dir=_out_dir, job_stem=str(scan_label))
+                        print(f"   [deliverables] parity report -> {_phtml}", flush=True)
+                    else:
+                        print("   [deliverables] no manual estimate found — parity skipped (new job).", flush=True)
+                except Exception as _p_exc:
+                    print(f"   [deliverables] parity report skipped ({_p_exc}) — run continues.", flush=True)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:

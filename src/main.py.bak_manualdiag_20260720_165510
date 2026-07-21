@@ -54,43 +54,33 @@ from sql_export import export_json_files_to_sqlserver_sql, export_single_json_fi
 def _find_manual_workbook(scan_label: str, summary: dict):
     """Locate a manual estimate workbook for this job via the UNC share convention.
     <share>\\<year>\\<customer>\\<jobfolder>\\*.xls  — returns the first .xls found, else None.
-    Instrumented: prints [manual-lookup] diagnostics so a skip is explainable. Never raises."""
+    Uses the UNC root (the mapped K: drive is session-dependent and often absent). Never raises:
+    any lookup problem returns None so the parity branch skips gracefully."""
     try:
-        import os, glob
+        import glob, re as _re
+        from pathlib import Path as _P
         share_root = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
         if not os.path.isdir(share_root):
-            print(f"   [manual-lookup] share not reachable at run time: {share_root}", flush=True)
             return None
-        # derive job number from BOTH scan_label and the job_folder in summary (more robust)
-        cands_labels = [str(scan_label)]
-        _jf = summary.get("job_folder") or summary.get("job_output_stem")
-        if _jf:
-            cands_labels.append(os.path.basename(str(_jf)))
-        job_nums = []
-        for lab in cands_labels:
-            jn = str(lab).split("-")[0].strip()
-            # keep only a leading numeric token (job numbers are numeric); strip any trailing words
-            jn = jn.split()[0] if jn else jn
-            if jn and jn not in job_nums:
-                job_nums.append(jn)
-        print(f"   [manual-lookup] scan_label={scan_label!r} job_nums={job_nums}", flush=True)
+        job_num = str(scan_label).split("-")[0].strip()
+        # year: prefer the job folder's mtime year via summary; fall back to scanning recent years
         candidates = []
         for year_dir in sorted(glob.glob(os.path.join(share_root, "20*")), reverse=True):
-            for jn in job_nums:
-                candidates += glob.glob(os.path.join(year_dir, "*", "*" + jn + "*", "*.xls"))
-                candidates += glob.glob(os.path.join(year_dir, "*" + jn + "*", "*.xls"))
-        print(f"   [manual-lookup] raw glob hits: {len(candidates)}", flush=True)
+            # search customer/job folders whose name contains the job number
+            for xls in glob.glob(os.path.join(year_dir, "*", "*" + job_num + "*", "*.xls")):
+                candidates.append(xls)
+            for xls in glob.glob(os.path.join(year_dir, "*" + job_num + "*", "*.xls")):
+                candidates.append(xls)
+        # de-dupe, prefer non-temp files
         seen = []
         for c in candidates:
-            if os.path.basename(c).startswith("~$"):
+            base = os.path.basename(c)
+            if base.startswith("~$"):
                 continue
             if c not in seen:
                 seen.append(c)
-        print(f"   [manual-lookup] after temp-filter: {len(seen)}"
-              + (f" -> using {seen[0]}" if seen else " -> none"), flush=True)
         return seen[0] if seen else None
-    except Exception as _mexc:
-        print(f"   [manual-lookup] error ({type(_mexc).__name__}: {_mexc}) -> None", flush=True)
+    except Exception:
         return None
 
 
