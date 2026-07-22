@@ -282,6 +282,15 @@ WELD_TIME_POLICY = {
     "weldment_complexity_max_multiplier": 4.0,
 }
 
+# ── DRES: dress welds after a structural (CO2/WELD) weld ──
+# A CO2-welded fabrication is almost always linished/dressed (DRES dept, £28.68/hr)
+# to clean the weld before finishing — Tim routes structural welds through DRES as a
+# matter of course. When True, any part carrying a `welding` op chains a `dress_welds`
+# op so the DRES labour lands on the route. Timing lives in the estimator (setup/run).
+# Spot/resistance welds are NOT dressed (they leave no proud bead), so only the CO2
+# `welding` op triggers this, not `spot_welding`/`resistance_welding`.
+DRESS_AFTER_STRUCTURAL_WELD = True
+
 # ── Acrylic provisional pricing (PROVISIONAL — pending estimating/Tim confirmation) ──
 # Bootstrap values from the M18 (10897) workbook so acrylic jobs get a sensible INFERRED
 # cost today instead of flagging INSUFFICIENT / falling back to £/kg (which under-prices

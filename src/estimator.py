@@ -2059,6 +2059,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and "handling" not in ops:
         ops = list(ops) + ["handling"]
 
+    # DRES — a structural (CO2/WELD) weld is dressed/linished to clean the bead before
+    # finishing. Chain a dress_welds op after the welding op so the DRES dept labour
+    # lands on the route (timing set in the run/setup tables below). Config-gated; spot/
+    # resistance welds leave no proud bead and are not dressed, so only `welding` triggers.
+    if (
+        getattr(config, "DRESS_AFTER_STRUCTURAL_WELD", True)
+        and "welding" in ops
+        and "dress_welds" not in ops
+    ):
+        ops = list(ops) + ["dress_welds"]
+        part.setdefault("inferred_operations", [])
+        if "dress_welds" not in part["inferred_operations"]:
+            part["inferred_operations"].append("dress_welds")
+
     setup_times_min: Dict[str, float] = {}
     run_times_min: Dict[str, float] = {}
     powder_coating_detail: Optional[Dict[str, Any]] = None
