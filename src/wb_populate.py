@@ -51,6 +51,14 @@ try:
 except Exception:
     _THROUGHPUT_SIZE_BANDS = {}
     _THROUGHPUT_AREA_EDGES = (0.05, 0.15, 0.40)
+try:
+    from config import BOOK_MANM_INSERT_LABOUR as _BOOK_MANM_INSERT_LABOUR
+    from config import MANM_INSERT_SECONDS_EACH as _MANM_INSERT_SECONDS_EACH
+    from config import MANM_INSERT_PART_TOKENS as _MANM_INSERT_PART_TOKENS
+except Exception:
+    _BOOK_MANM_INSERT_LABOUR = True
+    _MANM_INSERT_SECONDS_EACH = 15.0
+    _MANM_INSERT_PART_TOKENS = ["CLINCH", "PEM"]
 from typing import Any, Dict, List, Optional
 
 try:
@@ -1307,6 +1315,47 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 g["bends"] += int(_safe((_ng2 or {}).get("estimated_bend_line_count"), 0)) * _qty_pu
             elif _ol in ("hole_machining", "drilling", "punch"):
                 g["holes"] += int(_safe((_ng2 or {}).get("estimated_hole_count"), 0)) * _qty_pu
+
+    # ── MANM: insert labour for pressed fasteners (self-clinch nuts, PEM studs) ──
+    # Tim books the press/insert time as Manual labour (Metal) (MANM). His 12120 sheet
+    # gives the rule directly and consistently: Clinch x4 @60/hr and Pem x2 @120/hr both
+    # = 15 s/insert (config.MANM_INSERT_SECONDS_EACH). Knurled knobs and thumbscrews are
+    # hand-assembled (Assemble/pack), NOT pressed, so only clinch/PEM parts count. Counts
+    # come from bom_parts, which by now carry the reconciled quantities (self-clinch 1->4,
+    # PEM added), so this books labour on the true insert count. Injected here — like the
+    # Robomac row above — because the insert count is a BOM fact, not a per-part route op.
+    if _BOOK_MANM_INSERT_LABOUR and _MANM_INSERT_SECONDS_EACH > 0:
+        _ins_tokens = [str(t).upper() for t in (_MANM_INSERT_PART_TOKENS or [])]
+        _insert_count = 0
+        _insert_parts: List[str] = []
+        for _bp in bom_parts:
+            _blob = (str(_bp.get("description") or "") + " "
+                     + str(_bp.get("part_number") or "")).upper()
+            if _ins_tokens and any(_tok in _blob for _tok in _ins_tokens):
+                _q = int(_safe(_bp.get("quantity"), 0))
+                if _q > 0:
+                    _insert_count += _q
+                    _pn_ins = str(_bp.get("part_number") or _bp.get("description") or "insert")
+                    if _pn_ins not in _insert_parts:
+                        _insert_parts.append(_pn_ins)
+        if _insert_count > 0:
+            # bh chosen so the derived throughput below resolves to exactly
+            # 3600/(inserts * seconds_each): one MANM row, qty 1.
+            _manm_bh = order_qty * _insert_count * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
+            _mg = _groups.setdefault(("Manual labour (Metal)", "insert", ""), {
+                "wb_op": "Manual labour (Metal)", "material": "", "thickness": 0,
+                "qty": 1, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
+            })
+            _mg["qty"] = 1
+            _mg["bh"] += _manm_bh
+            _mg["parts"] = _insert_parts
+            _manm_tp = 3600.0 / (_insert_count * float(_MANM_INSERT_SECONDS_EACH))
+            _flag(f"MANM insert labour: {_insert_count} pressed insert(s) "
+                  f"(self-clinch/PEM, counted from the reconciled BOM: "
+                  f"{', '.join(_insert_parts)}) x {_MANM_INSERT_SECONDS_EACH:.0f}s each "
+                  f"-> Manual labour (Metal) at {_manm_tp:.0f}/hr. Rule from Tim's 12120 "
+                  f"sheet (clinch x4 @60/hr, pem x2 @120/hr both = 15s/insert). Knurled "
+                  f"knob & thumbscrew are hand-assembled (Assemble/pack), not counted.", flags)
 
     for _key in sorted(_groups.keys()):
         g = _groups[_key]

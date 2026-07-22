@@ -291,6 +291,20 @@ WELD_TIME_POLICY = {
 # `welding` op triggers this, not `spot_welding`/`resistance_welding`.
 DRESS_AFTER_STRUCTURAL_WELD = True
 
+# ── MANM: insert labour for pressed fasteners (self-clinch nuts, PEM studs) ──
+# Tim books the press/insert time for pressed-in fasteners as MANM (Manual labour
+# Metal, £31.18/hr, 15-min setup). His 12120 REV G manual estimate gives the rule
+# TWICE, and both agree exactly:
+#     Upstand   "Clinch x 4"  @ 60/hr  -> 3600/60  = 60s/part / 4 = 15 s/insert
+#     Base plate "Pem x 2"    @ 120/hr -> 3600/120 = 30s/part / 2 = 15 s/insert
+# So 15 s/insert is HIS number, derived from his own sheet — not an assumption.
+# Knurled knobs and thumbscrews are HAND-ASSEMBLED (they go to Assemble/pack), not
+# pressed, so only clinch/PEM parts count as inserts. wb_populate counts inserts from
+# the reconciled BOM (self-clinch nuts + PEM/keyhole studs) and books one MANM row.
+BOOK_MANM_INSERT_LABOUR = True
+MANM_INSERT_SECONDS_EACH = 15.0            # from Tim's 12120 sheet (clinch x4 @60/hr, pem x2 @120/hr)
+MANM_INSERT_PART_TOKENS = ["CLINCH", "PEM"]  # description/part-number tokens that mark a pressed insert
+
 # ── Acrylic provisional pricing (PROVISIONAL — pending estimating/Tim confirmation) ──
 # Bootstrap values from the M18 (10897) workbook so acrylic jobs get a sensible INFERRED
 # cost today instead of flagging INSUFFICIENT / falling back to £/kg (which under-prices
