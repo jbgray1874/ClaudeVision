@@ -1762,23 +1762,27 @@ def _finalize_scan_summary(
         # Deduplicate None-PN parts sharing page+geometry with a named part
         _by_geom: Dict[tuple, int] = {}
         _drop_idx: set = set()
-        for _di, _dp in enumerate(_pre_estimate_parts):
-            _gr = _dp.get("geometry_rollup") or _dp.get("geometry") or {}
+        for _di, _pep in enumerate(_pre_estimate_parts):
+            # NOTE: loop var is _pep (pre-estimate part), NOT _dp — _dp holds the
+            # dual-path BOM result computed far above and consumed by the reconcile
+            # after estimate_document. Reusing _dp here clobbered it, so the fastener
+            # reconcile always saw a part dict (no "rows") and silently no-op'd.
+            _gr = _pep.get("geometry_rollup") or _pep.get("geometry") or {}
             _cut = round(float(_gr.get("estimated_cut_length_mm") or 0))
             if _cut <= 0:
                 continue
-            _dk = (tuple(sorted(_dp.get("pages") or [])), _cut)
+            _dk = (tuple(sorted(_pep.get("pages") or [])), _cut)
             if _dk not in _by_geom:
                 _by_geom[_dk] = _di
                 continue
             _prev_i = _by_geom[_dk]
             _prev_p = _pre_estimate_parts[_prev_i]
-            if _dp.get("part_number") and not _prev_p.get("part_number"):
+            if _pep.get("part_number") and not _prev_p.get("part_number"):
                 _drop_idx.add(_prev_i)
                 _by_geom[_dk] = _di
-            elif not _dp.get("part_number") and _prev_p.get("part_number"):
+            elif not _pep.get("part_number") and _prev_p.get("part_number"):
                 _drop_idx.add(_di)
-            elif not _dp.get("part_number") and not _prev_p.get("part_number"):
+            elif not _pep.get("part_number") and not _prev_p.get("part_number"):
                 _drop_idx.add(_di)
         if _drop_idx:
             _pre_estimate_parts = [_p for _i, _p in enumerate(_pre_estimate_parts) if _i not in _drop_idx]
