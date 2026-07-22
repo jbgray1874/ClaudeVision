@@ -1413,15 +1413,26 @@ def _finalize_scan_summary(
             # resolved paths are known-good, so Path A reads the same files the estimate
             # was built from.
             _job_pdfs = [j.get("path") for j in (summary.get("job_source_pdfs") or []) if j.get("path")]
+            # DIAGNOSTIC (temporary): show which reconcile input branch is taken and why,
+            # so an empty _dp is explainable at the source (job_source_pdfs vs folder vs
+            # single pdf). Prints the actual paths so a bad/absent path is visible.
+            print(f"   [recon-input] job_source_pdfs={len(_job_pdfs)} "
+                  f"job_folder={str(job_folder)!r} scan_mode={summary.get('scan_mode')!r} "
+                  f"pdf_path={str(pdf_path)!r}", flush=True)
             if _job_pdfs:
+                print(f"   [recon-input] using job_source_pdfs -> {_job_pdfs}", flush=True)
                 _dp = reconciled_bom_rows_for_job(pdfs=_job_pdfs)
             elif job_folder and summary.get("scan_mode") == "folder_as_job":
+                print(f"   [recon-input] fallback to folder discovery on {str(job_folder)!r}", flush=True)
                 _dp = reconciled_bom_rows_for_job(folder=job_folder)
             elif pdf_path:
                 _dp = reconciled_bom_rows_for_job(pdfs=[pdf_path])
             else:
                 _fp_src = summary.get("full_path") or summary.get("source_file")
                 _dp = reconciled_bom_rows_for_job(pdfs=[_fp_src]) if _fp_src else {"rows": []}
+            print(f"   [recon-input] _dp keys={sorted((_dp or {}).keys())} "
+                  f"pdf_paths={len((_dp or {}).get('pdf_paths') or [])} "
+                  f"a_count={(_dp or {}).get('a_count')} b_count={(_dp or {}).get('b_count')}", flush=True)
             if _dp.get("rows"):
                 _da = summary.setdefault("document_analysis", {})
                 _da["bom_rows"] = _dp["rows"]
