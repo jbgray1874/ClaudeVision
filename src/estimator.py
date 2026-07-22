@@ -2279,7 +2279,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
     if "dress_welds" in ops:
         setup_times_min["dress_welds"] = 0.5
-        run_times_min["dress_welds"] = 2.0
+        # Tim's 12120 "Dress (Minimal)" = 120/hr = 0.5 min/unit (config lever).
+        run_times_min["dress_welds"] = float(getattr(config, "DRESS_WELD_RUN_MINUTES", 0.5))
 
     if "handling" in ops:
         run_times_min["handling"] = round(LABOUR_RULES["handling"]["min_per_part"], 2)

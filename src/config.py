@@ -290,6 +290,11 @@ WELD_TIME_POLICY = {
 # Spot/resistance welds are NOT dressed (they leave no proud bead), so only the CO2
 # `welding` op triggers this, not `spot_welding`/`resistance_welding`.
 DRESS_AFTER_STRUCTURAL_WELD = True
+# Per-unit dress RUN time. Tim's 12120 STAND ASSY "Dress (Minimal)" books 120/hr =
+# 30s = 0.5 min/unit (Total Hours 104.67 at qty 12500). The engine previously used
+# 2.0 min -> 30/hr, ~4x his cost (£0.96 vs his £0.24). 0.5 aligns to his number.
+# Adjustable: a heavy multi-pass dress would take longer than this minimal rate.
+DRESS_WELD_RUN_MINUTES = 0.5
 
 # ── MANM: insert labour for pressed fasteners (self-clinch nuts, PEM studs) ──
 # Tim books the press/insert time for pressed-in fasteners as MANM (Manual labour
