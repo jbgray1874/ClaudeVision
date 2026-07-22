@@ -52,49 +52,6 @@ from rag_transformer import transform_scan_summary_to_historical_job_record
 from sql_export import export_json_files_to_sqlserver_sql, export_single_json_file_to_sqlserver_sql
 
 
-def _find_manual_workbook(scan_label: str, summary: dict):
-    """Locate a manual estimate workbook for this job via the UNC share convention.
-    <share>\\<year>\\<customer>\\<jobfolder>\\*.xls  — returns the first .xls found, else None.
-    Instrumented: prints [manual-lookup] diagnostics so a skip is explainable. Never raises."""
-    try:
-        import os, glob
-        share_root = r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"
-        if not os.path.isdir(share_root):
-            print(f"   [manual-lookup] share not reachable at run time: {share_root}", flush=True)
-            return None
-        # derive job number from BOTH scan_label and the job_folder in summary (more robust)
-        cands_labels = [str(scan_label)]
-        _jf = summary.get("job_folder") or summary.get("job_output_stem")
-        if _jf:
-            cands_labels.append(os.path.basename(str(_jf)))
-        job_nums = []
-        for lab in cands_labels:
-            jn = str(lab).split("-")[0].strip()
-            # keep only a leading numeric token (job numbers are numeric); strip any trailing words
-            jn = jn.split()[0] if jn else jn
-            if jn and jn not in job_nums:
-                job_nums.append(jn)
-        print(f"   [manual-lookup] scan_label={scan_label!r} job_nums={job_nums}", flush=True)
-        candidates = []
-        for year_dir in sorted(glob.glob(os.path.join(share_root, "20*")), reverse=True):
-            for jn in job_nums:
-                candidates += glob.glob(os.path.join(year_dir, "*", "*" + jn + "*", "*.xls"))
-                candidates += glob.glob(os.path.join(year_dir, "*" + jn + "*", "*.xls"))
-        print(f"   [manual-lookup] raw glob hits: {len(candidates)}", flush=True)
-        seen = []
-        for c in candidates:
-            if os.path.basename(c).startswith("~$"):
-                continue
-            if c not in seen:
-                seen.append(c)
-        print(f"   [manual-lookup] after temp-filter: {len(seen)}"
-              + (f" -> using {seen[0]}" if seen else " -> none"), flush=True)
-        return seen[0] if seen else None
-    except Exception as _mexc:
-        print(f"   [manual-lookup] error ({type(_mexc).__name__}: {_mexc}) -> None", flush=True)
-        return None
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan drawings and build manufacturing and estimate inputs.")
     parser.add_argument("--pdf", type=str, help="Process a single drawing file (PDF or DXF).")
@@ -782,11 +739,31 @@ def main() -> None:
             _canon_json2 = (summary.get("saved_output_paths") or {}).get("json")
             _out_dir = str(Path(str(xlsx_path)).parent)
 
-            # 1) Client quote — always (needs only the summary JSON)
+            # Resolve the pinned manual estimate ONCE (explicit-only, no discovery) so
+            # both the client quote (customer name from the ...\<CUSTOMER>\... path) and
+            # the parity section below compare against the exact same spreadsheet. One job
+            # folder can hold several manual .xls (cut&fold variant, revisions, outsource
+            # copy), so we never guess — a wrong/absent path just means no parity, never a
+            # silent fallback to a discovered file.
+            _manual = None
+            _explicit = getattr(args, "parity_workbook", None)
+            if _explicit:
+                _ep = Path(_explicit)
+                if _ep.exists():
+                    _manual = str(_ep)
+                    print(f"   [deliverables] parity: using --parity-workbook {_manual}", flush=True)
+                else:
+                    print(f"   [deliverables] ERROR parity: --parity-workbook not found: {_ep}\n"
+                          f"                  parity section SKIPPED — no auto-discovery. "
+                          f"Fix the path and re-run.", flush=True)
+
+            # 1) Client quote — always (needs only the summary JSON). The pinned manual
+            #    workbook (when given) supplies the customer name from its folder path.
             if _canon_json2 and Path(_canon_json2).exists():
                 try:
                     from client_quote_html import generate_quote_files as _gen_quote
-                    _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label))
+                    _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label),
+                                        manual_workbook=_manual)
                     print(f"   [deliverables] client quote -> {_qpath}", flush=True)
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
@@ -800,18 +777,8 @@ def main() -> None:
                 #    (Replaces the old lean 5-section parity_report_html so parity and new-job
                 #    runs share one report; parity_report_html remains available standalone.)
                 try:
-                    _manual = None
-                    _explicit = getattr(args, "parity_workbook", None)
-                    if _explicit:
-                        _ep = Path(_explicit)
-                        if _ep.exists():
-                            _manual = str(_ep)
-                            print(f"   [deliverables] parity: using --parity-workbook {_manual}", flush=True)
-                        else:
-                            print(f"   [deliverables] parity: --parity-workbook not found ({_ep}) — trying auto-lookup", flush=True)
-                    if not _manual:
-                        _manual = _find_manual_workbook(str(scan_label), summary)
-
+                    # Parity uses the SAME explicit-only manual workbook resolved above
+                    # (_manual / _explicit). No auto-discovery here either.
                     _bundle_json = None
                     if _manual:
                         from estimate_full_parity_report import generate_and_write as _gen_bundle
@@ -822,9 +789,10 @@ def main() -> None:
                         _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv,
                                     read_via_excel=bool(getattr(args, "full_parity_read_via_excel", False)))
                         print(f"   [deliverables] parity bundle built (manual: {_manual})", flush=True)
-                    else:
-                        print("   [deliverables] no manual estimate found — new-job report (no parity section). "
-                              "Pass --parity-workbook <path> to pin one.", flush=True)
+                    elif not _explicit:
+                        print("   [deliverables] no --parity-workbook passed — new-job report only "
+                              "(no parity section). Pass --parity-workbook <path> to compare against a "
+                              "specific manual estimate.", flush=True)
 
                     from job_report_html import generate_report as _gen_job_report
                     _report_out = str(Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_report.html"))

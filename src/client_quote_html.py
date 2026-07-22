@@ -116,9 +116,18 @@ def _title_material(m: str) -> str:
 
 
 # ── customer + logo ─────────────────────────────────────────────────────────
-def _derive_customer(summary: Dict[str, Any], job_stem: str) -> str:
+def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None) -> str:
     """Best-effort customer name for display + logo key. Uses folder/GA-path tokens.
-    General fallback chain; when a real customer field exists in future JSONs it can be added here."""
+    General fallback chain; when a real customer field exists in future JSONs it can be added here.
+
+    When a manual estimate workbook is pinned (--parity-workbook), its
+    ...\\Manual Estimates\\<year>\\<CUSTOMER>\\... path is the AUTHORITATIVE customer
+    source and takes precedence over every heuristic below."""
+    # (0) Explicit pinned workbook path wins — no guessing, no share glob.
+    if manual_workbook:
+        _cust_pinned = _customer_from_workbook_path(str(manual_workbook))
+        if _cust_pinned:
+            return _cust_pinned
     # look in folder path + GA title for a known-ish brand token
     hay = " ".join([
         str(summary.get("job_folder") or ""),
@@ -155,15 +164,10 @@ def _derive_customer(summary: Dict[str, Any], job_stem: str) -> str:
     return "Customer"
 
 
-def _customer_from_manual_path(summary: Dict[str, Any]) -> str:
-    """If a manual estimate exists for this job, its path is
-    ...\Manual Estimates\<year>\<CUSTOMER>\<jobfolder>\*.xls — return <CUSTOMER>.
-    Uses the deployed _find_manual_workbook when available; else returns ''."""
-    try:
-        import file_scan as _FS
-        mp = _FS._find_manual_workbook(summary) if hasattr(_FS, "_find_manual_workbook") else None
-    except Exception:
-        mp = None
+def _customer_from_workbook_path(mp: str) -> str:
+    """Extract <CUSTOMER> from a manual-estimate path
+    ...\Manual Estimates\<year>\<CUSTOMER>\<jobfolder>\*.xls — else ''.
+    Pure path parsing; works for a UNC share or a mapped drive (e.g. K:\\...)."""
     if not mp:
         return ""
     try:
@@ -178,6 +182,18 @@ def _customer_from_manual_path(summary: Dict[str, Any]) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _customer_from_manual_path(summary: Dict[str, Any]) -> str:
+    """If a manual estimate exists for this job, its path is
+    ...\Manual Estimates\<year>\<CUSTOMER>\<jobfolder>\*.xls — return <CUSTOMER>.
+    Uses the deployed _find_manual_workbook when available; else returns ''."""
+    try:
+        import file_scan as _FS
+        mp = _FS._find_manual_workbook(summary) if hasattr(_FS, "_find_manual_workbook") else None
+    except Exception:
+        mp = None
+    return _customer_from_workbook_path(str(mp)) if mp else ""
 
 
 def _size_svg(svg_markup: str, *, height_px: int, width_px: Optional[int] = None) -> str:
@@ -316,7 +332,8 @@ def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
 
 
 # ── main render ─────────────────────────────────────────────────────────────
-def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None) -> str:
+def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
+                     manual_workbook: Optional[str] = None) -> str:
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
     stem = str(stem)
 
@@ -344,7 +361,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None) ->
     finish = _finish_line(summary, parts)
     ops = _collect_operations(parts)
 
-    customer = _derive_customer(summary, stem)
+    customer = _derive_customer(summary, stem, manual_workbook=manual_workbook)
     logo_markup = _load_logo_markup(customer)
     cust_header = logo_markup if logo_markup else f'<div style="font-size:18px;font-weight:600;color:#282928;">{_esc(customer)}</div>'
     sdi_logo = _sdi_logo_markup()
@@ -497,11 +514,12 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None) ->
 </html>"""
 
 
-def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem: Optional[str] = None) -> Optional[str]:
+def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem: Optional[str] = None,
+                         manual_workbook: Optional[str] = None) -> Optional[str]:
     jp = Path(json_path)
     summary = json.loads(jp.read_text(encoding="utf-8"))
     stem = job_stem or summary.get("job_output_stem") or jp.stem
-    html_str = build_quote_html(summary, job_stem=stem)
+    html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
