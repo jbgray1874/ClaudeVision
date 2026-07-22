@@ -92,8 +92,8 @@ def _hdr_norm(t: str) -> str:
     return t.upper().replace(".", "").strip()
 
 
-def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
-    """Find the BOM header row and return the column x-anchors derived from it.
+def _header_from_row(ri: int, row: List[dict]) -> Optional[Dict[str, Any]]:
+    """If this single clustered row is a BOM header, return {index, top, anchors}; else None.
 
     Column headers are matched against SYNONYM SETS (see _HDR_*), so this reads
     both the 2013 template (ITEM NO. / PartNo / Description / QTY.) and the 2025
@@ -105,55 +105,66 @@ def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
     word AND a QTY-like word (the three that are always present); the CODE column
     (DWG/PartNo) is located if present but its synonym set is broad.
     """
-    for ri, row in enumerate(rows):
-        norms = [( _hdr_norm(w["text"]), w["x0"] ) for w in row]
-        norm_texts = {n for n, _ in norms}
-        # Also consider two-word combinations (e.g. "ITEM" + "NO", "DWG" + "NO",
-        # "PART" + "NO") so multi-token headers match the synonym sets.
-        def _has(colset):
-            if norm_texts & colset:
+    norms = [( _hdr_norm(w["text"]), w["x0"] ) for w in row]
+    norm_texts = {n for n, _ in norms}
+    # Also consider two-word combinations (e.g. "ITEM" + "NO", "DWG" + "NO",
+    # "PART" + "NO") so multi-token headers match the synonym sets.
+    def _has(colset):
+        if norm_texts & colset:
+            return True
+        toks = [n for n, _ in norms]
+        for i in range(len(toks) - 1):
+            if f"{toks[i]} {toks[i+1]}" in colset:
                 return True
-            # try adjacent-word joins
-            toks = [n for n, _ in norms]
-            for i in range(len(toks) - 1):
-                if f"{toks[i]} {toks[i+1]}" in colset:
-                    return True
-            return False
+        return False
 
-        if not (_has(_HDR_ITEM) and _has(_HDR_DESC) and _has(_HDR_QTY)):
-            continue
+    if not (_has(_HDR_ITEM) and _has(_HDR_DESC) and _has(_HDR_QTY)):
+        return None
 
-        anchors: Dict[str, float] = {}
-        # Assign the FIRST word matching each column set as that column's x-anchor.
-        # Order matters: item is leftmost, then code, then desc, then qty. We take
-        # the leftmost qualifying word for each so multi-word headers anchor cleanly.
-        for norm, x in sorted(norms, key=lambda p: p[1]):
-            if "item" not in anchors and (norm in _HDR_ITEM):
-                anchors["item"] = x
-            elif "code" not in anchors and (norm in _HDR_CODE):
-                anchors["code"] = x
-            elif "desc" not in anchors and (norm in _HDR_DESC):
-                anchors["desc"] = x
-            elif "qty" not in anchors and (norm in _HDR_QTY):
-                anchors["qty"] = x
+    anchors: Dict[str, float] = {}
+    # Assign the FIRST word matching each column set as that column's x-anchor.
+    for norm, x in sorted(norms, key=lambda p: p[1]):
+        if "item" not in anchors and (norm in _HDR_ITEM):
+            anchors["item"] = x
+        elif "code" not in anchors and (norm in _HDR_CODE):
+            anchors["code"] = x
+        elif "desc" not in anchors and (norm in _HDR_DESC):
+            anchors["desc"] = x
+        elif "qty" not in anchors and (norm in _HDR_QTY):
+            anchors["qty"] = x
 
-        # item, desc, qty are required; code (DWG/PartNo) may be absent on some
-        # templates — if so, synthesise a code anchor midway between item and desc.
-        if not all(k in anchors for k in ("item", "desc", "qty")):
-            continue
-        if "code" not in anchors:
-            anchors["code"] = (anchors["item"] + anchors["desc"]) / 2.0
+    # item, desc, qty required; code (DWG/PartNo) may be absent — synthesise midway.
+    if not all(k in anchors for k in ("item", "desc", "qty")):
+        return None
+    if "code" not in anchors:
+        anchors["code"] = (anchors["item"] + anchors["desc"]) / 2.0
+    # anchors must be in sane left-to-right order
+    if not (anchors["item"] <= anchors["code"] <= anchors["desc"] < anchors["qty"]):
+        return None
 
-        # anchors must be in sane left-to-right order
-        if not (anchors["item"] <= anchors["code"] <= anchors["desc"] < anchors["qty"]):
-            continue
+    return {"header_row_index": ri, "header_top": row[0]["top"], "anchors": anchors}
 
-        return {
-            "header_row_index": ri,
-            "header_top": row[0]["top"],
-            "anchors": anchors,
-        }
+
+def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
+    """The FIRST BOM header on the page (kept for single-table callers)."""
+    for ri, row in enumerate(rows):
+        h = _header_from_row(ri, row)
+        if h:
+            return h
     return None
+
+
+def _find_all_headers(rows: List[List[dict]]) -> List[Dict[str, Any]]:
+    """EVERY BOM header on the page — so a page carrying a main BOM PLUS a fixings/
+    hardware sub-table is read in full, not just the first table. Belt-and-braces so
+    the deterministic path covers multi-table pages rather than leaning on the vision
+    backstop. Headers are returned top-to-bottom."""
+    out: List[Dict[str, Any]] = []
+    for ri, row in enumerate(rows):
+        h = _header_from_row(ri, row)
+        if h:
+            out.append(h)
+    return out
 
 
 def _parse_row(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str, str]]:
@@ -231,62 +242,69 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
         return None
 
     rows = _cluster_rows(words)
-    header = _find_header(rows)
-    if not header:
+    headers = _find_all_headers(rows)
+    if not headers:
         return None
 
-    anchors = header["anchors"]
-    header_top = header["header_top"]
     parent = _title_block_dwg_no(words)
 
     data_rows: List[Dict[str, Any]] = []
-    seen = set()
-    _max_item_seen = 0
-    for row in rows:
-        top = row[0]["top"]
-        if top <= header_top:
-            continue  # skip header and anything above it
-        cols = _parse_row(row, anchors)
-        if cols is None:
-            continue  # not a BOM data row (no valid item+qty in the table extent)
-        item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
+    seen = set()  # page-wide dedup across every table on the page
+    # Walk each header's table independently. A page can carry a main BOM PLUS a
+    # fixings/hardware sub-table; each restarts its own item sequence at 1, so the
+    # contiguity guard's _max_item_seen MUST reset per table or the second table's
+    # item 1 gets rejected as "backwards". Rows belong to a table when they sit
+    # BELOW that header and ABOVE the next header (or the page bottom for the last).
+    for hi, header in enumerate(headers):
+        anchors = header["anchors"]
+        header_top = header["header_top"]
+        next_top = headers[hi + 1]["header_top"] if hi + 1 < len(headers) else float("inf")
+        _max_item_seen = 0
+        for row in rows:
+            top = row[0]["top"]
+            if top <= header_top or top >= next_top:
+                continue  # outside this table's vertical band
+            cols = _parse_row(row, anchors)
+            if cols is None:
+                continue  # not a BOM data row (no valid item+qty in the table extent)
+            item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
 
-        # GUARD 1 — item contiguity: real BOM items are a monotonic 1..N sequence.
-        # A row whose item number is <= one already accepted is a duplicate/backwards
-        # value — almost always sheet-edge grid NUMBERS (2..8) that survived the x-extent
-        # filter because they look like integers. Reject it.
-        if int(item) <= _max_item_seen:
-            continue
+            # GUARD 1 — item contiguity: real BOM items are a monotonic 1..N sequence.
+            # A row whose item number is <= one already accepted is a duplicate/backwards
+            # value — almost always sheet-edge grid NUMBERS (2..8) that survived the x-extent
+            # filter because they look like integers. Reject it.
+            if int(item) <= _max_item_seen:
+                continue
 
-        # GUARD 2 — numeric-noise desc: grid-number noise builds a row like
-        # code='' desc='6 7' (bare integers). A genuine sparse/thin row has an EMPTY
-        # desc, never a numbers-only one. Reject empty-code rows whose desc is purely
-        # numeric/punctuation (no alphabetic run).
-        _has_alpha = bool(re.search(r"[A-Za-z]{2,}", desc))
-        _numeric_noise = bool(desc) and not _has_alpha and bool(re.match(r"^[\d\s.\-]+$", desc))
-        if not code.strip() and _numeric_noise:
-            continue
+            # GUARD 2 — numeric-noise desc: grid-number noise builds a row like
+            # code='' desc='6 7' (bare integers). A genuine sparse/thin row has an EMPTY
+            # desc, never a numbers-only one. Reject empty-code rows whose desc is purely
+            # numeric/punctuation (no alphabetic run).
+            _has_alpha = bool(re.search(r"[A-Za-z]{2,}", desc))
+            _numeric_noise = bool(desc) and not _has_alpha and bool(re.match(r"^[\d\s.\-]+$", desc))
+            if not code.strip() and _numeric_noise:
+                continue
 
-        _max_item_seen = int(item)
-        part_ref = code
-        # keep sparse rows (item+qty present) even if code/desc thin — flag them
-        thin = not (re.search(r"[A-Za-z]{2,}", desc) or re.search(r"[A-Za-z0-9]{2,}", part_ref))
+            _max_item_seen = int(item)
+            part_ref = code
+            # keep sparse rows (item+qty present) even if code/desc thin — flag them
+            thin = not (re.search(r"[A-Za-z]{2,}", desc) or re.search(r"[A-Za-z0-9]{2,}", part_ref))
 
-        kind, code_or_spec = _classify_part_ref(part_ref) if part_ref else ("bought_in", "")
-        key = (item, _clean(part_ref), qty)
-        if key in seen:
-            continue
-        seen.add(key)
+            kind, code_or_spec = _classify_part_ref(part_ref) if part_ref else ("bought_in", "")
+            key = (item, _clean(part_ref), qty)
+            if key in seen:
+                continue
+            seen.add(key)
 
-        data_rows.append({
-            "item_number": item,
-            "part_ref": _clean(part_ref),
-            "part_number": code_or_spec if kind == "drawing_ref" else "",
-            "description": desc,
-            "quantity": int(qty),
-            "kind": kind,
-            "thin": thin,
-        })
+            data_rows.append({
+                "item_number": item,
+                "part_ref": _clean(part_ref),
+                "part_number": code_or_spec if kind == "drawing_ref" else "",
+                "description": desc,
+                "quantity": int(qty),
+                "kind": kind,
+                "thin": thin,
+            })
 
     if not data_rows:
         return None
