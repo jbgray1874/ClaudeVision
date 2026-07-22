@@ -84,6 +84,11 @@ _EXT_TO_DOCTYPE = {
 }
 
 
+# Set by --debug: when True, probe_model prints before each extractor step so a
+# hang shows exactly which COM call stalled (the last printed step is the culprit).
+_DEBUG_STEPS = False
+
+
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -381,20 +386,30 @@ def probe_model(sw, path: str, do_mass: bool) -> Dict[str, Any]:
         return record
 
     record["opened"] = True
+
+    def _step(name, fn):
+        # Per-step tracer: with --debug, print BEFORE each extractor so a hang shows
+        # exactly which COM call stalled (the last printed step is the culprit).
+        if _DEBUG_STEPS:
+            _log(f"      · {name} ...")
+        return fn()
+
     try:
-        configs = read_configurations(model)
-        active_cfg = _safe(lambda: model.ConfigurationManager.ActiveConfiguration.Name) or ""
+        configs = _step("configurations", lambda: read_configurations(model))
+        active_cfg = _step("active_config",
+                           lambda: _safe(lambda: model.ConfigurationManager.ActiveConfiguration.Name) or "")
         record["configurations"] = configs
         record["active_configuration"] = active_cfg
-        record["material"] = read_material(model, active_cfg)
-        record["custom_properties"] = read_custom_properties(model, active_cfg)
-        record["sheet_metal"] = read_sheetmetal_and_bends(model)
-        record["holes"] = read_hole_signal(model)
-        record["weldment_cut_list"] = read_weldment_cutlist(model)
+        record["material"] = _step("material", lambda: read_material(model, active_cfg))
+        record["custom_properties"] = _step("custom_properties",
+                                            lambda: read_custom_properties(model, active_cfg))
+        record["sheet_metal"] = _step("sheet_metal", lambda: read_sheetmetal_and_bends(model))
+        record["holes"] = _step("holes", lambda: read_hole_signal(model))
+        record["weldment_cut_list"] = _step("weldment_cut_list", lambda: read_weldment_cutlist(model))
         if record["doc_type"] == "assembly":
-            record["components"] = read_assembly_components(model)
+            record["components"] = _step("components", lambda: read_assembly_components(model))
         if do_mass:
-            record["mass_properties"] = read_mass_properties(model)
+            record["mass_properties"] = _step("mass_properties", lambda: read_mass_properties(model))
         else:
             record["mass_properties"] = {"skipped": True}
     except Exception as e:
@@ -459,7 +474,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--limit", type=int, default=None, help="Stop after N models.")
     ap.add_argument("--visible", action="store_true", help="Run SolidWorks visibly.")
     ap.add_argument("--no-mass", action="store_true", help="Skip mass properties (faster).")
+    ap.add_argument("--debug", action="store_true",
+                    help="Print each extractor step so a hang shows which COM call stalled.")
     args = ap.parse_args(argv)
+    global _DEBUG_STEPS
+    _DEBUG_STEPS = bool(args.debug)
 
     models = gather_models(args.path, args.limit)
     if not models:
