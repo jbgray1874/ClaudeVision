@@ -187,6 +187,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                 _cm.setdefault("review_flags", []).append(
                     f"Quantity set to {_qty} from dual-path BOM table read")
                 _updated += 1
+            print(f"   [recon-row] CODE-MATCH '{_desc}' (code {_code}) -> qty {_qty}", flush=True)
             continue
 
         # 2) TOKEN match vs bought-in parts -> dual-path qty wins
@@ -208,11 +209,13 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                 _tm.setdefault("review_flags", []).append(
                     f"Quantity corrected {_old} -> {_qty} from dual-path BOM table read (matched '{_desc}')")
                 _updated += 1
+            print(f"   [recon-row] TOKEN-MATCH '{_desc}' -> {_p_code(_tm)} qty {_qty}", flush=True)
             continue
 
         # 3) No match -> ADD clean bought-in row
         _cc = _clean_code(_desc, _code)
         if any(_p_code(_p) == _cc.upper() for _p in _parts_recon):
+            print(f"   [recon-row] SKIP-ADD '{_desc}' -> {_cc} already present", flush=True)
             continue
         _parts_recon.append({
             "part_number": _cc, "description": _desc, "quantity": _qty,
@@ -227,6 +230,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             "confidence": {"overall": 0.0}, "source": "non_sdi_bom_row",
         })
         _added += 1
+        print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)
 
     if _es_recon.get("part_estimates") is not None:
         _es_recon["part_estimates"] = _parts_recon
