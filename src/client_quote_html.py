@@ -213,12 +213,12 @@ def _load_logo_markup(customer: str) -> str:
             if ext.lower() == ".svg":
                 svg = open(p, encoding="utf-8", errors="replace").read()
                 m = re.search(r"<svg\b.*?</svg>", svg, re.S | re.I)
-                inner = _size_svg(m.group(0) if m else svg, height_px=48)
+                inner = _size_svg(m.group(0) if m else svg, height_px=72)
                 return f'<span style="display:inline-flex;align-items:center;">{inner}</span>'
             if ext.lower() in (".png", ".jpg", ".jpeg", ".gif"):
                 data = base64.b64encode(open(p, "rb").read()).decode("ascii")
                 mime = "image/png" if ext.lower() == ".png" else ("image/jpeg" if ext.lower() in (".jpg", ".jpeg") else "image/gif")
-                return f'<img src="data:{mime};base64,{data}" alt="{_esc(customer)}" style="max-height:48px;max-width:200px;object-fit:contain;">'
+                return f'<img src="data:{mime};base64,{data}" alt="{_esc(customer)}" style="max-height:72px;max-width:300px;object-fit:contain;">'
     except OSError:
         pass
     return ""

@@ -791,11 +791,14 @@ def main() -> None:
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
 
-                # 2) Parity report — only if a manual estimate workbook is found.
-                #    An explicit --parity-workbook pins the EXACT manual sheet (there can be
-                #    several per job / multiple revisions), overriding the fuzzy share lookup;
-                #    it falls back to the auto-lookup when not supplied. This is also the seam
-                #    the portal will use (user picks the sheet to compare against).
+                # 2) Unified job report — ALWAYS generated. The rich new-job report (7 sections:
+                #    at-a-glance, what the engine got right, review items, drawing analysis,
+                #    what to check, design recommendations, verdict). When a manual estimate is
+                #    found (or pinned via --parity-workbook), a parity bundle is built and passed
+                #    in, which ADDS the "1a Parity vs manual estimate" section. In production —
+                #    a new enquiry with no manual — the SAME report renders without that section.
+                #    (Replaces the old lean 5-section parity_report_html so parity and new-job
+                #    runs share one report; parity_report_html remains available standalone.)
                 try:
                     _manual = None
                     _explicit = getattr(args, "parity_workbook", None)
@@ -808,22 +811,32 @@ def main() -> None:
                             print(f"   [deliverables] parity: --parity-workbook not found ({_ep}) — trying auto-lookup", flush=True)
                     if not _manual:
                         _manual = _find_manual_workbook(str(scan_label), summary)
+
+                    _bundle_json = None
                     if _manual:
                         from estimate_full_parity_report import generate_and_write as _gen_bundle
-                        from parity_report_html import generate_report_files as _gen_parity_html
                         _bundle_json = Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_parity_bundle.json")
                         _bundle_csv = _bundle_json.with_suffix(".csv")
                         # .xls reads via xlrd (computed values); an .xlsx manual may need Excel COM
                         # to resolve formulas — honour --full-parity-read-via-excel when set.
                         _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv,
                                     read_via_excel=bool(getattr(args, "full_parity_read_via_excel", False)))
-                        _phtml = _gen_parity_html(str(_bundle_json), out_dir=_out_dir, job_stem=str(scan_label))
-                        print(f"   [deliverables] parity report -> {_phtml}", flush=True)
+                        print(f"   [deliverables] parity bundle built (manual: {_manual})", flush=True)
                     else:
-                        print("   [deliverables] no manual estimate found — parity skipped (new job). "
+                        print("   [deliverables] no manual estimate found — new-job report (no parity section). "
                               "Pass --parity-workbook <path> to pin one.", flush=True)
+
+                    from job_report_html import generate_report as _gen_job_report
+                    _report_out = str(Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_report.html"))
+                    _rhtml = _gen_job_report(
+                        str(_canon_json2),
+                        out_path=_report_out,
+                        bundle_path=(str(_bundle_json) if _bundle_json else None),
+                        job_stem=str(scan_label),
+                    )
+                    print(f"   [deliverables] job report -> {_rhtml}", flush=True)
                 except Exception as _p_exc:
-                    print(f"   [deliverables] parity report skipped ({_p_exc}) — run continues.", flush=True)
+                    print(f"   [deliverables] job report skipped ({_p_exc}) — run continues.", flush=True)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:
