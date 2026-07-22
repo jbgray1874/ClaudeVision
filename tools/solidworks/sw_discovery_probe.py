@@ -115,11 +115,14 @@ def connect_solidworks(visible: bool):
         sw.Visible = bool(visible)
     except Exception:
         pass  # non-fatal — some configs disallow toggling Visible
-    # Suppress modal dialogs so a batch never blocks on a popup.
+    # Best-effort: stop SW prompting to load referenced configs/lightweight dialogs.
+    # (CommandInProgress was removed — on some installs it made the first OpenDoc6 hang.)
     try:
-        sw.CommandInProgress = True
+        # 2 = swUserPreferenceIntegerValue: not needed; keep this block defensive only.
+        sw.EnableBackgroundProcessing = True
     except Exception:
         pass
+    _log("Connected. (First SolidWorks launch + first document can take 30-90s.)")
     return sw
 
 
@@ -144,7 +147,10 @@ def gather_models(paths: List[str], limit: Optional[int]) -> List[str]:
                 if key not in seen:
                     seen.add(key)
                     found.append(c)
-    found.sort()
+    # Lead with PARTS, then assemblies: a part opens fast and needs no references,
+    # so the first (slow) COM round-trip validates the pipeline on the simplest case.
+    # Assemblies load every referenced part and are the likeliest thing to stall.
+    found.sort(key=lambda p: (os.path.splitext(p)[1].lower() == ".sldasm", p.lower()))
     if limit is not None:
         found = found[:limit]
     return found
