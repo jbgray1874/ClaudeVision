@@ -391,6 +391,16 @@ _CSS = """
   .chk li{padding:8px 0 8px 30px;position:relative;border-bottom:1px dashed var(--line);}
   .chk li:before{content:"\\25A1";position:absolute;left:4px;top:7px;font-size:17px;color:var(--steel);}
   .chk li:last-child{border-bottom:none;}
+  /* Scoped styles for the detailed parity tables reused from parity_report_html
+     (kept under .parity-detail so their .num/.over/.pn/.pill do not collide). */
+  .parity-detail h3{color:var(--navy);font-size:14px;margin:18px 0 4px;}
+  .parity-detail .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .parity-detail .over{color:#991b1b;font-weight:600;}
+  .parity-detail .under{color:#1d4ed8;font-weight:600;}
+  .parity-detail .ok{color:#166534;font-weight:600;}
+  .parity-detail .muted{color:var(--mut);}
+  .parity-detail .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;background:#eef2f7;color:var(--mut);}
+  .parity-detail .pn{font-family:"SF Mono",Consolas,Monaco,monospace;background:#eef2f7;padding:1px 5px;border-radius:4px;font-size:12px;}
 """
 
 
@@ -496,13 +506,46 @@ def _render_parity(bundle: Dict[str, Any]) -> str:
   <tbody>{money_rows}</tbody>
 </table>"""
 
+    # Detailed comparison tables — REUSE parity_report_html's exact renderers (no duplication),
+    # scoped under .parity-detail so their .num/.over/.pn/.pill styling can't collide with the
+    # job report's own classes. Failure-isolated: if the bundle lacks a piece, that table is skipped.
+    detail = ""
+    try:
+        from parity_report_html import (_route_rows, _recon, _route_table,
+                                        _matched_table, _unmatched_section)
+        _route = _route_rows(bundle)
+        _rec = _recon(bundle)
+        _blocks = ["<div class='parity-detail'>"]
+        if _route and _route.get("rows"):
+            _blocks.append("<h3>Labour by operation</h3>")
+            _blocks.append("<p class='mini'>Engine cost per operation, and how the engine's canonical "
+                           "operations map to the workbook route codes. Rows marked <b>manual only</b> are "
+                           "operations the manual books that the engine does not yet (e.g. Dress Welds) — "
+                           "the route gaps to close.</p>")
+            _blocks.append(_route_table(_route))
+        if _rec.get("matched"):
+            _blocks.append("<h3>Part lines matched on code</h3>")
+            _blocks.append("<p class='mini'>%s manual line(s) matched an engine line on part code "
+                           "(exact or code-stem).</p>" % _esc(_rec.get("matched_count", len(_rec.get("matched") or []))))
+            _blocks.append(_matched_table(_rec))
+        _us = _unmatched_section(_rec)
+        if _us:
+            _blocks.append("<h3>Lines not matched on code</h3>")
+            _blocks.append(_us)
+        _blocks.append("</div>")
+        if len(_blocks) > 2:
+            detail = "".join(_blocks)
+    except Exception:
+        detail = ""
+
     return f"""<h2>1a &nbsp;Parity vs manual estimate</h2>
 <p>This job has a manual estimate on file. The engine's figures are compared against it below —
 the manual estimate is the human benchmark, not necessarily ground truth (it may itself be at a
 different quantity or revision).</p>
 {money_block}
 {verdict_html}
-{match_note}"""
+{match_note}
+{detail}"""
 
 def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
     """Section 2 — verify claims from the data rather than assert fixed ones."""
