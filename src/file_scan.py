@@ -1406,7 +1406,16 @@ def _finalize_scan_summary(
     if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
         try:
             from bom_pipeline import reconciled_bom_rows_for_job
-            if job_folder and summary.get("scan_mode") == "folder_as_job":
+            # Prefer the EXACT PDF paths the pipeline already scanned (job_source_pdfs)
+            # over re-discovering them from the folder. find_pdfs(folder) returned []
+            # here on the UNC share (pdfs_found=0) even though the pipeline read the PDF
+            # fine — re-globbing the folder is a needless second point of failure. These
+            # resolved paths are known-good, so Path A reads the same files the estimate
+            # was built from.
+            _job_pdfs = [j.get("path") for j in (summary.get("job_source_pdfs") or []) if j.get("path")]
+            if _job_pdfs:
+                _dp = reconciled_bom_rows_for_job(pdfs=_job_pdfs)
+            elif job_folder and summary.get("scan_mode") == "folder_as_job":
                 _dp = reconciled_bom_rows_for_job(folder=job_folder)
             elif pdf_path:
                 _dp = reconciled_bom_rows_for_job(pdfs=[pdf_path])

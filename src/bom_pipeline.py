@@ -75,7 +75,8 @@ def reconciled_bom_rows_for_job(
     else:
         pdf_paths = []
     if not pdf_paths:
-        return {"rows": [], "findings": [], "counts": {}, "pdf_paths": []}
+        return {"rows": [], "findings": [], "counts": {}, "pdf_paths": [],
+                "a_count": 0, "b_count": 0}
 
     result = reconcile_job(pdf_paths, verbose=False, **opts)
 
