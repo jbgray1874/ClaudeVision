@@ -111,4 +111,10 @@ def reconciled_bom_rows_for_job(
         "findings": result.get("findings", []),
         "counts": result.get("counts", {}),
         "pdf_paths": result.get("pdf_paths", []),
+        # a_count/b_count = how many BOM tables each reader found across the job.
+        # Surfaced so a caller can tell an EMPTY dual-path result apart: a_count==0
+        # means the deterministic reader found no table (reader bug), b_count==0 means
+        # Grok vision was unavailable/uncached (offline — Path A alone still suffices).
+        "a_count": result.get("a_count", 0),
+        "b_count": result.get("b_count", 0),
     }

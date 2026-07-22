@@ -1989,7 +1989,11 @@ def _finalize_scan_summary(
             _pe_diag = (summary.get("estimate_summary") or {}).get("part_estimates")
             _fast_diag = [str(r.get("description") or r.get("part_number") or "?")
                           for r in (_dp_rows_diag or [])][:14]
+            _a_cnt = _dp_after.get("a_count") if isinstance(_dp_after, dict) else "?"
+            _b_cnt = _dp_after.get("b_count") if isinstance(_dp_after, dict) else "?"
+            _pdf_cnt = len(_dp_after.get("pdf_paths") or []) if isinstance(_dp_after, dict) else "?"
             print(f"   [dual-path recon:diag] _dp rows={len(_dp_rows_diag) if _dp_rows_diag is not None else 'NOT-A-DICT'} "
+                  f"pathA_tables={_a_cnt} pathB_tables={_b_cnt} pdfs_found={_pdf_cnt} "
                   f"part_estimates={len(_pe_diag) if isinstance(_pe_diag, list) else 'NONE'} "
                   f"dp_row_descs={_fast_diag}", flush=True)
             _u, _a = _reconcile_dualpath_into_part_estimates(summary, _dp_after)

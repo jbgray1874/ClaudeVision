@@ -141,6 +141,8 @@ OP_NAME_MAP = {
     "powder_coat":    "P.Coat",
     "welding":        "Weld (CO2)",
     "weld":           "Weld (CO2)",
+    "dress_welds":    "Dress Welds",   # DRES dept — dress/linish the CO2 weld bead
+    "dress":          "Dress Welds",
     "punch":          "Punch",
     "punching":       "Punch",
     "handling":       "Assemble/pack (Metal)",   # engine 'handling' -> WB assemble/pack metal
