@@ -459,52 +459,29 @@ def _render_parity(bundle: Dict[str, Any]) -> str:
     """Conditional section — engine vs manual estimate comparison, from the parity bundle."""
     if not bundle:
         return ""
-    money = bundle.get("money_cell_comparisons") or []
-    rollup = bundle.get("rollup_unit_cost_comparison") or {}
-    counts = bundle.get("status_counts") or {}
-    labour = bundle.get("labour_route_comparisons") or []
-
-    # money rows: find material / labour / unit
-    money_rows = ""
-    for m in money:
-        label = m.get("label") or m.get("cell") or m.get("metric") or ""
-        eng = m.get("json_value") if "json_value" in m else m.get("estimate_value")
-        man = m.get("workbook_value") if "workbook_value" in m else m.get("manual_value")
-        delta = m.get("delta") if "delta" in m else None
-        if eng is None and man is None:
-            continue
-        d = ""
-        try:
-            d = _money(float(eng) - float(man))
-        except (TypeError, ValueError):
-            d = _esc(delta) if delta is not None else "—"
-        money_rows += f"""<tr><td>{_esc(label)}</td><td class="n">{_money(eng)}</td><td class="n">{_money(man)}</td><td class="n">{d}</td></tr>"""
-
-    verdict_html = ""
-    ru = rollup.get("unit_cost_delta_pct") if isinstance(rollup, dict) else None
-    if ru is not None:
-        try:
-            pct = abs(float(ru))
-            if pct <= 5:
-                verdict_html = '<div class="callout good"><b>On track</b> — engine unit cost within 5% of the manual estimate.</div>'
-            elif pct <= 15:
-                verdict_html = '<div class="callout warn"><b>Needs a look</b> — engine unit cost 5–15% from the manual estimate.</div>'
-            else:
-                verdict_html = '<div class="callout warn"><b>Variance</b> — engine unit cost over 15% from the manual estimate.</div>'
-        except (TypeError, ValueError):
-            pass
-
-    match_note = ""
-    if counts:
-        parts_bits = ", ".join(f"{v} {k}" for k, v in counts.items())
-        match_note = f'<p class="mini">Part-line match summary: {_esc(parts_bits)}.</p>'
-
+    # Headline engine-vs-manual comparison — REUSE parity_report_html's extractor + renderer so it
+    # parses the REAL bundle schema. (The previous hand-rolled key guesses — json_value/workbook_value
+    # — did not match the bundle, so this table rendered blank.) Scoped under .parity-detail.
     money_block = ""
-    if money_rows:
-        money_block = f"""<table>
-  <thead><tr><th>Metric</th><th class="n">Engine</th><th class="n">Manual</th><th class="n">Δ</th></tr></thead>
-  <tbody>{money_rows}</tbody>
-</table>"""
+    verdict_html = ""
+    match_note = ""
+    try:
+        from parity_report_html import _money_rows, _section_table, _find_row
+        _mrows = _money_rows(bundle)
+        if _mrows:
+            money_block = "<div class='parity-detail'>" + _section_table(_mrows) + "</div>"
+            _u = _find_row(_mrows, "unit")
+            if _u and _u.get("engine") is not None and _u.get("manual"):
+                _pct = abs(_u["engine"] - _u["manual"]) / _u["manual"] * 100.0
+                if _pct <= 5:
+                    verdict_html = '<div class="callout good"><b>On track</b> — engine unit cost within 5% of the manual estimate.</div>'
+                elif _pct <= 15:
+                    verdict_html = '<div class="callout warn"><b>Needs a look</b> — engine unit cost 5–15% from the manual estimate.</div>'
+                else:
+                    verdict_html = '<div class="callout warn"><b>Variance</b> — engine unit cost over 15% from the manual estimate.</div>'
+    except Exception:
+        money_block = ""
+        verdict_html = ""
 
     # Detailed comparison tables — REUSE parity_report_html's exact renderers (no duplication),
     # scoped under .parity-detail so their .num/.over/.pn/.pill styling can't collide with the
@@ -823,7 +800,7 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool) ->
                  "recommendations above." if faults else
                  "The drawing pack read cleanly with no significant faults detected.")
     parity_note = (" The engine's figures are compared against the manual estimate in section 1a." if has_parity else "")
-    return f"""<h2>{'8' if has_parity else '7'} &nbsp;Verdict</h2>
+    return f"""<h2>7 &nbsp;Verdict</h2>
 <p class="lead">The estimate is <b>structurally sound</b>: material streams are correctly separated and
 there is no double-counting. The workbook Unit Cost is <b>{_money(hl['unit'])}</b>. It is presented with
 a transparent list of provisional items for estimator review.{parity_note} {draw_note}</p>"""
