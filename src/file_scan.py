@@ -1964,6 +1964,15 @@ def _finalize_scan_summary(
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
+    # UNCONDITIONAL recon probe (temporary): proves this branch is reached and shows the env +
+    # _dp state here, independent of the SDI_DUALPATH_BOM gate below. Remove once diagnosed.
+    try:
+        _dp_probe_state = f"defined rows={len((_dp or {}).get('rows') or [])}" if isinstance(_dp, dict) else f"defined non-dict:{type(_dp).__name__}"
+    except NameError:
+        _dp_probe_state = "NOT-DEFINED"
+    print(f"   [recon-probe] post-estimate_document reached | scan_mode={summary.get('scan_mode')!r} | "
+          f"SDI_DUALPATH_BOM={os.getenv('SDI_DUALPATH_BOM')!r} | _dp={_dp_probe_state}", flush=True)
+
     # Dual-path -> part_estimates reconcile: runs HERE, AFTER estimate_document has built
     # part_estimates, so the fastener corrections (self-clinch 1->4, knob 1->2, add
     # BI-PEMSTUD) land on the FINAL list the sheet reads. The earlier inline copy ran
