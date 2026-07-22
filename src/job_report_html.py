@@ -441,18 +441,39 @@ def _extract_parts_count_note(streams: List[Dict[str, Any]]) -> str:
 
 
 def _render_glance(streams: List[Dict[str, Any]], hl: Dict[str, Any]) -> str:
-    rows = ""
+    # Authoritative workbook-computed figures (the Excel's own SUM) — the single source of truth.
+    fig_rows = ""
+    if hl.get("material") is not None:
+        fig_rows += f'<tr><td>Material</td><td class="n">{_money(hl["material"])}</td></tr>'
+    if hl.get("labour") is not None:
+        fig_rows += f'<tr><td>Labour</td><td class="n">{_money(hl["labour"])}</td></tr>'
+    fig_rows += f'<tr><td><b>Unit Cost</b></td><td class="n"><b>{_money(hl["unit"])}</b></td></tr>'
+
+    # Parts grouped by material stream — COUNTS only. The per-stream £ breakdown was on an
+    # engine-internal basis that did not reconcile with the workbook total, so it is not shown
+    # here; the per-stream cost breakdown lives in the populated spreadsheet.
+    stream_rows = ""
     for s in streams:
-        cnt = f" ({s['count']} parts)" if s.get("count") else ""
-        rows += f"""<tr><td>{_esc(s['name'])}{cnt}</td><td class="n">{_money(s['value'])}</td></tr>"""
-    rows += f"""<tr><td><b>Unit Cost</b></td><td class="n"><b>{_money(hl['unit'])}</b></td></tr>"""
-    return f"""<h2>1 &nbsp;Estimate at a glance</h2>
-<p>The engine model identified and costed each material stream separately. The table below shows the
-cost breakdown by stream, as read from the drawing pack.</p>
+        if not s.get("count"):
+            continue
+        stream_rows += f'<tr><td>{_esc(s["name"])}</td><td class="n">{s["count"]}</td></tr>'
+    stream_table = ""
+    if stream_rows:
+        stream_table = f"""<h3>Parts by material stream</h3>
 <table>
-  <thead><tr><th>Cost stream</th><th class="n">Value</th></tr></thead>
-  <tbody>{rows}</tbody>
+  <thead><tr><th>Material stream</th><th class="n">Parts</th></tr></thead>
+  <tbody>{stream_rows}</tbody>
 </table>"""
+
+    return f"""<h2>1 &nbsp;Estimate at a glance</h2>
+<p>The figures below are the <b>authoritative workbook-computed</b> costs — the Excel's own SUM, the one
+true number. Parts are grouped by material stream as counts; the per-stream cost breakdown is in the
+populated spreadsheet.</p>
+<table>
+  <thead><tr><th>Figure</th><th class="n">Value</th></tr></thead>
+  <tbody>{fig_rows}</tbody>
+</table>
+{stream_table}"""
 
 
 def _render_parity(bundle: Dict[str, Any]) -> str:
