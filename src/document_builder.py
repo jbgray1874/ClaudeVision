@@ -925,6 +925,18 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             "assembly" in page_roles
             or part.get("assembly_candidate", False)
         )
+        # WELD-DECISION DIAGNOSTIC (env-gated): a part is welded only if it is an
+        # assembly part AND its extracted text carries a weld phrase. When 103-style
+        # brackets read poorly (low OCR confidence, no weld callout captured), they
+        # miss on one/both and get no weld op. Print the two inputs so a missing weld
+        # is explainable (bad classification vs missed callout) without guessing.
+        if os.getenv("SDI_WELD_DEBUG", "").lower() in {"1", "true", "yes"}:
+            _wp_hit = next((p for p in _ASSEMBLY_WELD_PHRASES
+                            if p in (combined_text or "").upper()), None)
+            _pn_dbg = str(part.get("part_number") or part.get("description") or "?")
+            print(f"   [weld-decision] {_pn_dbg}: assembly_part={is_assembly_part} "
+                  f"page_roles={list(page_roles)} weld_phrase={_wp_hit!r} "
+                  f"-> weld={'YES' if (is_assembly_part and _wp_hit) else 'no'}", flush=True)
         if is_assembly_part and combined_text.strip():
             ops_set = set(part.get("textual_operations", []))
             changed = False
