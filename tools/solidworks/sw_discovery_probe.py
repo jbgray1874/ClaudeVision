@@ -342,15 +342,42 @@ def probe_model(sw, path: str, do_mass: bool) -> Dict[str, Any]:
         "errors": [],
     }
 
-    errors = 0
-    warnings = 0
-    # OpenDoc6(FileName, Type, Options, Configuration, Errors, Warnings)
-    model = _safe(lambda: sw.OpenDoc6(path, doctype, SW_OPEN_FLAGS, "", errors, warnings))
+    # Open via GetOpenDocSpec + OpenDoc7. OpenDoc6's last two args are BY-REF output
+    # params (errors/warnings); late-binding Dispatch cannot marshal plain ints into
+    # them, so the call silently returns nothing (every model came back None). The
+    # spec object carries ReadOnly/Silent and OpenDoc7 returns the model directly —
+    # no out-params, no marshalling problem. GetOpenDocSpec auto-detects the doc type
+    # from the file extension.
+    model = None
+    try:
+        spec = sw.GetOpenDocSpec(path)
+        for _attr, _val in (("ReadOnly", True), ("Silent", True), ("ViewOnly", False)):
+            try:
+                setattr(spec, _attr, _val)
+            except Exception:
+                pass
+        model = sw.OpenDoc7(spec)
+        _err = _safe(lambda: int(spec.Error), 0)
+        _warn = _safe(lambda: int(spec.Warning), 0)
+        if _err:
+            record["errors"].append(f"OpenDoc7 spec.Error={_err}")
+    except Exception as _open_exc:
+        record["errors"].append(f"GetOpenDocSpec/OpenDoc7 failed: {_open_exc!r}")
     if model is None:
-        # Fall back to the ActiveDoc if OpenDoc6's out-params confused the binding.
+        # Fallback: OpenDoc6 with VARIANT by-ref out-params (older API path).
+        try:
+            import pythoncom
+            from win32com.client import VARIANT
+            _e = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            _w = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+            model = sw.OpenDoc6(path, doctype, SW_OPEN_FLAGS, "", _e, _w)
+        except Exception as _od6_exc:
+            record["errors"].append(f"OpenDoc6 fallback failed: {_od6_exc!r}")
+    if model is None:
         model = _safe(lambda: sw.ActiveDoc)
     if model is None:
-        record["errors"].append("OpenDoc6 returned no model (open failed or licence inactive)")
+        record["errors"].append("open failed — no model from OpenDoc7/OpenDoc6/ActiveDoc "
+                                "(check licence is active and the file opens in SW by hand)")
         return record
 
     record["opened"] = True
@@ -464,7 +491,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
+    _s = report["summary"]
     _log("")
+    _log(f"── Opened {_s['models_opened']}/{_s['models_found']} model(s) "
+         f"({_s['models_failed']} failed) ──")
+    # If nothing opened, the coverage matrix is meaningless — surface the first errors
+    # so the cause (licence, open failure, path) is visible instead of a silent 0/0.
+    if _s["models_opened"] == 0:
+        _log("  NO MODELS OPENED — coverage below is empty for that reason. First errors:")
+        for r in records:
+            if r.get("errors"):
+                _log(f"    {os.path.basename(r.get('path','?'))}: {r['errors'][0]}")
+        _log("")
     _log("── Batch coverage ──")
     for k, v in report["summary"]["coverage"].items():
         _log(f"  {k:<24} {v}")
