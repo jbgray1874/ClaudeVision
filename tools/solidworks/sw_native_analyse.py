@@ -55,6 +55,24 @@ DOCTYPE = {
 # OpenDoc6 options: silent (1) + read-only (2).
 OPEN_OPTS = 1 | 2
 
+# SldWorks type library GUID (stable across versions); major version is per SW release
+# (SW2026 = 34, from the makepy output 83A33D31-...x0x34x0). EnsureModule loads the
+# wrappers so CastTo can give early-bound interface access.
+SW_TYPELIB_GUID = "{83A33D31-27C5-11CE-BFD4-00400513BB57}"
+SW_TYPELIB_MAJOR = 34
+
+
+def _cast(obj, iface: str):
+    """CastTo an object to a named SW interface (IModelDoc2, IFeature, IPartDoc, ...) so
+    its methods are early-bound and callable with (). Requires the typelib module loaded
+    (EnsureModule). Returns the cast object, or the original if the cast is unavailable."""
+    if obj is None:
+        return None
+    try:
+        return win32com.client.CastTo(obj, iface)
+    except Exception:
+        return obj
+
 
 @dataclass
 class BomLine:
@@ -93,15 +111,21 @@ class SolidWorksSession:
         # methods. Late-binding Dispatch could not find FirstFeature ('Member not found')
         # — the classic reason SolidWorks automation needs makepy/early binding. Fall back
         # to late Dispatch if typelib generation is unavailable.
-        try:
-            self.sw = gencache.EnsureDispatch("SldWorks.Application")
-            self.early_bound = True
-        except Exception as e:
-            print(f"[warn] EnsureDispatch (early binding) failed ({e!r}); "
-                  f"falling back to late Dispatch — feature walk may be limited.", flush=True)
-            self.sw = win32com.client.Dispatch("SldWorks.Application")
-            self.early_bound = False
-        print(f"[binding] {'EARLY (typelib)' if self.early_bound else 'LATE (dispatch)'}", flush=True)
+        # Load the SolidWorks typelib module by GUID (generated once by makepy). This makes
+        # CastTo(obj, "IModelDoc2"/"IFeature"/...) available — the standard SW pattern. We
+        # do NOT EnsureDispatch the ProgID (SW's Application object refuses to drive makepy).
+        self.early_bound = False
+        for _maj in (SW_TYPELIB_MAJOR, 34, 33, 32, 31, 30, 29, 28):
+            try:
+                gencache.EnsureModule(SW_TYPELIB_GUID, 0, _maj, 0)
+                self.early_bound = True
+                break
+            except Exception:
+                continue
+        self.sw = win32com.client.Dispatch("SldWorks.Application")
+        print(f"[binding] typelib_loaded={self.early_bound} "
+              f"(CastTo {'available' if self.early_bound else 'UNAVAILABLE — run makepy on sldworks.tlb'})",
+              flush=True)
         self.sw.Visible = visible
         self._open_titles: List[str] = []
 
@@ -253,16 +277,15 @@ def _call_or_prop(obj, name):
 def sheet_metal_signals(doc) -> RouteSignals:
     """Feature walk for sheet-metal / hole / weldment hints on a part doc."""
     sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
-    # Get the first feature, trying the call form then the property form, capturing why.
+    # Cast to IModelDoc2 so FirstFeature()/GetNextFeature() are real methods (late binding
+    # returns 'Member not found'). Requires the typelib loaded via EnsureModule.
+    mdoc = _cast(doc, "IModelDoc2")
     feat = None
-    for _how in ("call", "attr"):
-        try:
-            fa = getattr(doc, "FirstFeature")
-            feat = fa() if _how == "call" and callable(fa) else fa
-            break
-        except Exception as e:
-            sig.notes.append(f"FirstFeature[{_how}]: {e!r}")
-            feat = None
+    try:
+        feat = mdoc.FirstFeature()
+    except Exception as e:
+        sig.notes.append(f"FirstFeature: {e!r}")
+        feat = _get0(doc, "FirstFeature")  # last-resort late-bound property form
     sig.notes.append("first_feature=" + ("obj" if feat is not None else "None"))
     try:
         bend_count = 0
@@ -270,19 +293,19 @@ def sheet_metal_signals(doc) -> RouteSignals:
         visited = 0
         while feat is not None and visited < 100000:
             visited += 1
+            feat = _cast(feat, "IFeature")
             raw_t = ""
-            for _m in ("GetTypeName2", "GetTypeName"):
+            try:
+                raw_t = _safe_str(feat.GetTypeName2())
+            except Exception:
                 try:
-                    raw_t = _safe_str(_call_or_prop(feat, _m))
-                    if raw_t:
-                        break
+                    raw_t = _safe_str(feat.GetTypeName())
                 except Exception:
-                    continue
-            t = (raw_t or _safe_str(_get0(feat, "Name"))).lower()
-            name = _safe_str(_get0(feat, "Name")).lower()
-            if raw_t and len(sig.feature_types) < 80:
+                    raw_t = _safe_str(_get0(feat, "Name"))
+            t = raw_t.lower()
+            if raw_t and len(sig.feature_types) < 120:
                 sig.feature_types.append(raw_t)  # diagnostic: what types the walk sees
-            if "sheetmetal" in t or "sheet metal" in t or "sheetmetal" in name:
+            if "sheetmetal" in t or "sheet metal" in t:
                 sig.is_sheet_metal = True
             if "bend" in t:  # EdgeBend / SketchBend / OneBend / SketchedBend
                 bend_count += 1
@@ -292,9 +315,9 @@ def sheet_metal_signals(doc) -> RouteSignals:
             if "weldment" in t or "structuralmember" in t or "weldmentcutlist" in t:
                 sig.has_weldment = True
             try:
-                feat = _call_or_prop(feat, "GetNextFeature")
+                feat = feat.GetNextFeature()
             except Exception:
-                feat = None
+                feat = _get0(feat, "GetNextFeature")
         sig.bend_count = bend_count
         sig.hole_count_est = hole_like
         sig.notes.append(f"features_visited={visited}")
