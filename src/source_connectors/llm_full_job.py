@@ -78,10 +78,18 @@ def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[st
         d = by_part.get(_clean_pn(p.get("part_number")))
         if not d:
             continue
+        # HARD PRINTED FACTS: deterministic is AUTHORITATIVE where it has a value (it read the
+        # exact printed value and cannot hallucinate). The LLM only fills where deterministic is
+        # null. If both have a value and they DISAGREE, deterministic wins and it is flagged.
         for k in ("material", "thickness_mm", "tube_section", "cut_length_mm", "weight_g", "finish"):
-            if p.get(k) in _EMPTY and d.get(k) not in (None, ""):
-                p[k] = d[k]
-                p.setdefault("_deterministic_filled", []).append(k)
+            dv, lv = d.get(k), p.get(k)
+            if dv in (None, ""):
+                continue  # deterministic has nothing here -> keep the LLM value (gap fill)
+            if lv not in _EMPTY and str(lv).strip().upper() != str(dv).strip().upper():
+                p.setdefault("_merge_flags", []).append(
+                    f"{k}: LLM='{lv}' vs deterministic='{dv}' — used deterministic (printed)")
+            p[k] = dv
+            p.setdefault("_deterministic", []).append(k)
     # Spec: COMBINE the weld line (each source has half), fill the rest from the deterministic block.
     sb = facts.get("spec_block") or {}
     spec = job.setdefault("spec", {})
