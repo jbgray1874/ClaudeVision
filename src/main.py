@@ -176,6 +176,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After populate, generate client quote (always) + parity report (if a manual estimate is found).",
     )
+    parser.add_argument(
+        "--order-qty", type=int, default=None,
+        help="Order/demand quantity for this job (drives batch economics + the WB order qty). "
+             "Each tender product prices at its own demand qty. If omitted, the engine's "
+             "inferred/assumed quantity is used.",
+    )
     return parser.parse_args()
 
 
@@ -458,6 +464,38 @@ def main() -> None:
             summary = get_engine().post_scan(summary)
         except Exception:
             pass
+
+        # Explicit order quantity (--order-qty) wins: each tender product prices at its demand
+        # qty. Set before the job-level cost additions below, which read summary["quantity"].
+        if getattr(args, "order_qty", None):
+            try:
+                summary["quantity"] = int(args.order_qty)
+                print(f"  Order quantity set to {int(args.order_qty)} (from --order-qty)")
+            except Exception:
+                pass
+
+        # Deterministic drawing-facts enrichment (Layer 2) — GATED (SDI_APPLY_DRAWING_FACTS) and
+        # non-destructive: fills material/finish only where the engine has none, and surfaces the
+        # printed weights + tube stock as review flags. Safe on DXF/native jobs (those layers
+        # already fill these, so nothing is overwritten). For no-DXF customer tender drawings it
+        # is the trustworthy backbone. Off by default so proven jobs (12120/1282) are untouched.
+        import os as _os_df
+        if _os_df.getenv("SDI_APPLY_DRAWING_FACTS", "").lower() in {"1", "true", "yes"}:
+            try:
+                from drawing_facts import extract_drawing_facts
+                from source_connectors.drawing_facts_conn import apply_drawing_facts_to_part_estimates
+                _dp = job_files[0] if job_files else None
+                _dps = str(_dp) if _dp else ""
+                if _dps.lower().endswith(".pdf"):
+                    _facts = extract_drawing_facts(_dps)
+                    _sb = _facts.get("spec_block") or {}
+                    _cnt = apply_drawing_facts_to_part_estimates(summary, _facts)
+                    summary.setdefault("drawing_facts", {})["spec_block"] = _sb
+                    print(f"  [drawing-facts] material+{_cnt['material_set']} finish+{_cnt['finish_set']} "
+                          f"weight+{_cnt['weight_flagged']} tube+{_cnt['tube_flagged']} | "
+                          f"powder={_sb.get('powder_micron')}um weld={_sb.get('weld_spec')}")
+            except Exception as _exc:
+                print(f"  [drawing-facts] skipped ({_exc})")
 
         # ── Job-level additions: assembly labour (history) + bought-in materials (Tim BOM) ──
         # Computed AFTER the scan, then folded into BOTH the bay estimate AND the canonical
