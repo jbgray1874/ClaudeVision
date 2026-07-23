@@ -487,7 +487,9 @@ def assembly_bom(doc) -> List[BomLine]:
             except Exception:
                 model = _get0(c, "GetModelDoc2")
             model = _wrap(model, "IModelDoc2") if model is not None else None
-            # Document identity = clean part number (strip the SW instance suffix "-N").
+            # Document identity. The component INSTANCE name carries the '-N' suffix
+            # (strip it); the model's document TITLE is already the clean part number
+            # (do NOT strip — '12120-01-103' must not lose its '-103').
             title = _clean_pn(name2.split("/")[-1])
             path = ""
             props: Dict[str, str] = {}
@@ -495,7 +497,7 @@ def assembly_bom(doc) -> List[BomLine]:
             if model is not None:
                 _dt = _safe_str(_get0(model, "GetTitle"))
                 if _dt:
-                    title = _clean_pn(os.path.splitext(_dt)[0])
+                    title = os.path.splitext(_dt)[0].strip()
                 path = _safe_str(_get0(model, "GetPathName"))
                 props = get_custom_properties(model)
                 material = _prop(props, "Material", "Material Description", "Material Spec", "Grade")
