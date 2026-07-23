@@ -469,13 +469,30 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
     return result
 
 
-def find_sw_files(root: str) -> List[str]:
+# Folder-name tokens that mark superseded/scratch content to skip (case-insensitive).
+# Archived models are often the OLD/broken revision (or half-built test assemblies) and
+# would pollute or stall a batch — the "ignore archived drawings" rule, at ingest.
+ARCHIVE_FOLDER_TOKENS = ("archive", "old versions", "superseded", "obsolete",
+                         "wip", "do not use", "backup", "previous")
+
+
+def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
     exts = {".sldprt", ".sldasm", ".slddrw"}
     found = []
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        if skip_archive:
+            # Prune archive/superseded subfolders so os.walk does not descend into them.
+            dirs[:] = [d for d in dirs
+                       if not any(tok in d.lower() for tok in ARCHIVE_FOLDER_TOKENS)]
+            if any(tok in dirpath.lower() for tok in ARCHIVE_FOLDER_TOKENS):
+                continue
         for f in files:
             if os.path.splitext(f)[1].lower() in exts:
                 if f.startswith("~$"):
+                    continue
+                # Also skip files whose NAME flags an old/test copy.
+                low = f.lower()
+                if skip_archive and (" old version" in low or "(old)" in low or " test." in low):
                     continue
                 found.append(os.path.join(dirpath, f))
     return sorted(found)
