@@ -365,7 +365,10 @@ def _make_material_total_error_tolerant(ws, flags=None):
                       "left as-is (a missing dim will still #VALUE! the total).", flags)
             return False
         # SUM(  ->  AGGREGATE(9,6,   for every SUM( in the formula. Ranges/bare refs unchanged.
-        new_f = _re.sub(r"\bSUM\(", "AGGREGATE(9,6,", f)
+        # AGGREGATE is an Excel 2010+ "future function": openpyxl MUST store it with the
+        # _xlfn. prefix or Excel shows #NAME? (it reads bare AGGREGATE as an unknown name).
+        # Excel displays/evaluates _xlfn.AGGREGATE(...) as AGGREGATE(...).
+        new_f = _re.sub(r"\bSUM\(", "_xlfn.AGGREGATE(9,6,", f)
         if new_f == f:
             return False
         cell.value = new_f
