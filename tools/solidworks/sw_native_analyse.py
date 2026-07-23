@@ -81,6 +81,7 @@ class RouteSignals:
     bbox_mm: Optional[Tuple[float, float, float]] = None
     ops_hint: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    feature_types: List[str] = field(default_factory=list)  # diagnostic: raw type names seen
 
 
 class SolidWorksSession:
@@ -234,16 +235,20 @@ def sheet_metal_signals(doc) -> RouteSignals:
         while feat is not None and guard < 100000:
             guard += 1
             try:
-                t = (_safe_str(_get0(feat, "GetTypeName2")) or _safe_str(_get0(feat, "Name"))).lower()
+                raw_t = _safe_str(_get0(feat, "GetTypeName2")) or _safe_str(_get0(feat, "GetTypeName"))
+                t = (raw_t or _safe_str(_get0(feat, "Name"))).lower()
                 name = _safe_str(_get0(feat, "Name")).lower()
-                if "sheetmetal" in t or "sheetmetal" in name:
+                if raw_t and len(sig.feature_types) < 60:
+                    sig.feature_types.append(raw_t)  # diagnostic: what types the walk sees
+                if "sheetmetal" in t or "sheet metal" in t or "sheetmetal" in name:
                     sig.is_sheet_metal = True
-                if "bend" in t or t in ("bend", "sketchedbend"):
+                # bend feature type names: EdgeBend, SketchBend, OneBend, SketchedBend
+                if "bend" in t:
                     bend_count += 1
                     sig.is_sheet_metal = True
-                if "hole" in t or "cut" in t or "holewizard" in t:
+                if "hole" in t or "holewizard" in t or "holeseries" in t:
                     hole_like += 1
-                if "weldment" in t or "structuralmember" in t:
+                if "weldment" in t or "structuralmember" in t or "weldmentcutlist" in t:
                     sig.has_weldment = True
             except Exception:
                 pass
@@ -254,10 +259,17 @@ def sheet_metal_signals(doc) -> RouteSignals:
         sig.notes.append(f"feature_walk_error: {e}")
 
     props = get_custom_properties(doc)
+    # Material: prefer a custom property, else the SW-APPLIED material (MaterialIdName is a
+    # property like "db|name" — take the name). Fabricated parts usually carry the applied
+    # material, NOT a custom prop, which is why material read empty before.
+    _applied = _safe_str(_get0(doc, "MaterialIdName"))
+    if _applied and "|" in _applied:
+        _applied = _applied.split("|")[-1].strip()
     sig.material = (
         props.get("Material")
         or props.get("MATERIAL")
         or props.get("Material Description")
+        or _applied
         or ""
     )
     for k, v in props.items():
@@ -512,8 +524,13 @@ def main():
                 print(f"Title: {r.get('title')}  type={r.get('doctype')}")
                 print(f"Props: {len(r.get('custom_properties') or {})}")
                 print(f"BOM lines: {len(r.get('bom') or [])}")
-                if r.get("route_signals"):
-                    print(f"Routes: {r['route_signals'].get('ops_hint')}")
+                rs = r.get("route_signals")
+                if rs:
+                    print(f"  material={rs.get('material')!r} sheet_metal={rs.get('is_sheet_metal')} "
+                          f"bends={rs.get('bend_count')} holes={rs.get('hole_count_est')} "
+                          f"weldment={rs.get('has_weldment')} mass_kg={rs.get('mass_kg')} "
+                          f"bbox={rs.get('bbox_mm')}")
+                    print(f"  ops_hint={rs.get('ops_hint')}  feat_types={rs.get('feature_types')[:12]}")
                 if r.get("errors"):
                     print(f"Errors: {r['errors']}")
             except Exception as e:
