@@ -1730,7 +1730,22 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                  or MATERIAL_DENSITY_KG_PER_M3.get((material or "").upper(), 7850.0) or 7850.0)
         _area_mass = (blank_length * blank_width / 1_000_000.0) * (thickness / 1000.0) * _dens
         if _area_mass > 0 and not (_min_ratio <= (stated_weight_kg / _area_mass) <= _max_ratio):
-            stated_weight_kg = None  # implausible vs blank -> use area formula
+            # Stated weight and blank DISAGREE. Which source is reliable decides who wins:
+            #  - DXF flat pattern present  -> the blank is measured truth; the odd stated weight
+            #    is probably a bad unit conversion -> drop it, use the area formula (original).
+            #  - NO DXF (blank is PDF-vision geometry, often garbled e.g. 4.5x4mm) -> the PRINTED
+            #    weight is the reliable one -> KEEP it (costs by mass below) and flag the blank.
+            # Lever: MATERIAL_PRICE_POLICY.trust_stated_weight_when_no_dxf (default True).
+            _dxf_backed = str(part.get("geometry_source") or "").lower() in (
+                "dxf_flat_pattern", "dxf", "dxf_flat")
+            _trust_wt = bool(_pol.get("trust_stated_weight_when_no_dxf", True))
+            if _dxf_backed or not _trust_wt:
+                stated_weight_kg = None  # measured blank wins -> use area formula
+            else:
+                part.setdefault("review_flags", []).append(
+                    f"blank {blank_length:g}x{blank_width:g}mm disagrees with stated weight "
+                    f"{round(stated_weight_kg * 1000)}g by {stated_weight_kg / _area_mass:.0f}x — "
+                    f"no DXF, costing by the printed weight (blank geometry unreliable)")
     if stated_weight_kg is not None and stated_weight_kg > 0:
         applied_price_per_kg = external_price.get("applied_price_per_kg")
         fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
