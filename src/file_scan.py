@@ -1889,9 +1889,17 @@ def _finalize_scan_summary(
     if _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").lower() in {"1", "true", "yes"} and pdf_path:
         try:
             from llm_full_extract import extract_full_job
-            from source_connectors.llm_full_job import apply_full_job_to_pre_estimate
+            from source_connectors.llm_full_job import apply_full_job_to_pre_estimate, overlay_drawing_facts
             _job = extract_full_job(str(pdf_path))
             if _job.get("found"):
+                # Overlay the DETERMINISTIC drawing_facts onto the LLM job: printed title-block
+                # values (per-part finish/thickness) fill the LLM's nulls, and the weld spec is
+                # combined (LLM 'set-down 20%' + deterministic 'ALL WELDS TO BE TIG'). Best of both.
+                try:
+                    from drawing_facts import extract_drawing_facts
+                    overlay_drawing_facts(_job, extract_drawing_facts(str(pdf_path)))
+                except Exception as _e_ov:
+                    print(f"   [llm-full-extract] overlay skipped ({_e_ov})", flush=True)
                 _c = apply_full_job_to_pre_estimate(_pre_estimate_parts, _job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
                 summary["llm_full_extract"] = {"spec": _job.get("spec"), "counts": _c}

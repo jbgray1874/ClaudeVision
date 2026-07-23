@@ -61,6 +61,42 @@ def _norm_material(m: str) -> str:
     return str(m or "").strip()
 
 
+def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[str, Any]:
+    """Overlay the DETERMINISTIC drawing_facts onto the LLM job so each source covers the other's
+    gaps — the responsibility for a PDF-only job. The LLM owns the hierarchy + structure; the
+    deterministic reader owns the PRINTED title-block facts (per-part finish, thickness) and the
+    letter-scrambled spec block the LLM misreads. Concretely: fill the LLM's null part fields with
+    drawing_facts' printed values, and COMBINE the weld spec (the LLM caught 'set-down 20%',
+    drawing_facts caught 'ALL WELDS TO BE TIG'). Mutates and returns job; records provenance."""
+    if not (isinstance(job, dict) and job.get("found") and isinstance(facts, dict)):
+        return job
+    by_part = {_clean_pn(pn): d for pn, d in (facts.get("by_part") or {}).items() if isinstance(d, dict)}
+    _EMPTY = (None, "", [])
+    for p in (job.get("parts") or []):
+        if not isinstance(p, dict):
+            continue
+        d = by_part.get(_clean_pn(p.get("part_number")))
+        if not d:
+            continue
+        for k in ("material", "thickness_mm", "tube_section", "cut_length_mm", "weight_g", "finish"):
+            if p.get(k) in _EMPTY and d.get(k) not in (None, ""):
+                p[k] = d[k]
+                p.setdefault("_deterministic_filled", []).append(k)
+    # Spec: COMBINE the weld line (each source has half), fill the rest from the deterministic block.
+    sb = facts.get("spec_block") or {}
+    spec = job.setdefault("spec", {})
+    _det_weld, _llm_weld = sb.get("weld_spec"), spec.get("weld")
+    if _det_weld and _llm_weld and _det_weld.strip().lower() not in _llm_weld.strip().lower():
+        spec["weld"] = f"{_det_weld}; {_llm_weld}"
+    elif _det_weld and not _llm_weld:
+        spec["weld"] = _det_weld
+    for k in ("powder_micron", "tolerances", "timber_note"):
+        if not spec.get(k) and sb.get(k):
+            spec[k] = sb[k]
+    job["_overlay"] = "drawing_facts merged (deterministic fills LLM nulls; weld combined)"
+    return job
+
+
 def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> Dict[str, int]:
     """Fold the LLM whole-document job into the pre-estimate part records. Non-destructive:
     fills a field only where the engine has nothing solid, EXCEPT it deliberately provides
