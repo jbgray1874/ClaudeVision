@@ -381,6 +381,38 @@ def _make_material_total_error_tolerant(ws, flags=None):
         return False  # never let this optional hardening break a run
 
 
+def _clean_error_cells(ws, flags=None):
+    """Wrap the formula-driven output cells in the Sheet-Steel / Other-Sheet rows (Qty Per Sheet,
+    Cost Per Part, and the row-aligned Laser/CNC/Powder rate-calculator cells) in IFERROR(...,"")
+    so a part with no blank dims shows BLANK cells instead of #DIV/0!/#VALUE! scattered across the
+    sheet. NON-REGRESSIVE: IFERROR(valid_formula,"") == valid_formula when there is no error, so a
+    fully dimensioned row is untouched — and the row SELF-HEALS: the instant the estimator fills
+    the dims, the formula evaluates and the value appears (and the error-tolerant material total
+    picks it up). The 'DIMS REQUIRED' description marker still names which rows to complete.
+    """
+    wrapped = 0
+    try:
+        blocks = [CELL_MAP.get("steel"), CELL_MAP.get("other_sheet")]
+        for blk in blocks:
+            if not blk:
+                continue
+            fr, lr = blk["first_row"], blk["last_row"]
+            for r in range(fr, lr + 1):
+                # K(11)..AH(34): Qty Per Sheet, Cost Per Part, and the row's rate-calculator cells
+                for c in range(11, 35):
+                    cell = ws.cell(row=r, column=c)
+                    v = cell.value
+                    if isinstance(v, str) and v.startswith("=") and "IFERROR(" not in v.upper():
+                        cell.value = f'=IFERROR({v[1:]},"")'
+                        wrapped += 1
+    except Exception:
+        return 0  # never let cosmetic cleanup break a run
+    if flags is not None and wrapped:
+        _flag(f"cleaned {wrapped} error-prone formula cell(s) with IFERROR — not-yet-dimensioned "
+              f"rows show blank, not #DIV/0!/#VALUE! (self-heal when dims are filled).", flags)
+    return wrapped
+
+
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
@@ -1564,6 +1596,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # gaps, and self-completes as the estimator fills the dims. Non-regressive on clean jobs.
     if _MATERIAL_TOTAL_ERROR_TOLERANT:
         _make_material_total_error_tolerant(ws, flags)
+        # Also clean the scattered per-row #DIV/0!/#VALUE! so the sheet is presentable to
+        # estimating: wrap the error-prone row formulas in IFERROR (blank on error, real value
+        # once dims are filled). Same 'don't blank the credible work' intent, at cell level.
+        _clean_error_cells(ws, flags)
 
     # ── Append AI supplementary sheets (renamed to avoid clashing with WB) ──
     _append_ai_sheets(wb, summary, flags)
