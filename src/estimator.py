@@ -1712,7 +1712,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "cost_per_part_gbp": round(unit_cost, 2) if unit_cost is not None else None,
                 "extended_material_cost_gbp": round(extended, 2) if extended is not None else None,
                 "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)},
-                "stock_form": part.get("manufacturing_interpretation", {}).get("stock_form"),
+                # This branch has a full a×b×t hollow-section profile + a real cut length, so it IS a
+                # tube — declare it as one (like the catalogue branch above) so the workbook routes it
+                # to the tube/BOM block and prices it by length, NOT into the Sheet Steel block as a
+                # flat blank (which mis-costs the 30×30 profile as a 30×30 plate).
+                "stock_form": "tube",
                 "requires_flat_blank": False,
                 "part_confidence_overall": _part_confidence_overall(part),
                 "part_geometry_reliability": _part_geometry_reliability(part),
