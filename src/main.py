@@ -182,6 +182,11 @@ def parse_args() -> argparse.Namespace:
              "Each tender product prices at its own demand qty. If omitted, the engine's "
              "inferred/assumed quantity is used.",
     )
+    parser.add_argument(
+        "--customer", type=str, default=None,
+        help="Customer name for the quote/report header (e.g. \"M&S\"). Authoritative — "
+             "overrides the folder/path heuristic. Also the logo key (assets/customer_logos/<name>).",
+    )
     return parser.parse_args()
 
 
@@ -469,8 +474,16 @@ def main() -> None:
         # qty. Set before the job-level cost additions below, which read summary["quantity"].
         if getattr(args, "order_qty", None):
             try:
-                summary["quantity"] = int(args.order_qty)
-                print(f"  Order quantity set to {int(args.order_qty)} (from --order-qty)")
+                _oq = int(args.order_qty)
+                # Set EVERY field the downstream reads: the assembly-labour calc reads
+                # summary["quantity"]; wb_populate writes the WB order-qty cell (D6) from
+                # assumed_job_quantity (default 180). Set all so the demand qty is authoritative.
+                summary["quantity"] = _oq
+                summary["assumed_job_quantity"] = _oq
+                _esd = summary.get("estimate_summary")
+                if isinstance(_esd, dict):
+                    _esd["assumed_job_quantity"] = _oq
+                print(f"  Order quantity set to {_oq} (from --order-qty)")
             except Exception:
                 pass
 
@@ -801,7 +814,7 @@ def main() -> None:
                 try:
                     from client_quote_html import generate_quote_files as _gen_quote
                     _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label),
-                                        manual_workbook=_manual)
+                                        manual_workbook=_manual, customer=getattr(args, "customer", None))
                     print(f"   [deliverables] client quote -> {_qpath}", flush=True)
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)

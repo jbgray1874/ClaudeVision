@@ -116,13 +116,18 @@ def _title_material(m: str) -> str:
 
 
 # ── customer + logo ─────────────────────────────────────────────────────────
-def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None) -> str:
+def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None,
+                     customer_override: Optional[str] = None) -> str:
     """Best-effort customer name for display + logo key. Uses folder/GA-path tokens.
     General fallback chain; when a real customer field exists in future JSONs it can be added here.
 
-    When a manual estimate workbook is pinned (--parity-workbook), its
-    ...\\Manual Estimates\\<year>\\<CUSTOMER>\\... path is the AUTHORITATIVE customer
-    source and takes precedence over every heuristic below."""
+    An explicit customer (from --customer) is AUTHORITATIVE and short-circuits everything — no
+    guessing. Next, a pinned manual estimate workbook (--parity-workbook) whose
+    ...\\Manual Estimates\\<year>\\<CUSTOMER>\\... path names the customer takes precedence over
+    the heuristics below."""
+    # (-1) Explicit --customer wins outright.
+    if customer_override and str(customer_override).strip():
+        return str(customer_override).strip()
     # (0) Explicit pinned workbook path wins — no guessing, no share glob.
     if manual_workbook:
         _cust_pinned = _customer_from_workbook_path(str(manual_workbook))
@@ -333,7 +338,7 @@ def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
 
 # ── main render ─────────────────────────────────────────────────────────────
 def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
-                     manual_workbook: Optional[str] = None) -> str:
+                     manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> str:
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
     stem = str(stem)
 
@@ -361,7 +366,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     finish = _finish_line(summary, parts)
     ops = _collect_operations(parts)
 
-    customer = _derive_customer(summary, stem, manual_workbook=manual_workbook)
+    customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
     logo_markup = _load_logo_markup(customer)
     cust_header = logo_markup if logo_markup else f'<div style="font-size:18px;font-weight:600;color:#282928;">{_esc(customer)}</div>'
     sdi_logo = _sdi_logo_markup()
@@ -515,11 +520,11 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
 
 
 def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem: Optional[str] = None,
-                         manual_workbook: Optional[str] = None) -> Optional[str]:
+                         manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> Optional[str]:
     jp = Path(json_path)
     summary = json.loads(jp.read_text(encoding="utf-8"))
     stem = job_stem or summary.get("job_output_stem") or jp.stem
-    html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook)
+    html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook, customer=customer)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
