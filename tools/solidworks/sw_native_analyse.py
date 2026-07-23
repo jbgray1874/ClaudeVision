@@ -34,6 +34,7 @@ folder is often 2D only (DXF/PDF) — the native models live elsewhere under the
 from __future__ import annotations
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -213,6 +214,12 @@ def _safe_str(v: Any) -> str:
     if v is None:
         return ""
     return str(v).strip()
+
+
+def _clean_pn(name: str) -> str:
+    """Strip the SolidWorks component instance suffix ('12120-01-02M-1' -> '12120-01-02M')
+    so quantities aggregate by part identity, not by instance."""
+    return re.sub(r"-\d+$", "", _safe_str(name)).strip()
 
 
 def _prop(props: Dict[str, str], *aliases: str) -> str:
@@ -440,17 +447,22 @@ def sheet_metal_signals(doc) -> RouteSignals:
 
 
 def assembly_bom(doc) -> List[BomLine]:
-    """Top-level component counts (qty = instance count of same doc + config). For a full
-    multi-level BOM, recurse GetChildren — a next-step improvement."""
+    """FULL multi-level BOM, qty aggregated by the part's document identity (not instance
+    name). GetComponents(False) returns every component at every level; GetModelDoc2 is
+    interface-returning so the component is wrapped IComponent2 and its model IModelDoc2
+    (else the title falls back to the instance name '...-3' and material/path are lost)."""
     counts: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    mdoc = _wrap(doc, "IModelDoc2")
+    comps = None
     try:
-        comps = doc.GetComponents(True)  # True = top level only
+        comps = mdoc.GetComponents(False)  # False = ALL levels (full flattened tree)
     except Exception:
-        comps = None
+        comps = _get0(doc, "GetComponents")
     if not comps:
         return []
     for c in comps:
         try:
+            c = _wrap(c, "IComponent2")
             _sup = _get0(c, "GetSuppression2")
             try:
                 if _sup is not None and int(_sup) == 0:  # swComponentSuppressed
@@ -459,17 +471,25 @@ def assembly_bom(doc) -> List[BomLine]:
                 pass
             name2 = _safe_str(_get0(c, "Name2"))
             config = _safe_str(_get0(c, "ReferencedConfiguration"))
-            model = _get0(c, "GetModelDoc2")
-            title = name2.split("/")[0]
+            model = None
+            try:
+                model = c.GetModelDoc2()
+            except Exception:
+                model = _get0(c, "GetModelDoc2")
+            model = _wrap(model, "IModelDoc2") if model is not None else None
+            # Document identity = clean part number (strip the SW instance suffix "-N").
+            title = _clean_pn(name2.split("/")[-1])
             path = ""
             props: Dict[str, str] = {}
             material = ""
             if model is not None:
-                title = _safe_str(_get0(model, "GetTitle")) or title
+                _dt = _safe_str(_get0(model, "GetTitle"))
+                if _dt:
+                    title = _clean_pn(os.path.splitext(_dt)[0])
                 path = _safe_str(_get0(model, "GetPathName"))
                 props = get_custom_properties(model)
                 material = _prop(props, "Material", "Material Description", "Material Spec", "Grade")
-            key = (path or title, config)
+            key = (title, config)
             if key not in counts:
                 counts[key] = {
                     "part_number": title,
