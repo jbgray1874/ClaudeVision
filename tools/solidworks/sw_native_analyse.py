@@ -62,14 +62,41 @@ SW_TYPELIB_GUID = "{83A33D31-27C5-11CE-BFD4-00400513BB57}"
 SW_TYPELIB_MAJOR = 34
 
 
-def _cast(obj, iface: str):
-    """CastTo an object to a named SW interface (IModelDoc2, IFeature, IPartDoc, ...) so
-    its methods are early-bound and callable with (). Requires the typelib module loaded
-    (EnsureModule). Returns the cast object, or the original if the cast is unavailable."""
+_SW_MOD = None
+
+
+def _sw_mod():
+    """The generated gen_py module for the SolidWorks typelib (from makepy/EnsureModule).
+    Its interface classes call methods by DISPID, which reaches interface-returning methods
+    (FirstFeature, CreateMassProperty) that late-binding's name table does NOT expose."""
+    global _SW_MOD
+    if _SW_MOD is None:
+        _SW_MOD = False
+        for _maj in (SW_TYPELIB_MAJOR, 34, 33, 32, 31, 30, 29, 28):
+            try:
+                m = gencache.GetModuleForTypelib(SW_TYPELIB_GUID, 0, _maj, 0)
+                if m is not None:
+                    _SW_MOD = m
+                    break
+            except Exception:
+                continue
+    return _SW_MOD or None
+
+
+def _wrap(obj, iface: str):
+    """Wrap a raw SW dispatch with the generated interface class (IModelDoc2, IFeature,
+    IModelDocExtension, ...) so its methods resolve by DISPID. Returns the wrapped object,
+    or the original if the module/class is unavailable."""
     if obj is None:
         return None
+    mod = _sw_mod()
+    if mod is None:
+        return obj
+    cls = getattr(mod, iface, None)
+    if cls is None:
+        return obj
     try:
-        return win32com.client.CastTo(obj, iface)
+        return cls(obj)
     except Exception:
         return obj
 
@@ -252,14 +279,14 @@ def get_bbox_mm(doc, doctype: int) -> Optional[Tuple[float, float, float]]:
 
 
 def get_mass_kg(doc) -> Optional[float]:
+    # CreateMassProperty is interface-returning -> wrap IModelDocExtension so it resolves
+    # by DISPID; the returned mass-property is wrapped IMassProperty for .Mass.
+    ext = _wrap(_get0(doc, "Extension"), "IModelDocExtension")
     for _mk in ("CreateMassProperty2", "CreateMassProperty"):
         try:
-            ext = doc.Extension
-            mp = _call_or_prop(ext, _mk)
-            if mp is None:
-                continue
-            mass = _call_or_prop(mp, "Mass")
-            mass = float(mass) if mass is not None else 0.0
+            mp = getattr(ext, _mk)()
+            mp = _wrap(mp, "IMassProperty")
+            mass = float(_get0(mp, "Mass") or 0.0)
             if mass:
                 return round(mass, 4)
         except Exception:
@@ -277,27 +304,16 @@ def _call_or_prop(obj, name):
 def sheet_metal_signals(doc) -> RouteSignals:
     """Feature walk for sheet-metal / hole / weldment hints on a part doc."""
     sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
-    # Cast to IModelDoc2 so FirstFeature()/GetNextFeature() are real methods (late binding
-    # returns 'Member not found'). Requires the typelib loaded via EnsureModule.
-    mdoc = doc
-    try:
-        mdoc = win32com.client.CastTo(doc, "IModelDoc2")
-        sig.notes.append(f"cast_IModelDoc2_type={type(mdoc).__name__}")
-    except Exception as e:
-        sig.notes.append(f"cast_IModelDoc2_err={type(e).__name__}:{e}")
+    # Wrap with the generated IModelDoc2 class so FirstFeature() resolves by DISPID (late
+    # binding returns 'Member not found' for interface-returning methods).
+    mdoc = _wrap(doc, "IModelDoc2")
+    sig.notes.append(f"mdoc_wrapped={type(mdoc).__name__}")
     feat = None
     try:
         feat = mdoc.FirstFeature()
     except Exception as e:
         sig.notes.append(f"FirstFeature: {e!r}")
-        # Try FeatureManager / count-based traversal as a fallback.
-        try:
-            n = int(mdoc.GetFeatureCount())
-            sig.notes.append(f"GetFeatureCount={n}")
-            feat = mdoc.FeatureByPositionReverse(0) if n else None
-        except Exception as e2:
-            sig.notes.append(f"FeatureByPosition_err={type(e2).__name__}:{e2}")
-            feat = _get0(doc, "FirstFeature")  # last-resort late-bound property form
+        feat = _get0(doc, "FirstFeature")  # last-resort late-bound property form
     sig.notes.append("first_feature=" + ("obj" if feat is not None else "None"))
     try:
         bend_count = 0
@@ -305,7 +321,7 @@ def sheet_metal_signals(doc) -> RouteSignals:
         visited = 0
         while feat is not None and visited < 100000:
             visited += 1
-            feat = _cast(feat, "IFeature")
+            feat = _wrap(feat, "IFeature")
             raw_t = ""
             try:
                 raw_t = _safe_str(feat.GetTypeName2())
