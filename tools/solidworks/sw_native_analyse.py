@@ -95,10 +95,18 @@ def _wrap(obj, iface: str):
     cls = getattr(mod, iface, None)
     if cls is None:
         return obj
-    try:
-        return cls(obj)
-    except Exception:
-        return obj
+    # The generated class calls _oleobj_.InvokeTypes(DISPID,...) — it needs the RAW
+    # PyIDispatch, not the late-bound CDispatch (else '<unknown>.InvokeTypes').
+    raw = getattr(obj, "_oleobj_", obj)
+    for _candidate in (raw, obj):
+        try:
+            w = cls(_candidate)
+            # sanity: the wrapper must expose InvokeTypes on its _oleobj_
+            if getattr(w, "_oleobj_", None) is not None:
+                return w
+        except Exception:
+            continue
+    return obj
 
 
 @dataclass
