@@ -631,6 +631,19 @@ def _lookup_catalogue_tube_price(
                 "catalogue_length_mm": cat_len,
             }
             best_len_delta = key
+
+    # LENGTH GATE — a catalogue tube row is a specific bought-in cut piece at a stated stock
+    # length (e.g. SLOTTEDTUBE 60x30x1.5 @1125mm). It is only a genuine price for a part of
+    # THAT length. Without this gate a 1342mm cut and a 529.8mm cut of the same profile both
+    # match the same row and take the same fixed price — which is exactly wrong (they should
+    # differ by length). So when the PART length is known, only accept the catalogue price if
+    # the catalogue length is within tolerance; otherwise return None so the caller costs by
+    # the length-sensitive mass path (kg/m x length x £/kg) — honest, repeatable, per-length.
+    if best is not None and length_mm:
+        _cat_len = best.get("catalogue_length_mm")
+        _tol = max(0.10 * length_mm, 75.0)
+        if not (_cat_len and abs(float(_cat_len) - length_mm) <= _tol):
+            return None
     return best
 
 

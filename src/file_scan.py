@@ -1903,8 +1903,8 @@ def _finalize_scan_summary(
                 _c = apply_full_job_to_pre_estimate(_pre_estimate_parts, _job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
                 summary["llm_full_extract"] = {"spec": _job.get("spec"), "counts": _c}
-                print(f"   [llm-full-extract] drove tube+{_c['tube']} material+{_c['material']} "
-                      f"weight+{_c['weight']} thickness+{_c['thickness']} "
+                print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
+                      f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
                       f"assembly-flagged+{_c['assembly_flagged']} into the estimate", flush=True)
             else:
                 print(f"   [llm-full-extract] no job returned ({_job.get('error', '')})", flush=True)

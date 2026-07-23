@@ -505,7 +505,8 @@ def main() -> None:
                     _cnt = apply_drawing_facts_to_part_estimates(summary, _facts)
                     summary.setdefault("drawing_facts", {})["spec_block"] = _sb
                     print(f"  [drawing-facts] material+{_cnt['material_set']} finish+{_cnt['finish_set']} "
-                          f"weight+{_cnt['weight_flagged']} tube+{_cnt['tube_flagged']} | "
+                          f"weight+{_cnt['weight_flagged']} tube+{_cnt['tube_flagged']} "
+                          f"weld-flag+{_cnt.get('weld_flagged', 0)} | "
                           f"powder={_sb.get('powder_micron')}um weld={_sb.get('weld_spec')}")
             except Exception as _exc:
                 print(f"  [drawing-facts] skipped ({_exc})")

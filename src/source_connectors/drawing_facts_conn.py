@@ -95,4 +95,22 @@ def apply_drawing_facts_to_part_estimates(summary: Dict[str, Any], facts: Dict[s
                 f"Tube stock {tube}" + (f" @ {cutlen}mm" if cutlen else "") + " (from drawing) — cost as tube, not sheet")
             out["tube_flagged"] += 1
 
+    # Weld-process surfacing (honest, non-costing) — the drawing may specify TIG, but the
+    # estimators' workbook has only a "Weld (CO2)" rate row (no TIG rate). We cannot invent a
+    # TIG rate, so we do NOT silently re-route; instead we FLAG every welded part so the
+    # estimator sees "drawing says TIG, sheet is costing CO2 — confirm the process/rate".
+    out["weld_flagged"] = 0
+    _weld = str(((facts.get("spec_block") or {}).get("weld_spec")) or "")
+    if "TIG" in _weld.upper():
+        for p in parts:
+            if not isinstance(p, dict):
+                continue
+            _mi = p.get("manufacturing_interpretation") or {}
+            _ops = _mi.get("textual_operations") or _mi.get("operations") or []
+            if any("weld" in str(o).lower() for o in _ops) or p.get("is_sub_assembly"):
+                p.setdefault("review_flags", []).append(
+                    "Drawing weld spec: TIG — workbook costs at Weld (CO2) rate "
+                    "(no TIG rate in WB); confirm weld process/rate")
+                out["weld_flagged"] += 1
+
     return out

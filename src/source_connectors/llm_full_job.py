@@ -61,6 +61,43 @@ def _norm_material(m: str) -> str:
     return str(m or "").strip()
 
 
+def _rollup_quantities(job: Dict[str, Any]) -> Dict[str, int]:
+    """Roll the PRINTED quantities up the hierarchy into a per-product total for every leaf part.
+    The GA BOM lists top-level lines (each part or sub-assembly x qty); each sub-assembly page
+    lists its children x qty. A leaf part's per-product total is:
+        (its qty as a direct GA line)  +  sum over parents( child_qty x parent's GA qty ).
+    All quantities are TRANSCRIBED (printed on the drawing), never computed — this only re-adds
+    them the way the pack itself lays them out. Used to correct the per-part count (e.g. a tube
+    the vision BOM double-counted as qty2 when the GA prints qty1)."""
+    bom = job.get("bom") or []
+    asms = job.get("assemblies") or []
+    bom_qty: Dict[str, float] = {}
+    for line in bom:
+        if not isinstance(line, dict):
+            continue
+        pn = _clean_pn(line.get("part_number"))
+        if pn:
+            bom_qty[pn] = bom_qty.get(pn, 0.0) + (_num(line.get("qty")) or 1.0)
+    asm_pns = {_clean_pn(a.get("part_number")) for a in asms if isinstance(a, dict)}
+    totals: Dict[str, float] = {}
+    # Direct GA leaf lines (a part listed on the GA that is NOT itself a sub-assembly).
+    for pn, q in bom_qty.items():
+        if pn not in asm_pns:
+            totals[pn] = totals.get(pn, 0.0) + q
+    # Children of each sub-assembly, multiplied by how many of that assembly the GA calls for.
+    for a in asms:
+        if not isinstance(a, dict):
+            continue
+        amult = bom_qty.get(_clean_pn(a.get("part_number")), 1.0) or 1.0
+        for ch in (a.get("children") or []):
+            if not isinstance(ch, dict):
+                continue
+            cpn = _clean_pn(ch.get("part_number"))
+            if cpn:
+                totals[cpn] = totals.get(cpn, 0.0) + (_num(ch.get("qty")) or 1.0) * amult
+    return {k: int(round(v)) for k, v in totals.items() if v and v > 0}
+
+
 def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[str, Any]:
     """Overlay the DETERMINISTIC drawing_facts onto the LLM job so each source covers the other's
     gaps — the responsibility for a PDF-only job. The LLM owns the hierarchy + structure; the
@@ -110,12 +147,13 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     fills a field only where the engine has nothing solid, EXCEPT it deliberately provides
     section_stock + stated_weight so the good paths win over garbled vision geometry.
     Returns counts of what changed."""
-    out = {"material": 0, "weight": 0, "thickness": 0, "tube": 0, "assembly_flagged": 0}
+    out = {"material": 0, "weight": 0, "thickness": 0, "tube": 0, "assembly_flagged": 0, "qty": 0}
     if not isinstance(job, dict) or not job.get("found") or not isinstance(parts, list):
         return out
 
     by_pn = {_clean_pn(p.get("part_number")): p for p in (job.get("parts") or []) if isinstance(p, dict)}
     assembly_pns = {_clean_pn(a.get("part_number")) for a in (job.get("assemblies") or []) if isinstance(a, dict)}
+    qty_rollup = _rollup_quantities(job)
 
     for part in parts:
         if not isinstance(part, dict):
@@ -146,6 +184,20 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
             or bool(part.get("flat_pattern_detected"))
             or bool(part.get("dxf_source_file"))
         )
+
+        # QUANTITY — the GA's PRINTED per-product count, rolled up the hierarchy. The vision BOM
+        # sometimes double-counts a line (e.g. a tube read as qty2 when the GA prints qty1). The
+        # transcribed rollup is authoritative for no-DXF parts; correct it and flag. DXF jobs keep
+        # their measured/BOM count untouched.
+        _roll_q = qty_rollup.get(pn)
+        if _roll_q and _roll_q > 0 and not _dxf_backed:
+            _cur_q = _num(part.get("quantity"))
+            if _cur_q is None or int(_cur_q) != _roll_q:
+                part["quantity"] = _roll_q
+                part.setdefault("review_flags", []).append(
+                    f"qty set to {_roll_q} from GA rollup (was {_cur_q}) — printed BOM quantity")
+                _flagged = True
+                out["qty"] += 1
 
         mat = jp.get("material")
         if mat and not str(part.get("normalized_material") or "").strip():
