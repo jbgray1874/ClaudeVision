@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pythoncom
 import win32com.client
 from win32com.client import VARIANT
+from win32com.client import gencache
 
 # SolidWorks doc types
 SW_PART = 1
@@ -87,7 +88,20 @@ class RouteSignals:
 class SolidWorksSession:
     def __init__(self, visible: bool = False):
         pythoncom.CoInitialize()
-        self.sw = win32com.client.Dispatch("SldWorks.Application")
+        # EARLY binding via EnsureDispatch: generates the SolidWorks typelib so no-arg
+        # methods like FirstFeature()/GetNextFeature()/GetTypeName2() resolve as real
+        # methods. Late-binding Dispatch could not find FirstFeature ('Member not found')
+        # — the classic reason SolidWorks automation needs makepy/early binding. Fall back
+        # to late Dispatch if typelib generation is unavailable.
+        try:
+            self.sw = gencache.EnsureDispatch("SldWorks.Application")
+            self.early_bound = True
+        except Exception as e:
+            print(f"[warn] EnsureDispatch (early binding) failed ({e!r}); "
+                  f"falling back to late Dispatch — feature walk may be limited.", flush=True)
+            self.sw = win32com.client.Dispatch("SldWorks.Application")
+            self.early_bound = False
+        print(f"[binding] {'EARLY (typelib)' if self.early_bound else 'LATE (dispatch)'}", flush=True)
         self.sw.Visible = visible
         self._open_titles: List[str] = []
 
