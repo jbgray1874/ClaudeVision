@@ -108,7 +108,10 @@ def _get(d: Any, *path, default=None):
 
 
 def _normalise_key(name: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+    # '&' -> 'and' so a customer typed "M&S" (key 'mands') matches the saved logo file
+    # "MAndS.png" (also 'mands'). Without this, "M&S" normalises to 'ms' and never matches.
+    s = (name or "").lower().replace("&", "and")
+    return re.sub(r"[^a-z0-9]", "", s)
 
 
 def _title_material(m: str) -> str:
