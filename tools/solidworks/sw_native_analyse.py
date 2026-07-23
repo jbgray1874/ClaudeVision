@@ -61,6 +61,13 @@ OPEN_OPTS = 1 | 2
 SW_TYPELIB_GUID = "{83A33D31-27C5-11CE-BFD4-00400513BB57}"
 SW_TYPELIB_MAJOR = 34
 
+# SW sheet-metal feature type names that each add a bend line (lower-cased). SMBaseFlange
+# (flat base) and UnFold/Fold (model flatten/refold ops) are intentionally excluded.
+_BEND_FEATURE_TYPES = {
+    "edgeflange", "sketchbend", "edgebend", "onebend", "hem",
+    "miterflange", "jog", "sweptflange", "crossbreak",
+}
+
 
 _SW_MOD = None
 
@@ -128,6 +135,7 @@ class RouteSignals:
     is_sheet_metal: bool = False
     bend_count: int = 0
     hole_count_est: int = 0
+    flat_pattern_present: bool = False
     has_weldment: bool = False
     material: str = ""
     thickness_mm: Optional[float] = None
@@ -341,12 +349,19 @@ def sheet_metal_signals(doc) -> RouteSignals:
             t = raw_t.lower()
             if raw_t and len(sig.feature_types) < 120:
                 sig.feature_types.append(raw_t)  # diagnostic: what types the walk sees
-            if "sheetmetal" in t or "sheet metal" in t:
+            if "sheetmetal" in t or "sheet metal" in t or t == "smbaseflange":
                 sig.is_sheet_metal = True
-            if "bend" in t:  # EdgeBend / SketchBend / OneBend / SketchedBend
+            if t == "flatpattern":
+                sig.flat_pattern_present = True
+            # SW sheet-metal BEND features. Each EdgeFlange/SketchBend/etc adds a bend line;
+            # SMBaseFlange is the flat base (NOT a bend); UnFold/Fold are model ops that
+            # flatten/refold existing bends, so they are NOT counted to avoid double-count.
+            if t in _BEND_FEATURE_TYPES or ("bend" in t and "unbend" not in t):
                 bend_count += 1
                 sig.is_sheet_metal = True
-            if "hole" in t or "holewizard" in t or "holeseries" in t:
+            # HoleWzd = hole-wizard FEATURE count (undercounts vs DXF pierce count — DXF
+            # stays authoritative for total holes). Kept as a sheet-metal signal only.
+            if t in ("holewzd", "holeseries", "advholewzd"):
                 hole_like += 1
             if "weldment" in t or "structuralmember" in t or "weldmentcutlist" in t:
                 sig.has_weldment = True
@@ -639,8 +654,8 @@ def main():
                 if rs:
                     print(f"  material={rs.get('material')!r} sheet_metal={rs.get('is_sheet_metal')} "
                           f"bends={rs.get('bend_count')} holes={rs.get('hole_count_est')} "
-                          f"weldment={rs.get('has_weldment')} mass_kg={rs.get('mass_kg')} "
-                          f"bbox={rs.get('bbox_mm')}")
+                          f"flat={rs.get('flat_pattern_present')} weldment={rs.get('has_weldment')} "
+                          f"mass_kg={rs.get('mass_kg')} bbox={rs.get('bbox_mm')}")
                     print(f"  ops_hint={rs.get('ops_hint')}  feat_types={rs.get('feature_types')[:12]}")
                     if rs.get("notes"):
                         print(f"  notes={rs.get('notes')}")
