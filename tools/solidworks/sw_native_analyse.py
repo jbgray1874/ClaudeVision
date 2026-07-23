@@ -214,57 +214,95 @@ def get_bbox_mm(doc, doctype: int) -> Optional[Tuple[float, float, float]]:
 
 
 def get_mass_kg(doc) -> Optional[float]:
-    try:
-        mp = _get0(doc.Extension, "CreateMassProperty")
-        if mp is None:
-            return None
-        mass = float(_get0(mp, "Mass"))  # kg
-        return round(mass, 4) if mass else None
-    except Exception:
-        return None
+    for _mk in ("CreateMassProperty2", "CreateMassProperty"):
+        try:
+            ext = doc.Extension
+            mp = _call_or_prop(ext, _mk)
+            if mp is None:
+                continue
+            mass = _call_or_prop(mp, "Mass")
+            mass = float(mass) if mass is not None else 0.0
+            if mass:
+                return round(mass, 4)
+        except Exception:
+            continue
+    return None
+
+
+def _call_or_prop(obj, name):
+    """Return obj.name whether it is a method (call it) or a property (value). Unlike
+    _get0 this RAISES on error so callers can record why a call failed."""
+    attr = getattr(obj, name)
+    return attr() if callable(attr) else attr
 
 
 def sheet_metal_signals(doc) -> RouteSignals:
     """Feature walk for sheet-metal / hole / weldment hints on a part doc."""
     sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
+    # Get the first feature, trying the call form then the property form, capturing why.
+    feat = None
+    for _how in ("call", "attr"):
+        try:
+            fa = getattr(doc, "FirstFeature")
+            feat = fa() if _how == "call" and callable(fa) else fa
+            break
+        except Exception as e:
+            sig.notes.append(f"FirstFeature[{_how}]: {e!r}")
+            feat = None
+    sig.notes.append("first_feature=" + ("obj" if feat is not None else "None"))
     try:
-        feat = _get0(doc, "FirstFeature")
         bend_count = 0
         hole_like = 0
-        guard = 0
-        while feat is not None and guard < 100000:
-            guard += 1
+        visited = 0
+        while feat is not None and visited < 100000:
+            visited += 1
+            raw_t = ""
+            for _m in ("GetTypeName2", "GetTypeName"):
+                try:
+                    raw_t = _safe_str(_call_or_prop(feat, _m))
+                    if raw_t:
+                        break
+                except Exception:
+                    continue
+            t = (raw_t or _safe_str(_get0(feat, "Name"))).lower()
+            name = _safe_str(_get0(feat, "Name")).lower()
+            if raw_t and len(sig.feature_types) < 80:
+                sig.feature_types.append(raw_t)  # diagnostic: what types the walk sees
+            if "sheetmetal" in t or "sheet metal" in t or "sheetmetal" in name:
+                sig.is_sheet_metal = True
+            if "bend" in t:  # EdgeBend / SketchBend / OneBend / SketchedBend
+                bend_count += 1
+                sig.is_sheet_metal = True
+            if "hole" in t or "holewizard" in t or "holeseries" in t:
+                hole_like += 1
+            if "weldment" in t or "structuralmember" in t or "weldmentcutlist" in t:
+                sig.has_weldment = True
             try:
-                raw_t = _safe_str(_get0(feat, "GetTypeName2")) or _safe_str(_get0(feat, "GetTypeName"))
-                t = (raw_t or _safe_str(_get0(feat, "Name"))).lower()
-                name = _safe_str(_get0(feat, "Name")).lower()
-                if raw_t and len(sig.feature_types) < 60:
-                    sig.feature_types.append(raw_t)  # diagnostic: what types the walk sees
-                if "sheetmetal" in t or "sheet metal" in t or "sheetmetal" in name:
-                    sig.is_sheet_metal = True
-                # bend feature type names: EdgeBend, SketchBend, OneBend, SketchedBend
-                if "bend" in t:
-                    bend_count += 1
-                    sig.is_sheet_metal = True
-                if "hole" in t or "holewizard" in t or "holeseries" in t:
-                    hole_like += 1
-                if "weldment" in t or "structuralmember" in t or "weldmentcutlist" in t:
-                    sig.has_weldment = True
+                feat = _call_or_prop(feat, "GetNextFeature")
             except Exception:
-                pass
-            feat = _get0(feat, "GetNextFeature")
+                feat = None
         sig.bend_count = bend_count
         sig.hole_count_est = hole_like
+        sig.notes.append(f"features_visited={visited}")
     except Exception as e:
-        sig.notes.append(f"feature_walk_error: {e}")
+        sig.notes.append(f"feature_walk_error: {e!r}")
 
     props = get_custom_properties(doc)
     # Material: prefer a custom property, else the SW-APPLIED material (MaterialIdName is a
     # property like "db|name" — take the name). Fabricated parts usually carry the applied
-    # material, NOT a custom prop, which is why material read empty before.
-    _applied = _safe_str(_get0(doc, "MaterialIdName"))
-    if _applied and "|" in _applied:
-        _applied = _applied.split("|")[-1].strip()
+    # material, NOT a custom prop. Prefer GetMaterialPropertyName2(config, out db) which
+    # returns the NAME ("Plain Carbon Steel" etc.); MaterialIdName gave a bare id ('273').
+    _applied = ""
+    try:
+        _db = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+        _nm = _safe_str(doc.GetMaterialPropertyName2("", _db))
+        if _nm and not _nm.isdigit():
+            _applied = _nm
+    except Exception as e:
+        sig.notes.append(f"material_name_err: {e!r}")
+    if not _applied:
+        _mid = _safe_str(_get0(doc, "MaterialIdName"))
+        _applied = _mid.split("|")[-1].strip() if "|" in _mid else _mid
     sig.material = (
         props.get("Material")
         or props.get("MATERIAL")
@@ -531,6 +569,8 @@ def main():
                           f"weldment={rs.get('has_weldment')} mass_kg={rs.get('mass_kg')} "
                           f"bbox={rs.get('bbox_mm')}")
                     print(f"  ops_hint={rs.get('ops_hint')}  feat_types={rs.get('feature_types')[:12]}")
+                    if rs.get("notes"):
+                        print(f"  notes={rs.get('notes')}")
                 if r.get("errors"):
                     print(f"Errors: {r['errors']}")
             except Exception as e:
