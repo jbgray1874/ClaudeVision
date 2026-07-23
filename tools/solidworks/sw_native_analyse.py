@@ -279,13 +279,25 @@ def sheet_metal_signals(doc) -> RouteSignals:
     sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
     # Cast to IModelDoc2 so FirstFeature()/GetNextFeature() are real methods (late binding
     # returns 'Member not found'). Requires the typelib loaded via EnsureModule.
-    mdoc = _cast(doc, "IModelDoc2")
+    mdoc = doc
+    try:
+        mdoc = win32com.client.CastTo(doc, "IModelDoc2")
+        sig.notes.append(f"cast_IModelDoc2_type={type(mdoc).__name__}")
+    except Exception as e:
+        sig.notes.append(f"cast_IModelDoc2_err={type(e).__name__}:{e}")
     feat = None
     try:
         feat = mdoc.FirstFeature()
     except Exception as e:
         sig.notes.append(f"FirstFeature: {e!r}")
-        feat = _get0(doc, "FirstFeature")  # last-resort late-bound property form
+        # Try FeatureManager / count-based traversal as a fallback.
+        try:
+            n = int(mdoc.GetFeatureCount())
+            sig.notes.append(f"GetFeatureCount={n}")
+            feat = mdoc.FeatureByPositionReverse(0) if n else None
+        except Exception as e2:
+            sig.notes.append(f"FeatureByPosition_err={type(e2).__name__}:{e2}")
+            feat = _get0(doc, "FirstFeature")  # last-resort late-bound property form
     sig.notes.append("first_feature=" + ("obj" if feat is not None else "None"))
     try:
         bend_count = 0
