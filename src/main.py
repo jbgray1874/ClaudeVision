@@ -855,6 +855,23 @@ def main() -> None:
                         job_stem=str(scan_label),
                     )
                     print(f"   [deliverables] job report -> {_rhtml}", flush=True)
+
+                    # Retrievable LLM extract sidecar — the transcribed source data (BOM
+                    # hierarchy, tube cut lengths, weights, material/finish, weld spec) written
+                    # as a plain JSON next to the spreadsheet/quote/report so it can be OPENED
+                    # and audited. This is what the estimate is built from; surfacing it proves
+                    # what was captured vs what the costed output used. Written on every run.
+                    _lfe = summary.get("llm_full_extract")
+                    if isinstance(_lfe, dict) and (_lfe.get("bom") or _lfe.get("parts")):
+                        _lfe_out = Path(_out_dir) / (re.sub(r"[^\w\- ]", "", str(scan_label)).strip()
+                                                     + "_llm_extract.json")
+                        with open(_lfe_out, "w", encoding="utf-8") as _fh_lfe:
+                            json.dump(_lfe, _fh_lfe, indent=2, ensure_ascii=False)
+                        _np = len(_lfe.get("parts") or [])
+                        _nb = len(_lfe.get("bom") or [])
+                        print(f"   [deliverables] LLM extract -> {_lfe_out} "
+                              f"({_nb} BOM lines, {_np} parts) — open this to audit the source data",
+                              flush=True)
                 except Exception as _p_exc:
                     print(f"   [deliverables] job report skipped ({_p_exc}) — run continues.", flush=True)
 

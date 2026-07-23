@@ -1886,7 +1886,15 @@ def _finalize_scan_summary(
     # vision geometry. Every value is flagged LLM-sourced (estimator to verify) and is
     # transcribed from the drawing, cross-checked against the deterministic reads. Failure-isolated.
     import os as _os_llm
-    if _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").lower() in {"1", "true", "yes"} and pdf_path:
+    # Default ON for PDF jobs when an XAI_API_KEY is present — the DXF waterfall keeps measured
+    # parts safe (LLM only fills gaps there), so the extract is safe on every job and this removes
+    # the silent no-op where the flag was simply never set and the good data never reached costing.
+    # Explicit SDI_LLM_FULL_EXTRACT=0/false/no/off disables it; =1/true/yes/on forces it on.
+    _llm_flag = _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").strip().lower()
+    _llm_off = _llm_flag in {"0", "false", "no", "off"}
+    _llm_on = (_llm_flag in {"1", "true", "yes", "on"}
+               or (_llm_flag == "" and bool(_os_llm.getenv("XAI_API_KEY"))))
+    if pdf_path and _llm_on and not _llm_off:
         try:
             from llm_full_extract import extract_full_job
             from source_connectors.llm_full_job import apply_full_job_to_pre_estimate, overlay_drawing_facts
@@ -1902,7 +1910,18 @@ def _finalize_scan_summary(
                     print(f"   [llm-full-extract] overlay skipped ({_e_ov})", flush=True)
                 _c = apply_full_job_to_pre_estimate(_pre_estimate_parts, _job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
-                summary["llm_full_extract"] = {"spec": _job.get("spec"), "counts": _c}
+                # Keep the WHOLE extract on the summary so it can be dumped to a retrievable
+                # sidecar next to the deliverables — this is the transcribed source data the
+                # estimator can audit against (BOM hierarchy, tube cut lengths, weights, spec).
+                summary["llm_full_extract"] = {
+                    "source": _job.get("source"),
+                    "top_assembly": _job.get("top_assembly"),
+                    "bom": _job.get("bom"),
+                    "assemblies": _job.get("assemblies"),
+                    "parts": _job.get("parts"),
+                    "spec": _job.get("spec"),
+                    "counts": _c,
+                }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
                       f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
                       f"assembly-flagged+{_c['assembly_flagged']} into the estimate", flush=True)
@@ -1910,6 +1929,11 @@ def _finalize_scan_summary(
                 print(f"   [llm-full-extract] no job returned ({_job.get('error', '')})", flush=True)
         except Exception as _e_llm:
             print(f"   [llm-full-extract] skipped ({_e_llm})", flush=True)
+    elif pdf_path and not _llm_off:
+        # Loud, not silent: the extract would have run but there is no API key. This is the
+        # exact footgun that made earlier runs quietly ignore the good LLM data.
+        print("   [llm-full-extract] NOT RUN — no XAI_API_KEY set (set it, or "
+              "SDI_LLM_FULL_EXTRACT=1, so the PDF extract can drive the estimate)", flush=True)
 
     # SDI Intelligence — Learning Engine pre-scan
     # Runs AFTER augment_summary_with_dxf + pre-estimate normalisation,
