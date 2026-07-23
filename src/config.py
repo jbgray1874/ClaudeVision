@@ -310,6 +310,18 @@ BOOK_MANM_INSERT_LABOUR = True
 MANM_INSERT_SECONDS_EACH = 15.0            # from Tim's 12120 sheet (clinch x4 @60/hr, pem x2 @120/hr)
 MANM_INSERT_PART_TOKENS = ["CLINCH", "PEM"]  # description/part-number tokens that mark a pressed insert
 
+# ── Material total: tolerate not-yet-dimensioned rows ────────────────────────────
+# When a fabricated part has no usable blank L/W (or gauge), the template's per-row material
+# formula errors (#VALUE!/#DIV/0!) and the plain SUM in Total Material Cost (M92) propagates
+# that error into Unit and Sell — so ONE missing dim blanks the whole sheet total. This is bad
+# for a human-review deliverable: it hides the genuine labour/wire/BOM work below it.
+# With this True, wb_populate rewrites M92's SUM(...) to AGGREGATE(9,6,...) (sum ignoring
+# errors), so the sheet shows a PARTIAL total from the credible lines, marks the dim-less rows
+# "⚠ DIMS REQUIRED", and self-completes as the estimator fills them in.
+# NON-REGRESSIVE: AGGREGATE(9,6,range) == SUM(range) when the range has no errors, so fully
+# dimensioned jobs (12120, 1282) are unchanged. Set False to restore the old #VALUE! wall.
+MATERIAL_TOTAL_ERROR_TOLERANT = True
+
 # ── Acrylic provisional pricing (PROVISIONAL — pending estimating/Tim confirmation) ──
 # Bootstrap values from the M18 (10897) workbook so acrylic jobs get a sensible INFERRED
 # cost today instead of flagging INSUFFICIENT / falling back to £/kg (which under-prices

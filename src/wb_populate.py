@@ -59,6 +59,17 @@ except Exception:
     _BOOK_MANM_INSERT_LABOUR = True
     _MANM_INSERT_SECONDS_EACH = 15.0
     _MANM_INSERT_PART_TOKENS = ["CLINCH", "PEM"]
+try:
+    # When a fabricated part has no usable blank dims (blank L/W or gauge), the template's
+    # per-row material formula errors (#VALUE!/#DIV/0!) and the plain SUM in Total Material
+    # Cost propagates that error into Unit and Sell — one missing dim blanks the whole total.
+    # With this on, the material total sums with AGGREGATE(9,6,…) which IGNORES errored rows,
+    # so the sheet computes a PARTIAL total from the credible lines and self-completes as the
+    # estimator fills the flagged dims. Non-regressive: AGGREGATE(9,6,r) == SUM(r) when there
+    # are no errors (so 12120/1282 are unchanged). Lever in config for full reversibility.
+    from config import MATERIAL_TOTAL_ERROR_TOLERANT as _MATERIAL_TOTAL_ERROR_TOLERANT
+except Exception:
+    _MATERIAL_TOTAL_ERROR_TOLERANT = True
 from typing import Any, Dict, List, Optional
 
 try:
@@ -326,6 +337,45 @@ def _verify_template_matches_cellmap(ws, cm, flags=None):
         raise
     except Exception:
         return  # never let the safety check itself break a run
+
+
+def _make_material_total_error_tolerant(ws, flags=None):
+    """Rewrite the Total Material Cost formula (M92) so an errored material row does not
+    blank the whole total.
+
+    The template's M92 is a plain SUM across the material blocks:
+        =(SUM(M11:M50)+SUM(M53:M60)+SUM(M63:M81)+SUM(M84:M91)+AF83)
+    A single #VALUE!/#DIV/0! in any summed cell (a steel part with no blank dims) makes the
+    whole SUM error, which cascades into Unit Cost and Sell Price. We replace each SUM(range)
+    with AGGREGATE(9,6,range) — 9 = SUM, 6 = ignore errors — so the total is the sum of the
+    CREDIBLE rows and the errored rows contribute nothing until the estimator dimensions them.
+
+    NON-REGRESSIVE: AGGREGATE(9,6,range) is arithmetically identical to SUM(range) whenever the
+    range has no errors, so fully-dimensioned jobs (12120/1282) are unchanged. Bare cell terms
+    (e.g. +AF83, the powder total) are left as-is — they are not the cascade source. Best-effort:
+    if M92 is not the expected shape, leave it untouched and flag.
+    """
+    import re as _re
+    try:
+        cell = ws["M92"]
+        f = cell.value
+        if not isinstance(f, str) or "SUM(" not in f:
+            if flags is not None:
+                _flag("material-total error-tolerance: M92 is not the expected SUM formula — "
+                      "left as-is (a missing dim will still #VALUE! the total).", flags)
+            return False
+        # SUM(  ->  AGGREGATE(9,6,   for every SUM( in the formula. Ranges/bare refs unchanged.
+        new_f = _re.sub(r"\bSUM\(", "AGGREGATE(9,6,", f)
+        if new_f == f:
+            return False
+        cell.value = new_f
+        if flags is not None:
+            _flag("material total made error-tolerant (SUM->AGGREGATE ignore-errors): a part "
+                  "with no blank dims no longer blanks Total Material/Unit/Sell — it totals the "
+                  "credible lines and self-completes when the flagged dims are filled.", flags)
+        return True
+    except Exception:
+        return False  # never let this optional hardening break a run
 
 
 def _flag(msg: str, flags: List[str]):
@@ -844,6 +894,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if not (length and width and gauge):
             _flag(f"steel {pe.get('part_number')} missing dim(s) "
                   f"(L={length} W={width} G={gauge}) — WB cost will be 0/wrong.", flags)
+            # Loud, on-sheet marker so the estimator sees exactly which rows to complete —
+            # the row keeps its formula, so filling L/W/G recomputes it and the (error-tolerant)
+            # material total picks it up automatically. Which dim is missing is named.
+            _miss = ", ".join(
+                _n for _n, _v in (("L", length), ("W", width), ("gauge", gauge)) if not _v
+            )
+            _dcell = ws.cell(row=row, column=s["col_desc"])
+            _dcur = str(_dcell.value or "")
+            if "DIMS REQUIRED" not in _dcur:
+                _dcell.value = f"{_dcur}  ⚠ DIMS REQUIRED ({_miss}) — not costed"
         row += 1
 
     # ── Other Sheet block: desc, qty, length, width, thickness ─────────────
@@ -1493,6 +1553,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
           f"not once per part.", flags)
     if labour_overflow:
         _flag(f"Labour overflow: more operations than {lb['last_row']-lb['first_row']+1} rows — extras DROPPED.", flags)
+
+    # ── Make Total Material Cost tolerate not-yet-dimensioned rows ─────────
+    # One steel part with no blank L/W (or blank gauge) errors its per-row cost and, via the
+    # plain SUM in M92, blanks the WHOLE total (Material -> Unit -> Sell). Rewrite M92 to sum
+    # ignoring errors so the sheet shows a PARTIAL total from the credible lines + the flagged
+    # gaps, and self-completes as the estimator fills the dims. Non-regressive on clean jobs.
+    if _MATERIAL_TOTAL_ERROR_TOLERANT:
+        _make_material_total_error_tolerant(ws, flags)
 
     # ── Append AI supplementary sheets (renamed to avoid clashing with WB) ──
     _append_ai_sheets(wb, summary, flags)
