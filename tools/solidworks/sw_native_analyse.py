@@ -1,4 +1,4 @@
-"""
+r"""
 sw_native_analyse.py
 Analyse .sldprt / .sldasm / .slddrw for BOM + route signals via SolidWorks COM.
 
@@ -103,10 +103,9 @@ class SolidWorksSession:
             raise RuntimeError(
                 f"OpenDoc6 failed: {path}  errs={errs.value} warns={warns.value}"
             )
-        try:
-            self._open_titles.append(doc.GetTitle())
-        except Exception:
-            pass
+        _t = _safe_str(_get0(doc, "GetTitle"))
+        if _t:
+            self._open_titles.append(_t)
         return doc, doctype
 
     def close_all(self):
@@ -132,6 +131,24 @@ def _safe_str(v: Any) -> str:
     if v is None:
         return ""
     return str(v).strip()
+
+
+def _get0(obj, name):
+    """Read a NO-ARGUMENT SolidWorks getter that late-binding pywin32 may expose as a
+    method OR as a property. In this binding GetTitle/GetPathName/FirstFeature/
+    GetNextFeature/GetTypeName2/GetModelDoc2/CreateMassProperty resolve as PROPERTIES
+    (the value is returned directly), so calling them with () raises 'str object is not
+    callable'. This returns the value whether it's a bound method or already the value.
+    Arg-taking calls (GetComponents(True), GetBox(0), Text2(r,c)) are left as normal
+    method calls — those resolve correctly."""
+    try:
+        attr = getattr(obj, name)
+    except Exception:
+        return None
+    try:
+        return attr() if callable(attr) else attr
+    except Exception:
+        return None
 
 
 def get_custom_properties(doc) -> Dict[str, str]:
@@ -197,10 +214,10 @@ def get_bbox_mm(doc, doctype: int) -> Optional[Tuple[float, float, float]]:
 
 def get_mass_kg(doc) -> Optional[float]:
     try:
-        mp = doc.Extension.CreateMassProperty()
+        mp = _get0(doc.Extension, "CreateMassProperty")
         if mp is None:
             return None
-        mass = float(mp.Mass)  # kg
+        mass = float(_get0(mp, "Mass"))  # kg
         return round(mass, 4) if mass else None
     except Exception:
         return None
@@ -208,17 +225,17 @@ def get_mass_kg(doc) -> Optional[float]:
 
 def sheet_metal_signals(doc) -> RouteSignals:
     """Feature walk for sheet-metal / hole / weldment hints on a part doc."""
-    sig = RouteSignals(part_number=_safe_str(getattr(doc, "GetTitle", lambda: "")()))
+    sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
     try:
-        feat = doc.FirstFeature()
+        feat = _get0(doc, "FirstFeature")
         bend_count = 0
         hole_like = 0
         guard = 0
         while feat is not None and guard < 100000:
             guard += 1
             try:
-                t = (feat.GetTypeName2() or feat.Name or "").lower()
-                name = (feat.Name or "").lower()
+                t = (_safe_str(_get0(feat, "GetTypeName2")) or _safe_str(_get0(feat, "Name"))).lower()
+                name = _safe_str(_get0(feat, "Name")).lower()
                 if "sheetmetal" in t or "sheetmetal" in name:
                     sig.is_sheet_metal = True
                 if "bend" in t or t in ("bend", "sketchedbend"):
@@ -230,10 +247,7 @@ def sheet_metal_signals(doc) -> RouteSignals:
                     sig.has_weldment = True
             except Exception:
                 pass
-            try:
-                feat = feat.GetNextFeature()
-            except Exception:
-                break
+            feat = _get0(feat, "GetNextFeature")
         sig.bend_count = bend_count
         sig.hole_count_est = hole_like
     except Exception as e:
@@ -284,35 +298,22 @@ def assembly_bom(doc) -> List[BomLine]:
         return []
     for c in comps:
         try:
+            _sup = _get0(c, "GetSuppression2")
             try:
-                if int(c.GetSuppression2()) == 0:  # swComponentSuppressed
+                if _sup is not None and int(_sup) == 0:  # swComponentSuppressed
                     continue
             except Exception:
                 pass
-            name2 = _safe_str(getattr(c, "Name2", None) or "")
-            config = ""
-            try:
-                config = _safe_str(c.ReferencedConfiguration)
-            except Exception:
-                pass
-            model = None
-            try:
-                model = c.GetModelDoc2()
-            except Exception:
-                model = None
+            name2 = _safe_str(_get0(c, "Name2"))
+            config = _safe_str(_get0(c, "ReferencedConfiguration"))
+            model = _get0(c, "GetModelDoc2")
             title = name2.split("/")[0]
             path = ""
             props: Dict[str, str] = {}
             material = ""
             if model is not None:
-                try:
-                    title = _safe_str(model.GetTitle()) or title
-                except Exception:
-                    pass
-                try:
-                    path = _safe_str(model.GetPathName())
-                except Exception:
-                    pass
+                title = _safe_str(_get0(model, "GetTitle")) or title
+                path = _safe_str(_get0(model, "GetPathName"))
                 props = get_custom_properties(model)
                 material = (
                     props.get("Material")
@@ -358,13 +359,10 @@ def drawing_bom_tables(doc) -> List[BomLine]:
     lines: List[BomLine] = []
     visited = 0
     try:
-        v = doc.GetFirstView()
+        v = _get0(doc, "GetFirstView")
         while v is not None and visited < 50:
             visited += 1
-            try:
-                tables = v.GetTableAnnotations()
-            except Exception:
-                tables = None
+            tables = _get0(v, "GetTableAnnotations")
             if tables:
                 for t in tables:
                     try:
@@ -407,10 +405,7 @@ def drawing_bom_tables(doc) -> List[BomLine]:
                                 continue
                     except Exception:
                         continue
-            try:
-                v = v.GetNextView()
-            except Exception:
-                break
+            v = _get0(v, "GetNextView")
     except Exception:
         pass
     return lines
@@ -428,10 +423,7 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
         "route_signals": None,
         "errors": [],
     }
-    try:
-        result["title"] = _safe_str(doc.GetTitle())
-    except Exception:
-        pass
+    result["title"] = _safe_str(_get0(doc, "GetTitle"))
     try:
         result["custom_properties"] = get_custom_properties(doc)
     except Exception as e:
