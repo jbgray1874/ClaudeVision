@@ -452,12 +452,22 @@ def assembly_bom(doc) -> List[BomLine]:
     interface-returning so the component is wrapped IComponent2 and its model IModelDoc2
     (else the title falls back to the instance name '...-3' and material/path are lost)."""
     counts: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    mdoc = _wrap(doc, "IModelDoc2")
+    # GetComponents is on IAssemblyDoc and is arg-taking, so it works on the raw late-bound
+    # doc (that is how the top-level version worked). False = ALL levels (full flattened
+    # tree); fall back to True (top level) if a build rejects False.
     comps = None
-    try:
-        comps = mdoc.GetComponents(False)  # False = ALL levels (full flattened tree)
-    except Exception:
-        comps = _get0(doc, "GetComponents")
+    for _topflag in (False, True):
+        try:
+            comps = doc.GetComponents(_topflag)
+            if comps:
+                break
+        except Exception:
+            try:
+                comps = _wrap(doc, "IAssemblyDoc").GetComponents(_topflag)
+                if comps:
+                    break
+            except Exception:
+                comps = None
     if not comps:
         return []
     for c in comps:
