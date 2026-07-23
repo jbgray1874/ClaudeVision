@@ -152,13 +152,20 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
             _flagged = True
             out["thickness"] += 1
 
-        # Tube: real section + cut length -> section_stock so the tube catalogue path fires.
+        # Tube: real section + cut length -> section_stock so the tube path costs by the REAL
+        # length. OVERRIDE any existing section_stock the engine stamped (its length is the
+        # generic @1100 / garbled one); the LLM cut length is the printed truth.
         a, b, t = _parse_section(jp.get("tube_section"))
         cut = _num(jp.get("cut_length_mm"))
-        if a and b and t and cut and cut > 0 and not part.get("section_stock"):
-            part["section_stock"] = {"a": a, "b": b, "t": t, "length_mm": cut}
-            _flagged = True
-            out["tube"] += 1
+        if a and b and t and cut and cut > 0:
+            ss = part.get("section_stock")
+            ss = dict(ss) if isinstance(ss, dict) else {}
+            _before_len = _num(ss.get("length_mm"))
+            ss.update({"a": a, "b": b, "t": t, "length_mm": cut})
+            part["section_stock"] = ss
+            if _before_len != cut:
+                _flagged = True
+                out["tube"] += 1
 
         if _flagged:
             part.setdefault("review_flags", []).append(
