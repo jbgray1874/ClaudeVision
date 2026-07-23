@@ -602,10 +602,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             continue
         if _is_acrylic_pw(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area
+        # A part named TUBE is a hollow section, NOT a flat coated sheet: its blank (if any) is
+        # garbled view geometry, and its true coated area is a thin cylinder surface, not L×W×2.
+        # Without this guard a tube the LLM missed (e.g. 10M read as a 2431×2431 blank) injects
+        # ~24 m² of phantom coated area and dominates the powder line. Skip it from the sheet sum.
+        _sdesc = str(_sp.get("part_description") or _sp.get("description")
+                     or _sme.get("description") or "").upper()
+        if "TUBE" in _sdesc:
+            continue
         _sng = _sp.get("normalized_geometry") or {}
         _sl = _safe(_sme.get("blank_length_mm") or _sng.get("blank_length_mm"))
         _sw = _safe(_sme.get("blank_width_mm") or _sng.get("blank_width_mm"))
         _sq = _safe(_sp.get("quantity"), 1) or 1
+        # Sanity guard: a single fabricated part on a retail display is never a >3.5 m² flat blank
+        # (2431×2431 = 5.9 m²). An area that large is garbled PDF view geometry — exclude it from
+        # the coated sum rather than let one bad blank invent the whole powder cost.
+        if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
+            continue
         if _sl and _sw:
             _sheet_powder_area_m2 += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
 

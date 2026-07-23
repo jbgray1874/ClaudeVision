@@ -1607,6 +1607,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             side_a_mm, side_b_mm, wall_t_mm = _parse_section_profile(str(part.get("description") or ""))
         length_mm = _infer_section_length_mm(part)
 
+        # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
+        # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,
+        # which mis-costs it ~13x (timber density + rate vs steel). With a real a×b×t profile in
+        # hand, coerce a non-metal material to mild steel so mass and £/kg are right.
+        if side_a_mm and side_b_mm and wall_t_mm and str(material or "").upper().replace("_", " ") in (
+                "TIMBER", "WOOD", "MDF", "PLYWOOD", "SOFTWOOD", "OAK", "MDF / OAK VENEER"):
+            part.setdefault("review_flags", []).append(
+                f"material '{material}' overridden to MILD STEEL — part is a "
+                f"{side_a_mm:g}x{side_b_mm:g}x{wall_t_mm:g} hollow section (cannot be timber)")
+            material = "MILD STEEL"
+
         # ── Wire path (workbook rows 28-35) ──────────────────────────────────
         # M = (wire_£_per_tonne / metres_per_tonne / 1000) × length_mm × qty × (1+scrap)
         desc_upper = str(part.get("description") or "").upper()
