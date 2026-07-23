@@ -215,6 +215,26 @@ def _safe_str(v: Any) -> str:
     return str(v).strip()
 
 
+def _prop(props: Dict[str, str], *aliases: str) -> str:
+    """Case-insensitive property lookup by any of several alias names, tolerant of the
+    naming variation between designers/templates (Material vs MATERIAL vs 'Material Spec').
+    Generic — no per-job hardcoding: tries exact (case-folded) matches first, then a loose
+    contains-match. This is what keeps property extraction repeatable across every job."""
+    if not props:
+        return ""
+    low = {str(k).lower().strip(): v for k, v in props.items()}
+    for a in aliases:
+        v = low.get(a.lower().strip())
+        if v:
+            return _safe_str(v)
+    for a in aliases:
+        al = a.lower().strip()
+        for k, v in low.items():
+            if al in k and v:
+                return _safe_str(v)
+    return ""
+
+
 def _get0(obj, name):
     """Read a NO-ARGUMENT SolidWorks getter that late-binding pywin32 may expose as a
     method OR as a property. In this binding GetTitle/GetPathName/FirstFeature/
@@ -391,21 +411,16 @@ def sheet_metal_signals(doc) -> RouteSignals:
     if not _applied:
         _mid = _safe_str(_get0(doc, "MaterialIdName"))
         _applied = _mid.split("|")[-1].strip() if "|" in _mid else _mid
-    sig.material = (
-        props.get("Material")
-        or props.get("MATERIAL")
-        or props.get("Material Description")
-        or _applied
-        or ""
-    )
-    for k, v in props.items():
-        if "thick" in k.lower() and v:
-            try:
-                sig.thickness_mm = float(
-                    "".join(ch for ch in v.replace(",", ".") if ch.isdigit() or ch == ".")
-                )
-            except Exception:
-                pass
+    sig.material = _prop(props, "Material", "Material Description", "Material Spec",
+                         "Spec", "Grade") or _applied
+    _thk = _prop(props, "Thickness", "Sheet Thickness", "Gauge", "Material Thickness")
+    if _thk:
+        try:
+            sig.thickness_mm = float(
+                "".join(ch for ch in _thk.replace(",", ".") if ch.isdigit() or ch == ".")
+            )
+        except Exception:
+            pass
     sig.bbox_mm = get_bbox_mm(doc, SW_PART)
     sig.mass_kg = get_mass_kg(doc)
 
@@ -453,17 +468,12 @@ def assembly_bom(doc) -> List[BomLine]:
                 title = _safe_str(_get0(model, "GetTitle")) or title
                 path = _safe_str(_get0(model, "GetPathName"))
                 props = get_custom_properties(model)
-                material = (
-                    props.get("Material")
-                    or props.get("MATERIAL")
-                    or props.get("Description")
-                    or ""
-                )
+                material = _prop(props, "Material", "Material Description", "Material Spec", "Grade")
             key = (path or title, config)
             if key not in counts:
                 counts[key] = {
                     "part_number": title,
-                    "description": props.get("Description") or props.get("DESCRIPTION") or "",
+                    "description": _prop(props, "Description", "Part Description", "Desc"),
                     "qty": 0.0,
                     "config": config,
                     "material": material,
@@ -584,7 +594,7 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
                 asdict(
                     BomLine(
                         part_number=result["title"],
-                        description=props.get("Description", ""),
+                        description=_prop(props, "Description", "Part Description", "Desc"),
                         qty=1.0,
                         material=sig.material,
                         thickness_mm=sig.thickness_mm,
