@@ -101,11 +101,19 @@ def connect_solidworks(visible: bool):
     seat/ProgID isn't available — the trial licence must be active for this to work.
     """
     try:
+        import pythoncom
         import win32com.client  # pywin32
     except ImportError as e:  # pragma: no cover - Windows-only dependency
         raise RuntimeError(
             "pywin32 is not installed. Run:  pip install pywin32"
         ) from e
+
+    # Initialise COM for this thread before Dispatch (house pattern from the existing
+    # sw_read scripts) — required for reliable SolidWorks automation.
+    try:
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
 
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")
@@ -177,17 +185,32 @@ def read_custom_properties(model, config_name: str) -> Dict[str, str]:
         cpm = _safe(lambda: model.Extension.CustomPropertyManager(cfg))
         if cpm is None:
             continue
+        # GetNames is a PROPERTY (no parens) returning a tuple in the working sw_read
+        # scripts; fall back to the method form if a binding exposes it that way.
         names = _safe(lambda: cpm.GetNames)
-        # GetNames is a property returning a VARIANT array in most bindings.
         names_list = names if isinstance(names, (list, tuple)) else _safe(lambda: cpm.GetNames())
         if not names_list:
             continue
         for name in names_list:
-            # Get6 resolves references (e.g. "SW-Mass") to their evaluated value.
+            # Get5(FieldName, UseCached, ValOut, ResolvedValOut, WasResolved). The last
+            # three are BY-REF out-params; plain Python strings do not marshal into them
+            # (the same bug that silently broke OpenDoc6), which is why Get6-with-strings
+            # read nothing. Pass VARIANT VT_BYREF holders and read .value back — the house
+            # pattern from the existing sw_read scripts. Resolved value preferred over raw.
             val = None
-            got = _safe(lambda: cpm.Get6(name, False, "", "", False, False))
-            if isinstance(got, (list, tuple)) and len(got) >= 2:
-                val = got[1] or got[0]
+            try:
+                import pythoncom
+                from win32com.client import VARIANT
+                _raw = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+                _res = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BSTR, "")
+                _was = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_BOOL, False)
+                cpm.Get5(name, False, _raw, _res, _was)
+                val = _res.value or _raw.value
+            except Exception:
+                # Last-resort fallback: some bindings return Get6 as a tuple.
+                got = _safe(lambda: cpm.Get6(name, False, "", "", False, False))
+                if isinstance(got, (list, tuple)) and len(got) >= 2:
+                    val = got[1] or got[0]
             if val:
                 out[str(name)] = str(val)
     return out
@@ -229,6 +252,28 @@ def read_mass_properties(model) -> Dict[str, Any]:
     box = _safe(lambda: mp.GetMassProperties2(1))  # accuracy flag; may be unsupported
     if isinstance(box, (list, tuple)) and len(box) >= 6:
         out["bbox_m"] = [round(float(v), 6) for v in box[:6]]
+    return out
+
+
+def read_bounding_box_mm(model, is_assembly: bool) -> Dict[str, Any]:
+    """Axis-aligned bounding box in mm — GetPartBox(True) for a part, GetBox(0) for an
+    assembly (house pattern from sw_read). Returns width/height/depth. This is a cheap,
+    rebuild-free geometry read (unlike mass properties), useful for blank size sanity."""
+    out: Dict[str, Any] = {"width_mm": None, "height_mm": None, "depth_mm": None}
+    box = None
+    if is_assembly:
+        box = _safe(lambda: model.GetBox(0))
+    else:
+        box = _safe(lambda: model.GetPartBox(True))
+        if not box:
+            box = _safe(lambda: model.GetBox(0))
+    if isinstance(box, (list, tuple)) and len(box) >= 6:
+        try:
+            out["width_mm"] = round(abs(box[3] - box[0]) * 1000.0, 1)
+            out["height_mm"] = round(abs(box[4] - box[1]) * 1000.0, 1)
+            out["depth_mm"] = round(abs(box[5] - box[2]) * 1000.0, 1)
+        except Exception:
+            pass
     return out
 
 
@@ -406,6 +451,8 @@ def probe_model(sw, path: str, do_mass: bool) -> Dict[str, Any]:
         record["sheet_metal"] = _step("sheet_metal", lambda: read_sheetmetal_and_bends(model))
         record["holes"] = _step("holes", lambda: read_hole_signal(model))
         record["weldment_cut_list"] = _step("weldment_cut_list", lambda: read_weldment_cutlist(model))
+        record["bounding_box_mm"] = _step("bounding_box",
+                                          lambda: read_bounding_box_mm(model, record["doc_type"] == "assembly"))
         if record["doc_type"] == "assembly":
             record["components"] = _step("components", lambda: read_assembly_components(model))
         if do_mass:
