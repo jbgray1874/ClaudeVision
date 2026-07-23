@@ -32,13 +32,42 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+# Excel COM returns an errored cell (#VALUE!, #REF!, #DIV/0! …) as one of these int sentinels
+# (the CVErr codes). A total that ERRORED — e.g. a material formula referencing a missing
+# dimension cell (L=None) — must NEVER be cast to a float and stamped into the JSON as a real
+# price. On the M&S Horti Crate run this leaked #VALUE! (-2146826273) back as "material £-2.1bn".
+_EXCEL_ERROR_SENTINELS = frozenset({
+    -2146826288,  # xlErrNull   #NULL!
+    -2146826281,  # xlErrDiv0   #DIV/0!
+    -2146826273,  # xlErrValue  #VALUE!
+    -2146826265,  # xlErrRef    #REF!
+    -2146826259,  # xlErrName   #NAME?
+    -2146826252,  # xlErrNum    #NUM!
+    -2146826246,  # xlErrNA     #N/A
+})
+
+# No costing subtotal on this template is ever this large in magnitude; anything beyond it is
+# either an error sentinel that slipped through or a corrupt read — reject rather than stamp.
+_IMPLAUSIBLE_TOTAL = 1e8
+
+
+def _is_excel_error(v: Any) -> bool:
+    """True if a COM cell value is an Excel error sentinel (errored formula), not a real number."""
+    return isinstance(v, int) and not isinstance(v, bool) and v in _EXCEL_ERROR_SENTINELS
+
+
 def _safe_float(v: Any) -> Optional[float]:
+    if _is_excel_error(v):
+        return None
     try:
         if v is None or v == "":
             return None
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return None
+    if f != f or abs(f) >= _IMPLAUSIBLE_TOTAL:  # NaN or absurd magnitude -> not a credible total
+        return None
+    return f
 
 
 # ---- Excel COM open + full calc (mirrors estimate_full_parity_report._open_workbook_excel_com) ----
