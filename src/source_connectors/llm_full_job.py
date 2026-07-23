@@ -137,8 +137,15 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # on GEOMETRY. Where it exists (e.g. 12120), the LLM must NOT override the blank/section —
         # it only fills material/finish the engine lacks. The LLM drives geometry ONLY for the
         # no-DXF PDF-only parts (e.g. the M&S tender). So LLM vars can be live on every job safely.
-        _dxf_backed = str(part.get("geometry_source") or "").lower() in (
-            "dxf_flat_pattern", "dxf", "dxf_flat") or bool(part.get("dxf_source_file"))
+        # Match the engine's OWN definition of DXF-backed (estimator.py:109 uses
+        # geometry_source=='dxf_flat_pattern' OR dxf_augmented) plus the other DXF markers it
+        # sets, so NO measured part slips through and gets overridden by the LLM.
+        _dxf_backed = (
+            str(part.get("geometry_source") or "").lower() in ("dxf_flat_pattern", "dxf", "dxf_flat")
+            or bool(part.get("dxf_augmented"))
+            or bool(part.get("flat_pattern_detected"))
+            or bool(part.get("dxf_source_file"))
+        )
 
         mat = jp.get("material")
         if mat and not str(part.get("normalized_material") or "").strip():
