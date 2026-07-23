@@ -135,30 +135,50 @@ def count_pages(pdf_path: str) -> int:
 # ----------------------------------------------------------------------------
 # Bump PROMPT_VERSION whenever _VISION_PROMPT changes — it is part of the cache
 # key, so a prompt change correctly invalidates every cached page result.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"  # v2: BOM rows (unchanged rules) + part_details + spec_block enrichment
 
 _VISION_PROMPT = """You are reading a single page of an engineering CAD drawing (SDI Displays).
-Your ONLY task is to transcribe any Bill of Materials (BOM) / parts table on this page.
+Transcribe ONLY what is VISIBLY PRINTED on this page. NEVER infer, guess, invent, or
+calculate. If a value is not printed on this page, use null (or an empty list).
 
-A BOM table has columns for: an ITEM number, a PART NUMBER / DWG NO / PartNo, a
-DESCRIPTION, and a QUANTITY (QTY). The header words vary between drawings.
-
-STRICT RULES:
+PRIMARY TASK — the Bill of Materials (BOM) / parts table:
+A BOM table has columns for an ITEM number, a PART NUMBER / DWG NO / PartNo, a DESCRIPTION,
+and a QUANTITY (QTY). The header words vary between drawings.
 - Transcribe ONLY rows that are visibly present in a BOM/parts table on THIS page.
-- Do NOT infer, guess, invent, or add rows that are not in a table. If a description
-  is only in a note (not the table cell), leave the description blank for that row.
+- Do NOT infer, guess, invent, or add rows that are not in a table. If a description is
+  only in a note (not the table cell), leave that row's description blank.
 - Read part numbers and quantities EXACTLY as printed (including hyphens/spaces).
-- Also read the drawing's own DWG NO from the title block (bottom-right) — that is
-  the PARENT assembly this table belongs to.
+- Read the drawing's own DWG NO from the title block (bottom-right) — that is the PARENT
+  assembly this table belongs to.
 - If there is NO BOM/parts table on this page, return an empty "rows" list.
 
-Return ONLY valid JSON, no markdown, in exactly this shape:
+SECONDARY — if THIS sheet details ONE part, capture its PRINTED detail (else leave null):
+material, thickness (mm), tube/section (e.g. "30 x 30 x 1.5mm"), cut length (mm), overall
+size, weight in grams (ONLY a printed weight — NEVER computed), finish, hole count (only if
+a count or hole table is printed), whether fold/bend lines are shown, and any verbatim
+manufacturing callouts (e.g. "SEAM THIS FACE", "CHROME").
+
+SECONDARY — the repeated notes/spec block, if present (else null): powder-coat micron
+range, weld specification, tolerances, material grades, timber note.
+
+Return ONLY valid JSON, no markdown, in EXACTLY this shape:
 {
   "parent": "<title-block DWG NO, or null>",
   "rows": [
     {"item": "1", "part_code": "1448-GA", "description": "UPPER LEG ASSEMBLY", "qty": 2}
-  ]
+  ],
+  "part_details": {
+    "material": null, "thickness_mm": null, "tube_section": null, "cut_length_mm": null,
+    "overall_size": null, "weight_g": null, "finish": null, "hole_count": null,
+    "fold_or_bend": null, "process_notes": []
+  },
+  "spec_block": {
+    "powder_micron": null, "weld_spec": null, "tolerances": null,
+    "material_grades": [], "timber_note": null
+  }
 }
+Fill part_details / spec_block ONLY from values printed on THIS sheet; any field not printed
+stays null. NEVER compute weight, area, or cut length — transcribe a printed number or null.
 """
 
 
@@ -308,7 +328,12 @@ def parse_vision_response(raw: str) -> Optional[Dict[str, Any]]:
             "quantity": qty,
             "kind": "vision",       # provenance tag; classification happens in merge
         })
-    return {"parent": parent, "rows": rows}
+    # Capture the v2 enrichment (part_details + spec_block) if present. Additive: consumers that
+    # only read "rows"/"parent" are unaffected. These are the LLM (Layer-3) view; the deterministic
+    # drawing_facts (Layer 2) remains authoritative — this is the cross-check / no-DXF backup.
+    part_details = obj.get("part_details") if isinstance(obj.get("part_details"), dict) else None
+    spec_block = obj.get("spec_block") if isinstance(obj.get("spec_block"), dict) else None
+    return {"parent": parent, "rows": rows, "part_details": part_details, "spec_block": spec_block}
 
 
 # ----------------------------------------------------------------------------
