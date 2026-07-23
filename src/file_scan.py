@@ -1879,6 +1879,30 @@ def _finalize_scan_summary(
             _part["textual_operations"] = _merged
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Whole-document LLM extract — DRIVE the estimate from a chat-session-style read ──
+    # Gated (SDI_LLM_FULL_EXTRACT). Reasons over the ENTIRE pack in one call (hierarchy + tube
+    # cut lengths + materials + weights) and folds it into the pre-estimate parts BEFORE costing,
+    # so the engine's own tube/weight paths fire with the real data instead of garbled per-page
+    # vision geometry. Every value is flagged LLM-sourced (estimator to verify) and is
+    # transcribed from the drawing, cross-checked against the deterministic reads. Failure-isolated.
+    import os as _os_llm
+    if _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").lower() in {"1", "true", "yes"} and pdf_path:
+        try:
+            from llm_full_extract import extract_full_job
+            from source_connectors.llm_full_job import apply_full_job_to_pre_estimate
+            _job = extract_full_job(str(pdf_path))
+            if _job.get("found"):
+                _c = apply_full_job_to_pre_estimate(_pre_estimate_parts, _job)
+                summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
+                summary["llm_full_extract"] = {"spec": _job.get("spec"), "counts": _c}
+                print(f"   [llm-full-extract] drove tube+{_c['tube']} material+{_c['material']} "
+                      f"weight+{_c['weight']} thickness+{_c['thickness']} "
+                      f"assembly-flagged+{_c['assembly_flagged']} into the estimate", flush=True)
+            else:
+                print(f"   [llm-full-extract] no job returned ({_job.get('error', '')})", flush=True)
+        except Exception as _e_llm:
+            print(f"   [llm-full-extract] skipped ({_e_llm})", flush=True)
+
     # SDI Intelligence — Learning Engine pre-scan
     # Runs AFTER augment_summary_with_dxf + pre-estimate normalisation,
     # BEFORE estimate_document, so knowledge-base / LiveOverrides corrections
