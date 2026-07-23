@@ -133,6 +133,12 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         if not jp:
             continue
         _flagged = False
+        # SOURCE WATERFALL: a DXF flat pattern (or SolidWorks native) is MEASURED truth and wins
+        # on GEOMETRY. Where it exists (e.g. 12120), the LLM must NOT override the blank/section —
+        # it only fills material/finish the engine lacks. The LLM drives geometry ONLY for the
+        # no-DXF PDF-only parts (e.g. the M&S tender). So LLM vars can be live on every job safely.
+        _dxf_backed = str(part.get("geometry_source") or "").lower() in (
+            "dxf_flat_pattern", "dxf", "dxf_flat") or bool(part.get("dxf_source_file"))
 
         mat = jp.get("material")
         if mat and not str(part.get("normalized_material") or "").strip():
@@ -157,7 +163,7 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # generic @1100 / garbled one); the LLM cut length is the printed truth.
         a, b, t = _parse_section(jp.get("tube_section"))
         cut = _num(jp.get("cut_length_mm"))
-        if a and b and t and cut and cut > 0:
+        if a and b and t and cut and cut > 0 and not _dxf_backed:  # DXF geometry wins; LLM drives no-DXF
             ss = part.get("section_stock")
             ss = dict(ss) if isinstance(ss, dict) else {}
             _before_len = _num(ss.get("length_mm"))
