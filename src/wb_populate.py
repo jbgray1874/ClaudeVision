@@ -173,6 +173,13 @@ OP_NAME_MAP = {
     "tube":           "Tube",
     "saw":            "Saw",
     "sawing":         "Saw",
+    # Deburr / linish — a quick hand finishing pass. It was unmapped, so the WB fuzzy-matched it
+    # to CNCJ (£64.07/hr) and, with no throughput default, billed ~22 hrs. Map it to its real
+    # dept so it costs at the deburr rate, not CNC joinery. (Throughput default added above.)
+    "deburring":      "Grinding / Deburr",
+    "deburr":         "Grinding / Deburr",
+    "linisher":       "Grinding / Deburr",
+    "linishing":      "Grinding / Deburr",
     # Timber / joinery operations. These map to the estimators' own route titles
     # (config.SDI_OPERATION_CODES). If a title does not match a row in the WB rate table the
     # WB LOOKUP returns 0 for that line — the run will show which the template actually carries,
@@ -1066,6 +1073,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "Tube":                      40,    # UNMEASURED
         "Guillotine":                80,    # UNMEASURED
         "Drill (Acrylic)":           30,    # UNMEASURED
+        # Deburr/linish is a quick hand pass. Without a default the engine's time model gave a
+        # garbage ~1/hr, so a single grouped deburr line billed 22 hrs / £365 at the CNCJ rate —
+        # the biggest single error on a metal job. A sane default lets the floor cap it.
+        "Grinding / Deburr":        120,    # UNMEASURED — quick hand deburr, config-tunable
     }
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
