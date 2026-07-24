@@ -902,6 +902,10 @@ FALLBACK_PRICING_POLICY = {
     "web_ai_call_timeout_s": 25,
     "max_web_ai_lookups_per_job": 25,
     "skip_rollup_parents": True,
+    # SQL query-execution timeout (seconds). The pyodbc CONNECT timeout does not bound a running
+    # query, so a slow/locked query on SDILive would hang the whole estimate at 0 CPU. This bounds
+    # each query: on overrun it degrades to 'no price' for that part (flagged) and the run finishes.
+    "sql_query_timeout_s": 30,
 }
 
 # openpyxl cannot save .xls; use an .xlsx copy of the blank estimate for --generate-ai-spreadsheet / write-back.

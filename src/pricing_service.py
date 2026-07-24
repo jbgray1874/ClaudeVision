@@ -48,12 +48,27 @@ class PricingService:
             f"UID={c.get('username')};PWD={c.get('password')};"
             "Encrypt=yes;TrustServerCertificate=yes;"
         )
-        return pyodbc.connect(conn_str, timeout=30)
+        _conn = pyodbc.connect(conn_str, timeout=30)   # login/connect timeout
+        # QUERY-execution timeout — the connect timeout above does NOT bound a running query, so a
+        # slow/locked query on SDILive blocks the whole estimate forever (0 CPU). Bound it: a query
+        # that overruns raises instead of hanging, and _fetch_*_with_retry degrades to no-price for
+        # that part (flagged) while the run finishes. Config lever, default 30s.
+        try:
+            _pol = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+            _conn.timeout = int(_pol.get("sql_query_timeout_s", 30))
+        except Exception:
+            pass
+        return _conn
 
     def _is_connection_error(self, exc: Exception) -> bool:
         message = str(exc).lower()
         tokens = ("connection", "closed", "08s01", "08003", "communication link failure")
         return any(token in message for token in tokens)
+
+    def _is_query_timeout(self, exc: Exception) -> bool:
+        """A pyodbc query-execution timeout (conn.timeout). SQLSTATE HYT00 / 'timeout expired'."""
+        message = str(exc).lower()
+        return "hyt00" in message or "timeout expired" in message or "query timeout" in message
 
     def _rounding_mode(self) -> str:
         policy = getattr(config, "ROUNDING_POLICY", {}) or {}
@@ -81,6 +96,15 @@ class PricingService:
                 if attempt == 0 and self._is_connection_error(exc):
                     self.conn = self._connection_factory()
                     continue
+                if self._is_query_timeout(exc):
+                    # slow/locked query — abandon this lookup (part flags 'no price'), reconnect so
+                    # subsequent parts still price, and never block the whole run on one query.
+                    print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
+                    try:
+                        self.conn = self._connection_factory()
+                    except Exception:
+                        pass
+                    return None
                 raise
             finally:
                 if cursor is not None:
@@ -101,6 +125,13 @@ class PricingService:
                 if attempt == 0 and self._is_connection_error(exc):
                     self.conn = self._connection_factory()
                     continue
+                if self._is_query_timeout(exc):
+                    print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
+                    try:
+                        self.conn = self._connection_factory()
+                    except Exception:
+                        pass
+                    return []
                 raise
             finally:
                 if cursor is not None:
