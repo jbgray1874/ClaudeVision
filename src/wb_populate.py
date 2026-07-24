@@ -173,6 +173,18 @@ OP_NAME_MAP = {
     "tube":           "Tube",
     "saw":            "Saw",
     "sawing":         "Saw",
+    # Timber / joinery operations. These map to the estimators' own route titles
+    # (config.SDI_OPERATION_CODES). If a title does not match a row in the WB rate table the
+    # WB LOOKUP returns 0 for that line — the run will show which the template actually carries,
+    # then we finalise the strings. Rates all exist engine-side (SAW/CNCJ/GLUE/SPRY).
+    "cnc_routing":    "CNC / Joinery machining",
+    "cnc":            "CNC / Joinery machining",
+    "cnc_joinery":    "CNC / Joinery machining",
+    "glue":           "Gluing / Bonding",
+    "gluing":         "Gluing / Bonding",
+    "wet_spray":      "Spray / Wet Paint",
+    "spray":          "Spray / Wet Paint",
+    "bench_work":     "Bench work / fitting",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
     "roll":           "Roll",
@@ -1071,8 +1083,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # electricals) are purchased finished goods — they must NOT generate fabrication
     # labour rows (e.g. BI-ADHESIVECABLE was wrongly getting an 'Assemble/pack' line).
     labour_parts = list(steel_parts) + list(board_parts) + list(weldment_parts) + list(wire_parts)
+
+    def _pe_material(p):
+        return str(p.get("normalized_material") or (p.get("material_estimate") or {}).get("material") or "")
+
     labour_parts += [p for p in bom_parts
-                     if str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"]
+                     if str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"
+                     # Timber/board panels are direct-priced in the BOM block for MATERIAL, but they
+                     # still need their sawing/routing/gluing/lacquer LABOUR — pull them into the
+                     # labour path (their stated-weight stock_form + board material is the signature;
+                     # this excludes the PVC sticker and metal fasteners, which are not stated_weight).
+                     or (str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "stated_weight"
+                         and _is_board(_pe_material(p)))]
     # Powder gate: costs_gbp carries powder_coating blind to finish (part_estimates
     # has finish=None). The reliable drawing-derived signal is textual_operations on
     # the fuller manufacturing_writeup.parts record. Build {part_number -> is_powder}.

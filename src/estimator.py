@@ -2374,6 +2374,34 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_times_min["deburring"] = 1.0
         run_times_min["deburring"] = round(max(0.5, (pierces * 30.0) / 60.0), 2)
 
+    # ── TIMBER / BOARD process allowance (no-geometry) ──────────────────────────────────
+    # A wood/board part on a PDF gives a printed WEIGHT but no blank L×W, so every geometry-based
+    # timer above reads 0 and the panel gets ZERO labour — yet a sawn, rebated, glued-and-pinned,
+    # lacquered timber panel plainly has labour content. When no cutting op fired and there is no
+    # cut length, assign flat per-part ALLOWANCES at the REAL shop rates (SAW/CNC-rout/GLUE/SPRY/
+    # assembly) so labour is a sensible, FLAGGED figure the estimator refines — never £0, never a
+    # metal-laser lie. Minutes are config-tunable (TIMBER_LABOUR_ALLOWANCE_MIN). Geometry-backed
+    # timber (from a DXF) keeps its real timing and skips this.
+    _mat_family = _mat_u.replace(" ", "_")
+    _TIMBER_FAMILIES = {"TIMBER", "WOOD", "MDF", "MDF_BOARD", "VENEERED_MDF", "OAK_VENEER_MDF",
+                        "PLYWOOD", "BIRCH_PLYWOOD", "SOFTWOOD", "HARDWOOD", "PINE"}
+    if (_mat_family in _TIMBER_FAMILIES
+            and not _has_cut_op
+            and not (cut_length_mm and cut_length_mm > 0)):
+        _alloc = getattr(config, "TIMBER_LABOUR_ALLOWANCE_MIN", None) or {
+            "saw": 1.5, "cnc_routing": 2.0, "glue": 1.5, "wet_spray": 1.5, "handling": 1.0,
+        }
+        for _top, _mins in _alloc.items():
+            _m = float(_mins or 0.0)
+            if _m <= 0:
+                continue
+            run_times_min[_top] = round(run_times_min.get(_top, 0.0) + _m, 2)
+            setup_times_min.setdefault(_top, 1.0)
+        part["timber_labour_allowance"] = True
+        part.setdefault("review_flags", []).append(
+            "timber labour is a FLAT PER-PART ALLOWANCE (saw/rout/glue/lacquer at shop rates) — "
+            "no panel dimensions on the PDF to time it precisely; estimator to refine")
+
     unit_times_min: Dict[str, float] = {}
     total_times_min: Dict[str, float] = {}
     for op in set(setup_times_min) | set(run_times_min):
