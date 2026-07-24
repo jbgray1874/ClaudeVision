@@ -2385,9 +2385,19 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     _mat_family = _mat_u.replace(" ", "_")
     _TIMBER_FAMILIES = {"TIMBER", "WOOD", "MDF", "MDF_BOARD", "VENEERED_MDF", "OAK_VENEER_MDF",
                         "PLYWOOD", "BIRCH_PLYWOOD", "SOFTWOOD", "HARDWOOD", "PINE"}
-    if (_mat_family in _TIMBER_FAMILIES
-            and not _has_cut_op
-            and not (cut_length_mm and cut_length_mm > 0)):
+    # Fire for ANY no-DXF timber/board part. We deliberately do NOT gate on cut_length: a PDF
+    # vector rollup often yields a phantom cut length, which previously (a) skipped this whole
+    # allowance and (b) let a metal 'laser_cutting' op attach to timber. A timber panel is sawn/
+    # routed, never metal-lasered, so we STRIP any inferred laser and assign the joinery route.
+    # Real DXF-backed timber keeps its measured timing and skips this.
+    _timber_dxf = ("dxf" in str(part.get("geometry_source") or "").lower()
+                   or bool(part.get("dxf_augmented")) or bool(part.get("flat_pattern_detected")))
+    if (_mat_family in _TIMBER_FAMILIES and not _timber_dxf
+            and not any(o in ("saw", "cnc_routing", "cnc") for o in set(run_times_min))):
+        # Timber is not laser-cut — drop any metal laser op the sheet/board inference attached.
+        for _bad in ("laser_cutting", "guillotine", "punch"):
+            run_times_min.pop(_bad, None)
+            setup_times_min.pop(_bad, None)
         _alloc = getattr(config, "TIMBER_LABOUR_ALLOWANCE_MIN", None) or {
             "saw": 1.5, "cnc_routing": 2.0, "glue": 1.5, "wet_spray": 1.5, "handling": 1.0,
         }

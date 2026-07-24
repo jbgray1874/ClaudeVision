@@ -44,16 +44,25 @@ def _parse_section(s: Optional[str]):
     return _num(m.group(1)), _num(m.group(2)), _num(m.group(3))
 
 
+_METAL_FAMILIES = {"MILD_STEEL", "STAINLESS_STEEL", "ALUMINIUM", "ZINTEC", "GALVANISED_STEEL"}
+_NON_METAL_FAMILIES = {"TIMBER", "MDF", "PLYWOOD", "ACRYLIC", "HIPS", "PVC", "FOAMEX"}
+
+
 def _norm_material(m: str) -> str:
     u = str(m or "").upper()
     if "STAINLESS" in u:
         return "STAINLESS_STEEL"
+    if "MDF" in u or "VENEER" in u:                       # MRMDF, MR MDF, veneered MDF
+        return "MDF"
+    if "PLYWOOD" in u or "PLYWD" in u:
+        return "PLYWOOD"
+    # Solid timber / softwood species — a title block names the species (FSC PINE, SPRUCE, OAK),
+    # not the generic "TIMBER"; map them all to the costable family.
+    if any(t in u for t in ("PINE", "SPRUCE", "SOFTWOOD", "HARDWOOD", "TIMBER", "WOOD",
+                            "OAK", "BEECH", "BIRCH", "FSC")):
+        return "TIMBER"
     if "MILD" in u or u.strip() == "STEEL":
         return "MILD_STEEL"
-    if "MDF" in u or "VENEER" in u:
-        return "MDF"
-    if "TIMBER" in u or "WOOD" in u or "OAK" in u:
-        return "TIMBER"
     if "ALUM" in u:
         return "ALUMINIUM"
     if "ACRYLIC" in u or "PERSPEX" in u:
@@ -200,10 +209,27 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 out["qty"] += 1
 
         mat = jp.get("material")
-        if mat and not str(part.get("normalized_material") or "").strip():
-            part["normalized_material"] = _norm_material(mat)
-            _flagged = True
-            out["material"] += 1
+        if mat:
+            _new_mat = _norm_material(mat)
+            _cur_mat = str(part.get("normalized_material") or "").strip().upper()
+            if not _cur_mat:
+                # gap fill — engine had nothing
+                part["normalized_material"] = _new_mat
+                _flagged = True
+                out["material"] += 1
+            elif (not _dxf_backed
+                  and _new_mat in _NON_METAL_FAMILIES
+                  and _cur_mat in _METAL_FAMILIES):
+                # OVERRIDE a wrong metal DEFAULT. The engine defaults unknown material to mild
+                # steel; on a no-DXF timber/board part the title-block material (FSC PINE, MRMDF)
+                # is authoritative and a wood/board part is definitively NOT steel. Without this
+                # the panels cost as steel-by-weight + metal laser and the timber path never fires.
+                part.setdefault("review_flags", []).append(
+                    f"material '{_cur_mat}' (engine default) overridden to '{_new_mat}' from the "
+                    f"drawing title block (no DXF) — part is not steel")
+                part["normalized_material"] = _new_mat
+                _flagged = True
+                out["material"] += 1
 
         wt = _num(jp.get("weight_g"))
         if wt and wt > 0 and not _num(part.get("stated_weight_g")):
