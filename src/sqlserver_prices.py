@@ -24,6 +24,7 @@ class SqlServerPriceConnector:
         material_price_query: str = "",
         labour_rate_query: str = "",
         part_system_cost_query: str = "",
+        part_system_cost_query_by_code: str = "",
         driver: str = "ODBC Driver 18 for SQL Server",
         encrypt: bool = True,
         trust_server_certificate: bool = True,
@@ -36,6 +37,7 @@ class SqlServerPriceConnector:
         self.material_price_query = material_price_query
         self.labour_rate_query = labour_rate_query
         self.part_system_cost_query = part_system_cost_query
+        self.part_system_cost_query_by_code = part_system_cost_query_by_code
         self.driver = driver
         self.encrypt = encrypt
         self.trust_server_certificate = trust_server_certificate
@@ -202,9 +204,29 @@ class SqlServerPriceConnector:
             self._debug(f"start get_part_system_cost part_code={part_code_norm} desc_len={len(desc_norm)}")
             connection = self._connect()
             cursor = connection.cursor()
-            params = [part_code_norm, desc_norm, part_code_norm, desc_norm, part_code_norm]
-            self._execute_query(cursor, self.part_system_cost_query, params)
-            for row in self._rows_to_dicts(cursor):
+            # Fast path: exact part-code seek (sargable, ~ms) BEFORE the description
+            # LIKE '%...%' scan. A code match already outranks a description match in
+            # the full query, so when this hits, the result is identical — it just
+            # avoids the 91k-row table scan (which was costing ~5.7s per part).
+            db_rows: List[Dict[str, Any]] = []
+            if part_code_norm and self.part_system_cost_query_by_code:
+                self._execute_query(
+                    cursor,
+                    self.part_system_cost_query_by_code,
+                    [part_code_norm, part_code_norm, part_code_norm],
+                )
+                db_rows = self._rows_to_dicts(cursor)
+                if db_rows:
+                    self._debug(
+                        f"code-seek hit part_code={part_code_norm} elapsed={round(time.time()-started,2)}s"
+                    )
+            # Fallback: only when the code seek found nothing do we run the full
+            # query that also scans [Description] with LIKE '%...%'.
+            if not db_rows:
+                params = [part_code_norm, desc_norm, part_code_norm, desc_norm, part_code_norm]
+                self._execute_query(cursor, self.part_system_cost_query, params)
+                db_rows = self._rows_to_dicts(cursor)
+            for row in db_rows:
                     price = row.get("price")
                     if price is None:
                         price = row.get("system_cost_per")

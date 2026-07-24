@@ -683,6 +683,58 @@ ORDER BY
     source_rank,
     combined.price DESC
 """,
+        # Sargable fast-path: exact part-code seek only, NO description LIKE scan.
+        # Tried first in get_part_system_cost; a code match already outranks any
+        # description match in the full query above, so when this returns a row the
+        # result is identical — it just skips the 91k-row table scan (~5.7s → ~ms).
+        # The full query above is used only as a fallback when this returns nothing.
+        # Expected params: (part_code, part_code, part_code)
+        "part_system_cost_query_by_code": """
+SELECT TOP (1) * FROM (
+    SELECT
+        u.[Part code]      COLLATE Latin1_General_CI_AS AS part_code,
+        u.[Description]    COLLATE Latin1_General_CI_AS AS description,
+        u.[System cost per]                              AS system_cost_per,
+        CAST(u.[System cost per] AS decimal(18,4))       AS price,
+        u.[Supplier code]  COLLATE Latin1_General_CI_AS AS supplier_code,
+        u.[Supplier name]  COLLATE Latin1_General_CI_AS AS supplier_name,
+        'GBP'              AS currency,
+        u.[UOM]            COLLATE Latin1_General_CI_AS AS unit,
+        0.98               AS confidence,
+        GETDATE()          AS price_date,
+        0                  AS source_rank,
+        u.[WO Est lab cost]     AS wo_est_lab_cost,
+        u.[WO Est mat cost]     AS wo_est_mat_cost,
+        u.[WO Actual lab cost]  AS wo_actual_lab_cost,
+        u.[WO Actual mat cost]  AS wo_actual_mat_cost
+    FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+    WHERE LTRIM(RTRIM(u.[Part code] COLLATE Latin1_General_CI_AS)) = LTRIM(RTRIM(?))
+    UNION ALL
+    SELECT
+        b.part_code        COLLATE Latin1_General_CI_AS,
+        b.description      COLLATE Latin1_General_CI_AS,
+        b.unit_price_gbp   AS system_cost_per,
+        CAST(b.unit_price_gbp AS decimal(18,4)) AS price,
+        b.supplier_code    COLLATE Latin1_General_CI_AS,
+        b.supplier_name    COLLATE Latin1_General_CI_AS,
+        'GBP'              AS currency,
+        b.uom              COLLATE Latin1_General_CI_AS AS unit,
+        0.93               AS confidence,
+        b.effective_date   AS price_date,
+        1                  AS source_rank,
+        NULL AS wo_est_lab_cost,
+        NULL AS wo_est_mat_cost,
+        NULL AS wo_actual_lab_cost,
+        NULL AS wo_actual_mat_cost
+    FROM dbo.bought_in_parts b
+    WHERE b.is_active = 1
+      AND LTRIM(RTRIM(b.part_code)) = LTRIM(RTRIM(?))
+) combined
+ORDER BY
+    CASE WHEN LTRIM(RTRIM(combined.part_code)) = LTRIM(RTRIM(?)) THEN 0 ELSE 1 END,
+    source_rank,
+    combined.price DESC
+""",
     },
     "sqlserver": {
         "enabled": True,
@@ -828,6 +880,57 @@ SELECT TOP (1) * FROM (
           LTRIM(RTRIM(b.part_code)) = LTRIM(RTRIM(?))
           OR b.description LIKE '%' + LTRIM(RTRIM(?)) + '%'
       )
+) combined
+ORDER BY
+    CASE WHEN LTRIM(RTRIM(combined.part_code)) = LTRIM(RTRIM(?)) THEN 0 ELSE 1 END,
+    source_rank,
+    combined.price DESC
+""",
+        # Sargable fast-path: exact part-code seek only, NO description LIKE scan.
+        # Tried first in get_part_system_cost; identical TOP(1) result to the full
+        # query above whenever a code match exists (code outranks description), but
+        # skips the 91k-row scan. Full query used only as fallback on a code miss.
+        # Expected params: (part_code, part_code, part_code)
+        "part_system_cost_query_by_code": """
+SELECT TOP (1) * FROM (
+    SELECT
+        u.[Part code]      COLLATE Latin1_General_CI_AS AS part_code,
+        u.[Description]    COLLATE Latin1_General_CI_AS AS description,
+        u.[System cost per]                              AS system_cost_per,
+        CAST(u.[System cost per] AS decimal(18,4))       AS price,
+        u.[Supplier code]  COLLATE Latin1_General_CI_AS AS supplier_code,
+        u.[Supplier name]  COLLATE Latin1_General_CI_AS AS supplier_name,
+        'GBP'              AS currency,
+        u.[UOM]            COLLATE Latin1_General_CI_AS AS unit,
+        0.95               AS confidence,
+        GETDATE()          AS price_date,
+        0                  AS source_rank,
+        u.[WO Est lab cost]     AS wo_est_lab_cost,
+        u.[WO Est mat cost]     AS wo_est_mat_cost,
+        u.[WO Actual lab cost]  AS wo_actual_lab_cost,
+        u.[WO Actual mat cost]  AS wo_actual_mat_cost
+    FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+    WHERE LTRIM(RTRIM(u.[Part code] COLLATE Latin1_General_CI_AS)) = LTRIM(RTRIM(?))
+    UNION ALL
+    SELECT
+        b.part_code        COLLATE Latin1_General_CI_AS,
+        b.description      COLLATE Latin1_General_CI_AS,
+        b.unit_price_gbp   AS system_cost_per,
+        CAST(b.unit_price_gbp AS decimal(18,4)) AS price,
+        b.supplier_code    COLLATE Latin1_General_CI_AS,
+        b.supplier_name    COLLATE Latin1_General_CI_AS,
+        'GBP'              AS currency,
+        b.uom              COLLATE Latin1_General_CI_AS AS unit,
+        0.93               AS confidence,
+        b.effective_date   AS price_date,
+        1                  AS source_rank,
+        NULL AS wo_est_lab_cost,
+        NULL AS wo_est_mat_cost,
+        NULL AS wo_actual_lab_cost,
+        NULL AS wo_actual_mat_cost
+    FROM dbo.bought_in_parts b
+    WHERE b.is_active = 1
+      AND LTRIM(RTRIM(b.part_code)) = LTRIM(RTRIM(?))
 ) combined
 ORDER BY
     CASE WHEN LTRIM(RTRIM(combined.part_code)) = LTRIM(RTRIM(?)) THEN 0 ELSE 1 END,
