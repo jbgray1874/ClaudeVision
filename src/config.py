@@ -1337,7 +1337,17 @@ def get_connection(timeout: int = 30):
         f"UID={c.get('username')};PWD={c.get('password')};"
         "Encrypt=yes;TrustServerCertificate=yes;"
     )
-    return pyodbc.connect(conn_str, timeout=timeout)
+    _conn = pyodbc.connect(conn_str, timeout=timeout)   # login/connect timeout
+    # QUERY-execution timeout — the connect timeout does NOT bound a running query. This shared
+    # connection is used by the tube-catalogue lookup, board-rate resolver and drawing-facts; a
+    # slow/locked query on any of them would hang the whole estimate at 0 CPU. Bound query
+    # execution so it raises (caller degrades to no-match) instead of blocking forever.
+    try:
+        _qt = int((FALLBACK_PRICING_POLICY or {}).get("sql_query_timeout_s", 30))
+        _conn.timeout = _qt
+    except Exception:
+        pass
+    return _conn
 
 # ── Powder coating material rate ────────────────────────────────────────────
 # £ per kg of powder. The Estimate workbook computes powder MATERIAL kg per part
