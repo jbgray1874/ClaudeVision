@@ -287,7 +287,10 @@ def _is_sheet_metal(mat: str) -> bool:
 
 def _is_board(mat: str) -> bool:
     m = (mat or "").upper()
-    return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD"))
+    return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD",
+                                # timber families — a glued-and-pinned timber crate is NOT sheet metal
+                                "TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+                                "SPRUCE", "BEECH", "BIRCH"))
 
 
 def _is_tube(pe: Dict[str, Any]) -> bool:
@@ -489,7 +492,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         stock_form = str(me.get("stock_form") or "").lower()
         rflags = [str(f).lower() for f in (me.get("reliability_flags") or [])]
         roles = [str(r).lower() for r in (pe.get("page_roles") or [])]
-        mat = str(pe.get("normalized_material") or "").upper()
+        mat = str(pe.get("normalized_material") or me.get("material") or "").upper()
         blank_l = _safe(me.get("blank_length_mm"))
         unit_price = _safe(pe.get("unit_cost_gbp") or pe.get("unit_material_cost_gbp"))
         ext_total = _safe(pe.get("extended_total_cost_gbp"))
@@ -518,8 +521,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             excluded.append(pe)
             print(f"   [wb_populate] excluded assembly rollup: {pn} "
                   f"(£{ext_total} carried by children)")
-        # 3. steel (sheet or stated-weight, with real geometry)
-        elif stock_form in STEEL_STOCK_FORMS:
+        # 2b. Stated-weight part with NO nesting geometry (e.g. a timber panel costed by its
+        #     printed weight × £/kg). The area-based steel/board blocks can't display it — they
+        #     read L×W and would show £0. Write it as a DIRECT-priced BOM line (the same proven
+        #     path the tubes use) so its real per-part material cost reaches the sheet. Steel
+        #     stated-weight parts that DO carry a blank still route to the Sheet Steel block below.
+        elif stock_form == "stated_weight" and blank_l is None and _safe(me.get("cost_per_part_gbp")):
+            bom_parts.append(pe)
+        # 3. steel (sheet or stated-weight, with real geometry) — but NOT a board/timber part.
+        #    A timber panel costed by stated weight has stock_form 'stated_weight' (in
+        #    STEEL_STOCK_FORMS); without the board guard it would be dumped in Sheet Steel and
+        #    metal-lasered. Board/timber materials fall through to the board block below.
+        elif stock_form in STEEL_STOCK_FORMS and not _is_board(mat):
             steel_parts.append(pe)
         # 3b. wire / round bar -> Wire block (WB prices it from gauge + length)
         elif stock_form == "wire":

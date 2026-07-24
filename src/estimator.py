@@ -1359,8 +1359,32 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
     return best or {"candidate_sheet_size_mm": None, "parts_per_sheet": None, "utilisation_pct": None}
 
 
+def _canonical_material_family(raw: Any) -> Any:
+    """Map a raw title-block material string to the canonical family the cost/density/routing
+    tables key on. Timber drawings print species/grades (FSC PINE, MRMDF, SPRUCE, OAK VENEER)
+    that never matched TIMBER/MDF, so those parts had no price and fell through to the sheet
+    path as phantom mild steel. This normalises them. Metals/plastics pass through unchanged
+    (only maps when a timber/board token is present)."""
+    u = str(raw or "").upper()
+    if not u:
+        return raw
+    if "MDF" in u:                                   # MRMDF, MR MDF, VENEERED MDF, OAK VENEER MDF
+        return "MDF"
+    if "PLYWOOD" in u or "PLYWD" in u or " PLY" in u or u.endswith("PLY"):
+        return "PLYWOOD"
+    if any(t in u for t in ("PINE", "SPRUCE", "SOFTWOOD", "HARDWOOD", "TIMBER", "WOOD",
+                            "OAK", "BEECH", "BIRCH", "FSC")):
+        return "TIMBER"
+    return raw
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     material = part.get("normalized_material") or _first(part.get("materials", []))
+    material = _canonical_material_family(material)
+    if material:
+        # Propagate the canonical family back onto the part so wb_populate's block routing
+        # (which reads normalized_material) sends timber/board to the right block, not steel.
+        part["normalized_material"] = material
     thickness = _safe_thickness_mm(part)
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
