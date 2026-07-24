@@ -23,6 +23,7 @@ class PricingService:
     def __init__(self, conn: Any = None, connection_factory: Optional[Callable[[], Any]] = None) -> None:
         self._connection_factory = connection_factory or self._get_db_connection
         self.conn = conn or self._connection_factory()
+        self._web_ai_calls = 0        # per-job budget counter for the web/LLM price fallback
 
     def __enter__(self) -> "PricingService":
         return self
@@ -646,7 +647,8 @@ class PricingService:
         if catalog:
             return catalog
         fallback_policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
-        if fallback_policy.get("enable_web_ai_fallback"):
+        if fallback_policy.get("enable_web_ai_fallback") and self._web_ai_fallback_allowed(part, fallback_policy):
+            self._web_ai_calls += 1
             web_result = self._get_web_ai_fallback(part)
             if web_result:
                 return web_result
@@ -665,6 +667,39 @@ class PricingService:
             ),
         }
 
+    def _web_ai_fallback_allowed(self, part: Dict[str, Any], fallback_policy: Dict[str, Any]) -> bool:
+        """Gate the web/LLM fallback so it prices without ever hanging the run:
+          - skip rollup/assembly parents (no own price; searching them is wasted time), and
+          - stop once the per-job budget is spent (the rest flag 'estimator to confirm').
+        """
+        if fallback_policy.get("skip_rollup_parents", True):
+            _pn = str(part.get("part_number") or "").upper()
+            _desc = str(part.get("description") or "").upper()
+            _is_parent = (
+                bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))
+                or "weldment_parent_material_suppressed" in [str(f).lower() for f in (part.get("reliability_flags") or [])]
+                or _pn.endswith("-GA") or "-GA-" in _pn
+                or any(t in _desc for t in ("WELDMENT", "ASSEMBLY", "SUB ASSEMBLY", "SUB-ASSEMBLY"))
+            )
+            if _is_parent:
+                return False
+        try:
+            _budget = int(fallback_policy.get("max_web_ai_lookups_per_job", 25))
+        except (TypeError, ValueError):
+            _budget = 25
+        if _budget >= 0 and self._web_ai_calls >= _budget:
+            if self._web_ai_calls == _budget:
+                # log once when the cap is first hit
+                try:
+                    print(f"   [pricing] web/AI fallback budget reached ({_budget}) — remaining "
+                          f"unpriced parts flagged 'estimator to confirm' (config "
+                          f"FALLBACK_PRICING_POLICY.max_web_ai_lookups_per_job)", flush=True)
+                except Exception:
+                    pass
+                self._web_ai_calls += 1  # advance so the message prints only once
+            return False
+        return True
+
     def _get_web_ai_fallback(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
         try:
             from web_ai_price_lookup import lookup_web_ai_price
@@ -676,24 +711,40 @@ class PricingService:
         ops = list(dict.fromkeys(
             (part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
         ))
-        result = lookup_web_ai_price(
-            {
-                "material": part.get("normalized_material") or part.get("material"),
-                "description": part.get("description"),
-                "thickness_mm": part.get("thickness_mm"),
-                "part_code": part.get("part_number"),
-                "finish": next(iter(part.get("surface_finishes") or []), None),
-                "colour": next(iter(part.get("colours") or []), None),
-                "quantity": part.get("quantity"),
-                "length_mm": geom.get("blank_length_mm") or part.get("length_mm"),
-                "width_mm": geom.get("blank_width_mm") or part.get("width_mm"),
-                "weight_kg": geom.get("weight_kg"),
-                "operations": ops[:6],
-            },
-            enable_web_search=True,
-            enable_llm_estimate=True,
-        )
-        if not result.get("found") or not result.get("price_gbp"):
+        _spec = {
+            "material": part.get("normalized_material") or part.get("material"),
+            "description": part.get("description"),
+            "thickness_mm": part.get("thickness_mm"),
+            "part_code": part.get("part_number"),
+            "finish": next(iter(part.get("surface_finishes") or []), None),
+            "colour": next(iter(part.get("colours") or []), None),
+            "quantity": part.get("quantity"),
+            "length_mm": geom.get("blank_length_mm") or part.get("length_mm"),
+            "width_mm": geom.get("blank_width_mm") or part.get("width_mm"),
+            "weight_kg": geom.get("weight_kg"),
+            "operations": ops[:6],
+        }
+        # HARD wall-clock timeout: run the (multi-call, network+LLM) lookup on a worker thread and
+        # abandon it if it exceeds the budget. Even if an inner call has no timeout of its own, the
+        # run never blocks — a slow part just falls through to 'no price, estimator to confirm'.
+        try:
+            _timeout_s = float(fallback_policy.get("web_ai_call_timeout_s", 25))
+        except (TypeError, ValueError):
+            _timeout_s = 25.0
+        import concurrent.futures as _futures
+        try:
+            with _futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                _fut = _ex.submit(
+                    lookup_web_ai_price, _spec, enable_web_search=True, enable_llm_estimate=True)
+                result = _fut.result(timeout=_timeout_s)
+        except _futures.TimeoutError:
+            print(f"   [pricing] web/AI fallback timed out ({_timeout_s:.0f}s) on "
+                  f"{part.get('part_number') or _spec.get('description')} — flagged 'estimator to "
+                  f"confirm', run continues", flush=True)
+            return None
+        except Exception:
+            return None
+        if not result or not result.get("found") or not result.get("price_gbp"):
             return None
         capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
         return {

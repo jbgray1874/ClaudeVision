@@ -892,6 +892,16 @@ FALLBACK_PRICING_POLICY = {
     "enable_web_ai_fallback": True,
     "fallback_confidence": 0.65,
     "fallback_confidence_cap": 0.72,
+    # ── Bounds so the (valuable) web/LLM fallback can never HANG a run ──────────────
+    # The fallback prices bought-ins/non-catalogue parts (needed for a good estimate), but it
+    # runs per-part with serial network+LLM calls. Unbounded, a job with many unpriced parts
+    # stalls for tens of minutes. These caps keep the pricing while guaranteeing the run finishes:
+    #   - a hard wall-clock timeout per part (a slow/blocked call is abandoned -> part flagged),
+    #   - a per-job budget (price the first N via fallback; flag the rest 'estimator to confirm'),
+    #   - skip rollup/assembly parents (they carry no own price; web-searching them is wasted time).
+    "web_ai_call_timeout_s": 25,
+    "max_web_ai_lookups_per_job": 25,
+    "skip_rollup_parents": True,
 }
 
 # openpyxl cannot save .xls; use an .xlsx copy of the blank estimate for --generate-ai-spreadsheet / write-back.
