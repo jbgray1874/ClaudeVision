@@ -1375,6 +1375,8 @@ def _canonical_material_family(raw: Any) -> Any:
     if any(t in u for t in ("PINE", "SPRUCE", "SOFTWOOD", "HARDWOOD", "TIMBER", "WOOD",
                             "OAK", "BEECH", "BIRCH", "FSC")):
         return "TIMBER"
+    if "BOARD" in u:                                 # generic board / soft-touch laminate board
+        return "MDF"
     return raw
 
 

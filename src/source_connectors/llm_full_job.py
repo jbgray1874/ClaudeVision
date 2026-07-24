@@ -54,13 +54,15 @@ def _norm_material(m: str) -> str:
         return "STAINLESS_STEEL"
     if "MDF" in u or "VENEER" in u:                       # MRMDF, MR MDF, veneered MDF
         return "MDF"
-    if "PLYWOOD" in u or "PLYWD" in u:
+    if "PLYWOOD" in u or "PLYWD" in u or "PLY" in u:      # PLYWOOD, MARINE PLY, BIRCH PLY
         return "PLYWOOD"
     # Solid timber / softwood species — a title block names the species (FSC PINE, SPRUCE, OAK),
     # not the generic "TIMBER"; map them all to the costable family.
     if any(t in u for t in ("PINE", "SPRUCE", "SOFTWOOD", "HARDWOOD", "TIMBER", "WOOD",
                             "OAK", "BEECH", "BIRCH", "FSC")):
         return "TIMBER"
+    if "BOARD" in u:                                      # generic board / soft-touch laminate board
+        return "MDF"
     if "MILD" in u or u.strip() == "STEEL":
         return "MILD_STEEL"
     if "ALUM" in u:
