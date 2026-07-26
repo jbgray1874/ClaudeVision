@@ -271,13 +271,13 @@ def _call_xai_llm(
     if not api_key:
         logger.warning("XAI_API_KEY not set — xAI LLM fallback unavailable")
         return None
-    model = str(_web_cfg.get("xai_model") or "grok-4.3").strip()
+    model = str(_web_cfg.get("xai_model") or "grok-4.5").strip()
     effort = (reasoning_effort if reasoning_effort is not None
               else str(_web_cfg.get("xai_reasoning_effort") or "low")).strip().lower()
     req_body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        # grok-4.3 is a reasoning model: it counts reasoning tokens against the
+        # grok-4.x is a reasoning model: it counts reasoning tokens against the
         # completion budget and uses max_completion_tokens (not max_tokens). Give
         # headroom so reasoning doesn't consume the budget before the JSON answer.
         "max_completion_tokens": int(max_completion_tokens) if max_completion_tokens else 4000,

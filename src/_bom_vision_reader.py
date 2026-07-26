@@ -428,7 +428,7 @@ def main():
     ap.add_argument("--page", type=int, default=None, help="single page index (0-based)")
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--max-side", type=int, default=2000)
-    ap.add_argument("--model", default=os.environ.get("XAI_VISION_MODEL", "grok-4.3"))
+    ap.add_argument("--model", default=os.environ.get("XAI_VISION_MODEL", "grok-4.5"))
     ap.add_argument("--dump-image", action="store_true", help="save rendered PNGs for inspection")
     ap.add_argument("--verbose", action="store_true", help="print the raw LLM response for each page")
     ap.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR, help="where to store/read cached page results")

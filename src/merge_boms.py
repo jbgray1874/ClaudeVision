@@ -247,7 +247,7 @@ def reconcile_job(
     is identical to the previous inline main() (verified: standalone output unchanged).
     """
     if model is None:
-        model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+        model = os.environ.get("XAI_VISION_MODEL", "grok-4.5")
     if cache_dir is None:
         cache_dir = pathB.DEFAULT_CACHE_DIR
     _args = argparse.Namespace(
@@ -309,7 +309,7 @@ def main():
     ap.add_argument("--pdf", default=None)
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--max-side", type=int, default=2000)
-    ap.add_argument("--model", default=os.environ.get("XAI_VISION_MODEL", "grok-4.3"))
+    ap.add_argument("--model", default=os.environ.get("XAI_VISION_MODEL", "grok-4.5"))
     ap.add_argument("--cache-dir", default=pathB.DEFAULT_CACHE_DIR)
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--refresh", action="store_true")
