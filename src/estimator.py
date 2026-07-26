@@ -2472,6 +2472,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         or _is_section_or_wire_candidate(part, part.get("normalized_material"))
     )
     if (_mat_family in _TIMBER_FAMILIES and not _timber_dxf and not _section_like
+            and not part.get("is_assembly_parent")
             and not any(o in ("saw", "cnc_routing", "cnc") for o in set(run_times_min))):
         # Timber is not laser-cut — drop any metal laser op the sheet/board inference attached.
         for _bad in ("laser_cutting", "guillotine", "punch"):
@@ -2731,6 +2732,21 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     part_number = part.get("part_number") or part.get("item_number") or "unknown_part"
     if debug:
         print(f"[DEBUG] estimate_part start {part_number}")
+    # ── GA / overall-unit parent detected by number pattern ────────────────────────
+    # A part numbered <job>-00-<xxx> is the top-level unit/GA line (the whole product),
+    # not a fabricated leaf. Left as a leaf it double-counts: its stated whole-unit weight
+    # becomes a huge material line (Cocktails 12301-00-101 = £389) and it takes a phantom
+    # fabrication route. Its children are costed individually, so mark it an assembly parent
+    # BEFORE material costing -> material is suppressed (carried by children) and the fab/
+    # joinery route is gated off. Guarded on 'no flat pattern of its own', since a genuine
+    # fabricated leaf would carry DXF/blank geometry. General, not a Cocktails patch.
+    _pn_ga = str(part.get("part_number") or "").upper().strip()
+    if (re.match(r"^\d+-0+-\d+$", _pn_ga) and not part.get("flat_pattern_detected")
+            and not part.get("is_assembly_parent")):
+        part["is_assembly_parent"] = True
+        part.setdefault("review_flags", []).append(
+            "top-level unit/GA line (…-00-…) treated as assembly parent — material carried "
+            "by children, fabrication route suppressed; estimator to verify")
     material = estimate_material(part)
     if debug:
         print(f"[DEBUG] estimate_part material done {part_number}")
