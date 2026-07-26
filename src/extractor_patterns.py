@@ -650,11 +650,45 @@ def _infer_flat_pattern_dimensions(text: str) -> List[float]:
     return chosen if len(chosen) == 2 else []
 
 
+# ── Spec-legend boilerplate that carries material words in a NON-part context ──
+# Retail-display drawings (M&S and others) print a standard MATERIAL SPECIFICATIONS
+# legend that lists generic material categories and grade rules for the WHOLE product
+# range, e.g. "... UP TO 3mm THICK FOR POWDER COATED STEEL ... TIMBER PRODUCTS:
+# • Q235 OVER 3mm THICK ...". The word TIMBER in "TIMBER PRODUCTS:" is a SECTION
+# HEADER in that legend, not a statement that this part is made of timber. Because
+# the material scan reads the whole page, that header (and "WOOD PRODUCTS") gets
+# stamped onto steel parts whose own material callout is absent on the page — the
+# part is then routed through the timber/joinery path (saw/glue/CNC) in error.
+# Strip these boilerplate phrases before scanning so ONLY genuine callouts remain.
+# This never removes a real material: no drawing writes "TIMBER PRODUCTS" to mean
+# the part IS timber, and a genuine timber part keeps its own standalone TIMBER/
+# MDF/PLYWOOD callout (not followed by "PRODUCTS"). General across every drawing
+# that carries the legend, not a per-job patch.
+_MATERIAL_BOILERPLATE_RE = re.compile(
+    r"\bTIMBER\s+PRODUCTS\b"
+    r"|\bWOOD\s+PRODUCTS\b"
+    r"|\bMATERIAL\s+SPECIFICATIONS?\b"
+    r"|\bFOR\s+POWDER\s+COATED\s+STEEL\b"
+    r"|\bFOR\s+CHROME[,\s]+ZINC\s+PLATE\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_material_boilerplate(text: str) -> str:
+    """Blank out standard spec-legend phrases that carry a material word in a
+    non-part context (legend headers, grade-rule bullets) so they cannot set the
+    part's material family. Genuine part callouts are untouched."""
+    return _MATERIAL_BOILERPLATE_RE.sub(" ", text or "")
+
+
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
     raw_text = text or ""
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
-    materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, normalized_text, flags=re.IGNORECASE)]
+    # Material scan runs on de-boilerplated text: the spec-legend "TIMBER PRODUCTS:"
+    # header and grade bullets must not be read as this part's material.
+    material_scan_text = _strip_material_boilerplate(normalized_text)
+    materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
     revisions = _extract_revision_candidates(raw_text)
     dates = _findall_unique(DATE_PATTERN, normalized_text, flags=re.IGNORECASE)
