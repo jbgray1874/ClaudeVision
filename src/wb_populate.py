@@ -1130,6 +1130,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # garbage ~1/hr, so a single grouped deburr line billed 22 hrs / £365 at the CNCJ rate —
         # the biggest single error on a metal job. A sane default lets the floor cap it.
         "Grinding / Deburr":        120,    # UNMEASURED — quick hand deburr, config-tunable
+        # Joinery / timber-route ops. Without defaults the engine's time model derived a
+        # garbage ~0.17/hr on no-DXF timber parts, so grouped CNC/Glue/Spray lines billed
+        # 5-6 hrs/part (£1,050 CNC + £610 spray + £472 glue on Cocktails). Sane defaults let
+        # the floor cap them back to ~a minute or two per part. UNMEASURED, config-tunable.
+        "CNC / Joinery machining":   30,    # UNMEASURED — CNC router pass
+        "Gluing / Bonding":          40,    # UNMEASURED — manual glue-up
+        "Spray / Wet Paint":         60,    # UNMEASURED — wet spray booth
     }
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
