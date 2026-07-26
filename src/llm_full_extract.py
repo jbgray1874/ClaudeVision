@@ -21,7 +21,7 @@ Public API:
     extract_full_job(pdf_path, model=..., )  -> dict   (structured job; {} on failure)
 
 Standalone:
-    python llm_full_extract.py <pdf> [--model grok-4.5] [--context-only]
+    python llm_full_extract.py <pdf> [--model grok-4.3] [--context-only]
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ try:
 except Exception:  # pragma: no cover
     pdfplumber = None
 
-DEFAULT_MODEL = os.environ.get("XAI_VISION_MODEL", "grok-4.5")
+DEFAULT_MODEL = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
 SOURCE_NAME = "llm_full_extract"
 
 _PROMPT = """You are an experienced sheet-metal estimator reading a COMPLETE engineering drawing

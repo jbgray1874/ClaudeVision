@@ -958,7 +958,7 @@ ORDER BY
         #   XAI_API_KEY   for Grok / xAI SDK
         #   OPENAI_API_KEY for OpenAI
         "llm_provider": "xai",  # "xai", "openai", or "none"
-        "xai_model": "grok-4.5",
+        "xai_model": "grok-4.3",
         "openai_model": "gpt-4.1-mini",
         # When enable_web_ai_fallback is True, call LLM for indicative prices if catalog URLs miss or are absent.
         "llm_market_estimate_fallback": True,

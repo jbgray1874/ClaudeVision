@@ -51,7 +51,7 @@ print(f"  XAI_API_KEY      : {_mask('XAI_API_KEY')}")
 print(f"  SERPAPI_API_KEY  : {_mask('SERPAPI_API_KEY')}")
 web_cfg = (getattr(config, "PRICE_SOURCE_CONFIG", {}) or {}).get("web", {}) or {}
 pol = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
-print(f"  xai_model        : {web_cfg.get('xai_model', '(default grok-4.5)')}")
+print(f"  xai_model        : {web_cfg.get('xai_model', '(default grok-4.3)')}")
 print(f"  xai_reasoning    : {web_cfg.get('xai_reasoning_effort', '(default low)')}")
 print(f"  fallback enabled : {pol.get('enable_web_ai_fallback')}")
 print(f"  max_web_ai_calls : {pol.get('max_web_ai_calls', '(default 300)')}")
