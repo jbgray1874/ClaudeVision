@@ -763,20 +763,55 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         pass
 
     b = cm["bom"]
+
+    def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
+        """Best-available unit price for a BOM line (mirrors the per-row logic below).
+        Used to sum consolidated overflow value. Withheld/unpriced -> None."""
+        if _pe.get("_price_explicitly_withheld"):
+            return None
+        _me = _pe.get("material_estimate") or {}
+        _p = _safe(_pe.get("unit_cost_gbp") or _pe.get("unit_material_cost_gbp")
+                   or _me.get("unit_material_cost_gbp"))
+        if _p is None:
+            _ext = _safe(_pe.get("extended_total_cost_gbp"))
+            _q = int(_safe(_pe.get("quantity"), 1) or 1)
+            if _ext is not None and _q > 0:
+                _p = round(_ext / _q, 4)
+        return _p
+
+    # ── BOM overflow: spill-in-code, no template surgery, no lines dropped ──────────
+    # The template's BOM block holds a fixed number of rows. A big job (e.g. Cocktails,
+    # 48 bought-in/tube lines) exceeds it. Rather than fail the whole sheet (dropping to
+    # the legacy builder) or silently drop lines, write the first (_n_rows - 1) items
+    # individually and turn the FINAL BOM row into a consolidated 'overflow' line that
+    # carries the summed value of the remainder — so the material total stays correct —
+    # while every spilled line is itemised in full on a dedicated 'BOM Overflow' sheet.
+    _n_rows = b["last_row"] - b["first_row"] + 1
+    _bom_overflow_parts: List[Dict[str, Any]] = []
+    if len(bom_parts) > _n_rows:
+        _bom_overflow_parts = bom_parts[_n_rows - 1:]
+        _ov_total = 0.0
+        for _op in _bom_overflow_parts:
+            _pp = _bom_line_price(_op)
+            if _pp is not None:
+                _ov_total += _pp * int(_safe(_op.get("quantity"), 1) or 1)
+        _consolidated = {
+            "part_number": "BOM-OVERFLOW",
+            "description": (f"+{len(_bom_overflow_parts)} more bought-in items "
+                            f"(itemised on 'BOM Overflow' sheet)"),
+            "quantity": 1,
+            "unit_cost_gbp": round(_ov_total, 2),
+            "_bom_overflow_consolidated": True,
+        }
+        bom_parts = bom_parts[:_n_rows - 1] + [_consolidated]
+        _flag(f"BOM overflow: {len(_bom_overflow_parts) + _n_rows - 1} BOM/tube lines > "
+              f"{_n_rows} template rows. {len(_bom_overflow_parts)} spilled to the "
+              f"'BOM Overflow' sheet and consolidated (£{_ov_total:.2f}) on the last BOM "
+              f"row — no lines dropped.", flags)
+
     row = b["first_row"]
     for pe in bom_parts:
         if row > b["last_row"]:
-            _n_rows = b["last_row"] - b["first_row"] + 1
-            _lost = [str(p.get("part_number") or p.get("description") or "?")
-                     for p in bom_parts[_n_rows:]]
-            _msg = (f"BOM overflow: {len(bom_parts)} BOM/tube parts but only {_n_rows} rows. "
-                    f"Would DROP: {', '.join(_lost)}. Widen the BOM block in the template.")
-            if STRICT_BOM_OVERFLOW:
-                # A dropped bought-in is pure lost money with no visual cue on the sheet.
-                # 1282 lost £27 of LED Downlights this way, behind a flag nobody read.
-                # Refuse to produce a quietly-short estimate.
-                raise RuntimeError("[wb_populate] " + _msg)
-            _flag(_msg + " — extra parts DROPPED.", flags)
             break
         me = pe.get("material_estimate") or {}
         se = me.get("stock_estimate") or {}
@@ -862,6 +897,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if price is None:
             _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
         row += 1
+
+    # Itemise every spilled BOM line on a dedicated sheet so nothing is hidden behind the
+    # consolidated overflow row. Failure-isolated: a sheet-write error never breaks the run.
+    if _bom_overflow_parts:
+        try:
+            _ov_ws = wb.create_sheet("BOM Overflow")
+            _ov_ws.append(["Part code", "Description", "Supplier", "Unit Price (GBP)", "Qty"])
+            for _op in _bom_overflow_parts:
+                _ome = _op.get("material_estimate") or {}
+                _ov_ws.append([
+                    _op.get("part_number") or "",
+                    str(_op.get("description") or "")[:120],
+                    _op.get("supplier") or _ome.get("supplier") or "",
+                    _bom_line_price(_op),
+                    int(_safe(_op.get("quantity"), 1) or 1),
+                ])
+        except Exception:
+            pass
 
     # ── Wire block: desc, qty, gauge, length ───────────────────────────────
     # Round bar / stud / wire. The WB prices it itself:
