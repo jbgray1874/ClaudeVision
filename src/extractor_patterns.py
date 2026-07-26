@@ -580,6 +580,16 @@ def _extract_colour_candidates(text: str) -> List[str]:
     )
 
 
+# Cross-reference / placeholder phrases a MATERIAL field may carry on GA / parent sheets
+# ("MATERIAL: SEE INDIVIDUAL DRAWINGS") — these are NOT materials and must not be accepted
+# as one when the keyword list doesn't recognise the labelled value.
+_MATERIAL_REF_NOTE_RE = re.compile(
+    r"\b(SEE|REFER|INDIVIDUAL|ASSEMBLY|DRAWING|DRAWINGS|SHOWN|ABOVE|BELOW|VARIOUS|"
+    r"AS\s+PER|TBC|TBA|N/?A|NONE)\b",
+    re.IGNORECASE,
+)
+
+
 def _extract_material_candidates(text: str) -> List[str]:
     """Labelled 'MATERIAL:' extraction — the authoritative part callout, read the same
     way FINISH and COLOUR are (rather than a whole-page keyword scan). Excludes the
@@ -602,8 +612,12 @@ def _extract_material_candidates(text: str) -> List[str]:
         keyword_hits = _findall_unique(MATERIAL_PATTERN, v, flags=re.IGNORECASE)
         if keyword_hits:
             out.extend(keyword_hits)
-        elif len(v) <= 25 and re.fullmatch(r"[A-Za-z][A-Za-z /+.\-]*", v):
-            # a short alpha callout the keyword list does not yet know
+        elif (len(v) <= 25 and re.fullmatch(r"[A-Za-z][A-Za-z /+.\-]*", v)
+              and not _MATERIAL_REF_NOTE_RE.search(v)):
+            # a short alpha callout the keyword list does not yet know (e.g. MARINE PLY,
+            # TILES) — but NOT a cross-reference note like "SEE INDIVIDUAL DRAWINGS" that
+            # a GA/parent sheet puts in its MATERIAL field. Those fall through to the
+            # keyword fallback / engine default instead of becoming a bogus material.
             out.append(v)
     seen: set = set()
     unique: List[str] = []
