@@ -2458,7 +2458,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # Real DXF-backed timber keeps its measured timing and skips this.
     _timber_dxf = ("dxf" in str(part.get("geometry_source") or "").lower()
                    or bool(part.get("dxf_augmented")) or bool(part.get("flat_pattern_detected")))
-    if (_mat_family in _TIMBER_FAMILIES and not _timber_dxf
+    # A tube / section / wire / bar is a bought steel section — SDI saws-to-length, bends and
+    # welds it; it is NEVER joinery-routed (saw+CNC-rout+glue+wet-spray). When such a part is
+    # mis-tagged as a timber family (e.g. a steel FRONT POST CROSS RAIL that the boilerplate
+    # scan called TIMBER), the timber allowance below would bolt a full joinery route onto it
+    # and blow the labour up. Gate the allowance off for section-form parts, whatever the
+    # material tag says — its real route (weld/handling) comes from the tube path. General.
+    _stock_form_now = str((part.get("material_estimate") or {}).get("stock_form")
+                          or (part.get("manufacturing_interpretation") or {}).get("stock_form")
+                          or "").lower()
+    _section_like = (
+        _stock_form_now in ("tube", "wire", "section", "bar")
+        or _is_section_or_wire_candidate(part, part.get("normalized_material"))
+    )
+    if (_mat_family in _TIMBER_FAMILIES and not _timber_dxf and not _section_like
             and not any(o in ("saw", "cnc_routing", "cnc") for o in set(run_times_min))):
         # Timber is not laser-cut — drop any metal laser op the sheet/board inference attached.
         for _bad in ("laser_cutting", "guillotine", "punch"):
