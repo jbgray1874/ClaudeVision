@@ -180,6 +180,9 @@ OP_NAME_MAP = {
     "deburr":         "Grinding / Deburr",
     "linisher":       "Grinding / Deburr",
     "linishing":      "Grinding / Deburr",
+    # Diamond polish (acrylic edge finish). Unmapped it fell through to a raw op name with no
+    # throughput default → ~0.67/hr / £52 on a single diffuser. (Metal DPOL is gated out upstream.)
+    "diamond_polish": "Diamond Polish",
     # Timber / joinery operations. These map to the estimators' own route titles
     # (config.SDI_OPERATION_CODES). If a title does not match a row in the WB rate table the
     # WB LOOKUP returns 0 for that line — the run will show which the template actually carries,
@@ -216,8 +219,10 @@ OP_NAME_MAP_ACRYLIC = {
     "handling":       "Assemble/pack (Acrylic)",
     "assembly":       "Assemble/pack (Acrylic)",
     "assemble":       "Assemble/pack (Acrylic)",
-    "manual":         "Manual labour (Acrylic)",
-    "manual_labour":  "Manual labour (Acrylic)",
+    "manual":              "Manual labour (Acrylic)",
+    "manual_labour":       "Manual labour (Acrylic)",
+    "manual_labour_acrylic": "Manual labour (Acrylic)",   # engine emits the _acrylic-suffixed key
+    "diamond_polish":      "Diamond Polish",
 }
 
 # Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
@@ -1137,6 +1142,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "CNC / Joinery machining":   30,    # UNMEASURED — CNC router pass
         "Gluing / Bonding":          40,    # UNMEASURED — manual glue-up
         "Spray / Wet Paint":         60,    # UNMEASURED — wet spray booth
+        # Dress Welds (DRES): linish/grind the CO2 weld bead — a quick hand pass, like deburr.
+        # Had no default, so the engine's garbage ~0.88/hr stood: a grouped 16-part line billed
+        # 18.6 hrs / £533 — the single largest labour line on Cocktails and the whole gap to the
+        # engine's £976. A sane default lets the floor cap it.
+        "Dress Welds":               60,    # UNMEASURED — hand weld dressing, config-tunable
+        # Diamond Polish (DPOL): acrylic edge polish. Unmapped + no default gave ~0.67/hr / £52
+        # on a single diffuser. (Metal DPOL is already gated out upstream.)
+        "Diamond Polish":            90,    # UNMEASURED — acrylic edge polish, config-tunable
     }
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
