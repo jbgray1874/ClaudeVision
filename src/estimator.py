@@ -2085,6 +2085,26 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             part["inferred_operations"] = [
                 o for o in part["inferred_operations"] if o not in _metal_hole_ops
             ]
+    # diamond_polish is an acrylic-EDGE finishing op — steel is never diamond polished
+    # (it is linished/dressed). It leaks onto steel because the standard drawing boilerplate
+    # "CHROME PLATING - POLISHING SPECIFICATION IS 400 GRIT FINAL POLISH" sits on every page
+    # and the op-detector reads "POLISH", booking large spurious DPOL lines (e.g. £83 on a
+    # powder-coated base mesh, £32 on a base shelf). Strip it from metal parts unless the
+    # part's OWN finish explicitly calls a mirror / diamond polish. Acrylic parts are not
+    # metal, so they are unaffected here and still get DPOL via the acrylic route below.
+    # General de-pollution, same class as the material-boilerplate fix — not a per-job patch.
+    if _is_metal_any and "diamond_polish" in ops:
+        _fin_all = " ".join([
+            str(part.get("normalized_finish") or ""),
+            " ".join(str(f) for f in (part.get("surface_finishes") or [])),
+            str(part.get("finish") or ""),
+        ]).upper()
+        _genuine_polish = ("MIRROR" in _fin_all) or ("DIAMOND POLISH" in _fin_all)
+        if not _genuine_polish:
+            ops = [o for o in ops if o != "diamond_polish"]
+            for _op_field in ("textual_operations", "inferred_operations"):
+                if isinstance(part.get(_op_field), list):
+                    part[_op_field] = [o for o in part[_op_field] if o != "diamond_polish"]
     # Section/tube/wire parts without a flat DXF are SAWN/MITRED to length, not laser
     # profile-cut. Their PDF "cut length" is the whole-GA-page geometry rollup (e.g.
     # 24,508mm on a 600mm frame), so it must never drive laser cost or trigger a laser
