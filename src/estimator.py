@@ -2021,9 +2021,53 @@ def _is_punch_part(part: Dict[str, Any], holes: int, desc_blob: str) -> bool:
     return False
 
 
+# Special / bought-in FINISHING items — mirror mosaic tiles, ceramic/glass tiles,
+# graphic panels, vinyl/decal graphics. These are NOT SDI-fabricated: they carry no
+# saw/glue/CNC/laser/weld fab labour. Dual gate so it stays general:
+#   - part number ends in the M&S '-X' special/finishing suffix (e.g. 12301-08-04X), OR
+#   - description names a tile/mosaic/graphic/vinyl item
+# Keyed on BOTH so a future '-X' that is genuinely a different item still needs the
+# description to match, and a tile item without the suffix is still caught.
+_SPECIAL_ITEM_DESC_RE = re.compile(
+    r"\b(TILE|TILES|MOSAIC|GRAPHIC\s+PANEL|GRAPHIC|VINYL|DECAL)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_special_bought_in_item(part: Dict[str, Any]) -> bool:
+    pn = str(part.get("part_number") or "").strip().upper()
+    desc = " ".join([
+        str(part.get("description") or ""),
+        str(part.get("part_description") or ""),
+    ]).upper()
+    _suffix = re.search(r"\d([A-Z])$", pn)
+    x_suffix = bool(_suffix and _suffix.group(1) == "X")
+    return x_suffix or bool(_SPECIAL_ITEM_DESC_RE.search(desc))
+
+
+_SPECIAL_ITEM_FAB_OPS = {
+    "laser_cutting", "saw", "cnc", "cnc_routing", "guillotine", "punch",
+    "folding", "fold", "weld", "welding", "dress_welds", "glue", "wet_spray",
+    "powder_coating", "diamond_polish", "edge_banding", "bench_work",
+    "hole_machining", "drilling", "linebend",
+}
+
+
 def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str, Any]:
     geom = part.get("geometry_rollup", {})
     ops = _part_ops(part)
+    # Special / bought-in finishing items (tiles, mosaics, graphics, vinyl, -X suffix):
+    # strip all fabrication ops — they are bought in, not made. Handling is retained so
+    # the item is still received/assembled; pricing routes through the bought-in path.
+    if _is_special_bought_in_item(part):
+        ops = [o for o in ops if o not in _SPECIAL_ITEM_FAB_OPS]
+        for _op_field in ("textual_operations", "inferred_operations"):
+            if isinstance(part.get(_op_field), list):
+                part[_op_field] = [o for o in part[_op_field] if o not in _SPECIAL_ITEM_FAB_OPS]
+        _roles = [str(r).lower() for r in (part.get("page_roles") or [])]
+        if "bought_in" not in _roles:
+            part.setdefault("page_roles", []).append("bought_in")
+        part["special_finish_item"] = True
     manufacturing_features = part.get("manufacturing_features", {})
     geometry_confidence = 0.0
     if isinstance(geom.get("confidence"), dict):
@@ -2433,6 +2477,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         part.setdefault("review_flags", []).append(
             "timber labour is a FLAT PER-PART ALLOWANCE (saw/rout/glue/lacquer at shop rates) — "
             "no panel dimensions on the PDF to time it precisely; estimator to refine")
+
+    # Special / bought-in finishing items (tiles, mosaics, graphics, vinyl, -X suffix) carry
+    # NO fabrication labour, whatever the inference or timber-allowance blocks above added —
+    # they are bought in, not made. Final strip so only handling/assembly survives.
+    if part.get("special_finish_item"):
+        for _timing in (setup_times_min, run_times_min):
+            for _op in list(_timing.keys()):
+                if _op in _SPECIAL_ITEM_FAB_OPS:
+                    _timing.pop(_op, None)
 
     unit_times_min: Dict[str, float] = {}
     total_times_min: Dict[str, float] = {}
@@ -2882,6 +2935,13 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # (catalogue) match produces wild fuzzy-match prices (e.g. "BRACKET" -> £13k).
     if part.get("geometry_inferred"):
         bought_in_candidate = False
+
+    # A special finishing item (tiles/mosaic/graphic/vinyl, -X suffix) is bought in, not
+    # fabricated — even when the engine gave it provisional geometry. Price it via the
+    # bought-in path (UDEF match, or left flagged/unpriced if nothing matches). Overrides
+    # GUARD 1; the plausibility cap (GUARD 2) below still applies.
+    if part.get("special_finish_item"):
+        bought_in_candidate = True
 
     # GUARD 2 — Plausibility cap on the matched system cost. A genuine bought-in
     # fitting (castor, hinge, screw, Hafele part) is cheap. A four/five-figure hit
