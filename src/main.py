@@ -738,6 +738,13 @@ def main() -> None:
                 raise RuntimeError("populate_workbook returned None")
         except Exception as _wb_exc:
             print(f"\n[wb_populate] failed ({_wb_exc}) — falling back to xlsx_output", flush=True)
+            # Full traceback so the failing line is visible, not just the message.
+            # A bare exception message (e.g. a KeyError with only a key name) hides
+            # where in populate_workbook's 400+ lines it died; the fallback to the
+            # old builder is otherwise silent about the real cause.
+            import traceback as _tb
+            print("   [wb_populate] traceback:", flush=True)
+            _tb.print_exc()
             try:
                 from xlsx_output import write_estimate_xlsx
                 _fallback = write_estimate_xlsx(summary, out_dir=OUTPUT_DIR / "estimates")
