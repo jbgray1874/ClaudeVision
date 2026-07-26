@@ -580,6 +580,41 @@ def _extract_colour_candidates(text: str) -> List[str]:
     )
 
 
+def _extract_material_candidates(text: str) -> List[str]:
+    """Labelled 'MATERIAL:' extraction — the authoritative part callout, read the same
+    way FINISH and COLOUR are (rather than a whole-page keyword scan). Excludes the
+    'MATERIAL SPECIFICATION(S)' legend heading via negative lookahead so the generic
+    grade table (Q195/Q235/SPCC/TIMBER PRODUCTS) can never masquerade as the part's
+    material. Returns cleaned material tokens: a known keyword if one sits inside the
+    labelled value, else the short labelled callout itself (e.g. 'MARINE PLY', 'TILES')
+    so downstream family mapping can resolve materials the keyword list doesn't list."""
+    values = _extract_labeled_values(
+        text,
+        r"MATERIAL(?!\s*SPEC)\s*[:\-]",
+        TITLE_BLOCK_STOP_LABELS,
+    )
+    out: List[str] = []
+    for value in values:
+        # a cramped title block can run the labelled field straight into the legend text
+        v = _strip_material_boilerplate(normalize_text(value)).strip(" :;-,.")
+        if not v:
+            continue
+        keyword_hits = _findall_unique(MATERIAL_PATTERN, v, flags=re.IGNORECASE)
+        if keyword_hits:
+            out.extend(keyword_hits)
+        elif len(v) <= 25 and re.fullmatch(r"[A-Za-z][A-Za-z /+.\-]*", v):
+            # a short alpha callout the keyword list does not yet know
+            out.append(v)
+    seen: set = set()
+    unique: List[str] = []
+    for token in out:
+        key = token.upper()
+        if key not in seen:
+            seen.add(key)
+            unique.append(token)
+    return unique
+
+
 def _extract_thickness_fallbacks(text: str) -> List[str]:
     normalized = normalize_text(text)
     values = _findall_unique(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE)
@@ -685,10 +720,18 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     raw_text = text or ""
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
-    # Material scan runs on de-boilerplated text: the spec-legend "TIMBER PRODUCTS:"
-    # header and grade bullets must not be read as this part's material.
-    material_scan_text = _strip_material_boilerplate(normalized_text)
-    materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
+    # Material is read PRIMARY from the labelled "MATERIAL:" field (authoritative, the
+    # same way FINISH/COLOUR are extracted). Only when no labelled callout exists do we
+    # fall back to a whole-page keyword scan — and that scan runs on de-boilerplated text
+    # so the spec-legend "TIMBER PRODUCTS:" header and grade bullets can never be read as
+    # the part's material. This asymmetry (labelled FINISH/COLOUR but keyword MATERIAL)
+    # was the source of the family leak that put TIMBER on steel detail sheets.
+    labelled_materials = _extract_material_candidates(raw_text)
+    if labelled_materials:
+        materials = [canonical_material(value) for value in labelled_materials]
+    else:
+        material_scan_text = _strip_material_boilerplate(normalized_text)
+        materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
     revisions = _extract_revision_candidates(raw_text)
     dates = _findall_unique(DATE_PATTERN, normalized_text, flags=re.IGNORECASE)
@@ -1165,7 +1208,17 @@ def infer_operations_from_text(
     if is_acrylic and "laser_cutting" not in operations:
         operations.append("laser_cutting")
 
-    if "DIAMOND POLISH" in text or "MATT POLISH" in text or "POLISH" in text:
+    # diamond_polish only on a GENUINE polish cue. Bare "POLISH" was matching the standard
+    # boilerplate "CHROME PLATING - POLISHING SPECIFICATION IS 400 GRIT FINAL POLISH", which
+    # sits on every page, inventing a diamond-polish op on parts that are powder coated / raw.
+    # Suppress bare "POLISH" when it only appears in that spec-legend context.
+    _polish_boilerplate = ("POLISHING SPECIFICATION" in text
+                           or "FINAL POLISH" in text
+                           or "GRIT" in text)
+    _genuine_polish_cue = ("DIAMOND POLISH" in text or "MATT POLISH" in text
+                           or "MIRROR POLISH" in text or "FLAME POLISH" in text
+                           or "EDGE POLISH" in text)
+    if _genuine_polish_cue or ("POLISH" in text and not _polish_boilerplate):
         operations.append("diamond_polish")
 
     if "GLUE" in text or "BONDING" in text or "BONDED" in text:
