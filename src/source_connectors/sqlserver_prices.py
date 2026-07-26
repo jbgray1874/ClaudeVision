@@ -219,12 +219,23 @@ class SqlServerPriceConnector:
                     self._debug(
                         f"code-seek hit part_code={part_code_norm} elapsed={round(time.time()-started,2)}s"
                     )
-            # Fallback: only when the code seek found nothing do we run the full
-            # query that also scans [Description] with LIKE '%...%'.
+            # Fallback: description LIKE '%...%' scan. This is a leading-wildcard
+            # scan of the whole 91k-row purchased-parts table (~11s each) and it
+            # fires on every code-miss — i.e. every fabricated part, which are not
+            # in the purchased-parts catalogue, so it just burns seconds returning
+            # nothing. Real catalogue/bought-in parts are already found by exact
+            # code above. OFF by default; enable with SDI_ENABLE_PART_DESC_SCAN=1
+            # only when you specifically want description cross-matching.
             if not db_rows:
-                params = [part_code_norm, desc_norm, part_code_norm, desc_norm, part_code_norm]
-                self._execute_query(cursor, self.part_system_cost_query, params)
-                db_rows = self._rows_to_dicts(cursor)
+                if os.getenv("SDI_ENABLE_PART_DESC_SCAN", "").lower() in {"1", "true", "yes"}:
+                    params = [part_code_norm, desc_norm, part_code_norm, desc_norm, part_code_norm]
+                    self._execute_query(cursor, self.part_system_cost_query, params)
+                    db_rows = self._rows_to_dicts(cursor)
+                else:
+                    self._debug(
+                        f"code-seek miss part_code={part_code_norm} -> description scan skipped "
+                        f"(set SDI_ENABLE_PART_DESC_SCAN=1 to enable)"
+                    )
             for row in db_rows:
                 price = row.get("price")
                 if price is None:
