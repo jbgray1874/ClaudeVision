@@ -73,6 +73,26 @@ OP_PLAIN_LANGUAGE = {
     "saw":                 "Sawing to length",
     "tube_cut":            "Tube cutting to length",
     "manual_labour_acrylic":"Hand finishing (acrylic)",
+    # Operation keys the engine actually emits. Without these the quote printed raw
+    # internal names ("Cnc routing", "Dress welds", "Glue") to the customer.
+    "cnc_routing":         "CNC routing and joinery machining",
+    "cnc":                 "CNC machining to drawing",
+    "cnc_joinery":         "CNC routing and joinery machining",
+    "glue":                "Bonding and assembly",
+    "dress_welds":         "Weld dressing and finishing",
+    "deburring":           "Deburring and edge finishing",
+    "deburr":              "Deburring and edge finishing",
+    "linishing":           "Linishing and edge finishing",
+    "guillotine":          "Guillotine cutting from sheet",
+    "edge_banding":        "Edge banding to exposed edges",
+    "bench_work":          "Bench fitting and assembly",
+    "spotweld":            "Spot welding and assembly",
+    "tubebend":            "Tube bending and forming",
+    "roll":                "Rolling and forming",
+    "wire_forming":        "Wire forming",
+    "robomac":             "Wire forming",
+    "lacquer":             "Lacquered finish",
+    "lacquering":          "Lacquered finish",
 }
 # operations we don't surface to clients as their own bullet (too internal / logistics-only)
 _OPS_HIDE = {"handling"}
@@ -288,15 +308,54 @@ def _ga_image_data_uri(summary: Dict[str, Any]) -> Optional[str]:
 
 # ── content assembly ────────────────────────────────────────────────────────
 def _collect_operations(parts: List[Dict[str, Any]]) -> List[str]:
-    """Distinct operations across all parts' routing, in a stable order, mapped to plain language."""
-    seen = []
+    """Distinct operations across all parts, in a stable order, mapped to plain language.
+
+    Driven by the operations we actually COSTED (labour cost lines / process times), not by
+    the drawing's interpreted `routing` text. That text is transcribed from drawing notes,
+    which on many packs carry a shared specification legend covering the customer's whole
+    product range ("CHROME PLATING ... POLISHING SPECIFICATION ... POWDER COATED STEEL").
+    Reading it put processes on the client quote that the job does not have and we never
+    charged for — e.g. powder coat and diamond polish promised on a lacquered pine crate.
+
+    A quote must describe what we priced. If an operation carries no cost on this job, it
+    does not appear. Same de-pollution principle applied to materials and routes upstream.
+    """
+    seen: List[str] = []
+
+    def _add(op: Any) -> None:
+        if isinstance(op, str) and op and op not in seen:
+            seen.append(op)
+
     for p in parts:
-        routing = _get(p, "process_estimate", "routing", default=[]) or []
-        if isinstance(routing, list):
-            for item in routing:
-                op = item.get("operation") if isinstance(item, dict) else (item if isinstance(item, str) else None)
-                if op and op not in seen:
-                    seen.append(op)
+        # 1. costed labour lines — the authoritative "what we charged for"
+        costed = _get(p, "labour_estimate", "costs_gbp", default={}) or {}
+        if isinstance(costed, dict):
+            for op, val in costed.items():
+                try:
+                    if float(val or 0) > 0:
+                        _add(op)
+                except (TypeError, ValueError):
+                    continue
+        # 2. process times — same op set, covers a part costed at zero but genuinely routed
+        times = _get(p, "process_estimate", "times_min", default={}) or {}
+        if isinstance(times, dict):
+            for op, val in times.items():
+                try:
+                    if float(val or 0) > 0:
+                        _add(op)
+                except (TypeError, ValueError):
+                    continue
+
+    # 3. Fallback ONLY if the estimate carries no costed operations at all (e.g. a parts-free
+    #    summary). Interpreted routing is better than an empty list, but never overrides real
+    #    costed operations above.
+    if not seen:
+        for p in parts:
+            routing = _get(p, "process_estimate", "routing", default=[]) or []
+            if isinstance(routing, list):
+                for item in routing:
+                    _add(item.get("operation") if isinstance(item, dict) else item)
+
     lines = []
     for op in seen:
         if op in _OPS_HIDE:
@@ -307,8 +366,15 @@ def _collect_operations(parts: List[Dict[str, Any]]) -> List[str]:
     for l in lines:
         if l not in s:
             out.append(l); s.add(l)
-    # always finish with clean-assembly + packing lines (client expectation)
-    for tail in ("Protective film removal and clean assembly", "Individual packing for transport"):
+    # Closing lines. Protective film is carried by acrylic and bright/coated steel sheet — it
+    # is not present on bare timber/board, so only claim its removal when such a material is
+    # actually in the job. Clean assembly and packing apply to everything.
+    _mats = " ".join(str(p.get("normalized_material") or "") for p in parts).upper()
+    _has_film = any(k in _mats for k in ("ACRYLIC", "PERSPEX", "POLYCARB", "STEEL", "ALUMIN", "ZINTEC"))
+    tails = ["Clean assembly and inspection", "Individual packing for transport"]
+    if _has_film:
+        tails.insert(0, "Protective film removal")
+    for tail in tails:
         if tail not in s:
             out.append(tail); s.add(tail)
     return out
@@ -324,12 +390,28 @@ def _materials_line(parts: List[Dict[str, Any]]) -> str:
 
 
 def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
+    """Headline finish for the quote — from the finish we COSTED, not the drawing's
+    interpreted routing text (which carries the customer's range-wide specification
+    legend and would claim 'Powder coated' on a lacquered timber product)."""
     pcs = _get(summary, "estimate_summary", "powder_coating_summary")
     ops = set()
     for p in parts:
-        for item in (_get(p, "process_estimate", "routing", default=[]) or []):
-            if isinstance(item, dict) and item.get("operation"):
-                ops.add(item["operation"])
+        costed = _get(p, "labour_estimate", "costs_gbp", default={}) or {}
+        if isinstance(costed, dict):
+            for op, val in costed.items():
+                try:
+                    if float(val or 0) > 0:
+                        ops.add(op)
+                except (TypeError, ValueError):
+                    continue
+        times = _get(p, "process_estimate", "times_min", default={}) or {}
+        if isinstance(times, dict):
+            for op, val in times.items():
+                try:
+                    if float(val or 0) > 0:
+                        ops.add(op)
+                except (TypeError, ValueError):
+                    continue
     if (isinstance(pcs, dict) and (pcs.get("powder_total_gbp") or 0)) or "powder_coating" in ops:
         return "Powder coated"
     if "wet_spray" in ops:

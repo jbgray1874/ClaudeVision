@@ -662,9 +662,19 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
     if dq.get("geo_reliability") is not None:
         band = dq.get("geo_reliability_band") or ""
         rel_pct = _num(float(dq["geo_reliability"]) * 100, 0) if isinstance(dq["geo_reliability"], (int, float)) else "—"
-        strengths.append(f"<li><b>Geometry reliability: {band} ({rel_pct}%).</b> "
+        # Name this for what it is. A high number here is PDF VECTOR EXTRACTION confidence —
+        # how cleanly we read the page — NOT flat-pattern/manufacturing geometry coverage.
+        # Shown unqualified next to "0 DXFs matched" it reads as "fab geometry is solid",
+        # which is the opposite of the truth on a PDF-only pack.
+        _no_dxf = not dq.get("dxf_matched")
+        _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                   "<b>not</b> flat-pattern coverage. No DXFs are matched on this job, so "
+                   "blank sizes, bend counts and cut lengths remain provisional.</em>"
+                   if _no_dxf else "")
+        strengths.append(f"<li><b>PDF vector extraction confidence: {band} ({rel_pct}%).</b> "
                          f"Overall extraction confidence "
-                         f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%.</li>")
+                         f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%."
+                         f"{_caveat}</li>")
     if not strengths:
         strengths.append("<li>Drawing pack read; see findings below.</li>")
 
