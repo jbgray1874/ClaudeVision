@@ -110,21 +110,32 @@
 
 <p>Four products were driven end-to-end through the pipeline (PDF → extract → material → route → catalogue pricing → estimators' template). They were deliberately chosen to stress <strong>different material families</strong>, and each exposed a distinct class of defect that was then fixed <em>as a general rule</em> — so every later job inherits the fix.</p>
 
+<p>All figures below are the <strong>totals the estimators' workbook itself computed</strong> (read back from the saved estimate, not re-derived), quoted per unit, ex VAT:</p>
+
 <div class="tablewrap">
 <table>
-  <thead><tr><th>Job</th><th>Product</th><th>Qty</th><th>Character</th><th>Unit (provisional)</th></tr></thead>
+  <thead><tr><th>Job</th><th>Product</th><th>Material</th><th>Labour</th><th>Unit</th><th>Parts</th><th>DXF</th><th>Credible</th></tr></thead>
   <tbody>
-    <tr><td><code>0348837</code></td><td>Horti Rustic Crate</td><td>4</td><td>Timber — FSC pine / MR-MDF, stated weights, no DXF</td><td>~£46</td></tr>
-    <tr><td><code>0357299</code></td><td>2 Module Wide Arch</td><td>1</td><td>Metal — steel tube frame, SDI GA pack</td><td>~£363</td></tr>
-    <tr><td><code>0357831</code></td><td>Madrid Bulk Stack</td><td>4</td><td>Mixed — steel + MDF + ticket strip</td><td>~£556</td></tr>
-    <tr><td><code>0359131</code></td><td>Cocktails Hero Bay 4ft</td><td>1</td><td>Mixed — steel + plywood + mosaic tile + acrylic, 60+ parts</td><td>~£670</td></tr>
+    <tr><td><code>0348837</code></td><td>Horti Crate — timber (FSC pine / MR-MDF)</td><td>£8.72</td><td>£34.56</td><td><strong>£46.53</strong></td><td>11</td><td>0%</td><td>0%</td></tr>
+    <tr><td><code>0357299</code></td><td>2 Wide Arch — steel tube frame</td><td>£31.61</td><td>£306.38</td><td><strong>£363.43</strong></td><td>28</td><td>0%</td><td>0%</td></tr>
+    <tr><td><code>0357831</code></td><td>Madrid Bulk Stack — steel + MDF</td><td>£150.64</td><td>£366.46</td><td><strong>£556.03</strong></td><td>30</td><td>0%</td><td>0%</td></tr>
+    <tr><td><code>0359131</code></td><td>Cocktails Hero Bay 4ft — steel + ply + tile + acrylic</td><td>£291.26</td><td>£331.65</td><td><strong>£669.80</strong></td><td>69</td><td>0%</td><td>9%</td></tr>
   </tbody>
 </table>
 </div>
 
+<h3>Reading the table</h3>
+
+<ul>
+  <li><strong>Unit is more than material + labour, and deliberately so.</strong> The workbook adds its own rebate gross-up and overhead absorption on top of the manufacturing sub-total, exactly as it does on a manually prepared estimate. Adding the two columns will therefore always fall short of the unit figure — e.g. Crate £8.72 + £34.56 = £43.28 against a £46.53 unit. The uplift is <strong>7.51%–7.53% across all four jobs</strong>, i.e. the same commercial treatment applied consistently on every sheet.</li>
+  <li><strong>"DXF" is the share of fabricated parts with a matched flat pattern.</strong> It is <strong>0% on every job</strong> — these are PDF-only packs. That is what drives the credibility gate, and why every unit above is <strong>provisional and not reportable as a quote</strong>.</li>
+  <li><strong>"Credible" is the proportion of cost derived from reliable geometry.</strong> Cocktails scores highest (9%) because it carries the most catalogue-priced bought-ins; the others are effectively 0%. <strong>None of these are quotable figures.</strong></li>
+  <li><strong>Arch is the outlier and needs human review:</strong> £306 labour against £32 material — a <strong>9.7 : 1</strong> ratio, where Cocktails is 1.1 : 1 and Madrid 2.4 : 1. On a tube-frame product with almost no sheet content that is directionally plausible (it is nearly all cutting, welding and dressing), but it is the single figure in this set most in need of an estimator's judgement before anyone leans on it.</li>
+</ul>
+
 <div class="callout warn">
-  <span class="lbl">Important caveat on these figures</span>
-  <p>Only <strong>0359131 (Cocktails)</strong> has been costed on the current code. The other three were costed earlier in the exercise, <em>before</em> the material de-pollution, tube-routing, assembly-parent and labour-throughput fixes described in §4 and §7. Their figures are indicative and are pending a confirmation re-run. They are shown here for context, not as settled numbers — and the direction of travel from those fixes is downward (removal of phantom cost), not upward.</p>
+  <span class="lbl">Caveat — three of the four predate the current code</span>
+  <p>Only <strong>0359131 (Cocktails)</strong> was costed on the build that includes the material de-pollution, tube-routing, assembly-parent and labour-throughput fixes described in §4. The Crate, Arch and Madrid figures are exactly what their workbooks say, but they were produced before those fixes and are <strong>indicative pending a confirmation re-run</strong>. The direction of travel from those fixes is downward — they remove phantom cost — so these three should be treated as upper bounds rather than settled totals.</p>
 </div>
 
 <h3>0348837 — Horti Rustic Crate <em>(timber)</em></h3>
@@ -143,7 +154,7 @@
 
 <ul>
   <li><strong>What it proved:</strong> the <strong>metal and tube path</strong> — geometry scan, bought-in recognition, BOM tree resolution, and tube sections priced from the supplier catalogue rather than costed as sheet.</li>
-  <li><strong>Defects it exposed:</strong> two. First, a <strong>12 m and a 13 m tube returned the same price</strong> — the catalogue match was length-blind. Second, mass-priced tubes were being written into the <strong>Sheet Steel</strong> block of the workbook, where they are meaningless.</li>
+  <li><strong>Defects it exposed (earlier runs):</strong> two. First, the catalogue tube match was <strong>length-blind</strong> — sections of materially different lengths could return the same price. Second, mass-priced tubes were being written into the <strong>Sheet Steel</strong> block of the workbook, where a tube has no meaningful blank.</li>
   <li><strong>Fix (general):</strong> a <strong>length gate</strong> on catalogue tube matching (reject a catalogue row whose length differs materially from the required length, and fall back to mass-based pricing), and correct stock-form declaration so tube sections always route to the BOM block, never to sheet.</li>
 </ul>
 
@@ -153,8 +164,8 @@
 
 <ul>
   <li><strong>What it proved:</strong> that <strong>two material families can coexist correctly in one job</strong> — steel parts taking laser / fold / weld / powder, board parts taking the joinery route, and each priced on its own basis within a single estimate.</li>
-  <li><strong>Defect it exposed:</strong> a <strong>phantom "deburring" operation costing ~£668</strong> on a job whose true total was around half that. The operation name was unmapped, so the workbook fuzzy-matched it to the CNC-joinery department (£64/hr) and — with no throughput reference — timed it at roughly one part per hour.</li>
-  <li><strong>Fix (general):</strong> map deburr/linish to its real department, and give it a sane throughput default so the floor can catch an implausible derived rate. <strong>Result: the job fell from ~£1,236 to ~£556.</strong> This was the first appearance of the garbage-throughput failure mode that later dominated Cocktails — and the fix built here is what made that one diagnosable.</li>
+  <li><strong>Defect it exposed (earlier run):</strong> a large phantom weld-dressing/deburring charge. The operation name was unmapped, so the workbook fuzzy-matched it to the CNC-joinery department and — with no throughput reference — timed it at roughly one part per hour. It was, at the time, the single largest line on the job.</li>
+  <li><strong>Fix (general):</strong> map deburr/linish to its real department, and give it a throughput default so the floor can clamp an implausible derived rate and flag the substitution. The job total fell substantially once corrected. <strong>This was the first appearance of the garbage-throughput failure mode that later dominated Cocktails</strong> — the fix built here is what made that one diagnosable. Current workbook figure: <strong>£556.03</strong>.</li>
 </ul>
 
 <h3>0359131 — Cocktails Hero Bay 4ft <em>(mixed steel + ply + tile + acrylic)</em></h3>
@@ -437,6 +448,7 @@
 <ol>
   <li><strong>Treat it as a provisional first pass.</strong> It is genuinely useful for structure, BOM completeness, catalogue hits and risk flags. It is <strong>not</strong> a final sell price while fabricated parts have no DXF — and the sheet says so on its face.</li>
   <li><strong>Read the flags; they are the most valuable part.</strong> Every assumption is written out in words. A flag naming what was assumed is an instruction, not noise.</li>
+  <li><strong>Take process detail from the review report and the workbook routes, not from the quote's "What's included" bullets.</strong> Those bullets are a customer-facing summary. A defect that allowed drawing-note boilerplate to reach them has been corrected — packs generated before that fix may list generic processes (e.g. powder coat and diamond polish appearing against a lacquered timber product). The workbook routes are authoritative in all cases.</li>
   <li><strong>Ask for part DXFs (and STEP / assembly where relevant)</strong> — the same standard you would need to manufacture the item. If we could not make it from what we were sent, we cannot fully cost it from what we were sent either.</li>
   <li><strong>Fill the commercial gaps deliberately.</strong> Packaging, delivery, and specials not in the catalogue come back as zero <em>on purpose</em>. Price them; do not let a zero pass through.</li>
   <li><strong>Prefer catalogue and historical matches for bought-ins.</strong> Where an indicative web/AI price appears, it is explicitly marked as such — verify before it reaches a quote.</li>

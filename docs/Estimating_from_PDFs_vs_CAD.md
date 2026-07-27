@@ -26,19 +26,43 @@ route → catalogue pricing → estimators' template). They were deliberately ch
 stress **different material families**, and each exposed a distinct class of defect that
 was then fixed *as a general rule* — so every later job inherits the fix.
 
-| Job | Product | Qty | Character | Unit (provisional) |
-|---|---|---|---|---|
-| `0348837` | Horti Rustic Crate | 4 | Timber — FSC pine / MR-MDF, stated weights, no DXF | ~£46 |
-| `0357299` | 2 Module Wide Arch | 1 | Metal — steel tube frame, SDI GA pack | ~£363 |
-| `0357831` | Madrid Bulk Stack | 4 | Mixed — steel + MDF + ticket strip | ~£556 |
-| `0359131` | Cocktails Hero Bay 4ft | 1 | Mixed — steel + plywood + mosaic tile + acrylic, 60+ parts | ~£670 |
+All figures below are the **totals the estimators' workbook itself computed** (read back
+from the saved estimate, not re-derived), and are quoted per unit, ex VAT:
 
-> **Important caveat on these figures.** Only **0359131 (Cocktails)** has been costed on
-> the current code. The other three were costed earlier in the exercise, *before* the
-> material de-pollution, tube-routing, assembly-parent and labour-throughput fixes
-> described in §4 and §7. Their figures are indicative and are pending a confirmation
-> re-run. They are shown here for context, not as settled numbers — and the direction of
-> travel from those fixes is downward (removal of phantom cost), not upward.
+| Job | Product | Material | Labour | **Unit** | Parts | DXF | Credible |
+|---|---|---|---|---|---|---|---|
+| `0348837` | Horti Crate — timber (FSC pine / MR-MDF) | £8.72 | £34.56 | **£46.53** | 11 | 0% | 0% |
+| `0357299` | 2 Wide Arch — steel tube frame | £31.61 | £306.38 | **£363.43** | 28 | 0% | 0% |
+| `0357831` | Madrid Bulk Stack — steel + MDF | £150.64 | £366.46 | **£556.03** | 30 | 0% | 0% |
+| `0359131` | Cocktails Hero Bay 4ft — steel + ply + tile + acrylic | £291.26 | £331.65 | **£669.80** | 69 | 0% | 9% |
+
+**Reading the table.**
+
+- **Unit is more than material + labour, and deliberately so.** The workbook adds its own
+  rebate gross-up and overhead absorption on top of the manufacturing sub-total, exactly as
+  it does on a manually prepared estimate. Adding the two columns will therefore always fall
+  short of the unit figure — e.g. Crate £8.72 + £34.56 = £43.28 against a £46.53 unit. The
+  uplift is **7.51%–7.53% across all four jobs**, i.e. the same commercial treatment applied
+  consistently on every sheet.
+- **"DXF" is the share of fabricated parts with a matched flat pattern.** It is **0% on
+  every job** — these are PDF-only packs. That is what drives the credibility gate, and
+  why every unit above is **provisional and not reportable as a quote**.
+- **"Credible" is the proportion of cost derived from reliable geometry.** Cocktails
+  scores highest (9%) because it carries the most catalogue-priced bought-ins; the others
+  are effectively 0%. **None of these are quotable figures.**
+- **Arch is the outlier and needs human review**: £306 labour against £32 material — a
+  **9.7 : 1** ratio, where Cocktails is 1.1 : 1 and Madrid 2.4 : 1. On a tube-frame product
+  with almost no sheet content that is directionally plausible (it is nearly all cutting,
+  welding and dressing), but it is the single figure in this set most in need of an
+  estimator's judgement before anyone leans on it.
+
+> **Caveat — three of the four predate the current code.** Only **0359131 (Cocktails)**
+> was costed on the build that includes the material de-pollution, tube-routing,
+> assembly-parent and labour-throughput fixes described in §4. The Crate, Arch and Madrid
+> figures are exactly what their workbooks say, but they were produced before those fixes
+> and are **indicative pending a confirmation re-run**. The direction of travel from those
+> fixes is downward — they remove phantom cost — so these three should be treated as
+> upper bounds rather than settled totals.
 
 ### 0348837 — Horti Rustic Crate *(timber)*
 
@@ -64,9 +88,10 @@ A steel tube-frame arch. The pack is an SDI GA with tube cut-lists.
 - **What it proved:** the **metal and tube path** — geometry scan, bought-in recognition,
   BOM tree resolution, and tube sections priced from the supplier catalogue rather than
   costed as sheet.
-- **Defects it exposed:** two. First, a **12 m and a 13 m tube returned the same price** —
-  the catalogue match was length-blind. Second, mass-priced tubes were being written into
-  the **Sheet Steel** block of the workbook, where they are meaningless.
+- **Defects it exposed (earlier runs):** two. First, the catalogue tube match was
+  **length-blind** — sections of materially different lengths could return the same price.
+  Second, mass-priced tubes were being written into the **Sheet Steel** block of the
+  workbook, where a tube has no meaningful blank.
 - **Fix (general):** a **length gate** on catalogue tube matching (reject a catalogue row
   whose length differs materially from the required length, and fall back to mass-based
   pricing), and correct stock-form declaration so tube sections always route to the BOM
@@ -80,15 +105,15 @@ genuinely **mixed-material** job in the set.
 - **What it proved:** that **two material families can coexist correctly in one job** —
   steel parts taking laser / fold / weld / powder, board parts taking the joinery route,
   and each priced on its own basis within a single estimate.
-- **Defect it exposed:** a **phantom "deburring" operation costing ~£668** on a job whose
-  true total was around half that. The operation name was unmapped, so the workbook
-  fuzzy-matched it to the CNC-joinery department (£64/hr) and — with no throughput
-  reference — timed it at roughly one part per hour.
-- **Fix (general):** map deburr/linish to its real department, and give it a sane
-  throughput default so the floor can catch an implausible derived rate. **Result: the
-  job fell from ~£1,236 to ~£556.** This was the first appearance of the
-  garbage-throughput failure mode that later dominated Cocktails — and the fix built here
-  is what made that one diagnosable.
+- **Defect it exposed (earlier run):** a large phantom weld-dressing/deburring charge. The
+  operation name was unmapped, so the workbook fuzzy-matched it to the CNC-joinery
+  department and — with no throughput reference — timed it at roughly one part per hour.
+  It was, at the time, the single largest line on the job.
+- **Fix (general):** map deburr/linish to its real department, and give it a throughput
+  default so the floor can clamp an implausible derived rate and flag the substitution.
+  The job total fell substantially once corrected. **This was the first appearance of the
+  garbage-throughput failure mode that later dominated Cocktails** — the fix built here is
+  what made that one diagnosable. Current workbook figure: **£556.03**.
 
 ### 0359131 — Cocktails Hero Bay 4ft *(mixed steel + ply + tile + acrylic)*
 
@@ -353,14 +378,20 @@ Practical rules for working with an automated estimate produced from a PDF-only 
    fabricated parts have no DXF — and the sheet says so on its face.
 2. **Read the flags; they are the most valuable part.** Every assumption is written out
    in words. A flag naming what was assumed is an instruction, not noise.
-3. **Ask for part DXFs (and STEP / assembly where relevant)** — the same standard you
+3. **Take process detail from the review report and the workbook routes, not from the
+   quote's "What's included" bullets.** Those bullets are a customer-facing summary. A
+   defect that allowed drawing-note boilerplate to reach them has been corrected — packs
+   generated before that fix may list generic processes (e.g. powder coat and diamond
+   polish appearing against a lacquered timber product). The workbook routes are
+   authoritative in all cases.
+4. **Ask for part DXFs (and STEP / assembly where relevant)** — the same standard you
    would need to manufacture the item. If we could not make it from what we were sent,
    we cannot fully cost it from what we were sent either.
-4. **Fill the commercial gaps deliberately.** Packaging, delivery, and specials not in the
+5. **Fill the commercial gaps deliberately.** Packaging, delivery, and specials not in the
    catalogue come back as zero *on purpose*. Price them; do not let a zero pass through.
-5. **Prefer catalogue and historical matches for bought-ins.** Where an indicative
+6. **Prefer catalogue and historical matches for bought-ins.** Where an indicative
    web/AI price appears, it is explicitly marked as such — verify before it reaches a quote.
-6. **Do not pressure the system — or a person — to "complete" numbers the drawing cannot
+7. **Do not pressure the system — or a person — to "complete" numbers the drawing cannot
    support.** That is precisely how an inaccurate quote is born. A gap is a question to
    answer, not a blank to fill in.
 
