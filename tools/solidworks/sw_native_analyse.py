@@ -620,6 +620,7 @@ def sheet_metal_signals(doc) -> RouteSignals:
             _bbox_max = max(float(x) for x in (sig.bbox_mm or []) if x)
         except Exception:
             pass
+        _read_tainted = False
         if _fl and _fw and _bbox_max:
             _flat_max = max(_fl, _fw)
             if _flat_max < _bbox_max * 0.95:
@@ -627,11 +628,22 @@ def sheet_metal_signals(doc) -> RouteSignals:
                     f"REJECTED cut-list flat {_fl}x{_fw}mm — smaller than the folded solid "
                     f"({_bbox_max:.1f}mm); a flat pattern cannot be smaller than the part")
                 _fl = _fw = None
+                # Every value in this dict came from the SAME property-manager read. If the
+                # flat is geometrically impossible the read itself is wrong, so thickness and
+                # bend radius from it cannot be trusted either — even when they happen to look
+                # plausible. A status code of 1 read as "1.0mm thick" passes a thickness-vs-bbox
+                # check on any formed part (01M: 1.0 < 21.5) and would silently misprice the
+                # material. Discard the whole read and fall back to the labelled inference.
+                _read_tainted = True
         sig.flat_length_mm = _fl
         sig.flat_width_mm = _fw
-        sig.bend_radius_mm = _cut_props.get("bend_radius")
-        sig.cut_length_mm = _cut_props.get("cut_length")
-        _thk = _cut_props.get("thickness")
+        sig.bend_radius_mm = None if _read_tainted else _cut_props.get("bend_radius")
+        sig.cut_length_mm = None if _read_tainted else _cut_props.get("cut_length")
+        _thk = None if _read_tainted else _cut_props.get("thickness")
+        if _read_tainted:
+            sig.notes.append(
+                "cut-list read discarded in full (flat failed the geometry check) — "
+                "thickness/bend radius from the same read are not trusted")
         # Thickness must not exceed the solid's smallest dimension.
         if _thk and sig.bbox_mm:
             try:
