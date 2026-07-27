@@ -449,7 +449,8 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     """
     out = {"flat": 0, "thickness": 0, "material": 0, "material_conflict": 0, "bends": 0,
            "qty": 0, "assembly_parent": 0, "bought_in": 0, "weld_flagged": 0,
-           "ops": 0, "mass": 0, "no_geometry_flagged": 0, "geometry_conflict": 0}
+           "ops": 0, "mass": 0, "no_geometry_flagged": 0, "geometry_conflict": 0,
+           "not_in_bom": 0}
     if not job or not job.found or not isinstance(parts, list):
         return out
 
@@ -509,6 +510,19 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
                              f"SolidWorks assembly BOM (component count, all levels)")
                 out["qty"] += 1
+
+        # ── NOT IN THE ASSEMBLY BOM ──────────────────────────────────────────────
+        # A modelled part that appears in no assembly is not a component of the product:
+        # a fixture, a jig, a setup block (e.g. a 500x500 setup part sitting in the job
+        # folder). Flag it rather than drop it — a BOM the analyser failed to read would
+        # otherwise silently delete real parts. Only fires when the BOM is substantial
+        # enough to prove it was read, so a failed read cannot mislabel a whole job.
+        if row is None and not _is_asm and len(job.bom) >= 3:
+            part["not_in_assembly_bom"] = True
+            flags.append("SolidWorks: this part appears in NO assembly BOM — a fixture, jig "
+                         "or setup part, not a component of the product. Confirm before "
+                         "costing it into the job")
+            out["not_in_bom"] += 1
 
         if nat is None:
             continue
@@ -589,10 +603,27 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 flags.append(f"flat blank {fl:g} x {fw:g}mm from the SolidWorks sheet-metal "
                              f"cut list (modelled flat pattern — measured, not inferred)")
                 out["flat"] += 1
-                if _plausible_mm(nat.cut_length_mm):
-                    gr = part.setdefault("geometry_rollup", {})
-                    if isinstance(gr, dict) and not _num(gr.get("estimated_cut_length_mm")):
+                # CUT LENGTH. Laser run time is driven by profile length, so a part with a
+                # real blank but no cut length would be costed as if it took no cutting at
+                # all — under-costing, which is the direction that loses money.
+                gr = part.setdefault("geometry_rollup", {})
+                if isinstance(gr, dict) and not _num(gr.get("estimated_cut_length_mm")):
+                    if nat.cut_length_mm and nat.cut_length_mm > 0:
                         gr["estimated_cut_length_mm"] = float(nat.cut_length_mm)
+                    else:
+                        # Rectangular-outline FLOOR, not an estimate of the real outline.
+                        # Any closed profile enclosing an L x W blank has a perimeter of at
+                        # least 2(L+W), so this cannot overstate the cut. It ignores hole
+                        # edges and any non-rectangular outline, so the true figure is
+                        # HIGHER — flagged as a floor so nobody reads it as measured.
+                        _perim = 2.0 * (fl + fw)
+                        gr["estimated_cut_length_mm"] = round(_perim, 1)
+                        gr["cut_length_basis"] = "solidworks_blank_perimeter_floor"
+                        flags.append(
+                            f"cut length {_perim:,.0f}mm is a FLOOR from the blank outline "
+                            f"(2 x ({fl:g}+{fw:g})) — the model gave no cut length; holes and "
+                            f"any non-rectangular profile add to this, so laser time is a "
+                            f"MINIMUM, not a measurement")
 
         # ── THICKNESS ────────────────────────────────────────────────────────────
         if _plausible_thk(nat.thickness_mm):

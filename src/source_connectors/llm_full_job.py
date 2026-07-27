@@ -198,15 +198,20 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
             or bool(part.get("flat_pattern_detected"))
             or bool(part.get("dxf_source_file"))
             or bool(part.get("native_flat_pattern"))
-            or bool(part.get("solidworks_native"))
         )
+        # PER-DATUM, not per-file. A part can be in the native BOM (so its QUANTITY is
+        # modelled truth) while the model gave it no blank and no material — there the LLM
+        # must still be free to fill the gap. Gating all three on one flag would silence
+        # the LLM on parts native never actually measured. Each datum has its own gate:
+        _native_qty = bool(part.get("solidworks_native"))          # BOM count applied
+        _native_material = str(part.get("material_source") or "") == "solidworks_api"
 
         # QUANTITY — the GA's PRINTED per-product count, rolled up the hierarchy. The vision BOM
         # sometimes double-counts a line (e.g. a tube read as qty2 when the GA prints qty1). The
         # transcribed rollup is authoritative for no-DXF parts; correct it and flag. DXF jobs keep
         # their measured/BOM count untouched.
         _roll_q = qty_rollup.get(pn)
-        if _roll_q and _roll_q > 0 and not _dxf_backed:
+        if _roll_q and _roll_q > 0 and not _dxf_backed and not _native_qty:
             _cur_q = _num(part.get("quantity"))
             if _cur_q is None or int(_cur_q) != _roll_q:
                 part["quantity"] = _roll_q
@@ -225,6 +230,7 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 _flagged = True
                 out["material"] += 1
             elif (not _dxf_backed
+                  and not _native_material
                   and _new_mat in _NON_METAL_FAMILIES
                   and _cur_mat in _METAL_FAMILIES):
                 # OVERRIDE a wrong metal DEFAULT. The engine defaults unknown material to mild

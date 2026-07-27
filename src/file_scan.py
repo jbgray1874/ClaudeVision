@@ -1927,6 +1927,10 @@ def _finalize_scan_summary(
                     print(f"   [solidworks] {_swc['no_geometry_flagged']} part(s) have a "
                           f"material but NO usable geometry — flagged as unpriced, NOT £0",
                           flush=True)
+                if _swc["not_in_bom"]:
+                    print(f"   [solidworks] {_swc['not_in_bom']} modelled part(s) appear in "
+                          f"NO assembly BOM (fixture/jig/setup) — flagged, confirm before "
+                          f"costing", flush=True)
             elif _sw_flag in {"1", "true", "yes", "on"}:
                 print("   [solidworks] NOT APPLIED — no _sw_native_extract.json for this job "
                       "(run tools/solidworks/sw_native_analyse.py on the model folder)", flush=True)
