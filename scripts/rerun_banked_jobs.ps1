@@ -14,7 +14,11 @@ param(
     [string]$PackRoot = "C:\ClaudeVision\work\MS_Tender",
     [string]$LogDir   = "C:\ClaudeVision\work\rerun_logs",
     [int]$OrderQty    = 1,
-    [string]$Customer = "M&S"
+    [string]$Customer = "M&S",
+    # Limit to specific job numbers, e.g. -Jobs 0348837
+    # Cocktails (0359131) is a 45-page pack and dominates the runtime, so re-running a
+    # single small job is often all that is needed after a deliverable-only change.
+    [string[]]$Jobs   = @("0348837", "0357299", "0357831", "0359131")
 )
 
 $ErrorActionPreference = "Continue"
@@ -26,7 +30,7 @@ $env:SDI_LLM_FULL_EXTRACT    = "1"
 $env:SKIP_VISION_EXTRACTION  = "1"
 $env:SCAN_DEBUG              = "1"
 
-$jobs = @("0348837", "0357299", "0357831", "0359131")
+$jobs = $Jobs
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
