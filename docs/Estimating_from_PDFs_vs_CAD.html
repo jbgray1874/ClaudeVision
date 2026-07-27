@@ -106,23 +106,68 @@
 
 <p>With those, the pipeline produces defensible, quotable numbers. Without them, it produces an honest provisional figure with a warning banner — which is the correct behaviour, and a limitation of the input, not something we can code our way around.</p>
 
-<h2>2. What we have proven works</h2>
+<h2>2. The four banked jobs — what each one proved</h2>
 
-<p>Four products costed end-to-end, automatically:</p>
+<p>Four products were driven end-to-end through the pipeline (PDF → extract → material → route → catalogue pricing → estimators' template). They were deliberately chosen to stress <strong>different material families</strong>, and each exposed a distinct class of defect that was then fixed <em>as a general rule</em> — so every later job inherits the fix.</p>
 
 <div class="tablewrap">
 <table>
-  <thead><tr><th>Product</th><th>Code</th><th>Type</th><th>Outcome</th></tr></thead>
+  <thead><tr><th>Job</th><th>Product</th><th>Qty</th><th>Character</th><th>Unit (provisional)</th></tr></thead>
   <tbody>
-    <tr><td>Horti Rustic Crate</td><td>0348837</td><td>Timber</td><td>Costed — timber route, material by weight</td></tr>
-    <tr><td>2 Module Wide Arch</td><td>0357299</td><td>Metal / tube</td><td>Costed — tube catalogue pricing, metal route</td></tr>
-    <tr><td>Madrid Bulk Stack</td><td>0357831</td><td>Mixed metal + MDF</td><td>Costed — mixed families handled correctly</td></tr>
-    <tr><td>Cocktails Hero Bay 4ft</td><td>0359131</td><td>Mixed metal + ply + tile + acrylic</td><td>Costed — 60+ parts, provisional (no DXFs)</td></tr>
+    <tr><td><code>0348837</code></td><td>Horti Rustic Crate</td><td>4</td><td>Timber — FSC pine / MR-MDF, stated weights, no DXF</td><td>~£46</td></tr>
+    <tr><td><code>0357299</code></td><td>2 Module Wide Arch</td><td>1</td><td>Metal — steel tube frame, SDI GA pack</td><td>~£363</td></tr>
+    <tr><td><code>0357831</code></td><td>Madrid Bulk Stack</td><td>4</td><td>Mixed — steel + MDF + ticket strip</td><td>~£556</td></tr>
+    <tr><td><code>0359131</code></td><td>Cocktails Hero Bay 4ft</td><td>1</td><td>Mixed — steel + plywood + mosaic tile + acrylic, 60+ parts</td><td>~£670</td></tr>
   </tbody>
 </table>
 </div>
 
-<p>On the most complex of these (Cocktails — a 4ft bay with over 60 parts spanning steel, plywood, mosaic tile and acrylic), the system with no human input:</p>
+<div class="callout warn">
+  <span class="lbl">Important caveat on these figures</span>
+  <p>Only <strong>0359131 (Cocktails)</strong> has been costed on the current code. The other three were costed earlier in the exercise, <em>before</em> the material de-pollution, tube-routing, assembly-parent and labour-throughput fixes described in §4 and §7. Their figures are indicative and are pending a confirmation re-run. They are shown here for context, not as settled numbers — and the direction of travel from those fixes is downward (removal of phantom cost), not upward.</p>
+</div>
+
+<h3>0348837 — Horti Rustic Crate <em>(timber)</em></h3>
+
+<p>A rustic display crate in FSC pine and moisture-resistant MDF. No fabricated DXFs; the drawings give <strong>stated weights</strong> rather than blank sizes.</p>
+
+<ul>
+  <li><strong>What it proved:</strong> the <strong>timber/board path</strong> end-to-end — material costed by mass (weight × £/kg) where no blank exists, plus a joinery route (saw / CNC-rout / glue / lacquer) at real shop rates.</li>
+  <li><strong>Defect it exposed:</strong> the part's material was defaulting to mild steel and the drawing's <code>FSC PINE</code> / <code>MRMDF</code> callouts were never applied — so the crate returned <strong>£0 material</strong>, and its labour was being timed by geometry that timber parts don't have (also £0).</li>
+  <li><strong>Fix (general):</strong> material-family override so a genuine non-metal callout replaces the engine's metal default; the normalisers taught the real timber and board names; and a flat per-part joinery labour allowance for no-DXF board parts, explicitly flagged as an allowance for the estimator to refine.</li>
+</ul>
+
+<h3>0357299 — 2 Module Wide Arch <em>(metal / tube)</em></h3>
+
+<p>A steel tube-frame arch. The pack is an SDI GA with tube cut-lists.</p>
+
+<ul>
+  <li><strong>What it proved:</strong> the <strong>metal and tube path</strong> — geometry scan, bought-in recognition, BOM tree resolution, and tube sections priced from the supplier catalogue rather than costed as sheet.</li>
+  <li><strong>Defects it exposed:</strong> two. First, a <strong>12 m and a 13 m tube returned the same price</strong> — the catalogue match was length-blind. Second, mass-priced tubes were being written into the <strong>Sheet Steel</strong> block of the workbook, where they are meaningless.</li>
+  <li><strong>Fix (general):</strong> a <strong>length gate</strong> on catalogue tube matching (reject a catalogue row whose length differs materially from the required length, and fall back to mass-based pricing), and correct stock-form declaration so tube sections always route to the BOM block, never to sheet.</li>
+</ul>
+
+<h3>0357831 — Madrid Bulk Stack <em>(mixed steel + MDF)</em></h3>
+
+<p>A bulk-stack display combining a steel frame, MDF panels and a ticket strip — the first genuinely <strong>mixed-material</strong> job in the set.</p>
+
+<ul>
+  <li><strong>What it proved:</strong> that <strong>two material families can coexist correctly in one job</strong> — steel parts taking laser / fold / weld / powder, board parts taking the joinery route, and each priced on its own basis within a single estimate.</li>
+  <li><strong>Defect it exposed:</strong> a <strong>phantom "deburring" operation costing ~£668</strong> on a job whose true total was around half that. The operation name was unmapped, so the workbook fuzzy-matched it to the CNC-joinery department (£64/hr) and — with no throughput reference — timed it at roughly one part per hour.</li>
+  <li><strong>Fix (general):</strong> map deburr/linish to its real department, and give it a sane throughput default so the floor can catch an implausible derived rate. <strong>Result: the job fell from ~£1,236 to ~£556.</strong> This was the first appearance of the garbage-throughput failure mode that later dominated Cocktails — and the fix built here is what made that one diagnosable.</li>
+</ul>
+
+<h3>0359131 — Cocktails Hero Bay 4ft <em>(mixed steel + ply + tile + acrylic)</em></h3>
+
+<p>The hardest job in the set and the principal worked example throughout this document: a 4ft hero bay of <strong>60+ parts</strong> spanning steel fabrications, a plywood back panel, mirror mosaic tiles, an acrylic light diffuser, and 46 bought-in BOM lines.</p>
+
+<ul>
+  <li><strong>What it proved:</strong> the pipeline handles <strong>four material families in one job</strong>, reads a full BOM including tube cut-lists and fixings, prices bought-ins from the live catalogue, excludes assembly parents, and populates the estimators' template — while correctly refusing to present the total as quotable.</li>
+  <li><strong>Defects it exposed:</strong> the full set described in §4 — boilerplate material contamination, a specification note becoming a real operation, tubes taking a joinery route, the product-level line costed as a part, and unbounded labour throughputs.</li>
+  <li><strong>Outcome:</strong> <strong>unit ~£670</strong> (material ~£291, labour ~£332), reconciled against the engine's own independent calculation. Marked <strong>provisional — 0% DXF coverage on fabricated parts.</strong></li>
+</ul>
+
+<p>On this most complex job, the system with no human input:</p>
 
 <ul>
   <li><strong>Read the full bill of materials</strong> — 46 lines including tube cut-lists, fixings, inserts, LED strip — using two independent methods (a deterministic table reader and a whole-document AI pass) which are cross-checked against each other.</li>
@@ -226,6 +271,50 @@
 </div>
 
 <p>The right-hand column is not "nicer to have." It is the difference between a <strong>quotable</strong> number and a <strong>provisional</strong> one.</p>
+
+<h3>The same table, expressed as consequence</h3>
+
+<p>It is worth showing what each gap actually <em>does</em> to an estimate, because the cost is rarely where you would expect:</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Manufacturing need</th><th>What the PDF gives</th><th>Consequence when it goes wrong</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Material per part</strong></td><td>Text in the title block <em>or</em> a shared legend repeated on every page</td><td>Steel tagged as timber → saw / glue / CNC instead of laser / weld / powder</td></tr>
+    <tr><td><strong>Flat-pattern blank</strong></td><td>Often absent; GA dimensions are not the unfolded blank</td><td>No credible sheet cost or laser time → flagged "dimensions required"</td></tr>
+    <tr><td><strong>Bend count / lines</strong></td><td>An occasional note or view, easily missed in a long pack</td><td>Missed folds understate labour; invented folds overstate it</td></tr>
+    <tr><td><strong>Cut length &amp; cut-outs</strong></td><td>Reconstructed from page vectors — thousands of paths, overshoots common</td><td>Derived internal-cut lengths of 6–8 m on small brackets inflate laser hours</td></tr>
+    <tr><td><strong>Tube size &amp; cut length</strong></td><td>Free text in a cut-list table</td><td>Prices correctly, but geometry stays weak and the route can be mis-assigned</td></tr>
+    <tr><td><strong>Weld length / joint</strong></td><td>A weld symbol at best</td><td>Guessed weld time, or a blanket dress-weld charge across the job</td></tr>
+    <tr><td><strong>Hierarchy &amp; quantity</strong></td><td>BOM tables of varying layout; parents mixed with leaves</td><td>The product parent costed as a leaf — a £389 phantom material line</td></tr>
+    <tr><td><strong>Process note vs part op</strong></td><td>A shared "POLISHING SPECIFICATION / 400 GRIT" on every page</td><td>Diamond polish charged on powder-coated mild steel — phantom labour</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Defects found, and the general rule that fixed each</h3>
+
+<p>Every fix is keyed on a <strong>family, stock form or drawing convention</strong> — never on a part number — so it applies to every future job automatically:</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Defect observed</th><th>Symptom on the estimate</th><th>General rule applied</th></tr></thead>
+  <tbody>
+    <tr><td>Boilerplate <code>TIMBER PRODUCTS</code> / <code>POLISH</code> on every page</td><td>Steel parts routed as joinery; diamond polish on powder-coated steel</td><td>Read the labelled <code>MATERIAL:</code> field first; reject legend text; require a genuine polish cue</td></tr>
+    <tr><td>Cross-reference used as a material</td><td><em>"SEE INDIVIDUAL DRAWINGS"</em> treated as a material family</td><td>Reject reference/placeholder phrases; fall through to the default and flag</td></tr>
+    <tr><td>Tubes tagged as timber</td><td>Leg, post and rail took saw / glue / CNC on top of their real route</td><td>A part whose stock form is tube / section / wire <strong>never</strong> takes a joinery route, whatever the material tag says</td></tr>
+    <tr><td>Product GA line costed as a part</td><td>~£389 phantom material on the top-level "Hero Bay" line</td><td>A top-level <code>-00-</code> unit line is an assembly parent — material carried by its children</td></tr>
+    <tr><td>Bought-in specials fabricated</td><td>Mosaic tiles given saw / glue / CNC / powder</td><td>Items matching the special/finishing convention (<code>-X</code> suffix, or tile / mosaic / graphic / vinyl) route as bought-in, with no fabrication labour</td></tr>
+    <tr><td>Unbounded labour throughputs</td><td>CNC, glue, spray and weld-dressing lines in the hundreds to low thousands</td><td>A throughput floor and ceiling per operation — an implausible derived rate is replaced by a sane default, and the substitution is flagged</td></tr>
+    <tr><td>BOM larger than the template block</td><td>Fell back to a legacy sheet, or dropped lines silently</td><td>Overflow spills in-code to a dedicated tab and is consolidated on the sheet — nothing is ever dropped</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout good">
+  <span class="lbl">Cumulative effect</span>
+  <p><strong>On Cocktails: £5,270 → £670.</strong> None of these were arithmetic errors. Every one was the software mis-reading an unstructured document — and every one is absent by construction when reading CAD.</p>
+</div>
 
 <h2>5. Why we deliberately refuse to guess</h2>
 
@@ -341,7 +430,20 @@
 
 <p>Beyond receiving files, the intended direction is a <strong>direct SolidWorks API integration</strong> — reading geometry, materials, sheet-metal parameters and the assembly tree straight from the model, with no export step and no file handling at all. That removes the entire class of defects described in §4 at source, and is the natural end-state for the pipeline.</p>
 
-<h2>10. Conclusion and recommendation</h2>
+<h2>10. How to use the output — guidance for estimators</h2>
+
+<p>Practical rules for working with an automated estimate produced from a PDF-only pack:</p>
+
+<ol>
+  <li><strong>Treat it as a provisional first pass.</strong> It is genuinely useful for structure, BOM completeness, catalogue hits and risk flags. It is <strong>not</strong> a final sell price while fabricated parts have no DXF — and the sheet says so on its face.</li>
+  <li><strong>Read the flags; they are the most valuable part.</strong> Every assumption is written out in words. A flag naming what was assumed is an instruction, not noise.</li>
+  <li><strong>Ask for part DXFs (and STEP / assembly where relevant)</strong> — the same standard you would need to manufacture the item. If we could not make it from what we were sent, we cannot fully cost it from what we were sent either.</li>
+  <li><strong>Fill the commercial gaps deliberately.</strong> Packaging, delivery, and specials not in the catalogue come back as zero <em>on purpose</em>. Price them; do not let a zero pass through.</li>
+  <li><strong>Prefer catalogue and historical matches for bought-ins.</strong> Where an indicative web/AI price appears, it is explicitly marked as such — verify before it reaches a quote.</li>
+  <li><strong>Do not pressure the system — or a person — to "complete" numbers the drawing cannot support.</strong> That is precisely how an inaccurate quote is born. A gap is a question to answer, not a blank to fill in.</li>
+</ol>
+
+<h2>11. Conclusion and recommendation</h2>
 
 <ul>
   <li>The estimating automation <strong>works</strong>, and is proven on four products across timber, metal, and mixed-material builds.</li>
