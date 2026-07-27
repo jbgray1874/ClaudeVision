@@ -672,9 +672,36 @@ def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python sw_native_analyse.py <file_or_folder>")
+        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>]")
         sys.exit(2)
-    target = sys.argv[1]
+    argv = list(sys.argv[1:])
+    out_override = None
+    if "--out" in argv:
+        i = argv.index("--out")
+        if i + 1 >= len(argv):
+            print("ERROR: --out needs a path")
+            sys.exit(2)
+        out_override = argv[i + 1]
+        del argv[i:i + 2]
+    if not argv:
+        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>]")
+        sys.exit(2)
+    target = argv[0]
+
+    # Fail LOUDLY on an unreachable target. Without this the run fell through to
+    # "treat it as a single file" -> "Unsupported extension:" -> then tried to write the
+    # report to the PARENT directory and died with a confusing FileNotFoundError. A path
+    # we cannot see is a setup problem, and it should say so.
+    if not os.path.exists(target):
+        print(f"ERROR: path not found or not accessible:\n  {target}")
+        print("\nCommon causes:")
+        print("  - UNC path to a hidden/admin share (\\\\host\\name$\\...): the process may have")
+        print("    no session to it. Try the MAPPED DRIVE instead, e.g. K:\\Estimating\\...")
+        print("  - running from an ELEVATED PowerShell: an admin shell does not inherit the")
+        print("    network credentials that mapped the drive. Use a normal shell.")
+        print("  - a typo or a trailing space in the folder name (check with Test-Path).")
+        sys.exit(2)
+
     paths = find_sw_files(target) if os.path.isdir(target) else [target]
     if not paths:
         print(f"No SolidWorks files under: {target}")
@@ -710,12 +737,22 @@ def main():
                 session.close_all()
     finally:
         session.shutdown()
-    out_json = os.path.join(
+    out_json = out_override or os.path.join(
         target if os.path.isdir(target) else os.path.dirname(target),
         "_sw_native_extract.json",
     )
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=2)
+    try:
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, indent=2)
+    except OSError as _e_write:
+        # The models often live on a read-only CAD share. Losing a completed analysis
+        # (minutes of SolidWorks document opens) to a write permission error is not
+        # acceptable — fall back to the current working directory and say where it went.
+        _fallback = os.path.join(os.getcwd(), "_sw_native_extract.json")
+        print(f"\nWARNING: could not write to {out_json} ({_e_write})")
+        with open(_fallback, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, indent=2)
+        out_json = _fallback
     print(f"\nWrote {out_json}")
 
 
