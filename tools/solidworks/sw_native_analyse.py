@@ -138,6 +138,11 @@ class RouteSignals:
     hole_count_est: int = 0
     flat_pattern_present: bool = False
     has_weldment: bool = False
+    # True when the feature tree shows imported geometry with no modelled fabrication
+    # features (an 'MBimport' body and nothing we would make). That is a supplier-supplied
+    # model — a bought-in component, not something SDI fabricates — so it must take no
+    # fabrication route. Catches fasteners, PEM inserts, standoffs, connectors.
+    likely_bought_in: bool = False
     material: str = ""
     thickness_mm: Optional[float] = None
     mass_kg: Optional[float] = None
@@ -431,17 +436,44 @@ def sheet_metal_signals(doc) -> RouteSignals:
     sig.bbox_mm = get_bbox_mm(doc, SW_PART)
     sig.mass_kg = get_mass_kg(doc)
 
+    # A part whose tree is imported geometry with no modelled fabrication features is a
+    # supplier model (fastener, PEM, standoff, connector, display module) — we buy it, we
+    # do not make it. Detect before assigning any route.
+    _fab_feats = {"SHEETMETAL", "SMBASEFLANGE", "EDGEFLANGE", "FOLD", "UNFOLD", "FLATPATTERN",
+                  "EXTRUSION", "CUT", "REVOLUTION", "REVCUT", "SWEEP", "SWEEPCUT", "LOFT",
+                  "HOLEWZD", "WELDMENT", "STRUCTURALMEMBER"}
+    _types_u = {str(t).upper() for t in (sig.feature_types or [])}
+    if "MBIMPORT" in _types_u and not (_types_u & _fab_feats):
+        sig.likely_bought_in = True
+
     # Route hints (rules-first — align with the estimator's op names). These are HINTS,
     # honestly flagged: powder in particular is a default assumption to confirm from notes.
-    if sig.is_sheet_metal or sig.bend_count:
-        sig.ops_hint += ["laser_cutting", "folding"]
-    if sig.hole_count_est:
-        sig.ops_hint.append("hole_machining")
-    if sig.has_weldment:
-        sig.ops_hint += ["welding", "dress_welds"]
-    mat_u = sig.material.upper()
-    if any(x in mat_u for x in ("MS", "MILD", "STEEL", "CRS", "ZINTEC")):
-        sig.ops_hint.append("powder_coating")  # DEFAULT ASSUMPTION — confirm from drawing notes
+    if sig.likely_bought_in:
+        # Bought-in: no fabrication route at all. Handling/assembly is added by the
+        # estimator, not asserted here.
+        sig.notes.append("likely bought-in (imported body, no fabrication features)")
+    else:
+        # Sheet metal is CUT — but only FOLDED when the model actually has bends. Gating
+        # 'folding' on is_sheet_metal alone put a fold operation on flat blanks: 12120-01-05M
+        # is SheetMetal -> SMBaseFlange -> FlatPattern with no EdgeFlange/Fold at all, yet was
+        # given a fold. An operation must follow evidence, never the material class.
+        if sig.is_sheet_metal or sig.bend_count:
+            sig.ops_hint.append("laser_cutting")
+        if sig.bend_count:
+            sig.ops_hint.append("folding")
+        if sig.hole_count_est:
+            sig.ops_hint.append("hole_machining")
+        if sig.has_weldment:
+            sig.ops_hint += ["welding", "dress_welds"]
+        # Powder is a DEFAULT ASSUMPTION for FABRICATED steel — confirm from drawing notes.
+        # It must not be applied to a steel bought-in: the Amphenol USB coupler, M4
+        # thumbscrews, PEM inserts and the Lenovo display module all carry material 'Steel'
+        # and were being given a powder-coat operation they will never see.
+        mat_u = sig.material.upper()
+        _is_steel = any(x in mat_u for x in ("MILD STEEL", "MILD_STEEL", "CR4", "STEEL",
+                                             "CRS", "ZINTEC", "GALV"))
+        if _is_steel and (sig.is_sheet_metal or sig.has_weldment):
+            sig.ops_hint.append("powder_coating")
     sig.ops_hint = sorted(set(sig.ops_hint))
     return sig
 
