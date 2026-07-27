@@ -708,8 +708,13 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
       - WELD: flag weld-candidate assemblies for the weld/dress route.
     Returns {'material_set','qty_corrected','weld_flagged'}. Geometry (holes/cut length)
     is deliberately NOT overwritten here — DXF stays authoritative for that.
-    NOTE: wiring the CALL of this into file_scan is a separate, reviewed step; this keeps
-    the mapping isolated and testable first."""
+
+    NOT ON THE LIVE PATH. apply_native_to_pre_estimate() supersedes it and IS wired into
+    file_scan: applying native truth BEFORE costing means the numbers are computed from it,
+    rather than patched afterwards while the costs still reflect the old values. This is
+    kept for the reconcile/audit use case — folding native data into an ALREADY-COSTED
+    summary for comparison — and must not be called on the estimating path, where it would
+    silently desynchronise part records from the costs derived from them."""
     out = {"material_set": 0, "qty_corrected": 0, "weld_flagged": 0}
     if not job or not job.found:
         return out
