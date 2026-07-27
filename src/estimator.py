@@ -108,6 +108,8 @@ def _weight_source_label(part: Dict[str, Any]) -> str:
         return "dxf_flat_pattern"
     if part.get("geometry_source") == "dxf_flat_pattern" or part.get("dxf_augmented"):
         return "dxf_flat_pattern"
+    if str(part.get("geometry_source") or "") == "solidworks_flat_pattern":
+        return "solidworks_flat_pattern"
     return "pdf_stated"
 
 
@@ -224,7 +226,25 @@ def _resolve_mfg_part(mfg_by_key: Dict[str, Dict[str, Any]], est_part: Dict[str,
     return None
 
 
+def _has_native_flat(part: Dict[str, Any]) -> bool:
+    """True when the blank came from the SolidWorks sheet-metal CUT LIST — a modelled flat
+    pattern, i.e. the same measured truth as a DXF flat (it is what generates the DXF), and
+    sanity-gated against the solid before it is written. Kept as a separate predicate from
+    the DXF ones so nothing anywhere claims a DXF exists when it does not; every gate that
+    means "this part has measured geometry" ORs the two together."""
+    if not isinstance(part, dict):
+        return False
+    return bool(part.get("native_flat_pattern")) or (
+        str(part.get("geometry_source") or "").lower() == "solidworks_flat_pattern"
+    )
+
+
 def _part_has_part_dxf(mfg: Dict[str, Any]) -> bool:
+    # A modelled flat pattern is measured geometry of the same class as a DXF flat, so the
+    # credibility gate must accept it — otherwise a fully native job (better data than any
+    # DXF job) would be stamped "insufficient data" for lacking a file it does not need.
+    if _has_native_flat(mfg):
+        return True
     if mfg.get("dxf_augmented"):
         return True
     gs = str(mfg.get("geometry_source") or "").lower()
@@ -255,6 +275,10 @@ def _part_cost_credibility(mfg: Optional[Dict[str, Any]], est_part: Dict[str, An
         reasons.append("geometry_inferred_provisional")
     if "implausible_system_cost_rejected" in rf_blob:
         reasons.append("rejected_catalogue_match")
+    # SolidWorks named the material but the model yielded no blank/mass/section, so the
+    # material cost is not derivable. Never let that line pass as a credible £0.
+    if mfg.get("native_material_without_geometry"):
+        reasons.append("native_material_no_geometry")
 
     has_dxf = _part_has_part_dxf(mfg)
     gr = _safe_float((est_part.get("process_estimate") or {}).get("geometry_reliability"))
@@ -896,7 +920,10 @@ def _dxf_geometry_trusted(part: Dict[str, Any], ng: Dict[str, Any]) -> bool:
         return True
     if part.get("geometry_source") == "dxf_flat_pattern":
         return True
-    if str(ng.get("geometry_source") or "").lower() in {"dxf_flat_pattern", "dxf"}:
+    if _has_native_flat(part):
+        return True
+    if str(ng.get("geometry_source") or "").lower() in {
+            "dxf_flat_pattern", "dxf", "solidworks_flat_pattern"}:
         return True
     prov = part.get("provenance") or {}
     if str(prov.get("source") or "").lower() == "dxf":
@@ -1065,7 +1092,10 @@ def infer_primary_dimensions(part: Dict[str, Any]) -> Dict[str, Optional[float]]
             "overall_length_mm": dxf_l,
             "overall_width_mm": dxf_w,
             "all_dimensions_mm": sorted([dxf_l, dxf_w], reverse=True),
-            "source": "dxf_flat_pattern",
+            # Report the flat pattern's ACTUAL source. Both are measured blanks, but a
+            # modelled cut-list flat must not be reported to an estimator as a DXF.
+            "source": ("solidworks_flat_pattern" if _has_native_flat(part)
+                       else "dxf_flat_pattern"),
         }
 
     # ── Priority 2: DXF normalised geometry bounding box only ─────────────────
@@ -1406,7 +1436,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # it is suppressed and carried by the costed child detail parts.
     _pn_wm = str(part.get("part_number") or "").upper()
     _wm_suffixes = getattr(config, "WELDMENT_PARENT_PN_SUFFIXES", [r"-WA\d*$", r"-SA\d*$"])
-    _has_own_flat = "dxf" in str(part.get("geometry_source") or "").lower()
+    _has_own_flat = ("dxf" in str(part.get("geometry_source") or "").lower()
+                     or _has_native_flat(part))
     # is_assembly_parent is stamped upstream (drawing_job_merge) for a part with no
     # flat DXF whose PN is a strict prefix of >=2 others — a roll-up whose material
     # is carried by its costed children (TANK 04 over 04-01/04-02).
@@ -1790,8 +1821,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             #  - NO DXF (blank is PDF-vision geometry, often garbled e.g. 4.5x4mm) -> the PRINTED
             #    weight is the reliable one -> KEEP it (costs by mass below) and flag the blank.
             # Lever: MATERIAL_PRICE_POLICY.trust_stated_weight_when_no_dxf (default True).
-            _dxf_backed = str(part.get("geometry_source") or "").lower() in (
-                "dxf_flat_pattern", "dxf", "dxf_flat")
+            _dxf_backed = (str(part.get("geometry_source") or "").lower() in (
+                "dxf_flat_pattern", "dxf", "dxf_flat") or _has_native_flat(part))
             _trust_wt = bool(_pol.get("trust_stated_weight_when_no_dxf", True))
             if _dxf_backed or not _trust_wt:
                 stated_weight_kg = None  # measured blank wins -> use area formula
@@ -3881,7 +3912,8 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
         # page-role. Such parts must never be collapsed by the bought-in description dedup
         # (which caused distinct GRAPHIC CHANNEL parts to be merged by token overlap).
         _gs = str(p.get("geometry_source") or "").lower()
-        if "dxf" in _gs or p.get("dxf_augmented") or p.get("dxf_source_file"):
+        if ("dxf" in _gs or p.get("dxf_augmented") or p.get("dxf_source_file")
+                or _has_native_flat(p)):
             return True
         import re as _re
         _pn = str(p.get("part_number") or "").upper()

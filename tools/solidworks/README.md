@@ -1,3 +1,61 @@
+# SolidWorks tooling
+
+Two scripts live here:
+
+| script | purpose |
+|--------|---------|
+| `sw_native_analyse.py` | **production extractor.** Reads a job's models and writes `_sw_native_extract.json` — the input the estimating pipeline consumes. |
+| `sw_discovery_probe.py` | one-off coverage probe (below) — answers *which* CAD data is actually populated, before committing to build against it. |
+
+## Running the extractor, then the estimate
+
+The extractor needs Windows + a licensed SolidWorks seat. The pipeline does **not** —
+it only reads the JSON, so the estimate can run anywhere.
+
+```powershell
+# 1. On the SolidWorks machine — read the models (read-only, nothing is saved back)
+C:\ClaudeVision\.venv\Scripts\python.exe tools\solidworks\sw_native_analyse.py `
+    "K:\Estimating\...\12120 Digital Ticketing Bracket" `
+    --out "C:\ClaudeVision\jobs\0359131\_sw_native_extract.json"
+
+# 2. Run the estimate as normal — the extract is picked up automatically
+C:\ClaudeVision\.venv\Scripts\python.exe -m src.main --job "C:\ClaudeVision\jobs\0359131"
+```
+
+**How the pipeline finds it.** `src/source_connectors/solidworks.py` is applied before
+costing (Layer 0 of the source waterfall) and is *self-gating*: it fires when
+`_sw_native_extract.json` is present in the job folder. No file, no effect — the job runs
+on PDF + DXF exactly as before.
+
+| variable | effect |
+|----------|--------|
+| `SDI_APPLY_SOLIDWORKS=0` | force off |
+| `SDI_APPLY_SOLIDWORKS=1` | force on; says so loudly if the extract is missing |
+| `SDI_SW_EXTRACT_JSON=<path>` | read the extract from an explicit path (models on a CAD share, job folder elsewhere) |
+
+**What it sets, and the rule for each** — all keyed on document type, stock form or
+drawing convention, so every rule inherits to the next job:
+
+- **Flat blank + sheet gauge + bend radius** from the sheet-metal cut list. Written only
+  where the part is not already DXF-backed; where it is, the two blanks are compared and a
+  disagreement over 10% by area is **flagged** (the DXF is kept).
+- **Material** from the model's applied material. Fills a gap always. Overrides only where
+  the family is wrong (metal ↔ non-metal). A same-family grade disagreement is flagged and
+  the drawing value kept — the title block is what the shop buys to.
+- **Bends** from the feature tree; where a Base Flange bakes its bends into the sketch the
+  part is flagged as *formed, bend count unreadable* rather than silently counted as flat.
+- **Quantities** from the full-depth assembly BOM.
+- **Assemblies** are marked as parents so their material is never costed twice alongside
+  their children (the GA double-count rule).
+- **Imported supplier bodies** with no modelled fabrication are marked bought-in and take
+  no fabrication route.
+- **Flag, never zero.** If the model names a material but yields no blank, mass or section,
+  the part is flagged as *cost not derivable* — a £0 line must never read as "free".
+
+Every value written carries a `review_flags` entry naming SolidWorks as the source.
+
+---
+
 # SolidWorks discovery probe
 
 Read-only tooling that answers one factual question before we build the

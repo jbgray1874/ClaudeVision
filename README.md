@@ -19,15 +19,25 @@ priced estimate.
 
 ## Source waterfall
 
-Data is taken from the most reliable source available, in this order:
+Data is taken from the most reliable source available, **per datum** — not per file — in
+this order:
 
-1. **DXF / SolidWorks geometry** — exact blank size, bends, cut length, holes
+0. **SolidWorks native** *(reliability 1.0)* — the model itself: flat blank and sheet gauge
+   from the sheet-metal cut list, bend count and radius, applied material, full-depth
+   assembly BOM quantities. See `tools/solidworks/README.md`.
+1. **DXF geometry** — exact blank size, bends, cut length, holes
 2. **Deterministic PDF reads** — labelled title-block fields, BOM tables, drawing facts
 3. **Whole-document LLM extract** — cross-checked against (2); drives geometry only for
    PDF-only parts with no DXF
 
-Where DXF coverage on fabricated parts is 0%, the **credibility gate** computes a
-provisional total but marks it *not reportable* rather than presenting it as a quote.
+Each layer fills only what the layer above left empty. Where two layers both have a value
+and they disagree, the disagreement is **flagged on the part** — a native/DXF blank
+mismatch over 10% by area, or a material the model and the title block do not agree on.
+
+Where no measured geometry (DXF *or* native flat pattern) covers the fabricated parts, the
+**credibility gate** computes a provisional total but marks it *not reportable* rather than
+presenting it as a quote. A part the model names a material for but yields no blank, mass
+or section is flagged as *cost not derivable* — never left as a £0 line that reads as free.
 
 ## Project layout
 
@@ -151,9 +161,17 @@ Proven end-to-end on four M&S tender products: **0348837** (Horti Rustic Crate, 
 metal + MDF), **0359131** (Cocktails Hero Bay 4ft, mixed metal + ply + tile + acrylic).
 
 These are PDF-only packs, so totals are **provisional** — the credibility gate reports
-0% DXF coverage on fabricated parts and withholds a reportable headline. Obtaining CAD
-(DXF flat patterns, STEP/IGES, native SolidWorks parts/assemblies) is the highest-value
-change available; direct SolidWorks API integration is the intended end-state.
+0% DXF coverage on fabricated parts and withholds a reportable headline. Obtaining CAD is
+the highest-value change available.
+
+**SolidWorks API integration is live.** `tools/solidworks/sw_native_analyse.py` reads a
+job's models read-only over the SolidWorks API and writes `_sw_native_extract.json`;
+`src/source_connectors/solidworks.py` folds that into the part records *before* costing.
+On a modelled job this replaces the whole class of PDF guesswork: measured flat blanks and
+sheet gauges instead of inferred ones, quantities from the assembly BOM instead of a vision
+read, imported supplier bodies identified as bought-in, and assemblies marked so their
+material is not counted twice. Outstanding: mass properties (`mass_kg`) do not yet populate,
+and revision selection where a pack carries two drawing revisions is still manual.
 
 ## Further reading
 

@@ -1879,6 +1879,60 @@ def _finalize_scan_summary(
             _part["textual_operations"] = _merged
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── SolidWorks native extract — LAYER 0 of the source waterfall ─────────────────────
+    # Runs BEFORE the LLM extract and before costing, so modelled truth (flat blank from the
+    # sheet-metal cut list, sheet gauge, applied material, full-depth BOM quantities) is in
+    # the part records first and every lower source can only fill the gaps it leaves.
+    #
+    # Self-gating: it applies when the analyser's `_sw_native_extract.json` is present in the
+    # job folder — i.e. when somebody ran tools/solidworks/sw_native_analyse.py on a machine
+    # with SolidWorks. No file, no effect: the job runs on PDF + DXF exactly as before.
+    #   SDI_APPLY_SOLIDWORKS=0   force off
+    #   SDI_APPLY_SOLIDWORKS=1   force on (and say so loudly if the extract is missing)
+    #   SDI_SW_EXTRACT_JSON=...  read the extract from an explicit path
+    _sw_flag = os.getenv("SDI_APPLY_SOLIDWORKS", "").strip().lower()
+    if _sw_flag not in {"0", "false", "no", "off"}:
+        try:
+            from source_connectors.solidworks import (
+                apply_native_to_pre_estimate,
+                native_extract_for_job,
+            )
+            _sw_json = os.getenv("SDI_SW_EXTRACT_JSON") or None
+            _sw_job = native_extract_for_job(folder=job_folder, json_path=_sw_json) \
+                if (job_folder or _sw_json) else None
+            if _sw_job and _sw_job.found:
+                _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
+                summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
+                # Keep the normalised extract on the summary so the estimator can audit the
+                # modelled source data behind every native-sourced number.
+                summary["solidworks_native"] = {
+                    "source": "solidworks_api",
+                    "reliability": 1.0,
+                    "extract_path": _sw_job.meta.get("extract_path"),
+                    "top_assembly": _sw_job.meta.get("top_assembly"),
+                    "counts": _sw_job.meta.get("counts"),
+                    "applied": _swc,
+                    "bom": [vars(r) for r in _sw_job.bom],
+                }
+                print(f"   [solidworks] native extract applied — flat+{_swc['flat']} "
+                      f"thickness+{_swc['thickness']} material+{_swc['material']} "
+                      f"bends+{_swc['bends']} qty+{_swc['qty']} "
+                      f"assembly-parent+{_swc['assembly_parent']} bought-in+{_swc['bought_in']}",
+                      flush=True)
+                if _swc["material_conflict"] or _swc["geometry_conflict"]:
+                    print(f"   [solidworks] {_swc['material_conflict']} material and "
+                          f"{_swc['geometry_conflict']} blank disagreement(s) with the drawing "
+                          f"— flagged on the part, drawing value kept", flush=True)
+                if _swc["no_geometry_flagged"]:
+                    print(f"   [solidworks] {_swc['no_geometry_flagged']} part(s) have a "
+                          f"material but NO usable geometry — flagged as unpriced, NOT £0",
+                          flush=True)
+            elif _sw_flag in {"1", "true", "yes", "on"}:
+                print("   [solidworks] NOT APPLIED — no _sw_native_extract.json for this job "
+                      "(run tools/solidworks/sw_native_analyse.py on the model folder)", flush=True)
+        except Exception as _e_sw:
+            print(f"   [solidworks] skipped ({_e_sw})", flush=True)
+
     # ── Whole-document LLM extract — DRIVE the estimate from a chat-session-style read ──
     # Gated (SDI_LLM_FULL_EXTRACT). Reasons over the ENTIRE pack in one call (hierarchy + tube
     # cut lengths + materials + weights) and folds it into the pre-estimate parts BEFORE costing,

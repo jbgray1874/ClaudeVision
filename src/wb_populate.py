@@ -990,7 +990,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _len_g = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
         _wid_g = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
         _gau_g = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
-        _dxf_g = (pe.get("geometry_source") == "dxf_flat_pattern")
+        _dxf_g = pe.get("geometry_source") in ("dxf_flat_pattern", "solidworks_flat_pattern")
         if (not _gau_g) and (not _len_g) and (not _wid_g) and (not _dxf_g):
             _skip_pns.add(_pn_g)
             _flag("excluded non-fabricatable part '" + _pn_g + "' from Sheet Steel "
@@ -1814,7 +1814,11 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
             pe.get("normalized_thickness_mm"),
             me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
             (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
-            "dxf" if (pe.get("geometry_source") == "dxf_flat_pattern") else "pdf",
+            # Name the real source. A modelled flat pattern is measured geometry, but the
+            # estimator must be able to tell a SolidWorks cut list from a DXF from a PDF.
+            {"dxf_flat_pattern": "dxf",
+             "solidworks_flat_pattern": "solidworks"}.get(
+                str(pe.get("geometry_source") or ""), "pdf"),
         ])
     _add("AI Material Detail",
          ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",

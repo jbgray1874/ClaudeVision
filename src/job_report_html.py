@@ -300,12 +300,33 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
+    # SolidWorks native flat patterns — measured blanks from the model's sheet-metal cut
+    # list. A part that has one is NOT missing geometry, so it must not be reported under
+    # "parts without DXF": that would tell the estimator the blank is provisional when it
+    # is measured. Layer 0 of the waterfall gets its own count.
+    _native = summary.get("solidworks_native") or {}
+    _native_flat_pns = {
+        str(p.get("part_number") or "").strip().upper()
+        for p in parts
+        if p.get("native_flat_pattern")
+        or str(p.get("geometry_source") or "") == "solidworks_flat_pattern"
+    } - {""}
+    _without_dxf = []
+    for x in (dxf.get("parts_without_dxf") or []):
+        _pn = (str(x.get("part_number") or "") if isinstance(x, dict) else str(x)).strip().upper()
+        if _pn and _pn in _native_flat_pns:
+            continue
+        _without_dxf.append(x)
+
     return {
         "dxf_matched": len(dxf.get("matched") or []),
         "dxf_unmatched": len(dxf.get("unmatched_dxf") or []),
         "dxf_ambiguous": len(dxf.get("ambiguous_dxf") or []),
         "dxf_skipped": len(dxf.get("skipped") or []),
-        "parts_without_dxf": dxf.get("parts_without_dxf") or [],
+        "native_flat_parts": len(_native_flat_pns),
+        "native_top_assembly": _native.get("top_assembly") or "",
+        "native_counts": _native.get("counts") or {},
+        "parts_without_dxf": _without_dxf,
         "geo_reliability": geo_rel,
         "geo_reliability_band": _band(geo_rel),
         "geo_confidence": geo_conf,
@@ -656,6 +677,16 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
     """Section 4 — the drawing-quality audit. Honest severity, not alarmist counts."""
     # 4.1 strengths
     strengths = []
+    if dq.get("native_flat_parts"):
+        _nc = dq.get("native_counts") or {}
+        _ta = f" (top assembly {dq['native_top_assembly']})" if dq.get("native_top_assembly") else ""
+        strengths.append(
+            f"<li><b>SolidWorks models read natively.</b> {dq['native_flat_parts']} part(s) "
+            f"carry a modelled flat pattern from the sheet-metal cut list{_ta} — blank size, "
+            f"sheet gauge and bend radius are taken from the model, not inferred from the "
+            f"drawing. Material coverage {_nc.get('material_coverage', '—')} of "
+            f"{_nc.get('parts_with_signals', '—')} part(s); quantities from the full-depth "
+            f"assembly BOM.</li>")
     if dq["dxf_matched"]:
         strengths.append(f"<li><b>Flat-pattern DXFs present.</b> {dq['dxf_matched']} DXF(s) matched to parts, "
                          f"giving reliable cut-length and bend geometry.</li>")
@@ -666,11 +697,14 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
         # how cleanly we read the page — NOT flat-pattern/manufacturing geometry coverage.
         # Shown unqualified next to "0 DXFs matched" it reads as "fab geometry is solid",
         # which is the opposite of the truth on a PDF-only pack.
-        _no_dxf = not dq.get("dxf_matched")
+        # The caveat only holds when NOTHING measured the blanks. Native SolidWorks flats
+        # are measured geometry, so a native job must not be told its blanks are provisional.
+        _no_measured = not (dq.get("dxf_matched") or dq.get("native_flat_parts"))
         _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
-                   "<b>not</b> flat-pattern coverage. No DXFs are matched on this job, so "
-                   "blank sizes, bend counts and cut lengths remain provisional.</em>"
-                   if _no_dxf else "")
+                   "<b>not</b> flat-pattern coverage. No DXFs or SolidWorks models are "
+                   "matched on this job, so blank sizes, bend counts and cut lengths "
+                   "remain provisional.</em>"
+                   if _no_measured else "")
         strengths.append(f"<li><b>PDF vector extraction confidence: {band} ({rel_pct}%).</b> "
                          f"Overall extraction confidence "
                          f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%."

@@ -189,11 +189,16 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # Match the engine's OWN definition of DXF-backed (estimator.py:109 uses
         # geometry_source=='dxf_flat_pattern' OR dxf_augmented) plus the other DXF markers it
         # sets, so NO measured part slips through and gets overridden by the LLM.
+        # SolidWorks native sits ABOVE DXF in the waterfall, so a natively-measured part is
+        # treated exactly like a DXF-backed one here: the LLM must not override it.
         _dxf_backed = (
-            str(part.get("geometry_source") or "").lower() in ("dxf_flat_pattern", "dxf", "dxf_flat")
+            str(part.get("geometry_source") or "").lower() in (
+                "dxf_flat_pattern", "dxf", "dxf_flat", "solidworks_flat_pattern")
             or bool(part.get("dxf_augmented"))
             or bool(part.get("flat_pattern_detected"))
             or bool(part.get("dxf_source_file"))
+            or bool(part.get("native_flat_pattern"))
+            or bool(part.get("solidworks_native"))
         )
 
         # QUANTITY — the GA's PRINTED per-product count, rolled up the hierarchy. The vision BOM
