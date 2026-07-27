@@ -15,6 +15,13 @@ python-dotenv   # load configuration from .env (imported as `dotenv`)
 requests        # web / LLM price-lookup calls
 Pillow          # image handling (imported as `PIL`)
 
+# ── SolidWorks native extraction (Windows only) ──────────────────────────
+# COM bridge used by tools/solidworks/*.py to read .SLDPRT/.SLDASM/.SLDDRW
+# read-only via the SolidWorks API. The marker keeps it off non-Windows installs
+# (CI / Linux), where the rest of the pipeline still runs on PDF + DXF.
+# Requires a licensed SolidWorks seat on the machine — no key is held in this repo.
+pywin32; sys_platform == "win32"
+
 # ── Optional / feature-specific ──────────────────────────────────────────
 # Uncomment as needed; these are heavier and not on the core estimate path.
 # numpy                    # numerics (usually pulled in transitively)
