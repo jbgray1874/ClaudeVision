@@ -1898,8 +1898,12 @@ def _finalize_scan_summary(
                 native_extract_for_job,
             )
             _sw_json = os.getenv("SDI_SW_EXTRACT_JSON") or None
-            _sw_job = native_extract_for_job(folder=job_folder, json_path=_sw_json) \
-                if (job_folder or _sw_json) else None
+            # job_folder is only set on the folder-as-job path; a single --pdf scan passes
+            # none. Fall back to the PDF's own directory, which is where the extract
+            # naturally sits — otherwise the file is present and silently ignored.
+            _sw_folder = job_folder or (Path(pdf_path).parent if pdf_path else None)
+            _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json) \
+                if (_sw_folder or _sw_json) else None
             if _sw_job and _sw_job.found:
                 _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
