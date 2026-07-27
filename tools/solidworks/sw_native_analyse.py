@@ -449,28 +449,52 @@ def _cutlist_properties(feat, notes: List[str]) -> Dict[str, Any]:
         pass
 
     def _get_prop(name: str) -> Optional[str]:
-        # Get2/Get are the simple string-returning forms; Get5/Get4 use byref out-params
-        # which are awkward under this binding, so they are last resorts.
-        for meth in ("Get2", "Get"):
-            try:
-                v = getattr(cpm, meth)(name)
-                if isinstance(v, (list, tuple)):
-                    v = next((x for x in v if isinstance(x, str) and x.strip()), None)
-                if v not in (None, ""):
-                    return _safe_str(v)
-            except Exception:
+        """Read one cut-list property, tolerating every return shape these COM methods use.
+
+        CRITICAL: Get/Get2/Get4/Get5 return the VALUE in [out] parameters and a STATUS CODE
+        as the function result. Under this binding the out-params come back in a tuple with
+        that status. Treating the bare result as the value read 1 (success) for every
+        property and reported a 1.0mm flat blank on a 79mm part — a plausible-looking number
+        that is entirely fictional. So: strings only, never a bare number.
+        """
+        for meth in ("Get5", "Get4", "Get3", "Get2", "Get"):
+            fn = getattr(cpm, meth, None)
+            if fn is None:
                 continue
+            for args in ((name, False), (name,)):
+                try:
+                    r = fn(*args)
+                except Exception:
+                    continue
+                # Tuple/list => (status, ValOut, ResolvedValOut). The RESOLVED value is the
+                # evaluated one (equations/links already applied), so prefer the last string.
+                if isinstance(r, (list, tuple)):
+                    strs = [x for x in r if isinstance(x, str) and x.strip()]
+                    if strs:
+                        return _safe_str(strs[-1])
+                    continue
+                if isinstance(r, str) and r.strip():
+                    return _safe_str(r)
+                # A bare int/float here is the status code, NOT the property value. Reject it.
         return None
 
     _hits = 0
+    _raw_seen: List[str] = []
     for key, candidates in _CUTLIST_KEYS.items():
         for cand in candidates:
             raw = _get_prop(cand)
+            if raw is not None and len(_raw_seen) < 5:
+                _raw_seen.append(f"{key}={raw!r}")
             val = _num_mm(raw)
             if val is not None:
                 out[key] = val
                 _hits += 1
                 break
+    # Record the RAW strings read. A previous version silently turned a COM status code
+    # into a 1.0mm blank; showing the raw value makes that class of error visible instead
+    # of it looking like a real measurement.
+    if _raw_seen:
+        notes.append("cutlist_raw: " + "; ".join(_raw_seen))
     if _hits:
         notes.append(f"cutlist_props_read={_hits}")
     else:
@@ -583,12 +607,44 @@ def sheet_metal_signals(doc) -> RouteSignals:
     # Cut-list thickness is the sheet-metal parameter itself, so it beats a custom
     # property or anything inferred from the bounding box.
     if _cut_props:
-        sig.flat_length_mm = _cut_props.get("flat_length")
-        sig.flat_width_mm = _cut_props.get("flat_width")
+        # SANITY GATE. Unfolding a part can only make it BIGGER, never smaller: the flat
+        # blank must be at least the largest face dimension of the folded solid. A read that
+        # returned 1.0 x 1.0mm for a 79mm part (a COM status code mistaken for a value)
+        # passed every downstream check and would have costed as a 1mm square of steel.
+        # Reject anything geometrically impossible and say why, rather than carry a
+        # plausible-looking fiction into a price.
+        _fl = _cut_props.get("flat_length")
+        _fw = _cut_props.get("flat_width")
+        _bbox_max = 0.0
+        try:
+            _bbox_max = max(float(x) for x in (sig.bbox_mm or []) if x)
+        except Exception:
+            pass
+        if _fl and _fw and _bbox_max:
+            _flat_max = max(_fl, _fw)
+            if _flat_max < _bbox_max * 0.95:
+                sig.notes.append(
+                    f"REJECTED cut-list flat {_fl}x{_fw}mm — smaller than the folded solid "
+                    f"({_bbox_max:.1f}mm); a flat pattern cannot be smaller than the part")
+                _fl = _fw = None
+        sig.flat_length_mm = _fl
+        sig.flat_width_mm = _fw
         sig.bend_radius_mm = _cut_props.get("bend_radius")
         sig.cut_length_mm = _cut_props.get("cut_length")
-        if _cut_props.get("thickness"):
-            sig.thickness_mm = _cut_props["thickness"]
+        _thk = _cut_props.get("thickness")
+        # Thickness must not exceed the solid's smallest dimension.
+        if _thk and sig.bbox_mm:
+            try:
+                _bbox_min = min(float(x) for x in sig.bbox_mm if x)
+                if _thk > _bbox_min * 1.05:
+                    sig.notes.append(
+                        f"REJECTED cut-list thickness {_thk}mm — exceeds the solid's smallest "
+                        f"dimension ({_bbox_min:.2f}mm)")
+                    _thk = None
+            except Exception:
+                pass
+        if _thk:
+            sig.thickness_mm = _thk
 
     # Last-resort thickness for a sheet part: the smallest bounding-box dimension of an
     # UNFORMED blank is its thickness. Only used when the part has no bends and no cut-list
