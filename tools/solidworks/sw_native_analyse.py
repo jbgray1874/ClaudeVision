@@ -138,6 +138,20 @@ class RouteSignals:
     hole_count_est: int = 0
     flat_pattern_present: bool = False
     has_weldment: bool = False
+    # ── Flat pattern, from the SolidWorks cut-list (the estimating prize) ──────────
+    # SolidWorks auto-generates cut-list properties on sheet-metal bodies: the FLAT
+    # blank length/width, the material thickness and the bend radius. This is exactly
+    # what a PDF cannot supply (see docs/Estimating_from_PDFs_vs_CAD) — blank size for
+    # material and nesting, thickness for gauge pricing, and a real bend radius.
+    flat_length_mm: Optional[float] = None
+    flat_width_mm: Optional[float] = None
+    bend_radius_mm: Optional[float] = None
+    cut_length_mm: Optional[float] = None
+    # Set when the solid is demonstrably formed (its smallest bounding-box dimension is
+    # far greater than the sheet thickness) but no bend feature was counted. A Base Flange
+    # built from a multi-segment sketch bakes its bends in and exposes no bend feature, so
+    # feature-counting alone under-reports. Flagged, never silently assumed.
+    formed_but_no_bend_features: bool = False
     # True when the feature tree shows imported geometry with no modelled fabrication
     # features (an 'MBimport' body and nothing we would make). That is a supplier-supplied
     # model — a bought-in component, not something SDI fabricates — so it must take no
@@ -339,6 +353,20 @@ def get_mass_kg(doc) -> Optional[float]:
                 return round(mass, 4)
         except Exception:
             continue
+    # Fallback: the older array-returning forms. CreateMassProperty returned nothing on
+    # every part of the first real job tested, leaving mass null across the board — and
+    # mass is the whole basis of the by-weight costing path. GetMassProperties2 returns
+    # [cx, cy, cz, volume, area, mass, ...] with mass in kg (document units are SI).
+    for _src, _name in ((ext, "GetMassProperties2"), (ext, "GetMassProperties"),
+                        (doc, "GetMassProperties2"), (doc, "GetMassProperties")):
+        try:
+            res = getattr(_src, _name)(0) if _name.endswith("2") else getattr(_src, _name)()
+            if isinstance(res, (list, tuple)) and len(res) >= 6:
+                mass = float(res[5] or 0.0)
+                if mass:
+                    return round(mass, 4)
+        except Exception:
+            continue
     return None
 
 
@@ -347,6 +375,113 @@ def _call_or_prop(obj, name):
     _get0 this RAISES on error so callers can record why a call failed."""
     attr = getattr(obj, name)
     return attr() if callable(attr) else attr
+
+
+def _num_mm(value) -> Optional[float]:
+    """Parse a cut-list property value to millimetres.
+
+    Cut-list values arrive as display strings ('79.00', '1.5mm', '79'). SolidWorks stores
+    these already in the document's display units (mm on these models), so this does NOT
+    convert — it only extracts the number. Returns None when nothing numeric is present,
+    never a guess.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    m = re.search(r"-?\d+(?:[.,]\d+)?", s.replace(",", "."))
+    if not m:
+        return None
+    try:
+        v = float(m.group(0))
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+# Cut-list property names SolidWorks generates for sheet-metal bodies. Spellings vary by
+# version/template, so each datum is tried against several candidates.
+_CUTLIST_KEYS = {
+    "flat_length": ("Bounding Box Length", "Sheet Metal Bounding Box Length",
+                    "Bounding Box Length@@@", "SW-Bounding Box Length"),
+    "flat_width": ("Bounding Box Width", "Sheet Metal Bounding Box Width",
+                   "Bounding Box Width@@@", "SW-Bounding Box Width"),
+    "thickness": ("Sheet Metal Thickness", "Thickness", "SW-Sheet Metal Thickness"),
+    "bend_radius": ("Bend Radius", "Default Bend Radius", "SW-Bend Radius"),
+    "cut_length": ("Cut Length", "Perimeter", "SW-Cut Length"),
+}
+
+
+def _cutlist_properties(feat, notes: List[str]) -> Dict[str, Any]:
+    """Read the cut-list custom properties hanging off a CutListFolder feature.
+
+    This is where SolidWorks puts the flat-pattern bounding box and the sheet thickness —
+    the two values a PDF can never supply. The property manager is reached differently
+    across SolidWorks versions and binding modes, so several access forms are tried and
+    whichever worked is recorded in notes. Returns {} when none succeed (honest null),
+    never a fabricated value.
+    """
+    out: Dict[str, Any] = {}
+    cpm = None
+    for attr in ("CustomPropertyManager", "GetCustomPropertyManager"):
+        try:
+            cpm = _call_or_prop(feat, attr)
+            if cpm is not None:
+                break
+        except Exception:
+            continue
+    if cpm is None:
+        return out
+
+    # Refresh the cut list so the auto-properties exist/are current. Read-only intent:
+    # this updates in-memory derived data only and the document is closed without saving.
+    try:
+        bf = _get0(feat, "GetSpecificFeature2")
+        if bf is not None:
+            for m in ("UpdateCutList", "Update"):
+                try:
+                    _call_or_prop(bf, m)
+                    break
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    def _get_prop(name: str) -> Optional[str]:
+        # Get2/Get are the simple string-returning forms; Get5/Get4 use byref out-params
+        # which are awkward under this binding, so they are last resorts.
+        for meth in ("Get2", "Get"):
+            try:
+                v = getattr(cpm, meth)(name)
+                if isinstance(v, (list, tuple)):
+                    v = next((x for x in v if isinstance(x, str) and x.strip()), None)
+                if v not in (None, ""):
+                    return _safe_str(v)
+            except Exception:
+                continue
+        return None
+
+    _hits = 0
+    for key, candidates in _CUTLIST_KEYS.items():
+        for cand in candidates:
+            raw = _get_prop(cand)
+            val = _num_mm(raw)
+            if val is not None:
+                out[key] = val
+                _hits += 1
+                break
+    if _hits:
+        notes.append(f"cutlist_props_read={_hits}")
+    else:
+        # Say so rather than silently returning nothing — this is the datum that decides
+        # whether a job can clear the credibility gate.
+        try:
+            names = _get0(cpm, "GetNames")
+            notes.append(f"cutlist_props_none; available={list(names)[:12] if names else None}")
+        except Exception:
+            notes.append("cutlist_props_none")
+    return out
 
 
 def sheet_metal_signals(doc) -> RouteSignals:
@@ -363,6 +498,7 @@ def sheet_metal_signals(doc) -> RouteSignals:
         sig.notes.append(f"FirstFeature: {e!r}")
         feat = _get0(doc, "FirstFeature")  # last-resort late-bound property form
     sig.notes.append("first_feature=" + ("obj" if feat is not None else "None"))
+    _cut_props: Dict[str, Any] = {}
     try:
         bend_count = 0
         hole_like = 0
@@ -397,6 +533,13 @@ def sheet_metal_signals(doc) -> RouteSignals:
                 hole_like += 1
             if "weldment" in t or "structuralmember" in t or "weldmentcutlist" in t:
                 sig.has_weldment = True
+            # The cut-list folder carries the flat-pattern bounding box, sheet thickness
+            # and bend radius — the values that let a sheet part be costed properly.
+            if t in ("cutlistfolder", "subweldfolder", "solidbodyfolder") and not _cut_props:
+                try:
+                    _cut_props = _cutlist_properties(feat, sig.notes) or {}
+                except Exception as _e_cl:
+                    sig.notes.append(f"cutlist_err: {_e_cl!r}")
             try:
                 feat = feat.GetNextFeature()
             except Exception:
@@ -436,6 +579,46 @@ def sheet_metal_signals(doc) -> RouteSignals:
     sig.bbox_mm = get_bbox_mm(doc, SW_PART)
     sig.mass_kg = get_mass_kg(doc)
 
+    # ── Flat pattern + thickness from the cut list ────────────────────────────────
+    # Cut-list thickness is the sheet-metal parameter itself, so it beats a custom
+    # property or anything inferred from the bounding box.
+    if _cut_props:
+        sig.flat_length_mm = _cut_props.get("flat_length")
+        sig.flat_width_mm = _cut_props.get("flat_width")
+        sig.bend_radius_mm = _cut_props.get("bend_radius")
+        sig.cut_length_mm = _cut_props.get("cut_length")
+        if _cut_props.get("thickness"):
+            sig.thickness_mm = _cut_props["thickness"]
+
+    # Last-resort thickness for a sheet part: the smallest bounding-box dimension of an
+    # UNFORMED blank is its thickness. Only used when the part has no bends and no cut-list
+    # thickness, and it is recorded as inferred so it is never mistaken for a model value.
+    if sig.is_sheet_metal and sig.thickness_mm is None and sig.bbox_mm:
+        try:
+            _mn = min(float(x) for x in sig.bbox_mm if x)
+            if 0.4 <= _mn <= 12.0 and not sig.bend_count:
+                sig.thickness_mm = round(_mn, 3)
+                sig.notes.append(f"thickness inferred from bbox min ({_mn:.2f}mm) — no cut-list value")
+        except Exception:
+            pass
+
+    # ── Formed-but-no-bend-features cross-check ───────────────────────────────────
+    # A Base Flange built from a multi-segment sketch bakes its bends into that feature and
+    # exposes no EdgeFlange/SketchBend, so counting bend features under-reports. If the solid
+    # is demonstrably formed — its smallest bbox dimension is several times the sheet
+    # thickness — say so, rather than silently reporting zero bends and dropping the fold.
+    if sig.is_sheet_metal and not sig.bend_count and sig.bbox_mm and sig.thickness_mm:
+        try:
+            _mn = min(float(x) for x in sig.bbox_mm if x)
+            if _mn > max(3.0 * float(sig.thickness_mm), float(sig.thickness_mm) + 3.0):
+                sig.formed_but_no_bend_features = True
+                sig.notes.append(
+                    f"FORMED but no bend features counted: min bbox {_mn:.1f}mm vs thickness "
+                    f"{sig.thickness_mm}mm — bends are likely baked into the base flange; "
+                    f"fold time needs confirming")
+        except Exception:
+            pass
+
     # A part whose tree is imported geometry with no modelled fabrication features is a
     # supplier model (fastener, PEM, standoff, connector, display module) — we buy it, we
     # do not make it. Detect before assigning any route.
@@ -459,7 +642,11 @@ def sheet_metal_signals(doc) -> RouteSignals:
         # given a fold. An operation must follow evidence, never the material class.
         if sig.is_sheet_metal or sig.bend_count:
             sig.ops_hint.append("laser_cutting")
-        if sig.bend_count:
+        # Fold when the model shows bends — either counted bend features, or a solid that
+        # is demonstrably formed (bends baked into the base flange). Gating on counted
+        # features alone would DROP the fold on those parts; gating on is_sheet_metal alone
+        # ADDED a fold to flat blanks. Both are wrong; this follows the geometry.
+        if sig.bend_count or sig.formed_but_no_bend_features:
             sig.ops_hint.append("folding")
         if sig.hole_count_est:
             sig.ops_hint.append("hole_machining")
@@ -757,6 +944,14 @@ def main():
                           f"bends={rs.get('bend_count')} holes={rs.get('hole_count_est')} "
                           f"flat={rs.get('flat_pattern_present')} weldment={rs.get('has_weldment')} "
                           f"mass_kg={rs.get('mass_kg')} bbox={rs.get('bbox_mm')}")
+                    # The costing-critical line: flat blank + gauge. Printed separately so a
+                    # missing value is obvious at a glance rather than buried in the JSON.
+                    print(f"  FLAT: {rs.get('flat_length_mm')} x {rs.get('flat_width_mm')} mm"
+                          f"  thickness={rs.get('thickness_mm')}mm"
+                          f"  bend_r={rs.get('bend_radius_mm')}"
+                          f"  cut_len={rs.get('cut_length_mm')}"
+                          f"{'  [FORMED - bends not feature-counted]' if rs.get('formed_but_no_bend_features') else ''}"
+                          f"{'  [BOUGHT-IN]' if rs.get('likely_bought_in') else ''}")
                     print(f"  ops_hint={rs.get('ops_hint')}  feat_types={rs.get('feature_types')[:12]}")
                     if rs.get("notes"):
                         print(f"  notes={rs.get('notes')}")
