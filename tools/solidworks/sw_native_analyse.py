@@ -163,6 +163,19 @@ class RouteSignals:
     # model — a bought-in component, not something SDI fabricates — so it must take no
     # fabrication route. Catches fasteners, PEM inserts, standoffs, connectors.
     likely_bought_in: bool = False
+    # ── further cut-list data (present on SDI's sheet-metal cut lists) ────────────
+    # Cut length is published split: outer profile + inner cut-outs. Laser time needs the
+    # sum, and the split is itself useful (a part that is mostly cut-outs runs differently
+    # from one that is mostly profile). Bend COUNT from the cut list resolves parts whose
+    # bends are baked into a base flange and cannot be counted from the feature tree.
+    cut_length_outer_mm: Optional[float] = None
+    cut_length_inner_mm: Optional[float] = None
+    cut_out_count: Optional[int] = None
+    blank_area_mm2: Optional[float] = None
+    bend_allowance_mm: Optional[float] = None
+    bend_count_cutlist: Optional[int] = None
+    surface_treatment: str = ""
+    sheet_gauge: str = ""
     material: str = ""
     thickness_mm: Optional[float] = None
     mass_kg: Optional[float] = None
@@ -463,6 +476,36 @@ def _call_or_prop(obj, name):
     return attr() if callable(attr) else attr
 
 
+# Densities used ONLY to resolve the units of the cut-list Mass value (kg vs grams) by
+# order of magnitude. Nominal handbook figures; a few percent either way cannot change
+# which of two readings a thousand-fold apart is the right one.
+_DENSITY_KG_M3 = (
+    ("STAINLESS", 8000.0), ("ALUMINI", 2700.0), ("ALUMINU", 2700.0),
+    # Wrought alloy designations — a SolidWorks library material is named '6061 Alloy',
+    # never 'aluminium', so the family token alone never matches it.
+    ("6061", 2700.0), ("6082", 2700.0), ("5251", 2700.0), ("5052", 2700.0),
+    ("5083", 2700.0), ("1050", 2700.0), ("1060", 2700.0), ("7075", 2700.0),
+    ("BRASS", 8500.0), ("COPPER", 8960.0), ("ZINC", 7140.0),
+    ("ACRYLIC", 1190.0), ("PMMA", 1190.0), ("ABS", 1040.0), ("NYLON", 1140.0),
+    ("POLYCARB", 1200.0), ("PVC", 1400.0),
+    ("MDF", 750.0), ("PLYWOOD", 600.0), ("TIMBER", 500.0),
+    # Species names, for the same reason — a title block says OAK, not TIMBER.
+    ("OAK", 700.0), ("BEECH", 720.0), ("BIRCH", 660.0), ("PINE", 500.0),
+    ("SPRUCE", 450.0), ("BALSA", 160.0), ("PLY", 600.0),
+    ("STEEL", 7850.0),          # last: 'STAINLESS STEEL' must match stainless first
+)
+
+
+def _density_kg_m3(material: str) -> Optional[float]:
+    u = str(material or "").upper()
+    if not u:
+        return None
+    for token, rho in _DENSITY_KG_M3:
+        if token in u:
+            return rho
+    return None
+
+
 def _num_mm(value) -> Optional[float]:
     """Parse a cut-list property value to millimetres.
 
@@ -488,6 +531,16 @@ def _num_mm(value) -> Optional[float]:
 
 # Cut-list property names SolidWorks generates for sheet-metal bodies. Spellings vary by
 # version/template, so each datum is tried against several candidates.
+# Property names confirmed present on SDI's own sheet-metal cut lists (12120 enumeration):
+#   Bend Allowance, Bend Radius, Bends, Bounding Box Area, Bounding Box Area-Blank,
+#   Bounding Box Length, Bounding Box Width, Cost-TotalCost, Cut Outs,
+#   Cutting Length-Inner, Cutting Length-Outer, Description, MATERIAL, Mass, QUANTITY,
+#   Sheet Metal Gauge, Sheet Metal Thickness, Surface Treatment
+# We were reading four of eighteen. The cut length we had been guessing at ("Cut Length",
+# "Perimeter") does not exist under those names — it is split Outer/Inner, which is better:
+# outer is the profile, inner is the cut-outs, and laser time needs both. Bend COUNT is
+# published too, which resolves parts whose bends are baked into a base flange and cannot
+# be feature-counted. Alternative names are kept so other SolidWorks versions still match.
 _CUTLIST_KEYS = {
     "flat_length": ("Bounding Box Length", "Sheet Metal Bounding Box Length",
                     "Bounding Box Length@@@", "SW-Bounding Box Length"),
@@ -495,7 +548,19 @@ _CUTLIST_KEYS = {
                    "Bounding Box Width@@@", "SW-Bounding Box Width"),
     "thickness": ("Sheet Metal Thickness", "Thickness", "SW-Sheet Metal Thickness"),
     "bend_radius": ("Bend Radius", "Default Bend Radius", "SW-Bend Radius"),
-    "cut_length": ("Cut Length", "Perimeter", "SW-Cut Length"),
+    "cut_length_outer": ("Cutting Length-Outer", "Cut Length-Outer", "Cut Length",
+                         "Perimeter", "SW-Cut Length"),
+    "cut_length_inner": ("Cutting Length-Inner", "Cut Length-Inner"),
+    "bend_count": ("Bends", "Bend Count", "Number of Bends"),
+    "cut_out_count": ("Cut Outs", "Cutouts", "Cut Out Count"),
+    "blank_area_mm2": ("Bounding Box Area-Blank", "Bounding Box Area"),
+    "bend_allowance": ("Bend Allowance",),
+    "mass_raw": ("Mass",),
+}
+# Text-valued cut-list properties — parsed as strings, never through the millimetre reader.
+_CUTLIST_TEXT_KEYS = {
+    "surface_treatment": ("Surface Treatment", "Finish"),
+    "sheet_gauge": ("Sheet Metal Gauge", "Gauge"),
 }
 
 
@@ -607,6 +672,14 @@ def _cutlist_properties(feat, notes: List[str]) -> Dict[str, Any]:
     # Record the RAW strings read. A previous version silently turned a COM status code
     # into a 1.0mm blank; showing the raw value makes that class of error visible instead
     # of it looking like a real measurement.
+    # Text-valued properties (finish, gauge designation) — the mm reader would strip these
+    # to a meaningless number ("Powder Coat" -> None, "16 GA" -> 16.0).
+    for key, candidates in _CUTLIST_TEXT_KEYS.items():
+        for cand in candidates:
+            raw = _get_prop(cand)
+            if raw and str(raw).strip():
+                out[key] = str(raw).strip()
+                break
     if _raw_seen:
         notes.append("cutlist_raw: " + "; ".join(_raw_seen))
     if _hits:
@@ -755,10 +828,12 @@ def sheet_metal_signals(doc) -> RouteSignals:
                 # round the bends. So if a part with bends reports a "flat" that matches its
                 # own bounding box, we are not looking at a flat pattern at all — we are
                 # looking at the FOLDED bounding box, which is a real number that is simply
-                # the wrong one. Proven on 12120-01-01M: the cut list returned 126.39x82.2,
-                # exactly the folded solid; its true developed blank (from the DXF) is
-                # 132.39x88.2. The first gate passes this by construction (folded == bbox is
-                # never < 0.95 x bbox), and costing the folded envelope UNDER-BUYS material.
+                # the wrong one. PRECAUTIONARY, not observed: written believing 12120-01-01M
+                # had failed this way, which fuller extraction disproved (its solid is
+                # 79x64.5x21.5 against a 126.39x82.2 flat — a genuine developed blank). Kept
+                # because the geometry it asserts is sound and the first gate passes a folded
+                # box by construction (folded == bbox is never < 0.95 x bbox), so nothing
+                # else would catch it. Costing a folded envelope UNDER-BUYS material.
                 _has_bends = bool(sig.bend_count or sig.formed_but_no_bend_features)
                 if _has_bends and sig.bbox_mm:
                     try:
@@ -793,7 +868,43 @@ def sheet_metal_signals(doc) -> RouteSignals:
         sig.flat_length_mm = _fl
         sig.flat_width_mm = _fw
         sig.bend_radius_mm = None if _read_tainted else _cut_props.get("bend_radius")
-        sig.cut_length_mm = None if _read_tainted else _cut_props.get("cut_length")
+        if not _read_tainted:
+            # ── CUT LENGTH: outer profile + inner cut-outs ────────────────────────
+            # The laser cuts both. Reporting only the outer under-states the time on any
+            # part with holes or slots; 01M has three. Kept separately as well, since the
+            # split is real information about how the part runs.
+            _co = _cut_props.get("cut_length_outer")
+            _ci = _cut_props.get("cut_length_inner")
+            sig.cut_length_outer_mm = _co
+            sig.cut_length_inner_mm = _ci
+            if _co or _ci:
+                sig.cut_length_mm = round((_co or 0.0) + (_ci or 0.0), 2)
+                sig.notes.append(
+                    f"cut length {sig.cut_length_mm}mm from the cut list "
+                    f"(outer {_co or 0:g} + inner {_ci or 0:g}) — measured, not a perimeter floor")
+            sig.blank_area_mm2 = _cut_props.get("blank_area_mm2")
+            sig.bend_allowance_mm = _cut_props.get("bend_allowance")
+            sig.surface_treatment = str(_cut_props.get("surface_treatment") or "")
+            sig.sheet_gauge = str(_cut_props.get("sheet_gauge") or "")
+            for _k, _attr in (("cut_out_count", "cut_out_count"),
+                              ("bend_count", "bend_count_cutlist")):
+                _v = _cut_props.get(_k)
+                if _v is not None:
+                    try:
+                        setattr(sig, _attr, int(round(float(_v))))
+                    except (TypeError, ValueError):
+                        pass
+            # ── BEND COUNT the feature tree cannot see ────────────────────────────
+            # A Base Flange from a multi-segment sketch exposes no bend feature, so
+            # feature-counting reports zero on a visibly folded part (02M, 06M, 08M). The
+            # cut list publishes the real count. Take it when it beats what we counted, and
+            # say where it came from — this replaces a flagged unknown with a fact.
+            if sig.bend_count_cutlist and sig.bend_count_cutlist > sig.bend_count:
+                sig.notes.append(
+                    f"bend count {sig.bend_count} -> {sig.bend_count_cutlist} from the cut "
+                    f"list ('Bends'); the feature tree cannot count bends baked into a "
+                    f"base flange sketch")
+                sig.bend_count = sig.bend_count_cutlist
         _thk = None if _read_tainted else _cut_props.get("thickness")
         if _read_tainted:
             sig.notes.append(
@@ -812,6 +923,40 @@ def sheet_metal_signals(doc) -> RouteSignals:
                 pass
         if _thk:
             sig.thickness_mm = _thk
+
+        # ── MASS from the cut list, with its UNITS resolved by geometry ────────────
+        # GetMassProperties2 has never populated on these models, but the cut list
+        # publishes 'Mass'. Its units follow the document (kg on some, grams on others)
+        # and the value alone cannot say which — 0.12 and 122 are both plausible for a
+        # small bracket. So predict the mass from geometry (blank area x thickness x
+        # density) and accept whichever reading matches. If neither does, record the raw
+        # value and leave mass unset: a mass that is wrong by 1000x would silently wreck
+        # the material cost, and an honest null is recoverable where that is not.
+        if not _read_tainted and sig.mass_kg is None:
+            _mraw = _cut_props.get("mass_raw")
+            _dens = _density_kg_m3(sig.material)
+            _area = sig.blank_area_mm2 or (
+                (sig.flat_length_mm or 0) * (sig.flat_width_mm or 0))
+            if _mraw and _dens and _area and sig.thickness_mm:
+                _pred = (_area / 1e6) * (sig.thickness_mm / 1000.0) * _dens   # kg
+                _cands = [("kg", float(_mraw)), ("g", float(_mraw) / 1000.0)]
+                _best = next((u_v for u_v in _cands
+                              if _pred > 0 and 0.6 <= u_v[1] / _pred <= 1.6), None)
+                if _best:
+                    sig.mass_kg = round(_best[1], 5)
+                    sig.notes.append(
+                        f"mass {sig.mass_kg}kg from the cut list (raw {_mraw!r} read as "
+                        f"{_best[0]}; geometry predicts {_pred:.4f}kg from "
+                        f"{_area:.0f}mm2 x {sig.thickness_mm}mm x {_dens}kg/m3)")
+                else:
+                    sig.notes.append(
+                        f"cut-list Mass {_mraw!r} NOT USED — matches neither kg nor grams "
+                        f"against the {_pred:.4f}kg the geometry predicts; units "
+                        f"unresolved, so mass is left unset rather than guessed")
+            elif _mraw:
+                sig.notes.append(
+                    f"cut-list Mass {_mraw!r} present but its units cannot be checked "
+                    f"(need material density, blank area and thickness) — left unset")
 
     # Last-resort thickness for a sheet part: the smallest bounding-box dimension of an
     # UNFORMED blank is its thickness. Only used when the part has no bends and no cut-list

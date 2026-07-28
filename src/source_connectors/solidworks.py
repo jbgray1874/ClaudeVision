@@ -102,6 +102,9 @@ class NativePart:
     thickness_mm: Optional[float] = None
     bend_radius_mm: Optional[float] = None
     cut_length_mm: Optional[float] = None
+    cut_out_count: Optional[int] = None
+    blank_area_mm2: Optional[float] = None
+    surface_treatment: str = ""
     mass_kg: Optional[float] = None
     # Formed solid whose bends are baked into a Base Flange sketch (no countable bend
     # feature). Real folds, un-counted — flagged so the fold op still fires.
@@ -171,10 +174,13 @@ def _reject_folded_box_as_flat(p: NativePart) -> None:
     equal to its own bounding box, the cut-list read returned the folded box: a real
     number, but the wrong one, and smaller than the truth. Costing it UNDER-BUYS material.
 
-    Proven on 12120-01-01M — cut list 126.39x82.2, exactly the folded solid; the DXF's
-    developed blank is 132.39x88.2. The analyser's own 'flat cannot be smaller than the
-    solid' gate passes this by construction, so the check has to live here too. Applied at
-    normalisation so it protects extracts already written, without re-running SolidWorks.
+    PRECAUTIONARY, not observed. It was written believing 12120-01-01M had failed this
+    way; fuller extraction showed it had not — 01M's folded solid is 79x64.5x21.5 and its
+    cut-list flat of 126.39x82.2 is a genuine developed blank, correctly far larger. The
+    guard stays because the geometry it asserts is sound and the analyser's own 'a flat
+    cannot be smaller than the solid' gate passes a folded box by construction, so nothing
+    else would catch it. It is inert on every 12120 part. Applied at normalisation so it
+    also protects extracts already on disk, without re-running SolidWorks.
 
     Keyed on bend evidence and geometry only — no part numbers, no job specifics."""
     if not (p.flat_length_mm and p.flat_width_mm and p.bbox_mm):
@@ -255,6 +261,8 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
             thickness_mm=_num(rs.get("thickness_mm")),
             bend_radius_mm=_num(rs.get("bend_radius_mm")),
             cut_length_mm=_num(rs.get("cut_length_mm")),
+            blank_area_mm2=_num(rs.get("blank_area_mm2")),
+            surface_treatment=str(rs.get("surface_treatment") or ""),
             mass_kg=_num(rs.get("mass_kg")),
             formed_but_no_bend_features=bool(rs.get("formed_but_no_bend_features")),
             likely_bought_in=bool(rs.get("likely_bought_in")),
@@ -524,7 +532,8 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     out = {"flat": 0, "thickness": 0, "material": 0, "material_conflict": 0, "bends": 0,
            "qty": 0, "assembly_parent": 0, "bought_in": 0, "weld_flagged": 0,
            "ops": 0, "mass": 0, "no_geometry_flagged": 0, "geometry_conflict": 0,
-           "geometry_unchecked": 0, "not_in_bom": 0, "rejected_values": 0}
+           "geometry_unchecked": 0, "not_in_bom": 0, "rejected_values": 0,
+           "finish": 0}
     if not job or not job.found or not isinstance(parts, list):
         return out
 
@@ -731,6 +740,23 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 flags.append(f"thickness {cur_thk:g}mm -> {thk:g}mm from the SolidWorks "
                              f"cut list (modelled sheet gauge)")
                 out["thickness"] += 1
+
+        # ── SURFACE TREATMENT ────────────────────────────────────────────────────
+        # The cut list publishes the finish the designer specified. This is the datum the
+        # drawing states as a POINTER ('SEE ASSEMBLY DRAWING') on four of 12120's parts —
+        # the model carries it directly. Added, never replacing a printed finish: the
+        # drawing is the released document and wins where the two differ.
+        if nat.surface_treatment:
+            _fin = part.setdefault("surface_finishes", [])
+            if isinstance(_fin, list):
+                _known = " ".join(str(f) for f in _fin).upper()
+                if nat.surface_treatment.upper() not in _known:
+                    _fin.append(nat.surface_treatment)
+                    flags.append(f"finish '{nat.surface_treatment}' from the SolidWorks cut "
+                                 f"list ('Surface Treatment')"
+                                 + (" — the drawing states a different finish, both kept "
+                                    "for the estimator to reconcile" if _known else ""))
+                    out["finish"] += 1
 
         # ── MASS ─────────────────────────────────────────────────────────────────
         if nat.mass_kg and nat.mass_kg > 0 and not _num(part.get("stated_weight_g")):
