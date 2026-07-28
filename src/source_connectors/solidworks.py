@@ -674,16 +674,43 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         if nat.has_flat():
             fl, fw = float(nat.flat_length_mm), float(nat.flat_width_mm)
             if _dxf_backed(part):
-                # DXF stays authoritative. Compare and flag a real disagreement (>10% on
-                # area) — two independent measurements of the same blank should agree.
+                # Two independent measurements of the same blank. Arbitrated on geometry
+                # alone — see geometry_arbitration for why a materially SMALLER DXF loses to
+                # the model while a larger one is kept and marked unreconciled. Flagging the
+                # disagreement and keeping the DXF regardless, as this did, is what let a
+                # part measuring 25% of its true area be costed at 25% of its true area.
                 _dl, _dw = _dxf_blank_mm(part)
                 if _dl and _dw:
-                    _a_dxf, _a_sw = _dl * _dw, fl * fw
-                    if _a_sw > 0 and abs(_a_dxf - _a_sw) / _a_sw > 0.10:
-                        flags.append(
-                            f"blank check: DXF {_dl:g}x{_dw:g}mm vs SolidWorks flat "
-                            f"{fl:g}x{fw:g}mm — kept the DXF (measured flat pattern)")
+                    from geometry_arbitration import arbitrate_flat, NATIVE
+                    _verdict = arbitrate_flat(_dl, _dw, fl, fw)
+                    part["flat_arbitration"] = _verdict
+                    if not _verdict["agree"]:
+                        flags.append(f"blank check: {_verdict['reason']}")
                         out["geometry_conflict"] += 1
+                    if _verdict["winner"] == NATIVE:
+                        # The DXF is incomplete. Supersede it with the model's flat and say
+                        # so on the part, so nothing downstream still believes it measured.
+                        ng = part.get("normalized_geometry")
+                        ng = dict(ng) if isinstance(ng, dict) else {}
+                        ng["blank_length_mm"], ng["blank_width_mm"] = fl, fw
+                        ng["geometry_source"] = NATIVE_GEOMETRY_SOURCE
+                        part["normalized_geometry"] = ng
+                        part["blank_length_mm"], part["blank_width_mm"] = fl, fw
+                        part["blank_area_mm2"] = fl * fw
+                        part["geometry_source"] = NATIVE_GEOMETRY_SOURCE
+                        part["blank_length_mm_source"] = SOURCE_NAME
+                        part["native_flat_pattern"] = True
+                        part["dxf_geometry_rejected"] = True
+                        part["dxf_measured_outline"] = False
+                        part.setdefault("review_flags", []).append(
+                            f"DXF flat pattern REJECTED and replaced by the model's: "
+                            f"{_verdict['reason']}. Check the DXF export — the file does not "
+                            f"contain the whole part")
+                        out["geometry_rejected"] = out.get("geometry_rejected", 0) + 1
+                    elif _verdict["unreconciled"]:
+                        part["flat_unreconciled"] = True
+                        part.setdefault("review_flags", []).append(
+                            f"Blank UNRECONCILED: {_verdict['reason']}")
                 else:
                     # A cross-check that silently declines to check is WORSE than none: it
                     # reports zero disagreements, which reads as agreement. Say so instead.
@@ -800,7 +827,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         # CUT-OUTS. The cut list publishes how many internal profiles the laser has to cut,
         # which is separate from round holes and drives pierce count and cutting time. It
         # was read from the model and then discarded before it reached anything that costs.
-        if nat.cut_out_count:
+        # `is not None`, NOT truthiness. A cut list reporting ZERO cut-outs has told us
+        # something definite — this part is a plain blank with one outer profile and one
+        # pierce — and it is the model saying it, the strongest source we have. Treating 0 as
+        # "no data" let a weaker PDF-derived count survive against explicit model evidence,
+        # which is the same silent-overwrite failure in the opposite direction.
+        if nat.cut_out_count is not None:
             # Every internal cut-out needs its own pierce, as does the outer profile.
             # Under-counting pierces under-prices the laser.
             _native_pierces = int(nat.cut_out_count) + 1
@@ -827,8 +859,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                     f"{_native_pierces} from the SolidWorks cut list ({nat.cut_out_count} "
                     f"cut-out(s) + the outer profile). The model is the stronger source; "
                     f"the two disagree, so confirm the drawing shows every cut-out")
-            flags.append(f"{nat.cut_out_count} cut-out(s) from the SolidWorks cut list "
-                         f"— each needs its own pierce")
+            flags.append(
+                f"{nat.cut_out_count} cut-out(s) from the SolidWorks cut list — each needs "
+                f"its own pierce ({_native_pierces} with the outer profile)"
+                if nat.cut_out_count else
+                "SolidWorks cut list reports NO cut-outs — a plain blank, one pierce for the "
+                "outer profile. This is the model stating it, not missing data")
 
         # ── OPS HINTS ────────────────────────────────────────────────────────────
         # The analyser only emits an op where the feature tree evidences it (steel + sheet

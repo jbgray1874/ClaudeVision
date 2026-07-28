@@ -154,6 +154,33 @@ def build_geometry_summary_for_dxf(dxf_path: Path) -> Tuple[Dict[str, Any], Dict
     return geometry, raw, reliability
 
 
+def _arbitrate_pierces(flat: Dict[str, Any], raw: Dict[str, Any]) -> Optional[int]:
+    """Which reader's pierce count do we cost?
+
+    The two readers are not equal and must not be treated as interchangeable. The flat
+    reader walks the file topologically: it explodes blocks, resolves inherited layers, and
+    counts closed contours — circles, closed polylines, and loops assembled from separate
+    lines and arcs. The raw reader does none of that. It never enters a block, and it counts
+    every closed polyline as a pierce whether or not that polyline is the outer profile, so
+    a part drawn as several short closed polylines is counted twice over: once as holes, once
+    as profiles.
+
+    So taking max() unconditionally, as this did, hands the decision to whichever reader
+    happens to be more wrong in the upward direction. When the flat reader reports a complete
+    walk, it IS the answer — a higher raw figure is inflation, not detail.
+
+    The raw reader is used only where the flat walk admits it is incomplete: segments left
+    unchained because the outline is drawn with gaps too large to close. There the flat
+    count is a floor rather than an answer, a higher raw figure may be catching something
+    real, and the part is flagged either way so a person sees it.
+    """
+    _flat = int(flat.get("estimated_pierce_count") or 0)
+    _raw = int(raw.get("estimated_pierce_count") or 0)
+    if not flat.get("pierce_count_incomplete"):
+        return _flat or _raw or None
+    return max(_flat, _raw) or None
+
+
 def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str, Any]:
     """
     Augment a part dict with DXF geometry.
@@ -249,17 +276,16 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "drawing_extents_mm": [flat["blank_length_mm"], flat["blank_width_mm"]],
             "estimated_hole_count": flat["hole_count"],
             "estimated_bend_line_count": flat["bend_count"],
-            # Take the HIGHER of the two readers. The flat reader explodes blocks, so it is
-            # the only one that sees anything on a block-wrapped export where the raw parser
-            # returns zero. But it can also under-count: where an outline is drawn with gaps
-            # too large to chain, its loops stay open and those contours are not counted.
-            # Preferring it outright meant a lower-but-positive figure beat a higher one, and
-            # a missed pierce is laser time nobody charges for.
-            "estimated_pierce_count": max(
-                int(flat.get("estimated_pierce_count") or 0),
-                int(raw.get("estimated_pierce_count") or 0),
-            ) or None,
+            "estimated_pierce_count": _arbitrate_pierces(flat, raw),
+            # Carried so a reader can tell "no internal cut-outs" from "we could not tell".
+            "pierce_count_incomplete": bool(flat.get("pierce_count_incomplete")),
+            "closed_contour_count": flat.get("closed_contour_count"),
         }
+        if flat.get("pierce_count_incomplete"):
+            part.setdefault("review_flags", []).append(
+                "DXF outline has segments that could not be chained into closed loops, so "
+                "some cut-outs may not have been counted. The pierce count is a FLOOR — "
+                "check the drawing for cut-outs the laser has not been charged for")
     else:
         extents = raw.get("drawing_extents_mm") or []
         if isinstance(extents, (list, tuple)) and len(extents) >= 2:

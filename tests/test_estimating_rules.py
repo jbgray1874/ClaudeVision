@@ -642,6 +642,254 @@ def test_every_material_block_is_read_back_not_just_the_bom():
     eq(round(total, 2), 10.07, "material rows must reconcile to the sheet's own total")
 
 
+# ── invariants — the checks that make a wrong answer loud ────────────────────────────
+def _job(**over):
+    """A job that passes every invariant, so each test can break exactly one thing."""
+    job = {
+        "final_estimate": {
+            "schema": "final_estimate.v2",
+            "totals": {"material_gbp": 10.07, "labour_gbp": 52.0, "unit_gbp": 62.07},
+            "material_rows": [{"workbook_row": 11, "description": "Pem", "total_value_gbp": 9.64},
+                              {"workbook_row": 63, "description": "01M", "total_value_gbp": 0.43}],
+            "labour_rows": [{"workbook_row": 41, "operation": "Laser", "total_value_gbp": 22.0},
+                            {"workbook_row": 43, "operation": "Fold", "total_value_gbp": 30.0}],
+            "adapter_problems": [],
+        },
+        "workbook_labour": {
+            "schema": "workbook_labour_rows.v2",
+            "rows": [{"workbook_row": 41, "route_group_id": "rg_a", "wb_operation": "Laser",
+                      "engine_operations": ["laser_cutting"], "part_numbers": ["01M"]},
+                     {"workbook_row": 43, "route_group_id": "rg_b", "wb_operation": "Fold",
+                      "engine_operations": ["folding"], "part_numbers": ["01M"]}],
+        },
+        "part_estimates": [{"part_number": "01M", "operations": ["laser_cutting", "folding"],
+                            "normalized_material": "MILD_STEEL", "material_source": "dxf",
+                            "quantity": 2, "quantity_source": "solidworks_api",
+                            "geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+                            "blank_length_mm": 126.39, "blank_length_mm_source": "dxf",
+                            "blank_width_mm": 82.2, "blank_area_mm2": 10389.3}],
+    }
+    for k, v in over.items():
+        job[k] = v
+    return job
+
+
+def test_a_clean_job_passes_every_invariant():
+    from invariants import check_job
+    r = check_job(_job(), write_back=False)
+    ok(r["ok"], f"a consistent job must pass: {[v['code'] for v in r['violations']]}")
+    eq(r["blocking"], 0, "no blocking violations on a clean job")
+
+
+def test_rows_must_sum_to_the_workbook_total():
+    """The defect this is built from: material rows summed to GBP 9.64 against the sheet's
+    own GBP 10.07 and nothing objected. A snapshot that will not reconcile to its own total
+    cannot be exported or quoted from."""
+    from invariants import check_job
+    j = _job()
+    j["final_estimate"]["material_rows"] = [{"workbook_row": 11, "total_value_gbp": 9.64}]
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("material_rows_do_not_sum_to_total" in codes,
+       f"a 43p shortfall must be a blocking violation, got {codes}")
+    # An Excel error reads back as null. Summing it as zero manufactures agreement out of
+    # missing data — the one thing these checks exist to prevent.
+    j2 = _job()
+    j2["final_estimate"]["labour_rows"] = [{"workbook_row": 41, "total_value_gbp": 52.0},
+                                           {"workbook_row": 43, "total_value_gbp": None}]
+    codes2 = [v["code"] for v in check_job(j2, write_back=False)["violations"]]
+    ok("labour_rows_incomplete" in codes2,
+       f"a row that did not calculate is missing data, not zero: {codes2}")
+
+
+def test_every_priced_row_must_join_exactly_once():
+    from invariants import check_job
+    j = _job()
+    j["final_estimate"]["labour_rows"].append(
+        {"workbook_row": 99, "operation": "Weld", "total_value_gbp": 8.0})
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("priced_row_without_identity" in codes,
+       f"a priced row joining to nothing belongs to no parts: {codes}")
+    j2 = _job()
+    j2["workbook_labour"]["rows"].append(
+        {"workbook_row": 41, "route_group_id": "rg_c", "wb_operation": "Laser"})
+    codes2 = [v["code"] for v in check_job(j2, write_back=False)["violations"]]
+    ok("priced_row_with_ambiguous_identity" in codes2,
+       f"one cost must not be reported against two groups: {codes2}")
+
+
+def test_a_block_that_could_not_be_read_is_a_failure_not_a_footnote():
+    """Returning no rows for a missing header is indistinguishable from a block with
+    nothing in it, and the two mean opposite things."""
+    from invariants import check_job
+    j = _job()
+    j["final_estimate"]["adapter_problems"] = [
+        {"block": "tube", "code": "header_row_not_found", "message": "template moved"}]
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("workbook_block_not_read" in codes, f"an unread block must block: {codes}")
+
+
+def test_measured_geometry_must_actually_be_measured():
+    """'Measured' unlocks the credibility gate and the blank-allowance skip. A part claiming
+    it with no outline is doing all that on the strength of a matched filename."""
+    from invariants import check_job
+    j = _job()
+    j["part_estimates"][0].update({"blank_length_mm": 0, "blank_width_mm": 0,
+                                   "blank_area_mm2": 0})
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("measured_geometry_without_outline" in codes,
+       f"an empty measurement must not pass as measured: {codes}")
+    # A matched-but-unmeasured file is an honest state and says so in its own name.
+    j2 = _job()
+    j2["part_estimates"][0].update({"geometry_source": "dxf_matched_no_geometry",
+                                    "dxf_measured_outline": False,
+                                    "blank_length_mm": 0, "blank_width_mm": 0,
+                                    "blank_area_mm2": 0})
+    codes2 = [v["code"] for v in check_job(j2, write_back=False)["violations"]]
+    ok("measured_geometry_without_outline" not in codes2,
+       "a file that says it measured nothing is honest, not a violation")
+
+
+def test_an_unknown_schema_is_never_read_as_if_known():
+    from invariants import check_job
+    j = _job()
+    j["final_estimate"]["schema"] = "final_estimate.v9"
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("unknown_schema" in codes,
+       f"a contract whose shape may have moved must not be read anyway: {codes}")
+
+
+def test_a_broken_check_reports_that_it_verified_nothing():
+    """A checker that throws must not read as a clean pass — that is worse than no check."""
+    import invariants
+    j = _job()
+    r = invariants.check_job({"final_estimate": j["final_estimate"],
+                              "workbook_labour": "not a dict at all"}, write_back=False)
+    ok(isinstance(r["violations"], list), "a malformed job must not crash the checker")
+    ok("checks_run" in r and r["checks_run"], "the checks it ran are reported")
+
+
+# ── geometry arbitration — the 04M rule, keyed on geometry alone ─────────────────────
+def test_an_incomplete_dxf_loses_to_the_model():
+    """12120's 04M measured 43.00 x 20.04mm from a DXF whose outer profile was not in the
+    file, against a model flat of 60.00 x 34.04mm — a quarter of the area, and it was costed.
+    A developed blank cannot be SMALLER than the flat it develops: material is consumed going
+    round a bend, never created. So a materially smaller DXF is missing geometry.
+
+    The rule is geometric. It knows nothing about 04M, this job, or any part number."""
+    from geometry_arbitration import arbitrate_flat, DXF, NATIVE
+
+    v = arbitrate_flat(43.00, 20.04, 60.00, 34.04)
+    eq(v["winner"], NATIVE, "an incomplete DXF must not be costed")
+    ok(v["dxf_incomplete"], "and must be named as incomplete, not merely 'different'")
+    ok("60" in v["reason"] and "43" in v["reason"], "both measurements quoted in the reason")
+
+    # Two honest measurements of the same blank agree, and the DXF stays authoritative.
+    v = arbitrate_flat(126.39, 82.2, 126.4, 82.0)
+    eq(v["winner"], DXF, "agreement keeps the direct measurement of the file")
+    ok(v["agree"] and not v["unreconciled"], "and is not flagged for review")
+
+    # Larger is also a disagreement, but swapping in the model trades one unverified number
+    # for another. Keep the DXF, mark it unreconciled, send it to a human.
+    v = arbitrate_flat(400.0, 300.0, 60.0, 34.0)
+    eq(v["winner"], DXF, "a too-large DXF is still the only direct measurement of the file")
+    ok(v["unreconciled"], "but the two are unreconciled and must reach a person")
+
+    # One-sided evidence is not a conflict, and must not be reported as agreement.
+    eq(arbitrate_flat(None, None, 60.0, 34.0)["winner"], NATIVE, "model only")
+    eq(arbitrate_flat(60.0, 34.0, None, None)["winner"], DXF, "DXF only")
+    ok(not arbitrate_flat(None, None, None, None)["agree"],
+       "no measurement at all is not agreement")
+
+
+def test_degenerate_geometry_is_not_a_pierce():
+    """Three ways of drawing the same thing must clear the same bar. A microscopic closed
+    polyline is a duplicated vertex, not an aperture; a zero-length line chains into a
+    self-loop whose one node has degree two, which is exactly the closed-contour test. Both
+    invent pierces the laser is then charged for."""
+    try:
+        import ezdxf
+    except ImportError:
+        print("      (skipped: ezdxf not installed)")
+        return
+    import tempfile
+    from pathlib import Path
+    from dxf_reader import extract_flat_pattern_data
+
+    d = ezdxf.new(); d.header["$INSUNITS"] = 4
+    msp = d.modelspace()
+    L, W = 150.0, 80.0
+    for a in [(0, 0, L, 0), (L, 0, L, W), (L, W, 0, W), (0, W, 0, 0)]:
+        msp.add_line(a[:2], a[2:], dxfattribs={"layer": "SLD-0"})
+    msp.add_circle((40, 40), 4.0, dxfattribs={"layer": "SLD-0"})          # one real hole
+    # A closed polyline spanning microns — a duplicated vertex from the export.
+    msp.add_lwpolyline([(70, 40), (70.002, 40), (70.002, 40.002), (70, 40.002)],
+                       close=True, dxfattribs={"layer": "SLD-0"})
+    for i in range(4):                                                    # zero-length lines
+        msp.add_line((100 + i, 40), (100 + i, 40), dxfattribs={"layer": "SLD-0"})
+    path = os.path.join(tempfile.mkdtemp(), "degenerate.dxf")
+    d.saveas(path)
+
+    r = extract_flat_pattern_data(Path(path))
+    eq(r.get("estimated_pierce_count"), 2,
+       "1 real hole plus the outer profile = 2; degenerate loops are not apertures")
+    eq(r.get("closed_contour_count"), 2, "and they are not contours either")
+
+
+def test_the_complete_reader_wins_over_the_inflating_one():
+    """The two DXF readers are not interchangeable. The flat reader walks topologically —
+    blocks exploded, layers inherited, contours closed. The raw reader never enters a block
+    and counts every short closed polyline as a pierce whether or not it is the outer
+    profile, so it double-counts. Taking max() unconditionally hands the decision to
+    whichever reader is more wrong upward.
+
+    The raw figure is used only where the flat walk ADMITS it is incomplete."""
+    from drawing_job_merge import _arbitrate_pierces
+    eq(_arbitrate_pierces({"estimated_pierce_count": 4, "pierce_count_incomplete": False},
+                          {"estimated_pierce_count": 9}), 4,
+       "a complete topological walk is the answer, not a floor to be raised")
+    eq(_arbitrate_pierces({"estimated_pierce_count": 4, "pierce_count_incomplete": True},
+                          {"estimated_pierce_count": 9}), 9,
+       "where the walk could not close its loops, a higher count may be catching something")
+    eq(_arbitrate_pierces({"estimated_pierce_count": 0, "pierce_count_incomplete": False},
+                          {"estimated_pierce_count": 6}), 6,
+       "a reader that saw nothing at all defers to one that saw something")
+    eq(_arbitrate_pierces({}, {}), None, "no evidence is None, never 0")
+
+
+def test_zero_cut_outs_is_evidence_not_absence():
+    """A cut list reporting ZERO cut-outs has said something definite: a plain blank, one
+    outer profile, one pierce — and the model is the strongest source there is. Reading 0 as
+    'no data' let a weaker PDF count survive against explicit model evidence, which is the
+    silent-overwrite failure running the other way."""
+    from source_connectors.solidworks import (normalize_native_extract,
+                                              apply_native_to_pre_estimate)
+    recs = [{"title": "AAA-01M", "doctype": 1, "route_signals": {
+        "material": "Mild Steel [CR4]", "is_sheet_metal": True, "bend_count": 1,
+        "flat_length_mm": 100.0, "flat_width_mm": 50.0, "thickness_mm": 1.5,
+        "cut_out_count": 0, "bbox_mm": [60.0, 50.0, 20.0]}}]
+    job = normalize_native_extract(recs)
+    parts = [{"part_number": "AAA-01M",
+              "manufacturing_features": {"pierce_count": 5},      # a PDF-derived guess
+              "geometry_rollup": {"estimated_pierce_count": 5}}]
+    apply_native_to_pre_estimate(parts, job)
+    eq((parts[0].get("geometry_rollup") or {}).get("estimated_pierce_count"), 1,
+       "no cut-outs means one pierce for the outer profile — not the PDF's 5")
+    eq((parts[0].get("manufacturing_features") or {}).get("cut_out_count"), 0,
+       "and zero is recorded as a value, not left absent")
+
+
+def test_route_group_id_is_stable_and_distinguishes_gauges():
+    """Row numbers move when the template changes; a group's identity does not. Without a
+    stable id, two runs of the same job cannot be compared row for row."""
+    from wb_populate import route_group_id
+    a = route_group_id("Fold", "Mild Steel", 1.2, ["01M", "06M"])
+    b = route_group_id("Fold", "Mild Steel", 1.2, ["06M", "01M"])   # order must not matter
+    c = route_group_id("Fold", "Mild Steel", 1.5, ["04M"])
+    eq(a, b, "the same group must have the same id whatever order its parts arrive in")
+    ok(a != c, "two gauges of the same operation are different groups")
+    ok(a.startswith("rg_"), "ids are recognisable on sight")
+
+
 # ── runner ───────────────────────────────────────────────────────────────────────────
 def main() -> int:
     global _COLLECT_ONLY

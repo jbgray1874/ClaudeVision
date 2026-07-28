@@ -1,0 +1,53 @@
+# Every rule this engine has had to learn the hard way, checked on every push.
+#
+# These are not unit tests in the usual sense. Each one is a defect that reached a real
+# estimate — a quote promising powder coating on a timber crate, labour costs joined to the
+# wrong parts, material rows 43p short of the sheet's own total. They exist so that a change
+# which reintroduces one of them cannot be merged quietly.
+#
+# Red here is merge-blocking. A rule that only warns is a rule the next deadline overrides.
+name: estimating rules
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ezdxf only. The suite is deliberately written against the PURE functions — material
+      # normalisation, thickness selection, route gating, precedence, contour counting — so
+      # it runs with no SolidWorks, no Excel, no SQL and no drawings, in about a second.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest ezdxf
+
+      - name: Regression fixtures
+        run: python -m pytest tests/test_estimating_rules.py -q
+
+      # The same suite through its own runner. The two disagreed once — the helpers only
+      # appended failures to a list, so pytest reported green over every mutation the plain
+      # runner caught — and a suite that can pass in one mode and fail in the other is not
+      # protecting anything.
+      - name: Regression fixtures (standalone runner)
+        run: python tests/test_estimating_rules.py
+
+      - name: Modules import cleanly
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          import invariants, geometry_arbitration, costed_facts, source_precedence
+          import dxf_reader, drawing_job_merge, wb_populate, wep_readback_from_xlsx
+          print("ok")
+          PY

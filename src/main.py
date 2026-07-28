@@ -826,6 +826,39 @@ def main() -> None:
             except Exception as _wep_exc:
                 print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
 
+        # ── Invariants: does this job hold together? ─────────────────────────────────
+        # Everything above has finished writing. The workbook has calculated, the read-back
+        # has stamped, and this is the last point at which the engine is looking at its own
+        # output before anything describes it to a person. Every defect this engine has
+        # shipped was visible here: rows that did not sum to their own total, costs joined to
+        # the wrong parts, a quote naming an operation the sheet never charged. Nothing
+        # compared them, so nothing objected.
+        #
+        # This never edits a price — silently correcting an unverified number is the failure
+        # mode, not the fix. It marks the job, so a consumer can say "provisional" instead of
+        # quoting a figure nobody stands behind.
+        _canon_json3 = (summary.get("saved_output_paths") or {}).get("json")
+        try:
+            from invariants import check_job as _check_job, format_report as _fmt_inv
+            _inv = _check_job(summary)
+            print(_fmt_inv(_inv), flush=True)
+            # Persist onto the canonical JSON, which the readback has already rewritten —
+            # writing to `summary` alone would leave the file disagreeing with the run.
+            if _canon_json3 and Path(_canon_json3).exists():
+                try:
+                    _doc = json.loads(Path(_canon_json3).read_text(encoding="utf-8"))
+                    _doc["invariants"] = _check_job(_doc, write_back=False)
+                    Path(_canon_json3).write_text(
+                        json.dumps(_doc, indent=2, ensure_ascii=False), encoding="utf-8")
+                except Exception as _iw:
+                    print(f"   [invariants] could not stamp the JSON ({_iw}) — "
+                          f"the console report above still stands.", flush=True)
+        except Exception as _inv_exc:
+            # A failed checker has verified NOTHING. Saying so is the point: a silent skip
+            # here reads exactly like a clean pass.
+            print(f"   [invariants] DID NOT RUN ({_inv_exc}) — this job is UNVERIFIED.",
+                  flush=True)
+
         # ── Deliverables: client quote (always) + parity report (if a manual exists) ──
         # Opt-in via --deliverables. Each generator is failure-isolated: a report error logs and
         # the run continues — it never breaks the estimate. Manual lookup uses the UNC share root

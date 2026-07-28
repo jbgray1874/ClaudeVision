@@ -757,6 +757,25 @@ def _is_closed_polyline(e: Any) -> bool:
         return False
 
 
+# One threshold for every contour shape. A circle, a closed polyline and a chained loop are
+# three ways of drawing the same thing, so a size that is too small to be an aperture in one
+# must be too small in all three — otherwise the check is only as strong as its weakest door.
+_MIN_CONTOUR_MM = 1.0
+# A segment shorter than this is a duplicated vertex, not geometry. Left in, it chains into a
+# self-loop that satisfies the closed-contour test on its own.
+_MIN_SEGMENT_MM = 0.05
+
+
+def _contour_span_mm(points: List[Tuple[float, float]], scale: float) -> float:
+    """The larger bounding dimension of a contour, in mm. Used to reject degenerate loops
+    without needing a true area, which a bulged polyline would not give cheaply."""
+    if not points:
+        return 0.0
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return max((max(xs) - min(xs)), (max(ys) - min(ys))) * (scale or 1.0)
+
+
 def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
                            blank_l: float = 0.0, blank_w: float = 0.0,
                            cut_layers: Optional[set] = None) -> Dict[str, Any]:
@@ -799,20 +818,30 @@ def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
     for e, layer in items:
         t = e.dxftype()
         if t == "CIRCLE":
-            if _circle_diameter_mm(e, scale) >= 1.0:
+            if _circle_diameter_mm(e, scale) >= _MIN_CONTOUR_MM:
                 contours.append(_entity_points(e))
             continue
         if t in ("LWPOLYLINE", "POLYLINE"):
+            # The same minimum a circle must clear. A closed polyline of a few microns is a
+            # duplicated vertex or a construction artefact, not an aperture the laser pierces
+            # — and applying the threshold to circles alone let it in by the other door.
             if _is_closed_polyline(e):
-                contours.append(_entity_points(e))
+                if _contour_span_mm(_entity_points(e), scale) >= _MIN_CONTOUR_MM:
+                    contours.append(_entity_points(e))
             else:
                 loose.append(e)
             continue
         # A bend line is not a cut. It must not be chained, or two cut-outs joined by a
         # bend line would be counted as one contour.
+        _pts = _entity_points(e)
         _len = _arc_length(e, scale) if t == "ARC" else (
-            _dist2d(*_entity_points(e)[:2]) * scale if len(_entity_points(e)) >= 2 else 0.0)
+            _dist2d(*_pts[:2]) * scale if len(_pts) >= 2 else 0.0)
         if _is_bend_candidate(e, _len):
+            continue
+        # A ZERO-LENGTH segment starts and ends on the same point. Chained, it becomes a
+        # self-loop whose single node has degree two — which is exactly the test for a closed
+        # contour, so every stray duplicate vertex in the file would invent a pierce.
+        if _len < _MIN_SEGMENT_MM:
             continue
         loose.append(e)
 
@@ -844,6 +873,10 @@ def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
         if len(pts) < 2:
             continue
         a, b = _key(pts[0]), _key(pts[-1])
+        if a == b and _contour_span_mm(pts, scale) < _MIN_CONTOUR_MM:
+            # Starts and ends on the same snapped node and spans nothing: a self-loop, which
+            # would pass the degree test alone and count as a contour of its own.
+            continue
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
         _union(a, b)
@@ -860,7 +893,10 @@ def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
             nodes.add(a); nodes.add(b)
         # A closed loop visits every node at least twice; a chain has two loose ends.
         if segs and all(degree.get(n, 0) >= 2 for n in nodes):
-            contours.append([p for _, _, pts in segs for p in pts])
+            _pts = [p for _, _, pts in segs for p in pts]
+            # Same minimum as a circle and a closed polyline must clear.
+            if _contour_span_mm(_pts, scale) >= _MIN_CONTOUR_MM:
+                contours.append(_pts)
         elif segs:
             incomplete = True
 

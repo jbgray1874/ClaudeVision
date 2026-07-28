@@ -262,16 +262,49 @@ def _find_header_row(com_ws, first_data_row: int, needles: Tuple[str, ...],
 
 
 def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
-                needles: Tuple[str, ...], id_field: str, max_col: int) -> list:
+                needles: Tuple[str, ...], id_field: str, max_col: int,
+                block_name: str = "", problems: Optional[list] = None,
+                value_field: str = "total_value_gbp") -> list:
     """Rows of one workbook block, as calculated. Blank identity = end of the used rows;
     an Excel error is carried through as None rather than a number, because a cell showing
-    #DIV/0! is missing data and must not be read as zero."""
+    #DIV/0! is missing data and must not be read as zero.
+
+    A BLOCK THAT CANNOT BE READ SAYS SO. Returning [] for a missing header is indistinguish-
+    able from a block that is genuinely empty, and the two mean opposite things: one is "no
+    tube on this job", the other is "the template moved and we are now under-reporting the
+    material total". That silence is what let the fabricated blocks go missing from the
+    read-back — nothing failed, the rows were simply absent, and the total was quietly 43p
+    short. Every unreadable block is appended to `problems` for the caller to surface.
+    """
+    def _problem(code: str, message: str, **detail) -> list:
+        if problems is not None:
+            problems.append({"block": block_name or "?", "code": code,
+                             "message": message, "detail": detail})
+        return []
+
     hr = _find_header_row(com_ws, first_row, needles, max_col)
     if hr is None:
-        return []
+        return _problem(
+            "header_row_not_found",
+            f"No header row for the '{block_name}' block above row {first_row} carrying "
+            f"{list(needles)}. The template layout has moved or the block was renamed; its "
+            f"rows are NOT in this read-back and any total built from it is short.",
+            searched_above_row=first_row, needles=list(needles))
     cols = _header_map(com_ws, hr, keys, max_col)
     if id_field not in cols:
-        return []
+        return _problem(
+            "identity_column_not_found",
+            f"The '{block_name}' block header at row {hr} has no column matching "
+            f"'{id_field}', so its rows cannot be identified and were not read.",
+            header_row=hr, mapped=sorted(cols))
+    if value_field and value_field not in cols:
+        # Rows without their value column read back as identity-only and silently contribute
+        # nothing to the total — exactly the tube/steel/other-sheet defect.
+        _problem("value_column_not_found",
+                 f"The '{block_name}' block header at row {hr} has no value column "
+                 f"(expected one matching {[k for k, v in keys.items() if v == value_field]}). "
+                 f"Its rows carry no cost and will not reconcile to the sheet total.",
+                 header_row=hr, mapped=sorted(cols))
     out = []
     for r in range(first_row, last_row + 1):
         try:
@@ -317,6 +350,7 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
     # skipped the block silently — nothing failed, the rows were simply absent.
     _blocks = [("bom", bom_first, bom_last, ("bill of materials", "total value"),
                 _MATERIAL_HEADER_KEYS)]
+    _missing_blocks = []
     try:
         from wb_populate import CELL_MAP as _CM2
         for _name, _needles, _keys in (
@@ -327,19 +361,33 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
             if _b:
                 _blocks.append((_name, int(_b["first_row"]), int(_b["last_row"]),
                                 _needles, _keys))
-    except Exception:
-        pass
+            else:
+                # A block this adapter expects but the template no longer defines. Silence
+                # here is what made the tube block vanish from the read-back.
+                _missing_blocks.append(_name)
+    except Exception as _exc:
+        _missing_blocks.append(f"CELL_MAP unavailable ({_exc}) — only the BOM was read")
+
+    problems: list = [{"block": b, "code": "block_not_in_cell_map",
+                       "message": f"CELL_MAP defines no '{b}' block, so nothing was read from "
+                                  f"it and the material total may be short.", "detail": {}}
+                      for b in _missing_blocks]
 
     mats = []
     for _name, _f, _l, _needles, _keys in _blocks:
-        for _r in _read_block(com_ws, _f, _l, _keys, _needles, "description", max_col):
+        for _r in _read_block(com_ws, _f, _l, _keys, _needles, "description", max_col,
+                              block_name=_name, problems=problems):
             _r["block"] = _name
             mats.append(_r)
 
     return {
         "labour_rows": _read_block(com_ws, lab_first, lab_last, _LABOUR_HEADER_KEYS,
-                                   ("operation", "total hours"), "operation", max_col),
+                                   ("operation", "total hours"), "operation", max_col,
+                                   block_name="labour", problems=problems),
         "material_rows": mats,
+        # Surfaced, not swallowed. The caller stamps these onto the job so an invariant can
+        # fail on them instead of a total quietly coming up short.
+        "adapter_problems": problems,
     }
 
 
@@ -422,8 +470,12 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
             "totals": {"material_gbp": material, "labour_gbp": labour, "unit_gbp": unit},
             "labour_rows": _final_rows.get("labour_rows") or [],
             "material_rows": _final_rows.get("material_rows") or [],
+            # Blocks this adapter could not read. Present and empty means "we checked".
+            "adapter_problems": _final_rows.get("adapter_problems") or [],
         }
-        print(f"   [wep-readback] final_estimate.v1 stamped — "
+        for _p in (_final_rows.get("adapter_problems") or []):
+            print(f"   [wep-readback] BLOCK NOT READ — {_p.get('message')}", flush=True)
+        print(f"   [wep-readback] final_estimate.v2 stamped — "
               f"{len(_final_rows.get('labour_rows') or [])} calculated labour row(s), "
               f"{len(_final_rows.get('material_rows') or [])} BOM row(s)", flush=True)
 

@@ -464,6 +464,38 @@ def _flag(msg: str, flags: List[str]):
     print(f"   [wb_populate] ⚠ {msg}")
 
 
+def route_group_id(wb_op: Any, material: Any, thickness: Any, part_numbers: Any = ()) -> str:
+    """A stable identity for a route group, independent of where it lands on the sheet.
+
+    The sheet row is the join key WITHIN a run, and it is the right one — it is what Excel
+    calculated against. But it is not stable BETWEEN runs: insert a row in the template, or
+    let a group drop out because a part became bought-in, and every row below shifts. A
+    baseline compared on row number then reports a change on every line and the real change
+    is invisible.
+
+    The identity is what the group IS — the operation, the material, the gauge, and the parts
+    it covers. Same group, same id, whatever row it lands on and whatever job it belongs to.
+    """
+    import hashlib
+    _thk = _num_or_none(thickness)
+    parts = sorted({str(p).strip().upper() for p in (part_numbers or []) if str(p).strip()})
+    basis = "|".join((
+        str(wb_op or "").strip().lower(),
+        str(material or "").strip().lower(),
+        f"{_thk:.3f}" if _thk is not None else "",
+        ",".join(parts),
+    ))
+    return "rg_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+
+
+def _num_or_none(v: Any) -> Optional[float]:
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return f if f == f else None
+
+
 def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[str, Any]:
     """The CANONICAL ROUTE RECORD: the labour rows the workbook accepted, each keyed to the
     sheet row it was written to.
@@ -486,12 +518,16 @@ def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[s
              if isinstance(g, dict) and g.get("workbook_row")]
     return {
         "schema": "workbook_labour_rows.v2",
+        "identity": ("route_group_id is stable across runs and template revisions; "
+                     "workbook_row is the join key within THIS run's sheet."),
         "note": ("Labour rows as ACCEPTED by wb_populate, keyed to the sheet row each was "
                  "written to. Identity only — hours, rates and values come from Excel via "
                  "final_estimate, which joins to these on workbook_row."),
         "rows": [
             {
                 "workbook_row": g.get("workbook_row"),
+                "route_group_id": route_group_id(g.get("wb_op"), g.get("material"),
+                                                 g.get("thickness"), g.get("parts")),
                 "wb_operation": g.get("wb_op"),
                 # Real engine operations, recorded when the group was formed. NOT the group
                 # key: that holds the mapped department name.
