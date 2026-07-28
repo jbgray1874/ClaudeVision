@@ -92,4 +92,6 @@ foreach ($r in $results | Where-Object { $_.Status -eq "ran" }) {
     "{0}: {1}" -f $r.Job, ($line -replace '.*stamped real totals into JSON: ', '')
 }
 Write-Host ""
-Write-Host "Deliverables (quote/report HTML) are in C:\ClaudeVision\output\estimates\"
+# No trailing backslash before the closing quote: PowerShell reads it as an escaped quote,
+# so the string never terminates and the whole script fails to parse.
+Write-Host "Deliverables (quote/report HTML) are in C:\ClaudeVision\output\estimates"
