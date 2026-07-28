@@ -421,21 +421,6 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     parts = es.get("part_estimates") or []
     material = _materials_line(parts)
     finish = _finish_line(summary, parts)
-    # The credibility gate's own verdict, on the face of the quote. The estimate is issued
-    # either way — an estimator needs the document — but a figure the engine has declared
-    # unfit to quote must not appear on a client-facing page looking like a firm price.
-    # State it in the customer's language, above the number, not buried in a footnote.
-    _ds_q = ((summary.get("estimate_summary") or {}).get("data_sufficiency") or {})
-    _provisional_banner = ""
-    if _ds_q.get("suppress_headline_total"):
-        _provisional_banner = (
-            '<div style="background:#fbf3e2;border-left:4px solid #a8710a;border-radius:0 6px 6px 0;'
-            'padding:12px 16px;margin:0 0 18px;font-size:13px;color:#6b5410;">'
-            '<b>Budgetary estimate &mdash; not a firm quotation.</b> '
-            'This price is derived from drawings only; manufacturing data (flat patterns) '
-            'was not available for the fabricated parts, so blank sizes and forming times '
-            'are estimated. Confirmation required before order.'
-            '</div>')
     ops = _collect_operations(parts, summary)
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
@@ -557,7 +542,6 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
           </table>
         </div>
       </div>
-      {_provisional_banner}
       <div class="price-box">
         <div>
           <div class="u">Unit price</div>
@@ -597,7 +581,6 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
     jp = Path(json_path)
     summary = json.loads(jp.read_text(encoding="utf-8"))
     stem = job_stem or summary.get("job_output_stem") or jp.stem
-
     html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook, customer=customer)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)
