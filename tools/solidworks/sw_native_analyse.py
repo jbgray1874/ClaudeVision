@@ -62,6 +62,12 @@ OPEN_OPTS = 1 | 2
 SW_TYPELIB_GUID = "{83A33D31-27C5-11CE-BFD4-00400513BB57}"
 SW_TYPELIB_MAJOR = 34
 
+# Opt-in (--flatten): flatten formed parts in memory to MEASURE the developed blank when
+# the cut-list property route yields nothing usable. Off by default because it rebuilds
+# every affected model. Read-only either way — the bend state is restored and the document
+# closed without saving.
+ALLOW_FLATTEN = False
+
 # SW sheet-metal feature type names that each add a bend line (lower-cased). SMBaseFlange
 # (flat base) and UnFold/Fold (model flatten/refold ops) are intentionally excluded.
 _BEND_FEATURE_TYPES = {
@@ -340,6 +346,86 @@ def get_bbox_mm(doc, doctype: int) -> Optional[Tuple[float, float, float]]:
         return None
 
 
+def flat_pattern_by_flatten(doc, folded_bbox: Optional[Tuple[float, float, float]],
+                            thickness_mm: Optional[float],
+                            notes: List[str]) -> Optional[Tuple[float, float]]:
+    """Measure the DEVELOPED blank by flattening the part in memory, then measuring it.
+
+    Why this exists: the cut-list property route is name-based, and SolidWorks uses the
+    name 'Bounding Box Length' for both a sheet-metal flat pattern AND a weldment solid's
+    box. On 12120-01-01M it returned the folded envelope (126.39x82.2) where the true
+    blank is 132.39x88.2. Flattening and MEASURING cannot be fooled that way — a flattened
+    body's bounding box is the blank, by construction.
+
+    Read-only intent, same contract as the mass-property read: SetBendState changes the
+    in-memory model only, the original state is restored, and the document is closed
+    without saving. Nothing is written to any file.
+
+    SELF-VERIFYING. The swSMBendState_e values differ across versions and we will not
+    assert one from memory, so each candidate is tried and the RESULT is checked against
+    geometry that only a real flatten can produce:
+      1. the box must GROW in at least one axis (material is consumed round a bend), and
+      2. its smallest axis must collapse to about the sheet thickness (a flat blank is
+         one sheet thick, whereas the folded part stands proud).
+    A candidate failing either test is discarded. If none pass, we return nothing rather
+    than a number — an honest null beats a plausible fiction.
+    """
+    if not folded_bbox:
+        return None
+    part = _wrap(doc, "IPartDoc")
+    if part is None:
+        return None
+    try:
+        _orig = _get0(part, "GetBendState")
+    except Exception:
+        return None
+    if _orig is None:
+        return None
+
+    _folded_sorted = sorted(folded_bbox, reverse=True)
+    best: Optional[Tuple[float, float]] = None
+    try:
+        for _state in (2, 1, 3):          # candidate 'flattened' values, verified below
+            if _state == _orig:
+                continue
+            try:
+                part.SetBendState(_state)
+                _get0(doc, "ForceRebuild3") if hasattr(doc, "ForceRebuild3") else None
+            except Exception:
+                continue
+            box = get_bbox_mm(doc, SW_PART)
+            if not box:
+                continue
+            _b = sorted(box, reverse=True)
+            _grew = _b[0] > _folded_sorted[0] + 0.05 or _b[1] > _folded_sorted[1] + 0.05
+            # A developed blank is exactly one sheet thick. Without a known thickness fall
+            # back to "the third axis collapsed a long way", which a real flatten always does.
+            if thickness_mm and thickness_mm > 0:
+                _thin = abs(_b[2] - thickness_mm) <= max(0.2, thickness_mm * 0.25)
+            else:
+                _thin = _b[2] < _folded_sorted[2] * 0.5
+            if _grew and _thin:
+                best = (round(_b[0], 2), round(_b[1], 2))
+                notes.append(
+                    f"flat pattern MEASURED by flattening in memory: {best[0]}x{best[1]}mm "
+                    f"(folded envelope was {_folded_sorted[0]:g}x{_folded_sorted[1]:g}mm; "
+                    f"blank is one sheet thick at {_b[2]:g}mm) — bend state {_state}")
+                break
+            notes.append(
+                f"flatten attempt (state {_state}) rejected: box "
+                f"{_b[0]:g}x{_b[1]:g}x{_b[2]:g}mm "
+                f"{'did not grow' if not _grew else 'is not one sheet thick'}")
+    finally:
+        try:
+            part.SetBendState(_orig)
+            if hasattr(doc, "ForceRebuild3"):
+                _get0(doc, "ForceRebuild3")
+        except Exception:
+            notes.append("WARNING: could not restore the original bend state in memory "
+                         "(document is closed without saving, so the file is unchanged)")
+    return best
+
+
 def get_mass_kg(doc) -> Optional[float]:
     # CreateMassProperty is interface-returning -> wrap IModelDocExtension so it resolves
     # by DISPID; the returned mass-property is wrapped IMassProperty for .Mass.
@@ -477,6 +563,34 @@ def _cutlist_properties(feat, notes: List[str]) -> Dict[str, Any]:
                     return _safe_str(r)
                 # A bare int/float here is the status code, NOT the property value. Reject it.
         return None
+
+    # ENUMERATE EVERYTHING FIRST — always, not only on failure. SolidWorks names the
+    # property "Bounding Box Length" in BOTH a sheet-metal cut list (where it is the FLAT
+    # PATTERN box) and a weldment cut list (where it is the SOLID's box). Asking for the
+    # name blind cannot tell those apart, and that is precisely how 12120-01-01M returned
+    # its folded envelope as a flat. The full name list distinguishes them — a sheet-metal
+    # folder carries 'Sheet Metal Thickness'/'Bend Radius', a weldment folder carries
+    # 'LENGTH'/'ANGLE1'/'Description' — so record it on every read and let the evidence
+    # decide rather than the property name.
+    _all_props: Dict[str, str] = {}
+    try:
+        _names = _get0(cpm, "GetNames")
+        for _nm in (list(_names) if _names else []):
+            _nm = str(_nm)
+            _v = _get_prop(_nm)
+            _all_props[_nm] = _v if _v is not None else ""
+    except Exception:
+        pass
+    if _all_props:
+        out["_all_cutlist_props"] = _all_props
+        # Which KIND of cut list answered. Sheet-metal markers mean 'Bounding Box Length'
+        # is the flat; their absence means it is the solid and must not be costed as a blank.
+        _sm_markers = [k for k in _all_props
+                       if "sheet metal" in k.lower() or "bend radius" in k.lower()
+                       or "flat pattern" in k.lower()]
+        out["_cutlist_kind"] = "sheet_metal" if _sm_markers else "unknown_or_weldment"
+        notes.append(f"cutlist_kind={out['_cutlist_kind']} "
+                     f"props={sorted(_all_props)}")
 
     _hits = 0
     _raw_seen: List[str] = []
@@ -727,6 +841,19 @@ def sheet_metal_signals(doc) -> RouteSignals:
                     f"fold time needs confirming")
         except Exception:
             pass
+
+    # ── Flat pattern by MEASUREMENT, when the property route gave nothing usable ───
+    # Reached when the part is formed but we have no blank — either the cut list was
+    # silent, or its "flat" was rejected as the folded envelope. Flattening and measuring
+    # cannot be fooled by a property name, so it is the authoritative fallback. Opt-in
+    # (--flatten) because it rebuilds each model in memory and costs time.
+    if (ALLOW_FLATTEN and sig.is_sheet_metal
+            and (sig.bend_count or sig.formed_but_no_bend_features)
+            and not (sig.flat_length_mm and sig.flat_width_mm)):
+        _fp = flat_pattern_by_flatten(doc, sig.bbox_mm, sig.thickness_mm, sig.notes)
+        if _fp:
+            sig.flat_length_mm, sig.flat_width_mm = _fp
+            sig.flat_pattern_present = True
 
     # A part whose tree is imported geometry with no modelled fabrication features is a
     # supplier model (fastener, PEM, standoff, connector, display module) — we buy it, we
@@ -1000,9 +1127,16 @@ def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>]")
+        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--flatten]")
         sys.exit(2)
     argv = list(sys.argv[1:])
+    global ALLOW_FLATTEN
+    if "--flatten" in argv:
+        ALLOW_FLATTEN = True
+        argv.remove("--flatten")
+        print("[flatten] ON — formed parts with no usable cut-list blank will be flattened "
+              "IN MEMORY and measured. The model is restored and closed WITHOUT SAVING.",
+              flush=True)
     out_override = None
     if "--out" in argv:
         i = argv.index("--out")
@@ -1012,7 +1146,7 @@ def main():
         out_override = argv[i + 1]
         del argv[i:i + 2]
     if not argv:
-        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>]")
+        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--flatten]")
         sys.exit(2)
     target = argv[0]
 
