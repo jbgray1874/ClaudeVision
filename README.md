@@ -39,6 +39,92 @@ Where no measured geometry (DXF *or* native flat pattern) covers the fabricated 
 presenting it as a quote. A part the model names a material for but yields no blank, mass
 or section is flagged as *cost not derivable* — never left as a £0 line that reads as free.
 
+## How a job actually runs
+
+Every source writes into **one shared list of part records** (`manufacturing_writeup.parts`).
+Nothing costs anything until that list is complete. The order below is the order in
+`file_scan._finalize_scan_summary`, and it *is* the waterfall — each stage can only fill
+what the stages above it left empty.
+
+| # | Stage | Module | What it contributes |
+|---|-------|--------|---------------------|
+| 1 | Render + read every PDF page | `pdfplumber`, `PyMuPDF` | page text, vector geometry |
+| 2 | Classify pages, pool the BOM | `file_scan`, `document_builder` | one part record per BOM line |
+| 3 | Deterministic title-block read | `extractor_patterns`, `drawing_facts` | material, finish, thickness, weights |
+| 4 | Normalise | `json_normaliser` | material → costable family |
+| 5 | **DXF augmentation** | `dxf_reader`, `drawing_job_merge` | measured flat blank, bends, cut length, holes |
+| 6 | **SolidWorks native** | `source_connectors/solidworks` | cut-list flat, gauge, bends, BOM qty, finish, mass |
+| 7 | Whole-document LLM extract | `llm_full_extract`, `source_connectors/llm_full_job` | fills gaps only; never overrides 5 or 6 |
+| 8 | Knowledge base / corrections | `learning_engine` | prior corrections for known parts |
+| 9 | Provisional geometry | `geometry_inference` | dimensions for parts with none — every value flagged |
+| 10 | **Costing** | `estimator.estimate_document` | material + labour + routes |
+| 11 | Credibility gate | `estimator` | withholds the headline if too little rests on measured data |
+| 12 | Workbook, then read back | `wb_populate`, `wep_readback_from_xlsx` | Excel computes; its totals are stamped back as authoritative |
+
+### Where SolidWorks fits, and where it does not
+
+**The estimating pipeline never opens SolidWorks.** COM lives only in
+`tools/solidworks/sw_native_analyse.py`, which is run by hand on a licensed Windows seat
+and writes `_sw_native_extract.json`. Stage 6 above only ever *reads that JSON*, so the
+estimate runs on any machine — and a **PDF-only job never touches the SolidWorks API at
+all**. No extract file, no effect; the job runs on PDF + DXF exactly as before.
+
+*(The `win32com` you will find inside `src/` is **Excel** COM — used to read the workbook's
+own computed totals at stage 12. Unrelated to SolidWorks.)*
+
+**What the analyser interrogates**
+
+| Read | Used for |
+|------|----------|
+| `.SLDASM` | full-depth component BOM — part numbers, quantities, assembly structure |
+| `.SLDPRT` | material, feature tree (bends, holes, weldment, imported bodies), bounding box, sheet-metal cut list |
+| `.SLDDRW` | opened, but its BOM tables currently return **0 rows** — see below |
+
+**What it does not**
+
+- **Drawing BOM tables.** The table API varies by SolidWorks version and our read returns
+  nothing. This matters: the PDF's BOM — which carries the `BI-` stock codes — is rendered
+  *from* that table, so it is the one place those codes exist in CAD. Open.
+- **STEP / IGES / Parasolid.** Geometry only, no BOM, no material. Never a source.
+- **DXF.** Handled by the separate DXF path (stage 5), not through SolidWorks.
+- **Bought-in identity.** Model titles are `USB`, `M4 Male Grip Knob`; the BOM says
+  `BI-SCREENCABLE`, `BI-KNURLEDKNOB`. Five of six carry no custom properties at all, so
+  **no honest string rule bridges them** — it needs a mapping table or the drawing BOM.
+
+### How the sources are reconciled
+
+Per datum, not per file — one part can take its blank from a DXF, its finish from the
+model and its weight from the drawing.
+
+| Datum | Wins | Loser's value |
+|-------|------|---------------|
+| Flat blank | DXF, else SolidWorks cut list | native flat compared; >10% area difference **flagged** |
+| Thickness | cut list, else DXF filename, else title block | board values under `MIN_BOARD_THICKNESS_MM` rejected outright |
+| Material | stated on the drawing | native override only across a family boundary (metal ↔ non-metal); same-family disagreement **flagged**, drawing kept |
+| Quantity | native assembly BOM | LLM roll-up used only where native has no row |
+| Bends | cut-list `Bends`, else feature tree | a formed part whose bends cannot be counted is **flagged**, never assumed zero |
+| Finish | printed on the drawing | model `Surface Treatment` added alongside, both kept |
+
+Nothing is silently overwritten. Every value a lower layer contributes carries a
+`review_flags` entry naming its source, and every disagreement between layers is recorded
+on the part rather than resolved out of sight.
+
+### What ends up in the JSON
+
+The canonical job JSON keeps each source **separately** as well as the merged result, so
+any number can be traced back:
+
+- `manufacturing_writeup.parts` — the merged part records the estimate was built from
+- `dxf_augmentation` — what matched, what did not
+- `solidworks_native` — extract path, BOM, counts, and what was applied
+- `llm_full_extract` — the transcribed source data, auditable against the drawing
+- `estimate_summary.data_sufficiency` — whether the headline is reportable
+- `workbook_equivalent_pricing` — Excel's own totals, stamped back at stage 12
+
+The workbook is the authority on the final figure. `wb_populate` writes formulas; Excel
+computes them on load; `wep-readback` reads the real totals back into the JSON so the
+spreadsheet, the quote and the report cannot drift apart.
+
 ## Project layout
 
 | Path | Purpose |
@@ -101,6 +187,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `VISION_MAX_SIDE` | Max rendered image edge in px (default 4000) |
 | `SDI_ENABLE_PART_DESC_SCAN=1` | Re-enable the description `LIKE` catalogue scan (default **off** — see *Performance*) |
 | `ESTIMATE_DEFAULT_JOB_QUANTITY` | Default order quantity when not supplied |
+| `SDI_APPLY_SOLIDWORKS=0` / `=1` | Force the native extract off / on. Default: applies when `_sw_native_extract.json` is present in the job folder, otherwise silent |
+| `SDI_SW_EXTRACT_JSON` | Read the native extract from an explicit path (models on a CAD share, job folder elsewhere) |
 
 ## Quick health check
 
