@@ -189,8 +189,15 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         unit = float(_pe.get("unit_total_cost_gbp") or 0)
         ext  = float(_pe.get("extended_total_cost_gbp") or 0)
         geo  = str(part.get("geometry_source") or "pdf")
-        # Merge textual + inferred ops so auto-assigned laser/handling/powder show.
-        ops  = list(part.get("textual_operations") or []) + list(part.get("inferred_operations") or [])
+        # Operations as the workbook ACCEPTED them, from the one shared post-costing source.
+        # This tab sits inside the same .xlsx as the Estimate, so narrating the raw textual
+        # + inferred lists here made one workbook describe two different routes: laser,
+        # powder and weld against timber panels the Estimate sheet charges saw, glue, CNC
+        # and spray for. Falls back to the raw lists only when no workbook rows exist.
+        from costed_facts import operations_for_part
+        ops = operations_for_part(summary, pn, _pe) or (
+            list(part.get("textual_operations") or [])
+            + list(part.get("inferred_operations") or []))
         # ── Material provenance ────────────────────────────────────────────────
         if _bought:
             mat_source_str = "Bought-in / catalogue component — no fabrication material"
