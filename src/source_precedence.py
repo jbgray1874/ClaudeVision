@@ -172,20 +172,65 @@ def source_of(part: Dict[str, Any], field: str) -> str:
     return str(node.get(_source_key(leaf)) or "")
 
 
-def may_overwrite(part: Dict[str, Any], field: str, new_source: Any) -> bool:
-    """May `new_source` replace the value already on this part?
+def _same_value(a: Any, b: Any) -> bool:
+    """Do two observations say the same thing? Numbers compare numerically (2 and 2.0 are one
+    fact), everything else case- and space-insensitively."""
+    try:
+        fa, fb = float(str(a).strip()), float(str(b).strip())
+        return abs(fa - fb) < 1e-9
+    except (TypeError, ValueError):
+        pass
+    return " ".join(str(a).split()).strip().lower() == " ".join(str(b).split()).strip().lower()
 
-    Yes when the datum is empty (anything may fill a gap), or when the new source ranks at
-    least as high as the one that wrote it. A tie is allowed: two passes of equal standing
-    refining each other is normal, and the later one usually knows more.
+
+def confidence_of(part: Dict[str, Any], field: str) -> Optional[float]:
+    if not isinstance(part, dict):
+        return None
+    path, leaf = _split(field)
+    node = _walk(part, path)
+    if node is None:
+        return None
+    try:
+        return float(node.get(f"{leaf}_confidence"))
+    except (TypeError, ValueError):
+        return None
+
+
+def may_overwrite(part: Dict[str, Any], field: str, new_source: Any,
+                  new_value: Any = MISSING, new_confidence: Optional[float] = None) -> bool:
+    """May `new_source` REPLACE a value that disagrees with it?
+
+    Yes when the datum is empty — anything may fill a gap. Otherwise only a STRICTLY stronger
+    source may replace a value it disagrees with.
+
+    Equal rank used to be enough, on the reasoning that two passes of equal standing refining
+    each other is normal and the later one usually knows more. That is not true of this
+    pipeline. Two title-block readings of the same rank disagreeing is not refinement, it is
+    a conflict — and resolving it by letting the later one win makes the answer depend on page
+    order, silently, with no flag raised because the write succeeded. The first observation is
+    kept and the disagreement recorded, unless the newcomer carries a strictly higher
+    confidence, which is a real reason to prefer it rather than an accident of ordering.
 
     A recorded ZERO is a value, not a gap. A model reporting no cut-outs has answered the
     question, and a weaker source must not treat that answer as an opening."""
     if not isinstance(part, dict):
         return False
-    if value_of(part, field) is MISSING:
+    _cur = value_of(part, field)
+    if _cur is MISSING:
         return True
-    return rank(new_source) >= rank(source_of(part, field))
+    _new_rank, _cur_rank = rank(new_source), rank(source_of(part, field))
+    if _new_rank > _cur_rank:
+        return True
+    if _new_rank < _cur_rank:
+        return False
+    # Equal rank. Agreement is not a replacement at all, so it is allowed and handled by
+    # apply_field as a provenance question.
+    if new_value is not MISSING and _same_value(_cur, new_value):
+        return True
+    _cur_conf = confidence_of(part, field)
+    if new_confidence is not None and _cur_conf is not None and new_confidence > _cur_conf:
+        return True
+    return False
 
 
 def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
@@ -205,7 +250,28 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         return False
     path, leaf = _split(field)
     key = _source_key(leaf)
-    if may_overwrite(part, field, source):
+    _cur = value_of(part, field)
+    _cur_src = source_of(part, field)
+
+    # AGREEMENT UPGRADES PROVENANCE. A source that confirms the value already present has
+    # told us something real: this datum now rests on stronger evidence than it did. Callers
+    # used to skip the resolver entirely when the numbers matched — "nothing to change" — and
+    # the datum kept the weaker source's name, so a later medium-ranked pass could still
+    # displace a figure the model had independently confirmed. Submitting agreement is how
+    # the strong source's rank actually attaches to the value.
+    if _cur is not MISSING and _same_value(_cur, value):
+        if rank(source) > rank(_cur_src):
+            node = _walk(part, path, create=True)
+            if node is not None:
+                node[key] = source
+                if confidence is not None:
+                    node[f"{leaf}_confidence"] = confidence
+        # The value did not change, so this is not a change to report. Callers gate their
+        # audit messages on the return, and "SolidWorks replaced X with X" is noise at best
+        # and a false claim at worst.
+        return False
+
+    if may_overwrite(part, field, source, new_value=value, new_confidence=confidence):
         node = _walk(part, path, create=True)
         if node is None:
             return False
@@ -216,10 +282,18 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         if note:
             part.setdefault("review_flags", []).append(note)
         return True
-    _cur = value_of(part, field)
-    _cur_src = source_of(part, field) or "an earlier pass"
-    if str(_cur).strip() != str(value).strip():
+
+    _cur_src_txt = _cur_src or "an earlier pass"
+    if rank(source) == rank(_cur_src):
+        # EQUAL RANK, DIFFERENT ANSWERS. Neither observation outranks the other, so nothing
+        # here can resolve it — and letting the later one win would make the result depend on
+        # the order pages happened to be read in. Keep the first, and say so.
         part.setdefault("review_flags", []).append(
-            f"{field}: '{value}' from {source} NOT applied — '{_cur}' from {_cur_src} is the "
-            f"stronger source and was kept. The two disagree; confirm which is right")
+            f"{field}: two sources of equal standing disagree — '{_cur}' from "
+            f"{_cur_src_txt} was kept, '{value}' from {source} was not applied. Neither "
+            f"outranks the other; a person must decide which is right")
+    else:
+        part.setdefault("review_flags", []).append(
+            f"{field}: '{value}' from {source} NOT applied — '{_cur}' from {_cur_src_txt} is "
+            f"the stronger source and was kept. The two disagree; confirm which is right")
     return False

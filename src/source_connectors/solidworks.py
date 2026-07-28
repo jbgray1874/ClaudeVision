@@ -670,11 +670,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         if row is not None and row.quantity and row.quantity > 0:
             _q = int(round(row.quantity))
             _cur = _num(part.get("quantity"))
-            # Through the resolver, which records the source and defends the value. Later
-            # passes (the PDF GA-tree rollup in particular) rewrite quantities, and without
-            # an arbitrated write they cannot tell they are overwriting the assembly BOM the
-            # shop builds from.
-            if _q > 0 and (_cur is None or int(_cur) != _q):
+            # ALWAYS SUBMIT, even when the numbers already match. Skipping the resolver on
+            # agreement left the datum carrying the WEAKER source's name, so a later
+            # medium-ranked pass could still displace a quantity the model had independently
+            # confirmed. Agreement is evidence: it upgrades provenance. The flag is gated on
+            # the return, which is true only when the value actually changed.
+            if _q > 0:
                 if _apply_field(part, "quantity", _q, SOURCE_NAME):
                     flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
                                  f"SolidWorks assembly BOM (component count, all levels)")
@@ -724,10 +725,15 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             new_mat = _norm_sw_material(nat.material)
             cur_mat = str(part.get("normalized_material") or "").strip().upper()
             if new_mat and not cur_mat:
+                if _apply_field(part, "normalized_material", new_mat, SOURCE_NAME):
+                    flags.append(f"material '{new_mat}' from the SolidWorks model "
+                                 f"(applied material: {nat.material})")
+                    out["material"] += 1
+            elif new_mat and cur_mat and new_mat == cur_mat:
+                # Same answer from a stronger source. Nothing changes on screen; what changes
+                # is that the value now rests on the model rather than on the drawing text,
+                # and a later pass can no longer quietly replace it.
                 _apply_field(part, "normalized_material", new_mat, SOURCE_NAME)
-                flags.append(f"material '{new_mat}' from the SolidWorks model "
-                             f"(applied material: {nat.material})")
-                out["material"] += 1
             elif new_mat and cur_mat and new_mat != cur_mat:
                 _cross_family = (
                     (new_mat in _NON_METAL_FAMILIES and cur_mat in _METAL_FAMILIES)
@@ -737,10 +743,13 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                     # A wood/board part is definitively not steel (and vice versa). The
                     # model is authoritative on what the designer specified — override
                     # the engine's family default and say so.
-                    _apply_field(part, "normalized_material", new_mat, SOURCE_NAME)
-                    flags.append(f"material '{cur_mat}' overridden to '{new_mat}' from the "
-                                 f"SolidWorks model ('{nat.material}') — wrong material FAMILY")
-                    out["material"] += 1
+                    # Gated on the RESULT. A rank-100 estimator correction can legitimately
+                    # survive this, and claiming "overridden" when it did not is a review
+                    # flag that describes something the engine did not do.
+                    if _apply_field(part, "normalized_material", new_mat, SOURCE_NAME):
+                        flags.append(f"material '{cur_mat}' overridden to '{new_mat}' from the "
+                                     f"SolidWorks model ('{nat.material}') — wrong material FAMILY")
+                        out["material"] += 1
                 else:
                     # Same family, different grade. The printed title block is what the
                     # shop buys to, so keep it — but surface the disagreement.
@@ -834,11 +843,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         if _plausible_thk(nat.thickness_mm):
             thk = float(nat.thickness_mm)
             cur_thk = _num(part.get("normalized_thickness_mm"))
-            if not cur_thk:
+            if not cur_thk or abs(cur_thk - thk) <= 0.05:
+                # Empty, or already agreeing: submit either way so the model's rank attaches.
                 if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
                     flags.append(f"thickness {thk:g}mm from the SolidWorks sheet-metal cut list")
                     out["thickness"] += 1
-            elif abs(cur_thk - thk) > 0.05 and not _dxf_backed(part):
+            elif not _dxf_backed(part):
                 # The model's sheet thickness is the gauge the part is made from; a PDF
                 # thickness is often lifted from a tolerance table. Model wins, and says so.
                 if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
@@ -999,10 +1009,10 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
         nat = job.part_signals.get(pn)
         # Material: native wins where the engine has nothing solid.
         if nat and nat.material and not str(p.get("normalized_material") or "").strip():
-            _apply_field(p, "normalized_material", nat.material, SOURCE_NAME)
-            p.setdefault("review_flags", []).append(
-                f"Material '{nat.material}' from SolidWorks model")
-            out["material_set"] += 1
+            if _apply_field(p, "normalized_material", nat.material, SOURCE_NAME):
+                p.setdefault("review_flags", []).append(
+                    f"Material '{nat.material}' from SolidWorks model")
+                out["material_set"] += 1
         # Quantity: native BOM roll-up corrects fastener/bought-in counts.
         q = qty_by_pn.get(pn)
         if q is not None and int(q) > 0 and p.get("quantity") != int(q):

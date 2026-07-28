@@ -14,6 +14,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The rules suite must never reach a live service. It was opening a connection to the
+# production SQL server just by importing a module for its pure functions, which makes every
+# fixture depend on a machine being reachable and cannot work in CI at all. The suite sets
+# this itself; setting it here too means a runner cannot accidentally have credentials.
+env:
+  SDI_OFFLINE: "1"
+
 jobs:
   rules:
     runs-on: ubuntu-latest
@@ -34,6 +41,28 @@ jobs:
 
       - name: Regression fixtures
         run: python -m pytest tests/test_estimating_rules.py -q
+
+      # A green run proves nothing if the suite reaches a live service by accident. The
+      # check is on CONNECTING, not on importing a driver: source_connectors imports pyodbc
+      # at module load and opens nothing, whereas learning_engine was dialling the production
+      # SQL server just to be imported. Every outbound socket is blocked here, so a fixture
+      # that talks to anything fails the build rather than passing quietly on a machine that
+      # happens to have credentials.
+      - name: Suite performs no live SQL or network access
+        run: |
+          python - <<'PY'
+          import os, sys, socket
+          os.environ["SDI_OFFLINE"] = "1"
+          def _no_net(*a, **k):
+              raise AssertionError("the rules suite attempted a network connection")
+          socket.socket.connect = _no_net
+          socket.socket.connect_ex = _no_net
+          socket.create_connection = _no_net
+          sys.argv = ["test_estimating_rules.py"]
+          sys.path.insert(0, "tests")
+          import test_estimating_rules as t
+          sys.exit(t.main())
+          PY
 
       # The same suite through its own runner. The two disagreed once — the helpers only
       # appended failures to a list, so pytest reported green over every mutation the plain

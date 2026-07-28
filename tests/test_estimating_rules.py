@@ -21,6 +21,14 @@ import os
 import sys
 import traceback
 
+# NO LIVE ANYTHING. This suite is meant to run in a second with no SolidWorks, no Excel, no
+# SQL and no drawings — and it was opening a connection to the production SDILive server
+# just by importing learning_engine, which tests its pure functions. A suite that needs the
+# production database is not isolated, cannot run in CI, and makes every fixture depend on a
+# machine being reachable. Set BEFORE any src import, because the connection was made at
+# module import time.
+os.environ.setdefault("SDI_OFFLINE", "1")
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 _FAILS = []
@@ -679,49 +687,251 @@ def test_the_resolver_sees_nested_fields_and_explicit_zeros():
 
 def test_arbitrated_fields_are_not_written_directly():
     """The resolver only protects a datum if every writer goes through it. One direct
-    assignment anywhere reintroduces last-writer-wins for that field, and it does so
-    silently — which is the whole failure this codebase keeps rediscovering.
+    assignment anywhere reintroduces last-writer-wins for that field, silently.
 
     So the rule is checked on the SOURCE, not just the behaviour: a fixture that exercises
     apply_field proves the resolver works, not that anyone calls it. Reverting a converted
     call site to a direct write passed every behavioural test in this file.
 
+    PARSED, NOT PATTERN-MATCHED. The first version of this guard was a regex, and a regex
+    reads text rather than code: it missed single-quoted keys, dict literals, keyword
+    arguments, .update(), aliased records and any assignment split over two lines. It was
+    already blind to empty_part_record(quantity=...), which is exactly how BOM quantities
+    were reaching parts unattributed. The AST sees the shapes themselves.
+
     This guards the modules already converted. It is not the whole pipeline yet — the
-    remaining writers are listed below and each one is a place a stronger source can still
-    be overwritten in silence."""
-    import re
+    remaining writers are listed at the end of this file's docstring and each one is a place
+    a stronger source can still be overwritten in silence."""
+    import ast
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "src"
-    # Modules whose writes go through source_precedence. Adding a module here is how a
-    # conversion gets locked in.
     RESOLVER_CLEAN = ["bom_tree.py", "part_index.py", "learning_engine.py",
                       "source_connectors/solidworks.py"]
-    ARBITRATED = ("quantity", "normalized_material", "pierce_count",
-                  "estimated_pierce_count", "normalized_thickness_mm")
-    # `<something>["<arbitrated field>"] =` — an assignment onto an existing record.
-    literal = re.compile(r'(\w+)\["(' + "|".join(ARBITRATED) + r')"\]\s*=(?!=)')
-    # And the same write with a VARIABLE key. A literal-field regex alone misses
-    # `part[rule["correction_field"]] = ...`, which is how the override rules wrote material,
-    # and `part[_fld] = v`, which is what a converted loop reverts to. Both set an arbitrated
-    # field without naming it, so the field name cannot be the whole test.
-    variable = re.compile(r'\b(part|_part|p|_p|nr|target)\[[_a-zA-Z]\w*(?:\[[^\]]*\])?\]\s*=(?!=)')
+    ARBITRATED = {"quantity", "normalized_material", "pierce_count",
+                  "estimated_pierce_count", "normalized_thickness_mm"}
+    # A single record that holds arbitrated evidence. NOT `parts`, which is a collection:
+    # `parts[pn] = <record>` inserts a whole record rather than writing a field, while
+    # `parts[pn]["quantity"] = x` is still caught by the literal-key rule below.
+    RECORDS = {"part", "_part", "p", "_p", "nr", "target", "pe"}
+    # Constructors that build a part record: passing an arbitrated field as a keyword sets it
+    # with no source, which is a direct write wearing a different hat.
+    CONSTRUCTORS = {"empty_part_record", "_empty_part_record"}
+
+    class Guard(ast.NodeVisitor):
+        def __init__(self, rel, allowed):
+            self.rel, self.allowed, self.hits = rel, allowed, []
+
+        def _report(self, node, what):
+            if node.lineno not in self.allowed:
+                self.hits.append(f"{self.rel}:{node.lineno}  {what}")
+
+        def _is_record(self, node):
+            if isinstance(node, ast.Name):
+                return node.id in RECORDS
+            if isinstance(node, ast.Subscript):      # parts[pn]["quantity"] = ...
+                return self._is_record(node.value)
+            if isinstance(node, ast.Attribute):
+                return node.attr in RECORDS
+            return False
+
+        def visit_Assign(self, node):
+            for tgt in node.targets:
+                if not isinstance(tgt, ast.Subscript):
+                    continue
+                key = tgt.slice
+                # record["arbitrated"] = ...  (quote style is irrelevant to the parser)
+                if isinstance(key, ast.Constant) and key.value in ARBITRATED:
+                    self._report(node, f'{ast.unparse(tgt)} = ...')
+                # record[<computed>] = ...  — names no field, so the field name cannot be
+                # the test. This is how the override rules wrote material.
+                elif not isinstance(key, ast.Constant) and self._is_record(tgt.value):
+                    self._report(node, f'{ast.unparse(tgt)} = ...  (computed key)')
+            self.generic_visit(node)
+
+        def visit_Call(self, node):
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+            # record.update({"quantity": ...}) / record.update(quantity=...)
+            if name == "update" and isinstance(fn, ast.Attribute) and self._is_record(fn.value):
+                for kw in node.keywords:
+                    if kw.arg in ARBITRATED:
+                        self._report(node, f"update({kw.arg}=...)")
+                for a in node.args:
+                    if isinstance(a, ast.Dict):
+                        for k in a.keys:
+                            if isinstance(k, ast.Constant) and k.value in ARBITRATED:
+                                self._report(node, f"update({{{k.value!r}: ...}})")
+            # empty_part_record(quantity=...) — born with a value and no source.
+            if name in CONSTRUCTORS:
+                for kw in node.keywords:
+                    if kw.arg in ARBITRATED and not (
+                            isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                        self._report(node, f"{name}({kw.arg}=...) with no source")
+            self.generic_visit(node)
 
     offenders = []
     for rel in RESOLVER_CLEAN:
         path = root / rel
         if not path.exists():
             continue
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            code = line.split("#")[0]
-            # A fresh record being built, or a list normalised in place, is not an overwrite
-            # of anyone's evidence. Marking the line says the author considered it.
-            if "precedence: direct-write ok" in line:
-                continue
-            if literal.search(code) or variable.search(code):
-                offenders.append(f"{rel}:{n}  {line.strip()[:90]}")
-    eq(offenders, [],
+        text = path.read_text(encoding="utf-8")
+        # A deliberate direct write is allowed when the author marked the line.
+        allowed = {n for n, line in enumerate(text.splitlines(), 1)
+                   if "precedence: direct-write ok" in line}
+        g = Guard(rel, allowed)
+        g.visit(ast.parse(text))
+        offenders.extend(g.hits)
+    eq(sorted(offenders), [],
        "these writes bypass the resolver — a stronger source can be overwritten in silence")
+
+
+def test_agreeing_evidence_upgrades_provenance():
+    """A source that CONFIRMS the value already present has told us something real: the datum
+    now rests on stronger evidence than it did. Callers used to skip the resolver when the
+    numbers matched — "nothing to change" — so the value kept the weaker source's name and a
+    later medium-ranked pass could still displace a figure the model had confirmed."""
+    from source_precedence import apply_field, source_of
+    p = {"quantity": 2, "quantity_source": "bom_tree"}
+    changed = apply_field(p, "quantity", 2, "solidworks_api")
+    eq(source_of(p, "quantity"), "solidworks_api",
+       "agreement from a stronger source must upgrade the recorded source")
+    ok(not changed,
+       "but the VALUE did not change, and an audit message must not claim it did")
+    # And that upgrade is what protects it.
+    ok(not apply_field(p, "quantity", 7, "drawing_deterministic"),
+       "once the model has confirmed it, a weaker source cannot displace it")
+    eq(p["quantity"], 2, "the confirmed value stands")
+    # A weaker source agreeing must not DOWNGRADE the provenance.
+    q = {"quantity": 2, "quantity_source": "solidworks_api"}
+    apply_field(q, "quantity", 2, "llm_extract")
+    eq(source_of(q, "quantity"), "solidworks_api", "agreement never weakens provenance")
+
+
+def test_equal_rank_conflicts_are_never_resolved_by_running_order():
+    """Two title-block readings of the same rank disagreeing is not refinement, it is a
+    conflict. Letting the later one win made the answer depend on the order pages happened to
+    be read in — silently, because the write succeeded so nothing was flagged."""
+    from source_precedence import apply_field
+    p = {}
+    apply_field(p, "normalized_material", "MILD_STEEL", "drawing_deterministic")
+    ok(not apply_field(p, "normalized_material", "ALUMINIUM", "drawing_deterministic"),
+       "an equal-ranked disagreement must not overwrite")
+    eq(p["normalized_material"], "MILD_STEEL", "the first observation is kept")
+    ok(any("equal standing" in str(f) for f in p.get("review_flags") or []),
+       "and the conflict is flagged for a person, not silently resolved")
+    # Confidence is a real reason to prefer the newcomer; page order is not.
+    q = {}
+    apply_field(q, "normalized_material", "MILD_STEEL", "llm_extract", confidence=0.4)
+    ok(apply_field(q, "normalized_material", "ALUMINIUM", "llm_extract", confidence=0.9),
+       "a strictly higher confidence at equal rank is a reason, not an accident")
+    eq(q["normalized_material"], "ALUMINIUM", "and it wins")
+
+
+def test_the_knowledge_base_is_not_gated_before_arbitration():
+    """A local reliability test refused to offer a knowledge-base correction whenever the
+    part already carried anything ranked at or above an override rule — so rank-100 KB data,
+    the one signal carrying knowledge the drawing does not, was never offered against a
+    rank-50, 70 or 90 value. That inverts the ranking table it exists to serve."""
+    from source_precedence import apply_field
+    for existing_source in ("override_rule:x", "drawing_deterministic", "solidworks_api"):
+        p = {"normalized_material": "MILD_STEEL", "material_source": existing_source}
+        ok(apply_field(p, "normalized_material", "ALUMINIUM", "knowledge_base (95%)",
+                       confidence=0.95),
+           f"a person's correction must outrank {existing_source}")
+        eq(p["normalized_material"], "ALUMINIUM", "and be applied")
+
+
+def test_bom_quantities_are_attributed_when_the_record_is_born():
+    """Records were constructed with quantity=<BOM value> and no source, and the apply path
+    further on only ran for quantities of None or 1 — so every quantity ABOVE one, which is
+    most of them, was never attributed and never protected."""
+    from document_builder import _empty_part_record
+    from source_precedence import apply_field, source_of
+    r = _empty_part_record("X-01", description="d", quantity=None)
+    eq(r["quantity"], None, "constructed with no quantity, so it is a gap the resolver fills")
+    apply_field(r, "quantity", 4, "bom_tree")
+    eq((r["quantity"], source_of(r, "quantity")), (4, "bom_tree"), "attributed at birth")
+    ok(not apply_field(r, "quantity", 9, "llm_extract"),
+       "and defended from a weaker source thereafter — including when it is above one")
+
+
+def test_the_rules_suite_touches_no_live_service():
+    """The suite opened a connection to the production SDILive server merely by importing
+    learning_engine for its pure functions. A suite that needs the production database is not
+    isolated, cannot run in CI, and makes every fixture depend on a machine being up."""
+    import learning_engine
+    eq(os.environ.get("SDI_OFFLINE"), "1", "the suite declares itself offline before importing")
+    ok(not learning_engine._DB_AVAILABLE,
+       "and the module honours it rather than dialling out at import time")
+
+
+def test_solidworks_submits_agreement_at_the_call_site():
+    """Behavioural, on the real call path. Asserting on apply_field proves the resolver
+    upgrades provenance on agreement; it says nothing about whether the connector SUBMITS
+    when the values already match. Restoring the `if values differ` guard passed every
+    resolver fixture in this file."""
+    from source_connectors.solidworks import (normalize_native_extract,
+                                              apply_native_to_pre_estimate)
+    recs = [
+        {"title": "ASM-01", "doctype": 2, "bom": [{"part_number": "AAA-01M", "qty": 2.0}]},
+        {"title": "AAA-01M", "doctype": 1, "route_signals": {
+            "material": "Mild Steel [CR4]", "is_sheet_metal": True, "bend_count": 1,
+            "flat_length_mm": 100.0, "flat_width_mm": 50.0, "thickness_mm": 1.5,
+            "bbox_mm": [60.0, 50.0, 20.0]}},
+    ]
+    job = normalize_native_extract(recs)
+    # The engine already has the RIGHT answers, from weaker sources.
+    parts = [{"part_number": "AAA-01M",
+              "quantity": 2, "quantity_source": "bom_tree",
+              "normalized_material": "MILD_STEEL", "material_source": "drawing_deterministic",
+              "normalized_thickness_mm": 1.5, "thickness_source": "drawing_deterministic"}]
+    apply_native_to_pre_estimate(parts, job)
+    p = parts[0]
+    eq(p.get("quantity_source"), "solidworks_api",
+       "the model confirming a quantity must upgrade its provenance, not skip the resolver")
+    eq(p.get("material_source"), "solidworks_api", "same for a confirmed material")
+    eq(p.get("thickness_source"), "solidworks_api", "and a confirmed thickness")
+    eq((p["quantity"], p["normalized_material"], p["normalized_thickness_mm"]),
+       (2, "MILD_STEEL", 1.5), "and none of the values changed")
+    # That upgrade is the whole point: the values are now defended.
+    from source_precedence import apply_field
+    ok(not apply_field(p, "quantity", 9, "drawing_deterministic"),
+       "a confirmed quantity is no longer displaceable by a medium-ranked pass")
+
+
+def test_the_knowledge_base_reaches_the_resolver_at_the_call_site():
+    """Behavioural, on the real call path. The local reliability gate sat BEFORE the
+    resolver, so a rank-100 correction was never offered at all — and a fixture that calls
+    apply_field directly cannot see that, because it starts after the gate."""
+    import learning_engine as LE
+
+    class _StubDB:
+        def lookup_part(self, pn):
+            return {"material": "ALUMINIUM", "thickness_mm": 3.0, "confidence": 0.95}
+        def get_active_overrides(self):
+            return []
+        def fire_override(self, _id):
+            pass
+
+    _orig_db, _orig_avail = LE.db, LE._DB_AVAILABLE
+    try:
+        LE.db, LE._DB_AVAILABLE = _StubDB(), True
+        eng = LE.LearningEngine.__new__(LE.LearningEngine)   # no DB work in __init__
+        eng._overrides_cache = []
+        # A part already carrying a strong, WRONG answer. The old gate refused to offer the
+        # knowledge base against anything ranked at or above an override rule.
+        summary = {"manufacturing_writeup": {"parts": [
+            {"part_number": "AAA-01M", "normalized_material": "MILD_STEEL",
+             "material_source": "solidworks_api"}]}}
+        eng.pre_scan(summary)
+        part = summary["manufacturing_writeup"]["parts"][0]
+        eq(part["normalized_material"], "ALUMINIUM",
+           "a person's correction outranks the model and must reach the part")
+        ok("knowledge_base" in str(part.get("material_source")),
+           f"and be attributed to it (got {part.get('material_source')!r})")
+    finally:
+        LE.db, LE._DB_AVAILABLE = _orig_db, _orig_avail
 
 
 def test_late_passes_cannot_clobber_the_assembly_quantity():

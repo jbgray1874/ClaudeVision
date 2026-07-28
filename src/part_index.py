@@ -69,12 +69,19 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         pn = row["part_number"]
         if not is_valid_part_identifier(pn):
             continue
+        # BORN WITH A SOURCE. Constructing the record with quantity=<BOM value> and no
+        # quantity_source left most BOM quantities unattributed, so arbitration had nothing
+        # to weigh them against and any later pass could replace them silently. Worse, the
+        # apply path further down only ran for quantities of None or 1 — so every quantity
+        # ABOVE one, which is most of them, skipped attribution entirely. Construct without
+        # it, then submit it as the observation it is.
         parts[pn] = empty_part_record(
             part_number=pn,
             item_number=row.get("item_number"),
             description=_clean_bom_description(row.get("description")),
-            quantity=row.get("quantity", 1),
+            quantity=None,
         )
+        apply_field(parts[pn], "quantity", row.get("quantity"), "bom_tree")
 
     for page in summary["pages"]:
         page_analysis = page.get("page_analysis", {})
@@ -173,22 +180,19 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                         part["description"] = _clean_bom_description(description)
                         break
 
-            if part["quantity"] in (None, 1):
-                # `quantity in (None, 1)` treats a quantity of ONE as an empty slot, so a
-                # part the model says there is one of was open to replacement by whatever a
-                # PDF table happened to say. The resolver decides instead: the document BOM
-                # is rank 60 and a title-block reading rank 70, and neither displaces the
-                # assembly BOM the shop builds from.
-                quantities = title_block.get("quantities", [])
-                if pn in document_bom_lookup and document_bom_lookup[pn].get("quantity"):
-                    apply_field(part, "quantity", document_bom_lookup[pn].get("quantity"),
-                                "bom_tree")
-                elif quantities:
-                    try:
-                        apply_field(part, "quantity", int(quantities[0]),
-                                    "drawing_deterministic")
-                    except (TypeError, ValueError):
-                        pass
+            # No "is it None or 1" test. That treated a quantity of ONE as an empty slot, so
+            # a part the model says there is one of was open to replacement by whatever a
+            # table happened to say — and it skipped attribution for everything above one.
+            # Every observation is submitted; the resolver decides which survives.
+            quantities = title_block.get("quantities", [])
+            if pn in document_bom_lookup and document_bom_lookup[pn].get("quantity"):
+                apply_field(part, "quantity", document_bom_lookup[pn].get("quantity"),
+                            "bom_tree")
+            elif quantities:
+                try:
+                    apply_field(part, "quantity", int(quantities[0]), "drawing_deterministic")
+                except (TypeError, ValueError):
+                    pass
 
             if should_assign_dimensions(effective_page_role, component_sheet):
                 page_dims = pick_part_dimensions(part, dimensions)
