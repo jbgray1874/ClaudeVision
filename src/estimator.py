@@ -2303,6 +2303,16 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{'/'.join(_stripped)} removed: part is {_mat_u or 'a board/timber family'}, "
                 f"which is not welded — joining is by glue/fixings. A weld cue was read from "
                 f"the drawing text; confirm it belongs to a different (metal) part")
+            # Clear the weld SIGNALS too, not just the costed ops. welding_required is
+            # synthesised from textual_operations back at document-build time, so without
+            # this the sheet correctly shows no weld while the job report still tells the
+            # estimator to "verify weld/dress content" on the same part. A report that
+            # contradicts the sheet it accompanies is worse than either alone.
+            _mf_w = part.get("manufacturing_features")
+            if isinstance(_mf_w, dict):
+                _mf_w["welding_required"] = False
+            if isinstance(part.get("risk_flags"), list):
+                part["risk_flags"] = [f for f in part["risk_flags"] if f != "weld_required"]
 
     # DRES — a structural (CO2/WELD) weld is dressed/linished to clean the bead before
     # finishing. Chain a dress_welds op after the welding op so the DRES dept labour
