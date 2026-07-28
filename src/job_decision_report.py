@@ -249,10 +249,31 @@ def _thk_source_explanation(part: Dict) -> str:
     return "⚠ No thickness found — assembly-only page or missing dimension"
 
 
-def _ops_explanation(part: Dict) -> str:
-    """Explain how operations were determined."""
-    # Merge textual + inferred ops so auto-assigned laser/handling/powder show.
-    ops = list(part.get("textual_operations") or []) + list(part.get("inferred_operations") or [])
+def _ops_explanation(part: Dict, est: Optional[Dict] = None) -> str:
+    """Explain how operations were determined.
+
+    Driven by what we actually COSTED where the part estimate is available, not by the raw
+    textual/inferred op lists. Those lists are the drawing's interpretation, and on these
+    packs the shared specification legend puts processes on parts that never carry them —
+    which is how "laser cutting" and "powder coating" ended up described against timber
+    panels that the Estimate sheet charges only saw, glue, CNC and spray for. A provenance
+    sheet that describes operations the estimate does not contain is worse than no
+    provenance: it reads as evidence for a route we did not price. Same rule already
+    applied to the client quote.
+    """
+    _costed: List[str] = []
+    if isinstance(est, dict):
+        for _blk in (("labour_estimate", "costs_gbp"), ("process_estimate", "times_min")):
+            _d = est.get(_blk[0]) or {}
+            _d = _d.get(_blk[1]) if isinstance(_d, dict) else None
+            if isinstance(_d, dict):
+                _costed += [k for k, v in _d.items() if v]
+    if _costed:
+        ops = _costed
+    else:
+        # No costed record (a bought-in or suppressed row) — fall back to the raw lists so
+        # the sheet still says something, rather than going blank.
+        ops = list(part.get("textual_operations") or []) + list(part.get("inferred_operations") or [])
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     geo = str(part.get("geometry_source") or "")
     if not ops:
@@ -321,11 +342,15 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
 
     ds = (summary.get("estimate_summary") or {}).get("data_sufficiency") or {}
     if ds.get("status") == "insufficient_data":
-        prov = float(ds.get("document_total_provisional_gbp") or total or 0)
+        # Do NOT print the engine part-sum (ds.document_total_provisional_gbp) as "the
+        # provisional total" — it is a different calculator from the workbook Sell Price and
+        # can differ materially (Horti Crate: engine £102.07 vs workbook £46.53), which made
+        # this header contradict the SELL PRICE total row below and the report/quote HTML.
+        # Warn here; the authoritative provisional figure is the Sell Price shown below.
         total_line = (
-            f"⚠ INSUFFICIENT DATA — provisional £{prov:,.2f} NOT for quoting "
+            f"⚠ INSUFFICIENT DATA — PROVISIONAL, NOT for quoting "
             f"(credible {float(ds.get('credible_cost_ratio') or 0) * 100:.0f}% · "
-            f"DXF {float(ds.get('dxf_part_ratio') or 0) * 100:.0f}% of parts)"
+            f"DXF {float(ds.get('dxf_part_ratio') or 0) * 100:.0f}% of parts) — see total below"
         )
     else:
         # Prefer the WB Sell Price; the header text still shows the engine sum as a
@@ -400,7 +425,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         conf, conf_label, conf_bg, conf_fg, conf_expl = _conf_info(part, unit)
         mat_why  = _mat_source_explanation(part)
         thk_why  = _thk_source_explanation(part)
-        ops_why  = _ops_explanation(part)
+        ops_why  = _ops_explanation(part, _est_lookup.get(pn))
         bg = C_ALT if i % 2 == 0 else C_WHITE
         if _is_bought_in(part):
             bg = C_BOUGHT
@@ -468,10 +493,16 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         ws.row_dimensions[row].height = 20
         row += 1
         ws.merge_cells(f"A{row}:K{row}")
+        # Do NOT cite a second, static "provisional total" here. The authoritative total is
+        # the workbook Sell Price shown in the SELL PRICE row directly above (a live cross-
+        # sheet formula). The engine part-sum (ds.document_total_provisional_gbp) is a
+        # different calculator and can differ materially — e.g. on the Horti Crate the engine
+        # part-sum was £102.07 while the workbook Sell Price was £46.53. Printing that figure
+        # here made the Decision Report contradict its own total row (and the report/quote
+        # HTML). The banner's job is to WARN; the number is already above it.
         _c(ws, row, 1,
-           f"Most of this estimate is not DXF-backed. Provisional total "
-           f"£{float(ds.get('document_total_provisional_gbp') or 0):,.2f} suppressed — "
-           f"request part DXFs before quoting. "
+           f"Most of this estimate is not DXF-backed. The total shown above is "
+           f"PROVISIONAL and must not be quoted — request part DXFs first. "
            f"Credible share: {float(ds.get('credible_cost_ratio') or 0) * 100:.0f}% · "
            f"Part DXFs: {int(ds.get('parts_with_dxf') or 0)}/"
            f"{int(ds.get('fabricated_part_count') or 0)} fabricated parts.",
