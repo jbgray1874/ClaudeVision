@@ -249,7 +249,8 @@ def _thk_source_explanation(part: Dict) -> str:
     return "⚠ No thickness found — assembly-only page or missing dimension"
 
 
-def _ops_explanation(part: Dict, est: Optional[Dict] = None) -> str:
+def _ops_explanation(part: Dict, est: Optional[Dict] = None,
+                     summary: Optional[Dict] = None) -> str:
     """Explain how operations were determined.
 
     Driven by what we actually COSTED where the part estimate is available, not by the raw
@@ -261,8 +262,10 @@ def _ops_explanation(part: Dict, est: Optional[Dict] = None) -> str:
     provenance: it reads as evidence for a route we did not price. Same rule already
     applied to the client quote.
     """
-    from costed_facts import costed_operations
-    _costed: List[str] = list(costed_operations([est])) if isinstance(est, dict) else []
+    # Canonical where the workbook has run (the route the Estimate sheet two tabs away
+    # actually charges); the part's own PRE-FILTER costed fields only as a fallback.
+    from costed_facts import operations_for_part
+    _costed: List[str] = operations_for_part(summary, part.get("part_number"), est)
     if _costed:
         ops = _costed
     else:
@@ -420,7 +423,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         conf, conf_label, conf_bg, conf_fg, conf_expl = _conf_info(part, unit)
         mat_why  = _mat_source_explanation(part)
         thk_why  = _thk_source_explanation(part)
-        ops_why  = _ops_explanation(part, _est_lookup.get(pn))
+        ops_why  = _ops_explanation(part, _est_lookup.get(pn), summary)
         bg = C_ALT if i % 2 == 0 else C_WHITE
         if _is_bought_in(part):
             bg = C_BOUGHT

@@ -596,8 +596,8 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
     # was gated off, which is how this bullet came to congratulate the engine for correctly
     # powder-coating eight lacquered timber panels that the Estimate sheet never charges
     # powder on. A report claiming a process the sheet does not price is worse than silence.
-    from costed_facts import parts_with_operation
-    _pc_parts = parts_with_operation(summary, "powder_coating")
+    from costed_facts import part_numbers_with_operation
+    _pc_parts = part_numbers_with_operation(summary, "powder_coating", "p.coat")
     if _pc_parts:
         rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Powder coating scoped to the right parts.</b> '
                  f'{len(_pc_parts)} part(s) are <b>charged</b> powder coating — not applied blanket '

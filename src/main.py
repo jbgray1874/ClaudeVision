@@ -734,6 +734,30 @@ def main() -> None:
             xlsx_path = populate_workbook(summary, str(scan_label))
             if xlsx_path:
                 print(f"\nAI Estimate Sheet: {Path(xlsx_path).resolve()}")
+                # Stamp the workbook's ACCEPTED labour rows into the canonical JSON.
+                # The JSON is written earlier in the run, before the workbook exists, so
+                # without this the route record populate_workbook builds never reaches the
+                # deliverables — which read the saved file, not this in-memory summary. They
+                # would fall back to the engine-side costed fields, which are PRE-filter and
+                # still carry powder on timber and weld on artefact records. Same principle
+                # as the wep-readback below: the workbook is the authority, so what it
+                # accepted has to come back.
+                try:
+                    _wl = summary.get("workbook_labour")
+                    _canon_wl = (summary.get("saved_output_paths") or {}).get("json")
+                    if _wl and _canon_wl and Path(_canon_wl).exists():
+                        with open(_canon_wl, encoding="utf-8") as _fh_r:
+                            _doc = json.load(_fh_r)
+                        _doc["workbook_labour"] = _wl
+                        with open(_canon_wl, "w", encoding="utf-8") as _fh_w:
+                            json.dump(_doc, _fh_w, indent=2, ensure_ascii=False, default=str)
+                        print(f"   [workbook-route] {len(_wl.get('rows') or [])} accepted "
+                              f"labour row(s) stamped into the JSON — quote, report and "
+                              f"Decision Report now describe the priced route", flush=True)
+                except Exception as _wl_exc:
+                    print(f"   [workbook-route] not stamped ({_wl_exc}) — deliverables will "
+                          f"fall back to PRE-FILTER engine ops and may name operations the "
+                          f"sheet does not charge", flush=True)
             else:
                 raise RuntimeError("populate_workbook returned None")
         except Exception as _wb_exc:

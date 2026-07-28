@@ -1611,6 +1611,41 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"sheet (clinch x4 @60/hr, pem x2 @120/hr both = 15s/insert). Knurled "
                   f"knob & thumbscrew are hand-assembled (Assemble/pack), not counted.", flags)
 
+    # ── CANONICAL ROUTE RECORD ────────────────────────────────────────────────────
+    # The workbook is the authority on the PRICE (wep-readback stamps its totals back into
+    # the JSON). It is equally the authority on the ROUTE, and until now nothing carried
+    # that back. Every filter above — _is_spurious_operation, the _powder_ok finish gate,
+    # the diamond-polish-on-powder drop — plus the department mapping and the injected ops
+    # (Robomac, MANM inserts) happen HERE and are never written to part_estimates. So
+    # labour_estimate.costs_gbp is one whole filtering stage upstream of the sheet: it still
+    # carries powder on timber panels, and weld/dress/powder on artefact records that this
+    # loop drops. Anything describing the job from costs_gbp therefore describes a route the
+    # workbook does not contain — which is exactly how the quote came to promise powder
+    # coating and weld dressing on a lacquered timber crate.
+    #
+    # Persist what SURVIVED, so the Decision Report, AI Provenance, client quote and job
+    # report can all describe the same job the Estimate sheet prices.
+    summary["workbook_labour"] = {
+        "schema": "workbook_labour_rows.v1",
+        "note": ("Labour rows as ACCEPTED by wb_populate — after every spurious-op, finish "
+                 "and material filter, after department mapping, and including injected "
+                 "operations. This is the route the Estimate sheet actually charges, and is "
+                 "the source every deliverable must describe. Engine-side "
+                 "labour_estimate.costs_gbp is PRE-filter and must not be used for that."),
+        "rows": [
+            {
+                "wb_operation": _groups[_k].get("wb_op"),
+                "engine_operation": _k[0] if isinstance(_k, tuple) else None,
+                "material": _groups[_k].get("material"),
+                "thickness_mm": _groups[_k].get("thickness"),
+                "qty_per_unit": _groups[_k].get("qty"),
+                "part_numbers": list(_groups[_k].get("parts") or []),
+            }
+            for _k in sorted(_groups.keys(), key=lambda x: str(x))
+        ],
+        "skipped_part_numbers": sorted(_skip_pns),
+    }
+
     for _key in sorted(_groups.keys()):
         g = _groups[_key]
         if row > lb["last_row"]:

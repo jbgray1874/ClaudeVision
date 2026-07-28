@@ -16,10 +16,20 @@ these packs carry a range-wide specification legend ("POWDER COATED STEEL", "WEL
 SPECIFICATION") that applies to the customer's whole product family, not to this job.
 
 The rule this module encodes: **if an operation carries no cost on this job, it did not
-happen.** The workbook is the authority on the price; the costed operations behind it are
-the authority on the description. Nothing here reads drawing text.
+happen.** Nothing here reads drawing text.
 
-Reads `estimate_summary.part_estimates` — i.e. only ever AFTER costing.
+SOURCE ORDER, and the distinction matters:
+
+  1. `workbook_labour.rows`  — CANONICAL. The labour rows wb_populate actually accepted,
+     after its spurious-op, finish and material filters, after department mapping, and
+     including injected operations. This is the route the Estimate sheet charges.
+  2. `estimate_summary.part_estimates[].labour_estimate.costs_gbp` — FALLBACK ONLY, for a
+     summary with no workbook built. It is PRE-FILTER: it still carries powder on timber
+     panels and weld/dress on artefact records the workbook drops, so anything described
+     from it can name operations the sheet does not contain.
+
+The workbook is the authority on the price (wep-readback stamps its totals back); it is
+equally the authority on the route, which is why (1) exists.
 """
 from __future__ import annotations
 
@@ -29,6 +39,8 @@ __all__ = [
     "costed_operations",
     "has_operation",
     "parts_with_operation",
+    "part_numbers_with_operation",
+    "operations_for_part",
     "costed_finish_label",
     "costed_finish_ops",
 ]
@@ -70,13 +82,48 @@ def _part_estimates(source: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _workbook_rows(source: Any) -> Optional[List[Dict[str, Any]]]:
+    """The workbook's own accepted labour rows, if wb_populate has run and stamped them.
+
+    THIS IS THE CANONICAL SOURCE. wb_populate applies filters the engine-side estimate never
+    sees — spurious-op removal by stock form, the finish gate that drops powder from a part
+    whose drawing finish is not powder, the diamond-polish-on-powder drop — and then maps
+    departments and injects operations. None of that is written back to part_estimates, so
+    `labour_estimate.costs_gbp` is a whole filtering stage upstream of the sheet: it still
+    carries powder on timber panels and weld/dress on artefact records the workbook drops.
+    """
+    if not isinstance(source, dict):
+        return None
+    node = source.get("workbook_labour")
+    if not isinstance(node, dict):
+        node = (source.get("estimate_summary") or {}).get("workbook_labour") \
+            if isinstance(source.get("estimate_summary"), dict) else None
+    if isinstance(node, dict) and isinstance(node.get("rows"), list):
+        return [r for r in node["rows"] if isinstance(r, dict)]
+    return None
+
+
 def costed_operations(source: Any) -> Dict[str, float]:
     """{operation: total cost or time across the job} for operations we actually charged.
+
+    Prefers the workbook's accepted labour rows where available (the route the Estimate
+    sheet charges). Falls back to the engine-side costed fields only when the workbook has
+    not been built — a quote generated from a JSON alone, say — and that fallback is
+    PRE-FILTER, so it can name operations the sheet would have dropped.
 
     An operation appears only where it carries a non-zero labour cost or process time.
     Zero-valued keys are dropped: the engine writes a key for every op it considered, so
     presence alone is not evidence that anything was priced."""
-    totals: Dict[str, float] = {}
+    rows = _workbook_rows(source)
+    if rows is not None:
+        totals: Dict[str, float] = {}
+        for r in rows:
+            op = r.get("engine_operation") or r.get("wb_operation")
+            if op:
+                totals[str(op)] = totals.get(str(op), 0.0) + max(_num(r.get("qty_per_unit")), 1.0)
+        return totals
+
+    totals = {}
     for p in _part_estimates(source):
         for block, field in (("labour_estimate", "costs_gbp"),
                              ("process_estimate", "times_min")):
@@ -97,8 +144,52 @@ def has_operation(source: Any, *ops: str) -> bool:
     return any(o in costed for o in ops)
 
 
+def part_numbers_with_operation(source: Any, *ops: str) -> List[str]:
+    """Part numbers carrying one of the named operations, from the workbook rows where
+    available. Preferred over parts_with_operation() for anything that only needs to count
+    or name parts, because the workbook rows survive the filters the estimate does not."""
+    rows = _workbook_rows(source)
+    if rows is not None:
+        want = {str(o).lower() for o in ops}
+        out: List[str] = []
+        for r in rows:
+            keys = {str(r.get("engine_operation") or "").lower(),
+                    str(r.get("wb_operation") or "").lower()}
+            if keys & want or any(w in k for k in keys if k for w in want):
+                for pn in (r.get("part_numbers") or []):
+                    if pn and pn not in out:
+                        out.append(str(pn))
+        return out
+    return [str(p.get("part_number")) for p in parts_with_operation(source, *ops)
+            if p.get("part_number")]
+
+
+def operations_for_part(source: Any, part_number: Any,
+                        part_estimate: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Operations charged against ONE part, canonical where the workbook rows exist.
+
+    A per-part view is what the Decision Report needs, and it must come from the same place
+    as the job-level view or the two sheets in one workbook will disagree. Falls back to the
+    part's own PRE-FILTER costed fields only when no workbook rows are present."""
+    pn = str(part_number or "").strip().upper()
+    rows = _workbook_rows(source)
+    if rows is not None and pn:
+        out: List[str] = []
+        for r in rows:
+            if any(str(x or "").strip().upper() == pn for x in (r.get("part_numbers") or [])):
+                op = r.get("engine_operation") or r.get("wb_operation")
+                if op and str(op) not in out:
+                    out.append(str(op))
+        return out
+    if isinstance(part_estimate, dict):
+        return list(costed_operations([part_estimate]))
+    return []
+
+
 def parts_with_operation(source: Any, *ops: str) -> List[Dict[str, Any]]:
-    """The part estimates that actually carry one of the named operations."""
+    """The part estimates that actually carry one of the named operations.
+
+    Engine-side and therefore PRE-FILTER — prefer part_numbers_with_operation()."""
     out: List[Dict[str, Any]] = []
     for p in _part_estimates(source):
         found = False

@@ -307,7 +307,8 @@ def _ga_image_data_uri(summary: Dict[str, Any]) -> Optional[str]:
 
 
 # ── content assembly ────────────────────────────────────────────────────────
-def _collect_operations(parts: List[Dict[str, Any]]) -> List[str]:
+def _collect_operations(parts: List[Dict[str, Any]],
+                        summary: Optional[Dict[str, Any]] = None) -> List[str]:
     """Distinct operations across all parts, in a stable order, mapped to plain language.
 
     Driven by the operations we actually COSTED (labour cost lines / process times), not by
@@ -330,7 +331,10 @@ def _collect_operations(parts: List[Dict[str, Any]]) -> List[str]:
     # from the one shared post-costing source so the quote, the internal report and the
     # Decision Report cannot each derive a different answer.
     from costed_facts import costed_operations
-    for op in costed_operations(parts):
+    # Pass the SUMMARY: workbook_labour (the canonical accepted route) hangs off it, not
+    # off the parts list. Handing over parts alone silently drops to the pre-filter
+    # engine fields, which is what put powder and weld dressing on a timber crate.
+    for op in costed_operations(summary if isinstance(summary, dict) else parts):
         _add(op)
 
     # 3. Fallback ONLY if the estimate carries no costed operations at all (e.g. a parts-free
@@ -386,7 +390,7 @@ def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
     # been gated off a part, and that combination promised "Powder coated" to the customer
     # on a lacquered timber crate whose priced sheet contains no powder at all.
     from costed_facts import costed_finish_label
-    return costed_finish_label(parts)
+    return costed_finish_label(summary if isinstance(summary, dict) else parts)
 
 
 # ── main render ─────────────────────────────────────────────────────────────
@@ -417,7 +421,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     parts = es.get("part_estimates") or []
     material = _materials_line(parts)
     finish = _finish_line(summary, parts)
-    ops = _collect_operations(parts)
+    ops = _collect_operations(parts, summary)
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
     logo_markup = _load_logo_markup(customer)
