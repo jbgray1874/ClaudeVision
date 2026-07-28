@@ -421,6 +421,21 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     parts = es.get("part_estimates") or []
     material = _materials_line(parts)
     finish = _finish_line(summary, parts)
+    # The credibility gate's own verdict, on the face of the quote. The estimate is issued
+    # either way — an estimator needs the document — but a figure the engine has declared
+    # unfit to quote must not appear on a client-facing page looking like a firm price.
+    # State it in the customer's language, above the number, not buried in a footnote.
+    _ds_q = ((summary.get("estimate_summary") or {}).get("data_sufficiency") or {})
+    _provisional_banner = ""
+    if _ds_q.get("suppress_headline_total"):
+        _provisional_banner = (
+            '<div style="background:#fbf3e2;border-left:4px solid #a8710a;border-radius:0 6px 6px 0;'
+            'padding:12px 16px;margin:0 0 18px;font-size:13px;color:#6b5410;">'
+            '<b>Budgetary estimate &mdash; not a firm quotation.</b> '
+            'This price is derived from drawings only; manufacturing data (flat patterns) '
+            'was not available for the fabricated parts, so blank sizes and forming times '
+            'are estimated. Confirmation required before order.'
+            '</div>')
     ops = _collect_operations(parts, summary)
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
@@ -542,6 +557,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
           </table>
         </div>
       </div>
+      {_provisional_banner}
       <div class="price-box">
         <div>
           <div class="u">Unit price</div>
@@ -581,30 +597,6 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
     jp = Path(json_path)
     summary = json.loads(jp.read_text(encoding="utf-8"))
     stem = job_stem or summary.get("job_output_stem") or jp.stem
-
-    # ── CREDIBILITY GATE: no customer-facing price when the engine says it is not
-    # reportable. ──────────────────────────────────────────────────────────────────
-    # data_sufficiency already decides whether a total may be quoted, and on these packs
-    # it says no — 0% of fabricated parts carry measured geometry, so blank sizes and
-    # cut/fold times are inferred. The workbook and the internal report are allowed to show
-    # the provisional figure, clearly labelled, because they are review documents. A CLIENT
-    # QUOTE is not: it is an offer to supply at a price. Writing one anyway leaves a
-    # correctly-formatted, on-brand PDF-able document sitting in the output folder with a
-    # number on it that the engine has already declared unfit to quote — the single easiest
-    # way for a provisional figure to reach a customer by accident.
-    #
-    # Refuse to write the file, say why, and name the override. The override exists because
-    # a suppressed job may still need a quote laid out for internal discussion; it has to be
-    # a deliberate act, not the default.
-    _ds = ((summary.get("estimate_summary") or {}).get("data_sufficiency") or {})
-    if _ds.get("suppress_headline_total") and not os.getenv("SDI_ALLOW_PROVISIONAL_QUOTE"):
-        print(f"   [quote] NOT GENERATED — the credibility gate marked this estimate "
-              f"'{_ds.get('status', 'insufficient_data')}' and suppressed its headline "
-              f"total, so there is no figure fit to put in front of a customer. "
-              f"({_ds.get('message') or 'part DXFs required'}) "
-              f"Set SDI_ALLOW_PROVISIONAL_QUOTE=1 to produce one anyway for internal use.",
-              flush=True)
-        return None
 
     html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook, customer=customer)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
