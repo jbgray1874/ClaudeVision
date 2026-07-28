@@ -2278,6 +2278,35 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and "handling" not in ops:
         ops = list(ops) + ["handling"]
 
+    # ── BOUGHT-IN PARTS TAKE NO FABRICATION LABOUR ───────────────────────────────
+    # Runs before every route rule below, because a purchased component is not a routing
+    # question at all. The UPC sticker was a catalogue line on the BOM and, at the same
+    # time, a record carrying weld, powder and glue on the route — the same item classified
+    # twice, at different stages, with different answers. Identity is settled once here.
+    #
+    # Handling/assembly is deliberately NOT stripped: we do fit bought-in components, and
+    # that bench time is real work that must keep being charged.
+    try:
+        from bought_in_policy import (bought_in_conflict, is_bought_in,
+                                      strip_fabrication_ops)
+        if is_bought_in(part):
+            _bi_removed = strip_fabrication_ops(part)
+            _bi_ops = set(part.get("textual_operations") or [])
+            ops = [o for o in ops if o in _bi_ops or str(o).lower() in ("handling", "assembly")]
+            if _bi_removed:
+                part.setdefault("review_flags", []).append(
+                    f"bought-in part — fabrication operations removed "
+                    f"({', '.join(_bi_removed)}). We buy this item; only handling/assembly "
+                    f"time applies. Price it from the catalogue, not from a route")
+            if bought_in_conflict(part):
+                # Identity says buy, geometry says make. Do not let the engine pick a side.
+                part.setdefault("review_flags", []).append(
+                    "CONFLICT: classified bought-in, but the part also carries its own "
+                    "measured flat pattern. One of the two is wrong — confirm whether this "
+                    "is a purchased item or one we fabricate")
+    except Exception:
+        pass
+
     # WELDING IS A METAL PROCESS. Timber, board and plastic parts are glued, screwed or
     # solvent-bonded — never CO2/MIG welded. The weld op leaks onto joinery the same way
     # diamond polish leaked onto steel: a weld note somewhere in the drawing text (an
