@@ -330,10 +330,17 @@ def _is_reliable_material(part: Dict) -> bool:
     src = str(part.get("material_source") or "").lower()
     if not mat or mat in ("UNKNOWN", "NONE", "?", "LED", "CARD"):
         return False
-    # Already overridden by knowledge base or rule — don't override again
-    if "knowledge_base" in src or "override_rule" in src:
-        return True
-    return False
+    # Ranked, not enumerated. This listed only knowledge_base and override_rule, so it had
+    # never heard of the model: a material read from the SolidWorks applied-material
+    # property — the strongest source we have short of a person — counted as unreliable and
+    # was silently replaced by a pattern rule. Anything ranking at or above an override rule
+    # is reliable, so a new strong source is protected the moment it is ranked rather than
+    # needing to be remembered here.
+    try:
+        from source_precedence import rank as _rank
+        return _rank(src) >= _rank("override_rule")
+    except Exception:
+        return "knowledge_base" in src or "override_rule" in src
 
 
 def _is_reliable_thickness(part: Dict) -> bool:

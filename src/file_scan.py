@@ -2106,9 +2106,19 @@ def _finalize_scan_summary(
                 _code = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
                 _eff = _effmap.get(_code)
                 if _eff is not None and _eff != _p.get("quantity"):
+                    # PRECEDENCE. This pass reads the PDF's GA table; a quantity already set
+                    # from the SolidWorks assembly BOM came from the structure the shop
+                    # builds from, and must not be silently replaced by a reading of a
+                    # printed table. apply_field keeps the stronger value and records the
+                    # disagreement so an estimator sees that two sources differed.
+                    from source_precedence import apply_field as _apply_qty
                     _prev = _p.get("quantity")
-                    _p["quantity"] = _eff
-                    print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+                    if _apply_qty(_p, "quantity", _eff, "bom_tree"):
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} -> {_eff} (GA tree)", flush=True)
+                    else:
+                        print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
+                              f"(GA tree said {_eff}) — stronger source, disagreement flagged",
+                              flush=True)
     except Exception as _bte:
         print(f"   [bom_tree] skipped: {_bte}", flush=True)
 

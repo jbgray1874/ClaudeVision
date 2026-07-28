@@ -590,6 +590,10 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             _cur = _num(part.get("quantity"))
             if _q > 0 and (_cur is None or int(_cur) != _q):
                 part["quantity"] = _q
+                # Record the SOURCE, not just the value. Later passes (the PDF GA-tree
+                # rollup in particular) rewrite quantities, and without this they cannot
+                # tell they are overwriting the assembly BOM the shop builds from.
+                part["quantity_source"] = SOURCE_NAME
                 flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
                              f"SolidWorks assembly BOM (component count, all levels)")
                 out["qty"] += 1
