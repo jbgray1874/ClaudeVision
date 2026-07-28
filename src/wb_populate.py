@@ -1535,7 +1535,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             g = _groups.setdefault(key, {
                 "wb_op": wb_op, "material": _mat, "thickness": _thk,
                 "qty": 0, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
+                # The ENGINE operation(s) behind this row. The group key carries the mapped
+                # DEPARTMENT name, so it cannot answer "what operation is this" — reading it
+                # as one turned wet_spray into 'Spray / Wet Paint' and left every consumer
+                # matching on a string the engine never emits.
+                "engine_ops": [],
             })
+            if op and op not in g.setdefault("engine_ops", []):
+                g["engine_ops"].append(str(op))
             g["qty"] += _qty_pu
             _bh = _safe(batch_hours.get(op))
             if _bh and _bh > 0:
@@ -1635,7 +1642,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "rows": [
             {
                 "wb_operation": _groups[_k].get("wb_op"),
-                "engine_operation": _k[0] if isinstance(_k, tuple) else None,
+                # Real engine operations, recorded when the group was formed. NOT the group
+                # key: that holds the mapped department name.
+                "engine_operations": list(_groups[_k].get("engine_ops") or []),
+                "engine_operation": (list(_groups[_k].get("engine_ops") or []) or [None])[0],
                 "material": _groups[_k].get("material"),
                 "thickness_mm": _groups[_k].get("thickness"),
                 "qty_per_unit": _groups[_k].get("qty"),

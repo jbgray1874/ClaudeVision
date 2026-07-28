@@ -104,6 +104,60 @@ def _workbook_rows(source: Any) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
+_DEPT_TO_ENGINE_OPS: Optional[Dict[str, List[str]]] = None
+
+
+def _dept_to_engine_ops() -> Dict[str, List[str]]:
+    """DEPARTMENT name -> engine operation key(s), inverted from wb_populate's own maps.
+
+    A workbook row is labelled with the department ("Spray / Wet Paint"), which is what the
+    estimators' template needs; the engine speaks in operation keys ("wet_spray"). Every
+    consumer here matches on operation keys, so without the inverse a row whose engine op
+    was not recorded resolves to nothing and the job silently looks like it has no finish.
+    Inverted from the source maps rather than duplicated, so a new department cannot be
+    added in one place and forgotten here."""
+    global _DEPT_TO_ENGINE_OPS
+    if _DEPT_TO_ENGINE_OPS is not None:
+        return _DEPT_TO_ENGINE_OPS
+    inv: Dict[str, List[str]] = {}
+    try:
+        import wb_populate as _wb
+        for _map in (getattr(_wb, "OP_NAME_MAP", {}), getattr(_wb, "OP_NAME_MAP_ACRYLIC", {}),
+                     getattr(_wb, "_TUBE_OP_REMAP", {})):
+            for eng, dept in (_map or {}).items():
+                if not dept:
+                    continue
+                bucket = inv.setdefault(str(dept).strip().lower(), [])
+                if str(eng) not in bucket:
+                    bucket.append(str(eng))
+    except Exception:
+        pass
+    _DEPT_TO_ENGINE_OPS = inv
+    return inv
+
+
+def _row_engine_ops(row: Dict[str, Any]) -> List[str]:
+    """The engine operation key(s) a workbook labour row represents.
+
+    Prefers what wb_populate recorded when the group was formed; falls back to inverting the
+    department name. Never returns the department string itself dressed up as an operation —
+    that is what made the earlier version depend on luck."""
+    inv = _dept_to_engine_ops()
+    ops = [str(o) for o in (row.get("engine_operations") or []) if o]
+    if not ops and row.get("engine_operation"):
+        ops = [str(row["engine_operation"])]
+    # An earlier version wrote the group KEY into engine_operation, which is the DEPARTMENT
+    # name. Runs made with it are already on disk, so detect the shape rather than trust the
+    # field: if the value is itself a known department, invert it instead of passing it
+    # through as an operation nobody matches.
+    ops = [o for o in ops if o.strip().lower() not in inv] or [
+        e for o in ops for e in inv.get(o.strip().lower(), [])]
+    if ops:
+        return ops
+    dept = str(row.get("wb_operation") or "").strip().lower()
+    return list(inv.get(dept, [])) or ([dept] if dept else [])
+
+
 def costed_operations(source: Any) -> Dict[str, float]:
     """{operation: total cost or time across the job} for operations we actually charged.
 
@@ -119,9 +173,8 @@ def costed_operations(source: Any) -> Dict[str, float]:
     if rows is not None:
         totals: Dict[str, float] = {}
         for r in rows:
-            op = r.get("engine_operation") or r.get("wb_operation")
-            if op:
-                totals[str(op)] = totals.get(str(op), 0.0) + max(_num(r.get("qty_per_unit")), 1.0)
+            for op in _row_engine_ops(r):
+                totals[op] = totals.get(op, 0.0) + max(_num(r.get("qty_per_unit")), 1.0)
         return totals
 
     totals = {}
@@ -154,8 +207,8 @@ def part_numbers_with_operation(source: Any, *ops: str) -> List[str]:
         want = {str(o).lower() for o in ops}
         out: List[str] = []
         for r in rows:
-            keys = {str(r.get("engine_operation") or "").lower(),
-                    str(r.get("wb_operation") or "").lower()}
+            keys = {o.lower() for o in _row_engine_ops(r)}
+            keys.add(str(r.get("wb_operation") or "").lower())
             if keys & want or any(w in k for k in keys if k for w in want):
                 for pn in (r.get("part_numbers") or []):
                     if pn and pn not in out:
@@ -178,9 +231,9 @@ def operations_for_part(source: Any, part_number: Any,
         out: List[str] = []
         for r in rows:
             if any(str(x or "").strip().upper() == pn for x in (r.get("part_numbers") or [])):
-                op = r.get("engine_operation") or r.get("wb_operation")
-                if op and str(op) not in out:
-                    out.append(str(op))
+                for op in _row_engine_ops(r):
+                    if op not in out:
+                        out.append(op)
         return out
     if isinstance(part_estimate, dict):
         return list(costed_operations([part_estimate]))
