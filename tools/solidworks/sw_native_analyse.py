@@ -635,6 +635,47 @@ def sheet_metal_signals(doc) -> RouteSignals:
                 # check on any formed part (01M: 1.0 < 21.5) and would silently misprice the
                 # material. Discard the whole read and fall back to the labelled inference.
                 _read_tainted = True
+            else:
+                # SECOND GATE — the one the first cannot see. A folded part's DEVELOPED blank
+                # must be LARGER than the envelope it folds into: material is consumed going
+                # round the bends. So if a part with bends reports a "flat" that matches its
+                # own bounding box, we are not looking at a flat pattern at all — we are
+                # looking at the FOLDED bounding box, which is a real number that is simply
+                # the wrong one. Proven on 12120-01-01M: the cut list returned 126.39x82.2,
+                # exactly the folded solid; its true developed blank (from the DXF) is
+                # 132.39x88.2. The first gate passes this by construction (folded == bbox is
+                # never < 0.95 x bbox), and costing the folded envelope UNDER-BUYS material.
+                _has_bends = bool(sig.bend_count or sig.formed_but_no_bend_features)
+                if _has_bends and sig.bbox_mm:
+                    try:
+                        _dims = [float(x) for x in sig.bbox_mm if x]
+                        # Does EACH flat side coincide with SOME bounding-box dimension?
+                        # Match against any axis, not the two largest — a folded part's
+                        # height often exceeds its footprint width (01M is 126.39 x 82.2 x 90,
+                        # the 90 being the upstand). Each dimension is consumed once.
+                        if len(_dims) >= 2:
+                            _avail, _same = list(_dims), True
+                            for _f in (float(_fl), float(_fw)):
+                                _hit = next((d for d in _avail
+                                             if abs(_f - d) <= max(0.5, d * 0.01)), None)
+                                if _hit is None:
+                                    _same = False
+                                    break
+                                _avail.remove(_hit)
+                            if _same:
+                                sig.notes.append(
+                                    f"REJECTED cut-list flat {_fl}x{_fw}mm — the part is FOLDED "
+                                    f"({sig.bend_count or '?'} bend(s)) yet the reported flat "
+                                    f"equals its folded bounding box "
+                                    f"({'x'.join(f'{d:g}' for d in _dims)}mm). A developed blank must be "
+                                    f"larger than the envelope it folds into, so this is the "
+                                    f"FOLDED box, not a flat pattern — using it would under-buy "
+                                    f"material. Flat pattern must come from the DXF or a "
+                                    f"flat-pattern-specific property")
+                                _fl = _fw = None
+                                _read_tainted = True
+                    except Exception:
+                        pass
         sig.flat_length_mm = _fl
         sig.flat_width_mm = _fw
         sig.bend_radius_mm = None if _read_tainted else _cut_props.get("bend_radius")

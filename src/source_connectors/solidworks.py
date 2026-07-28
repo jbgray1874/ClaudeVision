@@ -109,6 +109,7 @@ class NativePart:
     # Imported body with no modelled fabrication features = supplier model = bought in.
     likely_bought_in: bool = False
     ops_hint: List[str] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
     description: str = ""
     source: str = SOURCE_NAME
     reliability: float = RELIABILITY
@@ -162,6 +163,52 @@ def load_native_extract(json_path: str | Path) -> List[Dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
+def _reject_folded_box_as_flat(p: NativePart) -> None:
+    """Drop a 'flat pattern' that is really the part's FOLDED bounding box.
+
+    A folded part's DEVELOPED blank must be LARGER than the envelope it folds into —
+    material is consumed going round each bend. So when a part with bends reports a flat
+    equal to its own bounding box, the cut-list read returned the folded box: a real
+    number, but the wrong one, and smaller than the truth. Costing it UNDER-BUYS material.
+
+    Proven on 12120-01-01M — cut list 126.39x82.2, exactly the folded solid; the DXF's
+    developed blank is 132.39x88.2. The analyser's own 'flat cannot be smaller than the
+    solid' gate passes this by construction, so the check has to live here too. Applied at
+    normalisation so it protects extracts already written, without re-running SolidWorks.
+
+    Keyed on bend evidence and geometry only — no part numbers, no job specifics."""
+    if not (p.flat_length_mm and p.flat_width_mm and p.bbox_mm):
+        return
+    if not (p.bend_count or p.formed_but_no_bend_features):
+        return  # a genuinely flat part's blank SHOULD equal its bounding box
+    try:
+        dims = [float(x) for x in p.bbox_mm if x]
+        flat = [float(p.flat_length_mm), float(p.flat_width_mm)]
+    except (TypeError, ValueError):
+        return
+    if len(dims) < 2:
+        return
+    # Do BOTH flat sides coincide with a bounding-box dimension? Match against ANY axis, not
+    # the two largest: a folded part's height often exceeds its footprint width (01M is
+    # 126.39 x 82.2 x 90 — the 90 is the upstand). Each bbox dimension is consumed once, so
+    # a single 90mm side cannot satisfy a 90 x 90 flat.
+    _avail = list(dims)
+    for f in flat:
+        hit = next((d for d in _avail if abs(f - d) <= max(0.5, d * 0.01)), None)
+        if hit is None:
+            return  # at least one side is genuinely developed — a real flat pattern
+        _avail.remove(hit)
+    p.notes.append(
+        f"REJECTED flat {p.flat_length_mm:g}x{p.flat_width_mm:g}mm — part is FOLDED "
+        f"({p.bend_count or 'formed'}) yet both sides of the reported flat match its folded "
+        f"bounding box ({'x'.join(f'{d:g}' for d in dims)}mm). That is the folded envelope, "
+        f"not a developed blank; using it would under-buy material")
+    p.flat_length_mm = None
+    p.flat_width_mm = None
+    # Same read, same doubt: cut length came from the same property set.
+    p.cut_length_mm = None
+
+
 def _is_weld_candidate(title: str, description: str) -> bool:
     blob = f"{title} {description}".lower()
     return any(tok in blob for tok in _WELD_NAME_TOKENS)
@@ -213,6 +260,7 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
             likely_bought_in=bool(rs.get("likely_bought_in")),
             ops_hint=[str(o) for o in (rs.get("ops_hint") or [])],
         )
+        _reject_folded_box_as_flat(job.part_signals[pn])
 
     # Every document that is itself an assembly — the GA double-count rule keys on this.
     asm_titles = {
@@ -410,6 +458,32 @@ def _has_costable_geometry(part: Dict[str, Any]) -> bool:
     return False
 
 
+def _dxf_blank_mm(part: Dict[str, Any]):
+    """The DXF's DEVELOPED blank, in the order the engine itself resolves it.
+
+    Critically this must NEVER fall back to overall_length_mm/overall_width_mm. On a folded
+    part those carry the FORMED bounding box, not the blank (12120-01-01M: overall
+    126.39x82.2 formed, developed blank 132.39x88.2). Comparing a flat against a folded box
+    would report a false 'agreement' on exactly the parts where it matters most."""
+    ng = part.get("normalized_geometry") or {}
+    if not isinstance(ng, dict):
+        return None, None
+    l = _num(ng.get("blank_length_mm")) or _num(part.get("blank_length_mm"))
+    w = _num(ng.get("blank_width_mm")) or _num(part.get("blank_width_mm"))
+    if l and w:
+        return l, w
+    box = ng.get("bounding_box_flat_mm")
+    if isinstance(box, dict):
+        l, w = _num(box.get("length")), _num(box.get("width"))
+        if l and w:
+            return l, w
+    l = _num(ng.get("developed_length_mm"))
+    w = _num(ng.get("developed_width_mm"))
+    if l and w:
+        return l, w
+    return None, None
+
+
 def _dxf_backed(part: Dict[str, Any]) -> bool:
     """The engine's own definition of a DXF-measured part (estimator.py). DXF stays
     authoritative for flat geometry — native never overwrites it, only cross-checks."""
@@ -450,7 +524,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     out = {"flat": 0, "thickness": 0, "material": 0, "material_conflict": 0, "bends": 0,
            "qty": 0, "assembly_parent": 0, "bought_in": 0, "weld_flagged": 0,
            "ops": 0, "mass": 0, "no_geometry_flagged": 0, "geometry_conflict": 0,
-           "not_in_bom": 0}
+           "geometry_unchecked": 0, "not_in_bom": 0}
     if not job or not job.found or not isinstance(parts, list):
         return out
 
@@ -576,9 +650,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             if _dxf_backed(part):
                 # DXF stays authoritative. Compare and flag a real disagreement (>10% on
                 # area) — two independent measurements of the same blank should agree.
-                _ng = part.get("normalized_geometry") or {}
-                _dl = _num(_ng.get("blank_length_mm")) or _num(part.get("blank_length_mm"))
-                _dw = _num(_ng.get("blank_width_mm")) or _num(part.get("blank_width_mm"))
+                _dl, _dw = _dxf_blank_mm(part)
                 if _dl and _dw:
                     _a_dxf, _a_sw = _dl * _dw, fl * fw
                     if _a_sw > 0 and abs(_a_dxf - _a_sw) / _a_sw > 0.10:
@@ -586,6 +658,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                             f"blank check: DXF {_dl:g}x{_dw:g}mm vs SolidWorks flat "
                             f"{fl:g}x{fw:g}mm — kept the DXF (measured flat pattern)")
                         out["geometry_conflict"] += 1
+                else:
+                    # A cross-check that silently declines to check is WORSE than none: it
+                    # reports zero disagreements, which reads as agreement. Say so instead.
+                    flags.append(
+                        f"blank check NOT PERFORMED — the part is DXF-backed but no DXF blank "
+                        f"could be read to compare against the SolidWorks flat "
+                        f"{fl:g}x{fw:g}mm. The two measurements are UNRECONCILED")
+                    out["geometry_unchecked"] += 1
             else:
                 ng = part.get("normalized_geometry")
                 ng = dict(ng) if isinstance(ng, dict) else {}
