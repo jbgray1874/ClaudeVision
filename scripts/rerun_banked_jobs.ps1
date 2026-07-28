@@ -13,7 +13,11 @@
 param(
     [string]$PackRoot = "C:\ClaudeVision\work\MS_Tender",
     [string]$LogDir   = "C:\ClaudeVision\work\rerun_logs",
-    [int]$OrderQty    = 1,
+    # MUST match how the jobs were banked, or the totals are not comparable. Setup time is
+    # amortised over the order quantity, so a re-run at qty 1 loads every setup minute onto
+    # a single unit and the labour looks several times higher for no reason but the basis.
+    # 180 is config.DEFAULT_JOB_QUANTITY, which is what the banked figures were produced at.
+    [int]$OrderQty    = 180,
     [string]$Customer = "M&S",
     # Limit to specific job numbers, e.g. -Jobs 0348837
     # Cocktails (0359131) is a 45-page pack and dominates the runtime, so re-running a
@@ -39,6 +43,8 @@ Write-Host "Re-running banked jobs on commit: " -NoNewline
 git -C C:\ClaudeVision log --oneline -1
 Write-Host "Pack root: $PackRoot"
 Write-Host "Logs:      $LogDir"
+Write-Host "Order qty: $OrderQty  (banked figures were produced at 180 - totals are only"
+Write-Host "           comparable at the same quantity, since setup amortises over it)"
 Write-Host ""
 
 $results = @()
