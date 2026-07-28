@@ -80,9 +80,27 @@ def probe(path: str, expect: Optional[Tuple[float, float]] = None) -> None:
         return
     msp = doc.modelspace()
 
+    # EXPLODE INSERTs. src/dxf_reader collects model-space entities only and does not
+    # explode blocks, so a SolidWorks export that wraps the profile in a block reads as an
+    # empty cut layer. Exploding here shows what IS in the file, and the "src" column below
+    # says whether the engine can currently see it — the difference between "the geometry is
+    # missing" and "the geometry is there but we do not read it" needs opposite fixes.
     by_layer: Dict[str, List] = {}
+    exploded_layers: set = set()
     for e in msp:
-        by_layer.setdefault(str(getattr(e.dxf, "layer", "") or "").upper(), []).append(e)
+        lay = str(getattr(e.dxf, "layer", "") or "").upper()
+        if e.dxftype() == "INSERT":
+            try:
+                kids = list(e.virtual_entities())
+            except Exception:
+                kids = []
+            if kids:
+                for k in kids:
+                    klay = str(getattr(k.dxf, "layer", "") or "").upper() or lay
+                    by_layer.setdefault(klay, []).append(k)
+                    exploded_layers.add(klay)
+                continue
+        by_layer.setdefault(lay, []).append(e)
 
     print(f"  layers: {len(by_layer)}")
     header = f"    {'layer':<28} {'ents':>5}  {'extent (mm)':<26} {'size (mm)':<20} cut?"
@@ -92,6 +110,8 @@ def probe(path: str, expect: Optional[Tuple[float, float]] = None) -> None:
         ents = by_layer[layer]
         ext = _extents(ents)
         is_cut = "CUT" if layer in CUT_LAYERS else ""
+        if layer in exploded_layers:
+            is_cut = (is_cut + " (from INSERT - engine does NOT read these)").strip()
         if not ext:
             print(f"    {layer:<28} {len(ents):>5}  {'(no vertices)':<26} {'':<20} {is_cut}")
             continue

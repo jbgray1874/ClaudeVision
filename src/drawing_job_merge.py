@@ -283,12 +283,49 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "estimated_pierce_count": raw.get("estimated_pierce_count"),
         }
 
+    # ── DID THE DXF ACTUALLY YIELD MEASURED GEOMETRY? ────────────────────────────
+    # A matched file is not the same as a measured part. dxf_reader collects the outline
+    # from LINE/ARC/CIRCLE entities on the cut layers and does NOT explode INSERT blocks
+    # ("Model-space entities only (INSERT blocks are not exploded in v1)"). Where a
+    # SolidWorks export wraps the profile in a block — 4 of 7 parts on job 12120 — the cut
+    # layer yields nothing, the blank comes back 0, and the part's dimensions fall through
+    # to the drawing's DIMENSION TEXT instead. That number can be perfectly correct, but it
+    # is TRANSCRIBED, not measured, and it carries none of the guarantees a measured outline
+    # does: no cut length, no hole count, no proof the profile is what the text claims.
+    #
+    # Setting dxf_augmented unconditionally told the credibility gate that every matched
+    # part was DXF-backed, so a job could report full measured coverage while most of its
+    # blanks came from text. The gate exists to answer exactly that question, and it was
+    # being fed the wrong answer. Claim measurement only where there is measurement.
+    _blank_area = 0.0
+    try:
+        _blank_area = float((flat or {}).get("blank_area_mm2") or 0.0)
+    except (TypeError, ValueError):
+        _blank_area = 0.0
+    _measured = bool(flat and flat.get("flat_pattern_detected") and _blank_area > 0)
+    if not _measured:
+        try:
+            _measured = float((raw or {}).get("estimated_cut_length_mm") or 0.0) > 0.0
+        except (TypeError, ValueError):
+            pass
+
     part["geometry_source"] = (
-        "dxf_flat_pattern" if (flat and flat.get("flat_pattern_detected")) else "dxf"
+        "dxf_flat_pattern" if (flat and flat.get("flat_pattern_detected") and _blank_area > 0)
+        else ("dxf" if _measured else "dxf_matched_no_geometry")
     )
     part["geometry_source_path"] = str(dxf_path.resolve())
     part["dxf_source_file"] = dxf_path.name
-    part["dxf_augmented"] = True
+    part["dxf_measured_outline"] = _measured
+    # Only a MEASURED read counts as augmentation. The filename still gives thickness and
+    # material (dxf_source_file is kept), but the geometry claim is withdrawn.
+    part["dxf_augmented"] = _measured
+    if not _measured:
+        part.setdefault("review_flags", []).append(
+            f"DXF '{dxf_path.name}' matched but yielded NO measured outline — its cut layer "
+            f"holds no line/arc/circle geometry (commonly a block/INSERT export, which the "
+            f"reader does not explode). Any blank shown for this part is transcribed from "
+            f"the drawing's dimension text, not measured; cut length and hole count are "
+            f"unavailable. Re-export the flat pattern as exploded geometry to measure it")
     part["dxf_geometry_reliability"] = reliability
     part["dxf_raw_geometry"] = dxf_raw
     # DXF flat-pattern is ground truth for folding: a genuine flat-pattern part
