@@ -94,9 +94,16 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
         return False
     if part.get("flat_pattern_detected") or part.get("native_flat_pattern"):
         return True
-    if part.get("dxf_augmented") or part.get("dxf_source_file"):
+    # dxf_augmented is set ONLY where an outline was actually measured. dxf_source_file is
+    # deliberately NOT accepted: it records that a file MATCHED, which since the reader
+    # learned to distinguish the two can be true with nothing measured at all (a flat
+    # exported as an unreadable block, say). Counting it would make "a DXF exists" into
+    # fabrication evidence again — the very thing this predicate is narrow to avoid — and
+    # would raise a make/buy conflict on a purchased part that merely has a drawing.
+    if part.get("dxf_augmented") or part.get("dxf_measured_outline"):
         return True
-    return "dxf" in str(part.get("geometry_source") or "").lower()
+    _gs = str(part.get("geometry_source") or "").lower()
+    return "dxf" in _gs and _gs != "dxf_matched_no_geometry"
 
 
 def bought_in_conflict(part: Dict[str, Any]) -> bool:
