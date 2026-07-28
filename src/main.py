@@ -842,6 +842,15 @@ def main() -> None:
             from invariants import check_job as _check_job, format_report as _fmt_inv
             _inv = _check_job(summary)
             print(_fmt_inv(_inv), flush=True)
+            if not _inv.get("may_quote_firm"):
+                # Said once, plainly, at the point a person is watching. The deliverables
+                # below read the same record and mark themselves provisional; this is so the
+                # console does not look like a clean run.
+                print("   [invariants] THIS ESTIMATE IS NOT A FIRM PRICE — "
+                      f"{_inv.get('blocking', 0)} check(s) failed, "
+                      f"{_inv.get('unverified', 0)} could not be run. "
+                      "Deliverables will be marked provisional; do not release to a customer "
+                      "or an ERP export until resolved.", flush=True)
             # Persist onto the canonical JSON, which the readback has already rewritten —
             # writing to `summary` alone would leave the file disagreeing with the run.
             if _canon_json3 and Path(_canon_json3).exists():

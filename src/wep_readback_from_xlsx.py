@@ -329,6 +329,22 @@ def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
     return out
 
 
+def should_stamp_final_estimate(final_rows: Optional[Dict[str, Any]]) -> bool:
+    """Is there anything worth recording from this read-back?
+
+    STAMP EVEN WHEN EVERY ROW IS EMPTY, provided the adapter reported why. The condition used
+    to be simply "we read some rows", which discards the record in the one case it exists
+    for: if every header has moved, no block yields rows, adapter_problems lists exactly what
+    could not be read — and the whole structure was thrown away with it, leaving a job with
+    no final_estimate and no explanation. Downstream that is indistinguishable from a
+    read-back that never ran, which is the failure this record was added to make visible.
+    """
+    if not isinstance(final_rows, dict):
+        return False
+    return bool(final_rows.get("labour_rows") or final_rows.get("material_rows")
+                or final_rows.get("adapter_problems"))
+
+
 def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
     """The Estimate sheet's calculated labour and BOM rows.
 
@@ -460,7 +476,7 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     # rather than what was handed to it. wb_populate's workbook_labour remains as the
     # accepted INPUT grouping — useful for provenance, but it has no hours, rates or values
     # and must not be mistaken for the result.
-    if _final_rows.get("labour_rows") or _final_rows.get("material_rows"):
+    if should_stamp_final_estimate(_final_rows):
         summary["final_estimate"] = {
             "schema": "final_estimate.v2",
             "source": "excel_calculated",

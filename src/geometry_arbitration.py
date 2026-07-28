@@ -38,6 +38,12 @@ from typing import Any, Dict, Optional
 # generous for that — it is the tolerance the engine's existing cross-check flagged on — and
 # anything outside it is a disagreement about what the part IS, not measurement noise.
 AREA_TOLERANCE = 0.10
+# Area alone is not the blank. A 200 x 25 DXF and a 100 x 50 model flat have identical area
+# and would "agree" — but they are different parts: different nesting on the sheet, different
+# machine bed, different guillotine, possibly a different stock width entirely. Both SIDES
+# have to agree, compared orientation-normalised (long against long, short against short) so
+# a transposed export is not read as a disagreement.
+DIMENSION_TOLERANCE = 0.10
 
 DXF = "dxf"
 NATIVE = "native"
@@ -53,9 +59,19 @@ def _num(v: Any) -> Optional[float]:
     return f if f == f and abs(f) != float("inf") and f > 0 else None
 
 
+def _sides_agree(dl: float, dw: float, nl: float, nw: float, tol: float) -> bool:
+    """Long side against long side, short against short. Orientation is a drawing convention,
+    not a fact about the part, so a transposed export must not read as a disagreement."""
+    d_long, d_short = max(dl, dw), min(dl, dw)
+    n_long, n_short = max(nl, nw), min(nl, nw)
+    return (abs(d_long - n_long) <= tol * n_long
+            and abs(d_short - n_short) <= tol * n_short)
+
+
 def arbitrate_flat(dxf_length_mm: Any, dxf_width_mm: Any,
                    native_length_mm: Any, native_width_mm: Any,
-                   area_tolerance: float = AREA_TOLERANCE) -> Dict[str, Any]:
+                   area_tolerance: float = AREA_TOLERANCE,
+                   dimension_tolerance: float = DIMENSION_TOLERANCE) -> Dict[str, Any]:
     """Decide which flat-pattern measurement to cost, and say why.
 
     Returns:
@@ -86,12 +102,23 @@ def arbitrate_flat(dxf_length_mm: Any, dxf_width_mm: Any,
     a_dxf, a_native = dl * dw, nl * nw
     ratio = a_dxf / a_native if a_native else None
 
-    if ratio is not None and abs(1.0 - ratio) <= area_tolerance:
+    _sides_ok = _sides_agree(dl, dw, nl, nw, dimension_tolerance)
+    if ratio is not None and abs(1.0 - ratio) <= area_tolerance and _sides_ok:
         return {"winner": DXF, "agree": True, "unreconciled": False,
                 "dxf_incomplete": False, "area_ratio": round(ratio, 4),
                 "reason": (f"DXF flat {dl:g} x {dw:g}mm agrees with the model flat "
-                           f"{nl:g} x {nw:g}mm to within "
+                           f"{nl:g} x {nw:g}mm on both sides and to within "
                            f"{abs(1.0 - ratio) * 100:.1f}% on area")}
+
+    if ratio is not None and abs(1.0 - ratio) <= area_tolerance and not _sides_ok:
+        # Same area, different shape. Neither measurement is obviously the broken one, and
+        # the difference matters to nesting, stock width and which machine can take it.
+        return {"winner": DXF, "agree": False, "unreconciled": True,
+                "dxf_incomplete": False, "area_ratio": round(ratio, 4),
+                "reason": (f"DXF flat {dl:g} x {dw:g}mm and model flat {nl:g} x {nw:g}mm have "
+                           f"the same AREA but different SIDES. Same area is not the same "
+                           f"blank — it nests differently, may need different stock width and "
+                           f"may not fit the same machine. UNRECONCILED")}
 
     if ratio is not None and ratio < 1.0:
         # Missing geometry. The model's flat is the only complete measurement available.

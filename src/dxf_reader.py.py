@@ -767,13 +767,46 @@ _MIN_SEGMENT_MM = 0.05
 
 
 def _contour_span_mm(points: List[Tuple[float, float]], scale: float) -> float:
-    """The larger bounding dimension of a contour, in mm. Used to reject degenerate loops
-    without needing a true area, which a bulged polyline would not give cheaply."""
+    """The SMALLER bounding dimension of a contour, in mm.
+
+    The larger dimension is the wrong test: a 100 x 0 closed polyline — a line drawn back on
+    itself, which is what a collapsed or duplicated edge looks like — spans 100mm on its long
+    side and passes, then counts as an aperture the laser pierces. A real cut-out has extent
+    in BOTH directions, so the minor dimension is what has to clear the bar.
+    """
     if not points:
         return 0.0
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
-    return max((max(xs) - min(xs)), (max(ys) - min(ys))) * (scale or 1.0)
+    return min((max(xs) - min(xs)), (max(ys) - min(ys))) * (scale or 1.0)
+
+
+def _entity_length_mm(e: Any, scale: float) -> float:
+    """Length of a single entity, measured the way its own type requires.
+
+    Measuring end-to-end works for a LINE and for nothing else. A SPLINE's first and last fit
+    points can sit close together while the curve between them is long — an S-curve, or a
+    nearly closed profile — so a straight-line measurement discards valid large geometry as
+    degenerate. Ask each type for its own length and fall back only when it cannot answer.
+    """
+    t = e.dxftype()
+    try:
+        if t == "ARC":
+            return _arc_length(e, scale)
+        if t in ("LWPOLYLINE", "POLYLINE"):
+            return _polyline_length(e, scale)
+        if t == "SPLINE":
+            try:
+                return float(e.length()) * scale          # ezdxf measures the curve itself
+            except Exception:
+                pts = _entity_points(e)
+                return sum(_dist2d(pts[i], pts[i + 1]) for i in range(len(pts) - 1)) * scale
+        if t == "CIRCLE":
+            return math.pi * _circle_diameter_mm(e, scale)
+    except Exception:
+        pass
+    pts = _entity_points(e)
+    return _dist2d(pts[0], pts[-1]) * scale if len(pts) >= 2 else 0.0
 
 
 def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
@@ -833,9 +866,7 @@ def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
             continue
         # A bend line is not a cut. It must not be chained, or two cut-outs joined by a
         # bend line would be counted as one contour.
-        _pts = _entity_points(e)
-        _len = _arc_length(e, scale) if t == "ARC" else (
-            _dist2d(*_pts[:2]) * scale if len(_pts) >= 2 else 0.0)
+        _len = _entity_length_mm(e, scale)
         if _is_bend_candidate(e, _len):
             continue
         # A ZERO-LENGTH segment starts and ends on the same point. Chained, it becomes a

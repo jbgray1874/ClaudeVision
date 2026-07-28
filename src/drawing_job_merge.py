@@ -154,7 +154,20 @@ def build_geometry_summary_for_dxf(dxf_path: Path) -> Tuple[Dict[str, Any], Dict
     return geometry, raw, reliability
 
 
-def _arbitrate_pierces(flat: Dict[str, Any], raw: Dict[str, Any]) -> Optional[int]:
+def _pierce_fields(verdict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Flatten the arbitration into the geometry record: the VALUE costing reads, the SOURCE
+    that produced it, and whether it is a measurement or a floor. Kept as three fields rather
+    than one number, so a provisional figure cannot be mistaken for a measured one."""
+    if not verdict:
+        return {"estimated_pierce_count": None}
+    return {
+        "estimated_pierce_count": verdict.get("value"),
+        "estimated_pierce_count_source": verdict.get("source"),
+        "estimated_pierce_count_uncertain": bool(verdict.get("uncertain")),
+    }
+
+
+def _arbitrate_pierces(flat: Dict[str, Any], raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Which reader's pierce count do we cost?
 
     The two readers are not equal and must not be treated as interchangeable. The flat
@@ -177,8 +190,26 @@ def _arbitrate_pierces(flat: Dict[str, Any], raw: Dict[str, Any]) -> Optional[in
     _flat = int(flat.get("estimated_pierce_count") or 0)
     _raw = int(raw.get("estimated_pierce_count") or 0)
     if not flat.get("pierce_count_incomplete"):
-        return _flat or _raw or None
-    return max(_flat, _raw) or None
+        if _flat:
+            return {"value": _flat, "source": "dxf_contour_walk", "uncertain": False}
+        if _raw:
+            return {"value": _raw, "source": "dxf_raw_fallback", "uncertain": True,
+                    "note": ("The contour walk found no pierces and the raw parser found "
+                             f"{_raw}. Using the raw count, which does not enter blocks and "
+                             "can count a profile twice — confirm against the drawing")}
+        return None
+    # The walk could not close its loops. Neither reading is a measurement now: the walk is a
+    # floor, and the raw count is a different reader's guess with a known upward bias. Taking
+    # the larger is a choice between two unreliable numbers, so it is recorded AS a choice —
+    # value, source and uncertainty kept apart — and the part is marked provisional rather
+    # than the maximum being laundered into a confident measured figure.
+    _val = max(_flat, _raw)
+    if not _val:
+        return None
+    return {"value": _val, "source": "dxf_incomplete_walk_max", "uncertain": True,
+            "note": (f"DXF outline could not be fully closed. Pierce count is the larger of "
+                     f"the contour walk ({_flat}) and the raw parser ({_raw}); it is a FLOOR, "
+                     f"not a measurement")}
 
 
 def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str, Any]:
@@ -276,11 +307,15 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "drawing_extents_mm": [flat["blank_length_mm"], flat["blank_width_mm"]],
             "estimated_hole_count": flat["hole_count"],
             "estimated_bend_line_count": flat["bend_count"],
-            "estimated_pierce_count": _arbitrate_pierces(flat, raw),
+            **_pierce_fields(_arbitrate_pierces(flat, raw)),
             # Carried so a reader can tell "no internal cut-outs" from "we could not tell".
             "pierce_count_incomplete": bool(flat.get("pierce_count_incomplete")),
             "closed_contour_count": flat.get("closed_contour_count"),
         }
+        _pv = _arbitrate_pierces(flat, raw)
+        if _pv and _pv.get("uncertain"):
+            part["geometry_provisional"] = True
+            part.setdefault("review_flags", []).append(str(_pv.get("note") or ""))
         if flat.get("pierce_count_incomplete"):
             part.setdefault("review_flags", []).append(
                 "DXF outline has segments that could not be chained into closed loops, so "

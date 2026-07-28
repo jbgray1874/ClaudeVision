@@ -394,6 +394,38 @@ def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
 
 
 # ── main render ─────────────────────────────────────────────────────────────
+def _invariant_banner(summary: Dict[str, Any]) -> str:
+    """A visible, unmissable statement when the engine's own checks say this is not a firm
+    price — and an equally explicit one when they could not run at all.
+
+    The three states are deliberately distinct. "Checks failed" and "checks did not run" are
+    different facts, and the second is the more dangerous of the two because it looks like
+    silence rather than a problem: a read-back failure leaves every reconciliation check with
+    nothing to examine, finds nothing wrong, and produces a clean-looking job.
+    """
+    inv = summary.get("invariants")
+    if not isinstance(inv, dict):
+        return ('    <div class="prov">PROVISIONAL — the consistency checks did not run on '
+                'this estimate, so none of its figures have been verified against the '
+                'workbook. Not for release as a firm price.</div>')
+    if inv.get("may_quote_firm"):
+        return ""
+    _blocking = [v for v in (inv.get("violations") or [])
+                 if isinstance(v, dict) and v.get("severity") == "blocking"]
+    _unver = [v for v in (inv.get("violations") or [])
+              if isinstance(v, dict) and v.get("severity") == "unverified"]
+    _bits = []
+    if _blocking:
+        _bits.append(f"{len(_blocking)} consistency check(s) FAILED")
+    if _unver:
+        _bits.append(f"{len(_unver)} check(s) could not be run, so those figures are "
+                     f"unverified")
+    _detail = "; ".join(_esc(str(v.get("message") or "")) for v in (_blocking + _unver)[:3])
+    return ('    <div class="prov">PROVISIONAL — ' + _esc(" and ".join(_bits)) +
+            '. This estimate is not for release as a firm price until they are resolved.'
+            + (f'<span class="prov-d">{_detail}</span>' if _detail else "") + '</div>')
+
+
 def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
                      manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> str:
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
@@ -422,6 +454,13 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     material = _materials_line(parts)
     finish = _finish_line(summary, parts)
     ops = _collect_operations(parts, summary)
+
+    # THE INVARIANT GATE, READ BY THE DOCUMENT THAT LEAVES THE BUILDING.
+    # The checks ran and wrote their verdict onto the job, and the quote was generated
+    # regardless — a gate nothing consumes is a log line, not a gate. Suppressing the quote
+    # is not the answer either (an estimator still needs the working); the answer is that a
+    # price we cannot stand behind must not LOOK like one we can.
+    _inv_banner = _invariant_banner(summary)
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
     logo_markup = _load_logo_markup(customer)
@@ -472,6 +511,12 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   .head .cust .lbl {{ font-size:10px; letter-spacing:.14em; text-transform:uppercase;
                       color:var(--muted); margin-bottom:6px; }}
   .band {{ background:var(--sdi-ink); color:#fff; padding:20px 40px; }}
+  /* Not decorative. This is the difference between a price the shop can commit to and one
+     the engine could not verify, and it has to survive being printed in black and white. */
+  .prov {{ background:#fff3cd; border-top:3px solid #b8860b; border-bottom:1px solid #e0cfa0;
+           color:#5c4400; padding:14px 40px; font-size:12.5px; font-weight:700;
+           letter-spacing:.01em; }}
+  .prov-d {{ display:block; margin-top:6px; font-weight:400; font-size:11px; color:#6b5520; }}
   .band h1 {{ margin:0; font-size:22px; font-weight:600; }}
   .band .meta {{ margin-top:6px; font-size:13px; color:#d8d9d6; }}
   .band .meta b {{ color:var(--sdi-yellow); font-weight:600; }}
@@ -520,6 +565,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
       <h1>Quotation — {_esc(product)}</h1>
       <div class="meta">{meta_bits}</div>
     </div>
+{_inv_banner}
     <div class="body">
       <p class="lead">{_esc(product)} — manufactured to drawing. {_esc(material)}{(', ' + _esc(finish.lower())) if finish and finish!='As drawing' else ''}.</p>
       <div class="grid">

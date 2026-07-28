@@ -506,6 +506,84 @@ def _dxf_backed(part: Dict[str, Any]) -> bool:
     )
 
 
+def _reject_dxf_geometry(part: Dict[str, Any], nat: "NativePart",
+                         fl: float, fw: float, verdict: Dict[str, Any],
+                         flags: List[str]) -> None:
+    """Swap a rejected DXF fact set out for the model's, atomically.
+
+    Every cost-driving geometry field measured from the rejected file is moved aside under
+    `rejected_dxf_geometry` — kept, because a person needs to see what the file said, but out
+    of reach of costing. What the model can supply is written in its place; what it cannot is
+    left ABSENT rather than inherited, because an absent number is priced as unknown while a
+    stale one is priced as fact.
+    """
+    _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    _gr = part.get("geometry_rollup") if isinstance(part.get("geometry_rollup"), dict) else {}
+
+    _COST_DRIVING = ("blank_length_mm", "blank_width_mm", "blank_area_mm2",
+                     "estimated_cut_length_mm", "cut_length_mm", "raw_cut_length_mm",
+                     "estimated_hole_count", "hole_count", "estimated_pierce_count",
+                     "pierce_count", "drawing_extents_mm", "weight_kg",
+                     "estimated_bend_line_count", "closed_contour_count",
+                     "pierce_count_incomplete")
+    quarantined: Dict[str, Any] = {}
+    for holder_name, holder in (("part", part), ("normalized_geometry", _ng),
+                                ("geometry_rollup", _gr),
+                                ("manufacturing_features",
+                                 part.get("manufacturing_features")
+                                 if isinstance(part.get("manufacturing_features"), dict) else {})):
+        if not isinstance(holder, dict):
+            continue
+        for f in _COST_DRIVING:
+            if f in holder:
+                quarantined[f"{holder_name}.{f}"] = holder.pop(f)
+
+    part["rejected_dxf_geometry"] = {
+        "reason": verdict.get("reason"),
+        "area_ratio": verdict.get("area_ratio"),
+        "dxf_source_file": part.get("dxf_source_file"),
+        "values": quarantined,
+        "note": ("Measured from a DXF that does not contain the whole part. Retained for "
+                 "inspection only — not costed, and not to be read back into the estimate."),
+    }
+
+    # The model's flat, which IS complete.
+    _ng = part.setdefault("normalized_geometry", {})
+    _ng["blank_length_mm"], _ng["blank_width_mm"] = fl, fw
+    _ng["blank_area_mm2"] = fl * fw
+    _ng["geometry_source"] = NATIVE_GEOMETRY_SOURCE
+    part["blank_length_mm"], part["blank_width_mm"] = fl, fw
+    part["blank_area_mm2"] = fl * fw
+    part["geometry_source"] = NATIVE_GEOMETRY_SOURCE
+    part["blank_length_mm_source"] = SOURCE_NAME
+    part["native_flat_pattern"] = True
+    part["dxf_geometry_rejected"] = True
+    part["dxf_measured_outline"] = False
+    # The DXF is no longer evidence of anything measured. Leaving these set kept the part
+    # inside the engine's "has a measured flat pattern" gates on the strength of a file we
+    # have just rejected.
+    part["dxf_augmented"] = False
+    part["flat_pattern_detected"] = True          # true of the MODEL's flat, which we now hold
+
+    _gr = part.setdefault("geometry_rollup", {})
+    if nat is not None and getattr(nat, "cut_length_mm", None):
+        _gr["estimated_cut_length_mm"] = float(nat.cut_length_mm)
+    else:
+        # No model perimeter either. A rectangular floor is honest about being a floor; a
+        # stale perimeter from the rejected file is not.
+        _gr["estimated_cut_length_mm"] = 2.0 * (fl + fw)
+        _gr["estimated_cut_length_is_floor"] = True
+        flags.append(f"cut length for this part is a RECTANGULAR FLOOR ({2.0 * (fl + fw):.0f}mm) "
+                     f"— the DXF was rejected and the model publishes no cut length")
+    if nat is not None and getattr(nat, "cut_out_count", None) is not None:
+        _apply_field(part, "geometry_rollup.estimated_pierce_count",
+                     int(nat.cut_out_count) + 1, SOURCE_NAME)
+    if nat is not None and getattr(nat, "hole_count_est", None):
+        _gr["estimated_hole_count"] = int(nat.hole_count_est)
+    flags.append(f"DXF geometry QUARANTINED for this part ({len(quarantined)} field(s)) — "
+                 f"costed from the SolidWorks flat {fl:g} x {fw:g}mm")
+
+
 def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, int]:
     """Fold the SolidWorks native extract into the PRE-ESTIMATE part records — i.e. BEFORE
     costing — so the engine's existing paths fire with modelled truth instead of inferred
@@ -688,20 +766,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                         flags.append(f"blank check: {_verdict['reason']}")
                         out["geometry_conflict"] += 1
                     if _verdict["winner"] == NATIVE:
-                        # The DXF is incomplete. Supersede it with the model's flat and say
-                        # so on the part, so nothing downstream still believes it measured.
-                        ng = part.get("normalized_geometry")
-                        ng = dict(ng) if isinstance(ng, dict) else {}
-                        ng["blank_length_mm"], ng["blank_width_mm"] = fl, fw
-                        ng["geometry_source"] = NATIVE_GEOMETRY_SOURCE
-                        part["normalized_geometry"] = ng
-                        part["blank_length_mm"], part["blank_width_mm"] = fl, fw
-                        part["blank_area_mm2"] = fl * fw
-                        part["geometry_source"] = NATIVE_GEOMETRY_SOURCE
-                        part["blank_length_mm_source"] = SOURCE_NAME
-                        part["native_flat_pattern"] = True
-                        part["dxf_geometry_rejected"] = True
-                        part["dxf_measured_outline"] = False
+                        # QUARANTINE THE WHOLE REJECTED FACT SET, not just the two dimensions
+                        # that lost. A DXF that measured a quarter of the part measured its
+                        # cut length, hole count, pierce count and extents from the same
+                        # incomplete file — all of them wrong in the same direction, all of
+                        # them still readable by costing. Replacing the blank alone leaves a
+                        # part with the model's size and the broken file's perimeter, which
+                        # is a worse record than either source on its own.
+                        _reject_dxf_geometry(part, nat, fl, fw, _verdict, flags)
                         part.setdefault("review_flags", []).append(
                             f"DXF flat pattern REJECTED and replaced by the model's: "
                             f"{_verdict['reason']}. Check the DXF export — the file does not "

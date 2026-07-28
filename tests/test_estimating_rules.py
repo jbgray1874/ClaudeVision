@@ -855,6 +855,168 @@ def test_an_unknown_schema_is_never_read_as_if_known():
        f"a contract whose shape may have moved must not be read anyway: {codes}")
 
 
+def test_a_job_that_was_never_checked_is_not_a_pass():
+    """THE FAILURE THIS ALMOST SHIPPED WITH. If the read-back dies — Excel COM falls over, the
+    workbook will not open — there is no final_estimate, so every reconciliation check found
+    nothing to complain about and the job came back ok: true. Nothing was wrong because
+    nothing was looked at, and that is indistinguishable on a console from a job that
+    reconciled. A check that could not run must FAIL CLOSED."""
+    from invariants import check_job
+    r = check_job({"part_estimates": [{"part_number": "01M"}]}, write_back=False)
+    ok(r["unverified"] > 0, "checks with no data to read must report themselves unverified")
+    ok(not r["verified"], "and the job as a whole is not verified")
+    ok(not r["may_quote_firm"],
+       "an unverified job must not be quotable as a firm price, whatever `ok` says")
+    codes = [v["code"] for v in r["violations"]]
+    ok(any(c.endswith("_not_evaluated") for c in codes), f"named as unevaluated: {codes}")
+
+    # And the clean job must still be firm — fail-closed must not mean fail-always.
+    ok(check_job(_job(), write_back=False)["may_quote_firm"],
+       "a complete, consistent job is still releasable")
+
+
+def test_the_quote_says_so_when_the_engine_cannot_stand_behind_it():
+    """A gate nothing consumes is a log line. The quote was generated unconditionally and
+    never read the invariant record, so a job with failing checks produced a document that
+    looked exactly like one that passed."""
+    from client_quote_html import _invariant_banner
+    eq(_invariant_banner({"invariants": {"may_quote_firm": True}}), "",
+       "a job that passes carries no banner")
+    for job, why in (
+        ({}, "no invariant record at all — the checks did not run"),
+        ({"invariants": {"may_quote_firm": False, "violations": [
+            {"severity": "blocking", "message": "material rows do not sum to the total"}]}},
+         "a blocking failure"),
+        ({"invariants": {"may_quote_firm": False, "violations": [
+            {"severity": "unverified", "message": "read-back did not run"}]}},
+         "an unverified job"),
+    ):
+        b = _invariant_banner(job)
+        ok("PROVISIONAL" in b, f"{why} must be stated on the quote itself")
+        ok("firm price" in b, f"{why} must say it is not a firm price")
+
+
+def test_the_rendered_quote_actually_carries_the_banner():
+    """Testing _invariant_banner proves the banner builds, not that the quote uses it.
+    Blanking the call site passed every other test in this file — the same gap that let a
+    reverted apply_field call site go unnoticed. Assert on the rendered document."""
+    from client_quote_html import build_quote_html
+    failing = {"estimate_summary": {}, "invariants": {"may_quote_firm": False, "violations": [
+        {"severity": "blocking", "message": "material rows do not sum to the total"}]}}
+    html = build_quote_html(failing, job_stem="TEST-01")
+    ok("PROVISIONAL" in html, "the rendered quote must carry the provisional banner")
+    ok("firm price" in html, "and must say in words that it is not a firm price")
+    clean = {"estimate_summary": {}, "invariants": {"may_quote_firm": True, "violations": []}}
+    ok("PROVISIONAL" not in build_quote_html(clean, job_stem="TEST-02"),
+       "a job that passes must not be marked provisional")
+
+
+def test_same_area_is_not_the_same_blank():
+    """A 200 x 25 DXF and a 100 x 50 model flat have identical area. On area alone they
+    'agree' — but they nest differently, may need a different stock width, and may not fit
+    the same machine. Both SIDES have to agree."""
+    from geometry_arbitration import arbitrate_flat
+    v = arbitrate_flat(200.0, 25.0, 100.0, 50.0)
+    ok(not v["agree"], "equal area with different sides is not agreement")
+    ok(v["unreconciled"], "and neither measurement is obviously the broken one")
+    # Orientation is a drawing convention, not a fact about the part.
+    v = arbitrate_flat(82.2, 126.39, 126.39, 82.2)
+    ok(v["agree"], "a transposed export is the same blank and must not be flagged")
+
+
+def test_a_collapsed_polyline_is_not_a_cut_out():
+    """A 100 x 0 closed polyline — a line drawn back on itself, which is what a collapsed or
+    duplicated edge looks like — spans 100mm on its long side. Testing the LARGER dimension
+    passes it straight through as an aperture the laser pierces."""
+    try:
+        import ezdxf
+    except ImportError:
+        print("      (skipped: ezdxf not installed)")
+        return
+    import tempfile
+    from pathlib import Path
+    from dxf_reader import extract_flat_pattern_data
+
+    d = ezdxf.new(); d.header["$INSUNITS"] = 4
+    msp = d.modelspace()
+    L, W = 150.0, 80.0
+    for a in [(0, 0, L, 0), (L, 0, L, W), (L, W, 0, W), (0, W, 0, 0)]:
+        msp.add_line(a[:2], a[2:], dxfattribs={"layer": "SLD-0"})
+    msp.add_circle((40, 40), 4.0, dxfattribs={"layer": "SLD-0"})       # one real hole
+    # Long, but with no width at all.
+    msp.add_lwpolyline([(20, 60), (120, 60), (120, 60), (20, 60)],
+                       close=True, dxfattribs={"layer": "SLD-0"})
+    path = os.path.join(tempfile.mkdtemp(), "collapsed.dxf")
+    d.saveas(path)
+
+    r = extract_flat_pattern_data(Path(path))
+    eq(r.get("estimated_pierce_count"), 2,
+       "1 hole plus the outer profile = 2; a zero-width loop is not an aperture")
+
+
+def test_a_readback_that_found_nothing_still_says_why():
+    """The condition was "we read some rows", which throws the record away in the one case it
+    exists for: every header moved, no block yields rows, and adapter_problems holds the
+    explanation. Discarded, that is indistinguishable from a read-back that never ran."""
+    from wep_readback_from_xlsx import should_stamp_final_estimate as f
+    ok(f({"labour_rows": [{"workbook_row": 41}], "material_rows": [], "adapter_problems": []}),
+       "rows were read — stamp it")
+    ok(f({"labour_rows": [], "material_rows": [], "adapter_problems": [
+        {"block": "steel", "code": "header_row_not_found"}]}),
+       "NO rows but a recorded reason is the case this exists for")
+    ok(not f({"labour_rows": [], "material_rows": [], "adapter_problems": []}),
+       "nothing read and nothing to report is genuinely empty")
+    ok(not f(None), "no read-back at all")
+
+
+def test_a_route_the_sheet_charged_nothing_for():
+    """An unmapped department calculates to zero, reconciles perfectly against the total, and
+    gives the work away. Rows at zero are skipped as 'not part of the priced job' — but an
+    ACCEPTED route row at zero is the opposite: the engine decided this work happens."""
+    from invariants import check_job
+    j = _job()
+    j["final_estimate"]["labour_rows"] = [
+        {"workbook_row": 41, "operation": "Laser", "total_value_gbp": 52.0},
+        {"workbook_row": 43, "operation": "Fold", "total_value_gbp": 0.0}]
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("accepted_route_priced_at_zero" in codes,
+       f"work the engine routed but the sheet did not charge for must block: {codes}")
+
+
+def test_geometry_the_engine_could_not_reconcile_blocks_a_firm_price():
+    """arbitrate_flat marks an oversized DXF unreconciled, which was the right call — but a
+    review flag alone changed nothing, so the 400x300-against-60x34 case could still leave as
+    a firm quote."""
+    from invariants import check_job
+    j = _job()
+    j["part_estimates"][0]["flat_unreconciled"] = True
+    j["part_estimates"][0]["flat_arbitration"] = {"unreconciled": True, "reason": "much larger"}
+    r = check_job(j, write_back=False)
+    ok("geometry_unreconciled" in [v["code"] for v in r["violations"]],
+       "an unresolved size disagreement must block")
+    ok(not r["may_quote_firm"], "and must stop the price being firm")
+
+
+def test_the_money_tolerance_does_not_scale_with_the_estimate():
+    """A 0.5% relative tolerance passes a GBP 50 error on a GBP 10,000 job. The only
+    legitimate slack is Excel's per-row rounding, which scales with ROW COUNT."""
+    from invariants import _money_agrees
+    ok(not _money_agrees(10000.00, 10050.00, 12), "GBP 50 out on a big job is an error")
+    ok(_money_agrees(100.00, 100.03, 12), "twelve rows may each round by half a penny")
+    ok(not _money_agrees(100.00, 100.50, 2), "two rows cannot account for 50p")
+
+
+def test_attribution_is_checked_against_the_precedence_contract():
+    """The checker invented its own source-field names, so a correctly attributed job warned
+    on every part while thickness attribution went unchecked entirely."""
+    from invariants import _source_key_for
+    eq(_source_key_for("normalized_material"), "material_source",
+       "the contract writes material_source, not normalized_material_source")
+    eq(_source_key_for("quantity"), "quantity_source", "quantity")
+    eq(_source_key_for("normalized_thickness_mm"), "thickness_source",
+       "and thickness is normalized_thickness_mm -> thickness_source")
+
+
 def test_a_broken_check_reports_that_it_verified_nothing():
     """A checker that throws must not read as a clean pass — that is worse than no check."""
     import invariants
@@ -941,15 +1103,24 @@ def test_the_complete_reader_wins_over_the_inflating_one():
 
     The raw figure is used only where the flat walk ADMITS it is incomplete."""
     from drawing_job_merge import _arbitrate_pierces
-    eq(_arbitrate_pierces({"estimated_pierce_count": 4, "pierce_count_incomplete": False},
-                          {"estimated_pierce_count": 9}), 4,
-       "a complete topological walk is the answer, not a floor to be raised")
-    eq(_arbitrate_pierces({"estimated_pierce_count": 4, "pierce_count_incomplete": True},
-                          {"estimated_pierce_count": 9}), 9,
-       "where the walk could not close its loops, a higher count may be catching something")
-    eq(_arbitrate_pierces({"estimated_pierce_count": 0, "pierce_count_incomplete": False},
-                          {"estimated_pierce_count": 6}), 6,
-       "a reader that saw nothing at all defers to one that saw something")
+    v = _arbitrate_pierces({"estimated_pierce_count": 4, "pierce_count_incomplete": False},
+                           {"estimated_pierce_count": 9})
+    eq(v["value"], 4, "a complete topological walk is the answer, not a floor to be raised")
+    ok(not v["uncertain"], "and it is a measurement, recorded as one")
+
+    # An incomplete walk yields a FLOOR. Taking the larger of two unreliable readings is a
+    # choice between guesses, and it must be recorded as a choice — value, source and
+    # uncertainty kept apart — not laundered into a confident measured number.
+    v = _arbitrate_pierces({"estimated_pierce_count": 4, "pierce_count_incomplete": True},
+                           {"estimated_pierce_count": 9})
+    eq(v["value"], 9, "where the walk could not close its loops, the larger is the floor")
+    ok(v["uncertain"], "but it is NOT a measurement and must not be presented as one")
+    ok("floor" in str(v.get("note", "")).lower(), "and says so in words a person can read")
+
+    v = _arbitrate_pierces({"estimated_pierce_count": 0, "pierce_count_incomplete": False},
+                           {"estimated_pierce_count": 6})
+    eq(v["value"], 6, "a reader that saw nothing at all defers to one that saw something")
+    ok(v["uncertain"], "the raw parser's known upward bias makes that figure provisional")
     eq(_arbitrate_pierces({}, {}), None, "no evidence is None, never 0")
 
 

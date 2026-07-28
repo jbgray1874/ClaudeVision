@@ -35,13 +35,22 @@ KNOWN_SCHEMAS = {
     "workbook_labour": {"workbook_labour_rows.v1", "workbook_labour_rows.v2"},
 }
 
-# Money agrees to the penny, with a small proportional allowance for Excel's own rounding
-# across many rows. Anything outside this is a real disagreement, not a rounding artefact.
+# Money agrees to the penny. The only legitimate slack is Excel's own per-row rounding, so
+# the allowance scales with the NUMBER OF ROWS, not the size of the estimate: a proportional
+# tolerance lets a GBP 50 discrepancy pass on a GBP 10,000 job, which is a real error hiding
+# inside a percentage. Each row can round by at most half a penny.
 _ABS_TOL_GBP = 0.01
-_REL_TOL = 0.005
+_PER_ROW_TOL_GBP = 0.005
 
 BLOCKING = "blocking"      # the job must not be presented as a firm price
 WARNING = "warning"        # flag it, but the number still stands
+UNVERIFIED = "unverified"  # the check could not run — it has proved NOTHING
+
+# A check that finds nothing because it had nothing to look at is not a pass. The read-back
+# can fail (Excel COM dies, a workbook will not open), leaving no final_estimate at all — and
+# every reconciliation check then returned "no violations", which reads on a console and in a
+# JSON exactly like a job that reconciled. FAIL CLOSED: an unevaluated check is recorded as
+# UNVERIFIED, and a job with any unverified check cannot be released as a firm price.
 
 
 def _num(v: Any) -> Optional[float]:
@@ -54,8 +63,8 @@ def _num(v: Any) -> Optional[float]:
     return f if f == f and abs(f) != float("inf") else None
 
 
-def _money_agrees(a: float, b: float) -> bool:
-    return abs(a - b) <= max(_ABS_TOL_GBP, _REL_TOL * max(abs(a), abs(b)))
+def _money_agrees(a: float, b: float, row_count: int = 0) -> bool:
+    return abs(a - b) <= _ABS_TOL_GBP + _PER_ROW_TOL_GBP * max(0, int(row_count))
 
 
 def _node(summary: Any, key: str) -> Dict[str, Any]:
@@ -87,6 +96,12 @@ def _violation(code: str, severity: str, message: str, **detail) -> Dict[str, An
     return {"code": code, "severity": severity, "message": message, "detail": detail or {}}
 
 
+def _unevaluated(code: str, reason: str, **detail) -> List[Dict[str, Any]]:
+    """The check could not run. This is NOT a pass and must never read as one."""
+    return [_violation(f"{code}_not_evaluated", UNVERIFIED,
+                       f"{reason} This check has verified nothing.", **detail)]
+
+
 # ── contracts ────────────────────────────────────────────────────────────────────────
 def check_schemas(summary: Any) -> List[Dict[str, Any]]:
     """A structure whose version we do not recognise must not be read as if we did."""
@@ -94,6 +109,8 @@ def check_schemas(summary: Any) -> List[Dict[str, Any]]:
     for key, known in KNOWN_SCHEMAS.items():
         node = _node(summary, key)
         if not node:
+            out.extend(_unevaluated(f"{key}_schema",
+                                    f"This job carries no {key} contract at all."))
             continue
         schema = str(node.get("schema") or "")
         if schema not in known:
@@ -109,11 +126,20 @@ def check_schemas(summary: Any) -> List[Dict[str, Any]]:
 # ── 1 & 2. rows reconcile to totals ──────────────────────────────────────────────────
 def _check_rows_sum_to_total(fe: Dict[str, Any], rows_key: str, total_key: str,
                              label: str) -> List[Dict[str, Any]]:
+    if not fe:
+        return _unevaluated(f"{label}_rows_reconcile",
+                            "No final_estimate on this job, so nothing was read back from the "
+                            "calculated sheet and no total could be reconciled.")
     rows = fe.get(rows_key)
     totals = fe.get("totals") or {}
     total = _num(totals.get(total_key))
-    if not isinstance(rows, list) or total is None:
-        return []
+    if not isinstance(rows, list):
+        return _unevaluated(f"{label}_rows_reconcile",
+                            f"final_estimate carries no {rows_key} to reconcile.")
+    if total is None:
+        return _unevaluated(f"{label}_rows_reconcile",
+                            f"final_estimate carries no {total_key}, so the {label} rows have "
+                            f"nothing to be checked against.")
     # An Excel error reads back as None, never as zero. Summing it as zero would manufacture
     # agreement out of missing data — the one thing these checks exist to prevent.
     missing = [r for r in rows if isinstance(r, dict) and _num(r.get("total_value_gbp")) is None]
@@ -126,7 +152,7 @@ def _check_rows_sum_to_total(fe: Dict[str, Any], rows_key: str, total_key: str,
             f"through as null. The rows cannot be reconciled to the GBP {total:.2f} total "
             f"because part of the sheet did not calculate.",
             rows_missing_value=len(missing), total_gbp=round(total, 4))]
-    if not _money_agrees(summed, total):
+    if not _money_agrees(summed, total, len(rows)):
         return [_violation(
             f"{label}_rows_do_not_sum_to_total", BLOCKING,
             f"{label} rows sum to GBP {summed:.2f} but the sheet's own {label} total is "
@@ -158,8 +184,14 @@ def check_priced_rows_join_once(summary: Any) -> List[Dict[str, Any]]:
     wl = _node(summary, "workbook_labour")
     rows = fe.get("labour_rows")
     accepted = wl.get("rows")
-    if not isinstance(rows, list) or not isinstance(accepted, list) or not accepted:
-        return []
+    if not isinstance(rows, list):
+        return _unevaluated("priced_row_identity",
+                            "No calculated labour rows were read back, so no priced row could "
+                            "be joined to the route that produced it.")
+    if not isinstance(accepted, list) or not accepted:
+        return _unevaluated("priced_row_identity",
+                            "No accepted route rows were recorded by wb_populate, so the "
+                            "calculated costs have nothing to be joined to.")
 
     counts: Dict[Any, int] = {}
     for a in accepted:
@@ -197,6 +229,36 @@ def check_priced_rows_join_once(summary: Any) -> List[Dict[str, Any]]:
             f"row, so one cost would be reported against several groups of parts.",
             rows=duplicated[:10], count=len(duplicated)))
 
+    # A ROUTE THAT CALCULATED TO NOTHING. Rows at zero are skipped above because they are
+    # not part of the priced job — but an ACCEPTED route row landing at zero is a different
+    # fact entirely: wb_populate decided this work happens, wrote it to the sheet, and the
+    # sheet charged nothing for it. An unmapped department does exactly that, reconciles
+    # perfectly against the total, and quietly gives the work away.
+    _priced_rows = {}
+    for r in rows:
+        if isinstance(r, dict) and r.get("workbook_row") is not None:
+            _priced_rows[int(_num(r.get("workbook_row")) or 0)] = _num(r.get("total_value_gbp"))
+    _free = []
+    for a in accepted:
+        if not isinstance(a, dict) or a.get("workbook_row") is None:
+            continue
+        if a.get("no_charge"):            # explicitly free work, deliberately recorded
+            continue
+        _v = _priced_rows.get(int(_num(a.get("workbook_row")) or 0))
+        if _v is not None and _v <= 0:
+            _free.append({"workbook_row": a.get("workbook_row"),
+                          "wb_operation": a.get("wb_operation"),
+                          "part_numbers": (a.get("part_numbers") or [])[:5]})
+    if _free:
+        out.append(_violation(
+            "accepted_route_priced_at_zero", BLOCKING,
+            f"{len(_free)} accepted route row(s) calculated to GBP 0: "
+            f"{', '.join(sorted({str(f['wb_operation']) for f in _free}))}. The engine decided "
+            f"this work happens and the sheet charged nothing for it — most often a department "
+            f"that did not map to a rate. It reconciles against the total and gives the work "
+            f"away.",
+            rows=_free[:10], count=len(_free)))
+
     # Stable identity, where the writer supplied it. Row numbers move when the template
     # changes; a group's identity does not, which is what makes a baseline comparable
     # between runs at all.
@@ -221,14 +283,19 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
     dressing on a lacquered timber crate."""
     try:
         from costed_facts import costed_operations
-    except Exception:
-        return []
+    except Exception as exc:
+        return _unevaluated("unpriced_operation",
+                            f"costed_facts could not be loaded ({exc}), so what the job was "
+                            f"actually charged for is unknown.")
     try:
         costed = set(costed_operations(summary) or {})
-    except Exception:
-        return []
+    except Exception as exc:
+        return _unevaluated("unpriced_operation",
+                            f"The costed route could not be read ({exc}).")
     if not costed:
-        return []
+        return _unevaluated("unpriced_operation",
+                            "No costed operations could be resolved for this job, so nothing "
+                            "can be compared against what the reports name.")
 
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
@@ -254,6 +321,10 @@ def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
     """"Measured" is the word that unlocks the credibility gate, the blank-allowance skip and
     the fabricated-part tests. A part claiming it must actually carry an outline and an area,
     or the claim is doing all that work on the strength of a matched filename."""
+    if not _parts(summary):
+        return _unevaluated("measured_geometry",
+                            "No part records were found on this job, so no geometry claim "
+                            "could be checked.")
     bad = []
     for p in _parts(summary):
         src = str(p.get("geometry_source") or "").lower()
@@ -281,19 +352,36 @@ def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
 
 
 # ── 6. stronger evidence is never silently overwritten ───────────────────────────────
-_ATTRIBUTED_FIELDS = ("normalized_material", "quantity", "thickness_mm", "blank_length_mm")
+_ATTRIBUTED_FIELDS = ("normalized_material", "quantity", "normalized_thickness_mm",
+                      "blank_length_mm")
+
+
+def _source_key_for(field: str) -> str:
+    """The key the PRECEDENCE MODULE writes a source to — asked of that module rather than
+    guessed. Guessing produced "normalized_material_source" while apply_field writes
+    "material_source", so a properly attributed job was warned about on every part."""
+    try:
+        from source_precedence import _SOURCE_FIELDS
+        return _SOURCE_FIELDS.get(field, f"{field}_source")
+    except Exception:
+        return {"normalized_material": "material_source",
+                "quantity": "quantity_source",
+                "normalized_thickness_mm": "thickness_source"}.get(field, f"{field}_source")
 
 
 def check_evidence_is_attributed(summary: Any) -> List[Dict[str, Any]]:
     """Precedence can only be enforced on a datum whose source is recorded. A field written
     without one is invisible to arbitration: the next pass has nothing to compare against and
     overwrites it silently, which is the whole failure mode."""
+    if not _parts(summary):
+        return _unevaluated("evidence_attribution",
+                            "No part records were found on this job.")
     unattributed: Dict[str, int] = {}
     for p in _parts(summary):
         for f in _ATTRIBUTED_FIELDS:
             if p.get(f) in (None, "", 0):
                 continue
-            if not p.get(f"{f}_source"):
+            if not p.get(_source_key_for(f)):
                 unattributed[f] = unattributed.get(f, 0) + 1
     if not unattributed:
         return []
@@ -333,7 +421,16 @@ def check_workbook_adapters_read_everything(summary: Any) -> List[Dict[str, Any]
     with nothing in it. The read-back records which ones failed; this turns that record into
     a failure rather than a footnote."""
     fe = _node(summary, "final_estimate")
+    if not fe:
+        return _unevaluated("workbook_adapters",
+                            "No final_estimate on this job — the read-back did not run or did "
+                            "not complete, so which workbook blocks were readable is unknown.")
     problems = fe.get("adapter_problems")
+    if problems is None:
+        return _unevaluated("workbook_adapters",
+                            "The read-back recorded no adapter status, so whether every "
+                            "workbook block was readable is unknown. (Present and empty means "
+                            "'we checked'; absent means we did not.)")
     if not isinstance(problems, list) or not problems:
         return []
     return [_violation(
@@ -343,6 +440,43 @@ def check_workbook_adapters_read_everything(summary: Any) -> List[Dict[str, Any]
         f"Their rows are absent from this snapshot, so any total built from it is short by "
         f"whatever they contained.",
         problems=[p for p in problems if isinstance(p, dict)][:10])]
+
+
+def check_geometry_is_reconciled(summary: Any) -> List[Dict[str, Any]]:
+    """A part whose two measurements disagreed and could not be resolved is not a part we
+    know the size of. geometry_arbitration keeps the DXF and marks the part when it measures
+    materially LARGER than the model develops — the right call, because swapping in the model
+    would trade one unverified number for another — but a review flag alone changed nothing:
+    the fixture's own 400x300-against-60x34 case could still leave as a firm quote."""
+    if not _parts(summary):
+        return _unevaluated("geometry_reconciled", "No part records were found on this job.")
+    unreconciled, rejected = [], []
+    for p in _parts(summary):
+        _v = p.get("flat_arbitration") if isinstance(p.get("flat_arbitration"), dict) else {}
+        if p.get("flat_unreconciled") or _v.get("unreconciled"):
+            unreconciled.append({"part_number": p.get("part_number"),
+                                 "reason": _v.get("reason"),
+                                 "area_ratio": _v.get("area_ratio")})
+        elif p.get("dxf_geometry_rejected"):
+            # Resolved, not unresolved: the model superseded an incomplete DXF and the part
+            # is costed from a complete measurement. Worth seeing, not worth blocking.
+            rejected.append({"part_number": p.get("part_number"), "reason": _v.get("reason")})
+    out = []
+    if unreconciled:
+        out.append(_violation(
+            "geometry_unreconciled", BLOCKING,
+            f"{len(unreconciled)} part(s) have two measurements of the same blank that "
+            f"disagree beyond tolerance and could not be resolved. The size these parts were "
+            f"costed at is unconfirmed, so the price cannot be firm.",
+            parts=unreconciled[:10], count=len(unreconciled)))
+    if rejected:
+        out.append(_violation(
+            "dxf_geometry_superseded", WARNING,
+            f"{len(rejected)} part(s) were costed from the model because their DXF measured "
+            f"materially smaller than the flat the model develops. The price stands; the DXF "
+            f"export should be fixed.",
+            parts=rejected[:10], count=len(rejected)))
+    return out
 
 
 CHECKS = (
@@ -355,6 +489,7 @@ CHECKS = (
     check_measured_geometry_is_complete,
     check_evidence_is_attributed,
     check_low_confidence_is_declared,
+    check_geometry_is_reconciled,
 )
 
 
@@ -375,19 +510,28 @@ def check_job(summary: Any, write_back: bool = True) -> Dict[str, Any]:
             violations.extend(check(summary) or [])
         except Exception as exc:                       # a broken check must not stop a run
             violations.append(_violation(
-                "check_failed", WARNING,
+                "check_failed", UNVERIFIED,
                 f"invariant {check.__name__} could not run ({exc}); it has verified nothing.",
                 check=check.__name__))
         ran.append(check.__name__)
 
     blocking = [v for v in violations if v.get("severity") == BLOCKING]
+    unverified = [v for v in violations if v.get("severity") == UNVERIFIED]
     result = {
         "schema": SCHEMA,
+        # ok        — nothing we checked came back wrong
+        # verified  — every check actually had the data to run
+        # A job can be `ok` and unverified at the same time, and that combination is exactly
+        # what a read-back failure produces: nothing found wrong because nothing was looked
+        # at. Only `may_quote_firm` answers the question a quote needs to ask.
         "ok": not blocking,
+        "verified": not unverified,
+        "may_quote_firm": not blocking and not unverified,
         "checks_run": ran,
         "violations": violations,
         "blocking": len(blocking),
-        "warnings": len(violations) - len(blocking),
+        "unverified": len(unverified),
+        "warnings": len(violations) - len(blocking) - len(unverified),
     }
     if write_back and isinstance(summary, dict):
         summary["invariants"] = result
@@ -398,11 +542,14 @@ def format_report(result: Dict[str, Any]) -> str:
     """One block of text for the console and the log."""
     if not isinstance(result, dict):
         return "[invariants] no result"
-    if result.get("ok") and not result.get("violations"):
+    if result.get("may_quote_firm") and not result.get("violations"):
         return f"[invariants] all {len(result.get('checks_run') or [])} checks passed"
     lines = [f"[invariants] {result.get('blocking', 0)} blocking, "
-             f"{result.get('warnings', 0)} warning(s)"]
+             f"{result.get('unverified', 0)} unverified, "
+             f"{result.get('warnings', 0)} warning(s)"
+             f"{'' if result.get('may_quote_firm') else '  -> NOT A FIRM PRICE'}"]
+    _mark = {BLOCKING: "BLOCKING  ", UNVERIFIED: "UNVERIFIED", WARNING: "warning   "}
     for v in result.get("violations") or []:
-        mark = "BLOCKING" if v.get("severity") == BLOCKING else "warning "
-        lines.append(f"   {mark}  {v.get('code')}: {v.get('message')}")
+        lines.append(f"   {_mark.get(v.get('severity'), 'warning   ')}  "
+                     f"{v.get('code')}: {v.get('message')}")
     return "\n".join(lines)

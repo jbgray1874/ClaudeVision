@@ -464,7 +464,8 @@ def _flag(msg: str, flags: List[str]):
     print(f"   [wb_populate] ⚠ {msg}")
 
 
-def route_group_id(wb_op: Any, material: Any, thickness: Any, part_numbers: Any = ()) -> str:
+def route_group_id(wb_op: Any, material: Any, thickness: Any, part_numbers: Any = (),
+                   group_key: Any = None) -> str:
     """A stable identity for a route group, independent of where it lands on the sheet.
 
     The sheet row is the join key WITHIN a run, and it is the right one — it is what Excel
@@ -477,15 +478,23 @@ def route_group_id(wb_op: Any, material: Any, thickness: Any, part_numbers: Any 
     it covers. Same group, same id, whatever row it lands on and whatever job it belongs to.
     """
     import hashlib
-    _thk = _num_or_none(thickness)
     parts = sorted({str(p).strip().upper() for p in (part_numbers or []) if str(p).strip()})
-    basis = "|".join((
-        str(wb_op or "").strip().lower(),
-        str(material or "").strip().lower(),
-        f"{_thk:.3f}" if _thk is not None else "",
-        ",".join(parts),
-    ))
-    return "rg_" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+    if group_key is not None:
+        # THE GROUPING KEY IS THE IDENTITY. Deriving the id from the group's stored material
+        # and thickness is wrong for the one-row-per-job departments, whose key is
+        # (operation, "", ""): those fields hold whatever the FIRST part to reach the group
+        # happened to carry, so reordering mixed-gauge P.Coat or Weld parts changed an id
+        # that is supposed to be stable. The key is what actually decided the grouping.
+        basis = "|".join(str(k or "").strip().lower() for k in
+                         (group_key if isinstance(group_key, (list, tuple)) else [group_key]))
+    else:
+        _thk = _num_or_none(thickness)
+        basis = "|".join((
+            str(wb_op or "").strip().lower(),
+            str(material or "").strip().lower(),
+            f"{_thk:.3f}" if _thk is not None else "",
+        ))
+    return "rg_" + hashlib.sha1((basis + "||" + ",".join(parts)).encode("utf-8")).hexdigest()[:12]
 
 
 def _num_or_none(v: Any) -> Optional[float]:
@@ -527,7 +536,8 @@ def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[s
             {
                 "workbook_row": g.get("workbook_row"),
                 "route_group_id": route_group_id(g.get("wb_op"), g.get("material"),
-                                                 g.get("thickness"), g.get("parts")),
+                                                 g.get("thickness"), g.get("parts"),
+                                                 group_key=g.get("group_key")),
                 "wb_operation": g.get("wb_op"),
                 # Real engine operations, recorded when the group was formed. NOT the group
                 # key: that holds the mapped department name.
@@ -1614,6 +1624,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
             g = _groups.setdefault(key, {
                 "wb_op": wb_op, "material": _mat, "thickness": _thk,
+                # The tuple that DECIDED this grouping. material/thickness above are only
+                # those of the first part to land here, which for a one-row-per-job
+                # department is an accident of ordering.
+                "group_key": key,
                 "qty": 0, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
                 # The ENGINE operation(s) behind this row. The group key carries the mapped
                 # DEPARTMENT name, so it cannot answer "what operation is this" — reading it
