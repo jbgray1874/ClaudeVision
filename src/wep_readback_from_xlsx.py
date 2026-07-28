@@ -192,8 +192,13 @@ def _used_bounds(com_ws) -> Tuple[int, int]:
 # than fail. Same reasoning as _find_wb_sell_price_ref scanning for its label.
 _LABOUR_HEADER_KEYS = {
     "operation": "operation", "part description": "description", "dept": "department",
-    "qty per unit": "qty_per_unit", "rate per hour": "rate_per_hour",
-    "total hours": "total_hours", "labour cost": "labour_cost_gbp",
+    # Named for what they CONTAIN, not what the template's headers say. On this sheet
+    # "Rate Per Hour" is a THROUGHPUT (99 pieces/hour) and "Labour Cost" is the department's
+    # HOURLY RATE (GBP 25.43/hr) - only "Total Value" is a per-unit cost. Carrying the header
+    # wording into a JSON contract would hand an ERP integration two fields whose names say
+    # the opposite of their contents.
+    "qty per unit": "qty_per_unit", "rate per hour": "throughput_per_hour",
+    "total hours": "batch_hours", "labour cost": "dept_rate_gbp_per_hour",
     "set up": "setup_minutes", "total value": "total_value_gbp",
 }
 _MATERIAL_HEADER_KEYS = {
@@ -288,12 +293,34 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
         lab_first = int(_CM["labour"]["first_row"]); lab_last = int(_CM["labour"]["last_row"])
     except Exception:
         pass
+    # EVERY material block, not just the bought-in BOM. Reading rows 11-50 alone omitted the
+    # wire, sheet-steel and other-sheet blocks, so the snapshot's material rows could not sum
+    # to the sheet's Total Material Cost - on 12120 it was GBP 9.64 of a GBP 10.07 total,
+    # with the missing 43p being exactly the fabricated material. A snapshot that does not
+    # reconcile to its own total is not a snapshot anyone can build an ERP export on.
+    _blocks = [("bom", bom_first, bom_last, ("bill of materials", "total value"))]
+    try:
+        from wb_populate import CELL_MAP as _CM2
+        for _name, _needles in (("wire", ("gauge", "cost")),
+                                ("steel", ("part length", "cost per part")),
+                                ("other_sheet", ("thickness", "cost per part"))):
+            _b = _CM2.get(_name)
+            if _b:
+                _blocks.append((_name, int(_b["first_row"]), int(_b["last_row"]), _needles))
+    except Exception:
+        pass
+
+    mats = []
+    for _name, _f, _l, _needles in _blocks:
+        for _r in _read_block(com_ws, _f, _l, _MATERIAL_HEADER_KEYS, _needles,
+                              "description", max_col):
+            _r["block"] = _name
+            mats.append(_r)
+
     return {
         "labour_rows": _read_block(com_ws, lab_first, lab_last, _LABOUR_HEADER_KEYS,
                                    ("operation", "total hours"), "operation", max_col),
-        "material_rows": _read_block(com_ws, bom_first, bom_last, _MATERIAL_HEADER_KEYS,
-                                     ("bill of materials", "total value"), "description",
-                                     max_col),
+        "material_rows": mats,
     }
 
 

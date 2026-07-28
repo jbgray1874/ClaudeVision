@@ -103,21 +103,37 @@ def _workbook_rows(source: Any) -> Optional[List[Dict[str, Any]]]:
     if not isinstance(fe, dict) and isinstance(source.get("estimate_summary"), dict):
         fe = source["estimate_summary"].get("final_estimate")
     if isinstance(fe, dict) and isinstance(fe.get("labour_rows"), list):
+        # ROUTE IDENTITY comes from the accepted grouping, VALUE from Excel. The calculated
+        # rows know what a line cost but not which engine operations or parts produced it;
+        # the accepted rows know exactly that but nothing about cost. Joined on the sheet
+        # row they share. Without the join the department name is all that survives, and
+        # inverting it expands every alias — which is how the quote came to list both
+        # "Assembly" and "Assemble", "Fold" and "Folding", "Weld" and "Welding".
+        _accepted = {}
+        _acc_node = source.get("workbook_labour")
+        if not isinstance(_acc_node, dict) and isinstance(source.get("estimate_summary"), dict):
+            _acc_node = source["estimate_summary"].get("workbook_labour")
+        for _a in ((_acc_node or {}).get("rows") or []):
+            if isinstance(_a, dict) and _a.get("workbook_row"):
+                _accepted[int(_a["workbook_row"])] = _a
         rows = []
         for r in fe["labour_rows"]:
             if not isinstance(r, dict):
                 continue
-            _v = _num(r.get("total_value_gbp"))
-            _h = _num(r.get("total_hours"))
-            if _v <= 0 and _h <= 0:
+            # A line the sheet priced at nothing is not part of the job. Hours alone are not
+            # enough: a row can carry time and still resolve to no charge, and putting that
+            # on a client quote promises work we are not billing for.
+            if _num(r.get("total_value_gbp")) <= 0:
                 continue
+            _acc = _accepted.get(int(_num(r.get("workbook_row")) or 0)) or {}
             rows.append({
-                "wb_operation": r.get("operation"),
-                "engine_operations": r.get("engine_operations") or [],
-                "part_numbers": r.get("part_numbers") or [],
+                "wb_operation": r.get("operation") or _acc.get("wb_operation"),
+                "engine_operations": _acc.get("engine_operations") or [],
+                "part_numbers": _acc.get("part_numbers") or [],
                 "qty_per_unit": r.get("qty_per_unit"),
-                "total_hours": r.get("total_hours"),
+                "batch_hours": r.get("batch_hours"),
                 "total_value_gbp": r.get("total_value_gbp"),
+                "workbook_row": r.get("workbook_row"),
                 "_calculated": True,
             })
         if rows:
@@ -183,8 +199,13 @@ def _row_engine_ops(row: Dict[str, Any]) -> List[str]:
         e for o in ops for e in inv.get(o.strip().lower(), [])]
     if ops:
         return ops
+    # ONE canonical operation per department, not every synonym mapping to it. OP_NAME_MAP
+    # carries aliases ("assemble"/"assembly", "fold"/"folding", "weld"/"welding") so a
+    # department inverts to several keys, and a consumer rendering each in plain language
+    # printed the same operation twice under different names.
     dept = str(row.get("wb_operation") or "").strip().lower()
-    return list(inv.get(dept, [])) or ([dept] if dept else [])
+    hit = inv.get(dept)
+    return [hit[0]] if hit else ([dept] if dept else [])
 
 
 def costed_operations(source: Any) -> Dict[str, float]:

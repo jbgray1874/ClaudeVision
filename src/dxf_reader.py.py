@@ -678,6 +678,31 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     }
 
 
+def _all_entities(msp: Any, entity_types: Optional[set] = None) -> List[Any]:
+    """Every model-space entity INCLUDING block contents, transformed to model coordinates.
+
+    ezdxf's msp.query() does not enter an INSERT. Anything counting features — holes,
+    pierces — must explode the same way the outline does, or the two disagree about what
+    the file contains."""
+    out: List[Any] = []
+
+    def _walk(entities: Any, depth: int = 0) -> None:
+        for e in entities:
+            if e.dxftype() == "INSERT" and depth < 5:
+                try:
+                    kids = list(e.virtual_entities())
+                except Exception:
+                    kids = []
+                if kids:
+                    _walk(kids, depth + 1)
+                    continue
+            if entity_types is None or e.dxftype() in entity_types:
+                out.append(e)
+
+    _walk(msp)
+    return out
+
+
 def _get_layer_entities(
     msp: Any,
     target_layers: set,
@@ -716,7 +741,12 @@ def _get_layer_entities(
                 except Exception:
                     kids = []
                 if kids:
-                    _walk(kids, depth + 1, _entity_layer(e) or inherited)
+                    # A nested INSERT on layer '0' is ByBlock: it belongs to whatever
+                    # its parent sits on. Taking its own '0' would drop the cut layer
+                    # a level down and lose the geometry inside it.
+                    _own = _entity_layer(e)
+                    _walk(kids, depth + 1,
+                          inherited if _own in ('', '0') else (_own or inherited))
                     continue
             _consider(e, inherited)
 
@@ -1199,7 +1229,12 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
     notches  = _detect_corner_notches(cut_lines, scale)
 
     # Holes — circles on CUT_LAYERS or all layers (excluding tiny features)
-    all_circles = list(msp.query("CIRCLE"))
+    # Circles inside a block are geometry too. msp.query("CIRCLE") never enters an INSERT,
+    # so on an export that blocks the profile every hole vanished: 06M carries eight circles
+    # in its block and reported zero holes and zero pierces, which under-prices the laser.
+    # Same walk as the outline uses, so holes and profile can never disagree about what is
+    # in the file.
+    all_circles = _all_entities(msp, {"CIRCLE"})
     hole_diams  = sorted(set(
         round(_circle_diameter_mm(e, scale), 2)
         for e in all_circles

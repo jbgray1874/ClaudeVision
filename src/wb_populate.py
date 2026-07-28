@@ -1786,7 +1786,28 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             else:
                 _flag(f"labour op '{wb_op}' has no batch_hours and no default throughput — "
                       f"WB hours/cost will be #DIV/0! for this row.", flags)
+        # Remember WHICH sheet row this group became. The calculated read-back
+        # returns rows keyed only by their position, and without this join key it
+        # cannot recover which engine operations and which parts a row represents —
+        # it then falls back to inverting the department name, which expands every
+        # alias and duplicates operations on the client quote.
+        g["workbook_row"] = row
         row += 1
+
+    # Back-fill the sheet row each accepted group landed on, now the write loop has run.
+    # This is the join key the calculated read-back needs: without it a calculated row can
+    # only be matched by department name, and inverting that expands every alias.
+    try:
+        _by_op: Dict[str, List[Dict[str, Any]]] = {}
+        for _g in _groups.values():
+            if _g.get("workbook_row"):
+                _by_op.setdefault(str(_g.get("wb_op") or ""), []).append(_g)
+        for _r in ((summary.get("workbook_labour") or {}).get("rows") or []):
+            _cands = _by_op.get(str(_r.get("wb_operation") or ""))
+            if _cands:
+                _r["workbook_row"] = _cands.pop(0).get("workbook_row")
+    except Exception:
+        pass
 
     _flag(f"labour: {len(_groups)} grouped row(s) — setup is booked once per tooling group, "
           f"not once per part.", flags)

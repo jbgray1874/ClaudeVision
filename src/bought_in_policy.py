@@ -92,6 +92,12 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     components have all three. Only geometry we could actually cut from counts."""
     if not isinstance(part, dict):
         return False
+    # An explicit "nothing was measured" outranks every positive marker below. flat_pattern
+    # _detected is also set from drawing EXTENTS as a fallback (drawing_job_merge), which is
+    # not measured geometry, and being checked first it let a matched-but-unreadable DXF
+    # count as evidence — the exact case this predicate was narrowed to exclude.
+    if part.get("dxf_measured_outline") is False and not part.get("native_flat_pattern"):
+        return False
     if part.get("flat_pattern_detected") or part.get("native_flat_pattern"):
         return True
     # dxf_augmented is set ONLY where an outline was actually measured. dxf_source_file is
