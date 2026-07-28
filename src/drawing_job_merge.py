@@ -249,10 +249,16 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "drawing_extents_mm": [flat["blank_length_mm"], flat["blank_width_mm"]],
             "estimated_hole_count": flat["hole_count"],
             "estimated_bend_line_count": flat["bend_count"],
-            # Prefer the flat reader's figure: it explodes blocks, whereas the raw
-            # parser does not and returns zero pierces on a block-wrapped export.
-            "estimated_pierce_count": (flat.get("estimated_pierce_count")
-                                       or raw.get("estimated_pierce_count")),
+            # Take the HIGHER of the two readers. The flat reader explodes blocks, so it is
+            # the only one that sees anything on a block-wrapped export where the raw parser
+            # returns zero. But it can also under-count: where an outline is drawn with gaps
+            # too large to chain, its loops stay open and those contours are not counted.
+            # Preferring it outright meant a lower-but-positive figure beat a higher one, and
+            # a missed pierce is laser time nobody charges for.
+            "estimated_pierce_count": max(
+                int(flat.get("estimated_pierce_count") or 0),
+                int(raw.get("estimated_pierce_count") or 0),
+            ) or None,
         }
     else:
         extents = raw.get("drawing_extents_mm") or []

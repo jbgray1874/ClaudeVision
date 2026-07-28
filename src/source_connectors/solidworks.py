@@ -801,16 +801,32 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         # which is separate from round holes and drives pierce count and cutting time. It
         # was read from the model and then discarded before it reached anything that costs.
         if nat.cut_out_count:
+            # Every internal cut-out needs its own pierce, as does the outer profile.
+            # Under-counting pierces under-prices the laser.
+            _native_pierces = int(nat.cut_out_count) + 1
+            # SUPERSEDE, DO NOT MERELY FILL. This is the model's own count of internal
+            # profiles — rank 90, above DXF and far above a PDF-derived guess. Filling only
+            # an empty value meant any earlier positive number, however weak, locked the
+            # stronger evidence out: a drawing-text estimate of 2 kept its place against a
+            # cut list saying 9, and the laser was charged for two pierces. A disagreement is
+            # flagged rather than silently overwritten, so a human can see both figures.
             mf = part.setdefault("manufacturing_features", {})
+            gr = part.setdefault("geometry_rollup", {})
+            _prev = max(_num((mf or {}).get("pierce_count")) or 0,
+                        _num((gr or {}).get("estimated_pierce_count")) or 0)
             if isinstance(mf, dict):
                 mf["cut_out_count"] = int(nat.cut_out_count)
-                if not _num(mf.get("pierce_count")):
-                    # Every internal cut-out needs its own pierce, as does the outer
-                    # profile. Under-counting pierces under-prices the laser.
-                    mf["pierce_count"] = int(nat.cut_out_count) + 1
-            gr = part.setdefault("geometry_rollup", {})
-            if isinstance(gr, dict) and not _num(gr.get("estimated_pierce_count")):
-                gr["estimated_pierce_count"] = int(nat.cut_out_count) + 1
+                mf["pierce_count"] = _native_pierces
+                mf["pierce_count_source"] = SOURCE_NAME
+            if isinstance(gr, dict):
+                gr["estimated_pierce_count"] = _native_pierces
+                gr["estimated_pierce_count_source"] = SOURCE_NAME
+            if _prev and int(_prev) != _native_pierces:
+                part.setdefault("review_flags", []).append(
+                    f"pierce_count: {int(_prev)} from an earlier pass replaced by "
+                    f"{_native_pierces} from the SolidWorks cut list ({nat.cut_out_count} "
+                    f"cut-out(s) + the outer profile). The model is the stronger source; "
+                    f"the two disagree, so confirm the drawing shows every cut-out")
             flags.append(f"{nat.cut_out_count} cut-out(s) from the SolidWorks cut list "
                          f"— each needs its own pierce")
 

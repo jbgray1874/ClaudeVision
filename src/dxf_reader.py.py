@@ -678,29 +678,207 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     }
 
 
-def _all_entities(msp: Any, entity_types: Optional[set] = None) -> List[Any]:
-    """Every model-space entity INCLUDING block contents, transformed to model coordinates.
+def _all_entities_with_layers(msp: Any,
+                              entity_types: Optional[set] = None) -> List[Tuple[Any, str]]:
+    """Every model-space entity INCLUDING block contents, each paired with its EFFECTIVE
+    layer, transformed to model coordinates.
 
     ezdxf's msp.query() does not enter an INSERT. Anything counting features — holes,
     pierces — must explode the same way the outline does, or the two disagree about what
-    the file contains."""
-    out: List[Any] = []
+    the file contains.
 
-    def _walk(entities: Any, depth: int = 0) -> None:
+    The effective layer matters as much as the entity. An entity drawn on layer '0' inside
+    a block sits on whatever layer its INSERT sits on — that is how SolidWorks and the M&S
+    templates export them. Reading the entity's own layer instead returns '0' for every one
+    of them, so a circle inside a SYMBOLS(BENCHMARK) or DIMS+NOTES block passes a skip-layer
+    filter untouched and is priced as a hole. _get_layer_entities has always resolved this;
+    this walk did not, which left the two disagreeing about the same file.
+    """
+    out: List[Tuple[Any, str]] = []
+
+    def _walk(entities: Any, depth: int = 0, inherited: Optional[str] = None) -> None:
         for e in entities:
+            _own = _entity_layer(e)
+            _eff = inherited if (_own in ("", "0") and inherited) else _own
             if e.dxftype() == "INSERT" and depth < 5:
                 try:
                     kids = list(e.virtual_entities())
                 except Exception:
                     kids = []
                 if kids:
-                    _walk(kids, depth + 1)
+                    _walk(kids, depth + 1, _eff or inherited)
                     continue
             if entity_types is None or e.dxftype() in entity_types:
-                out.append(e)
+                out.append((e, _eff))
 
     _walk(msp)
     return out
+
+
+def _all_entities(msp: Any, entity_types: Optional[set] = None) -> List[Any]:
+    """As _all_entities_with_layers, entities only. Prefer the layer-aware form wherever
+    the result is filtered by layer."""
+    return [e for e, _ in _all_entities_with_layers(msp, entity_types)]
+
+
+def _entity_points(e: Any) -> List[Tuple[float, float]]:
+    """Every defining point of an entity, in drawing units. Used for extents and for
+    chaining open segments into loops; approximate is fine for both."""
+    t = e.dxftype()
+    try:
+        if t == "LINE":
+            return [(e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)]
+        if t == "ARC":
+            cx, cy, r = e.dxf.center.x, e.dxf.center.y, float(e.dxf.radius)
+            a0, a1 = math.radians(e.dxf.start_angle), math.radians(e.dxf.end_angle)
+            return [(cx + r * math.cos(a0), cy + r * math.sin(a0)),
+                    (cx + r * math.cos(a1), cy + r * math.sin(a1))]
+        if t == "CIRCLE":
+            cx, cy, r = e.dxf.center.x, e.dxf.center.y, float(e.dxf.radius)
+            return [(cx - r, cy - r), (cx + r, cy + r)]
+        if t == "LWPOLYLINE":
+            return [(float(p[0]), float(p[1])) for p in e.get_points("xy")]
+        if t == "POLYLINE":
+            return [(float(v.dxf.location.x), float(v.dxf.location.y)) for v in e.vertices]
+        if t == "SPLINE":
+            pts = list(getattr(e, "fit_points", []) or []) or list(getattr(e, "control_points", []) or [])
+            return [(float(p[0]), float(p[1])) for p in pts]
+    except Exception:
+        pass
+    return []
+
+
+def _is_closed_polyline(e: Any) -> bool:
+    if bool(getattr(e, "closed", False)):
+        return True
+    try:
+        return bool(int(getattr(e.dxf, "flags", 0) or 0) & 1)
+    except Exception:
+        return False
+
+
+def _count_closed_contours(msp: Any, scale: float, skip_layers: set,
+                           blank_l: float = 0.0, blank_w: float = 0.0,
+                           cut_layers: Optional[set] = None) -> Dict[str, Any]:
+    """How many separate closed profiles the laser has to cut — the pierce count.
+
+    A pierce is one closed contour: the outer profile, and every internal cut-out. Counting
+    only CIRCLEs answers this for round holes alone and silently prices a slot, a rectangular
+    aperture or a D-cut at nothing. Cut-outs arrive in three shapes and all three are counted
+    here: a circle, a closed polyline, and a loop assembled from separate lines and arcs
+    (which is how a slot with radiused ends is usually exported).
+
+    Bend lines are excluded — they are not cut, and chaining them would fuse real contours
+    into one. Annotation layers are excluded by EFFECTIVE layer, so geometry inheriting
+    layer '0' from an annotation block is still skipped.
+
+    The outer profile is one of these contours, not an extra: it is added only when no
+    detected contour spans the blank, which is the case when the outline is drawn with gaps
+    too large to chain. `incomplete` is set when open segments were left unclosed, so a
+    caller can tell "no internal cut-outs" from "we could not tell".
+    """
+    types = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE"}
+    contours: List[List[Tuple[float, float]]] = []
+    loose: List[Any] = []
+
+    items = [(e, (lay or "").upper())
+             for e, lay in _all_entities_with_layers(msp, types)
+             if (lay or "").upper() not in skip_layers]
+    # PREFER THE CUT LAYERS. A production drawing carries a frame, a title block and
+    # revision boxes, and those are closed rectangles too: chaining every non-annotation
+    # segment in the file would invent contours and charge pierces for the border. Where the
+    # cut layers hold geometry — the normal case for a flat-pattern export — only they are
+    # counted. A file whose cut layers are empty falls back to everything not skipped, so an
+    # unusual layer scheme still gets a count rather than a silent zero.
+    if cut_layers:
+        _wanted = {l.upper() for l in cut_layers}
+        _on_cut = [it for it in items if it[1] in _wanted]
+        if _on_cut:
+            items = _on_cut
+
+    for e, layer in items:
+        t = e.dxftype()
+        if t == "CIRCLE":
+            if _circle_diameter_mm(e, scale) >= 1.0:
+                contours.append(_entity_points(e))
+            continue
+        if t in ("LWPOLYLINE", "POLYLINE"):
+            if _is_closed_polyline(e):
+                contours.append(_entity_points(e))
+            else:
+                loose.append(e)
+            continue
+        # A bend line is not a cut. It must not be chained, or two cut-outs joined by a
+        # bend line would be counted as one contour.
+        _len = _arc_length(e, scale) if t == "ARC" else (
+            _dist2d(*_entity_points(e)[:2]) * scale if len(_entity_points(e)) >= 2 else 0.0)
+        if _is_bend_candidate(e, _len):
+            continue
+        loose.append(e)
+
+    # Chain the loose segments: shared endpoints, within a 0.1mm tolerance.
+    tol = (0.1 / scale) if scale else 0.1
+
+    def _key(p: Tuple[float, float]) -> Tuple[int, int]:
+        q = tol if tol > 0 else 0.1
+        return (int(round(p[0] / q)), int(round(p[1] / q)))
+
+    parent: Dict[Tuple[int, int], Tuple[int, int]] = {}
+
+    def _find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a, b):
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    degree: Dict[Tuple[int, int], int] = {}
+    seg_nodes: List[Tuple[Tuple[int, int], Tuple[int, int], List[Tuple[float, float]]]] = []
+    for e in loose:
+        pts = _entity_points(e)
+        if len(pts) < 2:
+            continue
+        a, b = _key(pts[0]), _key(pts[-1])
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+        _union(a, b)
+        seg_nodes.append((a, b, pts))
+
+    comps: Dict[Tuple[int, int], List[Tuple[Tuple[int, int], Tuple[int, int], List]]] = {}
+    for a, b, pts in seg_nodes:
+        comps.setdefault(_find(a), []).append((a, b, pts))
+
+    incomplete = False
+    for segs in comps.values():
+        nodes = set()
+        for a, b, _ in segs:
+            nodes.add(a); nodes.add(b)
+        # A closed loop visits every node at least twice; a chain has two loose ends.
+        if segs and all(degree.get(n, 0) >= 2 for n in nodes):
+            contours.append([p for _, _, pts in segs for p in pts])
+        elif segs:
+            incomplete = True
+
+    def _spans_blank(pts: List[Tuple[float, float]]) -> bool:
+        if not (blank_l and blank_w and pts):
+            return False
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+        dims = sorted([(max(xs) - min(xs)) * scale, (max(ys) - min(ys)) * scale], reverse=True)
+        return dims[0] >= 0.9 * max(blank_l, blank_w) and dims[1] >= 0.9 * min(blank_l, blank_w)
+
+    outer_counted = any(_spans_blank(c) for c in contours)
+    pierces = len(contours) + (0 if outer_counted else (1 if blank_l else 0))
+    return {
+        "pierce_count": pierces,
+        "closed_contours": len(contours),
+        "outer_counted": outer_counted,
+        "incomplete": incomplete,
+    }
 
 
 def _get_layer_entities(
@@ -1239,17 +1417,25 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
     # hole_count then counted every circle in the file regardless, so a title block or
     # symbol layer inflated the laser's hole count. Now one filtered list feeds both, so
     # the count and the diameters can never describe different sets of circles.
+    # Skip by EFFECTIVE layer: a circle drawn on layer '0' inside a SYMBOLS(BENCHMARK) or
+    # DIMS+NOTES block reports its own layer as '0' and would otherwise sail through the
+    # skip list and be priced as a hole.
     _hole_circles = [
-        e for e in _all_entities(msp, {"CIRCLE"})
-        if _circle_diameter_mm(e, scale) >= 1.0 and _entity_layer(e) not in _skip
+        e for e, _lay in _all_entities_with_layers(msp, {"CIRCLE"})
+        if _circle_diameter_mm(e, scale) >= 1.0 and (_lay or "").upper() not in _skip
     ]
     all_circles = _hole_circles
     hole_diams  = sorted(set(round(_circle_diameter_mm(e, scale), 2) for e in _hole_circles))
     hole_count  = len(_hole_circles)
-    # Every hole is its own pierce, plus one for the outer profile. The raw non-recursive
-    # parser never entered a block, so on a block-wrapped export it reported zero pierces
-    # and the laser's pierce time vanished with them.
-    pierce_from_holes = hole_count + (1 if outline.get("blank_length_mm") else 0)
+    # PIERCES ARE CONTOURS, NOT HOLES. Counting holes + 1 prices a slot, a rectangular
+    # aperture and a D-cut at nothing — only round holes were ever counted. Every closed
+    # profile needs its own pierce, whether it is a circle, a closed polyline, or a loop of
+    # separate lines and arcs, and the outer profile is one of them rather than an extra.
+    _contours = _count_closed_contours(msp, scale, _skip,
+                                       outline.get("blank_length_mm", 0.0) or 0.0,
+                                       outline.get("blank_width_mm", 0.0) or 0.0,
+                                       CUT_LAYERS)
+    pierce_from_holes = _contours["pierce_count"]
 
     # ── Bend data ─────────────────────────────────────────────────────────────
     bend = _extract_bend_data(msp, scale)
@@ -1319,6 +1505,10 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
 
         # Blank geometry (exact)
         "estimated_pierce_count": pierce_from_holes,
+        "closed_contour_count":   _contours["closed_contours"],
+        # Open segments were left unchained, so some cut-outs may not have been seen. Lets a
+        # caller tell "no internal cut-outs" from "we could not tell".
+        "pierce_count_incomplete": bool(_contours["incomplete"]),
         "blank_length_mm":      outline.get("blank_length_mm", 0.0),
         "blank_width_mm":       outline.get("blank_width_mm",  0.0),
         "blank_area_mm2":       area_mm2,

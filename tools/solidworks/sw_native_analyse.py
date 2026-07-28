@@ -1102,13 +1102,29 @@ def assembly_bom(doc) -> List[BomLine]:
             # nothing. Everything read from the model then silently vanishes: the BOM line
             # keeps the instance name but loses its title, material, properties and path,
             # so the part looks unidentified rather than unresolved. Resolve it and retry.
-            # swComponentFullyResolved = 3.
+            #
+            # swComponentSuppressionState_e: 2 = swComponentFullyResolved,
+            # 3 = swComponentResolved. Both lift a component out of lightweight; which one
+            # a given SolidWorks build accepts varies, so try the fully-resolved state first
+            # and fall back. The comment here previously named 3 as fully-resolved, which it
+            # is not.
+            #
+            # The retry must go through _get0 exactly as the first attempt does. In this
+            # late-binding, GetModelDoc2 resolves as a PROPERTY, so calling it with () raises
+            # rather than returning the model — which is the very failure that sent us here.
+            # Retrying with the calling convention that just failed can only fail again.
             if model is None:
-                try:
-                    c.SetSuppression2(3)
-                    model = c.GetModelDoc2()
-                except Exception:
-                    model = None
+                for _state in (2, 3):
+                    try:
+                        c.SetSuppression2(_state)
+                    except Exception:
+                        continue
+                    try:
+                        model = c.GetModelDoc2()
+                    except Exception:
+                        model = _get0(c, "GetModelDoc2")
+                    if model is not None:
+                        break
             model = _wrap(model, "IModelDoc2") if model is not None else None
             # Document identity. The component INSTANCE name carries the '-N' suffix
             # (strip it); the model's document TITLE is already the clean part number

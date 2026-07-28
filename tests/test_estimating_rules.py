@@ -25,15 +25,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 _FAILS = []
 
+# Under pytest a failure MUST raise, or pytest reports a green run over a broken engine:
+# these helpers only ever appended to a list, so `pytest tests/test_estimating_rules.py`
+# passed against every mutation the plain runner caught. The plain runner keeps collecting,
+# so it can still report every failure in a test rather than stopping at the first.
+_COLLECT_ONLY = False
+
+
+def _fail(msg: str) -> None:
+    _FAILS.append(msg)
+    if not _COLLECT_ONLY:
+        raise AssertionError(msg)
+
 
 def eq(actual, expected, what):
     if actual != expected:
-        _FAILS.append(f"{what}\n      expected: {expected!r}\n      actual:   {actual!r}")
+        _fail(f"{what}\n      expected: {expected!r}\n      actual:   {actual!r}")
 
 
 def ok(cond, what):
     if not cond:
-        _FAILS.append(what)
+        _fail(what)
 
 
 # ── material identity — job 0348837 (Horti Crate) ────────────────────────────────────
@@ -316,6 +328,12 @@ def test_native_bom_and_geometry_rules():
     parts = [{"part_number": p} for p in
              ("12120-01-GA", "12120-01-103", "12120-01-01M", "12120-01-05M",
               "M4 Male Grip Knob", "12120-01-06M")]
+    # 06M already carries a weaker pierce count — the sort of figure a PDF pass leaves
+    # behind. The model says nine; the drawing text guessed two.
+    for _p in parts:
+        if _p["part_number"] == "12120-01-06M":
+            _p["manufacturing_features"] = {"pierce_count": 2}
+            _p["geometry_rollup"] = {"estimated_pierce_count": 2}
     out = apply_native_to_pre_estimate(parts, job)
     by = {p["part_number"]: p for p in parts}
     # The GA is absent from its own BOM; without indexing the assemblies it is costed as a leaf.
@@ -333,6 +351,15 @@ def test_native_bom_and_geometry_rules():
     _mf = by["12120-01-06M"].get("manufacturing_features") or {}
     eq(_mf.get("cut_out_count"), 3, "cut-out count must reach the engine, not be discarded")
     eq(_mf.get("pierce_count"), 4, "3 cut-outs plus the outer profile = 4 pierces")
+    # The model is rank 90 and must SUPERSEDE the weaker count, not merely fill a gap: any
+    # earlier positive number, however weak, otherwise locks the stronger evidence out.
+    eq(_mf.get("pierce_count_source"), "solidworks_api", "and the source is recorded")
+    # This is the field the laser reads. Asserting only on manufacturing_features tests the
+    # staging value and says nothing about what the part was actually charged.
+    eq((by["12120-01-06M"].get("geometry_rollup") or {}).get("estimated_pierce_count"), 4,
+       "the pierce count COSTING reads must carry the native figure, not the PDF's 2")
+    ok(any("pierce_count" in str(f) for f in (by["12120-01-06M"].get("review_flags") or [])),
+       "replacing a weaker figure is flagged, not done silently")
 
 
 # ── DXF ──────────────────────────────────────────────────────────────────────────────
@@ -409,6 +436,87 @@ def test_annotation_circles_are_not_holes():
     eq(r.get("estimated_pierce_count"), 4, "3 holes plus the outer profile = 4 pierces")
     ok(all(dia >= 1.0 for dia in (r.get("hole_diameters_mm") or [])),
        "hole diameters and hole count must describe the same set of circles")
+
+
+def test_annotation_layers_are_skipped_by_effective_layer():
+    """An entity drawn on layer '0' INSIDE a block sits on the layer its INSERT sits on —
+    that is how these exports are written. Reading the entity's own layer returns '0' for
+    every one of them, so circles inside a SYMBOLS(BENCHMARK) block passed the skip filter
+    untouched and were priced as holes. The outline walk always resolved this; the feature
+    walk did not."""
+    try:
+        import ezdxf
+    except ImportError:
+        print("      (skipped: ezdxf not installed)")
+        return
+    import tempfile
+    from pathlib import Path
+    from dxf_reader import extract_flat_pattern_data
+
+    d = ezdxf.new(); d.header["$INSUNITS"] = 4
+    msp = d.modelspace()
+    L, W = 120.0, 60.0
+    for a in [(0, 0, L, 0), (L, 0, L, W), (L, W, 0, W), (0, W, 0, 0)]:
+        msp.add_line(a[:2], a[2:], dxfattribs={"layer": "SLD-0"})
+    msp.add_circle((30, 30), 3.0, dxfattribs={"layer": "SLD-0"})       # one real hole
+    sym = d.blocks.new(name="WELDSYM")                                  # symbols on layer 0 …
+    for i in range(6):
+        sym.add_circle((i * 4, 0), 2.0, dxfattribs={"layer": "0"})
+    # … placed on an annotation layer. Their effective layer is the INSERT's.
+    msp.add_blockref("WELDSYM", (10, 5), dxfattribs={"layer": "SYMBOLS(BENCHMARK)"})
+    path = os.path.join(tempfile.mkdtemp(), "inherit.dxf")
+    d.saveas(path)
+
+    r = extract_flat_pattern_data(Path(path))
+    eq(int(r.get("estimated_hole_count") or r.get("hole_count") or 0), 1,
+       "a circle inheriting an annotation layer from its block is not a hole")
+    eq(r.get("estimated_pierce_count"), 2, "1 hole plus the outer profile = 2 pierces")
+
+
+def test_non_circular_cut_outs_are_pierced():
+    """A pierce is a closed CONTOUR, not a round hole. Counting circles + 1 prices a slot,
+    a rectangular aperture and a D-cut at nothing — and every one of them costs the laser a
+    pierce and its own cutting time. Cut-outs arrive in three shapes and all three count: a
+    circle, a closed polyline, and a loop assembled from separate lines and arcs."""
+    try:
+        import ezdxf
+    except ImportError:
+        print("      (skipped: ezdxf not installed)")
+        return
+    import tempfile
+    from pathlib import Path
+    from dxf_reader import extract_flat_pattern_data
+
+    d = ezdxf.new(); d.header["$INSUNITS"] = 4
+    msp = d.modelspace()
+    L, W = 200.0, 100.0
+    for a in [(0, 0, L, 0), (L, 0, L, W), (L, W, 0, W), (0, W, 0, 0)]:
+        msp.add_line(a[:2], a[2:], dxfattribs={"layer": "SLD-0"})
+    msp.add_circle((30, 50), 5.0, dxfattribs={"layer": "SLD-0"})            # 1: round hole
+    msp.add_lwpolyline([(60, 40), (90, 40), (90, 60), (60, 60)],            # 2: rectangular
+                       close=True, dxfattribs={"layer": "SLD-0"})
+    # 3: a slot with radiused ends — two lines and two arcs, no single closed entity.
+    msp.add_line((120, 45), (150, 45), dxfattribs={"layer": "SLD-0"})
+    msp.add_line((150, 55), (120, 55), dxfattribs={"layer": "SLD-0"})
+    msp.add_arc((150, 50), 5.0, -90, 90, dxfattribs={"layer": "SLD-0"})
+    msp.add_arc((120, 50), 5.0, 90, 270, dxfattribs={"layer": "SLD-0"})
+    # A drawing frame and title block are closed rectangles too. Counting every closed
+    # contour in the file would charge the laser a pierce for the border.
+    for box in ([(-50, -50), (260, -50), (260, 160), (-50, 160)],
+                [(180, -45), (255, -45), (255, -10), (180, -10)]):
+        msp.add_lwpolyline(box, close=True, dxfattribs={"layer": "TITLE_FRAME"})
+    path = os.path.join(tempfile.mkdtemp(), "cutouts.dxf")
+    d.saveas(path)
+
+    r = extract_flat_pattern_data(Path(path))
+    eq(r.get("estimated_pierce_count"), 4,
+       "3 cut-outs (round, rectangular, slot) plus the outer profile = 4 pierces")
+    eq(r.get("closed_contour_count"), 4, "each closed contour counted once")
+    ok(not r.get("pierce_count_incomplete"),
+       "every segment chained into a loop — nothing left open to warn about")
+    # The outer profile is one of the contours, not an extra on top of them.
+    eq(int(r.get("estimated_hole_count") or r.get("hole_count") or 0), 1,
+       "only the circle is a HOLE; the slot and aperture are cut-outs, not drilled")
 
 
 # ── workbook join — job 12120 ────────────────────────────────────────────────────────
@@ -536,6 +644,8 @@ def test_every_material_block_is_read_back_not_just_the_bom():
 
 # ── runner ───────────────────────────────────────────────────────────────────────────
 def main() -> int:
+    global _COLLECT_ONLY
+    _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
     print(f"\n{len(tests)} regression fixture(s) — each locks a defect that reached a real estimate\n")
