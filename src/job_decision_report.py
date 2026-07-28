@@ -261,13 +261,8 @@ def _ops_explanation(part: Dict, est: Optional[Dict] = None) -> str:
     provenance: it reads as evidence for a route we did not price. Same rule already
     applied to the client quote.
     """
-    _costed: List[str] = []
-    if isinstance(est, dict):
-        for _blk in (("labour_estimate", "costs_gbp"), ("process_estimate", "times_min")):
-            _d = est.get(_blk[0]) or {}
-            _d = _d.get(_blk[1]) if isinstance(_d, dict) else None
-            if isinstance(_d, dict):
-                _costed += [k for k, v in _d.items() if v]
+    from costed_facts import costed_operations
+    _costed: List[str] = list(costed_operations([est])) if isinstance(est, dict) else []
     if _costed:
         ops = _costed
     else:

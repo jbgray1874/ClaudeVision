@@ -591,11 +591,17 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
                  'The engine reached a full costed estimate with no blocking data-sufficiency failure.</td></tr>')
 
     # powder handled?
-    pc = _get(summary, "estimate_summary", "powder_coating_summary", default={}) or {}
-    if pc.get("by_part"):
-        n_pc = len(pc.get("by_part") or [])
+    # Post-costing source, shared with the client quote (costed_facts). The powder MATERIAL
+    # summary is not evidence on its own: it can carry a line for a part whose powder LABOUR
+    # was gated off, which is how this bullet came to congratulate the engine for correctly
+    # powder-coating eight lacquered timber panels that the Estimate sheet never charges
+    # powder on. A report claiming a process the sheet does not price is worse than silence.
+    from costed_facts import parts_with_operation
+    _pc_parts = parts_with_operation(summary, "powder_coating")
+    if _pc_parts:
         rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Powder coating scoped to the right parts.</b> '
-                 f'{n_pc} part(s) carry powder coating, driven by the finish field — not applied blanket across raw/assembly parts.</td></tr>')
+                 f'{len(_pc_parts)} part(s) are <b>charged</b> powder coating — not applied blanket '
+                 f'across raw/assembly parts.</td></tr>')
 
     # bought-ins recognised
     bi = [p for p in parts if str(p.get("part_number") or "").upper().startswith("BI-")]

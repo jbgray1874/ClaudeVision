@@ -16,8 +16,8 @@ Field sources (all confirmed against real 1282 JSON):
   UNIT PRICE   <- estimate_summary.workbook_equivalent_pricing.m105  (the REAL Excel-computed cost)
   order value  <- unit price x quantity
   material     <- distinct normalized_material across part_estimates
-  finish       <- powder_coating_summary + operations  ('Powder coated' if powder present)
-  what's incl. <- distinct operations across part_estimates[].process_estimate.routing -> plain EN
+  finish       <- costed_facts.costed_finish_label  (named from what was CHARGED)
+  what's incl. <- costed_facts.costed_operations -> plain EN  (never the drawing's routing text)
   GA image     <- primary_pdf.path -> render page 1 to PNG (PyMuPDF) -> base64 embed
 
 Standalone:
@@ -326,25 +326,12 @@ def _collect_operations(parts: List[Dict[str, Any]]) -> List[str]:
         if isinstance(op, str) and op and op not in seen:
             seen.append(op)
 
-    for p in parts:
-        # 1. costed labour lines — the authoritative "what we charged for"
-        costed = _get(p, "labour_estimate", "costs_gbp", default={}) or {}
-        if isinstance(costed, dict):
-            for op, val in costed.items():
-                try:
-                    if float(val or 0) > 0:
-                        _add(op)
-                except (TypeError, ValueError):
-                    continue
-        # 2. process times — same op set, covers a part costed at zero but genuinely routed
-        times = _get(p, "process_estimate", "times_min", default={}) or {}
-        if isinstance(times, dict):
-            for op, val in times.items():
-                try:
-                    if float(val or 0) > 0:
-                        _add(op)
-                except (TypeError, ValueError):
-                    continue
+    # Costed labour lines and process times — the authoritative "what we charged for",
+    # from the one shared post-costing source so the quote, the internal report and the
+    # Decision Report cannot each derive a different answer.
+    from costed_facts import costed_operations
+    for op in costed_operations(parts):
+        _add(op)
 
     # 3. Fallback ONLY if the estimate carries no costed operations at all (e.g. a parts-free
     #    summary). Interpreted routing is better than an empty list, but never overrides real
@@ -393,32 +380,13 @@ def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
     """Headline finish for the quote — from the finish we COSTED, not the drawing's
     interpreted routing text (which carries the customer's range-wide specification
     legend and would claim 'Powder coated' on a lacquered timber product)."""
-    pcs = _get(summary, "estimate_summary", "powder_coating_summary")
-    ops = set()
-    for p in parts:
-        costed = _get(p, "labour_estimate", "costs_gbp", default={}) or {}
-        if isinstance(costed, dict):
-            for op, val in costed.items():
-                try:
-                    if float(val or 0) > 0:
-                        ops.add(op)
-                except (TypeError, ValueError):
-                    continue
-        times = _get(p, "process_estimate", "times_min", default={}) or {}
-        if isinstance(times, dict):
-            for op, val in times.items():
-                try:
-                    if float(val or 0) > 0:
-                        ops.add(op)
-                except (TypeError, ValueError):
-                    continue
-    if (isinstance(pcs, dict) and (pcs.get("powder_total_gbp") or 0)) or "powder_coating" in ops:
-        return "Powder coated"
-    if "wet_spray" in ops:
-        return "Wet-spray painted"
-    if "diamond_polishing" in ops or "diamond_polish" in ops:
-        return "Diamond polished"
-    return "As drawing"
+    # ONE shared post-costing source (costed_facts), so the quote, the internal report and
+    # the Decision Report cannot describe three different jobs. Note this no longer ORs in
+    # powder_coating_summary: a powder MATERIAL line can survive after the powder LABOUR has
+    # been gated off a part, and that combination promised "Powder coated" to the customer
+    # on a lacquered timber crate whose priced sheet contains no powder at all.
+    from costed_facts import costed_finish_label
+    return costed_finish_label(parts)
 
 
 # ── main render ─────────────────────────────────────────────────────────────
