@@ -1098,10 +1098,16 @@ SCRAP_PERCENTAGE = 0.04
 
 # A6: any "thickness" above this (mm) is treated as a dimension misparse and rejected.
 MAX_SHEET_THICKNESS_MM = 25.0
-# Thinnest board/timber stock we will accept as a real thickness. Below this on a joinery
-# part the value is tolerance-table text, not a gauge (0.5mm "TIMBER" reached the Horti
-# Crate sheet this way). Metal is unaffected — 0.5mm sheet steel is ordinary stock.
-MIN_BOARD_THICKNESS_MM = 3.0
+# Thinnest stock we will accept as a real thickness on a joinery part. Below this the value
+# is tolerance-table text, not a gauge (0.5mm "TIMBER" reached the Horti Crate sheet this
+# way). Metal is unaffected — 0.5mm sheet steel is ordinary stock.
+#
+# Two floors, because the stock differs: sheet board is made thin (3mm MDF and 3mm ply are
+# stocked items), solid timber is not — nobody machines a 3mm pine panel, the thinnest
+# practical section is around 6mm. A single floor either lets solid-timber noise through or
+# rejects real thin board. Tune to what SDI actually buys.
+MIN_BOARD_THICKNESS_MM = 3.0          # MDF / plywood / chipboard / OSB — sheet goods
+MIN_SOLID_TIMBER_THICKNESS_MM = 6.0   # pine / oak / spruce etc — solid section
 
 # A7: filenames matching these (case-insensitive substring) are NOT part drawings —
 # setup/route/manufacturing-order sheets that must never be ingested as parts.

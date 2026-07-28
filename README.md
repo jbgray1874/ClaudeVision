@@ -228,6 +228,12 @@ Rules that prevent classes of error, all general:
 | Throughput floor + ceiling per operation | Garbage derived rates (e.g. 0.17 parts/hr) printing thousands in phantom labour |
 | Tube catalogue price gated on length | A 12 m and 13 m tube returning the same price |
 | BOM overflow spills in-code | A large job silently dropping BOM lines, or falling back to the legacy sheet |
+| Timber / board / plastic never takes weld or dress-weld | Border *"WELD SPECIFICATION"* text booking Weld (CO2) **and** its chained Dress Welds against a wooden crate |
+| `-J` is not a steel signal; `-M` yields to timber evidence | Joinery part numbers force-routed to mild steel, laser and powder ahead of any material read |
+| Species map to their family (`FSC PINE` → `TIMBER`) | A stated material resolving to *nothing*, leaving part-number hints to win by default on a wooden part |
+| Board thickness below a physical floor rejected | Tolerance-table text costed as stock — `0.5mm TIMBER`. Separate floors for sheet board (3 mm) and solid timber (6 mm) |
+| Acrylic-department substitution on timber is named | A joinery part silently priced at the acrylic hand rate because the template has no joinery equivalent |
+| Blank allowance never added to a measured flat pattern | A DXF or cut-list blank — already the developed size — inflated by a bend allowance it does not need |
 
 ## Performance
 

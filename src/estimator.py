@@ -971,10 +971,21 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
         str(part.get("normalized_material") or ""),
         str(part.get("material") or ""),
     ]).upper()
-    _BOARD_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
-                     "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB")
-    _min_t = float(getattr(config, "MIN_BOARD_THICKNESS_MM", 3.0)) \
-        if any(t in _mat_thk_u for t in _BOARD_TOKENS) else 0.0
+    # Two floors, because the stock differs. Sheet board is made thin — 3mm MDF and 3mm ply
+    # are stocked items — but solid timber is not: nobody machines a 3mm pine panel, and the
+    # thinnest practical section is around 6mm. One floor would either let solid-timber noise
+    # through or reject real thin board. Sheet goods are checked first so a veneered or
+    # ply-faced product ("OAK VENEER MDF", "BIRCH PLY") takes the board floor, not the
+    # timber one — it is a board, whatever species is on its face.
+    _SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
+    _SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
+                            "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
+    if any(t in _mat_thk_u for t in _SHEET_BOARD_TOKENS):
+        _min_t = float(getattr(config, "MIN_BOARD_THICKNESS_MM", 3.0))
+    elif any(t in _mat_thk_u for t in _SOLID_TIMBER_TOKENS):
+        _min_t = float(getattr(config, "MIN_SOLID_TIMBER_THICKNESS_MM", 6.0))
+    else:
+        _min_t = 0.0
 
     def _ok(v: Optional[float]) -> bool:
         if v is None or v <= 0:
