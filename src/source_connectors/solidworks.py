@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from source_precedence import apply_field as _apply_field
+
 SOURCE_NAME = "solidworks_api"
 RELIABILITY = 1.0
 EXTRACT_FILENAME = "_sw_native_extract.json"
@@ -590,14 +592,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         if row is not None and row.quantity and row.quantity > 0:
             _q = int(round(row.quantity))
             _cur = _num(part.get("quantity"))
+            # Through the resolver, which records the source and defends the value. Later
+            # passes (the PDF GA-tree rollup in particular) rewrite quantities, and without
+            # an arbitrated write they cannot tell they are overwriting the assembly BOM the
+            # shop builds from.
             if _q > 0 and (_cur is None or int(_cur) != _q):
-                part["quantity"] = _q
-                # Record the SOURCE, not just the value. Later passes (the PDF GA-tree
-                # rollup in particular) rewrite quantities, and without this they cannot
-                # tell they are overwriting the assembly BOM the shop builds from.
-                part["quantity_source"] = SOURCE_NAME
-                flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
-                             f"SolidWorks assembly BOM (component count, all levels)")
+                if _apply_field(part, "quantity", _q, SOURCE_NAME):
+                    flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
+                                 f"SolidWorks assembly BOM (component count, all levels)")
                 out["qty"] += 1
 
         # ── NOT IN THE ASSEMBLY BOM ──────────────────────────────────────────────
@@ -644,8 +646,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             new_mat = _norm_sw_material(nat.material)
             cur_mat = str(part.get("normalized_material") or "").strip().upper()
             if new_mat and not cur_mat:
-                part["normalized_material"] = new_mat
-                part["material_source"] = SOURCE_NAME
+                _apply_field(part, "normalized_material", new_mat, SOURCE_NAME)
                 flags.append(f"material '{new_mat}' from the SolidWorks model "
                              f"(applied material: {nat.material})")
                 out["material"] += 1
@@ -658,8 +659,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                     # A wood/board part is definitively not steel (and vice versa). The
                     # model is authoritative on what the designer specified — override
                     # the engine's family default and say so.
-                    part["normalized_material"] = new_mat
-                    part["material_source"] = SOURCE_NAME
+                    _apply_field(part, "normalized_material", new_mat, SOURCE_NAME)
                     flags.append(f"material '{cur_mat}' overridden to '{new_mat}' from the "
                                  f"SolidWorks model ('{nat.material}') — wrong material FAMILY")
                     out["material"] += 1
@@ -763,16 +763,16 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             thk = float(nat.thickness_mm)
             cur_thk = _num(part.get("normalized_thickness_mm"))
             if not cur_thk:
-                part["normalized_thickness_mm"] = thk
-                flags.append(f"thickness {thk:g}mm from the SolidWorks sheet-metal cut list")
-                out["thickness"] += 1
+                if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
+                    flags.append(f"thickness {thk:g}mm from the SolidWorks sheet-metal cut list")
+                    out["thickness"] += 1
             elif abs(cur_thk - thk) > 0.05 and not _dxf_backed(part):
                 # The model's sheet thickness is the gauge the part is made from; a PDF
                 # thickness is often lifted from a tolerance table. Model wins, and says so.
-                part["normalized_thickness_mm"] = thk
-                flags.append(f"thickness {cur_thk:g}mm -> {thk:g}mm from the SolidWorks "
-                             f"cut list (modelled sheet gauge)")
-                out["thickness"] += 1
+                if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
+                    flags.append(f"thickness {cur_thk:g}mm -> {thk:g}mm from the SolidWorks "
+                                 f"cut list (modelled sheet gauge)")
+                    out["thickness"] += 1
 
         # ── SURFACE TREATMENT ────────────────────────────────────────────────────
         # The cut list publishes the finish the designer specified. This is the datum the
@@ -842,17 +842,20 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             # stronger evidence out: a drawing-text estimate of 2 kept its place against a
             # cut list saying 9, and the laser was charged for two pierces. A disagreement is
             # flagged rather than silently overwritten, so a human can see both figures.
-            mf = part.setdefault("manufacturing_features", {})
-            gr = part.setdefault("geometry_rollup", {})
-            _prev = max(_num((mf or {}).get("pierce_count")) or 0,
-                        _num((gr or {}).get("estimated_pierce_count")) or 0)
-            if isinstance(mf, dict):
-                mf["cut_out_count"] = int(nat.cut_out_count)
-                mf["pierce_count"] = _native_pierces
-                mf["pierce_count_source"] = SOURCE_NAME
-            if isinstance(gr, dict):
-                gr["estimated_pierce_count"] = _native_pierces
-                gr["estimated_pierce_count_source"] = SOURCE_NAME
+            # Through the resolver, on dotted paths, because these fields do not live at the
+            # top of a part record — and a resolver that cannot see inside geometry_rollup
+            # cannot arbitrate the numbers that drive the laser. apply_field records the
+            # source, defends the value against weaker later passes, and writes the
+            # disagreement onto the part when it declines. An explicit ZERO is written and
+            # then defended like any other value.
+            from source_precedence import apply_field as _apply
+            _prev = max(_num((part.get("manufacturing_features") or {}).get("pierce_count")) or 0,
+                        _num((part.get("geometry_rollup") or {}).get("estimated_pierce_count")) or 0)
+            _apply(part, "manufacturing_features.cut_out_count",
+                   int(nat.cut_out_count), SOURCE_NAME)
+            _apply(part, "manufacturing_features.pierce_count", _native_pierces, SOURCE_NAME)
+            _apply(part, "geometry_rollup.estimated_pierce_count",
+                   _native_pierces, SOURCE_NAME)
             if _prev and int(_prev) != _native_pierces:
                 part.setdefault("review_flags", []).append(
                     f"pierce_count: {int(_prev)} from an earlier pass replaced by "
@@ -924,7 +927,7 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
         nat = job.part_signals.get(pn)
         # Material: native wins where the engine has nothing solid.
         if nat and nat.material and not str(p.get("normalized_material") or "").strip():
-            p["normalized_material"] = nat.material
+            _apply_field(p, "normalized_material", nat.material, SOURCE_NAME)
             p.setdefault("review_flags", []).append(
                 f"Material '{nat.material}' from SolidWorks model")
             out["material_set"] += 1
@@ -932,10 +935,10 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
         q = qty_by_pn.get(pn)
         if q is not None and int(q) > 0 and p.get("quantity") != int(q):
             _old = p.get("quantity")
-            p["quantity"] = int(q)
-            p.setdefault("review_flags", []).append(
-                f"Quantity {_old} -> {int(q)} from SolidWorks BOM")
-            out["qty_corrected"] += 1
+            if _apply_field(p, "quantity", int(q), SOURCE_NAME):
+                p.setdefault("review_flags", []).append(
+                    f"Quantity {_old} -> {int(q)} from SolidWorks BOM")
+                out["qty_corrected"] += 1
         # Weld candidate → flag for the weld/dress route.
         if pn in weld_pns:
             p.setdefault("review_flags", []).append(

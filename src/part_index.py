@@ -2,6 +2,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from source_precedence import apply_field
+
 
 def _clean_bom_description(desc: Any) -> Any:
     """Truncate BOM text blobs to the first meaningful phrase (max 80 chars)."""
@@ -151,9 +153,17 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             part["slot_detected"] = part["slot_detected"] or cues.get("slot_detected", False)
             part["assembly_candidate"] = part["assembly_candidate"] or effective_page_role == "assembly"
             part["textual_operations"].extend(ops)
-            part["normalized_material"] = part["normalized_material"] or prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_material"), allow_on_assembly=allow_local_component_data)
-            part["normalized_finish"] = part["normalized_finish"] or prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_finish"), allow_on_assembly=allow_local_component_data)
-            part["normalized_thickness_mm"] = part["normalized_thickness_mm"] or prefer_local_scalar(effective_page_role, title_block.get("normalized", {}).get("primary_thickness_mm"), allow_on_assembly=allow_local_component_data)
+            # Title-block readings: rank 70. `x = x or y` fills a gap, which is the right
+            # direction, but records no source — and an unattributed datum is invisible to
+            # arbitration, so the next pass has nothing to weigh itself against.
+            _norm_tb = title_block.get("normalized", {})
+            for _fld, _tb_key in (("normalized_material", "primary_material"),
+                                  ("normalized_finish", "primary_finish"),
+                                  ("normalized_thickness_mm", "primary_thickness_mm")):
+                _v = prefer_local_scalar(effective_page_role, _norm_tb.get(_tb_key),
+                                         allow_on_assembly=allow_local_component_data)
+                if _v not in (None, ""):
+                    apply_field(part, _fld, _v, "drawing_deterministic")
 
             if part["description"] is None and pn in document_bom_lookup:
                 part["description"] = _clean_bom_description(document_bom_lookup[pn].get("description"))
@@ -164,12 +174,19 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                         break
 
             if part["quantity"] in (None, 1):
+                # `quantity in (None, 1)` treats a quantity of ONE as an empty slot, so a
+                # part the model says there is one of was open to replacement by whatever a
+                # PDF table happened to say. The resolver decides instead: the document BOM
+                # is rank 60 and a title-block reading rank 70, and neither displaces the
+                # assembly BOM the shop builds from.
                 quantities = title_block.get("quantities", [])
                 if pn in document_bom_lookup and document_bom_lookup[pn].get("quantity"):
-                    part["quantity"] = document_bom_lookup[pn].get("quantity")
+                    apply_field(part, "quantity", document_bom_lookup[pn].get("quantity"),
+                                "bom_tree")
                 elif quantities:
                     try:
-                        part["quantity"] = int(quantities[0])
+                        apply_field(part, "quantity", int(quantities[0]),
+                                    "drawing_deterministic")
                     except (TypeError, ValueError):
                         pass
 
@@ -181,7 +198,9 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                     part["overall_width_mm"] = page_dims["overall_width_mm"]
 
             if part["normalized_thickness_mm"] is None:
-                part["normalized_thickness_mm"] = first_numeric_thickness(part.get("thicknesses_mm", []))
+                apply_field(part, "normalized_thickness_mm",
+                            first_numeric_thickness(part.get("thicknesses_mm", [])),
+                            "drawing_deterministic")
             if not part["thicknesses_mm"] and part["normalized_thickness_mm"] is not None:
                 part["thicknesses_mm"] = [str(part["normalized_thickness_mm"])]
 
@@ -236,7 +255,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             "process_note_types",
             "textual_operations",
         ]:
-            part[key] = dedupe(part[key])
+            part[key] = dedupe(part[key])   # precedence: direct-write ok — dedupes a list in place, introduces no new evidence
         if part.get("normalized_material"):
             part["materials"] = [part["normalized_material"]]
         if part.get("normalized_finish"):
@@ -247,7 +266,8 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         if not part.get("drawing_numbers") and not is_assembly_identifier(part.get("part_number")):
             part["drawing_numbers"] = [part["part_number"]]
         if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None:
-            part["normalized_thickness_mm"] = document_primary_thickness
+            apply_field(part, "normalized_thickness_mm", document_primary_thickness,
+                        "drawing_deterministic")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(document_primary_thickness)]
         part["confidence"] = {

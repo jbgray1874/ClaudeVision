@@ -642,6 +642,103 @@ def test_every_material_block_is_read_back_not_just_the_bom():
     eq(round(total, 2), 10.07, "material rows must reconcile to the sheet's own total")
 
 
+def test_the_resolver_sees_nested_fields_and_explicit_zeros():
+    """Two things the connector-local writes kept getting wrong, and the reason they stayed
+    brittle: the fields that drive cost do not live at the top of a part record, and zero is
+    an answer rather than a gap."""
+    from source_precedence import apply_field, source_of, value_of, MISSING
+
+    # Nested. A resolver that only sees top-level keys cannot arbitrate the pierce count.
+    p = {}
+    ok(apply_field(p, "geometry_rollup.estimated_pierce_count", 9, "solidworks_api"),
+       "a nested field must be writable through the resolver")
+    eq(p["geometry_rollup"]["estimated_pierce_count"], 9, "written where costing reads it")
+    eq(source_of(p, "geometry_rollup.estimated_pierce_count"), "solidworks_api",
+       "and its source recorded alongside it, not at the top of the record")
+    ok(not apply_field(p, "geometry_rollup.estimated_pierce_count", 2, "llm_extract"),
+       "a weaker source must not replace it")
+    eq(p["geometry_rollup"]["estimated_pierce_count"], 9, "the stronger value survives")
+    ok(any("estimated_pierce_count" in str(f) for f in p.get("review_flags") or []),
+       "and the disagreement is recorded, not discarded")
+
+    # Explicit zero. `if cut_out_count:` read the model saying "none" as nobody having
+    # looked, which is how a weaker count survived against the strongest source there is.
+    z = {}
+    ok(apply_field(z, "manufacturing_features.cut_out_count", 0, "solidworks_api"),
+       "zero is a value and must be written")
+    eq(value_of(z, "manufacturing_features.cut_out_count"), 0, "and readable as zero")
+    ok(not apply_field(z, "manufacturing_features.cut_out_count", 4, "llm_extract"),
+       "a recorded zero is defended like any other value — it is not an opening")
+    eq(value_of({}, "manufacturing_features.cut_out_count"), MISSING,
+       "absent is MISSING, which is not the same fact as zero")
+    # Empty containers and None really are gaps.
+    e = {"normalized_material": ""}
+    ok(apply_field(e, "normalized_material", "MILD_STEEL", "inference"),
+       "an empty string is a gap anything may fill")
+
+
+def test_arbitrated_fields_are_not_written_directly():
+    """The resolver only protects a datum if every writer goes through it. One direct
+    assignment anywhere reintroduces last-writer-wins for that field, and it does so
+    silently — which is the whole failure this codebase keeps rediscovering.
+
+    So the rule is checked on the SOURCE, not just the behaviour: a fixture that exercises
+    apply_field proves the resolver works, not that anyone calls it. Reverting a converted
+    call site to a direct write passed every behavioural test in this file.
+
+    This guards the modules already converted. It is not the whole pipeline yet — the
+    remaining writers are listed below and each one is a place a stronger source can still
+    be overwritten in silence."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    # Modules whose writes go through source_precedence. Adding a module here is how a
+    # conversion gets locked in.
+    RESOLVER_CLEAN = ["bom_tree.py", "part_index.py", "learning_engine.py",
+                      "source_connectors/solidworks.py"]
+    ARBITRATED = ("quantity", "normalized_material", "pierce_count",
+                  "estimated_pierce_count", "normalized_thickness_mm")
+    # `<something>["<arbitrated field>"] =` — an assignment onto an existing record.
+    literal = re.compile(r'(\w+)\["(' + "|".join(ARBITRATED) + r')"\]\s*=(?!=)')
+    # And the same write with a VARIABLE key. A literal-field regex alone misses
+    # `part[rule["correction_field"]] = ...`, which is how the override rules wrote material,
+    # and `part[_fld] = v`, which is what a converted loop reverts to. Both set an arbitrated
+    # field without naming it, so the field name cannot be the whole test.
+    variable = re.compile(r'\b(part|_part|p|_p|nr|target)\[[_a-zA-Z]\w*(?:\[[^\]]*\])?\]\s*=(?!=)')
+
+    offenders = []
+    for rel in RESOLVER_CLEAN:
+        path = root / rel
+        if not path.exists():
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            code = line.split("#")[0]
+            # A fresh record being built, or a list normalised in place, is not an overwrite
+            # of anyone's evidence. Marking the line says the author considered it.
+            if "precedence: direct-write ok" in line:
+                continue
+            if literal.search(code) or variable.search(code):
+                offenders.append(f"{rel}:{n}  {line.strip()[:90]}")
+    eq(offenders, [],
+       "these writes bypass the resolver — a stronger source can be overwritten in silence")
+
+
+def test_late_passes_cannot_clobber_the_assembly_quantity():
+    """The PDF passes run late and used to write straight to the record. part_index treated a
+    quantity of ONE as an empty slot, so a part the model says there is one of was open to
+    replacement by whatever a table happened to say."""
+    from source_precedence import apply_field
+    p = {"part_number": "01M", "quantity": 1, "quantity_source": "solidworks_api"}
+    ok(not apply_field(p, "quantity", 4, "bom_tree"),
+       "a PDF BOM reading must not displace the assembly the shop builds from")
+    eq(p["quantity"], 1, "a quantity of one is a value, not an empty slot")
+    # With nothing recorded, the same write is welcome — it is filling a gap, not a fight.
+    q = {"part_number": "02M"}
+    ok(apply_field(q, "quantity", 4, "bom_tree"), "an unclaimed quantity may be filled")
+    eq(q["quantity_source"], "bom_tree", "and the filler is named")
+
+
 # ── invariants — the checks that make a wrong answer loud ────────────────────────────
 def _job(**over):
     """A job that passes every invariant, so each test can break exactly one thing."""

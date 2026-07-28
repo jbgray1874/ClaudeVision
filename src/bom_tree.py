@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 from collections import defaultdict
 import re
 
+from source_precedence import apply_field
+
 _ASSEMBLY_SUFFIX = re.compile(r"-(GA|WA\d*|WELD(?:MENT)?)\b", re.IGNORECASE)
 
 
@@ -235,7 +237,11 @@ def apply_effective_quantities(bom_rows: List[Dict[str, Any]]):
             continue
         nr = dict(r)
         if code in eff:
-            nr["quantity"] = eff[code]
-            nr["effective_qty_source"] = "bom_tree"
+            # Through the resolver. This is rank 60 — a reading of a printed table, which is
+            # a real observation but a weaker one than the assembly the shop builds from.
+            # Writing straight to the record meant this pass, which runs late, silently
+            # replaced quantities that had come from the SolidWorks BOM.
+            if apply_field(nr, "quantity", eff[code], "bom_tree"):
+                nr["effective_qty_source"] = "bom_tree"
         out.append(nr)
     return out, res["flags"]

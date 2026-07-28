@@ -29,6 +29,8 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 
+from source_precedence import apply_field
+
 log = logging.getLogger("learning_engine")
 
 try:
@@ -91,11 +93,17 @@ class LearningEngine:
                 if known and known["confidence"] >= 0.8:
                     if known.get("material") and not _is_reliable_material(part):
                         old = part.get("normalized_material")
-                        part["normalized_material"] = known["material"]
-                        part["material_source"] = f"knowledge_base ({known['confidence']:.0%})"
-                        if old != known["material"]:
-                            overrides_applied += 1
-                            log.info(f"[KB] {pn}: material {old!r} → {known['material']!r}")
+                        # Through the resolver, not straight onto the record. The knowledge
+                        # base outranks everything (a person looked at this part and said so),
+                        # so it will normally win — but "normally" is not "unconditionally",
+                        # and the arbitration is now visible either way. _is_reliable_material
+                        # is a local guess at the same question this module answers globally.
+                        if apply_field(part, "normalized_material", known["material"],
+                                       f"knowledge_base ({known['confidence']:.0%})",
+                                       confidence=float(known["confidence"])):
+                            if old != known["material"]:
+                                overrides_applied += 1
+                                log.info(f"[KB] {pn}: material {old!r} → {known['material']!r}")
                     if known.get("thickness_mm") and not _is_reliable_thickness(part):
                         part["kb_thickness_mm"] = known["thickness_mm"]
 
@@ -106,13 +114,17 @@ class LearningEngine:
                     if rule["pattern_type"] == "dxf_filename":
                         if rule["trigger_value"].upper() in dxf_fn:
                             if not _is_reliable_material(part):
-                                part[rule["correction_field"]] = rule["correction_value"]
-                                part["material_source"] = f"override_rule:{rule['rule_name']}"
-                                overrides_applied += 1
-                                db.fire_override(rule["id"])
-                                log.info(f"[RULE:{rule['rule_name']}] {pn}: "
-                                         f"DXF filename contains '{rule['trigger_value']}' "
-                                         f"→ {rule['correction_value']}")
+                                # A pattern rule is rank 50 — it is not an observation of
+                                # this part, it is a generalisation about its name. It must
+                                # not displace a measured DXF or the model.
+                                if apply_field(part, rule["correction_field"],
+                                               rule["correction_value"],
+                                               f"override_rule:{rule['rule_name']}"):
+                                    overrides_applied += 1
+                                    db.fire_override(rule["id"])
+                                    log.info(f"[RULE:{rule['rule_name']}] {pn}: "
+                                             f"DXF filename contains '{rule['trigger_value']}' "
+                                             f"→ {rule['correction_value']}")
                                 break
 
             # ── 3. Material value override rules ───────────────────────────────
@@ -125,12 +137,16 @@ class LearningEngine:
                             ctx = json.loads(rule.get("trigger_context") or "{}")
                             if _check_context(part, ctx):
                                 old = part.get("normalized_material")
-                                part[rule["correction_field"]] = rule["correction_value"]
-                                part["material_source"] = f"override_rule:{rule['rule_name']}"
-                                overrides_applied += 1
-                                db.fire_override(rule["id"])
-                                log.info(f"[RULE:{rule['rule_name']}] {pn}: "
-                                         f"material {old!r} → {rule['correction_value']!r}")
+                                # Rank 50: a pattern rule generalises about a value, it does
+                                # not observe this part. It must not displace the model or a
+                                # measured DXF.
+                                if apply_field(part, rule["correction_field"],
+                                               rule["correction_value"],
+                                               f"override_rule:{rule['rule_name']}"):
+                                    overrides_applied += 1
+                                    db.fire_override(rule["id"])
+                                    log.info(f"[RULE:{rule['rule_name']}] {pn}: "
+                                             f"material {old!r} → {rule['correction_value']!r}")
                                 break
 
         if overrides_applied:
