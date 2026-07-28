@@ -743,14 +743,26 @@ def main() -> None:
                 # as the wep-readback below: the workbook is the authority, so what it
                 # accepted has to come back.
                 try:
+                    from costed_facts import reconcile_risk_flags as _rrf
                     _wl = summary.get("workbook_labour")
                     _canon_wl = (summary.get("saved_output_paths") or {}).get("json")
+                    # Reconcile the IN-MEMORY summary first: the Decision Report and AI
+                    # Provenance sheets are written from it a few lines below.
+                    _rc_mem = _rrf(summary)
                     if _wl and _canon_wl and Path(_canon_wl).exists():
                         with open(_canon_wl, encoding="utf-8") as _fh_r:
                             _doc = json.load(_fh_r)
                         _doc["workbook_labour"] = _wl
+                        # ...and the on-disk copy, which is what the HTML deliverables read.
+                        # Both must agree or the .xlsx tabs and the HTML diverge again.
+                        _rc_doc = _rrf(_doc)
                         with open(_canon_wl, "w", encoding="utf-8") as _fh_w:
                             json.dump(_doc, _fh_w, indent=2, ensure_ascii=False, default=str)
+                        if _rc_doc.get("superseded") or _rc_mem.get("superseded"):
+                            print(f"   [risk-flags] {max(_rc_doc.get('superseded', 0), _rc_mem.get('superseded', 0))} "
+                                  f"flag(s) superseded — the drawing cue was read but the "
+                                  f"priced route has no such operation; recorded on the part "
+                                  f"as superseded_risk_flags, not dropped", flush=True)
                         print(f"   [workbook-route] {len(_wl.get('rows') or [])} accepted "
                               f"labour row(s) stamped into the JSON — quote, report and "
                               f"Decision Report now describe the priced route", flush=True)

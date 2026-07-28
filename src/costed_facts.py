@@ -43,6 +43,7 @@ __all__ = [
     "operations_for_part",
     "costed_finish_label",
     "costed_finish_ops",
+    "reconcile_risk_flags",
 ]
 
 # Operations that describe a FINISH rather than a fabrication step, most-specific first —
@@ -226,3 +227,70 @@ def costed_finish_label(source: Any, default: str = "As drawing") -> str:
         if has_operation(source, op):
             return label
     return default
+
+
+# ── risk flags vs the route that was actually priced ─────────────────────────
+# A risk flag that ASSERTS AN OPERATION is a claim about the route. Once the workbook
+# gates have removed that operation, the claim is stale — and it is stale in the worst
+# possible way, because it appears in the review list of a report that accompanies a sheet
+# showing the opposite. "Verify weld/dress content" against a part with no weld line reads
+# as the engine contradicting itself, and an estimator cannot tell which half to believe.
+#
+# Flags asserting GEOMETRY (large_flat, hanging_holes) are untouched: geometry is not a
+# route claim and the gates do not speak to it.
+_OP_ASSERTING_FLAGS: Dict[str, tuple] = {
+    "weld_required": ("welding", "dress_welds", "spot_welding", "spotweld",
+                      "resistance_welding", "Weld (CO2)", "Spotweld", "Dress Welds"),
+    "many_bends": ("folding", "fold", "linebend", "line_bending", "tubebend",
+                   "tube_bending", "Fold", "Linebend", "Tubebend"),
+}
+
+
+def reconcile_risk_flags(summary: Any) -> Dict[str, int]:
+    """Demote risk flags the priced route does not support, in place.
+
+    Not deleted — moved to `superseded_risk_flags` with the reason. The cue WAS read on the
+    drawing, and a gate removed the operation it implied. Both facts matter: silently
+    dropping the flag hides a genuine drawing cue that a gate may have stripped wrongly,
+    while leaving it as a review item makes the report contradict the sheet. Recording the
+    disposition keeps the audit trail and the consistency.
+
+    No-op until the workbook rows exist, because before that there is no priced route to
+    reconcile against and every flag would be demoted on missing evidence."""
+    out = {"superseded": 0, "kept": 0}
+    if _workbook_rows(summary) is None:
+        return out
+
+    buckets: List[List[Dict[str, Any]]] = []
+    if isinstance(summary, dict):
+        est = summary.get("estimate_summary")
+        if isinstance(est, dict) and isinstance(est.get("part_estimates"), list):
+            buckets.append(est["part_estimates"])
+        mw = summary.get("manufacturing_writeup")
+        if isinstance(mw, dict) and isinstance(mw.get("parts"), list):
+            buckets.append(mw["parts"])
+
+    for parts in buckets:
+        for p in parts:
+            if not isinstance(p, dict) or not isinstance(p.get("risk_flags"), list):
+                continue
+            route = {str(o).lower() for o in
+                     operations_for_part(summary, p.get("part_number"), p)}
+            kept, gone = [], []
+            for flag in p["risk_flags"]:
+                needed = _OP_ASSERTING_FLAGS.get(str(flag))
+                if needed and not any(str(n).lower() in route for n in needed):
+                    gone.append({
+                        "flag": str(flag),
+                        "reason": (f"read from the drawing, but the priced route contains "
+                                   f"no {needed[0]} — the operation was removed by a "
+                                   f"costing gate, so this is no longer a review item"),
+                    })
+                else:
+                    kept.append(flag)
+            if gone:
+                p["risk_flags"] = kept
+                p.setdefault("superseded_risk_flags", []).extend(gone)
+                out["superseded"] += len(gone)
+            out["kept"] += len(kept)
+    return out
