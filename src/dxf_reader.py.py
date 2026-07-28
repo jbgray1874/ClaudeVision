@@ -683,12 +683,44 @@ def _get_layer_entities(
     target_layers: set,
     entity_types: Optional[set] = None,
 ) -> List[Any]:
-    """Return modelspace entities whose layer (uppercased) is in target_layers."""
+    """Return modelspace entities whose layer (uppercased) is in target_layers.
+
+    INSERTs ARE EXPLODED. A SolidWorks flat-pattern export commonly wraps the whole profile
+    in a block, and iterating model space alone then finds a single INSERT and no geometry —
+    the cut layer looks empty, the blank comes back 0, and the part silently falls through to
+    the drawing's dimension TEXT for its size. On job 12120 that hit 4 of 7 parts, and the
+    geometry was in the file the whole time: exploding 01M's block gives 126.39 x 82.20mm,
+    matching the SolidWorks cut-list flat exactly.
+
+    virtual_entities() yields the block's contents transformed into model-space coordinates,
+    so extents and lengths are correct without touching the file. Nested blocks are followed
+    to a bounded depth. An entity inheriting layer 0 from its INSERT takes the INSERT's layer,
+    which is how SolidWorks exports them.
+    """
+    wanted = {l.upper() for l in target_layers}
     result = []
-    for e in msp:
-        if _entity_layer(e) in {l.upper() for l in target_layers}:
-            if entity_types is None or e.dxftype() in entity_types:
-                result.append(e)
+
+    def _consider(e: Any, inherited_layer: Optional[str] = None) -> None:
+        lay = _entity_layer(e)
+        # ByBlock/inherited: an entity on layer '0' inside a block sits on the INSERT's layer.
+        if inherited_layer and lay in ("", "0"):
+            lay = inherited_layer
+        if lay in wanted and (entity_types is None or e.dxftype() in entity_types):
+            result.append(e)
+
+    def _walk(entities: Any, depth: int = 0, inherited: Optional[str] = None) -> None:
+        for e in entities:
+            if e.dxftype() == "INSERT" and depth < 5:
+                try:
+                    kids = list(e.virtual_entities())
+                except Exception:
+                    kids = []
+                if kids:
+                    _walk(kids, depth + 1, _entity_layer(e) or inherited)
+                    continue
+            _consider(e, inherited)
+
+    _walk(msp)
     return result
 
 
