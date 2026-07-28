@@ -2223,6 +2223,32 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and "handling" not in ops:
         ops = list(ops) + ["handling"]
 
+    # WELDING IS A METAL PROCESS. Timber, board and plastic parts are glued, screwed or
+    # solvent-bonded — never CO2/MIG welded. The weld op leaks onto joinery the same way
+    # diamond polish leaked onto steel: a weld note somewhere in the drawing text (an
+    # assembly instruction, a spec block, a neighbouring detail) is read as a cue for the
+    # part, and because `welding` automatically chains `dress_welds` below, ONE bad cue
+    # books TWO departments. On the Horti Crate — a wooden crate — that was Weld (CO2)
+    # plus Dress Welds against parts the engine itself had identified as TIMBER.
+    #
+    # Gated on POSITIVE evidence the part is non-metal (a named board/timber/plastic
+    # family), the same standard as the polish gate, so a part whose material has not been
+    # resolved yet is left alone rather than stripped on a guess. Where the material is
+    # genuinely mis-read the fix belongs upstream in the material read, not here.
+    _is_board_any = any(mf in _CUT_BOARDS for mf in _mat_fields if mf)
+    if _is_board_any and not _is_metal_any:
+        _weld_ops = ("welding", "dress_welds", "spot_welding", "resistance_welding")
+        _stripped = [o for o in ops if o in _weld_ops]
+        if _stripped:
+            ops = [o for o in ops if o not in _weld_ops]
+            for _op_field in ("textual_operations", "inferred_operations"):
+                if isinstance(part.get(_op_field), list):
+                    part[_op_field] = [o for o in part[_op_field] if o not in _weld_ops]
+            part.setdefault("review_flags", []).append(
+                f"{'/'.join(_stripped)} removed: part is {_mat_u or 'a board/timber family'}, "
+                f"which is not welded — joining is by glue/fixings. A weld cue was read from "
+                f"the drawing text; confirm it belongs to a different (metal) part")
+
     # DRES — a structural (CO2/WELD) weld is dressed/linished to clean the bead before
     # finishing. Chain a dress_welds op after the welding op so the DRES dept labour
     # lands on the route (timing set in the run/setup tables below). Config-gated; spot/

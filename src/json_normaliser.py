@@ -29,8 +29,27 @@ MATERIAL_NORMALISATION = {
     "MDF": "MDF",
     "MDF BOARD": "MDF",
     "BIRCH PLY": "BIRCH_PLYWOOD",
+    "MARINE PLY": "PLYWOOD",
     "TIMBER": "TIMBER",
     "WOOD": "TIMBER",
+    # SPECIES, not families. A title block names the actual timber — "FSC PINE",
+    # "SPRUCE", "BEECH" — and never the word TIMBER, so a species-blind vocabulary
+    # returns nothing for a stated material and the part falls through unpriced or
+    # takes a default. This is what left the Horti Crate's FSC PINE panels with no
+    # material. Longest-key-first matching keeps "OAK VENEER MDF" resolving to the
+    # veneered board rather than to solid oak.
+    "FSC PINE": "TIMBER",
+    "PINE": "TIMBER",
+    "SPRUCE": "TIMBER",
+    "REDWOOD": "TIMBER",
+    "WHITEWOOD": "TIMBER",
+    "SOFTWOOD": "TIMBER",
+    "HARDWOOD": "TIMBER",
+    "BEECH": "TIMBER",
+    "ASH": "TIMBER",
+    "OAK": "TIMBER",
+    "MR MDF": "MDF",
+    "MRMDF": "MDF",
     "HDPE": "HDPE_PLASTIC",
     "HIGH IMPACT ACRYLIC": "ACRYLIC",
     "ACRYLIC": "ACRYLIC",
@@ -98,9 +117,11 @@ OPERATION_INFERENCE_MAP = {
 _MATERIAL_KEYS_SORTED = sorted(MATERIAL_NORMALISATION.keys(), key=len, reverse=True)
 _OPERATION_KEYS_SORTED = sorted(OPERATION_INFERENCE_MAP.keys(), key=len, reverse=True)
 
-# HORTI-style metal panels / joists in part number (override bogus WOOD bleed from title block).
+# Part-number suffix conventions used as WEAK material hints. '-M<digit>' is SDI's metal
+# detail convention (12120-01-01M etc). There is deliberately no '-J' rule: J reads as
+# JOINERY on real jobs, and treating it as a metal "joist" forced the Horti Crate's timber
+# panels to steel. See normalise_material for why these can never override a stated material.
 _METAL_PANEL_RE = re.compile(r"-\s*M\d", re.IGNORECASE)
-_METAL_JOIST_RE = re.compile(r"-\s*J\d", re.IGNORECASE)
 _METAL_SA_RE = re.compile(r"-\s*SA\d", re.IGNORECASE)
 
 
@@ -132,12 +153,22 @@ def _hints_timber(blob_upper: str) -> bool:
         return True
     if "TIMBER" in blob_upper and "MILD STEEL" not in blob_upper:
         return True
+    # Named species count as timber evidence. Without this a drawing stating "FSC PINE"
+    # gives no timber cue at all, so the part-number and blob steel hints below win by
+    # default on a wooden part. Suppressed where the blob also names steel, so a mixed
+    # note ("PINE PACKER ON MILD STEEL FRAME") does not flip a steel part to timber.
+    _SPECIES = ("FSC PINE", "PINE", "SPRUCE", "REDWOOD", "WHITEWOOD",
+                "SOFTWOOD", "HARDWOOD", "BEECH", "OAK", "JOINERY")
+    if any(s in blob_upper for s in _SPECIES) and "MILD STEEL" not in blob_upper:
+        return True
     return False
 
 
 def _hints_mild_steel_part_number(part_number: str) -> bool:
     u = str(part_number or "").upper()
-    if _METAL_PANEL_RE.search(u) or _METAL_JOIST_RE.search(u):
+    # '-J<digit>' removed: it reads as JOINERY on real jobs (Horti Crate -J01..-J08 are
+    # timber panels), not the metal "joist" this was named for. See normalise_material.
+    if _METAL_PANEL_RE.search(u):
         return True
     if any(k in u for k in ["FRAME", "WELDMENT", "CHANNEL", "TUBE", "SECTION", "STIFFENER", "BRACKET", "BASE"]):
         return True
@@ -228,8 +259,22 @@ def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:
     timber = _hints_timber(blob)
     blob_steel = _hints_mild_steel_blob(blob)
 
-    # Strongest: HORTI metal BOM line tags (even if OCR material field says WOOD).
-    if _METAL_PANEL_RE.search(pn.upper()) or _METAL_JOIST_RE.search(pn.upper()):
+    # PART-NUMBER SUFFIX AS A MATERIAL HINT — weak, and never an override.
+    #
+    # This used to return MILD_STEEL unconditionally for any '-M<digit>' or '-J<digit>'
+    # part number, ahead of every material check, to defeat the M&S title-block legend
+    # bleeding WOOD onto steel details. That legend problem is now fixed at source (the
+    # boilerplate material scan in extractor_patterns), so the override is no longer
+    # needed — and it was doing real harm: the Horti Crate's -J01..-J08 are the TIMBER
+    # panels, priced by weight as timber/MDF in the BOM, yet were forced to MILD_STEEL
+    # and routed to laser/weld/powder. A suffix is a NAMING CONVENTION, not a material.
+    #
+    # '-J' is dropped as a steel signal entirely: on this evidence J means JOINERY, and
+    # the "joist" reading it was named for is not supported by any job we have. '-M' is a
+    # genuine SDI convention for metal detail parts, so it is kept — but demoted to a hint
+    # that yields to positive timber evidence, exactly as the '-SA' rule below already
+    # does. Where the drawing states a material, that material wins.
+    if _METAL_PANEL_RE.search(pn.upper()) and not timber:
         return "MILD_STEEL"
 
     # HIPS declared explicitly on the drawing (MATERIAL: HIPS) is a distinct plastic
