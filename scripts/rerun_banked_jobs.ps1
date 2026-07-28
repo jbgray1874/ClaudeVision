@@ -24,7 +24,7 @@ param(
 $ErrorActionPreference = "Continue"
 $py = "C:\ClaudeVision\.venv\Scripts\python.exe"
 
-# Pipeline flags — same set used for the banked runs
+# Pipeline flags - same set used for the banked runs
 $env:SDI_APPLY_DRAWING_FACTS = "1"
 $env:SDI_LLM_FULL_EXTRACT    = "1"
 $env:SKIP_VISION_EXTRACTION  = "1"
@@ -50,7 +50,7 @@ foreach ($job in $jobs) {
              Where-Object { $_.Name -notmatch "_quote|_report" }
 
     if (-not $cands) {
-        Write-Host "[$job] NO PDF FOUND under $PackRoot — skipped." -ForegroundColor Red
+        Write-Host "[$job] NO PDF FOUND under $PackRoot - skipped." -ForegroundColor Red
         $results += [pscustomobject]@{ Job=$job; Status="no pdf"; Pdf=""; Log="" }
         continue
     }
@@ -92,6 +92,4 @@ foreach ($r in $results | Where-Object { $_.Status -eq "ran" }) {
     "{0}: {1}" -f $r.Job, ($line -replace '.*stamped real totals into JSON: ', '')
 }
 Write-Host ""
-# No trailing backslash before the closing quote: PowerShell reads it as an escaped quote,
-# so the string never terminates and the whole script fails to parse.
 Write-Host "Deliverables (quote/report HTML) are in C:\ClaudeVision\output\estimates"

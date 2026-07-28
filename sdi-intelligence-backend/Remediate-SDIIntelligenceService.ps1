@@ -1,6 +1,6 @@
 # ==============================================================================
 # Remediate-SDIIntelligenceService.ps1
-# SDI Intelligence Portal — Intune Proactive Remediation REMEDIATION script
+# SDI Intelligence Portal - Intune Proactive Remediation REMEDIATION script
 #
 # PURPOSE: Downloads NSSM, registers the SDI Intelligence portal as a
 #          Windows Service set to auto-start, and starts it immediately.
@@ -17,7 +17,7 @@
 #   - Python venv at:  C:\ClaudeVision\sdi-intelligence-backend\.venv\
 #   - App entry point: C:\ClaudeVision\sdi-intelligence-backend\app.py
 #
-# SAFE TO RE-RUN: yes — removes and recreates the service cleanly each time
+# SAFE TO RE-RUN: yes - removes and recreates the service cleanly each time
 # ==============================================================================
 
 $ServiceName  = "SDIIntelligence"
@@ -35,20 +35,20 @@ function Write-Log($msg) {
 }
 
 try {
-    # ── Step 1: Verify prerequisites ──────────────────────────────────────────
+    # ?? Step 1: Verify prerequisites ??????????????????????????????????????????
     if (-not (Test-Path $PythonExe)) {
-        Write-Log "ERROR: Python venv not found at $PythonExe — aborting"
+        Write-Log "ERROR: Python venv not found at $PythonExe - aborting"
         Exit 1
     }
     if (-not (Test-Path $AppScript)) {
-        Write-Log "ERROR: app.py not found at $AppScript — aborting"
+        Write-Log "ERROR: app.py not found at $AppScript - aborting"
         Exit 1
     }
     Write-Log "Prerequisites verified"
 
-    # ── Step 2: Download NSSM if needed ───────────────────────────────────────
+    # ?? Step 2: Download NSSM if needed ???????????????????????????????????????
     if (-not (Test-Path $NssmExe)) {
-        Write-Log "NSSM not found — downloading..."
+        Write-Log "NSSM not found - downloading..."
         New-Item -ItemType Directory -Path "C:\tools" -Force | Out-Null
 
         # Download with TLS 1.2
@@ -65,11 +65,11 @@ try {
     }
 
     if (-not (Test-Path $NssmExe)) {
-        Write-Log "ERROR: NSSM exe not found after extraction — aborting"
+        Write-Log "ERROR: NSSM exe not found after extraction - aborting"
         Exit 1
     }
 
-    # ── Step 3: Remove existing service if present ────────────────────────────
+    # ?? Step 3: Remove existing service if present ????????????????????????????
     $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($existing) {
         Write-Log "Removing existing service '$ServiceName'..."
@@ -82,12 +82,12 @@ try {
         Write-Log "Existing service removed"
     }
 
-    # ── Step 4: Install service ────────────────────────────────────────────────
+    # ?? Step 4: Install service ????????????????????????????????????????????????
     Write-Log "Installing service '$ServiceName'..."
     & $NssmExe install $ServiceName $PythonExe $AppScript
     Start-Sleep -Seconds 1
 
-    # ── Step 5: Configure service ──────────────────────────────────────────────
+    # ?? Step 5: Configure service ??????????????????????????????????????????????
     & $NssmExe set $ServiceName AppDirectory $AppDir
     & $NssmExe set $ServiceName DisplayName  $DisplayName
     & $NssmExe set $ServiceName Description  "SDI Intelligence AI Portal and Estimating Engine"
@@ -109,12 +109,12 @@ try {
 
     Write-Log "Service configured"
 
-    # ── Step 6: Start service ──────────────────────────────────────────────────
+    # ?? Step 6: Start service ??????????????????????????????????????????????????
     Write-Log "Starting service..."
     Start-Service -Name $ServiceName -ErrorAction Stop
     Start-Sleep -Seconds 5
 
-    # ── Step 7: Verify ────────────────────────────────────────────────────────
+    # ?? Step 7: Verify ????????????????????????????????????????????????????????
     $svc = Get-Service -Name $ServiceName -ErrorAction Stop
     if ($svc.Status -eq "Running") {
         Write-Log "SUCCESS: Service '$ServiceName' is running"

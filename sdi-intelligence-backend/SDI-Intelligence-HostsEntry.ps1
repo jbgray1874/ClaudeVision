@@ -1,6 +1,6 @@
 # ==============================================================================
 # SDI-Intelligence-HostsEntry.ps1
-# SDI Intelligence Portal — Intune Platform Script
+# SDI Intelligence Portal - Intune Platform Script
 #
 # PURPOSE: Adds sdi-intelligence.sdi.local -> 10.0.16.151 to the hosts file
 #          on every SDI PC so all users can reach the portal by friendly URL.
@@ -9,7 +9,7 @@
 # RUN AS:    SYSTEM
 # 64-BIT:    Yes
 #
-# SAFE TO RE-RUN: yes — never creates duplicate entries
+# SAFE TO RE-RUN: yes - never creates duplicate entries
 # ==============================================================================
 
 $CorrectIP  = "10.0.16.151"
@@ -27,7 +27,7 @@ try {
     # Check if already correct
     $existing = $content | Where-Object { $_ -match [regex]::Escape($Hostname) }
     if ($existing -and ($existing -match [regex]::Escape($CorrectIP))) {
-        Write-Log "Already correct: '$NewLine' — no change needed"
+        Write-Log "Already correct: '$NewLine' - no change needed"
         Exit 0
     }
 
