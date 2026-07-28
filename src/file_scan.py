@@ -1931,6 +1931,11 @@ def _finalize_scan_summary(
                     print(f"   [solidworks] {_swc['no_geometry_flagged']} part(s) have a "
                           f"material but NO usable geometry — flagged as unpriced, NOT £0",
                           flush=True)
+                if _swc["rejected_values"] or _swc["geometry_unchecked"]:
+                    print(f"   [solidworks] {_swc['rejected_values']} modelled value(s) READ "
+                          f"BUT REJECTED by the geometry gates, {_swc['geometry_unchecked']} "
+                          f"blank(s) left unreconciled against the DXF — both flagged on the "
+                          f"part, neither silently dropped", flush=True)
                 if _swc["not_in_bom"]:
                     print(f"   [solidworks] {_swc['not_in_bom']} modelled part(s) appear in "
                           f"NO assembly BOM (fixture/jig/setup) — flagged, confirm before "

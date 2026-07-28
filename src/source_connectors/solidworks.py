@@ -524,7 +524,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     out = {"flat": 0, "thickness": 0, "material": 0, "material_conflict": 0, "bends": 0,
            "qty": 0, "assembly_parent": 0, "bought_in": 0, "weld_flagged": 0,
            "ops": 0, "mass": 0, "no_geometry_flagged": 0, "geometry_conflict": 0,
-           "geometry_unchecked": 0, "not_in_bom": 0}
+           "geometry_unchecked": 0, "not_in_bom": 0, "rejected_values": 0}
     if not job or not job.found or not isinstance(parts, list):
         return out
 
@@ -600,6 +600,17 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
 
         if nat is None:
             continue
+
+        # ── SURFACE THE ANALYSER'S OWN REJECTIONS ────────────────────────────────
+        # A value the geometry gates threw out (a folded box read as a flat, an impossible
+        # thickness) must reach the estimator. Discarding it silently leaves the part
+        # looking merely un-measured, when in fact we READ something and judged it wrong —
+        # which is a different thing, and the estimator needs to know which.
+        for _n in nat.notes:
+            if _n not in flags:
+                flags.append(f"SolidWorks: {_n}")
+                if "REJECTED" in _n:
+                    out["rejected_values"] += 1
 
         # ── BOUGHT-IN: imported body, no modelled fabrication ────────────────────
         if nat.likely_bought_in:
