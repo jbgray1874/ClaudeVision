@@ -581,6 +581,31 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
     jp = Path(json_path)
     summary = json.loads(jp.read_text(encoding="utf-8"))
     stem = job_stem or summary.get("job_output_stem") or jp.stem
+
+    # ── CREDIBILITY GATE: no customer-facing price when the engine says it is not
+    # reportable. ──────────────────────────────────────────────────────────────────
+    # data_sufficiency already decides whether a total may be quoted, and on these packs
+    # it says no — 0% of fabricated parts carry measured geometry, so blank sizes and
+    # cut/fold times are inferred. The workbook and the internal report are allowed to show
+    # the provisional figure, clearly labelled, because they are review documents. A CLIENT
+    # QUOTE is not: it is an offer to supply at a price. Writing one anyway leaves a
+    # correctly-formatted, on-brand PDF-able document sitting in the output folder with a
+    # number on it that the engine has already declared unfit to quote — the single easiest
+    # way for a provisional figure to reach a customer by accident.
+    #
+    # Refuse to write the file, say why, and name the override. The override exists because
+    # a suppressed job may still need a quote laid out for internal discussion; it has to be
+    # a deliberate act, not the default.
+    _ds = ((summary.get("estimate_summary") or {}).get("data_sufficiency") or {})
+    if _ds.get("suppress_headline_total") and not os.getenv("SDI_ALLOW_PROVISIONAL_QUOTE"):
+        print(f"   [quote] NOT GENERATED — the credibility gate marked this estimate "
+              f"'{_ds.get('status', 'insufficient_data')}' and suppressed its headline "
+              f"total, so there is no figure fit to put in front of a customer. "
+              f"({_ds.get('message') or 'part DXFs required'}) "
+              f"Set SDI_ALLOW_PROVISIONAL_QUOTE=1 to produce one anyway for internal use.",
+              flush=True)
+        return None
+
     html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook, customer=customer)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)

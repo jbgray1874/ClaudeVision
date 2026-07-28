@@ -847,7 +847,10 @@ def main() -> None:
                     from client_quote_html import generate_quote_files as _gen_quote
                     _qpath = _gen_quote(str(_canon_json2), out_dir=_out_dir, job_stem=str(scan_label),
                                         manual_workbook=_manual, customer=getattr(args, "customer", None))
-                    print(f"   [deliverables] client quote -> {_qpath}", flush=True)
+                    # None = deliberately suppressed by the credibility gate, which has
+                    # already said why. Do not print a path that does not exist.
+                    if _qpath:
+                        print(f"   [deliverables] client quote -> {_qpath}", flush=True)
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
 
