@@ -961,12 +961,38 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
     Rejects: year-like values (1900-2100), values <= 0, values outside 0.3-50mm.
     Returns None if no reliable thickness found.
     """
+    # MATERIAL-AWARE FLOOR. A sheet-metal gauge of 0.5mm is ordinary; a 0.5mm timber panel
+    # is not a thing. Board and timber stock starts around 3mm (hardboard/thin ply) and is
+    # usually 6-25mm, so anything below that on a joinery part is the tolerance table
+    # bleeding in, not a thickness. It reached the sheet as "0.5mm TIMBER" on the Horti
+    # Crate. Reject it and return nothing: an absent thickness is visibly missing, whereas
+    # a wrong one silently drives grouping, gauge pricing and any thickness-based timing.
+    _mat_thk_u = " ".join([
+        str(part.get("normalized_material") or ""),
+        str(part.get("material") or ""),
+    ]).upper()
+    _BOARD_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+                     "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB")
+    _min_t = float(getattr(config, "MIN_BOARD_THICKNESS_MM", 3.0)) \
+        if any(t in _mat_thk_u for t in _BOARD_TOKENS) else 0.0
+
+    def _ok(v: Optional[float]) -> bool:
+        if v is None or v <= 0:
+            return False
+        if _min_t and v < _min_t:
+            part.setdefault("review_flags", []).append(
+                f"thickness {v:g}mm rejected: below the {_min_t:g}mm minimum for a "
+                f"board/timber part — that is tolerance-table text, not a stock thickness. "
+                f"Thickness left unset; confirm the board gauge from the drawing")
+            return False
+        return True
+
     _dfn = str(part.get("dxf_source_file") or part.get("geometry_source_path") or "")
     if _dfn:
         _tm = re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn, re.IGNORECASE)
         if _tm:
             _tv = _safe_float(_tm.group(1))
-            if _tv and 0.3 <= _tv <= 25.0:
+            if _tv and 0.3 <= _tv <= 25.0 and _ok(_tv):
                 return _tv
 
     # Already-normalised thickness — skip tolerance-table noise when DXF exists
@@ -974,7 +1000,7 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
     if raw:
         v = _safe_float(raw)
         _max_t = float(getattr(config, "MAX_SHEET_THICKNESS_MM", 25.0))
-        if v and 0.4 <= v <= _max_t and not (1900 <= v <= 2100):
+        if v and 0.4 <= v <= _max_t and not (1900 <= v <= 2100) and _ok(v):
             if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE or not _dfn:
                 return v
 
@@ -982,10 +1008,14 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
     _max_t = float(getattr(config, "MAX_SHEET_THICKNESS_MM", 25.0))
     candidates = [_safe_float(x) for x in part.get("thicknesses_mm", [])]
     # A6: reject implausible sheet thickness (e.g. a 500mm dimension misparsed as gauge)
-    candidates = [v for v in candidates if v and 0.3 <= v <= _max_t and not (1900 <= v <= 2100)]
+    candidates = [v for v in candidates
+                  if v and 0.3 <= v <= _max_t and not (1900 <= v <= 2100)]
     if not candidates:
         return None
 
+    # Tolerance-table strip runs FIRST, on the unfiltered set. The board floor below would
+    # otherwise remove 0.5/1.0/1.5/2.0 itself, break this subset test, and leave the 3.0
+    # that is also part of the table looking like a real 3mm board.
     cand_set = set(round(v, 1) for v in candidates)
     if _TOLERANCE_TABLE_SEQUENCE.issubset(cand_set):
         stripped = [v for v in candidates if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE]
@@ -993,6 +1023,20 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
         # original values ARE the real thickness (e.g. a 2mm-only acrylic part).
         if stripped:
             candidates = stripped
+        elif _min_t:
+            # Board/timber part whose ONLY thickness candidates are the tolerance table.
+            # For metal the fall-back above is sound (0.5-3mm are real gauges), but no
+            # board is made in those sizes, so there is nothing here to keep. Return
+            # nothing rather than the 3.0 that happens to sit at the top of the table.
+            part.setdefault("review_flags", []).append(
+                "no board thickness on the drawing - the only values found were the "
+                "tolerance table. Thickness left unset; confirm the board gauge")
+            return None
+    if not candidates:
+        return None
+
+    # Material-aware floor, applied after the table strip.
+    candidates = [v for v in candidates if _ok(v)]
     if not candidates:
         return None
 

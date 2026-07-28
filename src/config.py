@@ -1098,6 +1098,10 @@ SCRAP_PERCENTAGE = 0.04
 
 # A6: any "thickness" above this (mm) is treated as a dimension misparse and rejected.
 MAX_SHEET_THICKNESS_MM = 25.0
+# Thinnest board/timber stock we will accept as a real thickness. Below this on a joinery
+# part the value is tolerance-table text, not a gauge (0.5mm "TIMBER" reached the Horti
+# Crate sheet this way). Metal is unaffected — 0.5mm sheet steel is ordinary stock.
+MIN_BOARD_THICKNESS_MM = 3.0
 
 # A7: filenames matching these (case-insensitive substring) are NOT part drawings —
 # setup/route/manufacturing-order sheets that must never be ingested as parts.

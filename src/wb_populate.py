@@ -317,6 +317,25 @@ def _is_board(mat: str) -> bool:
                                 "SPRUCE", "BEECH", "BIRCH"))
 
 
+_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+                  "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB")
+
+
+def _is_timber(mat: str) -> bool:
+    """Timber/board joinery, as distinct from acrylic and the other plastics.
+
+    _is_board() lumps them together because neither is sheet metal, which is right for
+    deciding the cost stream but wrong for naming a DEPARTMENT: a wooden crate is not
+    made on the acrylic line. The workbook template has no joinery Assemble/pack, so a
+    timber part still has to take the nearest hand-assembly rate — but the estimator is
+    told that is what happened rather than reading 'Acrylic' against a timber crate and
+    having to work out why."""
+    m = (mat or "").upper()
+    if "ACRYLIC" in m or "PERSPEX" in m or "PMMA" in m:
+        return False          # veneered/laminated acrylic products stay acrylic
+    return any(k in m for k in _TIMBER_TOKENS)
+
+
 def _is_tube(pe: Dict[str, Any]) -> bool:
     """A part is tube if its description/geometry indicates section/tube stock
     (no flat-pattern DXF; priced by length). Heuristic: 'tube' in desc, or the
@@ -1484,6 +1503,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     continue
 
             wb_op = _map_operation(op, _is_acr, _sf or "")
+            # A timber part routed onto an ACRYLIC department: the template has no joinery
+            # equivalent, so the nearest hand rate is used. Say so rather than leaving
+            # "Assemble/pack (Acrylic)" sitting against a wooden crate unexplained — the
+            # rate is a substitution, and only an estimator can confirm it is the right one.
+            if wb_op and "(Acrylic)" in str(wb_op) and _is_timber(_mat):
+                _flag(f"'{wb_op}' booked on {_pn} ({_mat}) — the template has no joinery "
+                      f"equivalent of this department, so the ACRYLIC hand rate is used as "
+                      f"the nearest available. Confirm the rate is right for timber.", flags)
             if wb_op is None:
                 _flag(f"labour op '{op}' ({_pn}) not in OP_NAME_MAP — WB rate lookup will "
                       f"return 0 for it. Add mapping.", flags)
