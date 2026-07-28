@@ -370,8 +370,168 @@ def test_dxf_blocks_are_exploded():
            f"{pn}: a blocked profile must measure the same as a loose one")
     # Holes inside a block were invisible: 06M reported zero, under-pricing the laser.
     r = extract_flat_pattern_data(build(os.path.join(tmp, "holes.dxf"), 96.49, 39.09, True, holes=8))
-    ok(int(r.get("estimated_hole_count") or r.get("hole_count") or 0) >= 8,
+    eq(int(r.get("estimated_hole_count") or r.get("hole_count") or 0), 8,
        f"circles inside a block must be counted (got {r.get('estimated_hole_count')})")
+    # Every hole is a pierce, and so is the outer profile. The non-recursive parser never
+    # entered the block, reported zero, and the laser's pierce time vanished with it.
+    eq(r.get("estimated_pierce_count"), 9, "8 holes plus the outer profile = 9 pierces")
+
+
+def test_annotation_circles_are_not_holes():
+    """hole_diams filtered sub-1mm circles and annotation layers; hole_count then counted
+    every circle in the file regardless. The two described different sets, and a symbol
+    layer inflated the laser. One filtered list must feed both."""
+    try:
+        import ezdxf
+    except ImportError:
+        print("      (skipped: ezdxf not installed)")
+        return
+    import tempfile
+    from pathlib import Path
+    from dxf_reader import extract_flat_pattern_data
+
+    d = ezdxf.new(); d.header["$INSUNITS"] = 4
+    msp = d.modelspace()
+    L, W = 120.0, 60.0
+    for a in [(0, 0, L, 0), (L, 0, L, W), (L, W, 0, W), (0, W, 0, 0)]:
+        msp.add_line(a[:2], a[2:], dxfattribs={"layer": "SLD-0"})
+    for i in range(3):                                    # three real holes
+        msp.add_circle((20 + i * 20, W / 2), 3.0, dxfattribs={"layer": "SLD-0"})
+    for i in range(5):                                    # weld/finish symbols — not holes
+        msp.add_circle((10 + i * 5, 5), 2.0, dxfattribs={"layer": "SYMBOLS(BENCHMARK)"})
+    msp.add_circle((60, 50), 0.2, dxfattribs={"layer": "SLD-0"})   # centre mark, not a hole
+    path = os.path.join(tempfile.mkdtemp(), "annot.dxf")
+    d.saveas(path)
+
+    r = extract_flat_pattern_data(Path(path))
+    eq(int(r.get("estimated_hole_count") or r.get("hole_count") or 0), 3,
+       "only circles that survive the hole filter may be counted as holes")
+    eq(r.get("estimated_pierce_count"), 4, "3 holes plus the outer profile = 4 pierces")
+    ok(all(dia >= 1.0 for dia in (r.get("hole_diameters_mm") or [])),
+       "hole diameters and hole count must describe the same set of circles")
+
+
+# ── workbook join — job 12120 ────────────────────────────────────────────────────────
+def test_labour_rows_join_to_the_parts_that_produced_them():
+    """The calculated cost of a labour row must land on the parts that row was grouped
+    from. wb_populate used to publish the route record BEFORE the write loop and then
+    back-fill sheet rows by matching on DEPARTMENT NAME in insertion order. One department,
+    one group — fine. Two gauges of Fold, and the 1.2mm cost lands on the 1.5mm parts (and
+    the Laser rows swap with them). 12120 has exactly that shape.
+
+    The invariant: a row's workbook_row, parts and gauge all come off the same group."""
+    from wb_populate import build_workbook_labour
+    from costed_facts import operations_for_part, part_numbers_with_operation
+
+    # Insertion order deliberately unlike sheet order, and unlike sorted-key order: any
+    # implementation that pairs rows to sheet rows positionally will mis-associate.
+    groups = {
+        "Fold|1.5":  {"wb_op": "Fold",  "engine_ops": ["folding"], "thickness": 1.5,
+                      "material": "Mild Steel", "qty": 2, "parts": ["12120-01-04M"],
+                      "workbook_row": 44},
+        "Laser|1.2": {"wb_op": "Laser", "engine_ops": ["laser_cutting"], "thickness": 1.2,
+                      "material": "Mild Steel", "qty": 3, "parts": ["12120-01-01M", "12120-01-06M"],
+                      "workbook_row": 41},
+        "Fold|1.2":  {"wb_op": "Fold",  "engine_ops": ["folding"], "thickness": 1.2,
+                      "material": "Mild Steel", "qty": 3, "parts": ["12120-01-01M", "12120-01-06M"],
+                      "workbook_row": 43},
+        "Laser|1.5": {"wb_op": "Laser", "engine_ops": ["laser_cutting"], "thickness": 1.5,
+                      "material": "Mild Steel", "qty": 2, "parts": ["12120-01-04M"],
+                      "workbook_row": 42},
+        # Never written to the sheet — must not appear in the route record at all.
+        "Weld|-":    {"wb_op": "Weld",  "engine_ops": ["welding"], "thickness": None,
+                      "material": "Mild Steel", "qty": 1, "parts": ["12120-01-09M"]},
+    }
+    rec = build_workbook_labour(groups, ["12120-01-99B"])
+    rows = rec["rows"]
+
+    eq([r["workbook_row"] for r in rows], [41, 42, 43, 44], "rows must be in sheet order")
+    ok(all(r["wb_operation"] != "Weld" for r in rows),
+       "a group with no sheet row was never priced and must not be published as route")
+    by_row = {r["workbook_row"]: r for r in rows}
+    for g in groups.values():
+        if not g.get("workbook_row"):
+            continue
+        r = by_row[g["workbook_row"]]
+        eq((r["wb_operation"], r["thickness_mm"], r["part_numbers"]),
+           (g["wb_op"], g["thickness"], g["parts"]),
+           f"row {g['workbook_row']}: identity must come off the group that wrote it")
+    # The bug was invisible on identity alone until cost was joined on. £30 was booked for
+    # the 1.5mm fold; it must not be reported against the 1.2mm parts.
+    summary = {
+        "workbook_labour": rec,
+        "final_estimate": {"schema": "final_estimate.v2", "labour_rows": [
+            {"workbook_row": 41, "operation": "Laser", "batch_hours": 0.4, "total_value_gbp": 18.0},
+            {"workbook_row": 42, "operation": "Laser", "batch_hours": 0.2, "total_value_gbp": 9.0},
+            {"workbook_row": 43, "operation": "Fold",  "batch_hours": 0.5, "total_value_gbp": 22.0},
+            {"workbook_row": 44, "operation": "Fold",  "batch_hours": 0.7, "total_value_gbp": 30.0},
+        ]},
+    }
+    from costed_facts import _workbook_rows
+    priced = {r["total_value_gbp"]: r["part_numbers"] for r in (_workbook_rows(summary) or [])}
+    eq(priced.get(30.0), ["12120-01-04M"], "the 1.5mm fold cost belongs to the 1.5mm part")
+    eq(priced.get(22.0), ["12120-01-01M", "12120-01-06M"], "the 1.2mm fold cost belongs to the 1.2mm parts")
+    ok("folding" in operations_for_part(summary, "12120-01-04M"),
+       "a part in a priced fold group must show folding")
+    eq(sorted(part_numbers_with_operation(summary, "folding")),
+       ["12120-01-01M", "12120-01-04M", "12120-01-06M"], "every folded part, once")
+
+
+# ── read-back — job 12120 ────────────────────────────────────────────────────────────
+def test_every_material_block_is_read_back_not_just_the_bom():
+    """Fabricated material lives in three blocks below the BOM, and each names its value
+    column differently — "Cost" on tube, "Cost Per Part" on steel and other-sheet. Reading
+    all of them through the BOM's "Total Value" returned rows carrying no value; asking for
+    a block named "wire" when CELL_MAP defines "tube" skipped that block entirely, in
+    silence. On 12120 the read-back summed to GBP 9.64 of the sheet's own GBP 10.07 total,
+    the missing 43p being exactly the fabricated material. A snapshot that will not
+    reconcile to its own total is not something an ERP export can be built on."""
+    from wb_populate import CELL_MAP
+    from wep_readback_from_xlsx import read_final_rows
+
+    class Cell:
+        def __init__(self, v): self.Value = v
+
+    class FakeSheet:
+        """Only what _read_block touches: .Cells(row, col).Value."""
+        def __init__(self, grid): self.grid = grid
+        def Cells(self, r, c): return Cell(self.grid.get((r, c)))
+
+    grid = {}
+
+    def block(name, headers, rows):
+        b = CELL_MAP[name]
+        hr = b["first_row"] - 1
+        for c, text in headers.items():
+            grid[(hr, c)] = text
+        for i, vals in enumerate(rows):
+            for c, v in vals.items():
+                grid[(b["first_row"] + i, c)] = v
+
+    block("bom",
+          {3: "Bill Of Materials", 10: "Price", 11: "Qty Per Unit", 12: "Scrap", 13: "Total Value"},
+          [{3: "M6 Pem Stud", 10: 0.12, 11: 4, 13: 9.64}])
+    # Value column here is "Cost", not "Total Value".
+    block("tube", {3: "Part Description", 5: "Qty Per Unit", 6: "Gauge",
+                   7: "Length", 8: "Price Per M", 11: "Cost"},
+          [{3: "25x25x1.5 SHS Leg", 5: 2, 6: 1.5, 7: 300.0, 8: 4.10, 11: 0.18}])
+    # And "Cost Per Part" here.
+    block("steel", {3: "Part Description", 5: "Qty Per Unit", 6: "Part Length",
+                    7: "Part Width", 8: "Gauge", 13: "Cost Per Part"},
+          [{3: "12120-01-01M", 5: 1, 6: 126.39, 7: 82.2, 8: 1.2, 13: 0.15}])
+    block("other_sheet", {3: "Part Description", 4: "Qty Per Unit", 5: "Part Length",
+                          6: "Part Width", 7: "Thickness", 13: "Cost Per Part"},
+          [{3: "5mm Acrylic Window", 4: 1, 5: 200.0, 6: 100.0, 7: 5.0, 13: 0.10}])
+
+    rows = read_final_rows(FakeSheet(grid), 24).get("material_rows") or []
+    got = {r.get("block") for r in rows}
+    for name in ("bom", "tube", "steel", "other_sheet"):
+        ok(name in got, f"the {name} block must be read back — CELL_MAP defines it")
+    for r in rows:
+        ok(r.get("total_value_gbp") is not None,
+           f"{r.get('block')} row carries no value: its value column was not mapped")
+    total = sum(float(r.get("total_value_gbp") or 0) for r in rows)
+    eq(round(total, 2), 10.07, "material rows must reconcile to the sheet's own total")
 
 
 # ── runner ───────────────────────────────────────────────────────────────────────────

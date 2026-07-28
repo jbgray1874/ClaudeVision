@@ -249,7 +249,10 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "drawing_extents_mm": [flat["blank_length_mm"], flat["blank_width_mm"]],
             "estimated_hole_count": flat["hole_count"],
             "estimated_bend_line_count": flat["bend_count"],
-            "estimated_pierce_count": raw.get("estimated_pierce_count"),
+            # Prefer the flat reader's figure: it explodes blocks, whereas the raw
+            # parser does not and returns zero pierces on a block-wrapped export.
+            "estimated_pierce_count": (flat.get("estimated_pierce_count")
+                                       or raw.get("estimated_pierce_count")),
         }
     else:
         extents = raw.get("drawing_extents_mm") or []

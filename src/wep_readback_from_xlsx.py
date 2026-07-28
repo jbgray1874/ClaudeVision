@@ -206,6 +206,21 @@ _MATERIAL_HEADER_KEYS = {
     "price": "unit_price_gbp", "qty per unit": "qty_per_unit", "scrap": "scrap_pct",
     "total value": "total_value_gbp",
 }
+# The fabricated blocks are NOT the BOM and do not share its columns. Each names its value
+# column differently — "Cost" on tube, "Cost Per Part" on steel and other-sheet — so mapping
+# them all through the BOM's "Total Value" returned rows carrying no value, which is why the
+# material rows could not sum to the sheet's own Total Material Cost.
+_TUBE_HEADER_KEYS = {
+    "part description": "description", "qty per unit": "qty_per_unit", "gauge": "gauge",
+    "length": "length_mm", "price per m": "price_per_m_gbp", "kgs": "mass_kg",
+    "scrap": "scrap_pct", "cost": "total_value_gbp",
+}
+_SHEET_HEADER_KEYS = {
+    "part description": "description", "qty per unit": "qty_per_unit",
+    "part length": "length_mm", "part width": "width_mm", "gauge": "gauge",
+    "thickness": "thickness_mm", "qty per sheet": "qty_per_sheet", "scrap": "scrap_pct",
+    "cost per part": "total_value_gbp",
+}
 
 
 def _header_map(com_ws, header_row: int, keys: Dict[str, str],
@@ -298,22 +313,26 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
     # to the sheet's Total Material Cost - on 12120 it was GBP 9.64 of a GBP 10.07 total,
     # with the missing 43p being exactly the fabricated material. A snapshot that does not
     # reconcile to its own total is not a snapshot anyone can build an ERP export on.
-    _blocks = [("bom", bom_first, bom_last, ("bill of materials", "total value"))]
+    # Block names come from CELL_MAP itself. Asking for "wire" when the map defines "tube"
+    # skipped the block silently — nothing failed, the rows were simply absent.
+    _blocks = [("bom", bom_first, bom_last, ("bill of materials", "total value"),
+                _MATERIAL_HEADER_KEYS)]
     try:
         from wb_populate import CELL_MAP as _CM2
-        for _name, _needles in (("wire", ("gauge", "cost")),
-                                ("steel", ("part length", "cost per part")),
-                                ("other_sheet", ("thickness", "cost per part"))):
+        for _name, _needles, _keys in (
+                ("tube", ("gauge", "price per m"), _TUBE_HEADER_KEYS),
+                ("steel", ("part length", "cost per part"), _SHEET_HEADER_KEYS),
+                ("other_sheet", ("thickness", "cost per part"), _SHEET_HEADER_KEYS)):
             _b = _CM2.get(_name)
             if _b:
-                _blocks.append((_name, int(_b["first_row"]), int(_b["last_row"]), _needles))
+                _blocks.append((_name, int(_b["first_row"]), int(_b["last_row"]),
+                                _needles, _keys))
     except Exception:
         pass
 
     mats = []
-    for _name, _f, _l, _needles in _blocks:
-        for _r in _read_block(com_ws, _f, _l, _MATERIAL_HEADER_KEYS, _needles,
-                              "description", max_col):
+    for _name, _f, _l, _needles, _keys in _blocks:
+        for _r in _read_block(com_ws, _f, _l, _keys, _needles, "description", max_col):
             _r["block"] = _name
             mats.append(_r)
 
@@ -395,7 +414,7 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     # and must not be mistaken for the result.
     if _final_rows.get("labour_rows") or _final_rows.get("material_rows"):
         summary["final_estimate"] = {
-            "schema": "final_estimate.v1",
+            "schema": "final_estimate.v2",
             "source": "excel_calculated",
             "note": ("Rows as the Estimate sheet calculated them. Authoritative for what the "
                      "job contains and what each line costs. Excel errors are carried as "

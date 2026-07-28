@@ -464,6 +464,50 @@ def _flag(msg: str, flags: List[str]):
     print(f"   [wb_populate] ⚠ {msg}")
 
 
+def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[str, Any]:
+    """The CANONICAL ROUTE RECORD: the labour rows the workbook accepted, each keyed to the
+    sheet row it was written to.
+
+    Must be called AFTER the write loop, because `workbook_row` is stamped onto each group
+    there. An earlier version built this record BEFORE the loop and then back-filled row
+    numbers by matching on department name in insertion order — which is wrong the moment
+    one department holds more than one group. On 12120 that swapped the 1.2mm and 1.5mm
+    Fold rows, and the Laser rows with them, attaching each group's calculated cost to the
+    other's parts. Reading the row straight off the group cannot do that.
+
+    These rows are post-filter: after every spurious-op, finish and material gate, after
+    department mapping, and including injected operations. Engine-side
+    labour_estimate.costs_gbp is PRE-filter and must not be used to describe the job.
+
+    Identity only. Hours, rates and values come from Excel via `final_estimate`, which joins
+    to these rows on `workbook_row`.
+    """
+    _rows = [g for g in (groups.values() if isinstance(groups, dict) else (groups or []))
+             if isinstance(g, dict) and g.get("workbook_row")]
+    return {
+        "schema": "workbook_labour_rows.v2",
+        "note": ("Labour rows as ACCEPTED by wb_populate, keyed to the sheet row each was "
+                 "written to. Identity only — hours, rates and values come from Excel via "
+                 "final_estimate, which joins to these on workbook_row."),
+        "rows": [
+            {
+                "workbook_row": g.get("workbook_row"),
+                "wb_operation": g.get("wb_op"),
+                # Real engine operations, recorded when the group was formed. NOT the group
+                # key: that holds the mapped department name.
+                "engine_operations": list(g.get("engine_ops") or []),
+                "engine_operation": (list(g.get("engine_ops") or []) or [None])[0],
+                "material": g.get("material"),
+                "thickness_mm": g.get("thickness"),
+                "qty_per_unit": g.get("qty"),
+                "part_numbers": list(g.get("parts") or []),
+            }
+            for g in sorted(_rows, key=lambda g: g["workbook_row"])
+        ],
+        "skipped_part_numbers": sorted(skipped_part_numbers or []),
+    }
+
+
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
     """Open the template, populate inputs from `summary`, save-as to output dir.
     `job_folder_name` is the drawing-folder basename, used for the output filename.
@@ -1618,44 +1662,6 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"sheet (clinch x4 @60/hr, pem x2 @120/hr both = 15s/insert). Knurled "
                   f"knob & thumbscrew are hand-assembled (Assemble/pack), not counted.", flags)
 
-    # ── CANONICAL ROUTE RECORD ────────────────────────────────────────────────────
-    # The workbook is the authority on the PRICE (wep-readback stamps its totals back into
-    # the JSON). It is equally the authority on the ROUTE, and until now nothing carried
-    # that back. Every filter above — _is_spurious_operation, the _powder_ok finish gate,
-    # the diamond-polish-on-powder drop — plus the department mapping and the injected ops
-    # (Robomac, MANM inserts) happen HERE and are never written to part_estimates. So
-    # labour_estimate.costs_gbp is one whole filtering stage upstream of the sheet: it still
-    # carries powder on timber panels, and weld/dress/powder on artefact records that this
-    # loop drops. Anything describing the job from costs_gbp therefore describes a route the
-    # workbook does not contain — which is exactly how the quote came to promise powder
-    # coating and weld dressing on a lacquered timber crate.
-    #
-    # Persist what SURVIVED, so the Decision Report, AI Provenance, client quote and job
-    # report can all describe the same job the Estimate sheet prices.
-    summary["workbook_labour"] = {
-        "schema": "workbook_labour_rows.v1",
-        "note": ("Labour rows as ACCEPTED by wb_populate — after every spurious-op, finish "
-                 "and material filter, after department mapping, and including injected "
-                 "operations. This is the route the Estimate sheet actually charges, and is "
-                 "the source every deliverable must describe. Engine-side "
-                 "labour_estimate.costs_gbp is PRE-filter and must not be used for that."),
-        "rows": [
-            {
-                "wb_operation": _groups[_k].get("wb_op"),
-                # Real engine operations, recorded when the group was formed. NOT the group
-                # key: that holds the mapped department name.
-                "engine_operations": list(_groups[_k].get("engine_ops") or []),
-                "engine_operation": (list(_groups[_k].get("engine_ops") or []) or [None])[0],
-                "material": _groups[_k].get("material"),
-                "thickness_mm": _groups[_k].get("thickness"),
-                "qty_per_unit": _groups[_k].get("qty"),
-                "part_numbers": list(_groups[_k].get("parts") or []),
-            }
-            for _k in sorted(_groups.keys(), key=lambda x: str(x))
-        ],
-        "skipped_part_numbers": sorted(_skip_pns),
-    }
-
     for _key in sorted(_groups.keys()):
         g = _groups[_key]
         if row > lb["last_row"]:
@@ -1794,20 +1800,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         g["workbook_row"] = row
         row += 1
 
-    # Back-fill the sheet row each accepted group landed on, now the write loop has run.
-    # This is the join key the calculated read-back needs: without it a calculated row can
-    # only be matched by department name, and inverting that expands every alias.
-    try:
-        _by_op: Dict[str, List[Dict[str, Any]]] = {}
-        for _g in _groups.values():
-            if _g.get("workbook_row"):
-                _by_op.setdefault(str(_g.get("wb_op") or ""), []).append(_g)
-        for _r in ((summary.get("workbook_labour") or {}).get("rows") or []):
-            _cands = _by_op.get(str(_r.get("wb_operation") or ""))
-            if _cands:
-                _r["workbook_row"] = _cands.pop(0).get("workbook_row")
-    except Exception:
-        pass
+    # The canonical route record — built here, after the write loop, so every row carries
+    # the sheet row it actually landed on. See build_workbook_labour for why that matters.
+    summary["workbook_labour"] = build_workbook_labour(_groups, _skip_pns)
 
     _flag(f"labour: {len(_groups)} grouped row(s) — setup is booked once per tooling group, "
           f"not once per part.", flags)

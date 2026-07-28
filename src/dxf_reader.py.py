@@ -1234,14 +1234,22 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
     # in its block and reported zero holes and zero pierces, which under-prices the laser.
     # Same walk as the outline uses, so holes and profile can never disagree about what is
     # in the file.
-    all_circles = _all_entities(msp, {"CIRCLE"})
-    hole_diams  = sorted(set(
-        round(_circle_diameter_mm(e, scale), 2)
-        for e in all_circles
-        if _circle_diameter_mm(e, scale) >= 1.0
-        and _entity_layer(e) not in {l.upper() for l in SKIP_LAYERS}
-    ))
-    hole_count = len(all_circles)
+    _skip = {l.upper() for l in SKIP_LAYERS}
+    # FILTER FIRST, THEN COUNT. hole_diams excluded sub-1mm circles and annotation layers;
+    # hole_count then counted every circle in the file regardless, so a title block or
+    # symbol layer inflated the laser's hole count. Now one filtered list feeds both, so
+    # the count and the diameters can never describe different sets of circles.
+    _hole_circles = [
+        e for e in _all_entities(msp, {"CIRCLE"})
+        if _circle_diameter_mm(e, scale) >= 1.0 and _entity_layer(e) not in _skip
+    ]
+    all_circles = _hole_circles
+    hole_diams  = sorted(set(round(_circle_diameter_mm(e, scale), 2) for e in _hole_circles))
+    hole_count  = len(_hole_circles)
+    # Every hole is its own pierce, plus one for the outer profile. The raw non-recursive
+    # parser never entered a block, so on a block-wrapped export it reported zero pierces
+    # and the laser's pierce time vanished with them.
+    pierce_from_holes = hole_count + (1 if outline.get("blank_length_mm") else 0)
 
     # ── Bend data ─────────────────────────────────────────────────────────────
     bend = _extract_bend_data(msp, scale)
@@ -1310,6 +1318,7 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         "filename_stem":        fn_data.get("filename_stem"),
 
         # Blank geometry (exact)
+        "estimated_pierce_count": pierce_from_holes,
         "blank_length_mm":      outline.get("blank_length_mm", 0.0),
         "blank_width_mm":       outline.get("blank_width_mm",  0.0),
         "blank_area_mm2":       area_mm2,
