@@ -262,6 +262,8 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
             bend_radius_mm=_num(rs.get("bend_radius_mm")),
             cut_length_mm=_num(rs.get("cut_length_mm")),
             blank_area_mm2=_num(rs.get("blank_area_mm2")),
+            cut_out_count=(int(_num(rs.get("cut_out_count")))
+                           if _num(rs.get("cut_out_count")) is not None else None),
             surface_treatment=str(rs.get("surface_treatment") or ""),
             mass_kg=_num(rs.get("mass_kg")),
             formed_but_no_bend_features=bool(rs.get("formed_but_no_bend_features")),
@@ -795,6 +797,22 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             mf = part.setdefault("manufacturing_features", {})
             if isinstance(mf, dict):
                 mf["hole_count"] = int(nat.hole_count_est)
+        # CUT-OUTS. The cut list publishes how many internal profiles the laser has to cut,
+        # which is separate from round holes and drives pierce count and cutting time. It
+        # was read from the model and then discarded before it reached anything that costs.
+        if nat.cut_out_count:
+            mf = part.setdefault("manufacturing_features", {})
+            if isinstance(mf, dict):
+                mf["cut_out_count"] = int(nat.cut_out_count)
+                if not _num(mf.get("pierce_count")):
+                    # Every internal cut-out needs its own pierce, as does the outer
+                    # profile. Under-counting pierces under-prices the laser.
+                    mf["pierce_count"] = int(nat.cut_out_count) + 1
+            gr = part.setdefault("geometry_rollup", {})
+            if isinstance(gr, dict) and not _num(gr.get("estimated_pierce_count")):
+                gr["estimated_pierce_count"] = int(nat.cut_out_count) + 1
+            flags.append(f"{nat.cut_out_count} cut-out(s) from the SolidWorks cut list "
+                         f"— each needs its own pierce")
 
         # ── OPS HINTS ────────────────────────────────────────────────────────────
         # The analyser only emits an op where the feature tree evidences it (steel + sheet

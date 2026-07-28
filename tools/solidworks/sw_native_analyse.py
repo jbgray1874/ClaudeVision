@@ -403,7 +403,16 @@ def flat_pattern_by_flatten(doc, folded_bbox: Optional[Tuple[float, float, float
                 continue
             try:
                 part.SetBendState(_state)
-                _get0(doc, "ForceRebuild3") if hasattr(doc, "ForceRebuild3") else None
+                # ForceRebuild3 TAKES an argument (TopOnly). _get0 calls with none, so
+                # the rebuild never happened and we measured the body BEFORE it was rebuilt
+                # into its flattened state — silently, because the failure is swallowed.
+                try:
+                    doc.ForceRebuild3(False)
+                except Exception:
+                    try:
+                        doc.EditRebuild3()
+                    except Exception:
+                        pass
             except Exception:
                 continue
             box = get_bbox_mm(doc, SW_PART)
@@ -431,8 +440,10 @@ def flat_pattern_by_flatten(doc, folded_bbox: Optional[Tuple[float, float, float
     finally:
         try:
             part.SetBendState(_orig)
-            if hasattr(doc, "ForceRebuild3"):
-                _get0(doc, "ForceRebuild3")
+            try:
+                doc.ForceRebuild3(False)
+            except Exception:
+                pass
         except Exception:
             notes.append("WARNING: could not restore the original bend state in memory "
                          "(document is closed without saving, so the file is unchanged)")
@@ -1086,6 +1097,18 @@ def assembly_bom(doc) -> List[BomLine]:
                 model = c.GetModelDoc2()
             except Exception:
                 model = _get0(c, "GetModelDoc2")
+            # LIGHTWEIGHT COMPONENTS. A large assembly opens components lightweight to save
+            # memory, and a lightweight component has no IModelDoc2 — GetModelDoc2 returns
+            # nothing. Everything read from the model then silently vanishes: the BOM line
+            # keeps the instance name but loses its title, material, properties and path,
+            # so the part looks unidentified rather than unresolved. Resolve it and retry.
+            # swComponentFullyResolved = 3.
+            if model is None:
+                try:
+                    c.SetSuppression2(3)
+                    model = c.GetModelDoc2()
+                except Exception:
+                    model = None
             model = _wrap(model, "IModelDoc2") if model is not None else None
             # Document identity. The component INSTANCE name carries the '-N' suffix
             # (strip it); the model's document TITLE is already the clean part number
