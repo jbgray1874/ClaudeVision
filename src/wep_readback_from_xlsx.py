@@ -180,6 +180,123 @@ def _used_bounds(com_ws) -> Tuple[int, int]:
         return 240, 34
 
 
+# ── the FINAL rows, as Excel calculated them ────────────────────────────────────────
+# wb_populate can only record what it PUT IN — quantities, throughputs, the department it
+# chose. Hours, rates, costs and values are Excel formulas that do not evaluate until the
+# file is opened, so a snapshot taken at write time carries none of them. Anything
+# describing the finished estimate from that snapshot is describing the input, not the
+# result. These are read AFTER calculation, from the sheet itself.
+#
+# Columns are located by HEADER TEXT, not by index: the estimators' template shifts rows and
+# columns when the BOM block grows, and a hardcoded column would go quietly stale rather
+# than fail. Same reasoning as _find_wb_sell_price_ref scanning for its label.
+_LABOUR_HEADER_KEYS = {
+    "operation": "operation", "part description": "description", "dept": "department",
+    "qty per unit": "qty_per_unit", "rate per hour": "rate_per_hour",
+    "total hours": "total_hours", "labour cost": "labour_cost_gbp",
+    "set up": "setup_minutes", "total value": "total_value_gbp",
+}
+_MATERIAL_HEADER_KEYS = {
+    "bill of materials": "description", "part code": "part_code", "supplier": "supplier",
+    "price": "unit_price_gbp", "qty per unit": "qty_per_unit", "scrap": "scrap_pct",
+    "total value": "total_value_gbp",
+}
+
+
+def _header_map(com_ws, header_row: int, keys: Dict[str, str],
+                max_col: int) -> Dict[str, int]:
+    """{normalised field name: column index} by matching header text on one row."""
+    found: Dict[str, int] = {}
+    for c in range(1, max_col + 1):
+        try:
+            v = com_ws.Cells(header_row, c).Value
+        except Exception:
+            continue
+        if not isinstance(v, str):
+            continue
+        t = " ".join(v.split()).strip().lower()
+        if not t:
+            continue
+        for needle, field in keys.items():
+            if field not in found and needle in t:
+                found[field] = c
+                break
+    return found
+
+
+def _find_header_row(com_ws, first_data_row: int, needles: Tuple[str, ...],
+                     max_col: int) -> Optional[int]:
+    """The header row for a block: search upward from its first data row."""
+    for r in range(max(1, first_data_row - 6), first_data_row + 1):
+        row_text = ""
+        for c in range(1, min(max_col, 24) + 1):
+            try:
+                v = com_ws.Cells(r, c).Value
+            except Exception:
+                continue
+            if isinstance(v, str):
+                row_text += " " + v.lower()
+        if all(n in row_text for n in needles):
+            return r
+    return None
+
+
+def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
+                needles: Tuple[str, ...], id_field: str, max_col: int) -> list:
+    """Rows of one workbook block, as calculated. Blank identity = end of the used rows;
+    an Excel error is carried through as None rather than a number, because a cell showing
+    #DIV/0! is missing data and must not be read as zero."""
+    hr = _find_header_row(com_ws, first_row, needles, max_col)
+    if hr is None:
+        return []
+    cols = _header_map(com_ws, hr, keys, max_col)
+    if id_field not in cols:
+        return []
+    out = []
+    for r in range(first_row, last_row + 1):
+        try:
+            ident = com_ws.Cells(r, cols[id_field]).Value
+        except Exception:
+            continue
+        if ident is None or not str(ident).strip():
+            continue
+        row: Dict[str, Any] = {"workbook_row": r}
+        for field, c in cols.items():
+            try:
+                v = com_ws.Cells(r, c).Value
+            except Exception:
+                v = None
+            if _is_excel_error(v):
+                row[field] = None
+            elif isinstance(v, str):
+                row[field] = " ".join(v.split()).strip()
+            else:
+                row[field] = _safe_float(v) if isinstance(v, (int, float)) else v
+        out.append(row)
+    return out
+
+
+def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
+    """The Estimate sheet's calculated labour and BOM rows.
+
+    Block bounds come from wb_populate's own CELL_MAP so the two cannot disagree about
+    where the blocks are; falls back to the known defaults if that import is unavailable."""
+    bom_first, bom_last, lab_first, lab_last = 11, 50, 96, 167
+    try:
+        from wb_populate import CELL_MAP as _CM
+        bom_first = int(_CM["bom"]["first_row"]); bom_last = int(_CM["bom"]["last_row"])
+        lab_first = int(_CM["labour"]["first_row"]); lab_last = int(_CM["labour"]["last_row"])
+    except Exception:
+        pass
+    return {
+        "labour_rows": _read_block(com_ws, lab_first, lab_last, _LABOUR_HEADER_KEYS,
+                                   ("operation", "total hours"), "operation", max_col),
+        "material_rows": _read_block(com_ws, bom_first, bom_last, _MATERIAL_HEADER_KEYS,
+                                     ("bill of materials", "total value"), "description",
+                                     max_col),
+    }
+
+
 def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
     """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals."""
     excel = com_wb = None
@@ -190,11 +307,18 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
         except Exception:
             com_ws = com_wb.ActiveSheet
         max_row, max_col = _used_bounds(com_ws)
-        out: Dict[str, float] = {}
+        out: Dict[str, Any] = {}
         for key, needles in _TOTAL_LABELS.items():
             val = _scan_total(com_ws, needles, max_row, max_col)
             if val is not None:
                 out[key] = round(val, 4)
+        # Same COM session, same calculated state: opening Excel twice would be slow and
+        # could read a differently-calculated file. Failure here must not lose the totals.
+        try:
+            out["_final_rows"] = read_final_rows(com_ws, max_col)
+        except Exception as _rexc:
+            print(f"   [wep-readback] calculated rows not read ({_rexc}) — totals kept.",
+                  flush=True)
         return out or None
     except Exception as exc:
         print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
@@ -222,6 +346,7 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     material = totals.get("material")
     labour = totals.get("labour")
     unit = totals.get("unit")
+    _final_rows = totals.pop("_final_rows", None) or {}
 
     try:
         summary = json.loads(jp.read_text(encoding="utf-8"))
@@ -233,6 +358,28 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     if not isinstance(es, dict):
         print("   [wep-readback] JSON has no estimate_summary — skipped.", flush=True)
         return None
+
+    # ── final_estimate.v1 — the one post-Excel contract ──────────────────────────────
+    # Totals AND rows, read from the same calculated sheet. Everything downstream (sheets,
+    # HTML, comparison CSV, ERP export) should describe the estimate from this and nothing
+    # else: it is the only structure that reflects what the workbook actually computed,
+    # rather than what was handed to it. wb_populate's workbook_labour remains as the
+    # accepted INPUT grouping — useful for provenance, but it has no hours, rates or values
+    # and must not be mistaken for the result.
+    if _final_rows.get("labour_rows") or _final_rows.get("material_rows"):
+        summary["final_estimate"] = {
+            "schema": "final_estimate.v1",
+            "source": "excel_calculated",
+            "note": ("Rows as the Estimate sheet calculated them. Authoritative for what the "
+                     "job contains and what each line costs. Excel errors are carried as "
+                     "null, never as zero — a cell showing #DIV/0! is missing data."),
+            "totals": {"material_gbp": material, "labour_gbp": labour, "unit_gbp": unit},
+            "labour_rows": _final_rows.get("labour_rows") or [],
+            "material_rows": _final_rows.get("material_rows") or [],
+        }
+        print(f"   [wep-readback] final_estimate.v1 stamped — "
+              f"{len(_final_rows.get('labour_rows') or [])} calculated labour row(s), "
+              f"{len(_final_rows.get('material_rows') or [])} BOM row(s)", flush=True)
 
     wep = es.get("workbook_equivalent_pricing")
     if not isinstance(wep, dict):

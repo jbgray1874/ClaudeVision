@@ -95,6 +95,35 @@ def _workbook_rows(source: Any) -> Optional[List[Dict[str, Any]]]:
     """
     if not isinstance(source, dict):
         return None
+    # 1. final_estimate.v1 — rows AS EXCEL CALCULATED THEM. Preferred, because it is the
+    #    only structure carrying hours, rates and values: workbook_labour records what was
+    #    handed TO the sheet, not what came out. A row here whose Total Value calculated to
+    #    zero or errored is not part of the priced job and is dropped.
+    fe = source.get("final_estimate")
+    if not isinstance(fe, dict) and isinstance(source.get("estimate_summary"), dict):
+        fe = source["estimate_summary"].get("final_estimate")
+    if isinstance(fe, dict) and isinstance(fe.get("labour_rows"), list):
+        rows = []
+        for r in fe["labour_rows"]:
+            if not isinstance(r, dict):
+                continue
+            _v = _num(r.get("total_value_gbp"))
+            _h = _num(r.get("total_hours"))
+            if _v <= 0 and _h <= 0:
+                continue
+            rows.append({
+                "wb_operation": r.get("operation"),
+                "engine_operations": r.get("engine_operations") or [],
+                "part_numbers": r.get("part_numbers") or [],
+                "qty_per_unit": r.get("qty_per_unit"),
+                "total_hours": r.get("total_hours"),
+                "total_value_gbp": r.get("total_value_gbp"),
+                "_calculated": True,
+            })
+        if rows:
+            return rows
+    # 2. workbook_labour — the accepted INPUT grouping. Correct about WHICH operations and
+    #    which parts, silent about what they cost.
     node = source.get("workbook_labour")
     if not isinstance(node, dict):
         node = (source.get("estimate_summary") or {}).get("workbook_labour") \
