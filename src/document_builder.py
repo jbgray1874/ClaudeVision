@@ -335,13 +335,37 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
     bend_count = features.get("bend_count", 0) or 0
     flat_length = length
     flat_width = width
-    if length is not None and width is not None:
+    # The blank allowance ESTIMATES a developed size from formed dimensions. It must not be
+    # applied when the developed size is already known, nor when there is nothing to develop:
+    #
+    #  - MEASURED FLAT PATTERN. A DXF flat pattern (or a SolidWorks cut-list flat) IS the
+    #    developed blank — that is what a flat pattern is. Adding an allowance to it inflates
+    #    a known-correct number. Proven on 12120: the DXFs measure exactly the model's flat
+    #    (03M 45.00x20.00 both), and this allowance costed them at 51x26 — 47% more material
+    #    area on a small part, on every DXF-backed job.
+    #  - NO BENDS. A part with no bends does not develop; formed size IS blank size. The old
+    #    max(1, bend_count) charged a full bend's allowance to every flat blank.
+    #
+    # Where neither holds — formed dimensions read off a PDF, with bends — the allowance is
+    # a genuine estimate and still applies, scaled by bend count and thickness. It is
+    # recorded so an estimated blank is never mistaken for a measured one.
+    _measured_flat = bool(
+        part.get("flat_pattern_detected")
+        or part.get("dxf_augmented")
+        or part.get("native_flat_pattern")
+        or "dxf" in str(part.get("geometry_source") or "").lower()
+        or str(part.get("geometry_source") or "").lower() == "solidworks_flat_pattern"
+    )
+    blank_allowance_mm = 0.0
+    blank_basis = "measured_flat_pattern" if _measured_flat else "no_bends_formed_equals_blank"
+    if length is not None and width is not None and not _measured_flat and bend_count > 0:
         # Scale bend/blank allowance with bend count and thickness rather than fixed +20mm.
         thickness_for_allowance = thickness if thickness is not None else 1.5
         bend_radius = max(1.0, thickness_for_allowance)
-        allowance = max(6.0, min(40.0, 2.0 * bend_radius * max(1, bend_count)))
-        flat_length = round(length + allowance, 2)
-        flat_width = round(width + allowance, 2)
+        blank_allowance_mm = max(6.0, min(40.0, 2.0 * bend_radius * bend_count))
+        flat_length = round(length + blank_allowance_mm, 2)
+        flat_width = round(width + blank_allowance_mm, 2)
+        blank_basis = "estimated_from_formed_dimensions"
 
     formed_height = None
     if bend_angles:
@@ -388,6 +412,10 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
         },
         "developed_length_mm": flat_length,
         "developed_width_mm": flat_width,
+        # How the blank was arrived at, and how much (if any) was added to the measured or
+        # drawn size. An estimated blank must never be indistinguishable from a measured one.
+        "blank_basis": blank_basis,
+        "blank_allowance_mm": round(blank_allowance_mm, 2),
         "projected_area_m2": round((length * width) / 1_000_000.0, 4) if length is not None and width is not None else None,
         "blank_area_m2": blank_area_m2,
         "smallest_enclosing_rectangle_mm": {
