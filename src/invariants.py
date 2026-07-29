@@ -774,6 +774,60 @@ def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
         lines=detail[:10], count=len(detail))]
 
 
+def check_a_measured_plate_is_not_charged_for_folding(summary: Any) -> List[Dict[str, Any]]:
+    """A part the model measured as flat must not carry a fold on the priced rows.
+
+    12120's 04M is 60 x 34.04 x 1.5mm at 1.5mm gauge with a cut-list bend count of zero. The
+    fold was stripped at extraction, stripped again at costing, and STILL arrived in the
+    Fold 1.5mm group with GBP 0.16 of folding on it — because a 30-degree callout on the PDF
+    re-inferred the operation after each strip, and the money was written before anyone
+    looked again.
+
+    Removing the op in more places is whack-a-mole; each new pass is another chance to
+    re-add it. This asks the only question that matters, at the only point where it is
+    settled: is the engine CHARGING to fold something it has measured as flat? Any future
+    path that resurrects the op fails here, whatever route it took.
+    """
+    records = _parts(summary)
+    holders = [h for h in (summary if isinstance(summary, dict) else {},
+                           (summary or {}).get("estimate_summary") or {}) if isinstance(h, dict)]
+    for holder in holders:
+        for key in ("part_estimates", "parts"):
+            v = holder.get(key)
+            if isinstance(v, list):
+                records = records + [p for p in v if isinstance(p, dict)]
+    if not records:
+        return _unevaluated("plate_not_folded", "No part records were found on this job.")
+
+    # The verdict and the money can live on different records for the same part, so gather
+    # both by part number before judging either.
+    flat: Dict[str, Any] = {}
+    folded: Dict[str, float] = {}
+    for p in records:
+        pn = str(p.get("part_number") or "").strip()
+        if not pn:
+            continue
+        if p.get("native_flat_solid"):
+            flat[pn] = True
+        _costs = ((p.get("labour_estimate") or {}).get("costs_gbp")
+                  or ((p.get("cost_breakdown") or {}).get("labour") or {}).get("costs_gbp") or {})
+        if isinstance(_costs, dict):
+            for op, val in _costs.items():
+                if "fold" in str(op).lower() or "bend" in str(op).lower():
+                    folded[pn] = max(folded.get(pn, 0.0), _num(val) or 0.0)
+    bad = [{"part_number": pn, "folding_gbp": round(folded[pn], 2)}
+           for pn in sorted(set(flat) & set(folded))]
+    if not bad:
+        return []
+    return [_violation(
+        "plate_charged_for_folding", BLOCKING,
+        f"{len(bad)} part(s) the model measured as flat are being charged to fold: "
+        f"{', '.join(b['part_number'] for b in bad)}. A part one thickness thick has nowhere "
+        f"for a bend to be, so this is drawing text outvoting a measurement — and it reaches "
+        f"the sheet as a Fold row and a press-brake setup that will not happen.",
+        parts=bad, count=len(bad))]
+
+
 CHECKS = (
     check_schemas,
     check_workbook_adapters_read_everything,
@@ -789,6 +843,7 @@ CHECKS = (
     check_native_evidence_is_current,
     check_prices_are_reproducible,
     check_price_disagreement_is_declared,
+    check_a_measured_plate_is_not_charged_for_folding,
 )
 
 

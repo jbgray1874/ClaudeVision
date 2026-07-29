@@ -566,6 +566,57 @@ different quantity or revision).</p>
 {match_note}
 {detail}"""
 
+def bought_in_strength_row(bi: List[Dict[str, Any]]) -> str:
+    """The "bought-in items recognised" row, as its own function so a test can drive it.
+
+    RECOGNISING A PART AND PRICING IT ARE DIFFERENT ACHIEVEMENTS. This row said every
+    bought-in was "identified and priced from catalogue/historical sources" under a green
+    Sound tag, on a job where three of the applied prices were AI market estimates and a
+    fourth was zero. Identification is what went right; say that, and count how the prices
+    actually arrived.
+
+    Extracted because the fixture first written for it could only check whether a helper
+    existed and passed when it did not — a test that asserts nothing is worse than none,
+    because the suite goes green either way.
+    """
+    if not bi:
+        return ""
+    try:
+        import price_provenance
+        guessed = len({str(p.get("part_number") or "").upper()
+                       for p in bi if price_provenance.applied_ai_prices(p)})
+    except Exception:
+        guessed = 0
+
+    def _priced(p: Dict[str, Any]) -> bool:
+        # _num() in this module FORMATS a number for display; it is not a parser and returns
+        # a string, so testing it for truthiness would call every line priced.
+        for v in (((p.get("cost_breakdown") or {}).get("system_cost") or {}).get("unit_cost_gbp"),
+                  p.get("unit_cost_gbp"),
+                  (p.get("material_estimate") or {}).get("unit_material_cost_gbp")):
+            try:
+                if v is not None and float(v) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    unpriced = len([p for p in bi if not _priced(p)])
+    tag, note = "t-good", "identified as purchased rather than fabricated."
+    if guessed or unpriced:
+        bits = []
+        if guessed:
+            bits.append(f"{guessed} priced by an AI market estimate, not a catalogue")
+        if unpriced:
+            bits.append(f"{unpriced} carrying no price at all")
+        tag = "t-warn"
+        note = ("identified as purchased rather than fabricated \u2014 but "
+                + " and ".join(bits) + ". Identification is not pricing.")
+    return (f'<tr><td><span class="tag {tag}">'
+            f'{"Sound" if tag == "t-good" else "Check"}</span></td>'
+            f'<td><b>Bought-in items recognised.</b> {len(bi)} bought-in part(s) {note}</td></tr>')
+
+
 def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
     """Section 2 — verify claims from the data rather than assert fixed ones."""
     rows = ""
@@ -623,9 +674,7 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
 
     # bought-ins recognised
     bi = [p for p in parts if str(p.get("part_number") or "").upper().startswith("BI-")]
-    if bi:
-        rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Bought-in items recognised.</b> '
-                 f'{len(bi)} bought-in part(s) identified and priced from catalogue/historical sources rather than fabricated.</td></tr>')
+    rows += bought_in_strength_row(bi)
 
     if not rows:
         rows = '<tr><td><span class="tag t-info">Note</span></td><td>No specific strengths auto-detected for this job.</td></tr>'

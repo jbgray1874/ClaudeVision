@@ -2728,6 +2728,160 @@ def test_a_thickness_is_inferred_for_a_plate_with_no_sheet_metal_feature():
        "20mm is plate-shaped but out of sheet range — that is a fabrication, not a gauge")
 
 
+def test_a_measured_zero_bend_count_outvotes_a_drawing_callout():
+    """04M carried native_flat_solid=True and inferred_operations=['folding'] at the same
+    time, and GBP 0.16 of folding on its priced row. The op was stripped at extraction,
+    stripped again at costing, and came back both times.
+
+    The cause is the engine's own rule broken in one line:
+
+        bends = manufacturing_features.get("bend_count") or max(len(angles_deg), ...)
+
+    bend_count = 0 stamped by solidworks_api is a MEASUREMENT — the model was read and has no
+    bends. Zero is falsy, so it fell through to the PDF's 30-degree callout. Removing the op
+    in more places would be whack-a-mole; the evidence that regenerates it has to stop
+    outvoting the measurement.
+
+    Falling through is still right where the zero came from something that cannot see bends —
+    parts whose folds live only in a PDF callout must keep folding."""
+    from estimator import _model_measured_zero_bends, estimate_process_times
+
+    measured_flat = {"part_number": "04M", "normalized_material": "MILD_STEEL",
+                     "native_flat_solid": True, "angles_deg": ["30"],
+                     "normalized_thickness_mm": 1.5,
+                     "manufacturing_features": {"bend_count": 0,
+                                                "bend_count_source": "solidworks_api"},
+                     "textual_operations": ["laser_cutting", "powder_coating", "handling"]}
+    eq(_model_measured_zero_bends(measured_flat), True,
+       "a zero from the model is a measurement")
+
+    # The whole point: drive costing and check no fold is priced.
+    _res = estimate_process_times(dict(measured_flat), quantity=1)
+    _ops = list((_res or {}).get("times_min", {}) or (_res or {}).get("unit_times_min", {}) or {})
+    ok(not [o for o in _ops if "fold" in str(o).lower()],
+       f"a measured plate is not costed to fold (ops priced: {_ops})")
+
+    # A zero from something that cannot see bends must STILL fall through — this is the
+    # fold-shadowing fix, and breaking it would drop real folds off PDF-only parts.
+    pdf_only = {"part_number": "09M", "normalized_material": "MILD_STEEL",
+                "angles_deg": ["90"], "normalized_thickness_mm": 1.5,
+                "manufacturing_features": {"bend_count": 0},
+                "textual_operations": ["laser_cutting"]}
+    eq(_model_measured_zero_bends(pdf_only), False,
+       "a bare zero with no source is not a measurement")
+    _res2 = estimate_process_times(dict(pdf_only), quantity=1)
+    _ops2 = list((_res2 or {}).get("times_min", {}) or (_res2 or {}).get("unit_times_min", {}) or {})
+    ok([o for o in _ops2 if "fold" in str(o).lower()],
+       f"a PDF-only fold is still costed (ops priced: {_ops2})")
+
+    # Where the drawing says fold and the model counted no bends, the op stands — someone
+    # wrote it on the drawing — but the COUNT used to time it comes from the measurement, not
+    # from however many angles the PDF happens to carry. Two callouts would otherwise buy
+    # press-brake time for bends the model says are not there.
+    contested = {"part_number": "07M", "normalized_material": "MILD_STEEL",
+                 "normalized_thickness_mm": 1.5, "angles_deg": ["30", "90"],
+                 "textual_operations": ["laser_cutting", "folding"],
+                 "manufacturing_features": {"bend_count": 0,
+                                            "bend_count_source": "solidworks_api"}}
+    _t = estimate_process_times(dict(contested), quantity=1)
+    _tm = (_t or {}).get("times_min") or (_t or {}).get("unit_times_min") or {}
+    _unsourced = dict(contested, manufacturing_features={"bend_count": 0})
+    _t2 = estimate_process_times(_unsourced, quantity=1)
+    _tm2 = (_t2 or {}).get("times_min") or (_t2 or {}).get("unit_times_min") or {}
+    ok(_tm.get("folding", 0) < _tm2.get("folding", 0),
+       f"a measured zero times fewer bends than two PDF callouts "
+       f"({_tm.get('folding')} vs {_tm2.get('folding')} min)")
+
+    # An absent count is absence, not a measured zero.
+    eq(_model_measured_zero_bends({"manufacturing_features": {
+        "bend_count": None, "bend_count_source": "solidworks_api"}}), False,
+       "no count read is not a count of none")
+    # A real count is a real count.
+    eq(_model_measured_zero_bends({"manufacturing_features": {
+        "bend_count": 2, "bend_count_source": "solidworks_api"}}), False,
+       "two bends is not zero bends")
+
+
+def test_a_plate_is_never_charged_to_fold():
+    """The op was removed in three places and the money still reached the sheet, because
+    each strip ran before the next pass re-inferred the fold. Removing it in a fourth place
+    is another chance to miss it.
+
+    This asks the only question that settles it, at the point where it is settled: is the
+    engine CHARGING to fold something it measured as flat? Any future path that resurrects
+    the op fails here, whatever route it took."""
+    from invariants import check_job
+
+    j = _job()
+    j["parts"] = [{"part_number": "12120-01-04M", "native_flat_solid": True,
+                   "geometry_source": "dxf_cut_length_only"}]
+    j["estimate_summary"] = {"part_estimates": [
+        {"part_number": "12120-01-04M",
+         "labour_estimate": {"costs_gbp": {"laser_cutting": 0.68, "folding": 0.16}}}]}
+    r = check_job(j, write_back=False)
+    codes = [v["code"] for v in r["violations"]]
+    ok("plate_charged_for_folding" in codes,
+       f"charging a measured plate to fold must block: {codes}")
+    ok(not r["may_quote_firm"], "and stop the quote being firm")
+    _v = next(v for v in r["violations"] if v["code"] == "plate_charged_for_folding")
+    ok("12120-01-04M" in str(_v["detail"]), "naming the part and the money")
+
+    # The verdict and the money live on different records for the same part; the check has
+    # to join them, which is why 04M read native_flat_solid=None on its costed record.
+    j2 = _job()
+    j2["parts"] = [{"part_number": "12120-01-04M", "native_flat_solid": True}]
+    j2["estimate_summary"] = {"part_estimates": [
+        {"part_number": "12120-01-04M",
+         "cost_breakdown": {"labour": {"costs_gbp": {"folding": 0.16}}}}]}
+    ok("plate_charged_for_folding" in
+       [v["code"] for v in check_job(j2, write_back=False)["violations"]],
+       "wherever the cost was written, it is found")
+
+    # A part that genuinely folds is untouched.
+    j3 = _job()
+    j3["parts"] = [{"part_number": "12120-01-01M"}]
+    j3["estimate_summary"] = {"part_estimates": [
+        {"part_number": "12120-01-01M",
+         "labour_estimate": {"costs_gbp": {"folding": 1.96}}}]}
+    ok("plate_charged_for_folding" not in
+       [v["code"] for v in check_job(j3, write_back=False)["violations"]],
+       "a part that folds is charged to fold")
+
+
+def test_the_report_does_not_call_a_guess_a_catalogue_price():
+    """Under a green "Sound" tag the report said every bought-in was "identified and priced
+    from catalogue/historical sources" — on a job where three of those prices were AI market
+    estimates and a fourth was zero. Recognising a part and pricing it are different
+    achievements, and only the first had gone right.
+
+    The first version of this fixture checked whether a helper existed and passed when it did
+    not, asserting nothing at all. The row builder was extracted so this can drive it."""
+    from job_report_html import bought_in_strength_row
+
+    def _bi(pn, price, ai=False):
+        src = {"source_name": "llm_market_estimate" if ai else "udef_sqlserver",
+               "applied": True, "affects_total": True, "source_rank": 0,
+               "selected": {"source": "llm_market_estimate" if ai else "udef_sqlserver",
+                            "price": price}}
+        return {"part_number": pn, "unit_cost_gbp": price,
+                "cost_breakdown": {"system_cost": {"unit_cost_gbp": price,
+                                                   "applied_to_total": True, "source": src}}}
+
+    clean = bought_in_strength_row([_bi("BI-SELFCLINCHNUT", 0.03)])
+    ok("Sound" in clean, "catalogue-priced bought-ins still read as sound")
+    ok("AI market estimate" not in clean, "with nothing to warn about")
+
+    mixed = bought_in_strength_row([_bi("BI-SELFCLINCHNUT", 0.03),
+                                    _bi("BI-KNURLEDKNOB", 9.52, ai=True),
+                                    _bi("BI-PEMSTUD", 0.0)])
+    ok("Sound" not in mixed, "a mixed set is not reported as sound")
+    ok("1 priced by an AI market estimate" in mixed, "the guessed line is counted and named")
+    ok("1 carrying no price at all" in mixed, "and so is the unpriced one")
+    ok("Identification is not pricing" in mixed, "with the distinction spelled out")
+
+    eq(bought_in_strength_row([]), "", "and no bought-ins says nothing at all")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

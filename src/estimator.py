@@ -989,6 +989,39 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
 
 
+_MEASURED_BEND_SOURCES = {"solidworks_api", "solidworks", "native", "dxf_flat_pattern", "dxf"}
+
+
+def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
+    """Did something that can actually SEE the part count its bends, and find none?
+
+    THE ENGINE'S OWN RULE, BROKEN IN ONE LINE. bend_count = 0 stamped by solidworks_api is a
+    measurement — the model was read and it has no bends. Two places treated it as absence:
+
+        bends = manufacturing_features.get("bend_count") or max(len(angles_deg), ...)
+
+    A zero is falsy, so the fold fell through to the drawing's own callouts, and 12120's 04M
+    came back as one bend from a 30-degree angle on the PDF. That is why the plate gate kept
+    removing the op and the sheet kept charging for it: the op was stripped, and the evidence
+    that regenerates it was left on the record.
+
+    Falling through IS right when the zero came from something that cannot see bends — that
+    is the fold-shadowing fix, and parts whose folds live only in a PDF callout still need it.
+    So the distinction is not "is it zero" but "did anything actually look".
+    """
+    if not isinstance(part, dict):
+        return False
+    if part.get("native_flat_solid"):
+        return True          # the solid is one thickness thick — nowhere for a bend to be
+    mf = part.get("manufacturing_features") or {}
+    if not isinstance(mf, dict):
+        return False
+    count = mf.get("bend_count")
+    if count is None or _safe_int(count):
+        return False         # absent, or a real count — neither is a measured zero
+    return str(mf.get("bend_count_source") or "").strip().lower() in _MEASURED_BEND_SOURCES
+
+
 def _dxf_geometry_trusted(part: Dict[str, Any], ng: Dict[str, Any]) -> bool:
     """True when blank/bbox extents came from flat DXF, not PDF page vectors."""
     if part.get("dxf_augmented") or part.get("flat_pattern_detected"):
@@ -2277,7 +2310,14 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         int(geom.get("estimated_pierce_count") or 0),
         len(part.get("hole_sizes_mm", []) or []),
     )
-    bends = manufacturing_features.get("bend_count") or max(len(part.get("angles_deg", [])), len(part.get("fold_values_mm", [])), part.get("fold_count_textual", 0) or 0)  # fold-shadowing fix: present-but-zero bend_count falls through to PDF fold evidence (angles_deg/fold_count_textual), so parts folded from PDF callouts (no DXF BENDLINES layer) get their Fold op
+    # A MEASURED ZERO IS A VALUE. Where the model was read and found no bends, that answer
+    # stands and nothing falls through to the drawing. Everywhere else the fold-shadowing fix
+    # applies unchanged: a present-but-zero bend_count from something that cannot see bends
+    # falls through to PDF fold evidence, so parts folded from callouts alone still fold.
+    if _model_measured_zero_bends(part):
+        bends = 0
+    else:
+        bends = manufacturing_features.get("bend_count") or max(len(part.get("angles_deg", [])), len(part.get("fold_values_mm", [])), part.get("fold_count_textual", 0) or 0)
     bend_length_mm = sum([_safe_float(value) or 0.0 for value in part.get("fold_values_mm", [])])
     thickness_mm = _safe_thickness_mm(part)
 
@@ -2558,7 +2598,12 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # PDF, not a DXF layer). Add the op so it is costed. Same shape as the laser/punch
     # inference above. Sheet metal / board ONLY: a tube is bent on a tubebender (its own op),
     # a bought section is not press-folded. Uses `bends` (already set from PDF fold evidence).
-    if "folding" not in ops and (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and not _section_no_dxf:
+    # ...unless the model counted this part's bends and found none. This is the block that
+    # actually put 'folding' back on 04M — it reads len(angles_deg) > 0, and the PDF carries a
+    # 30-degree callout — writing it into inferred_operations, where the earlier strip had
+    # already been and gone. Drawing evidence infers a fold; a measurement rules one out.
+    if ("folding" not in ops and (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS)
+            and not _section_no_dxf and not _model_measured_zero_bends(part)):
         _fold_evidence = (
             (bends or 0) > 0
             or len(part.get("angles_deg") or []) > 0
@@ -3371,6 +3416,10 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "process_estimate": process,
         "labour_estimate": labour,
         "normalized_geometry": part.get("normalized_geometry", {}),
+        # The model's plate verdict travels with the costed record. It was set on the raw
+        # part and never copied here, so the record that carries the folding MONEY had no
+        # idea the part was flat, and nothing downstream could compare the two.
+        "native_flat_solid": part.get("native_flat_solid"),
         "cost_breakdown": {
             "material": {
                 "unit_material_mass_kg": material.get("unit_material_mass_kg"),
