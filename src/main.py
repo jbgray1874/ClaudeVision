@@ -840,7 +840,30 @@ def main() -> None:
         _canon_json3 = (summary.get("saved_output_paths") or {}).get("json")
         try:
             from invariants import check_job as _check_job, format_report as _fmt_inv
-            _inv = _check_job(summary)
+            # CHECK THE DOCUMENT THAT HAS EVERYTHING, ONCE.
+            #
+            # The read-back writes final_estimate to the JSON ON DISK, not to this in-memory
+            # summary. Checking `summary` therefore ran six checks against a job with no
+            # final_estimate at all, and they correctly reported themselves UNVERIFIED —
+            # then the JSON was checked separately and found a third blocking violation the
+            # console had never mentioned. One run, two verdicts: the console said 2 blocking
+            # and 6 unverified while the quote said 3 failed.
+            #
+            # Fail-closed did its job — nothing claimed a pass it had not earned — but two
+            # views of one job that disagree is the exact defect this layer exists to stop.
+            # Load the stamped JSON first, check that, print that, store that.
+            _doc = None
+            if _canon_json3 and Path(_canon_json3).exists():
+                try:
+                    _doc = json.loads(Path(_canon_json3).read_text(encoding="utf-8"))
+                except Exception as _rd:
+                    print(f"   [invariants] could not read the stamped JSON ({_rd}) — "
+                          f"checking the in-memory summary instead, which has no "
+                          f"final_estimate and will report those checks as unverified.",
+                          flush=True)
+            _target = _doc if isinstance(_doc, dict) else summary
+            _inv = _check_job(_target)
+            summary["invariants"] = _inv          # so anything reading `summary` agrees
             print(_fmt_inv(_inv), flush=True)
             if not _inv.get("may_quote_firm"):
                 # Said once, plainly, at the point a person is watching. The deliverables
@@ -851,12 +874,8 @@ def main() -> None:
                       f"{_inv.get('unverified', 0)} could not be run. "
                       "Deliverables will be marked provisional; do not release to a customer "
                       "or an ERP export until resolved.", flush=True)
-            # Persist onto the canonical JSON, which the readback has already rewritten —
-            # writing to `summary` alone would leave the file disagreeing with the run.
-            if _canon_json3 and Path(_canon_json3).exists():
+            if isinstance(_doc, dict) and _canon_json3:
                 try:
-                    _doc = json.loads(Path(_canon_json3).read_text(encoding="utf-8"))
-                    _doc["invariants"] = _check_job(_doc, write_back=False)
                     Path(_canon_json3).write_text(
                         json.dumps(_doc, indent=2, ensure_ascii=False), encoding="utf-8")
                 except Exception as _iw:

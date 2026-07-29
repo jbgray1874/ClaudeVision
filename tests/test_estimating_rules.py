@@ -1692,6 +1692,66 @@ def test_an_unknown_schema_is_never_read_as_if_known():
        f"a contract whose shape may have moved must not be read anyway: {codes}")
 
 
+def test_the_checks_run_against_the_stamped_document_not_a_stale_view():
+    """One run produced two verdicts. The console said "2 blocking, 6 unverified"; the quote
+    for the same job said "3 consistency check(s) FAILED", the extra one being the unit-price
+    gap.
+
+    The read-back writes final_estimate to the JSON ON DISK, not to the in-memory summary.
+    Checking the summary therefore ran six checks against a job carrying no final_estimate at
+    all. Fail-closed did its job — every one reported itself UNVERIFIED rather than passing —
+    but two views of one job that disagree is the exact defect this layer exists to stop.
+
+    The document checked must be the one the read-back stamped."""
+    from invariants import check_job
+
+    # The in-memory view, mid-run: no final_estimate yet.
+    pre = {"part_estimates": [{"part_number": "01M"}]}
+    r_pre = check_job(pre, write_back=False)
+    _unev = [v["code"] for v in r_pre["violations"] if v["severity"] == "unverified"]
+    ok(len(_unev) >= 4,
+       f"a summary with no final_estimate cannot verify the reconciliation checks: {_unev}")
+    ok(not r_pre["may_quote_firm"], "and must not be quotable")
+
+    # The stamped document: the same checks now have something to read, and find the real
+    # problem — which the earlier view could not have reported.
+    post = dict(pre, **{"final_estimate": {
+        "schema": "final_estimate.v2",
+        "totals": {"material_gbp": 15.03, "labour_gbp": 12.30, "unit_gbp": 29.39},
+        "material_rows": [{"workbook_row": 11, "total_value_gbp": 15.03}],
+        "labour_rows": [{"workbook_row": 41, "total_value_gbp": 12.30}],
+        "adapter_problems": []}})
+    r_post = check_job(post, write_back=False)
+    _codes = [v["code"] for v in r_post["violations"]]
+    ok("unit_price_does_not_equal_its_parts" in _codes,
+       f"the stamped document exposes the real gap: {_codes}")
+    ok("totals_reconcile_not_evaluated" not in _codes,
+       "and that check is no longer unverified — it had data to read")
+    # The two verdicts differ, which is precisely why only ONE may be reported.
+    ok(r_pre["blocking"] != r_post["blocking"],
+       "the two views genuinely disagree — checking both and printing one is the bug")
+
+
+def test_main_checks_the_document_it_stamps():
+    """Source-level, because the scan path cannot be exercised here — and a behavioural
+    fixture on check_job alone would start after the decision being tested, which is the
+    call-site gap that has caught this suite repeatedly."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "src" / "main.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call)
+             and getattr(n.func, "id", "") in ("_check_job", "check_job")]
+    ok(calls, "main must run the invariants")
+    eq(len(calls), 1,
+       "the invariants must be run ONCE. Two calls means two verdicts for one job, and the "
+       "console and the quote reported different numbers of failures for exactly that reason")
+    _arg = ast.unparse(calls[0].args[0]) if calls[0].args else ""
+    ok(_arg != "summary",
+       f"the checks must read the document the read-back stamped, not the in-memory "
+       f"summary that has no final_estimate (got {_arg!r})")
+
+
 def test_a_job_that_was_never_checked_is_not_a_pass():
     """THE FAILURE THIS ALMOST SHIPPED WITH. If the read-back dies — Excel COM falls over, the
     workbook will not open — there is no final_estimate, so every reconciliation check found
