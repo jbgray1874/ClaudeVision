@@ -1635,6 +1635,91 @@ def test_the_unit_price_must_equal_its_parts():
        "an uplift declared as its own figure is a component, not a discrepancy")
 
 
+def test_the_unit_price_uplift_must_be_attributed_not_assumed():
+    """12120's unit price is (material + labour) / 0.9299 — a 7.54% uplift, identical to four
+    decimal places across two runs with different material totals. It is real and deliberate:
+    the template's overhead absorption.
+
+    But the RESIDUAL IS NOT AN ANSWER. Stamping other_gbp = unit - material - labour would
+    make the reconciliation invariant tautological — it could never fail again, which is
+    worse than not having it. The uplift is declared only when the unit cell's own FORMULA
+    accounts for it.
+
+    Reading the formula also catches what is already true here: config documents the divisor
+    as 0.92, which gives GBP 27.97 on this job, not GBP 27.67. The live template does not do
+    what the comment says, and a constant taken from config would have declared a wrong
+    number with total confidence."""
+    from wep_readback_from_xlsx import read_unit_price_composition
+
+    class _Sheet:
+        """Only what the reader touches: Cells(r,c).Value/.Formula and Range(ref).Value."""
+        def __init__(self, formula, refs=None, unit=27.67):
+            self.formula, self.refs, self.unit = formula, refs or {}, unit
+        class _C:
+            def __init__(self, v, f=""): self.Value, self.Formula = v, f
+        def Cells(self, r, c):
+            if r == 5 and c == 1: return self._C("Total Unit Cost Price")
+            if r == 5 and c == 8: return self._C(self.unit, self.formula)
+            return self._C(None)
+        def Range(self, ref): return self._C(self.refs.get(ref))
+
+    # The real shape: a divisor written into the formula.
+    v = read_unit_price_composition(_Sheet("=((M59+M103)/(1-M107))/0.93",
+                                           refs={"M107": 0.0}), 13.43, 12.30, 27.67, 20, 12)
+    ok(v["explained"], f"a formula that accounts for the gap must be attributed: {v}")
+    eq(round(v["other_gbp"], 2), 1.94, "and the uplift declared as a figure")
+    ok("0.93" in str(v["basis"]), f"named, not merely observed: {v['basis']}")
+
+    # Same arithmetic expressed as a rebate cell instead — also attributable.
+    v = read_unit_price_composition(_Sheet("=(M59+M103)/(1-M107)", refs={"M107": 0.07}),
+                                    13.43, 12.30, 27.67, 20, 12)
+    ok(v["explained"] and "M107" in str(v["basis"]), f"a referenced cell is named too: {v}")
+
+    # A formula that does NOT account for the gap must leave it undeclared, so the invariant
+    # still fires. This is the case that stops the check becoming self-fulfilling.
+    v = read_unit_price_composition(_Sheet("=(M59+M103)/0.92", refs={}),
+                                    13.43, 12.30, 27.67, 20, 12)
+    ok(not v["explained"],
+       "0.92 gives 27.97, not 27.67 — an uplift the formula cannot explain stays undeclared")
+    eq(v["other_gbp"], None, "and no figure is invented for it")
+
+    # A sheet that simply adds up needs no uplift at all.
+    v = read_unit_price_composition(_Sheet("=M59+M103", unit=25.73), 13.43, 12.30, 25.73, 20, 12)
+    ok(v["explained"] and v["other_gbp"] == 0.0, "nothing to explain is explained")
+
+
+def test_other_gbp_is_never_stamped_as_a_bare_residual():
+    """Source-level, because the stamp runs through Excel COM and cannot be exercised here.
+
+    other_gbp = unit - material - labour would satisfy the reconciliation invariant by
+    construction: the check could never fail again on any job, and a silently-wrong unit
+    price would sail through it forever. The figure may only be stamped when the unit cell's
+    formula ACCOUNTED for the gap. A behavioural fixture on the composition reader proves the
+    reader is honest; it says nothing about whether the caller respects it."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "src"
+           / "wep_readback_from_xlsx.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    found = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for k, v in zip(node.keys, node.values):
+            if isinstance(k, ast.Constant) and k.value == "other_gbp":
+                found = True
+                _v = ast.unparse(v)
+                ok("-" not in _v,
+                   f"other_gbp is being computed as a residual ({_v}) — that makes the "
+                   f"reconciliation invariant unfailable")
+        # The conditional spread is the sanctioned form: present only when explained.
+        for v in node.values:
+            pass
+    _txt = "".join(src.split())
+    ok('"other_gbp":_comp.get("other_gbp")}if_comp.get("explained")' in _txt or not found,
+       "other_gbp must be stamped only when the formula explained the uplift")
+
+
 def test_every_priced_row_must_join_exactly_once():
     from invariants import check_job
     j = _job()

@@ -141,6 +141,119 @@ _TOTAL_LABELS = {
 }
 
 
+def _scan_total_cell(com_ws, label_needles: Tuple[str, ...], max_row: int,
+                     max_col: int) -> Optional[Tuple[int, int]]:
+    """The CELL a labelled total lives in, not just its value — so its FORMULA can be read."""
+    for r in range(1, max_row + 1):
+        _has = False
+        for c in range(1, min(max_col, 16) + 1):
+            try:
+                v = com_ws.Cells(r, c).Value
+            except Exception:
+                continue
+            if isinstance(v, str) and any(n in v.lower() for n in label_needles):
+                _has = True
+                break
+        if not _has:
+            continue
+        best = None
+        for c in range(1, max_col + 1):
+            try:
+                v = com_ws.Cells(r, c).Value
+            except Exception:
+                continue
+            f = _safe_float(v)
+            if f is not None and f != 0:
+                best = (r, c)
+        if best:
+            return best
+    return None
+
+
+def read_unit_price_composition(com_ws, material: Optional[float], labour: Optional[float],
+                                unit: Optional[float], max_row: int,
+                                max_col: int) -> Dict[str, Any]:
+    """What does the template add between the subtotals and the unit price — and can we NAME it?
+
+    On 12120 material + labour came to GBP 25.73 against a unit price of GBP 27.67: an uplift
+    of 7.54%, identical to four decimal places on a second run with a different material
+    total. So it is a multiplier, not a missing cost line.
+
+    THE RESIDUAL IS NOT AN ANSWER. Stamping other_gbp = unit - material - labour would make
+    the reconciliation invariant tautological: it could never fail again, which is worse than
+    not having it. The uplift has to be UNDERSTOOD, so this reads the unit cell's own FORMULA,
+    pulls out its numeric constants and the cells it references, and reconstructs the price
+    from material + labour + those. Only a reconstruction that lands on the sheet's own figure
+    is declared.
+
+    Reading the formula rather than trusting a constant in config also catches the case that
+    is already true here: config documents the divisor as 0.92, which yields GBP 27.97 on this
+    job. The live template is not doing what the comment says.
+
+    Returns {other_gbp, basis, formula, absorption_divisor, rebate_fraction, explained}.
+    `explained` False means the uplift was observed but not attributed — and other_gbp is
+    then absent, so the invariant still fires.
+    """
+    out: Dict[str, Any] = {"explained": False, "other_gbp": None, "basis": None,
+                           "formula": None, "absorption_divisor": None,
+                           "rebate_fraction": None}
+    if material is None or labour is None or unit is None:
+        return out
+    _sub = material + labour
+    if _sub <= 0:
+        return out
+    if abs(unit - _sub) <= 0.01:
+        out.update(explained=True, other_gbp=0.0, basis="none — the unit price is the sum "
+                                                        "of its subtotals")
+        return out
+
+    cell = _scan_total_cell(com_ws, _TOTAL_LABELS["unit"], max_row, max_col)
+    if not cell:
+        return out
+    try:
+        formula = str(com_ws.Cells(cell[0], cell[1]).Formula or "")
+    except Exception:
+        formula = ""
+    out["formula"] = formula or None
+
+    # The constants written into the formula, and the values of the cells it references.
+    _consts = [float(x) for x in re.findall(r"(?<![A-Za-z0-9_.])(\d*\.\d+)", formula)]
+    _refs: Dict[str, float] = {}
+    for _ref in set(re.findall(r"\$?([A-Z]{1,3})\$?(\d{1,5})", formula.upper())):
+        try:
+            _v = _safe_float(com_ws.Range(f"{_ref[0]}{_ref[1]}").Value)
+        except Exception:
+            _v = None
+        if _v is not None:
+            _refs[f"{_ref[0]}{_ref[1]}"] = _v
+
+    # Candidate reconstructions, in the shape the template documents:
+    #   unit = (material + labour) / (1 - rebate) / absorption
+    # Each candidate names what it used, so a match is an explanation rather than a fit.
+    _fracs = [(None, 0.0)] + [(k, v) for k, v in _refs.items() if 0.0 < v < 0.5]
+    _divs = [(None, 1.0)] + [(f"literal {c:g}", c) for c in _consts if 0.5 < c < 1.0]
+    for _rk, _rv in _fracs:
+        for _dk, _dv in _divs:
+            try:
+                _calc = _sub / (1.0 - _rv) / _dv
+            except ZeroDivisionError:
+                continue
+            if abs(_calc - unit) <= max(0.01, 0.0005 * abs(unit)):
+                _parts = []
+                if _rk:
+                    _parts.append(f"rebate {_rv:.4g} from {_rk}")
+                if _dk:
+                    _parts.append(f"absorption divisor {_dv:g} written into the formula")
+                out.update(explained=True,
+                           other_gbp=round(unit - _sub, 4),
+                           absorption_divisor=(_dv if _dk else None),
+                           rebate_fraction=(_rv if _rk else None),
+                           basis=("; ".join(_parts) or "unattributed")
+                                 + f" — (material + labour) {_sub:.2f} -> {unit:.2f}")
+                return out
+    return out
+
+
 def _scan_total(com_ws, label_needles: Tuple[str, ...], max_row: int, max_col: int) -> Optional[float]:
     """Find a row whose text contains one of the needles, return the rightmost numeric on that row."""
     for r in range(1, max_row + 1):
@@ -429,6 +542,14 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
         except Exception as _rexc:
             print(f"   [wep-readback] calculated rows not read ({_rexc}) — totals kept.",
                   flush=True)
+        # What the template adds between the subtotals and the price, read from the unit
+        # cell's own formula. Same COM session, same calculated state.
+        try:
+            out["_composition"] = read_unit_price_composition(
+                com_ws, out.get("material"), out.get("labour"), out.get("unit"),
+                max_row, max_col)
+        except Exception as _cexc:
+            print(f"   [wep-readback] unit-price composition not read ({_cexc}).", flush=True)
         return out or None
     except Exception as exc:
         print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
@@ -457,6 +578,7 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     labour = totals.get("labour")
     unit = totals.get("unit")
     _final_rows = totals.pop("_final_rows", None) or {}
+    _comp = totals.pop("_composition", None) or {}
 
     try:
         summary = json.loads(jp.read_text(encoding="utf-8"))
@@ -483,12 +605,26 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
             "note": ("Rows as the Estimate sheet calculated them. Authoritative for what the "
                      "job contains and what each line costs. Excel errors are carried as "
                      "null, never as zero — a cell showing #DIV/0! is missing data."),
-            "totals": {"material_gbp": material, "labour_gbp": labour, "unit_gbp": unit},
+            "totals": {
+                "material_gbp": material, "labour_gbp": labour, "unit_gbp": unit,
+                # DECLARED, not residual. Present only when the unit cell's formula
+                # accounted for the gap; absent when it did not, so the reconciliation
+                # invariant still fires rather than being satisfied by its own arithmetic.
+                **({"other_gbp": _comp.get("other_gbp")} if _comp.get("explained") else {}),
+            },
+            "unit_price_composition": _comp or None,
             "labour_rows": _final_rows.get("labour_rows") or [],
             "material_rows": _final_rows.get("material_rows") or [],
             # Blocks this adapter could not read. Present and empty means "we checked".
             "adapter_problems": _final_rows.get("adapter_problems") or [],
         }
+        if _comp.get("explained") and _comp.get("other_gbp"):
+            print(f"   [wep-readback] unit price uplift GBP {_comp['other_gbp']:.2f} "
+                  f"attributed: {_comp.get('basis')}", flush=True)
+        elif _comp and not _comp.get("explained") and unit is not None:
+            print(f"   [wep-readback] the unit price is NOT the sum of its subtotals and the "
+                  f"formula did not account for the difference — left undeclared so the "
+                  f"reconciliation check reports it.", flush=True)
         for _p in (_final_rows.get("adapter_problems") or []):
             print(f"   [wep-readback] BLOCK NOT READ — {_p.get('message')}", flush=True)
         print(f"   [wep-readback] final_estimate.v2 stamped — "
