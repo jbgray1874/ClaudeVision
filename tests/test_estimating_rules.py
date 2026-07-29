@@ -1582,6 +1582,53 @@ def test_an_assembly_parent_does_not_report_a_missing_rate_for_work_it_does_not_
        "a leaf part that folds must keep its fold")
 
 
+def test_the_same_catalogue_always_yields_the_same_price():
+    """THE DEFECT NO OTHER FIXTURE COULD CATCH. Job 12120 priced three times on identical
+    inputs — same drawings, same SolidWorks extract, same quantity — at GBP 27.67, GBP 29.39
+    and GBP 32.86. An 18.8% swing. Labour was identical to the penny every run; the whole
+    movement was bought-in lines.
+
+    The knurled knob went 1.45 -> 1.90 -> 1.45. It came BACK, so it was never a catalogue
+    being updated: it was the same two rows being chosen between. The rank tuple was
+    (-priority, penalty, -confidence), two rows for one part code tie on all three, and
+    `sorted(...)[0]` then fell through to Python's stable sort — which preserves whatever
+    order the connector returned, and a SQL query with no ORDER BY does not promise one.
+
+    What made this so dangerous is that every run RECONCILED. Rows summed to subtotals,
+    subtotals to the unit price, every money invariant passing. The engine was internally
+    consistent and externally unrepeatable."""
+    from price_sources import PriceCandidate, _candidate_rank_tuple, _price_disagreement
+
+    def _c(src, price, **meta):
+        return PriceCandidate(source=src, kind="material", price=price, currency="GBP",
+                              unit="each", confidence=0.9, metadata=meta)
+
+    rules = {"source_priority": {"udef_sqlserver": 100}, "freshness_penalty": {}}
+    rows = [_c("udef_sqlserver", 1.90, row_id=7), _c("udef_sqlserver", 1.45, row_id=2)]
+
+    # The same set in EITHER order must give the same answer. That is the whole property.
+    a = sorted(rows, key=lambda c: _candidate_rank_tuple(c, rules))[0]
+    b = sorted(list(reversed(rows)), key=lambda c: _candidate_rank_tuple(c, rules))[0]
+    eq(a.price, b.price, "row order must not change the price — this is the 1.45/1.90 flip")
+    eq(a.price, 1.45, "and of two tied catalogue rows the cheaper is the defensible one")
+
+    # Identical rows in rank AND price still order deterministically.
+    same = [_c("udef_sqlserver", 2.00, row_id=1), _c("udef_sqlserver", 2.00, row_id=9)]
+    eq(sorted(same, key=lambda c: _candidate_rank_tuple(c, rules))[0].metadata,
+       sorted(list(reversed(same)), key=lambda c: _candidate_rank_tuple(c, rules))[0].metadata,
+       "two rows agreeing on price must still resolve to the same ROW every time")
+
+    # DETERMINISM IS NOT CORRECTNESS. Picking 1.45 every time is repeatable and still hides a
+    # catalogue holding two different prices for one code. The spread is reported.
+    d = _price_disagreement(rows)
+    ok(d, "a catalogue that answers twice with different prices must be reported")
+    eq((d["low_gbp"], d["high_gbp"]), (1.45, 1.90), "with both figures named")
+    ok(d["spread_pct"] > 20, f"and the spread quantified ({d['spread_pct']}%)")
+    ok(_price_disagreement([_c("udef_sqlserver", 1.45)]) is None, "one answer is no conflict")
+    ok(_price_disagreement([_c("a", 1.45), _c("b", 1.4501)]) is None,
+       "a rounding-level difference is not a disagreement")
+
+
 # ── invariants — the checks that make a wrong answer loud ────────────────────────────
 def _job(**over):
     """A job that passes every invariant, so each test can break exactly one thing."""
