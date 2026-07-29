@@ -1489,6 +1489,41 @@ def test_rows_must_sum_to_the_workbook_total():
        f"a row that did not calculate is missing data, not zero: {codes2}")
 
 
+def test_the_unit_price_must_equal_its_parts():
+    """Job 12120: material rows reconciled to GBP 13.43, labour rows to GBP 12.30, both
+    checks passed — and the sheet's Total Unit Cost Price was GBP 27.67. GBP 1.94, seven per
+    cent of the price, belonging to nothing on the sheet. Every row reconciled to its own
+    subtotal and nothing ever asked whether the subtotals reconciled to the price."""
+    from invariants import check_job
+    j = _job()
+    j["final_estimate"]["totals"] = {"material_gbp": 13.43, "labour_gbp": 12.30,
+                                     "unit_gbp": 27.67}
+    j["final_estimate"]["material_rows"] = [{"workbook_row": 11, "total_value_gbp": 13.43}]
+    j["final_estimate"]["labour_rows"] = [{"workbook_row": 41, "total_value_gbp": 22.0},
+                                          {"workbook_row": 43, "total_value_gbp": -9.70}]
+    r = check_job(j, write_back=False)
+    codes = [v["code"] for v in r["violations"]]
+    ok("unit_price_does_not_equal_its_parts" in codes,
+       f"an unexplained GBP 1.94 in the price must block: {codes}")
+    ok(not r["may_quote_firm"], "and stop the price being firm")
+
+    # Adding up is the normal case and must stay silent.
+    j2 = _job()
+    j2["final_estimate"]["totals"] = {"material_gbp": 10.07, "labour_gbp": 52.0,
+                                      "unit_gbp": 62.07}
+    ok("unit_price_does_not_equal_its_parts" not in
+       [v["code"] for v in check_job(j2, write_back=False)["violations"]],
+       "a price that equals its parts raises nothing")
+
+    # A declared component is accounted for by NAME, not left in the gap.
+    j3 = _job()
+    j3["final_estimate"]["totals"] = {"material_gbp": 13.43, "labour_gbp": 12.30,
+                                      "other_gbp": 1.94, "unit_gbp": 27.67}
+    ok("unit_price_does_not_equal_its_parts" not in
+       [v["code"] for v in check_job(j3, write_back=False)["violations"]],
+       "an uplift declared as its own figure is a component, not a discrepancy")
+
+
 def test_every_priced_row_must_join_exactly_once():
     from invariants import check_job
     j = _job()

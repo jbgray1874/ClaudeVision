@@ -174,6 +174,52 @@ def check_labour_rows_reconcile(summary: Any) -> List[Dict[str, Any]]:
 
 
 # ── 3. every priced row has exactly one identity ─────────────────────────────────────
+def check_totals_reconcile_to_the_unit_price(summary: Any) -> List[Dict[str, Any]]:
+    """The unit price must be the sum of its parts.
+
+    The existing checks reconcile material ROWS to the material total and labour ROWS to the
+    labour total, and both passed on 12120 — while the two subtotals summed to GBP 25.73
+    against a Total Unit Cost Price of GBP 27.67. GBP 1.94, seven per cent of the price,
+    belonging to nothing on the sheet. Every row reconciled to its own subtotal and nobody
+    ever asked whether the subtotals reconciled to the price.
+
+    If the template legitimately adds something between the subtotals and the unit price —
+    downtime, consumables, an overhead percentage — then that is a component of the price and
+    belongs in the contract as its own figure. It does not belong in the gap between two
+    numbers that are supposed to add up.
+    """
+    fe = _node(summary, "final_estimate")
+    if not fe:
+        return _unevaluated("totals_reconcile",
+                            "No final_estimate on this job, so the unit price could not be "
+                            "reconciled against its components.")
+    totals = fe.get("totals") or {}
+    material = _num(totals.get("material_gbp"))
+    labour = _num(totals.get("labour_gbp"))
+    unit = _num(totals.get("unit_gbp"))
+    if material is None or labour is None or unit is None:
+        return _unevaluated("totals_reconcile",
+                            "final_estimate does not carry all three of material, labour and "
+                            "unit, so they could not be reconciled.")
+    # Anything the template adds on purpose is declared here and accounted for by name.
+    _declared = _num(totals.get("other_gbp")) or 0.0
+    _sum = material + labour + _declared
+    if _money_agrees(_sum, unit, 3):
+        return []
+    return [_violation(
+        "unit_price_does_not_equal_its_parts", BLOCKING,
+        f"Material GBP {material:.2f} + labour GBP {labour:.2f}"
+        + (f" + declared other GBP {_declared:.2f}" if _declared else "")
+        + f" = GBP {_sum:.2f}, but the sheet's Total Unit Cost Price is GBP {unit:.2f} — "
+          f"GBP {abs(unit - _sum):.2f} ({abs(unit - _sum) / unit * 100:.1f}% of the price) "
+          f"belongs to nothing on the sheet. Either a cost component is not being read back, "
+          f"or the template adds something between the subtotals and the price that is not "
+          f"declared as a figure of its own.",
+        material_gbp=round(material, 4), labour_gbp=round(labour, 4),
+        declared_other_gbp=round(_declared, 4), unit_gbp=round(unit, 4),
+        unexplained_gbp=round(unit - _sum, 4))]
+
+
 def check_priced_rows_join_once(summary: Any) -> List[Dict[str, Any]]:
     """A calculated row knows what a line cost but not which parts produced it; the accepted
     row knows exactly that but nothing about cost. They are joined on the sheet row they
@@ -577,6 +623,7 @@ CHECKS = (
     check_workbook_adapters_read_everything,
     check_material_rows_reconcile,
     check_labour_rows_reconcile,
+    check_totals_reconcile_to_the_unit_price,
     check_priced_rows_join_once,
     check_no_unpriced_operations_named,
     check_measured_geometry_is_complete,
