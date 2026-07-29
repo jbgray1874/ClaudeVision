@@ -1728,6 +1728,58 @@ def test_the_quote_says_so_when_the_engine_cannot_stand_behind_it():
         ok("firm price" in b, f"{why} must say it is not a firm price")
 
 
+def test_the_report_and_the_quote_never_disagree_about_the_same_job():
+    """On 12120 the quote said "3 consistency check(s) FAILED" while the report, for the same
+    job, said "Estimate completed cleanly ... no blocking data-sufficiency failure". Two
+    documents describing one estimate and contradicting each other about whether it could be
+    trusted — and the one an estimator reads first was the one saying everything was fine.
+
+    They were answering different questions. estimate_status is DATA SUFFICIENCY: did the
+    engine have enough to reach a number. The invariants are the later question: does that
+    number hold together. Both are worth reporting; neither may be reported as the other."""
+    from job_report_html import build_report_html
+    from client_quote_html import _invariant_banner
+
+    def _job_with(inv):
+        j = {"estimate_summary": {
+                "estimate_status": "ok",
+                "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": 29.39,
+                                                "m59_material_subtotal_gbp": 15.03,
+                                                "m103_labour_subtotal_gbp": 12.30},
+                "part_estimates": []}}
+        if inv is not None:
+            j["invariants"] = inv
+        return j
+
+    failing = _job_with({"may_quote_firm": False, "blocking": 3, "unverified": 0,
+                         "checks_run": ["a"] * 11, "violations": [
+                             {"severity": "blocking",
+                              "code": "unit_price_does_not_equal_its_parts",
+                              "message": "Material + labour does not equal the unit price."}]})
+    rep = build_report_html(failing)
+    ok("PROVISIONAL" in _invariant_banner(failing), "the quote says provisional")
+    ok("PROVISIONAL and must not be released" in rep,
+       "and the report must say the same, not 'completed cleanly'")
+    ok("completed cleanly" not in rep,
+       "a job with failing checks must never be described as having completed cleanly")
+    ok("unit_price_does_not_equal_its_parts" in rep,
+       "and the report names WHICH check failed — the quote can only carry a banner")
+
+    passing = _job_with({"may_quote_firm": True, "blocking": 0, "unverified": 0,
+                         "checks_run": ["a"] * 11, "violations": []})
+    ok(_invariant_banner(passing) == "", "a clean job carries no banner")
+    ok("PROVISIONAL" not in build_report_html(passing),
+       "and its report is not marked provisional either")
+
+    # Checks that never ran must not read as checks that passed, in EITHER document.
+    unrun = _job_with(None)
+    ok("PROVISIONAL" in _invariant_banner(unrun), "no invariant record: the quote says so")
+    _r = build_report_html(unrun)
+    ok("completed cleanly" not in _r,
+       "and the report must not claim a clean completion it never verified")
+    ok("did not run" in _r, "it must say the checks did not run")
+
+
 def test_the_rendered_quote_actually_carries_the_banner():
     """Testing _invariant_banner proves the banner builds, not that the quote uses it.
     Blanking the call site passed every other test in this file — the same gap that let a

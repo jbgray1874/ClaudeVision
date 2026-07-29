@@ -584,11 +584,29 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
              'Each part is assigned to exactly one cost stream — fabricated parts to their material, '
              'purchased items to the bill of materials.</td></tr>')
 
-    # estimate status
+    # estimate status — READ THE SAME GATE THE QUOTE READS.
+    # estimate_status is the DATA-SUFFICIENCY verdict: did the engine have enough to reach a
+    # number. The invariants are a different and later question: does that number hold
+    # together. Reporting the first as "completed cleanly" while the quote for the same job
+    # carried "3 consistency check(s) FAILED" left two documents describing one estimate and
+    # disagreeing about whether it could be trusted — and the one an estimator reads first is
+    # the one that said everything was fine.
     status = _get(summary, "estimate_summary", "estimate_status")
-    if status == "ok":
+    _inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    if status == "ok" and _inv is not None and not _inv.get("may_quote_firm"):
+        rows += ('<tr><td><span class="tag t-bad">Not firm</span></td><td><b>Consistency checks did '
+                 'not pass.</b> The engine reached a full costed estimate — data sufficiency was '
+                 f'met — but {_inv.get("blocking", 0)} check(s) FAILED and '
+                 f'{_inv.get("unverified", 0)} could not be run. The figures below are '
+                 '<b>provisional</b> and must not be released as a firm price. See section 8.</td></tr>')
+    elif status == "ok" and _inv is None:
+        rows += ('<tr><td><span class="tag t-warn">Unverified</span></td><td><b>Estimate completed, '
+                 'but unchecked.</b> The engine reached a full costed estimate; the consistency '
+                 'checks did not run, so none of its figures have been verified against the '
+                 'workbook.</td></tr>')
+    elif status == "ok":
         rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>Estimate completed cleanly.</b> '
-                 'The engine reached a full costed estimate with no blocking data-sufficiency failure.</td></tr>')
+                 'The engine reached a full costed estimate, and every consistency check passed.</td></tr>')
 
     # powder handled?
     # Post-costing source, shared with the client quote (costed_facts). The powder MATERIAL
@@ -864,22 +882,88 @@ def _render_design_recs(dq: Optional[Dict[str, Any]] = None) -> str:
 </div>"""
 
 
-def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool) -> str:
+def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
+                    summary: Dict[str, Any]) -> str:
     faults = bool(dq.get("parts_without_dxf") or dq.get("stray_space_files")
                   or dq.get("review_errors") or dq.get("validation_issues"))
     draw_note = ("The drawing pack is largely legible, with the main opportunities captured as Design "
                  "recommendations above." if faults else
                  "The drawing pack read cleanly with no significant faults detected.")
     parity_note = (" The engine's figures are compared against the manual estimate in section 1a." if has_parity else "")
+    _inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    if _inv is not None and not _inv.get("may_quote_firm"):
+        _lead = (f"<b>This estimate is PROVISIONAL and must not be released as a firm price.</b> "
+                 f"{_inv.get('blocking', 0)} consistency check(s) failed and "
+                 f"{_inv.get('unverified', 0)} could not be run — listed in section 8. The "
+                 f"structure is sound (material streams separated, no double-counting) and the "
+                 f"workbook Unit Cost is <b>{_money(hl['unit'])}</b>, but that figure is not yet "
+                 f"one the engine can stand behind.")
+    elif _inv is None:
+        _lead = (f"The estimate is <b>structurally sound</b>: material streams are correctly "
+                 f"separated and there is no double-counting. The workbook Unit Cost is "
+                 f"<b>{_money(hl['unit'])}</b>. The consistency checks did NOT run on this job, "
+                 f"so none of these figures have been verified against the workbook — treat as "
+                 f"provisional.")
+    else:
+        _lead = (f"The estimate is <b>structurally sound</b> and every consistency check passed: "
+                 f"material rows and labour rows each reconcile to the workbook's own totals, "
+                 f"and those totals to the unit price. The workbook Unit Cost is "
+                 f"<b>{_money(hl['unit'])}</b>. It is presented with a transparent list of "
+                 f"provisional items for estimator review.")
     return f"""<h2>7 &nbsp;Verdict</h2>
-<p class="lead">The estimate is <b>structurally sound</b>: material streams are correctly separated and
-there is no double-counting. The workbook Unit Cost is <b>{_money(hl['unit'])}</b>. It is presented with
-a transparent list of provisional items for estimator review.{parity_note} {draw_note}</p>"""
+<p class="lead">{_lead}{parity_note} {draw_note}</p>
+{_invariants_section(summary)}"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Assembly
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _invariants_section(summary: Dict[str, Any]) -> str:
+    """What the engine checked about its own answer, and what it found.
+
+    The quote can only carry a banner — it goes to a customer. The report is the document an
+    estimator works from, so it gets the detail: every check that ran, and for each failure
+    the engine's own sentence about what is wrong. Without this the report asserted the
+    estimate was sound while the quote for the same job said three checks had failed, and
+    nothing in either told anyone WHICH.
+    """
+    inv = summary.get("invariants")
+    if not isinstance(inv, dict):
+        return ('<h2>8 &nbsp;Consistency checks</h2>'
+                '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
+                'Nothing here has been verified against the workbook: rows have not been '
+                'reconciled to their totals, priced rows have not been joined to the parts that '
+                'produced them, and geometry claims have not been tested. Treat every figure in '
+                'this report as unverified.</div>')
+    _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
+    _n = len(inv.get("checks_run") or [])
+    if inv.get("may_quote_firm") and not _v:
+        return (f'<h2>8 &nbsp;Consistency checks</h2>'
+                f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
+                f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
+                f'the unit price, every priced row joins to exactly one route, and no report '
+                f'names an operation the sheet did not charge for.</div>')
+    _order = {"blocking": 0, "unverified": 1, "warning": 2}
+    _label = {"blocking": ('t-bad', 'Failed'),
+              "unverified": ('t-warn', 'Not verified'),
+              "warning": ('t-info', 'Advisory')}
+    rows = ""
+    for x in sorted(_v, key=lambda a: _order.get(str(a.get("severity")), 3)):
+        _cls, _txt = _label.get(str(x.get("severity")), ('t-info', 'Advisory'))
+        rows += (f'<tr><td><span class="tag {_cls}">{_txt}</span></td>'
+                 f'<td><code>{_esc(str(x.get("code") or ""))}</code></td>'
+                 f'<td>{_esc(str(x.get("message") or ""))}</td></tr>')
+    _head = ('<div class="callout warn"><b>This estimate is not a firm price.</b> '
+             f'{inv.get("blocking", 0)} check(s) failed and {inv.get("unverified", 0)} could '
+             f'not be run, out of {_n}. A check that could not run has verified nothing — it '
+             f'is not a pass.</div>' if not inv.get("may_quote_firm") else
+             '<div class="callout info">No check failed. The advisories below are worth '
+             'reading but do not affect whether the price can be released.</div>')
+    return (f'<h2>8 &nbsp;Consistency checks</h2>{_head}'
+            f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>')
+
 
 def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] = None) -> str:
     has_parity = bool(bundle)
@@ -903,7 +987,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         _render_drawing_analysis(dq),
         _render_checklist(review, dq),
         _render_design_recs(dq),
-        _render_verdict(hl, dq, has_parity),
+        _render_verdict(hl, dq, has_parity, summary),
         f'<div class="foot">SDI Intelligence &middot; ClaudeVision automated estimating engine &middot; '
         f'Job {_esc(h["stem"])}<br>Unit Cost {_money(hl["unit"])} is the workbook-computed figure. '
         f'Provisional items and drawing recommendations are listed for estimator and Design review. '
