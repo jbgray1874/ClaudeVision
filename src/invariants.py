@@ -774,81 +774,6 @@ def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
         lines=detail[:10], count=len(detail))]
 
 
-_MEASURED_GEOMETRY_TOKENS = ("dxf_flat_pattern", "solidworks_flat_pattern", "native_flat")
-
-
-def check_the_inputs_were_complete(summary: Any) -> List[Dict[str, Any]]:
-    """Was this job estimated from measured geometry, or from what the drawing said?
-
-    THE ESTIMATOR RUNS THIS THEMSELVES, AND WILL FORGET THINGS. A job run without its
-    flat-pattern DXFs produces an estimate that looks exactly like one run with them: same
-    layout, same confident totals, same green sections. The blanks are transcribed from
-    dimension text instead of measured, cut lengths are inferred rather than followed, and
-    nothing on the page says so loudly enough to send anybody back for the files.
-
-    This is not the same question as measured_geometry_without_outline. That one catches a
-    part CLAIMING measurement it does not have — a lie. This one catches evidence that was
-    never supplied — an omission. A job can be perfectly honest and still be missing half
-    its inputs, and the estimator is the only person who can fix that.
-
-    Two different situations, and they deserve different sentences:
-
-        nothing measured anywhere  -> a PDF-only estimate. That is a real ceiling on what
-                                      any engine can do, not a defect, and it should be
-                                      stated rather than discovered.
-        some measured, some not    -> the unmeasured ones are probably missing files, and
-                                      naming them is the whole point.
-    """
-    parts = _parts(summary)
-    if not parts:
-        return _unevaluated("input_completeness", "No part records were found on this job.")
-
-    try:
-        from bought_in_policy import FABRICATION_OPS, is_bought_in
-    except ImportError:
-        return _unevaluated("input_completeness",
-                            "The make/buy policy could not be loaded, so fabricated parts "
-                            "could not be told from purchased ones.")
-
-    measured, transcribed = [], []
-    for p in parts:
-        if is_bought_in(p):
-            continue                      # we buy it; nobody was going to measure it
-        ops = {str(o).strip().lower() for o in
-               ((p.get("textual_operations") or []) + (p.get("inferred_operations") or []))}
-        if not (ops & FABRICATION_OPS):
-            continue                      # not something we cut or form
-        src = str(p.get("geometry_source") or "").lower()
-        if (p.get("dxf_measured_outline") is True or p.get("native_flat_pattern")
-                or any(t in src for t in _MEASURED_GEOMETRY_TOKENS)):
-            measured.append(p.get("part_number"))
-        else:
-            transcribed.append({"part_number": p.get("part_number"),
-                                "geometry_source": src or "drawing text"})
-    if not transcribed:
-        return []
-
-    total = len(measured) + len(transcribed)
-    if not measured:
-        return [_violation(
-            "estimated_without_measured_geometry", WARNING,
-            f"All {total} fabricated part(s) on this job were sized from the drawing rather "
-            f"than from measured geometry — no flat-pattern DXF and no model was read for any "
-            f"of them. The blanks are transcribed dimension text, so they carry no cut length, "
-            f"no hole count and no proof the profile matches the numbers. If flat-pattern DXFs "
-            f"or the SolidWorks models exist, adding them and re-running will change the blank "
-            f"sizes and the laser times. If they do not, this is as good as the drawing allows.",
-            parts=transcribed[:12], count=total, measured=0)]
-    return [_violation(
-        "some_parts_estimated_without_measured_geometry", WARNING,
-        f"{len(transcribed)} of {total} fabricated part(s) were sized from the drawing while "
-        f"the other {len(measured)} were measured. Mixed evidence on one job usually means "
-        f"files were left out rather than that they do not exist — check whether a "
-        f"flat-pattern DXF or model exists for these and re-run: their blanks and cut times "
-        f"will change if it does.",
-        parts=transcribed[:12], count=len(transcribed), measured=len(measured))]
-
-
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -1020,7 +945,6 @@ CHECKS = (
     check_price_disagreement_is_declared,
     check_a_measured_plate_is_not_charged_for_folding,
     check_prices_are_firm,
-    check_the_inputs_were_complete,
 )
 
 

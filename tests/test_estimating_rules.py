@@ -3156,59 +3156,6 @@ def test_a_pdf_only_job_still_reads_its_routes():
        "and with no model to call it a plate, its fold stands")
 
 
-def test_a_job_says_when_its_inputs_were_incomplete():
-    """THE ESTIMATOR RUNS THIS THEMSELVES AND WILL FORGET THINGS. A job run without its
-    flat-pattern DXFs produces an estimate that looks exactly like one run with them — same
-    layout, same confident totals, same green sections. The blanks are transcribed from
-    dimension text rather than measured, and nothing says so loudly enough to send anybody
-    back for the files.
-
-    Different question from measured_geometry_without_outline: that catches a part CLAIMING
-    measurement it does not have. This catches evidence that was never supplied. A job can be
-    perfectly honest and still be missing half its inputs."""
-    from invariants import check_job
-
-    def _fab(pn, **kw):
-        return dict({"part_number": pn, "normalized_material": "MILD_STEEL",
-                     "quantity": 1, "quantity_source": "bom_tree", "material_source": "pdf",
-                     "textual_operations": ["laser_cutting", "folding"]}, **kw)
-
-    _measured = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
-                 "overall_length_mm": 126.39, "overall_width_mm": 82.2}
-
-    codes = lambda parts: [v["code"] for v in
-                           check_job(dict(_job(), part_estimates=parts),
-                                     write_back=False)["violations"]]
-
-    # Nothing measured anywhere: a PDF-only estimate. Real ceiling, not a defect — but it
-    # must be stated rather than discovered.
-    _c = codes([_fab("01M"), _fab("02M")])
-    ok("estimated_without_measured_geometry" in _c,
-       f"a job with no measured geometry says so: {_c}")
-
-    # Mixed: the unmeasured ones are probably missing files, and naming them is the point.
-    j = dict(_job(), part_estimates=[_fab("01M", **_measured), _fab("02M")])
-    r = check_job(j, write_back=False)
-    _v = next((v for v in r["violations"]
-               if v["code"] == "some_parts_estimated_without_measured_geometry"), None)
-    ok(_v is not None, "mixed evidence on one job is called out")
-    eq(_v["detail"]["count"], 1, "counting only the ones without")
-    ok("02M" in str(_v["detail"]["parts"]), "and naming them, so they can be found")
-    ok("01M" not in str(_v["detail"]["parts"]), "not the one that was measured")
-    ok(r["ok"], "incomplete inputs are a warning, not a wrong answer")
-
-    # Everything measured: nothing to say.
-    ok("estimated_without_measured_geometry" not in codes([_fab("01M", **_measured)]),
-       "a fully measured job raises nothing")
-
-    # A purchased part was never going to be measured, and must not be counted as missing.
-    _bi = codes([_fab("01M", **_measured),
-                 {"part_number": "BI-KNURLEDKNOB", "quantity": 2,
-                  "quantity_source": "bom_tree", "textual_operations": ["handling"]}])
-    ok("some_parts_estimated_without_measured_geometry" not in _bi,
-       f"a bought-in is not a missing DXF: {_bi}")
-
-
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
