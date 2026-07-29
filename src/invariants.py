@@ -899,7 +899,22 @@ if __name__ == "__main__":
         with open(_path, "r", encoding="utf-8") as _fh:
             _doc = json.load(_fh)
         _res = check_job(_doc, write_back=False)
+        # WHEN WAS THIS WRITTEN? Two consecutive re-checks came back byte-identical after a
+        # re-run, and the only way to tell "the fix did not fire" from "this is the previous
+        # file" was to notice that the guessed prices had not moved — which they always do.
+        # A verdict with no timestamp on the document it read cannot answer that at all.
+        try:
+            import datetime
+            import os as _os
+            _age = datetime.datetime.fromtimestamp(_os.path.getmtime(_path))
+            _mins = (datetime.datetime.now() - _age).total_seconds() / 60.0
+            _when = (f"{_age:%Y-%m-%d %H:%M:%S}  "
+                     f"({_mins:.0f} min ago)" if _mins >= 1 else
+                     f"{_age:%Y-%m-%d %H:%M:%S}  (just now)")
+        except OSError:
+            _when = "unknown"
         print(f"\n=== {_path}")
+        print(f"    written: {_when}")
         print(format_report(_res))
         # Name the priced lines, whatever they turned out to be. A verdict with no lines
         # under it cannot be acted on, and cannot be disbelieved either.
@@ -917,7 +932,12 @@ if __name__ == "__main__":
             _row = _by_source.setdefault(f"{_cls}|{_name}", {"applied": 0, "unused": 0})
             _row["applied" if _used else "unused"] += 1
             if price_provenance.stamp_is_ai_estimate(_b) and _used:
-                _guessed.append(f"     GUESSED  {str(_own or '?'):<22} {_name:<22} {_p}")
+                # The price itself, because it is the one field that proves this is a fresh
+                # run: a guessed number that comes back identical did not come back at all.
+                _sel = _b.get("selected") if isinstance(_b.get("selected"), dict) else {}
+                _amt = _sel.get("price", _b.get("unit_price_gbp"))
+                _amt = f"GBP {float(_amt):>8.2f}" if isinstance(_amt, (int, float)) else "GBP        ?"
+                _guessed.append(f"     GUESSED  {str(_own or '?'):<22} {_amt}  {_name:<22} {_p}")
             if _all:
                 print(f"     {'GUESSED' if price_provenance.stamp_is_ai_estimate(_b) else '       '}"
                       f"  {_cls:<12} {_name:<34} "
