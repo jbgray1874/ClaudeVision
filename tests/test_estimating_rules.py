@@ -1430,6 +1430,61 @@ def test_late_passes_cannot_clobber_the_assembly_quantity():
     eq(q["quantity_source"], "bom_tree", "and the filler is named")
 
 
+def test_an_assembly_parent_does_not_report_a_missing_rate_for_work_it_does_not_do():
+    """Job 12120's 101 and 103 both carried missing_labour_rate:folding, and 103 also
+    hole_machining — reading as "work identified and not priced", which is under-costing.
+    The truth was the reverse. An assembly does not fold; its children do, and they carried
+    the fold. Suppressing it on the parent is correct.
+
+    The flag came from an inconsistent record. estimate_process_times returns five time
+    maps, unit_times_min and times_min derived from the other two and built BEFORE the
+    assembly-parent strip runs. The strip popped folding from two of them, so the part said
+    "does not fold" in the maps costing reads and "folds" in the map the risk check reads,
+    and requested_ops - costed_ops reported a rate that was never missing. It sent an
+    estimator hunting for a configuration error that did not exist."""
+    # estimate_part, not estimate_process_times: the strip runs in the caller, after the
+    # time maps have been built. Testing the producer alone would start before the code
+    # under test — the same gap that let a reverted call site pass earlier in this file.
+    from estimator import estimate_part
+    parent = {
+        "part_number": "12120-01-101", "normalized_material": "MILD_STEEL",
+        "is_assembly_parent": True, "is_sub_assembly": True,
+        "textual_operations": ["folding", "hole_machining", "welding", "assembly"],
+        "normalized_thickness_mm": 1.5, "overall_length_mm": 300, "overall_width_mm": 200,
+        "manufacturing_features": {"bend_count": 2, "hole_count": 4},
+        "geometry_rollup": {"estimated_cut_length_mm": 900.0},
+        "quantity": 1,
+    }
+    _est = estimate_part(parent) or {}
+    proc = _est.get("process_estimate") or parent.get("process_estimate") or {}
+    ok(proc, "estimate_part must return a process estimate")
+    maps = ("setup_times_min", "run_times_min_per_unit", "unit_times_min", "times_min")
+    present = {m: sorted(set(proc.get(m) or {}) & {"folding", "hole_machining"})
+               for m in maps if isinstance(proc.get(m), dict)}
+    for m, ops in present.items():
+        eq(ops, [], f"{m} still lists fabrication ops on an assembly parent")
+    # The DERIVED maps must agree with each other. setup_times_min legitimately holds only
+    # operations that have a setup, so it is not comparable — but unit_times_min and
+    # times_min are both built from the same union and any divergence between them means one
+    # was edited and the other was not, which is exactly the defect above.
+    _u = set(proc.get("unit_times_min") or {})
+    _t = set(proc.get("times_min") or {})
+    eq(sorted(_u ^ _t), [],
+       "unit_times_min and times_min disagree about which operations this part has")
+    _flags = [f for f in (_est.get("risk_flags") or [])
+              if str(f).startswith("missing_labour_rate:")]
+    eq([f for f in _flags if "folding" in f or "hole_machining" in f], [],
+       "no missing-rate flag for work the parent does not do")
+
+    # A real fabricated part is untouched — the strip is about parents, not about folding.
+    leaf = dict(parent, part_number="12120-01-01M", is_assembly_parent=False,
+                is_sub_assembly=False)
+    _lest = estimate_part(leaf) or {}
+    lproc = _lest.get("process_estimate") or leaf.get("process_estimate") or {}
+    ok(any("folding" in (lproc.get(m) or {}) for m in maps),
+       "a leaf part that folds must keep its fold")
+
+
 # ── invariants — the checks that make a wrong answer loud ────────────────────────────
 def _job(**over):
     """A job that passes every invariant, so each test can break exactly one thing."""

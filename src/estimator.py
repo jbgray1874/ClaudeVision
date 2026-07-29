@@ -2924,11 +2924,33 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             "hole_machining", "guillotine", "plasma_cutting", "waterjet",
             "drilling", "tapping", "countersinking",
         }
-        for _bucket in ("run_times_min_per_unit", "setup_times_min"):
+        # EVERY TIME MAP, not two of five. estimate_process_times returns setup_times_min,
+        # run_times_min_per_unit, unit_times_min and times_min — the last two derived from
+        # the first two and built BEFORE this strip runs. Popping only the first two left a
+        # part record that says "does not fold" in one map and "folds" in another.
+        #
+        # That inconsistency is what produced missing_labour_rate:folding on 12120's 101 and
+        # 103. The risk flag is computed from times_min (estimator.py:3224) as
+        # requested_ops - costed_ops: folding survived in times_min, was correctly NOT costed
+        # because the strip had removed it from the maps costing reads, and the subtraction
+        # reported it as an operation with no configured rate. It reads as under-costing —
+        # work identified and not priced — when the truth is the opposite: the fold belongs
+        # to the CHILDREN, they carry it, and suppressing it on the parent is correct. The
+        # flag sent an estimator looking for a missing rate that was never missing.
+        for _bucket in ("run_times_min_per_unit", "setup_times_min",
+                        "unit_times_min", "times_min"):
             _m = process.get(_bucket)
             if isinstance(_m, dict):
                 for _op in [o for o in _m if o in _PARENT_FAB_STRIP]:
                     _m.pop(_op, None)
+        # The totals are sums of those maps and go stale the moment anything is removed.
+        try:
+            process["unit_time_min"] = round(
+                sum((process.get("unit_times_min") or {}).values()), 2)
+            process["total_time_min"] = round(
+                sum((process.get("times_min") or {}).values()), 2)
+        except Exception:
+            pass
         process["assembly_parent_fab_suppressed"] = True
 
     # Acrylic route, costed the SDI way (canonical model from the M18 workbook). The laser
