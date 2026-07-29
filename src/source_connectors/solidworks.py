@@ -1142,7 +1142,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 out["bends"] += 1
             if _plausible_thk(nat.bend_radius_mm):
                 part["bend_radius_mm"] = float(nat.bend_radius_mm)
-        elif (nat.is_sheet_metal and _plausible_thk(nat.thickness_mm)
+        elif (_plausible_thk(nat.thickness_mm)
               and not nat.formed_but_no_bend_features and _is_flat_solid(nat)):
             # THE MODEL SAYS THIS PART DOES NOT FOLD, AND ITS SOLID AGREES.
             #
@@ -1152,8 +1152,18 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             # a part one thickness thick has nowhere for a bend to be. 12120's 04M is
             # 60 x 34.04 x 1.5mm at 1.5mm gauge — a plate — and it was being folded.
             #
-            # The guard requires a sheet-metal cut list with a real thickness, so it fires
-            # only where the model was actually read, never on a part we know nothing about.
+            # THE GUARD USED TO REQUIRE is_sheet_metal, AND THAT EXCLUDED THE WHOLE POINT.
+            # is_sheet_metal is true only where the feature tree holds a sheet-metal feature
+            # — SMBaseFlange, an EdgeFlange, a SketchBend. Nobody models a flat plate that
+            # way; you extrude it. So the parts this gate exists to catch were precisely the
+            # ones it could not see, and 04M kept coming back in the Fold 1.5mm group.
+            #
+            # Nothing is lost by dropping it. _plausible_thk demands a real thickness and
+            # _is_flat_solid demands a three-dimensional bounding box, so the gate still
+            # fires only where the model was actually read — which is the assurance
+            # is_sheet_metal was being credited with. And a folded part cannot pass
+            # _is_flat_solid however it was modelled: its envelope always stands taller than
+            # its material.
             #
             # The op is dropped here rather than left to a later gate because nothing
             # downstream has this evidence: the drawing text, the DXF bend-line heuristic and

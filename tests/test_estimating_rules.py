@@ -2636,6 +2636,82 @@ def test_a_guessed_price_says_so_on_the_estimating_sheet():
     ok(len(_cell) <= 120, "and the cell still fits")
 
 
+def test_a_plate_modelled_as_an_extrude_is_still_a_plate():
+    """04M stayed in the Fold 1.5mm group across every run, and the fixture above passed the
+    whole time — because it declares is_sheet_metal True and a 1.5mm cut-list thickness. The
+    real part has neither.
+
+    is_sheet_metal is true only where the feature tree holds a sheet-metal feature:
+    SMBaseFlange, an EdgeFlange, a SketchBend. Nobody models a flat plate that way; you
+    extrude it. Both the analyser's last-resort thickness and the connector's fold gate were
+    keyed on that flag, so the parts the gate exists to catch were exactly the ones it could
+    not see.
+
+    Nothing about the physics changed: a part one thickness thick has nowhere for a bend to
+    be, however it was drawn."""
+    from source_connectors.solidworks import (normalize_native_extract,
+                                              apply_native_to_pre_estimate)
+
+    # An extruded plate, as SolidWorks actually reports one: no sheet-metal feature, and a
+    # thickness the analyser had to infer from the solid.
+    job = normalize_native_extract([{"title": "04M", "doctype": 1, "route_signals": {
+        "material": "Mild Steel [CR4]", "is_sheet_metal": False, "bend_count": 0,
+        "thickness_mm": 1.5, "bbox_mm": [60.0, 34.04, 1.5]}}])
+    parts = [{"part_number": "04M", "textual_operations": ["laser_cutting", "folding"],
+              "manufacturing_features": {"bend_count": 1}}]
+    apply_native_to_pre_estimate(parts, job)
+    ok("folding" not in (parts[0].get("textual_operations") or []),
+       "a plate is not folded just because it was extruded rather than flanged")
+    eq(parts[0].get("native_flat_solid"), True,
+       "and the verdict is durable, so a later drawing-text pass cannot re-add the fold")
+
+    # A formed part with no countable bends must still fold — that is the case zero-bends
+    # alone can never be trusted for, and dropping is_sheet_metal must not weaken it.
+    formed = normalize_native_extract([{"title": "06M", "doctype": 1, "route_signals": {
+        "material": "Mild Steel [CR4]", "is_sheet_metal": False, "bend_count": 0,
+        "thickness_mm": 1.2, "bbox_mm": [96.49, 39.09, 35.0],
+        "formed_but_no_bend_features": True}}])
+    fparts = [{"part_number": "06M", "textual_operations": ["laser_cutting", "folding"]}]
+    apply_native_to_pre_estimate(fparts, formed)
+    ok("folding" in (fparts[0].get("textual_operations") or []),
+       "a formed part still folds")
+    ok(not fparts[0].get("native_flat_solid"), "and is never called a plate")
+
+    # A solid that stands taller than its material folds, whatever its feature tree says.
+    tall = normalize_native_extract([{"title": "01M", "doctype": 1, "route_signals": {
+        "material": "Mild Steel [CR4]", "is_sheet_metal": False, "bend_count": 0,
+        "thickness_mm": 1.5, "bbox_mm": [79.0, 64.5, 21.5]}}])
+    tparts = [{"part_number": "01M", "textual_operations": ["laser_cutting", "folding"]}]
+    apply_native_to_pre_estimate(tparts, tall)
+    ok("folding" in (tparts[0].get("textual_operations") or []),
+       "21.5mm of envelope on 1.5mm material is not a plate")
+
+
+def test_a_thickness_is_inferred_for_a_plate_with_no_sheet_metal_feature():
+    """The analyser's last-resort thickness — the smallest bbox dimension of an unformed
+    blank — was gated on is_sheet_metal too, so an extruded plate reached the connector with
+    no thickness at all and could not pass the flat-solid test whatever the gate allowed.
+
+    A part with no sheet-metal feature has to earn it on shape: a 10mm pin measuring
+    10 x 10 x 30 also has a small minimum, and is not 10mm thick.
+
+    Drives the analyser's own function. The first version of this fixture restated the rule
+    inline and asserted against its own copy, which proves only that the test agrees with
+    itself — the same mistake this suite keeps having to relearn."""
+    _infer = _load_analyser().infer_thickness_from_bbox
+
+    eq(_infer([60.0, 34.04, 1.5], False), 1.5, "an extruded plate gets its thickness")
+    eq(_infer([10.0, 10.0, 30.0], False), None, "a pin does not")
+    eq(_infer([79.0, 64.5, 21.5], False), None, "nor does a formed envelope")
+    eq(_infer([60.0, 34.04, 1.5], False, bend_count=2), None,
+       "nor does anything with bends — its envelope is not its material")
+    eq(_infer([54.7, 45.0, 1.5], True), 1.5, "and sheet-metal parts are unaffected")
+    eq(_infer([60.0, 34.04], False), None, "a two-dimensional box says nothing about a solid")
+    eq(_infer(None, False), None, "and neither does no box at all")
+    eq(_infer([600.0, 340.0, 20.0], False), None,
+       "20mm is plate-shaped but out of sheet range — that is a fabrication, not a gauge")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

@@ -930,6 +930,37 @@ def _cutlist_properties(feat, notes: List[str]) -> Dict[str, Any]:
     return out
 
 
+def infer_thickness_from_bbox(bbox_mm, is_sheet_metal: bool, bend_count: int = 0):
+    """Thickness of an unformed blank, read off its own solid. None when it cannot be said.
+
+    A plate's smallest bounding-box dimension IS its thickness. A folded part's is not — its
+    envelope always stands taller than its material — so this applies only where nothing has
+    been bent.
+
+    A part with no sheet-metal feature has to earn it on shape. A flat plate is modelled as
+    an extrude, not a flange, so excluding those excluded the parts that most need a
+    thickness inferred; but a 10mm pin measuring 10 x 10 x 30 also has a small minimum and is
+    not 10mm thick. Requiring the smallest dimension to be a small fraction of the next
+    smallest is what separates a plate from a bar or a block.
+
+    A module-level function so a test can drive it rather than re-implement it — a test that
+    restates the rule proves only that the test agrees with itself.
+    """
+    try:
+        dims = sorted(float(x) for x in (bbox_mm or []) if x)
+    except (TypeError, ValueError):
+        return None
+    if len(dims) < 3 or bend_count:
+        return None
+    smallest = dims[0]
+    if not (0.4 <= smallest <= 12.0):
+        return None
+    plate_shape = dims[1] > 0 and (smallest / dims[1]) <= 0.25
+    if is_sheet_metal or plate_shape:
+        return round(smallest, 3)
+    return None
+
+
 def sheet_metal_signals(doc) -> RouteSignals:
     """Feature walk for sheet-metal / hole / weldment hints on a part doc."""
     sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
@@ -1196,14 +1227,25 @@ def sheet_metal_signals(doc) -> RouteSignals:
     # Last-resort thickness for a sheet part: the smallest bounding-box dimension of an
     # UNFORMED blank is its thickness. Only used when the part has no bends and no cut-list
     # thickness, and it is recorded as inferred so it is never mistaken for a model value.
-    if sig.is_sheet_metal and sig.thickness_mm is None and sig.bbox_mm:
-        try:
-            _mn = min(float(x) for x in sig.bbox_mm if x)
-            if 0.4 <= _mn <= 12.0 and not sig.bend_count:
-                sig.thickness_mm = round(_mn, 3)
-                sig.notes.append(f"thickness inferred from bbox min ({_mn:.2f}mm) — no cut-list value")
-        except Exception:
-            pass
+    #
+    # NOT ONLY FOR SHEET-METAL PARTS. This was gated on is_sheet_metal, which is true only
+    # where the feature tree holds a sheet-metal feature. A flat plate is modelled as an
+    # extrude, so it got no thickness here and no plate verdict downstream — and 12120's 04M
+    # (60 x 34.04 x 1.5) kept being folded off the drawing text because nothing could say it
+    # was flat. The parts that most need a thickness inferred were the ones excluded.
+    #
+    # For a part with no sheet-metal features the shape has to earn it: the smallest
+    # dimension must be a small fraction of the next smallest, which is what makes something
+    # a plate rather than a bar or a block. A 10mm pin measuring 10 x 10 x 30 has a small
+    # minimum too, and is not 10mm "thick".
+    if sig.thickness_mm is None and sig.bbox_mm and not sig.bend_count:
+        _inferred = infer_thickness_from_bbox(sig.bbox_mm, sig.is_sheet_metal, sig.bend_count)
+        if _inferred is not None:
+            sig.thickness_mm = _inferred
+            sig.notes.append(
+                f"thickness inferred from bbox min ({_inferred:.2f}mm) — no cut-list value"
+                + ("" if sig.is_sheet_metal else
+                   "; part carries no sheet-metal feature, and its solid is plate-shaped"))
 
     # ── Formed-but-no-bend-features cross-check ───────────────────────────────────
     # A Base Flange built from a multi-segment sketch bakes its bends into that feature and
