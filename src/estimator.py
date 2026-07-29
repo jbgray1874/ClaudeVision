@@ -2148,6 +2148,33 @@ _SPECIAL_ITEM_FAB_OPS = {
 def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str, Any]:
     geom = part.get("geometry_rollup", {})
     ops = _part_ops(part)
+
+    # A PLATE DOES NOT FOLD — enforced HERE, at costing time, because this is the last point
+    # before an op becomes money.
+    #
+    # The SolidWorks connector already strips the fold when the cut list reports zero bends
+    # AND the solid is one thickness thick. But the connector runs early, and
+    # document_builder re-derives folding from the drawing's own text ("fold or bend work
+    # indicated") long afterwards — which is how 12120's 04M was back in the Fold 1.5mm
+    # group after the strip had removed it. The op was removed once and grew back.
+    #
+    # native_flat_solid is the model's durable statement that the part is a plate, so the
+    # gate can be applied again after every pass that could re-add the op has run. Removing
+    # an op we know is impossible needs no arbitration: the drawing text is a cue, and the
+    # solid is a measurement.
+    if part.get("native_flat_solid"):
+        if "folding" in ops:
+            ops = [o for o in ops if o != "folding"]
+        for _fld in ("textual_operations", "inferred_operations", "operations"):
+            if isinstance(part.get(_fld), list) and "folding" in part[_fld]:
+                part[_fld] = [o for o in part[_fld] if o != "folding"]   # precedence: direct-write ok — removes an op the model rules out
+        _mf = part.setdefault("manufacturing_features", {})
+        if isinstance(_mf, dict):
+            _mf["bend_count"] = 0
+        _rf = part.get("risk_flags")
+        if isinstance(_rf, list):
+            _rf[:] = [f for f in _rf
+                      if "fold" not in str(f).lower() and "bend" not in str(f).lower()]
     # Special / bought-in finishing items (tiles, mosaics, graphics, vinyl, -X suffix):
     # strip all fabrication ops — they are bought in, not made. Handling is retained so
     # the item is still received/assembled; pricing routes through the bought-in path.

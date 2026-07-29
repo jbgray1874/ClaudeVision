@@ -970,6 +970,11 @@ def test_a_plate_is_not_folded():
        "and its bend count must say so")
     ok(not [f for f in (parts[0].get("risk_flags") or []) if "fold" in str(f).lower()],
        "with the fold risk flag cleared, not left telling an estimator to check a fold")
+    # A DURABLE marker, not just a removal. The connector runs early and a later pass
+    # re-derives folding from the drawing text; without this the op grows back, which is
+    # exactly what 12120's 04M did on the next run.
+    ok(parts[0].get("native_flat_solid"),
+       "the model's statement that this is a plate must persist for the costing-time gate")
 
     # 01M: genuinely folded — envelope stands far taller than the gauge. Untouched.
     parts = [{"part_number": "01M", "textual_operations": ["laser_cutting", "folding"],
@@ -988,6 +993,42 @@ def test_a_plate_is_not_folded():
     ok("folding" in (parts[0].get("textual_operations") or []),
        "a zero bend COUNT on a part whose solid is deeper than its gauge is not evidence "
        "of a plate — the fold must survive")
+
+
+def test_a_plate_stays_unfolded_after_the_drawing_text_pass():
+    """The connector strips the fold from a plate. Then document_builder re-derives folding
+    from the drawing's own text — "fold or bend work indicated" — and 12120's 04M was back
+    in the Fold 1.5mm group on the very next run. The op was removed once and grew back.
+
+    Removing it once is not the same as it staying removed. The model's statement that the
+    part is a plate has to survive every pass that can re-add the op, and be enforced again
+    at costing time, which is the last point before an op becomes money."""
+    from estimator import estimate_process_times
+    plate = {"part_number": "04M", "normalized_material": "MILD_STEEL",
+             "native_flat_solid": True,          # the model: 60 x 34.04 x 1.5 at 1.5mm gauge
+             # …and a later pass has put the fold back from the drawing text.
+             "textual_operations": ["laser_cutting", "folding"],
+             "inferred_operations": ["folding"],
+             "manufacturing_features": {"bend_count": 2},
+             "risk_flags": ["fold_count_uncertain"],
+             "normalized_thickness_mm": 1.5, "overall_length_mm": 60, "overall_width_mm": 34,
+             "geometry_rollup": {"estimated_cut_length_mm": 224.0}}
+    estimate_process_times(plate)
+    for _f in ("textual_operations", "inferred_operations"):
+        ok("folding" not in (plate.get(_f) or []),
+           f"{_f} still folds a part the model says is a plate")
+    eq((plate.get("manufacturing_features") or {}).get("bend_count"), 0, "and no bends")
+    ok(not [f for f in (plate.get("risk_flags") or []) if "fold" in str(f).lower()],
+       "no fold risk flag telling an estimator to check a fold that cannot exist")
+
+    # A part the model has NOT called a plate keeps whatever the drawing says.
+    folded = dict(plate, part_number="01M", native_flat_solid=False,
+                  textual_operations=["laser_cutting", "folding"],
+                  inferred_operations=["folding"],
+                  manufacturing_features={"bend_count": 6}, risk_flags=[])
+    estimate_process_times(folded)
+    ok("folding" in (folded.get("textual_operations") or []),
+       "a genuinely folded part is untouched — the gate is about plates, not about folding")
 
 
 def test_every_native_disagreement_reaches_the_resolver():
@@ -1928,6 +1969,29 @@ def test_the_report_and_the_quote_never_disagree_about_the_same_job():
     ok("completed cleanly" not in _r,
        "and the report must not claim a clean completion it never verified")
     ok("did not run" in _r, "it must say the checks did not run")
+
+
+def test_a_failing_check_names_the_records_it_objected_to():
+    """"5 part(s) claim measured geometry but carry no usable outline" gives an estimator a
+    number and nothing to act on — they cannot open five unnamed parts. Every check already
+    collects which records it objected to; printing the message and discarding the evidence
+    made the report describe a problem instead of locating it."""
+    from job_report_html import build_report_html
+    j = {"estimate_summary": {"estimate_status": "ok", "part_estimates": [],
+         "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": 32.86,
+                                         "m59_material_subtotal_gbp": 18.25,
+                                         "m103_labour_subtotal_gbp": 12.30}},
+         "invariants": {"may_quote_firm": False, "blocking": 1, "unverified": 0,
+                        "checks_run": ["a"] * 12, "violations": [
+             {"severity": "blocking", "code": "measured_geometry_without_outline",
+              "message": "5 part(s) claim measured geometry but carry no usable outline.",
+              "detail": {"count": 5, "parts": [
+                  {"part_number": "12120-01-101", "geometry_source": "dxf_flat_pattern"},
+                  {"part_number": "12120-01-103", "geometry_source": "dxf"}]}}]}}
+    h = build_report_html(j)
+    ok("12120-01-101" in h, "the report must name the parts a check objected to")
+    ok("dxf_flat_pattern" in h, "and say what each of them claimed")
+    ok("count=5" in h, "scalar detail is carried through too")
 
 
 def test_the_rendered_quote_actually_carries_the_banner():

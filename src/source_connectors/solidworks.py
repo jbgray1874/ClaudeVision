@@ -1173,6 +1173,13 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             if isinstance(_rf, list):
                 _rf[:] = [f for f in _rf if "fold" not in str(f).lower()
                           and "bend" not in str(f).lower()]
+            # A DURABLE FACT, not just a removal. Stripping the op here is not enough: the
+            # connector runs early, and a later pass re-derives folding from the drawing's
+            # own text ("fold or bend work indicated"), which is how 04M was back in the
+            # Fold 1.5mm group after the strip had removed it. The marker records that the
+            # MODEL says this part is a plate, so the gate can be enforced again at costing
+            # time, after every pass that could re-add the op has run.
+            part["native_flat_solid"] = True
             if _removed:
                 flags.append(
                     f"fold REMOVED: the cut list reports 0 bends and the solid is "

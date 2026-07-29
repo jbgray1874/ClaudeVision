@@ -951,9 +951,33 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     rows = ""
     for x in sorted(_v, key=lambda a: _order.get(str(a.get("severity")), 3)):
         _cls, _txt = _label.get(str(x.get("severity")), ('t-info', 'Advisory'))
+        # THE DETAIL, not just the sentence. "5 part(s) claim measured geometry but carry no
+        # usable outline" tells an estimator a number and nothing they can act on: they
+        # cannot open five unnamed parts. Every check already collects which records it
+        # objected to; printing the message and discarding the evidence made the report
+        # describe a problem instead of locating it.
+        _d = x.get("detail") if isinstance(x.get("detail"), dict) else {}
+        _bits = []
+        for _k in ("parts", "rows", "problems", "failed_paths"):
+            for _item in (_d.get(_k) or [])[:8]:
+                if isinstance(_item, dict):
+                    _lbl = (_item.get("part_number") or _item.get("workbook_row")
+                            or _item.get("block") or _item.get("path"))
+                    _why = (_item.get("geometry_source") or _item.get("wb_operation")
+                            or _item.get("reason") or _item.get("code") or "")
+                    _bits.append(f"{_lbl}{f' ({_why})' if _why else ''}")
+                elif _item:
+                    _bits.append(str(_item))
+        for _k, _v in sorted(_d.items()):
+            if _k in ("parts", "rows", "problems", "failed_paths") or _v in (None, "", [], {}):
+                continue
+            if not isinstance(_v, (list, dict)):
+                _bits.append(f"{_k}={_v}")
+        _detail = (f'<br><span class="mini">{_esc("; ".join(_bits[:12]))}</span>'
+                   if _bits else "")
         rows += (f'<tr><td><span class="tag {_cls}">{_txt}</span></td>'
                  f'<td><code>{_esc(str(x.get("code") or ""))}</code></td>'
-                 f'<td>{_esc(str(x.get("message") or ""))}</td></tr>')
+                 f'<td>{_esc(str(x.get("message") or ""))}{_detail}</td></tr>')
     _head = ('<div class="callout warn"><b>This estimate is not a firm price.</b> '
              f'{inv.get("blocking", 0)} check(s) failed and {inv.get("unverified", 0)} could '
              f'not be run, out of {_n}. A check that could not run has verified nothing — it '
