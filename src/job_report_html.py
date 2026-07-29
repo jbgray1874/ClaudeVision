@@ -1017,7 +1017,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
         # describe a problem instead of locating it.
         _d = x.get("detail") if isinstance(x.get("detail"), dict) else {}
         _bits = []
-        _DETAIL_LISTS = ("parts", "lines", "rows", "problems", "failed_paths")
+        _DETAIL_LISTS = ("parts", "lines", "rows", "problems", "failed_paths", "files")
         for _k in _DETAIL_LISTS:
             for _item in (_d.get(_k) or [])[:8]:
                 if isinstance(_item, dict):

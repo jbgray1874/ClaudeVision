@@ -3156,6 +3156,95 @@ def test_a_pdf_only_job_still_reads_its_routes():
        "and with no model to call it a plate, its fold stands")
 
 
+def test_dwg_flat_patterns_are_converted_not_ignored():
+    """DWG is DXF's binary sibling — the same geometry in a different container — and the
+    engine read neither it nor anything else outside .pdf/.dxf/.sldXXX. A customer sending
+    DWG flat patterns got an estimate built from the PDF alone, with transcribed blanks and
+    inferred cut lengths, while the measured outline sat unread in the same folder.
+
+    The conversion runs an external program, so it is driven here through an injected runner:
+    a function that can only be tested on a machine with a particular tool installed is a
+    function nobody tests."""
+    import cad_inputs
+    from pathlib import Path
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as _tmp:
+        job = Path(_tmp)
+        (job / "12120-01-01M_1.5mm_MILD_STEEL.dwg").write_text("x")
+        (job / "12120-01-02M_1.5mm_MILD_STEEL.DWG").write_text("x")
+        (job / "12120-01-GA.pdf").write_text("x")
+        (job / "assembly.STEP").write_text("x")
+
+        # The converter is absent: say so, name the cost, and never raise into the run.
+        _none = cad_inputs.convert_dwgs(job, converter=None)
+        eq(len(_none["found"]), 2, "both DWGs are found whatever their case")
+        eq(_none["converted"], [], "nothing is converted without the tool")
+        ok("ODA File Converter" in _none["reason"],
+           "and the reason names what to install rather than failing silently")
+        ok("sized from the drawing text" in _none["reason"],
+           "with what it costs the estimate")
+
+        # With a converter, the produced DXFs are reported as ours, not as customer input.
+        out = job / "_dxf_from_dwg"
+        def _fake(cmd):
+            out.mkdir(parents=True, exist_ok=True)
+            for n in ("12120-01-01M_1.5mm_MILD_STEEL.dxf", "12120-01-02M_1.5mm_MILD_STEEL.dxf"):
+                (out / n).write_text("0\nSECTION\n")
+            return 0
+        _done = cad_inputs.convert_dwgs(job, out, converter="x", runner=_fake)
+        eq(len(_done["converted"]), 2, "both DWGs become DXFs")
+        eq(_done["reason"], "", "and there is nothing to explain")
+
+        inv = cad_inputs.inventory(job, converted=[Path(p) for p in _done["converted_paths"]])
+        ok("12120-01-GA.pdf" in inv["read"], "the PDF is read")
+        eq(sorted(inv["converted"]), sorted(_done["converted"]),
+           "a DXF we made is not reported as one the customer supplied")
+        ok(any(f.lower().endswith(".step") for f in inv["unread"]),
+           f"and the STEP file is named as present and unread: {inv['unread']}")
+
+        # A converter that runs and produces nothing is a different failure and says so.
+        _empty = cad_inputs.convert_dwgs(job, job / "_none", converter="x",
+                                         runner=lambda cmd: 0)
+        ok("no DXF" in _empty["reason"], f"reported, not silent: {_empty['reason']}")
+
+
+def test_a_file_nobody_opened_is_named_in_the_report():
+    """The engine ignored everything outside .pdf/.dxf/.sldXXX without a word. An estimator
+    deciding whether to trust a number deserves to know a file they supplied was never opened
+    — especially a DWG, which is measured geometry we could have used."""
+    from invariants import check_job
+
+    j = _job()
+    j["cad_inputs"] = {"schema": "cad_inputs.v1", "present": True,
+                       "read": ["12120-01-GA.pdf"], "solidworks": [], "converted": [],
+                       "unread": ["01M.dwg", "02M.dwg", "assembly.STEP"], "unknown": []}
+    r = check_job(j, write_back=False)
+    _v = next((v for v in r["violations"] if v["code"] == "cad_files_not_read"), None)
+    ok(_v is not None, "unread CAD files are reported")
+    eq(_v["severity"], "warning", "as a warning — the number still stands")
+    eq(_v["detail"]["dwg_count"], 2, "counting the DWGs separately")
+    ok("01M.dwg" in _v["message"], "naming them so they can be found")
+    ok("ODA File Converter" in _v["message"], "and saying what would make the DWGs readable")
+    ok("skipped by design" in _v["message"],
+       "while STEP is explained rather than presented as an omission")
+
+    # Nothing unread: nothing to say.
+    j2 = _job()
+    j2["cad_inputs"] = {"schema": "cad_inputs.v1", "present": True,
+                        "read": ["a.pdf", "b.dxf"], "solidworks": [], "converted": [],
+                        "unread": [], "unknown": []}
+    ok("cad_files_not_read" not in
+       [v["code"] for v in check_job(j2, write_back=False)["violations"]],
+       "a folder with nothing unread raises nothing")
+
+    # A run that was not folder-based has no folder to inventory, and must not be marked
+    # unverified for ever on the strength of a question that did not apply to it.
+    r3 = check_job(_job(), write_back=False)
+    ok("cad_inputs_not_evaluated" not in [v["code"] for v in r3["violations"]],
+       "and a single-file run is not held against itself")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

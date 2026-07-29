@@ -774,6 +774,45 @@ def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
         lines=detail[:10], count=len(detail))]
 
 
+def check_every_cad_file_was_used(summary: Any) -> List[Dict[str, Any]]:
+    """Did anything the customer supplied go unopened?
+
+    The engine reads .pdf, .dxf and the three SolidWorks document types, and ignores
+    everything else without a word. A customer sending DWG flat patterns gets an estimate
+    built from the PDF alone — transcribed blanks, inferred cut lengths — while the measured
+    geometry sits unread in the same folder.
+
+    Reported, never corrected: whether a STEP file matters is a judgement about that job, and
+    the engine is not the one to make it. What it can do is stop the omission being silent.
+    """
+    # NOT FAIL-CLOSED, AND DELIBERATELY. Every other check here verifies a NUMBER, so an
+    # unevaluated one is recorded as UNVERIFIED and the job cannot go out firm. This one
+    # reports what was in a folder. A run driven from a single file has no folder to
+    # inventory, and marking those jobs unverified for ever would say a price was unsafe on
+    # the strength of a question that did not apply to it.
+    inv = _node(summary, "cad_inputs")
+    if not inv or not inv.get("present"):
+        return []
+    unread = [str(n) for n in (inv.get("unread") or [])]
+    if not unread:
+        return []
+    _dwg = [n for n in unread if n.lower().endswith(".dwg")]
+    _rest = [n for n in unread if n not in _dwg]
+    _msg = f"{len(unread)} CAD file(s) in the job folder were not read: {', '.join(unread[:8])}"
+    if len(unread) > 8:
+        _msg += f" (+{len(unread) - 8} more)"
+    if _dwg:
+        _msg += (f". {len(_dwg)} of them are DWG — the same geometry as a DXF in a different "
+                 f"container, which the ODA File Converter turns into something this engine "
+                 f"reads. Those parts are being sized from drawing text while their measured "
+                 f"outline sits unopened")
+    if _rest:
+        _msg += (". The rest carry geometry and none of the things an estimate needs — no "
+                 "part numbers, no quantities, no material — so they are skipped by design")
+    return [_violation("cad_files_not_read", WARNING, _msg + ".",
+                       files=unread[:12], count=len(unread), dwg_count=len(_dwg))]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -945,6 +984,7 @@ CHECKS = (
     check_price_disagreement_is_declared,
     check_a_measured_plate_is_not_charged_for_folding,
     check_prices_are_firm,
+    check_every_cad_file_was_used,
 )
 
 

@@ -28,6 +28,12 @@ ARCHIVE_SQL_DIR = ARCHIVE_DIR / "sql"
 
 SUPPORTED_EXTENSIONS = {".pdf", ".dxf"}
 
+# The ODA File Converter turns DWG into DXF offline and free, so a DWG flat pattern feeds the
+# reader we already have instead of being ignored. Leave as None to auto-detect: PATH first,
+# then the usual install roots. Set it explicitly if it lives somewhere else.
+#   e.g. r"C:\Program Files\ODA\ODAFileConverter 25.4.0\ODAFileConverter.exe"
+DWG_CONVERTER_PATH = None
+
 # PDF GA + flat DXF per part: DXF augments geometry on the PDF scan JSON (see drawing_job_merge.py).
 DRAWING_JOB_DISCOVERY = {
     "enabled": True,
