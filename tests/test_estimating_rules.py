@@ -3182,8 +3182,11 @@ def test_dwg_flat_patterns_are_converted_not_ignored():
         eq(_none["converted"], [], "nothing is converted without the tool")
         ok("ODA File Converter" in _none["reason"],
            "and the reason names what to install rather than failing silently")
-        ok("sized from the drawing text" in _none["reason"],
-           "with what it costs the estimate")
+        ok("if any are part flat patterns" in _none["reason"],
+           "hedged correctly — a job folder's DWGs are not all part flats, and 12120's only "
+           "DWG is a GA sheet")
+        ok("flat patterns are unread" not in _none["reason"],
+           "so it does not promise measured blanks from files nobody has opened")
 
         # With a converter, the produced DXFs are reported as ours, not as customer input.
         out = job / "_dxf_from_dwg"

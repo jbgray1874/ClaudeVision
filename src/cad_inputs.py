@@ -141,11 +141,15 @@ def convert_dwgs(
 
     exe = converter or find_converter()
     if not exe and runner is None:
+        # NOT "these flat patterns". A job folder's DWGs are whatever the customer sent, and
+        # they are not all part flats — a GA sheet is the DWG equivalent of the PDF, and
+        # 12120's only DWG is exactly that. Promising measured blanks from files nobody has
+        # opened is the same over-claim the engine exists to stop.
         result["reason"] = (
             f"{len(dwgs)} DWG file(s) found and not converted: the ODA File Converter was not "
             f"located. It is a free standalone download; set config.DWG_CONVERTER_PATH to its "
-            f"executable, or put it on PATH. Until then these flat patterns are unread and "
-            f"the parts they describe are sized from the drawing text instead.")
+            f"executable, or put it on PATH. Until then nothing has read them — if any are "
+            f"part flat patterns, those parts are being sized from drawing text instead.")
         return result
 
     out_dir = Path(out_dir or (folder / "_dxf_from_dwg"))
@@ -174,3 +178,67 @@ def convert_dwgs(
         result["reason"] = (f"{len(dwgs) - len(produced)} of {len(dwgs)} DWG file(s) produced "
                             f"no DXF and were not used.")
     return result
+
+
+if __name__ == "__main__":
+    # Verify a DWG setup without running a job.
+    #
+    #     python src\cad_inputs.py "K:\...\12120-01-GA- DIGITAL TICKETING BRACKET"
+    #
+    # Prints what is in the folder, whether the converter was found, what it produced, and
+    # whether each converted file would be accepted as a part flat pattern. A setup you
+    # cannot check is not a setup: the failure mode this guards against is a converter that
+    # runs, writes files nobody reads, and leaves the estimate exactly as it was.
+    import sys
+
+    if len(sys.argv) < 2:
+        print(__doc__)
+        print("usage: python cad_inputs.py <job folder> [--no-convert]")
+        raise SystemExit(2)
+
+    _folder = Path(" ".join(a for a in sys.argv[1:] if not a.startswith("--")).strip('"'))
+    if not _folder.is_dir():
+        print(f"Not a folder: {_folder}")
+        raise SystemExit(2)
+
+    _exe = find_converter()
+    print(f"\nODA File Converter : {_exe or 'NOT FOUND'}")
+    if not _exe:
+        print("   Install the free ODA File Converter, or set config.DWG_CONVERTER_PATH to "
+              "its executable.")
+
+    _conv: Dict[str, Any] = {"converted_paths": []}
+    if "--no-convert" not in sys.argv:
+        _conv = convert_dwgs(_folder)
+        if _conv.get("found"):
+            print(f"\nDWG found          : {len(_conv['found'])}")
+            for _n in _conv["found"][:12]:
+                print(f"   {_n}")
+            print(f"DWG converted      : {len(_conv.get('converted') or [])}")
+        if _conv.get("reason"):
+            print(f"\n   {_conv['reason']}")
+
+    _inv = inventory(_folder, converted=[Path(p) for p in _conv.get("converted_paths") or []])
+    for _key, _label in (("read", "read directly"), ("solidworks", "read by SolidWorks"),
+                         ("converted", "converted from DWG"), ("unread", "PRESENT, NOT READ"),
+                         ("unknown", "unrecognised")):
+        _items = _inv.get(_key) or []
+        if _items:
+            print(f"\n{_label} ({len(_items)}):")
+            for _n in _items[:15]:
+                print(f"   {_n}")
+
+    # The step that decides whether a conversion was worth anything: a converted file still
+    # has to look like a part's flat pattern, or nothing will measure it.
+    if _conv.get("converted_paths"):
+        try:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from drawing_job_merge import is_flat_part_dxf
+            print("\nwould be used as a part flat pattern:")
+            for _p in _conv["converted_paths"]:
+                _ok = is_flat_part_dxf(Path(_p))
+                print(f"   {'YES' if _ok else 'no '}  {Path(_p).name}"
+                      + ("" if _ok else "   (GA sheet, or no part number in the filename)"))
+        except ImportError:
+            pass
+    print()
