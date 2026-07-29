@@ -1684,6 +1684,12 @@ def test_an_ai_guessed_price_cannot_make_a_quote_firm():
     ok(not r["may_quote_firm"], "and stop the quote being firm")
     _v = next(v for v in r["violations"] if v["code"] == "price_not_reproducible")
     eq(_v["detail"]["count"], 2, "both guessed lines counted, not just the first")
+    # The violation ends by telling someone to add these codes to the catalogue. On the live
+    # 12120 JSON it named estimate_summary.part_estimates[11], which nobody can add to
+    # anything — the instruction was unfollowable.
+    eq(sorted(_v["detail"]["parts"]), ["BI-KNURLEDKNOB", "BI-SCREENCABLE"],
+       "naming the codes to catalogue, not array indices")
+    ok("part_estimates[" not in _v["message"], "and not in the sentence a human reads")
     _sources = {str(l["source"]) for l in _v["detail"]["lines"]}
     eq(_sources, {"llm_market_estimate"}, "and only the guessed ones")
     ok("udef_sqlserver" not in str(_v["detail"]),

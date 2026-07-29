@@ -677,13 +677,10 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
             "No priced lines carrying a price-source stamp were found anywhere on this job.")
 
     guessed = []
-    for path, block in stamps:
-        if not (price_provenance.stamp_affects_total(block)
-                and price_provenance.stamp_is_ai_estimate(block)):
-            continue
+    for path, block, owner in price_provenance.applied_ai_prices(summary):
         _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
         guessed.append({
-            "where": path,
+            "part": owner, "where": path,
             "source": block.get("source_name") or _sel.get("source"),
             "unit_cost_gbp": _sel.get("price") if _sel.get("price") is not None
                              else block.get("unit_price_gbp"),
@@ -691,17 +688,21 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
         })
     if not guessed:
         return []
-    _names = sorted({str(g["where"]).split(".cost_breakdown")[0].split(".material_estimate")[0]
-                     for g in guessed})
+    # NAME THE CODES, NOT THE ARRAY INDICES. "part_estimates[11]" cannot be added to a
+    # catalogue; the whole instruction this violation ends with depends on the reader knowing
+    # which items to go and price.
+    _names = sorted({str(g["part"]) for g in guessed if g.get("part")}) \
+        or sorted({str(g["where"]) for g in guessed})
     return [_violation(
         "price_not_reproducible", BLOCKING,
         f"{len(guessed)} priced line(s) that reached the total were costed by an AI market "
-        f"estimate rather than a catalogue: {', '.join(_names[:8])}. Those figures change "
+        f"estimate rather than a catalogue: {', '.join(_names[:8])}"
+        f"{f' (+{len(_names) - 8} more)' if len(_names) > 8 else ''}. Those figures change "
         f"every run — the same job has priced at three different totals on identical inputs, "
         f"one cable line moving from GBP 4.54 to GBP 8.54 on its own — so the estimate cannot "
-        f"be reproduced or defended. Add the codes to the price catalogue, or price these "
+        f"be reproduced or defended. Add these codes to the price catalogue, or price the "
         f"lines by hand.",
-        lines=guessed[:10], count=len(guessed))]
+        parts=_names, lines=guessed[:10], count=len(guessed))]
 
 
 def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
@@ -818,10 +819,61 @@ def format_report(result: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_SCAN_DIRS = ("output/json", "output", ".")
+
+
+def _resolve_job_files(arguments: List[str]) -> List[str]:
+    """Turn whatever the shell handed us into job files that exist.
+
+    EVERY JOB HERE HAS SPACES IN ITS NAME. "12120-01-GA- DIGITAL TICKETING BRACKET.json"
+    unquoted in PowerShell arrives as four arguments, and the first attempt opened
+    'output\\json\\12120-01-GA-' and died. A re-check tool that cannot be pointed at a real
+    filename does not get used, and a check nobody runs verifies nothing — which is the
+    failure this whole module exists to prevent.
+
+    So: a path is used as given when it exists; otherwise the arguments are rejoined with
+    spaces and tried as one name; otherwise each is matched as a fragment against the output
+    folders. Anything still unresolved is reported by name rather than raising.
+    """
+    import glob
+    import os
+
+    def _hits(text: str) -> List[str]:
+        text = text.strip().strip('"').strip("'")
+        if not text:
+            return []
+        if os.path.isfile(text):
+            return [text]
+        found = sorted(p for p in glob.glob(text) if os.path.isfile(p))
+        if found:
+            return found
+        for folder in _SCAN_DIRS:
+            found = sorted(glob.glob(os.path.join(folder, f"*{text}*.json")))
+            if found:
+                return found
+        return []
+
+    # The rejoined form first: it is the case the shell mangled, and matching it is what the
+    # user meant. Only fall back to per-argument matching if that finds nothing.
+    whole = _hits(" ".join(arguments))
+    if whole:
+        return whole
+    resolved: List[str] = []
+    for arg in arguments:
+        got = _hits(arg)
+        if got:
+            resolved.extend(g for g in got if g not in resolved)
+        else:
+            print(f"  no job file matched: {arg!r}")
+    return resolved
+
+
 if __name__ == "__main__":
     # Re-check a job that has already been stamped, without re-running the estimate.
     #
-    #     python src\invariants.py output\json\12120_scan.json
+    #     python src\invariants.py "output\json\12120-01-GA- DIGITAL TICKETING BRACKET.json"
+    #     python src\invariants.py 12120            # a fragment of the name is enough
+    #     python src\invariants.py output\json\*.json
     #
     # The checks read only what is in the document, so this answers "would this job be
     # released as firm?" against a JSON already on disk. It exists because the alternative —
@@ -832,11 +884,18 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print(__doc__)
-        print("usage: python invariants.py <stamped-job.json> [...]")
+        print("usage: python invariants.py <stamped-job.json | name fragment | glob> [...]")
+        raise SystemExit(2)
+
+    _args = [a for a in sys.argv[1:] if a not in ("--all", "-a")]
+    _all = len(_args) != len(sys.argv[1:])
+    _files = _resolve_job_files(_args)
+    if not _files:
+        print(f"\nNothing to check. Looked in: {', '.join(_SCAN_DIRS)}")
         raise SystemExit(2)
 
     _worst = 0
-    for _path in sys.argv[1:]:
+    for _path in _files:
         with open(_path, "r", encoding="utf-8") as _fh:
             _doc = json.load(_fh)
         _res = check_job(_doc, write_back=False)
@@ -844,12 +903,37 @@ if __name__ == "__main__":
         print(format_report(_res))
         # Name the priced lines, whatever they turned out to be. A verdict with no lines
         # under it cannot be acted on, and cannot be disbelieved either.
-        for _p, _b in price_provenance.iter_price_stamps(_doc):
-            _cls = _b.get("source_class") or (
-                "ai_estimate" if price_provenance.stamp_is_ai_estimate(_b) else "?")
-            _mark = "  GUESSED" if price_provenance.stamp_is_ai_estimate(_b) else "         "
-            _used = "applied" if price_provenance.stamp_affects_total(_b) else "not applied"
-            print(f"  {_mark}  {_cls:<12} {str(_b.get('source_name')):<34} {_used:<11} {_p}")
+        #
+        # But a real job stamps every labour rate on every part, which is over a hundred
+        # lines of "sqlserver, applied" — and a listing nobody reads to the end hides the
+        # five that matter. So: one row per source with a count, then every guessed line in
+        # full. --all prints the lot when someone actually wants to audit it.
+        _by_source: Dict[str, Dict[str, int]] = {}
+        _guessed: List[str] = []
+        for _p, _b, _own in price_provenance.iter_price_stamps_with_owner(_doc):
+            _cls = price_provenance.stamp_source_class(_b)
+            _name = str(_b.get("source_name") or "?")
+            _used = price_provenance.stamp_affects_total(_b)
+            _row = _by_source.setdefault(f"{_cls}|{_name}", {"applied": 0, "unused": 0})
+            _row["applied" if _used else "unused"] += 1
+            if price_provenance.stamp_is_ai_estimate(_b) and _used:
+                _guessed.append(f"     GUESSED  {str(_own or '?'):<22} {_name:<22} {_p}")
+            if _all:
+                print(f"     {'GUESSED' if price_provenance.stamp_is_ai_estimate(_b) else '       '}"
+                      f"  {_cls:<12} {_name:<34} "
+                      f"{'applied' if _used else 'not applied':<11} {_p}")
+        if not _all:
+            print("  price sources on this job:")
+            for _key in sorted(_by_source):
+                _cls, _name = _key.split("|", 1)
+                _c = _by_source[_key]
+                _flag = "  <-- GUESSED" if _cls == "ai_estimate" else ""
+                print(f"     {_cls:<12} {_name:<34} "
+                      f"{_c['applied']:>3} applied, {_c['unused']:>3} unused{_flag}")
+        if _guessed:
+            print("  lines that reached the total on a guessed price:")
+            for _line in _guessed:
+                print(_line)
         if not _res.get("may_quote_firm"):
             _worst = 1
     raise SystemExit(_worst)

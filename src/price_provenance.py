@@ -134,6 +134,54 @@ def _looks_like_price_stamp(node: Dict[str, Any]) -> bool:
     return "source_name" in node and ("applied" in node or "source_rank" in node)
 
 
+def iter_price_stamps_with_owner(
+    node: Any, _path: str = "", _owner: Optional[str] = None,
+) -> Iterator[Tuple[str, Dict[str, Any], Optional[str]]]:
+    """As iter_price_stamps, but also carrying the part the stamp was found under.
+
+    A verdict that says estimate_summary.part_estimates[11] is unactionable — nobody can add
+    an array index to a catalogue, and that violation ends by instructing someone to do
+    exactly that. The owner is the nearest enclosing record that names itself, so the message
+    can say BI-SCREENCABLE instead.
+    """
+    if isinstance(node, dict):
+        owner = _owner
+        for key in ("part_number", "matched_part_code", "part_code", "description"):
+            _v = node.get(key)
+            if isinstance(_v, str) and _v.strip():
+                owner = _v.strip()
+                break
+        if node.get("schema") == PRICE_SOURCE_SCHEMA or _looks_like_price_stamp(node):
+            yield _path, node, owner
+        for key, value in node.items():
+            if isinstance(value, (dict, list)):
+                yield from iter_price_stamps_with_owner(
+                    value, f"{_path}.{key}" if _path else str(key), owner)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            if isinstance(value, (dict, list)):
+                yield from iter_price_stamps_with_owner(value, f"{_path}[{index}]", _owner)
+
+
+def stamp_source_class(block: Dict[str, Any]) -> str:
+    """What kind of thing priced this line, for a block that may predate the stamp.
+
+    Older JSON carries no source_class, and reading that absence as "unknown" makes a listing
+    of every price on a job over a hundred rows of question marks — which tells a reader
+    nothing and invites them to stop looking before reaching the rows that matter.
+    """
+    declared = block.get("source_class")
+    if isinstance(declared, str) and declared:
+        return declared
+    _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
+    return classify_price_source(
+        block.get("source_name") or _sel.get("source"),
+        source_type=block.get("source_type"),
+        pricing_mode=block.get("pricing_mode"),
+        priced=_sel.get("price") is not None or block.get("applied") is True,
+    )
+
+
 def iter_price_stamps(node: Any, _path: str = "") -> Iterator[Tuple[str, Dict[str, Any]]]:
     """Walk any job/part/estimate structure and yield (path, block) for every price stamp.
 
@@ -148,16 +196,8 @@ def iter_price_stamps(node: Any, _path: str = "") -> Iterator[Tuple[str, Dict[st
     So nothing here knows a field path, and nothing here is given a list of parts. It is
     handed the whole job and it finds every price in it.
     """
-    if isinstance(node, dict):
-        if node.get("schema") == PRICE_SOURCE_SCHEMA or _looks_like_price_stamp(node):
-            yield _path, node
-        for key, value in node.items():
-            if isinstance(value, (dict, list)):
-                yield from iter_price_stamps(value, f"{_path}.{key}" if _path else str(key))
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            if isinstance(value, (dict, list)):
-                yield from iter_price_stamps(value, f"{_path}[{index}]")
+    for path, block, _owner in iter_price_stamps_with_owner(node, _path):
+        yield path, block
 
 
 def stamp_affects_total(block: Dict[str, Any]) -> bool:
@@ -199,9 +239,9 @@ def applied_ai_prices(node: Any) -> list:
     a guessed number that reached the total is a problem for reproducing the job.
     """
     found = []
-    for path, block in iter_price_stamps(node):
+    for path, block, owner in iter_price_stamps_with_owner(node):
         if stamp_affects_total(block) and stamp_is_ai_estimate(block):
-            found.append((path, block))
+            found.append((path, block, owner))
     return found
 
 
