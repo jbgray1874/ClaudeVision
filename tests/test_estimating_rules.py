@@ -3221,6 +3221,19 @@ def test_dwg_flat_patterns_are_converted_not_ignored():
     ok('summary["cad_inputs"] = _cad_inv' in _seg,
        "with the inventory stamped so the report and the gate can read it")
 
+    # A JOB FOLDER'S DWGs ARE WHATEVER THE CUSTOMER SENT. attach_dxf_paths deliberately skips
+    # the flat-part filter because a human naming a file has already made that judgement.
+    # Nobody made it here, so a converted GA sheet handed over unfiltered would be read as a
+    # part's flat pattern.
+    # The exact expression, not just the name: the name also appears in the line that
+    # REPORTS the rejects, so a looser assertion passes with the filter itself deleted.
+    ok("_converted_dxf = [p for p in _converted_dxf if is_flat_part_dxf(p)]" in _seg,
+       "converted files face the same test discovery applies to supplied ones")
+    from drawing_job_merge import is_flat_part_dxf
+    from pathlib import Path as _P
+    eq(is_flat_part_dxf(_P("12120-01-GA-_1.5mm.dxf")), False, "a GA sheet is not a flat pattern")
+    eq(is_flat_part_dxf(_P("12120-01-01M_1.5mm_MILD_STEEL.dxf")), True, "a part flat is")
+
 
 def test_a_file_nobody_opened_is_named_in_the_report():
     """The engine ignored everything outside .pdf/.dxf/.sldXXX without a word. An estimator

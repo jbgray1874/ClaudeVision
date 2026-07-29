@@ -465,7 +465,24 @@ def main() -> None:
             # globs the job folder and a "DXF" subfolder only — it does not recurse — so a
             # converted file written anywhere else would be produced and then never read,
             # which looks exactly like the feature working.
+            #
+            # HELD TO THE SAME STANDARD AS A SUPPLIED FILE. attach_dxf_paths deliberately
+            # skips the flat-part filter, because a human naming a file has already made that
+            # judgement. Nobody made it here: a job folder's DWGs are whatever the customer
+            # sent, and a converted GA sheet handed over unfiltered would be read as a part's
+            # flat pattern. Discovery's own predicate decides, so a converted file is judged
+            # exactly as the same file would be if it had arrived as a DXF.
             _converted_dxf = [Path(p) for p in (_cad_conv.get("converted_paths") or [])]
+            try:
+                from drawing_job_merge import is_flat_part_dxf
+                _rejected = [p for p in _converted_dxf if not is_flat_part_dxf(p)]
+                _converted_dxf = [p for p in _converted_dxf if is_flat_part_dxf(p)]
+                if _rejected:
+                    print(f"   [cad] {len(_rejected)} converted DXF(s) are not part flat "
+                          f"patterns (GA sheets or no part number in the name) and were not "
+                          f"used for geometry: {', '.join(p.name for p in _rejected[:4])}")
+            except ImportError:
+                pass
             summary, output_paths = scan_folder_job(
                 job_folder,
                 job_files,
