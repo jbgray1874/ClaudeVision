@@ -2986,6 +2986,97 @@ def test_a_price_nobody_committed_to_is_reported_not_assumed():
     ok(r["ok"], "a warning does not make the job wrong")
 
 
+def test_firmness_severity_follows_intent_and_coverage():
+    """A single global constant flipped when the first supplier feed lands would claim every
+    other material was integrated too. Firm pricing arrives one supplier at a time.
+
+        indicative                          -> warning, whatever the source
+        firm intent, class has a connector  -> BLOCKING: the price is missing or stale
+        firm intent, class has none         -> BLOCKING: nothing could have been firm
+
+    Those are different failures and an estimator can act on each one differently."""
+    from invariants import check_job
+    import config
+
+    def _steel_line(pn, src):
+        return {"part_number": pn, "normalized_material": "MILD_STEEL",
+                "cost_breakdown": {"system_cost": {"applied_to_total": True, "source": {
+                    "source_name": src, "applied": True, "affects_total": True,
+                    "source_rank": 0, "selected": {"source": src, "price": 1.0}}}}}
+
+    def _job_with(intent):
+        j = _job()
+        j["quote_intent"] = intent
+        j["estimate_summary"] = {"part_estimates": [_steel_line("01M", "udef_sqlserver")]}
+        return j
+
+    codes = lambda j: [v["code"] for v in check_job(j, write_back=False)["violations"]]
+
+    ind = check_job(_job_with("indicative"), write_back=False)
+    _v = next(v for v in ind["violations"] if v["code"] == "price_not_firm")
+    eq(_v["severity"], "warning", "an indicative estimate is not lying by using a list price")
+    ok(ind["ok"], "and the job is not marked wrong")
+    ok("indicative estimate" in _v["message"], "the message says which kind of job this is")
+
+    # Firm intent, and no connector exists for sheet steel yet.
+    _saved = dict(getattr(config, "FIRM_PRICING_COVERAGE", {}) or {})
+    try:
+        firm = check_job(_job_with("firm"), write_back=False)
+        ok("no_firm_pricing_source" in [v["code"] for v in firm["violations"]],
+           "a firm quote on a class with no connector is refused for that reason")
+        ok(not firm["ok"], "and blocks")
+        _n = next(v for v in firm["violations"] if v["code"] == "no_firm_pricing_source")
+        ok("Uptonsteel" in _n["message"],
+           "naming the source that would make it firm, so the gap is actionable")
+
+        # Same job once sheet steel HAS a firm-capable connector: the complaint changes from
+        # "nothing could have been firm" to "this particular price is not".
+        config.FIRM_PRICING_COVERAGE = dict(_saved)
+        config.FIRM_PRICING_COVERAGE["sheet_steel"] = {"firm_capable": True,
+                                                       "intended_source": "Uptonsteel"}
+        covered = check_job(_job_with("firm"), write_back=False)
+        _cc = [v["code"] for v in covered["violations"]]
+        ok("no_firm_pricing_source" not in _cc, "coverage removes the not-configured refusal")
+        _p = next(v for v in covered["violations"] if v["code"] == "price_not_firm")
+        eq(_p["severity"], "blocking", "but a firm quote still blocks on an unfirm price")
+
+        # And turning steel on must not claim plastic is integrated.
+        eq((config.FIRM_PRICING_COVERAGE.get("plastic_sheet") or {}).get("firm_capable"), False,
+           "one supplier at a time — plastic is untouched by the steel switch")
+    finally:
+        config.FIRM_PRICING_COVERAGE = _saved
+
+
+def test_an_old_invoice_is_not_an_agreement():
+    """History is evidence of a completed transaction, not a commitment to repeat it. Putting
+    a validity date on an old invoice must not create an agreement that never existed — the
+    agreement REFERENCE is what does the work."""
+    import price_provenance as pp
+
+    def _hist(**kw):
+        b = {"source_name": "historical_quote_material_line", "applied": True,
+             "affects_total": True, "source_rank": 0,
+             "selected": {"source": "historical_quote_material_line", "price": 24.15}}
+        b.update(kw)
+        return b
+
+    plain = pp.price_firmness(_hist(), today="2026-07-29")
+    eq((plain["class"], plain["firm"]), (pp.PURCHASE_HISTORY, False),
+       "what we last paid is not, by itself, firm")
+
+    dated = pp.price_firmness(_hist(price_valid_to="2099-01-01"), today="2026-07-29")
+    eq(dated["firm"], False, "and a date on an invoice does not make it an agreement")
+
+    covered = pp.price_firmness(_hist(price_valid_to="2099-01-01",
+                                      quote_reference="CONTRACT-4471"), today="2026-07-29")
+    eq((covered["class"], covered["firm"]), (pp.CONTRACT, True),
+       "a purchase still covered by a live agreement IS a contract price")
+
+    lapsed = pp.price_firmness(_hist(price_valid_to="2020-01-01",
+                                     quote_reference="CONTRACT-4471"), today="2026-07-29")
+    eq(lapsed["firm"], False, "once the agreement lapses it is history again")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

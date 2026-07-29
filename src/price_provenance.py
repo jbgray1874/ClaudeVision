@@ -133,7 +133,12 @@ SOURCE_CLASS_RULES = {
     CONTRACT:         (True,  True,  True),
     ACCOUNT_FEED:     (True,  True,  True),
     SUPPLIER_QUOTE:   (True,  True,  True),
-    PURCHASE_HISTORY: (True,  True,  True),   # conditional: needs a recent purchase date
+    # WHAT WE LAST PAID IS EVIDENCE, NOT A COMMITMENT. An invoice records a transaction that
+    # completed under conditions that may no longer hold; nobody has undertaken to repeat it.
+    # Putting a validity date on an old invoice does not create an agreement, so history is
+    # never firm on its own — it is promoted to `contract` below only when it cites an
+    # agreement that is still in force.
+    PURCHASE_HISTORY: (True,  False, False),
     CATALOGUE:        (True,  False, False),  # reproducible, never firm on its own
     COMMODITY_INDEX:  (True,  False, False),
     AI_ESTIMATE:      (False, False, False),
@@ -203,6 +208,17 @@ def price_firmness(block: Dict[str, Any], today: Any = None) -> Dict[str, Any]:
                               source_type=block.get("source_type"),
                               pricing_mode=block.get("pricing_mode"),
                               priced=_sel.get("price") is not None or bool(block.get("applied")))
+    # A purchase still covered by an unexpired agreement IS a contract price — the invoice is
+    # just where we happen to have read it. The agreement reference is what does the work:
+    # without it there is nothing anyone has undertaken to honour, and a date alone would
+    # turn every old invoice firm.
+    if cls == PURCHASE_HISTORY:
+        _ref = (block.get("quote_reference") or block.get("contract_id")
+                or block.get("agreement_ref"))
+        _valid = block.get("price_valid_to") or block.get("valid_to")
+        if _ref and _valid and not (today and str(_valid) < str(today)):
+            cls = CONTRACT
+
     reproducible, firm, needs_validity = SOURCE_CLASS_RULES[cls]
     reason = ""
     if not reproducible:
@@ -245,6 +261,73 @@ def _looks_like_price_stamp(node: Dict[str, Any]) -> bool:
     here to stop.
     """
     return "source_name" in node and ("applied" in node or "source_rank" in node)
+
+
+# What a priced line is made of, for deciding which supplier connector would own it. Keyed
+# on material family and stock form, never on a part code, so a job nobody has seen yet is
+# routed by the same rule.
+MATERIAL_CLASS_TOKENS = (
+    ("plastic_sheet", ("HIPS", "ABS", "PETG", "ACRYLIC", "PERSPEX", "HDPE", "POLYPROP",
+                       "POLYCARB", "PVC", "FOAMEX")),
+    ("timber_board", ("MDF", "PLYWOOD", "PLY", "TIMBER", "CHIPBOARD", "OSB", "HARDBOARD",
+                      "OAK", "PINE", "BIRCH", "BEECH")),
+    ("sheet_steel", ("MILD_STEEL", "MILD STEEL", "CR4", "GALV", "ZINTEC", "ALUMINISED",
+                     "STAINLESS", "ALUMINIUM", "STEEL")),
+)
+
+
+def material_class_of(context: Dict[str, Any]) -> str:
+    """Which supplier class would own this line: sheet_steel, plastic_sheet, timber_board,
+    fasteners_mro, or other.
+
+    A bought-in with no material is a purchased component — fasteners, cable, knobs — which
+    is a different supplier from any of the sheet materials, so it is its own class rather
+    than an unknown.
+    """
+    blob = " ".join(str(context.get(k) or "") for k in
+                    ("normalized_material", "material", "stock_form")).upper()
+    for name, tokens in MATERIAL_CLASS_TOKENS:
+        if any(t in blob for t in tokens):
+            return name
+    if context.get("bought_in") or "BOUGHT" in blob:
+        return "fasteners_mro"
+    return "other"
+
+
+def iter_price_stamps_with_context(
+    node: Any, _path: str = "", _ctx: Optional[Dict[str, Any]] = None,
+) -> Iterator[Tuple[str, Dict[str, Any], Dict[str, Any]]]:
+    """As iter_price_stamps, carrying what the nearest enclosing record says about the part.
+
+    The owner variant returns a name, which is enough to report a line and not enough to
+    decide which supplier would price it. Severity now depends on whether a firm-capable
+    connector exists for the line's MATERIAL, so the material has to travel with the stamp.
+    """
+    if isinstance(node, dict):
+        ctx = dict(_ctx or {})
+        for key in ("part_number", "matched_part_code", "part_code", "description",
+                    "normalized_material", "material", "stock_form"):
+            v = node.get(key)
+            if isinstance(v, str) and v.strip():
+                ctx[key] = v.strip()          # the nearest enclosing record wins
+        _pn = ctx.get("part_number") or ctx.get("matched_part_code") or ctx.get("part_code")
+        if _pn and str(_pn).upper().startswith("BI-"):
+            ctx["bought_in"] = True
+        if node.get("schema") == PRICE_SOURCE_SCHEMA or _looks_like_price_stamp(node):
+            yield _path, node, ctx
+        for key, value in node.items():
+            if isinstance(value, dict):
+                if "applied_to_total" in node and "affects_total" not in value:
+                    value = dict(value, affects_total=bool(node.get("applied_to_total")))
+                yield from iter_price_stamps_with_context(
+                    value, f"{_path}.{key}" if _path else str(key), ctx)
+            elif isinstance(value, list):
+                yield from iter_price_stamps_with_context(
+                    value, f"{_path}.{key}" if _path else str(key), ctx)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            if isinstance(value, (dict, list)):
+                yield from iter_price_stamps_with_context(value, f"{_path}[{index}]", _ctx)
 
 
 def iter_price_stamps_with_owner(

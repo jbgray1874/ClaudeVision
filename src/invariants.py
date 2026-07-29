@@ -782,42 +782,86 @@ def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     an agreed rate, a live account feed, a written quotation, or a recent purchase is
     something to stand behind — and each of those only while it is unexpired.
 
-    A WARNING, DELIBERATELY, AND ONLY FOR NOW. No price source in this engine carries a
-    validity date yet, so today every line resolves to "firm status cannot be established"
-    and blocking would fail every job on every run — which is how a gate becomes noise that
-    people learn to click past. It reports what is missing per line instead, so the gap is
-    visible and countable. The day the first supplier feed lands carrying price_valid_to,
-    this becomes BLOCKING and the severity below is the only edit needed.
+    SEVERITY FOLLOWS INTENT AND COVERAGE, NOT A GLOBAL SWITCH. An estimate produced to inform
+    is not lying when it uses a list price, so on an indicative job this is a warning. A job
+    someone intends to send as a firm price is different, and there the answer depends on
+    whether a firm-capable source for that MATERIAL exists at all:
+
+        indicative                                  -> warning, always
+        firm intent, class has a connector          -> BLOCKING: the price is missing or stale
+        firm intent, class has no connector         -> BLOCKING: nothing could have been firm
+
+    Those are different failures and deserve different sentences. Firm pricing arrives one
+    supplier at a time, so a single constant flipped when the first feed lands would claim
+    every other material was integrated too.
     """
     if not isinstance(summary, dict):
         return _unevaluated("price_firmness", "This job is not a readable structure.")
-    stamps = list(price_provenance.iter_price_stamps_with_owner(summary))
+    stamps = list(price_provenance.iter_price_stamps_with_context(summary))
     if not stamps:
         return _unevaluated("price_firmness", "No priced lines carrying a stamp were found.")
+
+    try:
+        import config as _cfg
+        coverage = dict(getattr(_cfg, "FIRM_PRICING_COVERAGE", {}) or {})
+        default_intent = str(getattr(_cfg, "DEFAULT_QUOTE_INTENT", "indicative"))
+    except Exception:
+        coverage, default_intent = {}, "indicative"
+    intent = str(summary.get("quote_intent") or _node(summary, "estimate_summary").get("quote_intent")
+                 or default_intent).strip().lower()
+    firm_intent = intent == "firm"
+
     import datetime
     today = datetime.date.today().isoformat()
-    not_firm: List[Dict[str, Any]] = []
-    for _path, block, owner in stamps:
+    uncovered: List[Dict[str, Any]] = []
+    unfirm: List[Dict[str, Any]] = []
+    for _path, block, ctx in stamps:
         if not price_provenance.stamp_affects_total(block):
             continue
         verdict = price_provenance.price_firmness(block, today=today)
         if verdict.get("firm"):
             continue
-        not_firm.append({"part": owner, "class": verdict.get("class"),
-                         "reason": verdict.get("reason"), "where": _path})
-    if not not_firm:
-        return []
-    by_reason: Dict[str, int] = {}
-    for n in not_firm:
-        by_reason[str(n["reason"])] = by_reason.get(str(n["reason"]), 0) + 1
-    return [_violation(
-        "price_not_firm", WARNING,
-        f"{len(not_firm)} applied price(s) are not something to stand behind: "
-        + "; ".join(f"{v} because {k}" for k, v in sorted(by_reason.items(), key=lambda kv: -kv[1]))
-        + ". Reproducible is not the same as firm — a list price repeats perfectly and "
-          "commits nobody. A firm quote needs an agreed rate, a live account feed, a written "
-          "quotation or a recent purchase, each of them unexpired.",
-        lines=not_firm[:12], count=len(not_firm), reasons=by_reason)]
+        mclass = price_provenance.material_class_of(ctx)
+        line = {"part": ctx.get("part_number") or ctx.get("description"),
+                "material_class": mclass, "class": verdict.get("class"),
+                "reason": verdict.get("reason"), "where": _path}
+        if firm_intent and not (coverage.get(mclass) or {}).get("firm_capable"):
+            line["intended_source"] = (coverage.get(mclass) or {}).get("intended_source")
+            uncovered.append(line)
+        else:
+            unfirm.append(line)
+
+    def _by_reason(rows):
+        out: Dict[str, int] = {}
+        for r in rows:
+            out[str(r["reason"])] = out.get(str(r["reason"]), 0) + 1
+        return out
+
+    out: List[Dict[str, Any]] = []
+    if uncovered:
+        _classes = sorted({str(r["material_class"]) for r in uncovered})
+        _want = sorted({str(r.get("intended_source")) for r in uncovered if r.get("intended_source")})
+        out.append(_violation(
+            "no_firm_pricing_source", BLOCKING,
+            f"This job is marked as a firm quote, but {len(uncovered)} applied price(s) are "
+            f"in material class(es) with no firm-capable pricing source configured: "
+            f"{', '.join(_classes)}"
+            + (f" — intended source: {', '.join(_want)}" if _want else "")
+            + ". Nothing on those lines could have been firm, whatever the price says.",
+            lines=uncovered[:12], count=len(uncovered), material_classes=_classes))
+    if unfirm:
+        by_reason = _by_reason(unfirm)
+        out.append(_violation(
+            "price_not_firm", BLOCKING if firm_intent else WARNING,
+            f"{len(unfirm)} applied price(s) are not something to stand behind: "
+            + "; ".join(f"{v} because {k}" for k, v in sorted(by_reason.items(), key=lambda kv: -kv[1]))
+            + ". Reproducible is not the same as firm — a list price repeats perfectly and "
+              "commits nobody. A firm quote needs an agreed rate, a live account feed, a "
+              "written quotation, or a purchase still covered by an unexpired agreement."
+            + ("" if firm_intent else " This job is an indicative estimate, so the figures "
+                                      "stand; they are simply not a quote."),
+            lines=unfirm[:12], count=len(unfirm), reasons=by_reason, quote_intent=intent))
+    return out
 
 
 def check_a_measured_plate_is_not_charged_for_folding(summary: Any) -> List[Dict[str, Any]]:

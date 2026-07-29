@@ -609,6 +609,32 @@ HISTORY_CSV_HEADERS = [
     "text_snippet",
 ]
 
+# WHICH MATERIAL CLASSES HAVE A FIRM-CAPABLE PRICING SOURCE YET.
+#
+# Firm pricing arrives one supplier at a time, not all at once, so this is a per-class switch
+# rather than a single global flag. Turning sheet steel on when the Uptonsteel feed lands must
+# not imply that plastic, timber and MRO are also integrated.
+#
+# Set a class True once a connector for it can supply an agreed rate or account feed carrying
+# a validity date. Until then a firm customer quote on that class is refused with "no firm
+# pricing source configured", which is the truth rather than a shrug.
+#
+# Classes come from price_provenance.material_class_of, which keys on material family and
+# stock form — never on a part code — so a job nobody has seen yet is routed by the same rule.
+FIRM_PRICING_COVERAGE = {
+    "sheet_steel":   {"firm_capable": False, "intended_source": "Uptonsteel account feed"},
+    "plastic_sheet": {"firm_capable": False, "intended_source": "Eagle Plastics account feed"},
+    "timber_board":  {"firm_capable": False, "intended_source": "Cashmores account feed"},
+    "fasteners_mro": {"firm_capable": False, "intended_source": "RS eProcurement / Farnell"},
+    "other":         {"firm_capable": False, "intended_source": "UDEF contract price"},
+}
+
+# Whether an estimate is being produced to inform, or to be sent to a customer as a price we
+# will honour. Nothing is firm by default: a job becomes firm-intent only when someone says so.
+QUOTE_INTENT_INDICATIVE = "indicative"
+QUOTE_INTENT_FIRM = "firm"
+DEFAULT_QUOTE_INTENT = QUOTE_INTENT_INDICATIVE
+
 PRICE_SOURCE_PRIORITY = [
     "udef_sqlserver",
     "sqlserver",
