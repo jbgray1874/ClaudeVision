@@ -3208,6 +3208,19 @@ def test_dwg_flat_patterns_are_converted_not_ignored():
                                          runner=lambda cmd: 0)
         ok("no DXF" in _empty["reason"], f"reported, not silent: {_empty['reason']}")
 
+    # CONVERTED IS NOT THE SAME AS READ. Folder discovery globs the job folder and a "DXF"
+    # subfolder only — it does not recurse — so a converted file written anywhere else is
+    # produced and then never opened, which looks exactly like the feature working. main.py
+    # hands them over explicitly instead of hoping they are found.
+    _main = open(__import__("main").__file__, encoding="utf-8").read()
+    _seg = _main[_main.index("_cad_conv, _cad_inv = {}, {}"):]
+    _seg = _seg[:_seg.index("scan_label = job_folder.name")]
+    ok("convert_dwgs(job_folder)" in _seg, "conversion runs before the folder is scanned")
+    ok("attach_dxf_paths=_converted_dxf" in _seg,
+       "and the DXFs it produced are handed to the scan, not left to discovery")
+    ok('summary["cad_inputs"] = _cad_inv' in _seg,
+       "with the inventory stamped so the report and the gate can read it")
+
 
 def test_a_file_nobody_opened_is_named_in_the_report():
     """The engine ignored everything outside .pdf/.dxf/.sldXXX without a word. An estimator

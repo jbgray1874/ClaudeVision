@@ -436,12 +436,49 @@ def main() -> None:
         reset_connectors()
         if job_folder is not None:
             print(f"[JOB] {job_folder.name} ({len(job_files)} PDF(s))")
+            # BEFORE ANYTHING READS THE FOLDER, MAKE WHAT WE CAN READABLE. A DWG is a DXF in
+            # a different container — the same measured outline — and it was being ignored,
+            # so those parts were sized from drawing text while their geometry sat unopened.
+            # Converting first means the DXFs it produces are discovered by the ordinary
+            # scan, with no special path for them afterwards.
+            #
+            # Never allowed to stop a job: a folder with no DWGs, no converter installed, or
+            # a converter that fails, all end the same way — the estimate runs exactly as it
+            # does today and the report says what was not used.
+            _cad_conv, _cad_inv = {}, {}
+            try:
+                import cad_inputs
+                _cad_conv = cad_inputs.convert_dwgs(job_folder)
+                if _cad_conv.get("converted"):
+                    print(f"   [cad] converted {len(_cad_conv['converted'])} DWG(s) to DXF")
+                if _cad_conv.get("reason"):
+                    print(f"   [cad] {_cad_conv['reason']}")
+                _cad_inv = cad_inputs.inventory(
+                    job_folder, converted=_cad_conv.get("converted_paths") or [])
+                if _cad_inv.get("unread"):
+                    print(f"   [cad] {len(_cad_inv['unread'])} file(s) present and not read: "
+                          f"{', '.join(_cad_inv['unread'][:6])}")
+            except Exception as _exc:
+                print(f"   [cad] input inventory skipped ({_exc})")
+
+            # Handed over explicitly rather than left to be discovered. Folder discovery
+            # globs the job folder and a "DXF" subfolder only — it does not recurse — so a
+            # converted file written anywhere else would be produced and then never read,
+            # which looks exactly like the feature working.
+            _converted_dxf = [Path(p) for p in (_cad_conv.get("converted_paths") or [])]
             summary, output_paths = scan_folder_job(
                 job_folder,
                 job_files,
-                attach_dxf_paths=None,
+                attach_dxf_paths=_converted_dxf or None,
                 auto_discover_dxf=auto_discover_dxf,
             )
+            # Stamped onto the job so the report, the quote gate and the re-check CLI all
+            # read the same record of what was supplied and what was done with it.
+            if isinstance(summary, dict):
+                if _cad_inv:
+                    summary["cad_inputs"] = _cad_inv
+                if _cad_conv.get("found"):
+                    summary["dwg_conversion"] = _cad_conv
             scan_label = job_folder.name
         else:
             drawing_path = job_files[0]
