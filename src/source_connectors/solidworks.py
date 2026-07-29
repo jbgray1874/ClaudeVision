@@ -352,31 +352,129 @@ def native_extract_for_job(
     - folder given               -> read <folder>/_sw_native_extract.json; if absent and
                                      run=True, invoke the analyser (needs SolidWorks) then read.
     Returns a NativeJob (found=False if nothing native is available — the caller then
-    falls back cleanly to the PDF/DXF path)."""
+    falls back cleanly to the PDF/DXF path).
+
+    FRESHNESS. An extract is a photograph of the models at the moment it was taken. Reading
+    one without checking it still describes the files on disk is how a job gets costed from
+    last month's geometry with nothing on screen to say so — the same silence the invariant
+    layer exists to break. `native_files_state` fingerprints the native files; a mismatch
+    does not discard the extract (it is still the best evidence available) but marks it
+    STALE, which the estimate must carry through as provisional."""
     jp: Optional[Path] = Path(json_path) if json_path else None
     if jp is None and folder is not None:
         jp = Path(folder) / EXTRACT_FILENAME
 
-    if jp is not None and not jp.exists() and run and folder is not None:
-        _run_analyser(folder, analyser=analyser, python_exe=python_exe)
+    _run_error = None
+    if jp is not None and run and folder is not None and _should_run(jp, folder):
+        _run_error = _run_analyser(folder, analyser=analyser, python_exe=python_exe)
 
     records = load_native_extract(jp) if jp else []
     job = normalize_native_extract(records)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
+
+    if folder is not None:
+        _state = native_files_state(folder)
+        job.meta["native_files_present"] = _state["count"]
+        job.meta["native_files_fingerprint"] = _state["fingerprint"]
+        _recorded = None
+        if jp is not None and jp.exists():
+            try:
+                _recorded = json.loads(jp.read_text(encoding="utf-8"))
+                _recorded = (_recorded.get("_manifest") or {}).get("native_files_fingerprint") \
+                    if isinstance(_recorded, dict) else None
+            except Exception:
+                _recorded = None
+            # A list-shaped extract (the analyser's own format) carries no manifest yet, so
+            # fall back to comparing modification times: any native file newer than the
+            # extract means the extract predates a change.
+            if _recorded is None:
+                job.meta["extract_stale"] = _state["newest_mtime"] > jp.stat().st_mtime
+            else:
+                job.meta["extract_stale"] = (_recorded != _state["fingerprint"])
+        # NATIVE MODELS PRESENT BUT NO EXTRACT. The strongest source in the building is
+        # sitting in the folder unread, and until now that was indistinguishable from a job
+        # that simply has no models.
+        if _state["count"] and not records:
+            job.meta["native_present_but_unread"] = True
+            job.meta["native_unread_reason"] = _run_error or (
+                "native models are in the job folder but no extract has been generated. "
+                "Run tools/solidworks/sw_native_analyse.py on a machine with SolidWorks")
+    if _run_error:
+        job.meta["analyser_error"] = _run_error
     return job
 
 
+# Native model files. Drawings are included in the fingerprint because a released .SLDDRW
+# carries BOM tables and callouts the analyser reads.
+_NATIVE_EXTS = (".sldprt", ".sldasm", ".slddrw")
+
+
+def native_files_state(folder: str | Path) -> Dict[str, Any]:
+    """Fingerprint the native files in a job folder: how many, and their identity.
+
+    Size+mtime rather than a content hash — a hash of a folder of 80MB assemblies costs
+    seconds per run and buys nothing here, because the question is only "have these files
+    changed since the extract was taken", not "are they byte-identical to a known good"."""
+    out: Dict[str, Any] = {"count": 0, "fingerprint": "", "newest_mtime": 0.0, "files": []}
+    try:
+        root = Path(folder)
+        if not root.exists():
+            return out
+        found = []
+        for p in sorted(root.rglob("*")):
+            if p.is_file() and p.suffix.lower() in _NATIVE_EXTS:
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                found.append((p.name.lower(), st.st_size, int(st.st_mtime)))
+                out["newest_mtime"] = max(out["newest_mtime"], st.st_mtime)
+        out["count"] = len(found)
+        out["files"] = [f[0] for f in found]
+        if found:
+            import hashlib
+            basis = "|".join(f"{n}:{s}:{m}" for n, s, m in found)
+            out["fingerprint"] = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        pass
+    return out
+
+
+def _should_run(extract_path: Path, folder: str | Path) -> bool:
+    """Run the analyser when there is no extract, or the one we have predates the models."""
+    if not extract_path.exists():
+        return True
+    try:
+        return native_files_state(folder)["newest_mtime"] > extract_path.stat().st_mtime
+    except Exception:
+        return False
+
+
 def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
-                  python_exe: Optional[str] = None) -> None:
-    """Invoke sw_native_analyse.py on a folder (Windows + SolidWorks only). Best-effort:
-    failures leave no JSON and the caller falls back to PDF/DXF."""
+                  python_exe: Optional[str] = None) -> Optional[str]:
+    """Invoke sw_native_analyse.py on a folder (Windows + SolidWorks only).
+
+    Returns None on success, or a description of the failure. It used to swallow every
+    exception and return nothing, so an analyser that could not start — no SolidWorks, no
+    licence, a bad path — was indistinguishable from a job with no models: the run simply
+    continued on PDF+DXF and said nothing. The caller records the reason."""
     if analyser is None:
         analyser = Path(__file__).resolve().parents[2] / "tools" / "solidworks" / "sw_native_analyse.py"
     exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or "python"
     try:
-        subprocess.run([exe, str(analyser), str(folder)], check=False, timeout=1800)
-    except Exception:
-        pass
+        r = subprocess.run([exe, str(analyser), str(folder)], check=False, timeout=1800,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            _tail = (r.stderr or r.stdout or "").strip().splitlines()
+            return (f"the SolidWorks analyser exited {r.returncode}"
+                    + (f": {_tail[-1][:300]}" if _tail else ""))
+        return None
+    except FileNotFoundError:
+        return f"could not start the SolidWorks analyser — python executable {exe!r} not found"
+    except subprocess.TimeoutExpired:
+        return "the SolidWorks analyser timed out after 30 minutes"
+    except Exception as exc:
+        return f"the SolidWorks analyser could not be run: {exc}"
 
 
 # ── material normalisation ───────────────────────────────────────────────────
@@ -676,10 +774,13 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             # confirmed. Agreement is evidence: it upgrades provenance. The flag is gated on
             # the return, which is true only when the value actually changed.
             if _q > 0:
+                # The counter belongs INSIDE the success branch. Outside it, a quantity the
+                # resolver refused — because an estimator had already corrected it — was
+                # still counted as applied, so the run reported work it did not do.
                 if _apply_field(part, "quantity", _q, SOURCE_NAME):
                     flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
                                  f"SolidWorks assembly BOM (component count, all levels)")
-                out["qty"] += 1
+                    out["qty"] += 1
 
         # ── NOT IN THE ASSEMBLY BOM ──────────────────────────────────────────────
         # A modelled part that appears in no assembly is not a component of the product:
@@ -751,11 +852,21 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                                      f"SolidWorks model ('{nat.material}') — wrong material FAMILY")
                         out["material"] += 1
                 else:
-                    # Same family, different grade. The printed title block is what the
-                    # shop buys to, so keep it — but surface the disagreement.
-                    flags.append(f"material check: drawing '{cur_mat}' vs SolidWorks "
-                                 f"'{new_mat}' ('{nat.material}') — kept the drawing value")
-                    out["material_conflict"] += 1
+                    # SAME FAMILY, DIFFERENT GRADE — still submitted. This branch used to
+                    # decide the outcome itself and never call the resolver at all, on the
+                    # reasoning that the printed title block is what the shop buys to. That
+                    # reasoning is a rank judgement, and rank is not this function's to make:
+                    # it kept the drawing value even against an estimator's own correction,
+                    # and it left the datum carrying the weaker source so a later pass could
+                    # still move it. Submit; let apply_field decide and record the conflict.
+                    if _apply_field(part, "normalized_material", new_mat, SOURCE_NAME):
+                        flags.append(f"material '{cur_mat}' -> '{new_mat}' from the SolidWorks "
+                                     f"model ('{nat.material}') — same family, different grade")
+                        out["material"] += 1
+                    else:
+                        flags.append(f"material check: drawing '{cur_mat}' vs SolidWorks "
+                                     f"'{new_mat}' ('{nat.material}') — kept the drawing value")
+                        out["material_conflict"] += 1
 
         # ── GEOMETRY: the sheet-metal cut list ───────────────────────────────────
         if nat.has_flat():
@@ -848,7 +959,13 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
                     flags.append(f"thickness {thk:g}mm from the SolidWorks sheet-metal cut list")
                     out["thickness"] += 1
-            elif not _dxf_backed(part):
+            else:
+                # DIFFERING GAUGE — submitted whether or not the part is DXF-backed. This
+                # branch used to be guarded by `not _dxf_backed(part)`, so a part with a DXF
+                # never even offered the model's gauge. That is a rank judgement made
+                # locally, and a wrong one: a DXF filename thickness is a filename, while the
+                # cut list is the gauge the part is modelled in. The resolver ranks them.
+                #
                 # The model's sheet thickness is the gauge the part is made from; a PDF
                 # thickness is often lifted from a tolerance table. Model wins, and says so.
                 if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):

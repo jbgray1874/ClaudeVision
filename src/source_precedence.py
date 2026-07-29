@@ -260,11 +260,26 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
     # displace a figure the model had independently confirmed. Submitting agreement is how
     # the strong source's rank actually attaches to the value.
     if _cur is not MISSING and _same_value(_cur, value):
-        if rank(source) > rank(_cur_src):
-            node = _walk(part, path, create=True)
-            if node is not None:
+        _new_rank, _cur_rank = rank(source), rank(_cur_src)
+        node = _walk(part, path, create=True)
+        if node is not None:
+            if _new_rank > _cur_rank:
+                # SOURCE AND CONFIDENCE MOVE TOGETHER. Updating the source while leaving the
+                # weaker source's confidence behind produces a datum labelled with a strong
+                # source and scored with a weak one — a record that reads as better evidence
+                # than anything actually supplied. When the stronger source gives no
+                # confidence, the stale figure is cleared rather than inherited.
                 node[key] = source
                 if confidence is not None:
+                    node[f"{leaf}_confidence"] = confidence
+                else:
+                    node.pop(f"{leaf}_confidence", None)
+            elif _new_rank == _cur_rank and confidence is not None:
+                # Corroboration at equal rank. Two independent readings agreeing is a
+                # genuine strengthening even though neither outranks the other, so the
+                # higher confidence stands. The source is unchanged: nothing was replaced.
+                _prev = confidence_of(part, field)
+                if _prev is None or confidence > _prev:
                     node[f"{leaf}_confidence"] = confidence
         # The value did not change, so this is not a change to report. Callers gate their
         # audit messages on the return, and "SolidWorks replaced X with X" is noise at best

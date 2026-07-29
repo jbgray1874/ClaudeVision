@@ -934,6 +934,154 @@ def test_the_knowledge_base_reaches_the_resolver_at_the_call_site():
         LE.db, LE._DB_AVAILABLE = _orig_db, _orig_avail
 
 
+def test_every_native_disagreement_reaches_the_resolver():
+    """Three branches decided the outcome themselves instead of submitting the observation.
+    Same-family material ("keep the drawing value"), a differing thickness on a DXF-backed
+    part, and a quantity counter that incremented whether or not the write was accepted.
+    Each is a rank judgement made locally, and rank is not a connector's to decide."""
+    from source_connectors.solidworks import (normalize_native_extract,
+                                              apply_native_to_pre_estimate)
+    recs = [
+        {"title": "ASM-9", "doctype": 2, "bom": [{"part_number": "BBB-01M", "qty": 3.0}]},
+        {"title": "BBB-01M", "doctype": 1, "route_signals": {
+            "material": "AISI 304", "is_sheet_metal": True, "bend_count": 1,
+            "flat_length_mm": 120.0, "flat_width_mm": 60.0, "thickness_mm": 2.0,
+            "bbox_mm": [80.0, 60.0, 25.0]}},
+    ]
+    job = normalize_native_extract(recs)
+    # Same FAMILY, different grade: the drawing says mild steel, the model says stainless.
+    # (Different families in the engine's map, but both metals — the old branch kept the
+    # drawing value for anything not crossing metal/non-metal.)
+    parts = [{"part_number": "BBB-01M",
+              "normalized_material": "MILD_STEEL", "material_source": "llm_extract",
+              "normalized_thickness_mm": 3.0, "thickness_source": "llm_extract",
+              "dxf_source_file": "BBB-01M_3mm.dxf", "dxf_measured_outline": True,
+              "blank_length_mm": 120.0, "blank_width_mm": 60.0}]
+    apply_native_to_pre_estimate(parts, job)
+    p = parts[0]
+    eq(p["normalized_material"], "STAINLESS_STEEL",
+       "the model must beat a rank-40 reading even within the same broad family")
+    eq(p["material_source"], "solidworks_api", "and be attributed")
+    eq(p["normalized_thickness_mm"], 2.0,
+       "a DXF-backed part must still receive the model's gauge — a DXF filename is a filename")
+    eq(p["thickness_source"], "solidworks_api", "and be attributed")
+
+    # A rank-100 correction must survive all three, and nothing may claim it changed.
+    parts2 = [{"part_number": "BBB-01M",
+               "quantity": 1, "quantity_source": "estimator_confirmed",
+               "normalized_material": "ALUMINIUM", "material_source": "estimator_confirmed"}]
+    counts = apply_native_to_pre_estimate(parts2, job)
+    eq(parts2[0]["quantity"], 1, "an estimator's quantity stands against the model")
+    eq(parts2[0]["normalized_material"], "ALUMINIUM", "and so does their material")
+    eq(counts["qty"], 0, "a rejected write must not be counted as applied")
+    eq(counts["material"], 0, "nor a rejected material")
+
+
+def test_source_and_confidence_move_together():
+    """Updating the source while leaving the weaker source's confidence behind produces a
+    datum labelled with strong evidence and scored with weak — a record that reads as better
+    than anything actually supplied."""
+    from source_precedence import apply_field, source_of, confidence_of
+    p = {}
+    apply_field(p, "normalized_material", "MILD_STEEL", "llm_extract", confidence=0.4)
+    # Stronger source agrees but offers no confidence: the stale 0.4 must not be inherited.
+    apply_field(p, "normalized_material", "MILD_STEEL", "solidworks_api")
+    eq(source_of(p, "normalized_material"), "solidworks_api", "provenance upgraded")
+    eq(confidence_of(p, "normalized_material"), None,
+       "and the weaker source's confidence cleared, not left attached to a stronger name")
+    # Corroboration at equal rank raises confidence without changing the source.
+    q = {}
+    apply_field(q, "normalized_material", "MDF", "drawing_deterministic", confidence=0.5)
+    apply_field(q, "normalized_material", "MDF", "title_block", confidence=0.8)
+    eq(confidence_of(q, "normalized_material"), 0.8,
+       "two independent readings agreeing is a real strengthening")
+    eq(source_of(q, "normalized_material"), "drawing_deterministic",
+       "but nothing was replaced, so the source is unchanged")
+
+
+def test_the_pipeline_actually_runs_the_analyser():
+    """Source-level, because the scan path cannot be exercised without a job folder — and a
+    behavioural fixture that stops short of the call site is exactly what let this sit.
+
+    native_extract_for_job defaults to run=False, and file_scan called it without the
+    argument, so the pipeline CONSUMED an extract but never produced one. On a machine with
+    SolidWorks the strongest source available was used or skipped depending on whether
+    somebody had remembered to run a separate script."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call)
+             and getattr(n.func, "id", getattr(n.func, "attr", "")) == "native_extract_for_job"]
+    ok(calls, "file_scan must call native_extract_for_job at all")
+    for c in calls:
+        kw = {k.arg: k.value for k in c.keywords}
+        ok("run" in kw, f"line {c.lineno}: the call must pass run= explicitly, not inherit "
+                        f"the run=False default")
+        ok(not (isinstance(kw.get("run"), ast.Constant) and kw["run"].value is False),
+           f"line {c.lineno}: run=False hard-coded — the analyser would never generate an "
+           f"extract, only consume one somebody else made")
+
+
+def test_native_models_present_but_unread_is_loud():
+    """The pipeline consumed an extract only if one already existed, so on a machine WITH
+    SolidWorks the strongest source available was used or skipped depending on whether a
+    person had remembered to run a separate script — and skipping it looked exactly like a
+    job with no models at all."""
+    from invariants import check_job
+    j = _job()
+    j["solidworks_native"] = {"found": False, "native_present_but_unread": True,
+                              "native_files_present": 7, "reason": "no extract generated"}
+    r = check_job(j, write_back=False)
+    ok("native_models_not_read" in [v["code"] for v in r["violations"]],
+       "models in the folder but unread must block")
+    ok(not r["may_quote_firm"], "and stop the price being firm")
+
+    # Stale is its own fact: an extract taken before the design changed.
+    j2 = _job()
+    j2["solidworks_native"] = {"extract_stale": True, "native_files_present": 7}
+    r2 = check_job(j2, write_back=False)
+    ok("native_extract_stale" in [v["code"] for v in r2["violations"]],
+       "an extract older than the models must block")
+    # A job with no models at all is not a violation — most jobs are drawings only.
+    ok(check_job(_job(), write_back=False)["may_quote_firm"],
+       "a job with no native models is unaffected")
+
+
+def test_the_analyser_reports_why_it_could_not_run():
+    """Failures were swallowed whole, so an analyser that could not start — no SolidWorks, no
+    licence, a bad path — was indistinguishable from a job with no models."""
+    from source_connectors.solidworks import _run_analyser
+    err = _run_analyser("/nonexistent/job/folder",
+                        analyser="/nonexistent/analyser.py",
+                        python_exe="definitely-not-a-python-executable")
+    ok(err, "a failure to launch must return a reason, not None")
+    ok("analyser" in str(err).lower(), f"and the reason must name what failed: {err!r}")
+
+
+def test_native_files_are_fingerprinted_for_freshness():
+    """An extract is a photograph of the models at the moment it was taken. Reading one
+    without checking it still describes the files on disk is how a job gets costed from last
+    month's geometry with nothing on screen to say so."""
+    import tempfile
+    from pathlib import Path
+    from source_connectors.solidworks import native_files_state
+
+    d = Path(tempfile.mkdtemp())
+    eq(native_files_state(d)["count"], 0, "an empty folder has no native files")
+    (d / "a.SLDPRT").write_bytes(b"x" * 10)
+    (d / "b.sldasm").write_bytes(b"y" * 20)
+    (d / "c.pdf").write_bytes(b"z")              # not a native model
+    st = native_files_state(d)
+    eq(st["count"], 2, "parts and assemblies counted, drawings-and-PDFs distinguished")
+    ok(st["fingerprint"], "and fingerprinted")
+    before = st["fingerprint"]
+    (d / "a.SLDPRT").write_bytes(b"x" * 999)     # the design changed
+    ok(native_files_state(d)["fingerprint"] != before,
+       "a changed model must change the fingerprint, or staleness cannot be detected")
+
+
 def test_late_passes_cannot_clobber_the_assembly_quantity():
     """The PDF passes run late and used to write straight to the record. part_index treated a
     quantity of ONE as an empty slot, so a part the model says there is one of was open to

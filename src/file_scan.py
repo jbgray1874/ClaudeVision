@@ -1902,8 +1902,31 @@ def _finalize_scan_summary(
             # none. Fall back to the PDF's own directory, which is where the extract
             # naturally sits — otherwise the file is present and silently ignored.
             _sw_folder = job_folder or (Path(pdf_path).parent if pdf_path else None)
-            _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json) \
+            # RUN IT, don't just hope somebody did. The pipeline consumed an extract only
+            # if one already existed, so on a machine WITH SolidWorks the strongest source
+            # available was used or skipped depending on whether a person had remembered to
+            # run a separate script — and skipping it looked exactly like a job with no
+            # models. run=True generates the extract when it is absent or older than the
+            # models. On a machine without SolidWorks the analyser fails, the reason is
+            # recorded, and the run continues on PDF+DXF as before.
+            #   SDI_SW_RUN_ANALYSER=0   never invoke it (consume an existing extract only)
+            _sw_run = os.getenv("SDI_SW_RUN_ANALYSER", "").strip().lower() \
+                not in {"0", "false", "no", "off"}
+            _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
+                                             run=_sw_run) \
                 if (_sw_folder or _sw_json) else None
+            if _sw_job is not None and _sw_job.meta.get("native_present_but_unread"):
+                summary["solidworks_native"] = {
+                    "source": "solidworks_api",
+                    "found": False,
+                    "native_files_present": _sw_job.meta.get("native_files_present"),
+                    "native_present_but_unread": True,
+                    "reason": _sw_job.meta.get("native_unread_reason"),
+                    "analyser_error": _sw_job.meta.get("analyser_error"),
+                }
+                print(f"   [solidworks] {_sw_job.meta.get('native_files_present')} native model "
+                      f"file(s) are in this job folder but were NOT read: "
+                      f"{_sw_job.meta.get('native_unread_reason')}", flush=True)
             if _sw_job and _sw_job.found:
                 _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
@@ -1916,8 +1939,17 @@ def _finalize_scan_summary(
                     "top_assembly": _sw_job.meta.get("top_assembly"),
                     "counts": _sw_job.meta.get("counts"),
                     "applied": _swc,
+                    # Freshness, carried onto the job so an invariant can act on it.
+                    "extract_stale": bool(_sw_job.meta.get("extract_stale")),
+                    "native_files_present": _sw_job.meta.get("native_files_present"),
+                    "native_files_fingerprint": _sw_job.meta.get("native_files_fingerprint"),
+                    "analyser_error": _sw_job.meta.get("analyser_error"),
                     "bom": [vars(r) for r in _sw_job.bom],
                 }
+                if _sw_job.meta.get("extract_stale"):
+                    print("   [solidworks] EXTRACT IS STALE — the native models have changed "
+                          "since it was taken. The estimate is built on older geometry and "
+                          "is PROVISIONAL until the extract is regenerated.", flush=True)
                 print(f"   [solidworks] native extract applied — flat+{_swc['flat']} "
                       f"thickness+{_swc['thickness']} material+{_swc['material']} "
                       f"bends+{_swc['bends']} qty+{_swc['qty']} "

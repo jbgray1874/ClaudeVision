@@ -479,6 +479,43 @@ def check_geometry_is_reconciled(summary: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
+    """The models are the strongest source this engine has. Two ways that goes wrong quietly.
+
+    STALE: an extract is a photograph of the models at the moment it was taken. Costing from
+    one that predates a design change produces a confident number describing a part that no
+    longer exists.
+
+    UNREAD: native files sitting in the job folder with no extract. Until the analyser was
+    made to run, that was indistinguishable from a job that simply has no models — the best
+    evidence in the building, unused, with nothing on screen to say so."""
+    sw = _node(summary, "solidworks_native")
+    if not sw:
+        return []          # no models involved in this job; nothing to be current about
+    out = []
+    if sw.get("extract_stale"):
+        out.append(_violation(
+            "native_extract_stale", BLOCKING,
+            "The SolidWorks extract predates the model files it was taken from — the design "
+            "has changed since. This estimate is built on older geometry, materials and "
+            "quantities than the models now hold.",
+            native_files_present=sw.get("native_files_present")))
+    if sw.get("native_present_but_unread"):
+        out.append(_violation(
+            "native_models_not_read", BLOCKING,
+            f"{sw.get('native_files_present')} SolidWorks model file(s) are in this job folder "
+            f"but were not read: {sw.get('reason') or 'no extract was generated'}. The job has "
+            f"been costed from the drawings alone while the models were available.",
+            reason=sw.get("reason"), analyser_error=sw.get("analyser_error")))
+    elif sw.get("analyser_error"):
+        out.append(_violation(
+            "native_analyser_failed", WARNING,
+            f"The SolidWorks analyser reported a problem: {sw.get('analyser_error')}. An "
+            f"existing extract was used if one was present.",
+            analyser_error=sw.get("analyser_error")))
+    return out
+
+
 CHECKS = (
     check_schemas,
     check_workbook_adapters_read_everything,
@@ -490,6 +527,7 @@ CHECKS = (
     check_evidence_is_attributed,
     check_low_confidence_is_declared,
     check_geometry_is_reconciled,
+    check_native_evidence_is_current,
 )
 
 
