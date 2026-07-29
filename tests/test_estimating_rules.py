@@ -2528,6 +2528,53 @@ def test_a_measured_cut_path_is_not_a_measured_blank():
         djm.extract_flat_pattern_data = _saved_flat
 
 
+def test_a_blank_is_found_wherever_the_writer_put_it():
+    """Four parts on 12120 blocked the quote as "claims measured geometry but carries no
+    usable outline" while their blanks sat on the populated sheet in front of the estimator:
+    126.39 x 82.2, 45 x 20, 33.3 x 27.8, 79 x 37.79. All four read geometry_source
+    dxf_flat_pattern, which by construction requires a measured area.
+
+    drawing_job_merge writes a measured flat pattern to part["normalized_geometry"] and
+    mirrors the extents to overall_length_mm / overall_width_mm. It does not write
+    blank_length_mm to the part root — and the root plus geometry_rollup were the only two
+    places the check looked.
+
+    A false positive here is not harmless: it blocks a firm quote, and it sent a defect hunt
+    after the wrong cause for several runs."""
+    from invariants import check_job
+
+    def _codes(part):
+        j = _job()
+        j["part_estimates"] = [dict(part, part_number="12120-01-01M", quantity=1,
+                                    quantity_source="bom_tree",
+                                    normalized_material="MILD_STEEL",
+                                    material_source="dxf")]
+        return [v["code"] for v in check_job(j, write_back=False)["violations"]]
+
+    measured = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+                "flat_pattern_detected": True,
+                "overall_length_mm": 126.39, "overall_width_mm": 82.2,
+                "normalized_geometry": {"blank_length_mm": 126.39, "blank_width_mm": 82.2,
+                                        "blank_area_mm2": 10389.3,
+                                        "geometry_source": "dxf_flat_pattern"}}
+    ok("measured_geometry_without_outline" not in _codes(measured),
+       "a blank in normalized_geometry is a blank")
+
+    # The check must still catch the thing it exists for: a measurement claim with no
+    # measurement behind it, in any of the three places.
+    empty = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+             "normalized_geometry": {"geometry_source": "dxf_flat_pattern"}}
+    ok("measured_geometry_without_outline" in _codes(empty),
+       "and an empty claim is still caught")
+
+    # geometry_rollup remains a valid home for it.
+    rolled = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+              "geometry_rollup": {"blank_length_mm": 45.0, "blank_width_mm": 20.0,
+                                  "blank_area_mm2": 900.0}}
+    ok("measured_geometry_without_outline" not in _codes(rolled),
+       "wherever it was written, it counts")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

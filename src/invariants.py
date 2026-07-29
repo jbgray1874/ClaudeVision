@@ -379,6 +379,30 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
 _MEASURED_TOKENS = ("dxf_flat_pattern", "dxf", "solidworks_flat_pattern", "native_flat")
 
 
+def _blank_num(part: Dict[str, Any], *keys: str) -> Optional[float]:
+    """A blank dimension, from wherever the writer happened to put it.
+
+    THE CHECK WAS LOOKING IN TWO OF THE THREE PLACES. drawing_job_merge writes a measured
+    flat pattern to part["normalized_geometry"] and mirrors the extents to overall_length_mm
+    / overall_width_mm; it does not write blank_length_mm to the part root. Reading only the
+    root and geometry_rollup, this check reported "claims measured geometry but carries no
+    outline" against four parts on 12120 whose blanks are on the populated sheet in front of
+    you — 126.39 x 82.2, 45 x 20, 33.3 x 27.8, 79 x 37.79.
+
+    A false positive here is not harmless noise: it blocks a firm quote, and it sent a real
+    defect hunt after the wrong cause for several runs. Look everywhere the value is written,
+    and if it is genuinely absent from all of them, then say so.
+    """
+    holders = (part, part.get("normalized_geometry") or {}, part.get("geometry_rollup") or {})
+    for key in keys:
+        for holder in holders:
+            if isinstance(holder, dict):
+                value = _num(holder.get(key))
+                if value:
+                    return value
+    return None
+
+
 def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
     """"Measured" is the word that unlocks the credibility gate, the blank-allowance skip and
     the fabricated-part tests. A part claiming it must actually carry an outline and an area,
@@ -399,9 +423,9 @@ def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
         # both. Now that they are separate claims, this one is true and takes the allowance.
         if "no_geometry" in src or "matched_no_geometry" in src or "cut_length_only" in src:
             continue
-        length = _num(p.get("blank_length_mm")) or _num((p.get("geometry_rollup") or {}).get("blank_length_mm"))
-        width = _num(p.get("blank_width_mm")) or _num((p.get("geometry_rollup") or {}).get("blank_width_mm"))
-        area = _num(p.get("blank_area_mm2")) or _num((p.get("geometry_rollup") or {}).get("blank_area_mm2"))
+        length = _blank_num(p, "blank_length_mm", "overall_length_mm")
+        width = _blank_num(p, "blank_width_mm", "overall_width_mm")
+        area = _blank_num(p, "blank_area_mm2")
         if not (length and width and length > 0 and width > 0) or not (area and area > 0):
             bad.append({"part_number": p.get("part_number"), "geometry_source": src,
                         "blank_length_mm": length, "blank_width_mm": width,
