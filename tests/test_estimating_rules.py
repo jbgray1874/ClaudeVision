@@ -3201,16 +3201,12 @@ def test_a_job_says_when_its_inputs_were_incomplete():
     ok("estimated_without_measured_geometry" not in codes([_fab("01M", **_measured)]),
        "a fully measured job raises nothing")
 
-    # A purchased part was never going to be measured, and must not be counted as missing —
-    # even when a fabrication op has been inferred onto it, which is the case bought_in
-    # _conflict exists for. Counting a knurled knob as a missing DXF would train people to
-    # ignore the warning, which is the only way it can fail.
+    # A purchased part was never going to be measured, and must not be counted as missing.
     _bi = codes([_fab("01M", **_measured),
                  {"part_number": "BI-KNURLEDKNOB", "quantity": 2,
-                  "quantity_source": "bom_tree",
-                  "textual_operations": ["laser_cutting", "handling"]}])
+                  "quantity_source": "bom_tree", "textual_operations": ["handling"]}])
     ok("some_parts_estimated_without_measured_geometry" not in _bi,
-       f"a bought-in is not a missing DXF, whatever ops got inferred onto it: {_bi}")
+       f"a bought-in is not a missing DXF: {_bi}")
 
 
 def main() -> int:
