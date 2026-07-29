@@ -1242,6 +1242,60 @@ def test_exclusion_matches_whole_words_not_substrings():
            f"analyser and consumer must agree about {name!r}")
 
 
+def test_a_linked_table_cell_is_read_until_something_answers():
+    """A BOM table's cells are LINKED: Text2 can return an empty string while
+    DisplayedText2 holds the resolved value. Treating the first non-None answer as final
+    accepted "" and never asked the call that would have answered — which is why both of
+    12120's drawings came back with zero BOM rows AND zero errors, reading as 'this drawing
+    has no BOM' rather than 'we did not manage to read it'."""
+    swa = _load_analyser()
+
+    class _EmptyFirst:
+        """The FIRST accessor tried answers successfully with an empty string; a later one
+        holds the value. Whichever accessor happens to be first, an empty success must not
+        end the search — that is the whole defect, and a fake that answers on the first call
+        tests the ORDER rather than the rule."""
+        def __init__(self, real): self.real = real
+        def DisplayedText2(self, r, c, *a): return ""
+        def Text2(self, r, c, *a): return ""
+        def Text(self, r, c): return self.real.get((r, c), "")
+
+    t = _EmptyFirst({(0, 0): "PART NO", (1, 0): "12120-01-01M"})
+    eq(swa._table_text(t, 1, 0), "12120-01-01M",
+       "an empty success must not end the search while a later accessor has the value")
+    eq(swa._table_text(t, 5, 5), "", "a genuinely empty cell is still empty")
+
+    class _LinkedCell:
+        """The live shape: linked BOM cells resolve through DisplayedText2 while Text2
+        returns nothing."""
+        def __init__(self, real): self.real = real
+        def DisplayedText2(self, r, c, *a): return self.real.get((r, c), "")
+        def Text2(self, r, c, *a): return ""
+    eq(swa._table_text(_LinkedCell({(1, 0): "12120-01-04M"}), 1, 0), "12120-01-04M",
+       "and a linked cell resolves through DisplayedText2")
+
+    class _OnlyText:
+        """An older build with no DisplayedText2 at all."""
+        def Text(self, r, c): return "LEGACY-01"
+    eq(swa._table_text(_OnlyText(), 1, 0), "LEGACY-01", "the oldest form still works")
+
+
+def test_discovery_and_fingerprinting_share_one_exclusion_rule():
+    """Discovery kept its own substring list ("previous", "old versions") while the
+    fingerprint used the whole-word rule. Two lists means the extract and the manifest can
+    disagree about what was covered — a folder read by one and omitted by the other — which
+    is the same silent divergence as "folder" matching "old", from the other direction."""
+    swa = _load_analyser()
+    ok(swa.ARCHIVE_FOLDER_TOKENS is swa._EXCLUDED_DIR_TOKENS,
+       "discovery must not have a second token list")
+    # Unifying must not WIDEN what gets read: everything the discovery list excluded still is.
+    for name in ("previous", "Previous Revisions", "Old Versions", "WIP", "Do Not Use",
+                 "Archive", "superseded", "backup"):
+        ok(swa._is_excluded_dir(name), f"{name!r} was excluded before and must stay excluded")
+    for name in ("CAD Folder", "Models", "Released", "Rev A", "Boldon"):
+        ok(not swa._is_excluded_dir(name), f"{name!r} is live design")
+
+
 def test_a_zero_count_from_the_cut_list_survives_parsing():
     """'Cut Outs = 0' says this part is a plain blank with one pierce. Parsed with the LENGTH
     reader — which rejects non-positive values, correctly, because a blank cannot be 0mm long

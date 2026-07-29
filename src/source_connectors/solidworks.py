@@ -483,8 +483,11 @@ _NATIVE_EXTS = (".sldprt", ".sldasm", ".slddrw")
 # Matched as whole WORDS. The substring version excluded "CAD Folder", because "folder"
 # contains "old", and the damage was silent: the analyser read those files while the manifest
 # omitted them, so later changes to them were invisible to the freshness check.
+# "previous" and "prev" come from the discovery rule this replaced. Unifying two lists must
+# not quietly WIDEN what gets read: every token either list had is kept.
 _EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
-                        "bak", "dnu", "scrap", "wip", "temp", "tmp")
+                        "bak", "dnu", "scrap", "wip", "temp", "tmp",
+                        "previous", "prev")
 _EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
 
 

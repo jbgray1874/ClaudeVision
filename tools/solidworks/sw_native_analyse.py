@@ -34,6 +34,7 @@ folder is often 2D only (DXF/PDF) — the native models live elsewhere under the
 from __future__ import annotations
 import json
 import os
+from pathlib import Path
 import re
 import sys
 from dataclasses import dataclass, field, asdict
@@ -242,7 +243,19 @@ class SolidWorksSession:
         # this file open, OpenDoc6 hands back THEIR document, and closing it afterwards
         # closes their work — unsaved changes included. Ask what is already open BEFORE
         # opening anything, and close only what this process actually opened.
-        _already = self._is_already_open(path)
+        # SHORT-CIRCUIT. Knowing a document is already open and then calling OpenDoc6
+        # anyway is what still failed micro_usb_Wire_01 on v7: the assembly load already
+        # holds the title, OpenDoc6 refuses with 65536, and the recovery path runs only
+        # after the refusal. If we already know SolidWorks has it, take it — do not ask for
+        # it a second time and then try to clean up the refusal.
+        _trace: List[str] = []
+        _existing = self._get_open_document(path, _trace)
+        if _existing is not None:
+            self._borrowed_titles.append(_safe_str(_get0(_existing, "GetTitle")) or path)
+            print(f"[reused] {os.path.basename(path)} was already open "
+                  f"({'; '.join(_trace)}) — read in place, not reopened")
+            return _existing, doctype
+        _already = False
         doc = self.sw.OpenDoc6(path, doctype, OPEN_OPTS, "", errs, warns)
         if doc is None:
             # 65536 is swFileWithSameTitleAlreadyOpen. On this job it is not a corrupt file:
@@ -251,7 +264,7 @@ class SolidWorksSession:
             # title. micro_usb_Wire_01 failed for exactly this reason and its data was simply
             # lost. The document is right there — take it rather than reporting a failure.
             if int(errs.value or 0) & 65536:
-                _trace: List[str] = []
+                _trace = []
                 doc = self._get_open_document(path, _trace)
                 if doc is not None:
                     print(f"[recovered] already-open document reused ({'; '.join(_trace)})")
@@ -442,15 +455,25 @@ def _table_text(table, row: int, col: int) -> str:
     others, and calling the wrong arity raises rather than returning nothing — which is how a
     released drawing BOM came back empty on every row instead of reporting it could not be
     read. Try each form; the first that answers wins."""
-    for _attempt in (lambda: table.Text2(row, col, True),
+    # A LINKED cell — which is what a BOM table's cells are — can return an empty string
+    # from Text2 while DisplayedText2 holds the resolved value. Treating the first
+    # non-None answer as final therefore accepted "" and never asked the call that would
+    # have answered. Keep going until something non-empty comes back.
+    for _attempt in (lambda: table.DisplayedText2(row, col, 0),
+                     lambda: table.DisplayedText2(row, col),
+                     lambda: table.DisplayedText(row, col),
+                     lambda: table.Text2(row, col, True),
                      lambda: table.Text2(row, col),
                      lambda: table.Text(row, col)):
         try:
             v = _attempt()
-            if v is not None:
-                return _safe_str(v)
         except Exception:
             continue
+        if v is None:
+            continue
+        _t = _safe_str(v).strip()
+        if _t:
+            return _t
     return ""
 
 
@@ -1373,11 +1396,101 @@ def assembly_bom(doc) -> List[BomLine]:
     return lines
 
 
+def _collect_from_table(t, lines: List[BomLine]) -> None:
+    """Read one table annotation's rows into BomLines. Shared by both discovery paths so
+    they cannot drift apart in what they accept."""
+    try:
+        rows = int(t.RowCount)
+        cols = int(t.ColumnCount)
+    except Exception:
+        return
+    headers = []
+    for col in range(cols):
+        try:
+            headers.append(_table_text(t, 0, col).lower())
+        except Exception:
+            headers.append("")
+    idx_pn = next((i for i, h in enumerate(headers)
+                   if "part" in h or "item" in h or h == "no"), 0)
+    idx_qty = next((i for i, h in enumerate(headers)
+                    if "qty" in h or "qnty" in h or "quantity" in h), None)
+    idx_desc = next((i for i, h in enumerate(headers) if "desc" in h), None)
+    for r in range(1, rows):
+        try:
+            pn = _table_text(t, r, idx_pn)
+            if not pn:
+                continue
+            qty = 1.0
+            if idx_qty is not None:
+                try:
+                    qty = float(_table_text(t, r, idx_qty).replace(",", ""))
+                except Exception:
+                    qty = 1.0
+            desc = _table_text(t, r, idx_desc) if idx_desc is not None else ""
+            lines.append(BomLine(part_number=pn, description=desc, qty=qty,
+                                 source="drawing_bom"))
+        except Exception:
+            continue
+
+
 def drawing_bom_tables(doc) -> List[BomLine]:
     """Extract BOM table annotations from a drawing. Best-effort: the table API varies by
     SW version — VERIFY on one known .slddrw (e.g. 12120's GA) before trusting it."""
     lines: List[BomLine] = []
     visited = 0
+
+    def _tables_everywhere():
+        """Every table annotation on the drawing, not just those hanging off the views of
+        the ACTIVE SHEET.
+
+        GetFirstView/GetNextView walks one sheet, and on these drawings the BOM is not
+        there — both .SLDDRW records came back with zero rows and zero errors, which reads
+        as "this drawing has no BOM" rather than "we looked in one place". Three sources
+        are collected: the document's own table annotations, every view returned by
+        GetViews() across all sheets, and the per-sheet walk as a fallback.
+        """
+        out = []
+        for _name in ("GetTableAnnotations", "GetTableAnnotationCount"):
+            if _name == "GetTableAnnotations":
+                try:
+                    for t in (_get0(doc, "GetTableAnnotations") or []):
+                        out.append(t)
+                except Exception:
+                    pass
+        # GetViews() returns an array per sheet — [[sheet1 views], [sheet2 views], ...] —
+        # so every sheet's tables are reachable, not only the active one.
+        try:
+            sheets = doc.GetViews()
+            for _sheet in (sheets or []):
+                for _v in (_sheet or []):
+                    try:
+                        for t in (_get0(_v, "GetTableAnnotations") or []):
+                            out.append(t)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return out
+
+    try:
+        for t in _tables_everywhere():
+            try:
+                _tt = _get0(t, "Type")
+                # swTableAnnotationType_e: 3 = swTableAnnotation_BillOfMaterials. Where the
+                # type is readable, take BOM tables only — a revision block and a general
+                # note table have rows and columns too, and reading them as a BOM invents
+                # part numbers out of revision letters.
+                if _tt is not None and int(_tt) not in (3,):
+                    continue
+            except Exception:
+                pass
+            _collect_from_table(t, lines)
+        if lines:
+            lines.sort(key=lambda x: x.part_number.lower())
+            return lines
+    except Exception:
+        pass
+
     try:
         v = _get0(doc, "GetFirstView")
         while v is not None and visited < 50:
@@ -1484,8 +1597,39 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
 # Folder-name tokens that mark superseded/scratch content to skip (case-insensitive).
 # Archived models are often the OLD/broken revision (or half-built test assemblies) and
 # would pollute or stall a batch — the "ignore archived drawings" rule, at ingest.
-ARCHIVE_FOLDER_TOKENS = ("archive", "old versions", "superseded", "obsolete",
-                         "wip", "do not use", "backup", "previous")
+# Kept as a name for compatibility, but discovery no longer has its own rule: it uses
+# _is_excluded_dir, the same whole-word test as the fingerprint. Two lists meant discovery
+# and the manifest could disagree about what the extract covers — a "previous/" folder read
+# by one and omitted by the other — which is the same silent-divergence bug as "folder"
+# matching "old", just from the opposite direction.
+# Folders whose contents are not the live design: superseded models that would otherwise
+# make a drawing-only job look as though native evidence had been ignored.
+#
+# MATCHED AS WHOLE WORDS. Substring matching excluded "CAD Folder", because "folder"
+# contains "old" — and the consequence is not a missed folder but a silent one: the analyser
+# read those files while the manifest omitted them, so any later change to them was
+# invisible to the freshness check. Discovery and fingerprinting must also use the SAME rule,
+# or the two disagree about what the extract covers.
+# "previous" and "prev" come from the discovery rule this replaced. Unifying two lists must
+# not quietly WIDEN what gets read: every token either list had is kept.
+_EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
+                        "bak", "dnu", "scrap", "wip", "temp", "tmp",
+                        "previous", "prev")
+_EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
+
+
+def _is_excluded_dir(name: str) -> bool:
+    n = str(name or "").strip().lower()
+    if n.startswith(".") or n.startswith("~"):
+        return True
+    if any(ph in n for ph in _EXCLUDED_DIR_PHRASES):
+        return True
+    # Split on anything that is not a letter or digit, so "Old Revs", "_BAK", "rev-old" all
+    # match while "Folder" and "Boldon" do not.
+    return any(w in _EXCLUDED_DIR_TOKENS for w in re.split(r"[^a-z0-9]+", n) if w)
+
+
+ARCHIVE_FOLDER_TOKENS = _EXCLUDED_DIR_TOKENS
 
 
 def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
@@ -1494,9 +1638,9 @@ def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
     for dirpath, dirs, files in os.walk(root):
         if skip_archive:
             # Prune archive/superseded subfolders so os.walk does not descend into them.
-            dirs[:] = [d for d in dirs
-                       if not any(tok in d.lower() for tok in ARCHIVE_FOLDER_TOKENS)]
-            if any(tok in dirpath.lower() for tok in ARCHIVE_FOLDER_TOKENS):
+            # ONE RULE, shared with the fingerprint — see _is_excluded_dir.
+            dirs[:] = [d for d in dirs if not _is_excluded_dir(d)]
+            if any(_is_excluded_dir(part) for part in Path(dirpath).parts):
                 continue
         for f in files:
             if os.path.splitext(f)[1].lower() in exts:
@@ -1707,30 +1851,6 @@ def _fingerprint_native_files(target: str) -> str:
     found.sort()
     basis = "|".join(f"{n}:{s}:{m}" for n, s, m in found)
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
-
-
-# Folders whose contents are not the live design: superseded models that would otherwise
-# make a drawing-only job look as though native evidence had been ignored.
-#
-# MATCHED AS WHOLE WORDS. Substring matching excluded "CAD Folder", because "folder"
-# contains "old" — and the consequence is not a missed folder but a silent one: the analyser
-# read those files while the manifest omitted them, so any later change to them was
-# invisible to the freshness check. Discovery and fingerprinting must also use the SAME rule,
-# or the two disagree about what the extract covers.
-_EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
-                        "bak", "dnu", "scrap", "wip", "temp", "tmp")
-_EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
-
-
-def _is_excluded_dir(name: str) -> bool:
-    n = str(name or "").strip().lower()
-    if n.startswith(".") or n.startswith("~"):
-        return True
-    if any(ph in n for ph in _EXCLUDED_DIR_PHRASES):
-        return True
-    # Split on anything that is not a letter or digit, so "Old Revs", "_BAK", "rev-old" all
-    # match while "Folder" and "Boldon" do not.
-    return any(w in _EXCLUDED_DIR_TOKENS for w in re.split(r"[^a-z0-9]+", n) if w)
 
 
 def _sw_version_string(session: Any) -> str:
