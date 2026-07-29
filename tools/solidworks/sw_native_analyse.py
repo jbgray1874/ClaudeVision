@@ -251,10 +251,19 @@ class SolidWorksSession:
             # title. micro_usb_Wire_01 failed for exactly this reason and its data was simply
             # lost. The document is right there — take it rather than reporting a failure.
             if int(errs.value or 0) & 65536:
-                doc = self._get_open_document(path)
+                _trace: List[str] = []
+                doc = self._get_open_document(path, _trace)
                 if doc is not None:
+                    print(f"[recovered] already-open document reused ({'; '.join(_trace)})")
                     self._borrowed_titles.append(_safe_str(_get0(doc, "GetTitle")) or path)
                     return doc, doctype
+                # Say what was tried. A bare "failed" told us nothing last time and cost a
+                # whole run to learn no more than that.
+                raise RuntimeError(
+                    f"OpenDoc6 failed: {path}  errs={errs.value} warns={warns.value} "
+                    f"(swFileWithSameTitleAlreadyOpen — a document of this title is open but "
+                    f"could not be retrieved; tried: {'; '.join(_trace) or 'nothing'})"
+                )
             raise RuntimeError(
                 f"OpenDoc6 failed: {path}  errs={errs.value} warns={warns.value}"
             )
@@ -265,31 +274,76 @@ class SolidWorksSession:
             self._borrowed_titles.append(_t or path)
         return doc, doctype
 
-    def _get_open_document(self, path: str):
-        """The already-open document for this path, or None. Matched on full path first, then
-        on title — a component loaded as part of an assembly may report a title without its
-        path resolving identically."""
+    def _get_open_document(self, path: str, trace: Optional[List[str]] = None):
+        """The already-open document for this path, or None.
+
+        FOUR ROUTES, because the first attempt at this used only the GetFirstDocument walk
+        and recovered nothing on 12120 — and a silent None told us only that it had failed,
+        not which step had. Each route records what it returned, so a failure is diagnosable
+        from the log instead of guessed at:
+
+          1. GetOpenDocumentByName — the documented lookup, and the one that should work.
+             Omitting it was the mistake.
+          2. GetDocuments() — the whole open-document array, including components loaded
+             invisibly as part of an assembly, which is what these actually are.
+          3. The GetFirstDocument/GetNext linked walk.
+          4. Title match, as a last resort: a component pulled in by an assembly can report
+             a title whose path does not resolve identically.
+        """
+        trace = trace if trace is not None else []
         _target = self._norm(path)
         _stem = os.path.splitext(os.path.basename(path))[0].lower()
-        try:
-            d = self.sw.GetFirstDocument2() if hasattr(self.sw, "GetFirstDocument2") \
-                else _get0(self.sw, "GetFirstDocument")
-        except Exception:
-            return None
-        _by_title = None
-        seen = 0
-        while d is not None and seen < 5000:
-            seen += 1
+
+        # 1. The documented call.
+        for _name in ("GetOpenDocumentByName2", "GetOpenDocumentByName"):
             try:
-                if self._norm(_safe_str(_get0(d, "GetPathName"))) == _target:
+                d = getattr(self.sw, _name)(path)
+                if d is not None:
+                    trace.append(f"{_name}: found")
                     return d
-                if _by_title is None:
+                trace.append(f"{_name}: None")
+            except Exception as exc:
+                trace.append(f"{_name}: raised {type(exc).__name__}")
+
+        # 2. The full array of open documents.
+        _by_title = None
+        try:
+            docs = self.sw.GetDocuments()
+            _n = len(docs) if docs is not None else 0
+            trace.append(f"GetDocuments: {_n} open")
+            for d in (docs or []):
+                try:
+                    if self._norm(_safe_str(_get0(d, "GetPathName"))) == _target:
+                        trace.append("GetDocuments: path match")
+                        return d
                     _t = _safe_str(_get0(d, "GetTitle"))
-                    if _t and os.path.splitext(_t)[0].lower() == _stem:
+                    if _by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem:
                         _by_title = d
+                except Exception:
+                    continue
+        except Exception as exc:
+            trace.append(f"GetDocuments: raised {type(exc).__name__}")
+
+        # 3. The linked walk.
+        try:
+            d = _get0(self.sw, "GetFirstDocument")
+            seen = 0
+            while d is not None and seen < 5000:
+                seen += 1
+                if self._norm(_safe_str(_get0(d, "GetPathName"))) == _target:
+                    trace.append(f"GetFirstDocument walk: path match after {seen}")
+                    return d
+                _t = _safe_str(_get0(d, "GetTitle"))
+                if _by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem:
+                    _by_title = d
                 d = _get0(d, "GetNext")
-            except Exception:
-                break
+            trace.append(f"GetFirstDocument walk: {seen} document(s), no path match")
+        except Exception as exc:
+            trace.append(f"GetFirstDocument walk: raised {type(exc).__name__}")
+
+        # 4. Title, last.
+        if _by_title is not None:
+            trace.append("matched on title")
         return _by_title
 
     @staticmethod
