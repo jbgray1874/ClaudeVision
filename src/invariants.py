@@ -507,6 +507,20 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             f"but were not read: {sw.get('reason') or 'no extract was generated'}. The job has "
             f"been costed from the drawings alone while the models were available.",
             reason=sw.get("reason"), analyser_error=sw.get("analyser_error")))
+    if sw.get("changed_during_extraction"):
+        out.append(_violation(
+            "native_models_changed_during_extraction", BLOCKING,
+            "The model files changed while the extract was being taken, so its results "
+            "describe the files as they were when each was opened and the manifest describes "
+            "what is on disk now. The two are not the same snapshot; re-run the extraction.",
+            fingerprint_before=sw.get("fingerprint_before")))
+    if sw.get("source_unreachable"):
+        out.append(_violation(
+            "native_source_unreachable", UNVERIFIED,
+            f"The folder this extract was generated from is not reachable "
+            f"({sw.get('fingerprint_folder')}), so its freshness could not be checked. That "
+            f"is not evidence the extract is stale — only that nothing could be verified.",
+            fingerprint_folder=sw.get("fingerprint_folder")))
     if sw.get("extract_incomplete"):
         out.append(_violation(
             "native_extract_incomplete", BLOCKING,
@@ -516,15 +530,26 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             f"produces a non-empty file that reads downstream as a successful read.",
             files_read=sw.get("files_read"), files_failed=sw.get("files_failed")))
     elif sw.get("files_failed"):
+        # BLOCKING, not a warning. "Some files failed" cannot be waved through, because
+        # nothing here knows whether the failures were irrelevant fixtures or a released
+        # component of the assembly being priced — and if it was the latter, the job is
+        # undercosted by whatever that part contributes. The analyser can clear this by
+        # showing the failures fall outside the BOM closure; until it does, the honest
+        # position is that we do not know what is missing.
+        _outside = sw.get("failed_outside_bom_closure")
         out.append(_violation(
-            "native_extract_partial", WARNING,
+            "native_extract_partial", WARNING if _outside else BLOCKING,
             f"{sw.get('files_failed')} model file(s) could not be read by the analyser "
-            f"({sw.get('files_read')} succeeded). Anything they would have contributed is "
-            f"absent from this estimate.",
-            files_failed=sw.get("files_failed")))
+            f"({sw.get('files_read')} succeeded)"
+            + (". They are outside the assembly BOM, so nothing priced depends on them."
+               if _outside else
+               ". Until they are shown to be outside the assembly BOM, a released component "
+               "may be missing and the job undercosted by whatever it contributes."),
+            files_failed=sw.get("files_failed"),
+            failed_paths=(sw.get("extract_errors") or [])[:10]))
     if sw.get("freshness_unverifiable"):
         out.append(_violation(
-            "native_freshness_unverifiable", WARNING,
+            "native_freshness_unverifiable", UNVERIFIED,
             "The extract was supplied from outside the job folder and carries no manifest "
             "saying which models it was generated from, so nothing about its freshness could "
             "be checked. Treat this run as diagnostic: regenerate the extract immediately "
@@ -532,7 +557,7 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             fingerprint_folder=sw.get("fingerprint_folder")))
     elif sw.get("manifest_absent") and sw.get("found") is not False:
         out.append(_violation(
-            "native_freshness_unverified", WARNING,
+            "native_freshness_unverified", UNVERIFIED,
             "This extract carries no manifest, so it could only be checked for freshness on "
             "its file timestamp. A copy, a restore or a touched file defeats that, and a "
             "model deleted or renamed since is invisible to it. Regenerate the extract to "

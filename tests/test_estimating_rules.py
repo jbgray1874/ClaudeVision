@@ -1090,12 +1090,23 @@ def test_an_extract_that_read_nothing_is_not_a_successful_read():
     ok("native_extract_incomplete" in [v["code"] for v in r["violations"]],
        "an extraction that read nothing must block")
     ok(not r["may_quote_firm"], "and must stop the price being firm")
-    # Partial coverage is worth seeing but the numbers that were read still stand.
+    # PARTIAL COVERAGE BLOCKS until the failures are shown to be irrelevant. Nothing here
+    # knows whether the file that failed was a fixture or a released component of the
+    # assembly being priced — and if it was the latter the job is undercosted by whatever
+    # that part contributes. "Some files failed" is not a thing to wave through.
     j2 = _job()
     j2["solidworks_native"] = {"files_read": 6, "files_failed": 2}
     r2 = check_job(j2, write_back=False)
     ok("native_extract_partial" in [v["code"] for v in r2["violations"]], "partial is flagged")
-    ok(r2["may_quote_firm"], "but does not block — what was read is still valid")
+    ok(not r2["may_quote_firm"],
+       "and blocks: an unread file may be a released component")
+    # Shown to be outside the BOM closure, it drops to a warning and the price stands.
+    j3 = _job()
+    j3["solidworks_native"] = {"files_read": 6, "files_failed": 2,
+                               "failed_outside_bom_closure": True}
+    r3 = check_job(j3, write_back=False)
+    ok(r3["may_quote_firm"],
+       "failures proven irrelevant to the priced assembly do not block")
 
 
 def test_freshness_without_a_manifest_says_it_is_weak():
@@ -1171,6 +1182,100 @@ def test_an_extract_supplied_from_elsewhere_says_it_cannot_be_verified():
        f"an unverifiable extract must say so: {codes}")
     ok("native_extract_stale" not in codes,
        "and must NOT be reported as stale — that is a different, checkable fact")
+    # A warning does not stop a firm quote, so "we cannot verify this" recorded as a warning
+    # let a diagnostic extract produce a firm price while saying it could not be checked.
+    ok(not r["may_quote_firm"],
+       "unverifiable freshness must stop the price being firm, not merely annotate it")
+
+    # An unreachable source drive is not evidence of staleness — only that we could not look.
+    j2 = _job()
+    j2["solidworks_native"] = {"source_unreachable": True, "fingerprint_folder": "K:\\models"}
+    r2 = check_job(j2, write_back=False)
+    codes2 = [v["code"] for v in r2["violations"]]
+    ok("native_source_unreachable" in codes2, f"say the drive was unreachable: {codes2}")
+    ok("native_extract_stale" not in codes2,
+       "a missing network drive must not be reported as a stale extract")
+    ok(not r2["may_quote_firm"], "and nothing verified means nothing firm")
+
+    # Files that moved under the extraction are not a snapshot of anything.
+    j3 = _job()
+    j3["solidworks_native"] = {"changed_during_extraction": True, "fingerprint_before": "aaa"}
+    r3 = check_job(j3, write_back=False)
+    ok("native_models_changed_during_extraction" in [v["code"] for v in r3["violations"]],
+       "a mid-run save must invalidate the extract")
+    ok(not r3["may_quote_firm"], "and block")
+
+
+def _load_analyser():
+    """Import the SolidWorks analyser for its PURE helpers, on any platform.
+
+    COM is imported lazily inside it, so the decision logic — which folders are the live
+    design, whether a cut-list zero is a value — loads without pywin32. The module must be
+    registered in sys.modules before exec, or dataclass field resolution cannot find it."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "tools" / "solidworks" / "sw_native_analyse.py"
+    spec = importlib.util.spec_from_file_location("sw_native_analyse", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["sw_native_analyse"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_exclusion_matches_whole_words_not_substrings():
+    """'folder' contains 'old'. A substring rule therefore excluded 'CAD Folder' — and the
+    consequence was not a missed folder but a silent one: the analyser READ those files while
+    the manifest omitted them, so any later change to them was invisible to the freshness
+    check. Discovery and fingerprinting must also share one rule, or they disagree about what
+    the extract covers."""
+    swa = _load_analyser()
+    for keep in ("CAD Folder", "Folder", "Boldon Screens", "Goldsmith", "Models", "Released"):
+        ok(not swa._is_excluded_dir(keep), f"{keep!r} is live design and must be kept")
+    for drop in ("Archive", "OBSOLETE", "Old Revs", "rev-old", "_BAK", "Superseded",
+                 "Do Not Use", "WIP", ".git"):
+        ok(swa._is_excluded_dir(drop), f"{drop!r} is not the live design and must be dropped")
+
+    # The consumer's copy must agree, or it counts files the analyser never opened.
+    from source_connectors.solidworks import _is_excluded_dir as consumer_rule
+    for name in ("CAD Folder", "Archive", "Old Revs", "Models", "_BAK", "Boldon Screens"):
+        eq(consumer_rule(name), swa._is_excluded_dir(name),
+           f"analyser and consumer must agree about {name!r}")
+
+
+def test_a_zero_count_from_the_cut_list_survives_parsing():
+    """'Cut Outs = 0' says this part is a plain blank with one pierce. Parsed with the LENGTH
+    reader — which rejects non-positive values, correctly, because a blank cannot be 0mm long
+    — it became None, and the resolver's explicit-zero handling never saw a zero to defend.
+    The confusion was fixed downstream and reintroduced one layer up."""
+    swa = _load_analyser()
+    eq(swa._num_count("0"), 0, "an explicit zero count is a value")
+    eq(swa._num_count(0), 0, "including as a number")
+    eq(swa._num_count("3"), 3, "and a real count reads normally")
+    eq(swa._num_count(""), None, "empty is absent")
+    eq(swa._num_count(None), None, "and so is nothing at all")
+    # Lengths keep the old rule: a 0mm blank is a failed read, not a flat part.
+    eq(swa._num_mm("0"), None, "a zero LENGTH is still rejected")
+    eq(swa._num_mm("126.39"), 126.39, "and a real length still reads")
+
+
+def test_the_solidworks_version_is_captured_before_the_session_closes():
+    """shutdown() clears session.sw, so reading the version afterwards recorded an empty
+    string on every extract — a manifest field that always looked like 'we did not ask'."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "tools" / "solidworks"
+           / "sw_native_analyse.py").read_text(encoding="utf-8")
+    ok("_sw_version_string(session)" not in src.split('"solidworks_version"')[1][:200],
+       "the manifest must not call _sw_version_string AFTER shutdown — read the captured value")
+    tree = ast.parse(src)
+    main_fn = next((n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+    ok(main_fn is not None, "main() must exist")
+    body = ast.unparse(main_fn)
+    _cap = body.index("_sw_version = ") if "_sw_version = " in body else -1
+    _shut = body.index("session.shutdown()") if "session.shutdown()" in body else -1
+    ok(_cap != -1, "the version must be captured into a variable")
+    ok(_cap < _shut, "and captured BEFORE shutdown, while the session is still alive")
 
 
 def test_the_pipeline_actually_runs_the_analyser():

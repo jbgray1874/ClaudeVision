@@ -39,10 +39,21 @@ import sys
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-import pythoncom
-import win32com.client
-from win32com.client import VARIANT
-from win32com.client import gencache
+# COM IMPORTED LAZILY. Everything in this file that decides something — which folders are
+# the live design, whether a cut-list zero is a value, how a table cell is read — is pure
+# Python, and requiring pywin32 to import it meant none of it could be tested anywhere but a
+# Windows box with SolidWorks. The regression suite skipped those fixtures silently, which is
+# indistinguishable from passing them. The session class imports COM when it is constructed.
+try:
+    import pythoncom
+    import win32com.client
+    from win32com.client import VARIANT
+    from win32com.client import gencache
+    _COM_AVAILABLE = True
+except ImportError as _com_exc:          # not Windows, or pywin32 absent
+    pythoncom = win32com = VARIANT = gencache = None       # type: ignore
+    _COM_AVAILABLE = False
+    _COM_IMPORT_ERROR = str(_com_exc)
 
 # SolidWorks doc types
 SW_PART = 1
@@ -187,6 +198,10 @@ class RouteSignals:
 
 class SolidWorksSession:
     def __init__(self, visible: bool = False):
+        if not _COM_AVAILABLE:
+            raise RuntimeError(
+                f"SolidWorks COM is not available in this Python ({_COM_IMPORT_ERROR}). "
+                f"This analyser must run on Windows with pywin32 and SolidWorks installed.")
         pythoncom.CoInitialize()
         # EARLY binding via EnsureDispatch: generates the SolidWorks typelib so no-arg
         # methods like FirstFeature()/GetNextFeature()/GetTypeName2() resolve as real
@@ -230,6 +245,16 @@ class SolidWorksSession:
         _already = self._is_already_open(path)
         doc = self.sw.OpenDoc6(path, doctype, OPEN_OPTS, "", errs, warns)
         if doc is None:
+            # 65536 is swFileWithSameTitleAlreadyOpen. On this job it is not a corrupt file:
+            # opening the assemblies FIRST loads their components, so a component opened
+            # again by path is refused because SolidWorks already holds a document of that
+            # title. micro_usb_Wire_01 failed for exactly this reason and its data was simply
+            # lost. The document is right there — take it rather than reporting a failure.
+            if int(errs.value or 0) & 65536:
+                doc = self._get_open_document(path)
+                if doc is not None:
+                    self._borrowed_titles.append(_safe_str(_get0(doc, "GetTitle")) or path)
+                    return doc, doctype
             raise RuntimeError(
                 f"OpenDoc6 failed: {path}  errs={errs.value} warns={warns.value}"
             )
@@ -240,14 +265,47 @@ class SolidWorksSession:
             self._borrowed_titles.append(_t or path)
         return doc, doctype
 
+    def _get_open_document(self, path: str):
+        """The already-open document for this path, or None. Matched on full path first, then
+        on title — a component loaded as part of an assembly may report a title without its
+        path resolving identically."""
+        _target = self._norm(path)
+        _stem = os.path.splitext(os.path.basename(path))[0].lower()
+        try:
+            d = self.sw.GetFirstDocument2() if hasattr(self.sw, "GetFirstDocument2") \
+                else _get0(self.sw, "GetFirstDocument")
+        except Exception:
+            return None
+        _by_title = None
+        seen = 0
+        while d is not None and seen < 5000:
+            seen += 1
+            try:
+                if self._norm(_safe_str(_get0(d, "GetPathName"))) == _target:
+                    return d
+                if _by_title is None:
+                    _t = _safe_str(_get0(d, "GetTitle"))
+                    if _t and os.path.splitext(_t)[0].lower() == _stem:
+                        _by_title = d
+                d = _get0(d, "GetNext")
+            except Exception:
+                break
+        return _by_title
+
+    @staticmethod
+    def _norm(path: str) -> str:
+        if not path:
+            return ""
+        try:
+            return os.path.normcase(path if str(path).startswith("\\\\")
+                                    else os.path.abspath(path))
+        except Exception:
+            return os.path.normcase(str(path))
+
     def _is_already_open(self, path: str) -> bool:
         """Was this document open before we asked for it? Compared on the full path, since
         two files in different folders can share a title."""
-        try:
-            _target = os.path.normcase(os.path.abspath(path)) if not path.startswith("\\\\") \
-                else os.path.normcase(path)
-        except Exception:
-            _target = os.path.normcase(path)
+        _target = self._norm(path)
         try:
             d = self.sw.GetFirstDocument2() if hasattr(self.sw, "GetFirstDocument2") \
                 else _get0(self.sw, "GetFirstDocument")
@@ -320,6 +378,25 @@ def _prop(props: Dict[str, str], *aliases: str) -> str:
         for k, v in low.items():
             if al in k and v:
                 return _safe_str(v)
+    return ""
+
+
+def _table_text(table, row: int, col: int) -> str:
+    """One cell of a table annotation.
+
+    ITableAnnotation exposes Text2(row, col, useCached) on some builds and Text(row, col) on
+    others, and calling the wrong arity raises rather than returning nothing — which is how a
+    released drawing BOM came back empty on every row instead of reporting it could not be
+    read. Try each form; the first that answers wins."""
+    for _attempt in (lambda: table.Text2(row, col, True),
+                     lambda: table.Text2(row, col),
+                     lambda: table.Text(row, col)):
+        try:
+            v = _attempt()
+            if v is not None:
+                return _safe_str(v)
+        except Exception:
+            continue
     return ""
 
 
@@ -583,6 +660,29 @@ def _num_mm(value) -> Optional[float]:
     return v if v > 0 else None
 
 
+def _num_count(value) -> Optional[int]:
+    """A COUNT from the cut list, where ZERO is a real answer.
+
+    _num_mm rejects non-positive values, which is right for a length: a blank cannot be 0mm
+    long, so a zero there is a failed read. It is wrong for a count. 'Cut Outs = 0' says this
+    part is a plain blank with one outer profile and one pierce, and dropping it to None
+    turned that statement back into "nobody looked" — the exact confusion the resolver's
+    explicit-zero handling exists to end, reintroduced one layer upstream."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    m = re.search(r"-?\d+(?:[.,]\d+)?", s.replace(",", "."))
+    if not m:
+        return None
+    try:
+        v = int(round(float(m.group(0))))
+    except ValueError:
+        return None
+    return v if v >= 0 else None
+
+
 # Cut-list property names SolidWorks generates for sheet-metal bodies. Spellings vary by
 # version/template, so each datum is tried against several candidates.
 # Property names confirmed present on SDI's own sheet-metal cut lists (12120 enumeration):
@@ -713,12 +813,16 @@ def _cutlist_properties(feat, notes: List[str]) -> Dict[str, Any]:
 
     _hits = 0
     _raw_seen: List[str] = []
+    # COUNTS accept zero; LENGTHS do not. A blank cannot be 0mm long, so a zero there is a
+    # failed read — but "Cut Outs = 0" and "Bends = 0" are statements about the part, and
+    # parsing them with the length reader turned each into "nobody looked".
+    _COUNT_KEYS = {"cut_out_count", "bend_count", "hole_count"}
     for key, candidates in _CUTLIST_KEYS.items():
         for cand in candidates:
             raw = _get_prop(cand)
             if raw is not None and len(_raw_seen) < 5:
                 _raw_seen.append(f"{key}={raw!r}")
-            val = _num_mm(raw)
+            val = _num_count(raw) if key in _COUNT_KEYS else _num_mm(raw)
             if val is not None:
                 out[key] = val
                 _hits += 1
@@ -1233,7 +1337,7 @@ def drawing_bom_tables(doc) -> List[BomLine]:
                         headers = []
                         for col in range(cols):
                             try:
-                                headers.append(_safe_str(t.Text2(0, col)).lower())
+                                headers.append(_table_text(t, 0, col).lower())
                             except Exception:
                                 headers.append("")
                         idx_pn = next(
@@ -1250,16 +1354,16 @@ def drawing_bom_tables(doc) -> List[BomLine]:
                         )
                         for r in range(1, rows):
                             try:
-                                pn = _safe_str(t.Text2(r, idx_pn))
+                                pn = _table_text(t, r, idx_pn)
                                 if not pn:
                                     continue
                                 qty = 1.0
                                 if idx_qty is not None:
                                     try:
-                                        qty = float(_safe_str(t.Text2(r, idx_qty)).replace(",", ""))
+                                        qty = float(_table_text(t, r, idx_qty).replace(",", ""))
                                     except Exception:
                                         qty = 1.0
-                                desc = _safe_str(t.Text2(r, idx_desc)) if idx_desc is not None else ""
+                                desc = _table_text(t, r, idx_desc) if idx_desc is not None else ""
                                 lines.append(
                                     BomLine(part_number=pn, description=desc, qty=qty, source="drawing_bom")
                                 )
@@ -1398,6 +1502,8 @@ def main():
               "models live elsewhere under the job root — point me at that folder.")
         sys.exit(1)
     session = SolidWorksSession(visible=False)
+    # Before the first document is opened, so a mid-run save is detectable.
+    _fp_before = _fingerprint_native_files(target)
     all_results = []
     try:
         for p in paths:
@@ -1432,6 +1538,9 @@ def main():
                 all_results.append({"path": p, "errors": [str(e)]})
             finally:
                 session.close_all()
+        # Captured while the session is still alive. shutdown() clears session.sw, so
+        # reading the version afterwards recorded an empty string on every extract.
+        _sw_version = _sw_version_string(session)
     finally:
         session.shutdown()
     out_json = out_override or os.path.join(
@@ -1447,6 +1556,18 @@ def main():
     # COVERAGE travels with it. Per-file failures are caught and written as error-only
     # records, and the process still exits zero, so an extraction where every file failed
     # produced a non-empty list that read downstream as a successful read.
+    # FINGERPRINT AFTER, COMPARED WITH BEFORE. Taken only at the end, the manifest describes
+    # the files as they are NOW while the results describe them as they were when each was
+    # opened. A model saved by a designer while a long batch is running produces an extract
+    # that claims to match the current file and does not. Two readings that differ means the
+    # design moved under us and the run cannot be trusted as a snapshot of anything.
+    _fp_after = _fingerprint_native_files(target)
+    _fp_changed = bool(_fp_before) and bool(_fp_after) and _fp_before != _fp_after
+    if _fp_changed:
+        print("\nWARNING: the model files CHANGED DURING this extraction. The results "
+              "describe the files as they were when each was opened, which is no longer "
+              "what is on disk. This extract is marked invalid — re-run it.")
+
     _errors = [{"path": r.get("path"), "errors": r.get("errors")}
                for r in all_results if isinstance(r, dict) and r.get("errors")]
     _ok = [r for r in all_results
@@ -1454,9 +1575,16 @@ def main():
     payload = {
         "schema": "sw_native_extract.v2",
         "_manifest": {
-            "native_files_fingerprint": _fingerprint_native_files(target),
-            "generated_from": os.path.abspath(target) if not str(target).startswith("\\\\") else target,
-            "solidworks_version": _sw_version_string(session),
+            "native_files_fingerprint": _fp_after,
+            "fingerprint_before": _fp_before,
+            # True when the files moved under us mid-run. The consumer must not treat this
+            # extract as a valid snapshot of anything.
+            "changed_during_extraction": _fp_changed,
+            # The FOLDER, for both file and folder targets — this is what the consumer
+            # fingerprints, and recording a file path here made every single-file extract
+            # read as stale immediately.
+            "generated_from": _fingerprint_scope(target),
+            "solidworks_version": _sw_version,
             "extractor_schema": "sw_native_extract.v2",
             "files_seen": len(all_results),
             "files_read": len(_ok),
@@ -1493,13 +1621,22 @@ def main():
               f"{len(_errors)} failed")
 
 
+def _fingerprint_scope(target: str) -> str:
+    """The folder a fingerprint covers. A file target is analysed on its own but fingerprinted
+    over its whole folder, and `generated_from` used to record the FILE — so the consumer
+    treated a file path as a directory, computed an empty fingerprint, and marked a
+    freshly-written extract stale on the spot. Both now record the same folder."""
+    return target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
+
+
 def _fingerprint_native_files(target: str) -> str:
-    """Same basis as the consumer's native_files_state, so the two can be compared at all."""
+    """Same basis and same exclusions as the consumer's native_files_state, so the two can be
+    compared at all."""
     import hashlib
     exts = (".sldprt", ".sldasm", ".slddrw")
     found = []
     try:
-        root = target if os.path.isdir(target) else os.path.dirname(target)
+        root = _fingerprint_scope(target)
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if not _is_excluded_dir(d)]
             for fn in filenames:
@@ -1520,13 +1657,26 @@ def _fingerprint_native_files(target: str) -> str:
 
 # Folders whose contents are not the live design: superseded models that would otherwise
 # make a drawing-only job look as though native evidence had been ignored.
+#
+# MATCHED AS WHOLE WORDS. Substring matching excluded "CAD Folder", because "folder"
+# contains "old" — and the consequence is not a missed folder but a silent one: the analyser
+# read those files while the manifest omitted them, so any later change to them was
+# invisible to the freshness check. Discovery and fingerprinting must also use the SAME rule,
+# or the two disagree about what the extract covers.
 _EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
-                        "_bak", "do not use", "dnu", "scrap")
+                        "bak", "dnu", "scrap", "wip", "temp", "tmp")
+_EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
 
 
 def _is_excluded_dir(name: str) -> bool:
     n = str(name or "").strip().lower()
-    return n.startswith(".") or any(t in n for t in _EXCLUDED_DIR_TOKENS)
+    if n.startswith(".") or n.startswith("~"):
+        return True
+    if any(ph in n for ph in _EXCLUDED_DIR_PHRASES):
+        return True
+    # Split on anything that is not a letter or digit, so "Old Revs", "_BAK", "rev-old" all
+    # match while "Folder" and "Boldon" do not.
+    return any(w in _EXCLUDED_DIR_TOKENS for w in re.split(r"[^a-z0-9]+", n) if w)
 
 
 def _sw_version_string(session: Any) -> str:

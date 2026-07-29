@@ -420,10 +420,22 @@ def native_extract_for_job(
             _payload = load_native_payload(jp)
             _man = _payload.get("_manifest") if isinstance(_payload.get("_manifest"), dict) else None
             _recorded = (_man or {}).get("native_files_fingerprint")
+            job.meta["changed_during_extraction"] = bool((_man or {}).get("changed_during_extraction"))
+            job.meta["fingerprint_before"] = (_man or {}).get("fingerprint_before")
             if _recorded:
-                # The real test: does this extract still describe the files on disk? A
-                # fingerprint sees a deleted or renamed model, which a timestamp cannot.
-                job.meta["extract_stale"] = (_recorded != _state["fingerprint"])
+                # UNREACHABLE IS NOT STALE. If the manifest names a folder on a drive that is
+                # not mapped now, the current fingerprint comes back empty and every file
+                # looks changed — which would report a perfectly good extract as stale on the
+                # strength of a missing network drive. That proves only that we could not
+                # look.
+                _folder_ok = bool(_fp_folder) and Path(str(_fp_folder)).exists()
+                if not _folder_ok or not _state["fingerprint"]:
+                    job.meta["source_unreachable"] = True
+                    job.meta["extract_stale"] = False
+                else:
+                    # The real test: does this extract still describe the files on disk? A
+                    # fingerprint sees a deleted or renamed model, which a timestamp cannot.
+                    job.meta["extract_stale"] = (_recorded != _state["fingerprint"])
                 job.meta["extract_manifest"] = _man
             else:
                 # No manifest. mtime is the only thing left, and it is genuinely weaker: a
@@ -464,15 +476,25 @@ def native_extract_for_job(
 # carries BOM tables and callouts the analyser reads.
 _NATIVE_EXTS = (".sldprt", ".sldasm", ".slddrw")
 
-# Folders whose contents are not the live design. Mirrors sw_native_analyse._EXCLUDED_DIR_TOKENS
-# — the two must agree, or the consumer counts files the analyser never opens.
+# Folders whose contents are not the live design. MUST match
+# sw_native_analyse._EXCLUDED_DIR_TOKENS exactly, or the consumer counts files the analyser
+# never opened — and a fixture compares the two rules name for name.
+#
+# Matched as whole WORDS. The substring version excluded "CAD Folder", because "folder"
+# contains "old", and the damage was silent: the analyser read those files while the manifest
+# omitted them, so later changes to them were invisible to the freshness check.
 _EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
-                        "_bak", "do not use", "dnu", "scrap")
+                        "bak", "dnu", "scrap", "wip", "temp", "tmp")
+_EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
 
 
 def _is_excluded_dir(name: str) -> bool:
     n = str(name or "").strip().lower()
-    return n.startswith(".") or any(t in n for t in _EXCLUDED_DIR_TOKENS)
+    if n.startswith(".") or n.startswith("~"):
+        return True
+    if any(ph in n for ph in _EXCLUDED_DIR_PHRASES):
+        return True
+    return any(w in _EXCLUDED_DIR_TOKENS for w in re.split(r"[^a-z0-9]+", n) if w)
 
 
 def native_files_state(folder: str | Path) -> Dict[str, Any]:
