@@ -2575,6 +2575,53 @@ def test_a_blank_is_found_wherever_the_writer_put_it():
        "wherever it was written, it counts")
 
 
+def test_a_guessed_price_says_so_on_the_estimating_sheet():
+    """The supplier column was blank on every BOM line, so a catalogue price and an AI market
+    estimate looked identical to the estimator reading the workbook.
+
+    On 12120 that mattered: the three guessed lines were 96% of material cost, and the
+    knurled knob was quoted at GBP 1.25, GBP 11.52 and GBP 1.77 across three runs of
+    identical inputs. A figure nobody can reproduce must not sit in a price column looking
+    like a quote.
+
+    Keyed on the source CLASS, never on a part code, so a job nobody has seen yet is labelled
+    by the same rule."""
+    from wb_populate import _price_origin, _INDICATIVE_TAG
+
+    def _line(source_name, applied=True):
+        return {"part_number": "BI-KNURLEDKNOB", "quantity": 2, "unit_cost_gbp": 1.77,
+                "cost_breakdown": {"system_cost": {
+                    "applied_to_total": applied,
+                    "source": {"source_name": source_name, "applied": True,
+                               "affects_total": applied, "source_rank": 0,
+                               "selected": {"source": source_name, "price": 1.77}}}}}
+
+    label, indicative = _price_origin(_line("llm_market_estimate"))
+    eq(indicative, True, "a guessed line is marked indicative")
+    ok("AI ESTIMATE" in label, f"and named as one in the supplier column (got {label!r})")
+
+    label, indicative = _price_origin(_line("udef_sqlserver"))
+    eq(indicative, False, "a catalogue line is not")
+    eq(label, "", "and needs no warning next to it")
+
+    # A price that was resolved but never added cannot mislead anyone about the total.
+    _, indicative = _price_origin(_line("llm_market_estimate", applied=False))
+    eq(indicative, False, "a resolved-but-unapplied guess does not tag the line")
+
+    # The tag has to be readable as what it is, in a narrow cell, by someone skim-reading.
+    ok("NOT A QUOTE" in _INDICATIVE_TAG and "INDICATIVE" in _INDICATIVE_TAG,
+       f"the tag says plainly what it is: {_INDICATIVE_TAG!r}")
+
+    # The cell is truncated to 120 characters on write and the tag is appended last, so on a
+    # long description the warning is the first thing that would be cut. It must survive.
+    _long = "BI-SCREENCABLE  " + ("SCREEN CABLE ASSEMBLY WITH MOULDED BOOT AND STRAIN RELIEF " * 3)
+    _room = 120 - len(_INDICATIVE_TAG) - 2
+    _cell = f"{_long[:_room].rstrip()}  {_INDICATIVE_TAG}"[:120]
+    ok(_cell.endswith(_INDICATIVE_TAG),
+       f"the warning survives truncation on a long description (got ...{_cell[-40:]!r})")
+    ok(len(_cell) <= 120, "and the cell still fits")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

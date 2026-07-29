@@ -70,7 +70,53 @@ try:
     from config import MATERIAL_TOTAL_ERROR_TOLERANT as _MATERIAL_TOTAL_ERROR_TOLERANT
 except Exception:
     _MATERIAL_TOTAL_ERROR_TOLERANT = True
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# What goes next to a price nobody can reproduce. Short enough for a spreadsheet cell and
+# blunt enough that it cannot be read as a supplier quote.
+_INDICATIVE_TAG = "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]"
+
+# How each kind of source is named in the supplier column, so an estimator reading the sheet
+# can see at a glance which lines are firm. Keyed on the source CLASS, never on a part code,
+# so a job nobody has seen yet is labelled by the same rule.
+_ORIGIN_LABELS = {
+    "ai_estimate": "AI ESTIMATE - INDICATIVE",
+    "web_catalog": "Web listing - verify",
+    "catalogue": "",          # a real catalogue row needs no warning; its supplier name stands
+    "config": "",
+    "unpriced": "NO PRICE FOUND - estimator to price",
+}
+
+
+def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
+    """(label for the supplier column, is this an unrepeatable guess?) for one BOM line.
+
+    Reads the price stamps the estimator wrote rather than re-deciding anything here: one
+    module owns the question of what a price source IS, so the sheet, the report, the quote
+    and the invariants cannot disagree about the same line.
+    """
+    try:
+        import price_provenance
+    except ImportError:
+        return "", False
+    best = None
+    for _path, block in price_provenance.iter_price_stamps(pe):
+        if not price_provenance.stamp_affects_total(block):
+            continue
+        # The bought-in unit cost is the line's price; a material rate on the same record is
+        # not what the BOM row is charging for.
+        if "system_cost" in _path:
+            best = block
+            break
+        if best is None:
+            best = block
+    if best is None:
+        return "", False
+    cls = price_provenance.stamp_source_class(best)
+    label = _ORIGIN_LABELS.get(cls)
+    if label is None:
+        label = str(best.get("source_name") or "")
+    return label, cls == "ai_estimate"
 
 try:
     import openpyxl
@@ -952,6 +998,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         code = _own_pn or se.get("catalogue_part_code")
         # supplier: engine may put it at top level OR in material_estimate
         supplier = pe.get("supplier") or me.get("supplier") or ""
+        # WHERE THIS PRICE CAME FROM, ON THE SHEET ITSELF. The supplier column was blank on
+        # every BOM line, so a catalogue price and an AI market estimate looked identical to
+        # the estimator reading the workbook — and on this job the guessed lines were 96% of
+        # material, with one knob quoted at GBP 1.25, GBP 11.52 and GBP 1.77 on three runs of
+        # the same inputs. A figure nobody can reproduce must not sit in a price column
+        # looking like a quote.
+        _origin, _indicative = _price_origin(pe)
+        if _origin and not supplier:
+            supplier = _origin
+        if _indicative:
+            # Also on the description, because the supplier column is narrow and this is the
+            # one thing a reader must not miss. The cell is truncated to 120 characters on
+            # write, and the tag is appended LAST — so on a long description the warning is
+            # the first thing that would be cut. Trim the description instead: a shortened
+            # part name is a small loss, a silently dropped warning is the whole point gone.
+            _room = 120 - len(_INDICATIVE_TAG) - 2
+            desc = f"{str(desc)[:_room].rstrip()}  {_INDICATIVE_TAG}"
+            _flag(f"BOM {code or desc}: priced by an AI market estimate, not a catalogue. "
+                  f"The figure changes every run and is INDICATIVE ONLY — confirm before "
+                  f"quoting.", flags)
         # price: bought-in unit_cost_gbp, or tube's unit_material_cost_gbp (catalogue £/EA),
         # or — for BI-/fuller-costed items — derive unit from extended_total_cost_gbp / qty
         qty = int(_safe(pe.get("quantity"), 1))
