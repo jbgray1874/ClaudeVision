@@ -1629,6 +1629,51 @@ def test_the_same_catalogue_always_yields_the_same_price():
        "a rounding-level difference is not a disagreement")
 
 
+def test_an_ai_guessed_price_cannot_make_a_quote_firm():
+    """Job 12120 priced three times on identical inputs at GBP 27.67, GBP 29.39 and GBP 32.86.
+    Labour was identical to the penny every run; the steel never moved. SQL missed on
+    THUM620, the knurled knob and the screen cable every time, so the lookup fell through to
+    an LLM market estimate — confidence 0.3-0.4, INDICATIVE by its own description — and the
+    cable came back at 4.54, then 6.00, then 8.54.
+
+    No tie-break fixes that. An LLM is being asked what a part costs and answering
+    differently each time, which is what it does. Filling a gap that way is defensible;
+    putting it on a quote as the applied unit cost is not, because the number cannot be
+    reproduced, audited, or defended to a customer who asks how it was reached.
+
+    And every one of those runs RECONCILED. No other check here can see it, because each run
+    is individually consistent."""
+    from invariants import check_job
+    j = _job()
+    j["part_estimates"] = [
+        {"part_number": "12120-01-01M", "operations": ["laser_cutting", "folding"],
+         "normalized_material": "MILD_STEEL", "material_source": "solidworks_api",
+         "quantity": 2, "quantity_source": "solidworks_api",
+         "geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+         "blank_length_mm": 126.39, "blank_length_mm_source": "dxf",
+         "blank_width_mm": 82.2, "blank_area_mm2": 10389.3,
+         "price_source": {"source_type": "udef_sqlserver", "price": 0.18}},
+        {"part_number": "BI-SCREENCABLE", "quantity": 1, "quantity_source": "bom_tree",
+         "price_source": {"source_type": "llm_market_estimate", "price": 8.54,
+                          "confidence": 0.35}},
+    ]
+    r = check_job(j, write_back=False)
+    codes = [v["code"] for v in r["violations"]]
+    ok("price_not_reproducible" in codes, f"an AI-guessed price must block: {codes}")
+    ok(not r["may_quote_firm"], "and stop the quote being firm")
+    _v = next(v for v in r["violations"] if v["code"] == "price_not_reproducible")
+    ok("BI-SCREENCABLE" in str(_v["detail"]), "naming the line, so it can be catalogued")
+    ok("12120-01-01M" not in str(_v["detail"]),
+       "a line priced from the catalogue is not implicated")
+
+    # Every line from a real source: nothing to report.
+    j2 = _job()
+    j2["part_estimates"][0]["price_source"] = {"source_type": "udef_sqlserver", "price": 1.16}
+    ok("price_not_reproducible" not in
+       [v["code"] for v in check_job(j2, write_back=False)["violations"]],
+       "catalogue prices raise nothing")
+
+
 # ── invariants — the checks that make a wrong answer loud ────────────────────────────
 def _job(**over):
     """A job that passes every invariant, so each test can break exactly one thing."""

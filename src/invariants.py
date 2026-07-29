@@ -618,6 +618,58 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
     return out
 
 
+# Sources that CANNOT produce the same answer twice. An LLM asked what a knurled knob costs
+# returns a different number each time; that is what these are for, and it is a legitimate way
+# to fill a gap — but it is an estimate OF a price, not a price.
+NON_REPRODUCIBLE_PRICE_SOURCES = {
+    "llm_market_estimate", "web_ai_fallback", "web_search", "web", "ai_market_estimate",
+}
+
+
+def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
+    """Was any priced line costed from a source that cannot answer the same way twice?
+
+    Job 12120 priced three times on identical inputs at GBP 27.67, GBP 29.39 and GBP 32.86.
+    Labour was identical to the penny every run and the steel never moved. SQL missed on
+    THUM620, the knurled knob and the screen cable every time, so the lookup fell through to
+    an LLM market estimate — confidence 0.3-0.4, described in its own output as INDICATIVE —
+    and the cable came back at GBP 4.54, then GBP 6.00, then GBP 8.54.
+
+    That is not drift and no tie-break fixes it. An LLM is being asked what a part costs, and
+    it is answering differently each time because that is what it does. As a way of filling a
+    gap it is defensible; as the applied unit cost on a quote it is not, because the number
+    cannot be reproduced, audited, or defended to a customer who asks how it was arrived at.
+
+    Every one of those three runs RECONCILED — rows to subtotals, subtotals to unit price.
+    The engine was internally perfect and externally unrepeatable, and no other check here
+    can see that, because each run is individually consistent.
+    """
+    parts = _parts(summary)
+    if not parts:
+        return _unevaluated("price_reproducibility", "No part records were found on this job.")
+    guessed = []
+    for p in parts:
+        _ps = p.get("price_source") or (p.get("material_estimate") or {}).get("price_source")
+        if not isinstance(_ps, dict):
+            continue
+        _src = str(_ps.get("source_type") or _ps.get("source") or "").strip().lower()
+        if _src in NON_REPRODUCIBLE_PRICE_SOURCES:
+            guessed.append({"part_number": p.get("part_number"), "source": _src,
+                            "unit_cost_gbp": (_ps.get("price") or _ps.get("unit_price_gbp")
+                                              or p.get("unit_cost_gbp")),
+                            "confidence": _ps.get("confidence")})
+    if not guessed:
+        return []
+    return [_violation(
+        "price_not_reproducible", BLOCKING,
+        f"{len(guessed)} priced line(s) were costed by an AI market estimate rather than a "
+        f"catalogue: {', '.join(sorted({str(g['part_number']) for g in guessed}))}. Those "
+        f"figures change every run — the same job has priced at three different totals on "
+        f"identical inputs — so the estimate cannot be reproduced or defended. Add the codes "
+        f"to the price catalogue, or price these lines by hand.",
+        parts=guessed[:10], count=len(guessed))]
+
+
 CHECKS = (
     check_schemas,
     check_workbook_adapters_read_everything,
@@ -631,6 +683,7 @@ CHECKS = (
     check_low_confidence_is_declared,
     check_geometry_is_reconciled,
     check_native_evidence_is_current,
+    check_prices_are_reproducible,
 )
 
 
