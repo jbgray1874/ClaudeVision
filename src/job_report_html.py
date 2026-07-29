@@ -1017,18 +1017,24 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
         # describe a problem instead of locating it.
         _d = x.get("detail") if isinstance(x.get("detail"), dict) else {}
         _bits = []
-        for _k in ("parts", "rows", "problems", "failed_paths"):
+        _DETAIL_LISTS = ("parts", "lines", "rows", "problems", "failed_paths")
+        for _k in _DETAIL_LISTS:
             for _item in (_d.get(_k) or [])[:8]:
                 if isinstance(_item, dict):
-                    _lbl = (_item.get("part_number") or _item.get("workbook_row")
-                            or _item.get("block") or _item.get("path"))
+                    # `part` as well as `part_number`: the firmness checks report a line by
+                    # whatever named it, and a detail block that renders as a bare count is
+                    # the thing this whole section exists to stop.
+                    _lbl = (_item.get("part_number") or _item.get("part")
+                            or _item.get("workbook_row") or _item.get("block")
+                            or _item.get("path") or _item.get("where"))
                     _why = (_item.get("geometry_source") or _item.get("wb_operation")
-                            or _item.get("reason") or _item.get("code") or "")
+                            or _item.get("reason") or _item.get("code")
+                            or _item.get("material_class") or "")
                     _bits.append(f"{_lbl}{f' ({_why})' if _why else ''}")
                 elif _item:
                     _bits.append(str(_item))
         for _k, _v in sorted(_d.items()):
-            if _k in ("parts", "rows", "problems", "failed_paths") or _v in (None, "", [], {}):
+            if _k in _DETAIL_LISTS or _v in (None, "", [], {}):
                 continue
             if not isinstance(_v, (list, dict)):
                 _bits.append(f"{_k}={_v}")

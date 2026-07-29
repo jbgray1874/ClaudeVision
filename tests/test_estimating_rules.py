@@ -2985,6 +2985,37 @@ def test_a_price_nobody_committed_to_is_reported_not_assumed():
        f"and the reasons are distinguished, not lumped: {v['detail']['reasons']}")
     ok(r["ok"], "a warning does not make the job wrong")
 
+    # A LABOUR RATE IS NOT A SUPPLIER PRICE. Every operation on every part stamps its rate,
+    # so on the live 12120 run this reported 83 lines of which 80 were labour — burying the
+    # three an estimator can act on. Firmness asks whether someone OUTSIDE SDI has committed
+    # to a price; our own rate card is a different question.
+    j2 = _job()
+    j2["estimate_summary"] = {"part_estimates": [
+        _line("A", "udef_sqlserver"),
+        {"part_number": "A", "labour_estimate": {"rate_sources": {
+            "folding": {"source_name": "sqlserver", "applied": True, "affects_total": True,
+                        "source_rank": 0,
+                        "selected": {"source": "sqlserver", "kind": "labour_rate",
+                                     "price": 40.47}}}}}]}
+    v2 = next((x for x in check_job(j2, write_back=False)["violations"]
+               if x["code"] == "price_not_firm"), None)
+    ok(v2 is not None, "material lines are still reported")
+    ok(not [l for l in v2["detail"]["lines"] if "rate_sources" in str(l.get("where"))],
+       f"but labour rates are not counted: {v2['detail']['count']} line(s)")
+
+
+def test_a_failing_check_shows_its_lines_not_just_a_count():
+    """The firmness advisory rendered as "count=83" and nothing else, because the report's
+    detail builder only knew the key names other checks happened to use. A verdict an
+    estimator cannot act on is the exact failure section 8 exists to prevent."""
+    import job_report_html as jr
+    _src = open(jr.__file__, encoding="utf-8").read()
+    _seg = _src[_src.index("_DETAIL_LISTS = ("):]
+    _seg = _seg[:_seg.index("_detail = (")]
+    ok('"lines"' in _seg, "a check reporting `lines` has its records rendered")
+    ok('_item.get("part")' in _seg, "and a line named by `part` is labelled, not blanked")
+    ok('_item.get("reason")' in _seg, "with the reason it objected")
+
 
 def test_firmness_severity_follows_intent_and_coverage():
     """A single global constant flipped when the first supplier feed lands would claim every

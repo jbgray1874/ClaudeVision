@@ -818,6 +818,16 @@ def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     for _path, block, ctx in stamps:
         if not price_provenance.stamp_affects_total(block):
             continue
+        # A LABOUR RATE IS NOT A SUPPLIER PRICE. Every operation on every part stamps its
+        # rate, so on 12120 this check reported 83 lines of which 80 were labour — burying
+        # the three that an estimator can actually do something about. Firmness is a question
+        # about what we BUY: whether someone outside SDI has committed to a price and for how
+        # long. Our own rate card is a different question with different governance, and
+        # answering it here would make the advisory unreadable, which is how a check stops
+        # being read at all.
+        _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
+        if "labour" in str(_sel.get("kind") or "").lower() or "rate_sources" in _path:
+            continue
         verdict = price_provenance.price_firmness(block, today=today)
         if verdict.get("firm"):
             continue
