@@ -154,7 +154,17 @@ def iter_price_stamps_with_owner(
         if node.get("schema") == PRICE_SOURCE_SCHEMA or _looks_like_price_stamp(node):
             yield _path, node, owner
         for key, value in node.items():
-            if isinstance(value, (dict, list)):
+            if isinstance(value, dict):
+                # THE ENCLOSING BLOCK KNOWS WHETHER THE MONEY WAS ADDED. A system_cost block
+                # carries applied_to_total beside the stamp; the stamp's own `applied` only
+                # means a price was resolved. On a document written before affects_total
+                # existed those two differ, and reading the looser one reports a GBP 75.00
+                # line as reaching a GBP 32.86 unit price — which it plainly did not.
+                if "applied_to_total" in node and "affects_total" not in value:
+                    value = dict(value, affects_total=bool(node.get("applied_to_total")))
+                yield from iter_price_stamps_with_owner(
+                    value, f"{_path}.{key}" if _path else str(key), owner)
+            elif isinstance(value, list):
                 yield from iter_price_stamps_with_owner(
                     value, f"{_path}.{key}" if _path else str(key), owner)
     elif isinstance(node, list):

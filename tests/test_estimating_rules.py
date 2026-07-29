@@ -1704,6 +1704,19 @@ def test_an_ai_guessed_price_cannot_make_a_quote_firm():
        [v["code"] for v in check_job(j3, write_back=False)["violations"]],
        "a resolved-but-unapplied guess does not block")
 
+    # A document written before affects_total existed carries only the looser `applied` on
+    # the stamp, with the real answer on the sibling beside it. Reading the stamp alone
+    # reported a GBP 75.00 weldment line as reaching a GBP 32.86 unit price, which it plainly
+    # had not — the enclosing block said applied_to_total was false.
+    j5 = _job()
+    _legacy = _system_cost("12120-01-101", "llm_market_estimate", 75.00,
+                           applied_to_total=False)
+    _legacy["cost_breakdown"]["system_cost"]["source"].pop("affects_total")
+    j5["estimate_summary"] = {"part_estimates": [_legacy]}
+    ok("price_not_reproducible" not in
+       [v["code"] for v in check_job(j5, write_back=False)["violations"]],
+       "the sibling flag is believed over the stamp's looser one on older documents")
+
     # Every line from a real source: nothing to report.
     j2 = _job()
     j2["estimate_summary"] = {"part_estimates": [
