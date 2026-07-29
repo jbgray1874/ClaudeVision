@@ -475,6 +475,19 @@ def _build_price_source_metadata(
         "source_class": _source_class,
         "reproducible": _source_class != "ai_estimate",
         "pricing_mode": _pricing_mode,
+        # WHAT KIND OF PRICE, AND MAY WE STAND BEHIND IT. Two different questions: a public
+        # list price repeats perfectly and is still not a quote we have committed to. The
+        # validity fields are carried through from whatever supplied them and are absent on
+        # every source today, which is itself the finding.
+        "price_class": price_provenance.source_class_of(
+            source_name, source_type=src_type, pricing_mode=_pricing_mode,
+            priced=selected.get("price") is not None),
+        "price_valid_to": (metadata.get("price_valid_to") or evidence.get("price_valid_to")
+                           or metadata.get("valid_to")),
+        "price_effective_at": (metadata.get("price_effective_at")
+                               or metadata.get("price_date") or evidence.get("price_date")),
+        "quote_reference": (metadata.get("quote_reference") or metadata.get("contract_id")
+                            or evidence.get("quote_reference")),
         # Named, not just classified — "an AI estimate" is a category, "xAI Grok" is an answer
         # to the question an estimator actually asks about a number they cannot reproduce.
         "llm_provider": metadata.get("llm_provider") or evidence.get("llm_provider"),

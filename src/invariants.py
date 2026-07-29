@@ -774,6 +774,52 @@ def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
         lines=detail[:10], count=len(detail))]
 
 
+def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
+    """Is every applied price one we have actually committed to honour?
+
+    REPRODUCIBLE AND FIRM ARE DIFFERENT QUESTIONS. A public distributor list price repeats
+    perfectly and is still not a quote: no contract, no validity date, no commitment. Only
+    an agreed rate, a live account feed, a written quotation, or a recent purchase is
+    something to stand behind — and each of those only while it is unexpired.
+
+    A WARNING, DELIBERATELY, AND ONLY FOR NOW. No price source in this engine carries a
+    validity date yet, so today every line resolves to "firm status cannot be established"
+    and blocking would fail every job on every run — which is how a gate becomes noise that
+    people learn to click past. It reports what is missing per line instead, so the gap is
+    visible and countable. The day the first supplier feed lands carrying price_valid_to,
+    this becomes BLOCKING and the severity below is the only edit needed.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("price_firmness", "This job is not a readable structure.")
+    stamps = list(price_provenance.iter_price_stamps_with_owner(summary))
+    if not stamps:
+        return _unevaluated("price_firmness", "No priced lines carrying a stamp were found.")
+    import datetime
+    today = datetime.date.today().isoformat()
+    not_firm: List[Dict[str, Any]] = []
+    for _path, block, owner in stamps:
+        if not price_provenance.stamp_affects_total(block):
+            continue
+        verdict = price_provenance.price_firmness(block, today=today)
+        if verdict.get("firm"):
+            continue
+        not_firm.append({"part": owner, "class": verdict.get("class"),
+                         "reason": verdict.get("reason"), "where": _path})
+    if not not_firm:
+        return []
+    by_reason: Dict[str, int] = {}
+    for n in not_firm:
+        by_reason[str(n["reason"])] = by_reason.get(str(n["reason"]), 0) + 1
+    return [_violation(
+        "price_not_firm", WARNING,
+        f"{len(not_firm)} applied price(s) are not something to stand behind: "
+        + "; ".join(f"{v} because {k}" for k, v in sorted(by_reason.items(), key=lambda kv: -kv[1]))
+        + ". Reproducible is not the same as firm — a list price repeats perfectly and "
+          "commits nobody. A firm quote needs an agreed rate, a live account feed, a written "
+          "quotation or a recent purchase, each of them unexpired.",
+        lines=not_firm[:12], count=len(not_firm), reasons=by_reason)]
+
+
 def check_a_measured_plate_is_not_charged_for_folding(summary: Any) -> List[Dict[str, Any]]:
     """A part the model measured as flat must not carry a fold on the priced rows.
 
@@ -844,6 +890,7 @@ CHECKS = (
     check_prices_are_reproducible,
     check_price_disagreement_is_declared,
     check_a_measured_plate_is_not_charged_for_folding,
+    check_prices_are_firm,
 )
 
 

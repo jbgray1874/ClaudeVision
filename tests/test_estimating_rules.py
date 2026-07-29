@@ -2905,6 +2905,87 @@ def test_the_report_counts_bought_ins_the_same_way_the_checks_do():
        "with the prefix left only as an import fallback")
 
 
+def test_reproducible_and_firm_are_different_questions():
+    """This module answered one question where there are two. A public distributor list price
+    repeats perfectly, every run, forever — and it is not a quote: no contract behind it, no
+    validity date, no commitment to honour it. Treating reproducible as sufficient would let
+    a list price sit on a customer quote looking exactly like a negotiated one.
+
+        reproducible — same inputs, same answer
+        firm         — we will stand behind it, and it has not expired
+
+    Nothing here judges a supplier; it classifies what KIND of thing a price is, so a
+    supplier nobody has onboarded yet is judged by the same rule."""
+    import price_provenance as pp
+
+    def _blk(src, **kw):
+        b = {"source_name": src, "applied": True, "affects_total": True, "source_rank": 0,
+             "selected": {"source": src, "price": 1.0}}
+        b.update(kw)
+        return b
+
+    eq(pp.source_class_of("udef_sqlserver"), pp.CONTRACT, "UDEF is an agreed rate")
+    eq(pp.source_class_of("historical_quote_material_line"), pp.PURCHASE_HISTORY,
+       "a historical quote line is what we last paid")
+    eq(pp.source_class_of("estimating_supplier_catalog_url"), pp.CATALOGUE,
+       "a supplier's published list is a catalogue")
+    eq(pp.source_class_of("argus_crc_index"), pp.COMMODITY_INDEX, "an index is a benchmark")
+    eq(pp.source_class_of("llm_market_estimate"), pp.AI_ESTIMATE, "and a guess is a guess")
+
+    # A catalogue price is reproducible and never firm — that is the whole distinction.
+    cat = pp.price_firmness(_blk("estimating_supplier_catalog_url"), today="2026-07-29")
+    eq((cat["reproducible"], cat["firm"]), (True, False),
+       "a list price repeats and still commits nobody")
+    ok("commitment" in cat["reason"], "and says why, not just that it failed")
+
+    # An agreed rate is firm only while it is in date.
+    live = pp.price_firmness(_blk("udef_sqlserver", price_valid_to="2026-12-31"),
+                             today="2026-07-29")
+    eq(live["firm"], True, "an unexpired contract price is firm")
+    dead = pp.price_firmness(_blk("udef_sqlserver", price_valid_to="2026-01-01"),
+                             today="2026-07-29")
+    eq(dead["firm"], False, "an expired one is not")
+    ok("expired on 2026-01-01" in dead["reason"], "naming the date it lapsed")
+
+    # THE STATE OF THE ENGINE TODAY: no source carries a validity date, so every line is
+    # unfirmable. That is the honest answer, and it is why the check reports rather than
+    # blocks — a gate that fails every job on every run is one people learn to click past.
+    bare = pp.price_firmness(_blk("udef_sqlserver"), today="2026-07-29")
+    eq((bare["reproducible"], bare["firm"]), (True, False),
+       "a contract price with no validity date cannot be shown to be firm")
+    ok("price_valid_to" in bare["reason"], "and names the missing field, so it can be asked for")
+
+
+def test_a_price_nobody_committed_to_is_reported_not_assumed():
+    """The firmness verdict has to reach a human, grouped by what is actually missing —
+    "not firm" on its own tells an estimator nothing they can act on."""
+    from invariants import check_job
+
+    def _line(pn, src, **kw):
+        src_blk = {"source_name": src, "applied": True, "affects_total": True,
+                   "source_rank": 0, "selected": {"source": src, "price": 1.0}}
+        src_blk.update(kw)
+        return {"part_number": pn, "cost_breakdown": {"system_cost": {
+            "applied_to_total": True, "source": src_blk}}}
+
+    j = _job()
+    j["estimate_summary"] = {"part_estimates": [
+        _line("A", "udef_sqlserver"),
+        _line("B", "estimating_supplier_catalog_url"),
+        _line("C", "udef_sqlserver", price_valid_to="2099-12-31")]}
+    r = check_job(j, write_back=False)
+    v = next((x for x in r["violations"] if x["code"] == "price_not_firm"), None)
+    ok(v is not None, "lines nobody committed to are reported")
+    eq(v["severity"], "warning",
+       "as a warning while no source carries validity — a gate that fails everything is noise")
+    _named = {str(l.get("part")) for l in v["detail"]["lines"]}
+    ok("C" not in _named, f"the in-date contract line is not implicated (named: {_named})")
+    ok({"A", "B"} <= _named, f"the two that cannot be stood behind are (named: {_named})")
+    ok(len(v["detail"]["reasons"]) == 2,
+       f"and the reasons are distinguished, not lumped: {v['detail']['reasons']}")
+    ok(r["ok"], "a warning does not make the job wrong")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

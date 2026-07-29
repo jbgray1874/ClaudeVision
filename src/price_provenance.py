@@ -106,6 +106,119 @@ def classify_price_source(
     return "catalogue"
 
 
+# ── two axes, not one ────────────────────────────────────────────────────────────────
+# REPRODUCIBLE and FIRM are different questions and this module used to answer only the
+# first. "Would the same input give the same number tomorrow?" is not "may we put this in
+# front of a customer as a price we will honour?" A public distributor list price is
+# perfectly reproducible and is not a firm quote: it carries no contract, no validity date
+# and no commitment. Treating reproducible as sufficient let a list price sit on a quote
+# looking exactly like a negotiated one.
+#
+#   reproducible  — same inputs, same answer. About repeatability.
+#   firm          — we will stand behind it. About commitment and expiry.
+#
+# Nothing here decides whether a given SUPPLIER is any good; it decides what KIND of thing a
+# price is, so the same rule applies to a supplier nobody has onboarded yet.
+CONTRACT = "contract"                # agreed rate: UDEF, an active contract price
+ACCOUNT_FEED = "account_feed"        # supplier's own feed for our account, with a valid_to
+SUPPLIER_QUOTE = "supplier_quote"    # written quotation with an expiry
+PURCHASE_HISTORY = "purchase_history"  # what we last actually paid
+CATALOGUE = "catalogue"              # public list price, no contract behind it
+COMMODITY_INDEX = "commodity_index"  # market benchmark, never a sell price
+AI_ESTIMATE = "ai_estimate"
+UNPRICED = "unpriced"
+
+#                       reproducible   firm            needs a validity date to be firm
+SOURCE_CLASS_RULES = {
+    CONTRACT:         (True,  True,  True),
+    ACCOUNT_FEED:     (True,  True,  True),
+    SUPPLIER_QUOTE:   (True,  True,  True),
+    PURCHASE_HISTORY: (True,  True,  True),   # conditional: needs a recent purchase date
+    CATALOGUE:        (True,  False, False),  # reproducible, never firm on its own
+    COMMODITY_INDEX:  (True,  False, False),
+    AI_ESTIMATE:      (False, False, False),
+    UNPRICED:         (True,  False, False),
+}
+
+# Internal, agreed prices. These are SDI's own record of what a thing costs under agreement.
+_CONTRACT_SOURCES = ("udef", "sqlserver", "access", "spreadsheet", "bought_in_parts",
+                     "pma_tbl", "labour_rates", "material_prices")
+# What we last paid — traceable and reproducible, but not automatically still true.
+_HISTORY_SOURCES = ("historical_quote", "purchase_history", "last_paid", "previous_quote")
+# Somebody else's published list.
+_CATALOGUE_SOURCES = ("supplier_catalog", "catalog_url", "web_catalog", "distributor_list")
+_INDEX_SOURCES = ("argus", "platts", "fastmarkets", "commodity_index", "hrc", "crc")
+
+# How stale a purchase may be and still be quoted as firm. A price you paid last week is
+# evidence; one you paid two years ago is history. Overridable by whoever owns the policy.
+PURCHASE_HISTORY_FIRM_DAYS = 90
+
+
+def source_class_of(source_name: Any, *, source_type: Any = None, pricing_mode: Any = None,
+                    priced: bool = True) -> str:
+    """Which of the classes above produced this price."""
+    if not priced:
+        return UNPRICED
+    if is_non_reproducible_source(source_name, source_type, pricing_mode):
+        return AI_ESTIMATE
+    n = _norm(source_name)
+    if not n or n in _UNPRICED_SOURCES:
+        return UNPRICED if n in _UNPRICED_SOURCES else CATALOGUE
+    for token in _INDEX_SOURCES:
+        if token in n:
+            return COMMODITY_INDEX
+    for token in _HISTORY_SOURCES:
+        if token in n:
+            return PURCHASE_HISTORY
+    for token in _CATALOGUE_SOURCES:
+        if token in n:
+            return CATALOGUE
+    for token in _CONTRACT_SOURCES:
+        if token in n:
+            return CONTRACT
+    return CATALOGUE          # unknown source: reproducible, but nobody has agreed it
+
+
+def price_firmness(block: Dict[str, Any], today: Any = None) -> Dict[str, Any]:
+    """Is this price firm, and if not, exactly what is missing?
+
+    Returns {"class", "reproducible", "firm", "reason"}. `reason` is empty when firm, and
+    otherwise names the one thing standing in the way — because "not firm" on its own tells
+    an estimator nothing they can act on.
+
+    NOTHING IS FIRM TODAY. No price source in this engine carries a validity date, so every
+    line resolves to "firm status cannot be established". That is the honest answer, and it
+    is why the check that reads this reports a warning rather than blocking every job: a gate
+    that fails everything is one people learn to ignore. It becomes blocking the day the
+    first supplier feed lands carrying price_valid_to.
+    """
+    # Always computed from the source itself, never read off source_class. That field carries
+    # the older, coarser vocabulary used for the spreadsheet's supplier label, where
+    # "catalogue" means "a real lookup of any kind" — including UDEF. Reading it here would
+    # file every contract price as a public list price and rule it non-firm.
+    _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
+    cls = block.get("price_class")
+    if cls not in SOURCE_CLASS_RULES:
+        cls = source_class_of(block.get("source_name") or _sel.get("source"),
+                              source_type=block.get("source_type"),
+                              pricing_mode=block.get("pricing_mode"),
+                              priced=_sel.get("price") is not None or bool(block.get("applied")))
+    reproducible, firm, needs_validity = SOURCE_CLASS_RULES[cls]
+    reason = ""
+    if not reproducible:
+        reason = "the price is generated, not looked up — it differs every run"
+    elif not firm:
+        reason = (f"a {cls.replace('_', ' ')} price carries no commitment to honour it")
+    elif needs_validity:
+        valid_to = block.get("price_valid_to") or block.get("valid_to")
+        effective = block.get("price_effective_at") or block.get("price_date")
+        if not valid_to and not (cls == PURCHASE_HISTORY and effective):
+            firm, reason = False, "no price_valid_to on the source — validity cannot be checked"
+        elif valid_to and today and str(valid_to) < str(today):
+            firm, reason = False, f"the price expired on {valid_to}"
+    return {"class": cls, "reproducible": reproducible, "firm": firm, "reason": reason}
+
+
 def is_reproducible(
     source_name: Any = None,
     *,
