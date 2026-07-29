@@ -23,6 +23,8 @@ from config import (
     WORKBOOK_EQUIVALENT_PRICING,
 )
 from estimate_source_extract import build_estimate_source_extract
+import price_provenance
+from price_provenance import classify_price_source
 from price_sources import PriceRequest, get_best_price
 from unit_parsing import is_per_kg_unit, is_per_hour_unit
 
@@ -418,7 +420,13 @@ def _selected_price_unit(selected: Dict[str, Any]) -> str:
     return str(selected.get("unit") or "").strip().lower()
 
 
-def _build_price_source_metadata(result: Dict[str, Any], fallback_source: str, applied: bool, applied_basis: str | None = None) -> Dict[str, Any]:
+def _build_price_source_metadata(
+    result: Dict[str, Any],
+    fallback_source: str,
+    applied: bool,
+    applied_basis: str | None = None,
+    affects_total: bool | None = None,
+) -> Dict[str, Any]:
     selected = _extract_selected_price(result)
     evidence = selected.get("evidence", {}) if isinstance(selected.get("evidence"), dict) else {}
     metadata = selected.get("metadata", {}) if isinstance(selected.get("metadata"), dict) else {}
@@ -444,7 +452,42 @@ def _build_price_source_metadata(result: Dict[str, Any], fallback_source: str, a
     elif str(source_name).lower() == "web" and selected.get("source"):
         src_type = "web_catalog"
 
+    # WHERE A GUESSED PRICE USED TO HIDE. `src_type` above is derived from the *connector*
+    # that answered, so anything reached through the pricing-service chain — including an LLM
+    # market estimate — landed here as "external", the same word a SQL catalogue row carries.
+    # Nothing downstream could tell the two apart, and three AI-priced bought-ins on 12120
+    # passed the reproducibility check because of it. Classify by the source's identity, in
+    # one shared place, so every writer and every checker reaches the same verdict.
+    _pricing_mode = (evidence.get("pricing_mode") or metadata.get("pricing_mode")
+                     or selected.get("pricing_mode"))
+    _source_class = classify_price_source(
+        source_name, source_type=src_type, pricing_mode=_pricing_mode,
+        priced=selected.get("price") is not None,
+    )
+    if _source_class == "ai_estimate" and src_type == "external":
+        src_type = "web_ai_fallback"      # never let a generated price read as a catalogue hit
+
     return {
+        # The marker consumers find priced lines by. Nothing downstream should have to know
+        # WHERE in a part a price is stored — a block added to a new part shape is then
+        # checked without the checker being taught about it.
+        "schema": price_provenance.PRICE_SOURCE_SCHEMA,
+        "source_class": _source_class,
+        "reproducible": _source_class != "ai_estimate",
+        "pricing_mode": _pricing_mode,
+        # `applied` means a price was found for this line. `affects_total` is narrower: a
+        # bought-in unit cost can be resolved and then not added, because the part was costed
+        # as a fabrication instead. Only money that reached the total can move the total.
+        "affects_total": bool(applied if affects_total is None else affects_total),
+        # The resolver's own account of which sources answered and whether they agreed. A
+        # price that moves between runs is otherwise invisible: every run is internally
+        # consistent and the number is simply different.
+        "provenance": result.get("provenance"),
+        "review_reason": (
+            selected.get("review_reason")
+            or metadata.get("review_reason")
+            or price_provenance.review_reason_for(_source_class, source_name)
+        ),
         "supplier_source": supplier_source,
         "supplier_code": metadata.get("supplier_code") or evidence.get("supplier_code") or evidence_row.get("supplier_code"),
         "price_date": metadata.get("price_date") or evidence.get("price_date") or str(date.today()),
@@ -903,8 +946,25 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                             "price": ps_price,
                             "confidence": anchor.get("confidence"),
                             "provenance": anchor.get("provenance"),
-                            "review_required": anchor.get("review_required", False),
+                            "review_required": anchor.get("review_required",
+                                                         anchor.get("review_flag", False)),
                             "review_reason": anchor.get("review_reason"),
+                            # The anchor already knows what it is — a UDEF row, a historical
+                            # quote line, or a web/AI estimate. Dropping that here is what
+                            # left an LLM price indistinguishable from a catalogue hit by the
+                            # time it reached the sheet.
+                            "metadata": {
+                                "pricing_mode": anchor.get("source_type") or anchor.get("source"),
+                                "supplier_name": anchor.get("supplier_name"),
+                                "price_date": anchor.get("price_date"),
+                                "review_reason": anchor.get("review_reason"),
+                            },
+                            "evidence": {
+                                "web_query": anchor.get("web_query"),
+                                "low_estimate_gbp": anchor.get("low_estimate_gbp"),
+                                "high_estimate_gbp": anchor.get("high_estimate_gbp"),
+                                "source_note": anchor.get("provenance"),
+                            },
                         }
                     },
                     "applied_unit_cost": ps_price,
@@ -3325,6 +3385,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                     fallback_source="system_cost_not_found",
                     applied=system_unit_cost is not None,
                     applied_basis="GBP_each" if system_unit_cost is not None else None,
+                    # The same expression as applied_to_total below, so the stamp and the
+                    # sibling flag cannot disagree about whether this price reached the total.
+                    affects_total=bool(bought_in_candidate and system_unit_cost is not None),
                 ),
                 "applied_to_total": bought_in_candidate and system_unit_cost is not None,
             },

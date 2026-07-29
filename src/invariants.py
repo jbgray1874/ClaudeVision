@@ -25,6 +25,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+# The one place that decides what a price source IS. Shared with the estimator and the
+# pricing service so a writer and a checker cannot reach different verdicts about the same
+# source — which is how an AI market estimate came to be stamped, and read, as "external".
+# Dependency-free by design: no config, no database, no connectors.
+import price_provenance
+
 SCHEMA = "invariants.v1"
 
 # The contract versions this module knows how to read. A structure carrying a different
@@ -83,6 +89,16 @@ def _node(summary: Any, key: str) -> Dict[str, Any]:
 def _parts(summary: Any) -> List[Dict[str, Any]]:
     if not isinstance(summary, dict):
         return []
+    # THESE ARE THE RAW PART RECORDS, AND DELIBERATELY SO. Every caller of this helper is a
+    # geometry or attribution check: it reads geometry_source, blank_length_mm,
+    # flat_arbitration, dxf_geometry_rejected. Those fields exist on the top-level `parts`
+    # list and NOT on estimate_summary.part_estimates, which carries costed rows.
+    #
+    # Which is why no price check may use this helper. The reproducibility check did, found
+    # geometry records with no money in them, and reported CLEAR on a job with three AI-priced
+    # bought-ins. Reordering this to prefer part_estimates would have fixed that one check by
+    # silently blinding four others — the same trade in the other direction. Price checks walk
+    # the whole job for price stamps instead; see check_prices_are_reproducible.
     for holder in (summary, summary.get("estimate_summary") or {}):
         if isinstance(holder, dict):
             for key in ("part_estimates", "parts"):
@@ -621,9 +637,9 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
 # Sources that CANNOT produce the same answer twice. An LLM asked what a knurled knob costs
 # returns a different number each time; that is what these are for, and it is a legitimate way
 # to fill a gap — but it is an estimate OF a price, not a price.
-NON_REPRODUCIBLE_PRICE_SOURCES = {
-    "llm_market_estimate", "web_ai_fallback", "web_search", "web", "ai_market_estimate",
-}
+# Kept as a name for existing readers, but the list itself lives in one place now. Two copies
+# of "which sources are guesses" is how a writer and a checker come to disagree.
+NON_REPRODUCIBLE_PRICE_SOURCES = price_provenance.NON_REPRODUCIBLE_SOURCES
 
 
 def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
@@ -643,31 +659,83 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     Every one of those three runs RECONCILED — rows to subtotals, subtotals to unit price.
     The engine was internally perfect and externally unrepeatable, and no other check here
     can see that, because each run is individually consistent.
+
+    HOW THIS CHECK FAILED ONCE ALREADY. Its first version read part["price_source"] over
+    _parts(summary), and reported CLEAR on the very job above. Two reasons, both of them the
+    same mistake: it looked at the top-level `parts` list, which carries geometry and no
+    prices, never reaching estimate_summary.part_estimates; and even there the AI prices were
+    bought-in unit costs at cost_breakdown.system_cost.source, not at price_source. A check
+    that has to be told where money lives will keep passing jobs whose money is somewhere
+    else. So it is now handed the whole job and finds every price stamp in it by marker.
     """
-    parts = _parts(summary)
-    if not parts:
-        return _unevaluated("price_reproducibility", "No part records were found on this job.")
+    if not isinstance(summary, dict):
+        return _unevaluated("price_reproducibility", "This job is not a readable structure.")
+    stamps = list(price_provenance.iter_price_stamps(summary))
+    if not stamps:
+        return _unevaluated(
+            "price_reproducibility",
+            "No priced lines carrying a price-source stamp were found anywhere on this job.")
+
     guessed = []
-    for p in parts:
-        _ps = p.get("price_source") or (p.get("material_estimate") or {}).get("price_source")
-        if not isinstance(_ps, dict):
+    for path, block in stamps:
+        if not (price_provenance.stamp_affects_total(block)
+                and price_provenance.stamp_is_ai_estimate(block)):
             continue
-        _src = str(_ps.get("source_type") or _ps.get("source") or "").strip().lower()
-        if _src in NON_REPRODUCIBLE_PRICE_SOURCES:
-            guessed.append({"part_number": p.get("part_number"), "source": _src,
-                            "unit_cost_gbp": (_ps.get("price") or _ps.get("unit_price_gbp")
-                                              or p.get("unit_cost_gbp")),
-                            "confidence": _ps.get("confidence")})
+        _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
+        guessed.append({
+            "where": path,
+            "source": block.get("source_name") or _sel.get("source"),
+            "unit_cost_gbp": _sel.get("price") if _sel.get("price") is not None
+                             else block.get("unit_price_gbp"),
+            "confidence": block.get("confidence"),
+        })
     if not guessed:
         return []
+    _names = sorted({str(g["where"]).split(".cost_breakdown")[0].split(".material_estimate")[0]
+                     for g in guessed})
     return [_violation(
         "price_not_reproducible", BLOCKING,
-        f"{len(guessed)} priced line(s) were costed by an AI market estimate rather than a "
-        f"catalogue: {', '.join(sorted({str(g['part_number']) for g in guessed}))}. Those "
-        f"figures change every run — the same job has priced at three different totals on "
-        f"identical inputs — so the estimate cannot be reproduced or defended. Add the codes "
-        f"to the price catalogue, or price these lines by hand.",
-        parts=guessed[:10], count=len(guessed))]
+        f"{len(guessed)} priced line(s) that reached the total were costed by an AI market "
+        f"estimate rather than a catalogue: {', '.join(_names[:8])}. Those figures change "
+        f"every run — the same job has priced at three different totals on identical inputs, "
+        f"one cable line moving from GBP 4.54 to GBP 8.54 on its own — so the estimate cannot "
+        f"be reproduced or defended. Add the codes to the price catalogue, or price these "
+        f"lines by hand.",
+        lines=guessed[:10], count=len(guessed))]
+
+
+def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
+    """Where several sources answered with different prices, is the spread visible?
+
+    Determinism is not correctness. If the catalogue holds THUM620 at both GBP 1.16 and
+    GBP 1.32, picking the same row every run is repeatable and still hides a data problem
+    that belongs in front of a person. The resolver records the spread; this makes sure a
+    reader is told about it rather than shown only the survivor.
+
+    A warning, not blocking: the number that was applied came from a real catalogue row, so
+    the price stands — it is the catalogue that needs attention.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("price_disagreement", "This job is not a readable structure.")
+    disputed = price_provenance.declared_price_disagreements(summary)
+    if not disputed:
+        return []
+    detail = []
+    for path, block in disputed:
+        dis = (block.get("provenance") or {}).get("disagreement") or {}
+        detail.append({"where": path, "low_gbp": dis.get("low_gbp"),
+                       "high_gbp": dis.get("high_gbp"),
+                       "spread_pct": dis.get("spread_pct"),
+                       "sources": dis.get("sources")})
+    _worst = max(detail, key=lambda d: float(d.get("spread_pct") or 0.0))
+    return [_violation(
+        "price_sources_disagree", WARNING,
+        f"{len(detail)} priced line(s) had sources that disagreed on the price — the widest "
+        f"spread is {_worst.get('spread_pct')}% between GBP {_worst.get('low_gbp')} and "
+        f"GBP {_worst.get('high_gbp')} at {_worst.get('where')}. The applied figure is a real "
+        f"catalogue row, so the price stands, but the catalogue holds more than one answer "
+        f"for the same item and an estimator should see which is right.",
+        lines=detail[:10], count=len(detail))]
 
 
 CHECKS = (
@@ -684,6 +752,7 @@ CHECKS = (
     check_geometry_is_reconciled,
     check_native_evidence_is_current,
     check_prices_are_reproducible,
+    check_price_disagreement_is_declared,
 )
 
 
@@ -747,3 +816,40 @@ def format_report(result: Dict[str, Any]) -> str:
         lines.append(f"   {_mark.get(v.get('severity'), 'warning   ')}  "
                      f"{v.get('code')}: {v.get('message')}")
     return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    # Re-check a job that has already been stamped, without re-running the estimate.
+    #
+    #     python src\invariants.py output\json\12120_scan.json
+    #
+    # The checks read only what is in the document, so this answers "would this job be
+    # released as firm?" against a JSON already on disk. It exists because the alternative —
+    # believing a check fires because a fixture says it does — is how a reproducibility check
+    # reported CLEAR on a job with three AI-priced bought-ins in it.
+    import json
+    import sys
+
+    if len(sys.argv) < 2:
+        print(__doc__)
+        print("usage: python invariants.py <stamped-job.json> [...]")
+        raise SystemExit(2)
+
+    _worst = 0
+    for _path in sys.argv[1:]:
+        with open(_path, "r", encoding="utf-8") as _fh:
+            _doc = json.load(_fh)
+        _res = check_job(_doc, write_back=False)
+        print(f"\n=== {_path}")
+        print(format_report(_res))
+        # Name the priced lines, whatever they turned out to be. A verdict with no lines
+        # under it cannot be acted on, and cannot be disbelieved either.
+        for _p, _b in price_provenance.iter_price_stamps(_doc):
+            _cls = _b.get("source_class") or (
+                "ai_estimate" if price_provenance.stamp_is_ai_estimate(_b) else "?")
+            _mark = "  GUESSED" if price_provenance.stamp_is_ai_estimate(_b) else "         "
+            _used = "applied" if price_provenance.stamp_affects_total(_b) else "not applied"
+            print(f"  {_mark}  {_cls:<12} {str(_b.get('source_name')):<34} {_used:<11} {_p}")
+        if not _res.get("may_quote_firm"):
+            _worst = 1
+    raise SystemExit(_worst)

@@ -1642,36 +1642,120 @@ def test_an_ai_guessed_price_cannot_make_a_quote_firm():
     reproduced, audited, or defended to a customer who asks how it was reached.
 
     And every one of those runs RECONCILED. No other check here can see it, because each run
-    is individually consistent."""
+    is individually consistent.
+
+    THE SHAPE IS THE TEST. The first version of this fixture hand-built
+    part_estimates[*].price_source at the top level, and passed — while the same check
+    reported CLEAR on the real 12120 JSON, where all three AI prices sit at
+    estimate_summary.part_estimates[*].cost_breakdown.system_cost.source, stamped
+    source_name=llm_market_estimate but source_type=external. So this fixture is built to the
+    real nesting: a top-level `parts` list carrying geometry and no money, the priced records
+    under estimate_summary, and the guessed price two levels inside a cost breakdown."""
     from invariants import check_job
+
+    def _system_cost(code, source_name, price, applied_to_total=True, source_type="external"):
+        """One bought-in line, in the shape the estimator actually writes."""
+        return {
+            "part_number": code, "quantity": 1, "quantity_source": "bom_tree",
+            "cost_breakdown": {"system_cost": {
+                "unit_cost_gbp": price, "matched_part_code": code,
+                "applied_to_total": applied_to_total,
+                "source": {"source_name": source_name, "source_type": source_type,
+                           "applied": True, "affects_total": applied_to_total,
+                           "source_rank": 0, "confidence": 0.35,
+                           "selected": {"source": source_name, "price": price}},
+            }},
+        }
+
     j = _job()
-    j["part_estimates"] = [
-        {"part_number": "12120-01-01M", "operations": ["laser_cutting", "folding"],
-         "normalized_material": "MILD_STEEL", "material_source": "solidworks_api",
-         "quantity": 2, "quantity_source": "solidworks_api",
-         "geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
-         "blank_length_mm": 126.39, "blank_length_mm_source": "dxf",
-         "blank_width_mm": 82.2, "blank_area_mm2": 10389.3,
-         "price_source": {"source_type": "udef_sqlserver", "price": 0.18}},
-        {"part_number": "BI-SCREENCABLE", "quantity": 1, "quantity_source": "bom_tree",
-         "price_source": {"source_type": "llm_market_estimate", "price": 8.54,
-                          "confidence": 0.35}},
-    ]
+    # Geometry records: where the old check looked, and where no price has ever lived.
+    j["parts"] = [{"part_number": "12120-01-01M", "geometry_source": "dxf_flat_pattern",
+                   "dxf_measured_outline": True, "blank_length_mm": 126.39,
+                   "blank_width_mm": 82.2, "blank_area_mm2": 10389.3}]
+    # Priced records: where the money actually is.
+    j["estimate_summary"] = {"part_estimates": [
+        _system_cost("THUM620", "udef_sqlserver", 1.16),
+        _system_cost("BI-SCREENCABLE", "llm_market_estimate", 8.54),
+        _system_cost("BI-KNURLEDKNOB", "llm_market_estimate", 1.90),
+    ]}
     r = check_job(j, write_back=False)
     codes = [v["code"] for v in r["violations"]]
     ok("price_not_reproducible" in codes, f"an AI-guessed price must block: {codes}")
     ok(not r["may_quote_firm"], "and stop the quote being firm")
     _v = next(v for v in r["violations"] if v["code"] == "price_not_reproducible")
-    ok("BI-SCREENCABLE" in str(_v["detail"]), "naming the line, so it can be catalogued")
-    ok("12120-01-01M" not in str(_v["detail"]),
+    eq(_v["detail"]["count"], 2, "both guessed lines counted, not just the first")
+    _sources = {str(l["source"]) for l in _v["detail"]["lines"]}
+    eq(_sources, {"llm_market_estimate"}, "and only the guessed ones")
+    ok("udef_sqlserver" not in str(_v["detail"]),
        "a line priced from the catalogue is not implicated")
+
+    # A guessed price the estimator resolved but did NOT add to the total cannot move the
+    # total, so it is not what makes the job unrepeatable.
+    j3 = _job()
+    j3["estimate_summary"] = {"part_estimates": [
+        _system_cost("BI-SCREENCABLE", "llm_market_estimate", 8.54, applied_to_total=False)]}
+    ok("price_not_reproducible" not in
+       [v["code"] for v in check_job(j3, write_back=False)["violations"]],
+       "a resolved-but-unapplied guess does not block")
 
     # Every line from a real source: nothing to report.
     j2 = _job()
-    j2["part_estimates"][0]["price_source"] = {"source_type": "udef_sqlserver", "price": 1.16}
+    j2["estimate_summary"] = {"part_estimates": [
+        _system_cost("THUM620", "udef_sqlserver", 1.16)]}
     ok("price_not_reproducible" not in
        [v["code"] for v in check_job(j2, write_back=False)["violations"]],
        "catalogue prices raise nothing")
+
+    # A job with no price stamps anywhere has not been checked — it has not passed.
+    j4 = _job()
+    j4["part_estimates"][0].pop("material_estimate")
+    r4 = check_job(j4, write_back=False)
+    ok("price_reproducibility_not_evaluated" in [v["code"] for v in r4["violations"]],
+       "and a job with no priced lines reads as unverified, never as clear")
+
+
+def test_the_estimator_stamps_what_kind_of_thing_priced_each_line():
+    """The gate above can only fire on what the estimator wrote down.
+
+    An LLM market estimate reached the sheet stamped source_type='external' — the same word a
+    SQL catalogue hit carries — because the type was derived from the connector that answered
+    rather than from what the source IS. Nothing downstream could tell them apart. This tests
+    the writer, not the classifier: the classifier was right all along and never consulted."""
+    from estimator import _build_price_source_metadata
+
+    def _stamp(source, **sel):
+        sel.setdefault("price", 8.54)
+        return _build_price_source_metadata(
+            {"selected": dict(sel, source=source)}, fallback_source="x", applied=True)
+
+    guessed = _stamp("llm_market_estimate")
+    eq(guessed["source_class"], "ai_estimate", "an LLM estimate is named as one")
+    eq(guessed["reproducible"], False, "and declared unrepeatable")
+    ok(guessed["source_type"] != "external",
+       f"never labelled like a catalogue hit (got {guessed['source_type']!r})")
+    ok("indicative" in str(guessed["review_reason"]).lower(),
+       "carrying the sentence an estimator needs to read")
+
+    catalogued = _stamp("udef_sqlserver")
+    eq(catalogued["source_class"], "catalogue", "a SQL row is a catalogue price")
+    eq(catalogued["reproducible"], True, "and repeats")
+
+    # The connector reached through the pricing service reports its mode in metadata; the
+    # source name alone would not give it away.
+    viaservice = _build_price_source_metadata(
+        {"selected": {"source": "web", "price": 4.54,
+                      "metadata": {"pricing_mode": "web_ai_fallback"}}},
+        fallback_source="x", applied=True)
+    eq(viaservice["source_class"], "ai_estimate",
+       "an AI mode is caught even when the source name is just the connector")
+
+    # And the stamp must be findable without knowing where it was written.
+    import price_provenance
+    found = dict(price_provenance.iter_price_stamps(
+        {"estimate_summary": {"part_estimates": [
+            {"cost_breakdown": {"system_cost": {"source": guessed}}}]}}))
+    eq(list(found), ["estimate_summary.part_estimates[0].cost_breakdown.system_cost.source"],
+       "the walker finds a stamp by marker, at whatever depth it was written")
 
 
 # ── invariants — the checks that make a wrong answer loud ────────────────────────────
@@ -1699,7 +1783,14 @@ def _job(**over):
                             "quantity": 2, "quantity_source": "solidworks_api",
                             "geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
                             "blank_length_mm": 126.39, "blank_length_mm_source": "dxf",
-                            "blank_width_mm": 82.2, "blank_area_mm2": 10389.3}],
+                            "blank_width_mm": 82.2, "blank_area_mm2": 10389.3,
+                            # A clean job has priced something, from somewhere nameable. A
+                            # job with no price stamp at all is not clean, it is unchecked —
+                            # so the baseline here carries one, from a catalogue.
+                            "material_estimate": {"price_source": {
+                                "schema": "price_source.v1", "source_name": "udef_sqlserver",
+                                "source_class": "catalogue", "reproducible": True,
+                                "applied": True, "affects_total": True}}}],
     }
     for k, v in over.items():
         job[k] = v
