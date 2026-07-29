@@ -673,7 +673,17 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
                  f'across raw/assembly parts.</td></tr>')
 
     # bought-ins recognised
-    bi = [p for p in parts if str(p.get("part_number") or "").upper().startswith("BI-")]
+    # ONE MODULE ANSWERS "DO WE BUY THIS". A local BI- prefix test read four bought-ins and
+    # two AI-priced lines on 12120, while the invariant reading the same job said three —
+    # because THUM620 does not start with BI-, and bought_in_policy has listed THUM as a
+    # bought-in family all along. Two counts of the same thing on one page is the defect that
+    # module exists to prevent; the prefix stays only as a fallback if it cannot be imported.
+    try:
+        from bought_in_policy import is_bought_in as _is_bought_in
+    except ImportError:
+        def _is_bought_in(p):
+            return str(p.get("part_number") or "").upper().startswith("BI-")
+    bi = [p for p in parts if _is_bought_in(p)]
     rows += bought_in_strength_row(bi)
 
     if not rows:

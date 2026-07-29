@@ -2882,6 +2882,29 @@ def test_the_report_does_not_call_a_guess_a_catalogue_price():
     eq(bought_in_strength_row([]), "", "and no bought-ins says nothing at all")
 
 
+def test_the_report_counts_bought_ins_the_same_way_the_checks_do():
+    """The report said 4 bought-ins with 2 AI-priced, and the invariant reading the same job
+    said 3 AI-priced. Both were right about what they looked at: the report used a local
+    "starts with BI-" test, and THUM620 does not start with BI- — while bought_in_policy has
+    listed THUM as a bought-in family all along.
+
+    Two counts of the same thing on one page is exactly the defect bought_in_policy was
+    written to end. One module answers the question."""
+    import job_report_html as jr
+    from bought_in_policy import is_bought_in
+
+    thumbscrew = {"part_number": "THUM620", "description": "M4x10mm MUSHROOM THUMBSCREW"}
+    eq(is_bought_in(thumbscrew), True, "the policy knows a thumbscrew is bought in")
+
+    _src = open(jr.__file__, encoding="utf-8").read()
+    ok("from bought_in_policy import is_bought_in" in _src,
+       "and the report asks the policy rather than testing the prefix itself")
+    _seg = _src[_src.index("# ONE MODULE ANSWERS"):]
+    _seg = _seg[:_seg.index("rows +=")]
+    ok('startswith("BI-")' not in _seg.split("except ImportError:")[0],
+       "with the prefix left only as an import fallback")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
