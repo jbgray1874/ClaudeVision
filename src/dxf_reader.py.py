@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 try:
     import ezdxf  # type: ignore
     from ezdxf import bbox  # type: ignore
@@ -1677,11 +1679,16 @@ def merge_dxf_into_scan_json(
         part["geometry_score"]      = 1.0
         part["flat_pattern_detected"] = True
 
-        # Material from filename if not already set
-        if flat.get("material_from_filename") and not part.get("normalized_material"):
-            part["normalized_material"] = flat["material_from_filename"]
-        if flat.get("thickness_mm") and not part.get("normalized_thickness_mm"):
-            part["normalized_thickness_mm"] = flat["thickness_mm"]
+        # Material and gauge FROM THE FILENAME. Not from the geometry — from the characters
+        # in the file's name, which is a naming convention someone typed. It ranks as
+        # inference, well below the model's cut list and below the printed title block, and
+        # the "if not already set" guard is not a substitute for that: it protects a value
+        # that arrived first, not the value that is better.
+        if flat.get("material_from_filename"):
+            _apply_field(part, "normalized_material", flat["material_from_filename"],
+                         "inference")
+        if flat.get("thickness_mm"):
+            _apply_field(part, "normalized_thickness_mm", flat["thickness_mm"], "inference")
 
         # Bends
         if flat["bend_count"] > 0:

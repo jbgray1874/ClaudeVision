@@ -9,6 +9,8 @@ from math import floor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 import config
 from config import (
     CSV_HEADERS,
@@ -1471,7 +1473,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     if material:
         # Propagate the canonical family back onto the part so wb_populate's block routing
         # (which reads normalized_material) sends timber/board to the right block, not steel.
-        part["normalized_material"] = material
+        # NORMALISATION, not new evidence: this is the part's OWN material rewritten to its
+        # canonical family name ("MR MDF" -> "MDF"). It must not lose the source that
+        # supplied it, so the recorded source is carried through unchanged rather than
+        # re-stamped as if the estimator had observed something.
+        part["normalized_material"] = material   # precedence: direct-write ok — canonicalises the part's own value, source unchanged
     thickness = _safe_thickness_mm(part)
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
@@ -2149,7 +2155,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         ops = [o for o in ops if o not in _SPECIAL_ITEM_FAB_OPS]
         for _op_field in ("textual_operations", "inferred_operations"):
             if isinstance(part.get(_op_field), list):
-                part[_op_field] = [o for o in part[_op_field] if o not in _SPECIAL_ITEM_FAB_OPS]
+                part[_op_field] = [o for o in part[_op_field] if o not in _SPECIAL_ITEM_FAB_OPS]   # precedence: direct-write ok — removes ops, adds no evidence
         _roles = [str(r).lower() for r in (part.get("page_roles") or [])]
         if "bought_in" not in _roles:
             part.setdefault("page_roles", []).append("bought_in")
@@ -2234,7 +2240,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             ops = [o for o in ops if o != "diamond_polish"]
             for _op_field in ("textual_operations", "inferred_operations"):
                 if isinstance(part.get(_op_field), list):
-                    part[_op_field] = [o for o in part[_op_field] if o != "diamond_polish"]
+                    part[_op_field] = [o for o in part[_op_field] if o != "diamond_polish"]   # precedence: direct-write ok — removes ops, adds no evidence
     # Section/tube/wire parts without a flat DXF are SAWN/MITRED to length, not laser
     # profile-cut. Their PDF "cut length" is the whole-GA-page geometry rollup (e.g.
     # 24,508mm on a 600mm frame), so it must never drive laser cost or trigger a laser
@@ -2327,7 +2333,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             ops = [o for o in ops if o not in _weld_ops]
             for _op_field in ("textual_operations", "inferred_operations"):
                 if isinstance(part.get(_op_field), list):
-                    part[_op_field] = [o for o in part[_op_field] if o not in _weld_ops]
+                    part[_op_field] = [o for o in part[_op_field] if o not in _weld_ops]   # precedence: direct-write ok — removes ops, adds no evidence
             part.setdefault("review_flags", []).append(
                 f"{'/'.join(_stripped)} removed: part is {_mat_u or 'a board/timber family'}, "
                 f"which is not welded — joining is by glue/fixings. A weld cue was read from "
@@ -2816,7 +2822,10 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
 def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     quantity = _sanitise_part_quantity(part)
-    part["quantity"] = quantity
+    # Sanitisation of the part's OWN quantity (None/0/negative -> 1), not a new observation,
+    # so the source that supplied it stands. Writing it through the resolver would re-stamp a
+    # model-supplied quantity as if the estimator had measured it.
+    part["quantity"] = quantity   # precedence: direct-write ok — sanitises the part's own value
 
     # Commercial placeholders (PACKAGING, DELIVERY) are NOT parts to be estimated — they are
     # always-present reminder lines whose real cost is order-specific and lives in the enquiry,
@@ -3738,7 +3747,10 @@ def _recognise_sdi_coded_bought_in(
         cat = _lookup_udef_exact_code(code)
         if cat and cat.get("unit_price_gbp") is not None:
             stub = _bought_in_part_stub(code, cat["description"] or code, _use_qty)
-            stub["quantity"] = _use_qty
+            # A record built on the line above, so this overwrites nothing — but a datum
+            # with no source is invisible to arbitration, and a later pass would find an
+            # unclaimed quantity it is free to replace.
+            _apply_field(stub, "quantity", _use_qty, "bom_tree")
             stub["unit_cost_gbp"] = cat["unit_price_gbp"]
             stub["unit_material_cost_gbp"] = cat["unit_price_gbp"]
             stub["extended_total_cost_gbp"] = round(cat["unit_price_gbp"] * _use_qty, 2)
@@ -3819,7 +3831,7 @@ def _recognise_sdi_coded_bought_in(
         else:
             # Recognised the code but it's not priced in UDEF — honest flag, never guess.
             stub = _bought_in_part_stub(code, code, _use_qty)
-            stub["quantity"] = _use_qty
+            _apply_field(stub, "quantity", _use_qty, "bom_tree")
             stub["unit_cost_gbp"] = None
             stub["extended_total_cost_gbp"] = None
             stub["source"] = "sdi_bom_code_unpriced"

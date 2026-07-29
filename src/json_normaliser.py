@@ -7,6 +7,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from source_precedence import apply_field
+
 logger = logging.getLogger(__name__)
 
 V4_SCHEMA = "professional_manufacturing_json.v4"
@@ -381,7 +383,11 @@ def apply_material_context_normalisation(parts: List[Dict[str, Any]]) -> None:
     for part in parts:
         inferred = normalise_material_for_part(part)
         if inferred:
-            part["normalized_material"] = inferred
+            # INFERENCE, rank 20. This reads the part number, the description and any stated
+            # material and picks a family — a reading of text, not an observation of the part.
+            # It ran unattributed and unconditionally, so it could overwrite a material the
+            # MODEL had supplied simply by running later.
+            apply_field(part, "normalized_material", inferred, "inference")
 
 
 def _resolve_parts(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -410,7 +416,7 @@ def normalise_json(raw_json: Dict[str, Any]) -> Dict[str, Any]:
         previous = part.get("normalized_material")
         inferred_material = normalise_material_for_part(part)
         if inferred_material:
-            part["normalized_material"] = inferred_material
+            apply_field(part, "normalized_material", inferred_material, "inference")
 
         if debug_mat and inferred_material and inferred_material != previous:
             logger.info(

@@ -13,6 +13,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 import config
 from document_builder import _empty_geometry_rollup, _empty_part_record, _interpret_part, _rollup_geometry
 from dxf_reader import (
@@ -260,10 +262,13 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
-                    part[_k] = [_o for _o in _ops if _o != "folding"]
+                    part[_k] = [_o for _o in _ops if _o != "folding"]   # precedence: direct-write ok — removes an op, adds no evidence   # precedence: direct-write ok — removes an op, adds no evidence
 
-        if flat.get("thickness_mm") and part.get("normalized_thickness_mm") is None:
-            part["normalized_thickness_mm"] = flat["thickness_mm"]
+        if flat.get("thickness_mm"):
+            # From the measured flat pattern — rank 80. Submitted even when a value is
+            # already present: `is None` protected whatever arrived first rather than
+            # whatever is better, and left the datum unattributed either way.
+            _apply_field(part, "normalized_thickness_mm", flat["thickness_mm"], "dxf")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(flat["thickness_mm"])]
 
@@ -272,8 +277,10 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             not part.get("normalized_material")
             or str(part.get("normalized_material") or "").strip().upper() in {"MDF", "NONE", ""}
         ):
-            # DXF filename material is authoritative over a missing or MDF-bleed material.
-            part["normalized_material"] = _mat_fn
+            # "Authoritative" overstated it: this is the characters in a FILENAME, a naming
+            # convention someone typed, not a measurement. It ranks as inference and must
+            # lose to the model, a measured DXF material and the printed title block.
+            _apply_field(part, "normalized_material", _mat_fn, "inference")
 
         weight_g = float(flat.get("weight_g") or 0.0)
         if weight_g > 0:
@@ -333,8 +340,9 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 part["flat_pattern_detected"] = True
 
         thk = thickness_mm_from_dxf_filename(dxf_path)
-        if thk is not None and part.get("normalized_thickness_mm") is None:
-            part["normalized_thickness_mm"] = thk
+        if thk is not None:
+            # A gauge read from the FILENAME, not the geometry — inference, not measurement.
+            _apply_field(part, "normalized_thickness_mm", thk, "inference")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(thk)]
 
@@ -412,7 +420,7 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
-                    part[_k] = [_o for _o in _ops if _o != "folding"]
+                    part[_k] = [_o for _o in _ops if _o != "folding"]   # precedence: direct-write ok — removes an op, adds no evidence
     except Exception:
         pass
 
@@ -581,15 +589,18 @@ def _create_orphan_dxf_part(summary: Dict[str, Any], part_number: str, dxf_path:
     desc = _description_for_orphan_dxf(summary, pn)
     if desc == pn or desc == part_number:
         desc = dxf_path.stem.replace("_", " ").strip()
-    part = _empty_part_record(pn, description=desc, quantity=1)
+    part = _empty_part_record(pn, description=desc, quantity=None)
+    # Born with a source. A quantity of 1 written silently is indistinguishable from a
+    # quantity of 1 somebody established, and the next pass is free to replace it.
+    _apply_field(part, "quantity", 1, "inference")
     part["page_roles"] = ["dxf_only"]
     part["source"] = "dxf_orphan_no_bom_part"
     part["geometry_source"] = "dxf_flat_pattern"
     part.setdefault("review_flags", []).append("dxf_orphan_no_detail_ga")
     part["dxf_orphan"] = {"path": str(dxf_path.resolve()), "note": "Flat DXF in folder — no detail GA/PDF part record"}
     _mat_fn = material_from_dxf_filename(dxf_path)
-    if _mat_fn and not part.get("normalized_material"):
-        part["normalized_material"] = _mat_fn
+    if _mat_fn:
+        _apply_field(part, "normalized_material", _mat_fn, "inference")
     return part
 
 
@@ -757,8 +768,8 @@ def _split_parent_flats_to_children(
                 not target.get("normalized_material")
                 or str(target.get("normalized_material") or "").strip().upper() in {"MDF", "NONE", ""}
             ):
-                # DXF filename material is authoritative over a missing/MDF-bleed child material.
-                target["normalized_material"] = _mat_fn
+                # Filename, therefore inference — see above.
+                _apply_field(target, "normalized_material", _mat_fn, "inference")
             _apply_and_report(target, chosen, report, matched_keys, reason=bind_reason)
         else:
             pn = _orphan_child_pn(parent, chosen, _ci)

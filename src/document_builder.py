@@ -4,6 +4,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 from estimator import extract_bought_in_items_from_assembly
 try:
     from extractor_patterns import infer_operations_from_text as _infer_ops_from_text
@@ -585,7 +587,7 @@ def _rollup_geometry(target: Dict[str, Any], geometry: Dict[str, Any]) -> None:
             if isinstance(source, dict):
                 for subkey, value in source.items():
                     if isinstance(target[key].get(subkey, 0.0), (int, float)) and isinstance(value, (int, float)):
-                        target[key][subkey] = max(target[key].get(subkey, 0.0), value)
+                        target[key][subkey] = max(target[key].get(subkey, 0.0), value)   # precedence: direct-write ok — rolls up a geometry maximum, not a part field
             continue
         incoming = geometry.get(key, 0)
         if isinstance(target[key], (int, float)) and isinstance(incoming, (int, float)):
@@ -881,7 +883,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             part["bar_schedule"] = _bar_sched
             # The "8" in "8mm DIA" is a DIAMETER, not a sheet thickness. Leaving it set is
             # exactly what let this part masquerade as 8mm sheet steel.
-            part["normalized_thickness_mm"] = None
+            part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
             part.setdefault("_bar_recognised", True)
         # Sheet mild steel inheritance — wire detection wins over bare MILD STEEL on drawing
         inherited_steel = (
@@ -1068,7 +1070,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         part["wire_length_mm"] = float(_l)
                         # A DIAMETER is not a sheet THICKNESS. 4mm dia was being read as
                         # 4mm plate — the same misread that costed the 1310 stud as sheet.
-                        part["normalized_thickness_mm"] = None
+                        part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a wire diameter, adds no evidence
                         _me = part.setdefault("material_estimate", {})
                         _me["stock_form"] = "wire"
                         _me["wire_gauge_mm"] = float(_g)
@@ -1105,7 +1107,10 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             ]
             if _valid_thick:
                 part["thicknesses_mm"] = _valid_thick
-                part["normalized_thickness_mm"] = _safe_float(_valid_thick[0])
+                # A gauge read from the drawing's own thickness list — rank 70, below the
+                # model's cut list and a measured DXF, above any default.
+                _apply_field(part, "normalized_thickness_mm",
+                             _safe_float(_valid_thick[0]), "drawing_deterministic")
             elif not part.get("normalized_thickness_mm"):
                 _thick_defaults = {
                     "MDF": 18.0,
@@ -1119,7 +1124,9 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 }
                 for _mk, _mv in _thick_defaults.items():
                     if _mk in mat_upper_joined:
-                        part["normalized_thickness_mm"] = _mv
+                        # A family DEFAULT (18mm for MDF) — not a reading of this part at
+                        # all, so it fills a gap and never displaces anything.
+                        _apply_field(part, "normalized_thickness_mm", _mv, "inference")
                         part["thicknesses_mm"] = [
                             str(int(_mv)) if float(_mv) == int(_mv) else str(_mv)
                         ]
@@ -1259,10 +1266,13 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 if non_metal_label:
                     cleaned_materials = _dedupe(cleaned_materials + [non_metal_label])
                 part["materials"] = cleaned_materials
-                part["normalized_material"] = (
-                    non_metal_label.replace(" ", "_").upper() if non_metal_label else None
-                )
-                part["normalized_thickness_mm"] = None
+                _nm = non_metal_label.replace(" ", "_").upper() if non_metal_label else None
+                if _nm:
+                    # The drawing states a non-metal; this is a reading of it, rank 70.
+                    _apply_field(part, "normalized_material", _nm, "drawing_deterministic")
+                else:
+                    part["normalized_material"] = None   # precedence: direct-write ok — clears a wrong metal, adds no evidence
+                part["normalized_thickness_mm"] = None   # precedence: direct-write ok — a metal gauge cannot describe this part
                 part["material_inherited_from"] = None
                 fabrication_ops = {
                     "laser_cutting", "folding", "welding", "hole_machining",
@@ -1789,7 +1799,9 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
             continue
         effective_pn = pn if len(pn) >= 3 else dsc[:40]
         effective_desc = dsc or pn
-        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=qty)
+        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=None)
+        # Born with a source, so the next pass has something to weigh itself against.
+        _apply_field(rec, "quantity", qty, "bom_tree")
         rec["page_roles"] = ["bought_in"]
         rec["pages"] = []
         rec["materials"] = []
@@ -1841,7 +1853,8 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
         if any(k in dsc.upper() for k in _PARENT_KW):
             continue  # parent / sub-assembly — its components are costed individually
         rec = _empty_part_record(pn, item_number=_meta.get("item_number"),
-                                 description=dsc or pn, quantity=qty)
+                                 description=dsc or pn, quantity=None)
+        _apply_field(rec, "quantity", qty, "bom_tree")
         rec["page_roles"] = ["bom_only"]
         rec["source"] = "sdi_bom_row_no_geometry"
         rec["review_flags"] = ["no_geometry_estimate_incomplete"]

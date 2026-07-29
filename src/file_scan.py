@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from source_precedence import apply_field as _apply_field
+
 try:
     import pdfplumber  # type: ignore
 except ImportError:  # pragma: no cover
@@ -182,8 +184,10 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                     _cm = _p
                     break
         if _cm is not None:
-            if _cm.get("quantity") != _qty:
-                _cm["quantity"] = _qty
+            # A quantity read from the PDF BOM table — rank 60. It must not displace the
+            # assembly BOM the shop builds from, and the flag is gated on the write landing
+            # so the record cannot claim a change the resolver refused.
+            if _apply_field(_cm, "quantity", _qty, "bom_tree"):
                 _cm.setdefault("review_flags", []).append(
                     f"Quantity set to {_qty} from dual-path BOM table read")
                 _updated += 1
@@ -205,7 +209,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         if _tm is not None:
             if _tm.get("quantity") != _qty:
                 _old = _tm.get("quantity")
-                _tm["quantity"] = _qty
+                _apply_field(_tm, "quantity", _qty, "bom_tree")
                 _tm.setdefault("review_flags", []).append(
                     f"Quantity corrected {_old} -> {_qty} from dual-path BOM table read (matched '{_desc}')")
                 _updated += 1
@@ -1135,7 +1139,11 @@ def _inherit_document_material_to_parts(
         if part.get("materials"):
             continue
         if doc_mat_norm:
-            part["normalized_material"] = doc_mat_norm
+            # INHERITED from the document, not read from this part. Rank 60: better than a
+            # guess, weaker than anything that looked at the part itself. The `if
+            # part.get("materials"): continue` guard above protects a part that states its
+            # own material, but says nothing about a part whose material came from the MODEL.
+            _apply_field(part, "normalized_material", doc_mat_norm, "bom_tree")
             part.setdefault("material_inherited_from", "document_level")
         if doc_mat_raw and not part.get("materials"):
             part["materials"] = [doc_mat_raw]
@@ -1521,9 +1529,9 @@ def _finalize_scan_summary(
                                     break
                         if _cm is not None:
                             if _cm.get("quantity") != _qty:
-                                _cm["quantity"] = _qty
-                                _cm.setdefault("review_flags", []).append(
-                                    f"Quantity set to {_qty} from dual-path BOM table read")
+                                if _apply_field(_cm, "quantity", _qty, "bom_tree"):
+                                    _cm.setdefault("review_flags", []).append(
+                                        f"Quantity set to {_qty} from dual-path BOM table read")
                                 _updated += 1
                             continue
 
@@ -1542,7 +1550,7 @@ def _finalize_scan_summary(
                         if _tm is not None:
                             if _tm.get("quantity") != _qty:
                                 _old = _tm.get("quantity")
-                                _tm["quantity"] = _qty
+                                _apply_field(_tm, "quantity", _qty, "bom_tree")
                                 _tm.setdefault("review_flags", []).append(
                                     f"Quantity corrected {_old} -> {_qty} from dual-path BOM "
                                     f"table read (matched '{_desc}')")
@@ -1742,7 +1750,7 @@ def _finalize_scan_summary(
             for _dim_field in ('overall_length_mm', 'overall_width_mm'):
                 _v = _part.get(_dim_field)
                 if _v is not None and 1900.0 <= float(_v) <= 2100.0:
-                    _part[_dim_field] = None
+                    _part[_dim_field] = None   # precedence: direct-write ok — clears a dimension, adds no evidence
         summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
 
         # Drop None-PN BOM artefacts whose description is a qty-suffixed duplicate
@@ -1796,34 +1804,35 @@ def _finalize_scan_summary(
                 if _tm_thk:
                     _tv_thk = float(_tm_thk.group(1))
                     if 0.3 <= _tv_thk <= 25.0:
-                        _part["normalized_thickness_mm"] = _tv_thk
+                        # From the filename, so inference — not the geometry, not the model.
+                        _apply_field(_part, "normalized_thickness_mm", _tv_thk, "inference")
             # 1. Set correct normalized_material (BOUGHT_IN, VENEERED_MDF etc.)
             _mat = normalise_material_for_part(_part)
             if _mat:
-                _part["normalized_material"] = _mat
+                _apply_field(_part, "normalized_material", _mat, "inference")
             # Fabricated MS flat patterns must not stay BOUGHT_IN (e.g. GRAPHIC CHANNEL).
             if (_part.get("normalized_material") or "").upper() == "BOUGHT_IN":
                 _dfn_chk = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "").upper()
                 if _part.get("flat_pattern_detected") and ("_MS_" in _dfn_chk or " MS_" in _dfn_chk
                         or re.search(r"\d+\.?\d*\s*MM\s*MS", _dfn_chk)):
-                    _part["normalized_material"] = "MILD_STEEL"
+                    _apply_field(_part, "normalized_material", "MILD_STEEL", "inference")
             # DXF filename material fallback
             if not _part.get("normalized_material"):
                 _dfn = str(_part.get("dxf_source_file") or _part.get("geometry_source_path") or "").upper()
                 _dgs = str(_part.get("geometry_source") or "")
                 if "dxf" in _dgs.lower() and _dfn:
                     if "_MS_" in _dfn or "MS_" in _dfn or "_MS." in _dfn:
-                        _part["normalized_material"] = "MILD_STEEL"
+                        _apply_field(_part, "normalized_material", "MILD_STEEL", "inference")
                     elif "PETG" in _dfn:
-                        _part["normalized_material"] = "ACRYLIC"
+                        _apply_field(_part, "normalized_material", "ACRYLIC", "inference")
                     elif ("_ACR_" in _dfn or "ACRYLIC" in _dfn or "HI ACR" in _dfn
                             or "HI_ACR" in _dfn or "HIGH IMPACT" in _dfn or "HIGH_IMPACT" in _dfn
                             or "PERSPEX" in _dfn or "PMMA" in _dfn):
-                        _part["normalized_material"] = "ACRYLIC"
+                        _apply_field(_part, "normalized_material", "ACRYLIC", "inference")
                     elif "JOINERY" in _dfn or "_MDF_" in _dfn:
-                        _part["normalized_material"] = "MDF"
+                        _apply_field(_part, "normalized_material", "MDF", "inference")
                     elif "DISPA" in _dfn or "PAPER" in _dfn:
-                        _part["normalized_material"] = "BOUGHT_IN"
+                        _apply_field(_part, "normalized_material", "BOUGHT_IN", "inference")
             # 2. Strip spec boilerplate from process_notes then re-derive ops
             _clean_notes = [_strip_spec_boilerplate(str(n)) for n in (_part.get("process_notes") or [])]
             _part["process_notes"] = _clean_notes

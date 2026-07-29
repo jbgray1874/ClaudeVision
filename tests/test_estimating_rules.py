@@ -706,8 +706,13 @@ def test_arbitrated_fields_are_not_written_directly():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "src"
+    # STAGE 5 COMPLETE: every module that writes an arbitrated field. Adding a module here
+    # is how a conversion gets locked in, and the guard is what stops the next writer someone
+    # adds from silently reintroducing last-writer-wins on a job nobody has seen yet.
     RESOLVER_CLEAN = ["bom_tree.py", "part_index.py", "learning_engine.py",
-                      "source_connectors/solidworks.py"]
+                      "source_connectors/solidworks.py",
+                      "document_builder.py", "json_normaliser.py", "file_scan.py",
+                      "drawing_job_merge.py", "dxf_reader.py.py", "estimator.py"]
     ARBITRATED = {"quantity", "normalized_material", "pierce_count",
                   "estimated_pierce_count", "normalized_thickness_mm"}
     # A single record that holds arbitrated evidence. NOT `parts`, which is a collection:
