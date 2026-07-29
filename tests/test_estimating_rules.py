@@ -3108,6 +3108,54 @@ def test_an_old_invoice_is_not_an_agreement():
     eq(lapsed["firm"], False, "once the agreement lapses it is history again")
 
 
+def test_a_pdf_only_job_still_reads_its_routes():
+    """EVERY FIX THIS SESSION WAS DRIVEN BY A SOLIDWORKS-BACKED JOB. The measured-zero bend
+    rule, the outline/cut-length split, the fold gate, the fabrication-evidence guard — all
+    of them were written while looking at a pack with models, DXFs and a cut list.
+
+    Most packs do not have that. A PDF-only job has no native record, no DXF outline and no
+    cut list, and it still has to produce a BOM and a route: folds come from drawing
+    callouts, and nothing about a measurement it never had may take them away. This is the
+    case that would degrade silently, because it is not the one anybody is looking at."""
+    from bought_in_policy import has_fabrication_evidence, is_bought_in
+    from estimator import _model_measured_zero_bends, estimate_process_times
+
+    def _ops(part):
+        r = estimate_process_times(dict(part), quantity=1)
+        return sorted((r or {}).get("times_min") or (r or {}).get("unit_times_min") or {})
+
+    # Fabricated from the drawing alone: folds stated as callouts, no model, no DXF.
+    pdf_part = {"part_number": "X-01M", "normalized_material": "MILD_STEEL",
+                "normalized_thickness_mm": 1.5, "angles_deg": ["90", "90"],
+                "fold_count_textual": 2, "flat_pattern_detected": True,
+                "textual_operations": ["laser_cutting", "folding", "powder_coating"]}
+    eq(has_fabrication_evidence(pdf_part), True, "a drawing-derived flat is still evidence we make it")
+    eq(is_bought_in(pdf_part), False, "and it is not mistaken for a purchased part")
+    eq(_model_measured_zero_bends(pdf_part), False,
+       "with no model to count bends, nothing claims a measured zero")
+    _o = _ops(pdf_part)
+    ok("folding" in _o, f"so the drawing's folds are still costed: {_o}")
+    ok("laser_cutting" in _o and "powder_coating" in _o, "along with the rest of its route")
+
+    # The weakest case the engine has to survive: a part with no geometry at all.
+    bare = {"part_number": "X-02M", "normalized_material": "MILD_STEEL",
+            "textual_operations": ["laser_cutting"]}
+    _b = _ops(bare)
+    ok("folding" not in _b, f"a part with no fold evidence does not gain one: {_b}")
+    ok("laser_cutting" in _b, "and keeps what the drawing did say")
+
+    # A PDF-only part claims no measured geometry, so the outline check must not object to it.
+    from invariants import check_job
+    j = _job()
+    j["part_estimates"] = [dict(pdf_part, quantity=1, quantity_source="bom_tree",
+                                material_source="pdf", geometry_source="pdf_text")]
+    _codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("measured_geometry_without_outline" not in _codes,
+       f"a part that never claimed measurement is not accused of faking it: {_codes}")
+    ok("plate_charged_for_folding" not in _codes,
+       "and with no model to call it a plate, its fold stands")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
