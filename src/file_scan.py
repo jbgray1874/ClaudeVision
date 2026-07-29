@@ -1902,16 +1902,20 @@ def _finalize_scan_summary(
             # none. Fall back to the PDF's own directory, which is where the extract
             # naturally sits — otherwise the file is present and silently ignored.
             _sw_folder = job_folder or (Path(pdf_path).parent if pdf_path else None)
-            # RUN IT, don't just hope somebody did. The pipeline consumed an extract only
-            # if one already existed, so on a machine WITH SolidWorks the strongest source
-            # available was used or skipped depending on whether a person had remembered to
-            # run a separate script — and skipping it looked exactly like a job with no
-            # models. run=True generates the extract when it is absent or older than the
-            # models. On a machine without SolidWorks the analyser fails, the reason is
-            # recorded, and the run continues on PDF+DXF as before.
-            #   SDI_SW_RUN_ANALYSER=0   never invoke it (consume an existing extract only)
+            # OPT-IN, NOT DEFAULT — and the reason is other people's work, not caution.
+            # The analyser calls Dispatch("SldWorks.Application"), which ATTACHES to a
+            # SolidWorks already running on this machine. SolidWorks does not open a document
+            # twice: OpenDoc6 on a file a designer already has open returns THEIR document,
+            # and the analyser then closes every title it touched. On a designer's
+            # workstation that closes their work, unsaved changes included.
+            #
+            # Making acquisition automatic was right; making it automatic HERE was not.
+            # Enable it only where SolidWorks belongs to this process — a dedicated worker or
+            # batch box — by setting SDI_SW_RUN_ANALYSER=1. Everywhere else the pipeline
+            # consumes an extract someone else produced, exactly as before, and says so
+            # loudly when models are present and no extract is.
             _sw_run = os.getenv("SDI_SW_RUN_ANALYSER", "").strip().lower() \
-                not in {"0", "false", "no", "off"}
+                in {"1", "true", "yes", "on"}
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
                                              run=_sw_run) \
                 if (_sw_folder or _sw_json) else None
@@ -1941,6 +1945,13 @@ def _finalize_scan_summary(
                     "applied": _swc,
                     # Freshness, carried onto the job so an invariant can act on it.
                     "extract_stale": bool(_sw_job.meta.get("extract_stale")),
+                    "extract_incomplete": bool(_sw_job.meta.get("extract_incomplete")),
+                    "manifest_absent": bool(_sw_job.meta.get("manifest_absent")),
+                    "freshness_unverifiable": bool(_sw_job.meta.get("freshness_unverifiable")),
+                    "fingerprint_folder": _sw_job.meta.get("fingerprint_folder"),
+                    "freshness_check": _sw_job.meta.get("freshness_check"),
+                    "files_read": _sw_job.meta.get("files_read"),
+                    "files_failed": _sw_job.meta.get("files_failed"),
                     "native_files_present": _sw_job.meta.get("native_files_present"),
                     "native_files_fingerprint": _sw_job.meta.get("native_files_fingerprint"),
                     "analyser_error": _sw_job.meta.get("analyser_error"),

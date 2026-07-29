@@ -210,6 +210,10 @@ class SolidWorksSession:
               flush=True)
         self.sw.Visible = visible
         self._open_titles: List[str] = []
+        # Documents that were ALREADY open when this run started. We read them; we never
+        # close them. Closing a designer's open document is the one irreversible thing this
+        # tool could do, and it would take their unsaved work with it.
+        self._borrowed_titles: List[str] = []
 
     def open(self, path: str):
         path = os.path.abspath(path) if not path.startswith("\\\\") else path
@@ -219,23 +223,62 @@ class SolidWorksSession:
             raise ValueError(f"Unsupported extension: {ext}")
         errs = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warns = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+        # OWNERSHIP. SolidWorks does not open a document twice: if a designer already has
+        # this file open, OpenDoc6 hands back THEIR document, and closing it afterwards
+        # closes their work — unsaved changes included. Ask what is already open BEFORE
+        # opening anything, and close only what this process actually opened.
+        _already = self._is_already_open(path)
         doc = self.sw.OpenDoc6(path, doctype, OPEN_OPTS, "", errs, warns)
         if doc is None:
             raise RuntimeError(
                 f"OpenDoc6 failed: {path}  errs={errs.value} warns={warns.value}"
             )
         _t = _safe_str(_get0(doc, "GetTitle"))
-        if _t:
+        if _t and not _already:
             self._open_titles.append(_t)
+        elif _already:
+            self._borrowed_titles.append(_t or path)
         return doc, doctype
 
+    def _is_already_open(self, path: str) -> bool:
+        """Was this document open before we asked for it? Compared on the full path, since
+        two files in different folders can share a title."""
+        try:
+            _target = os.path.normcase(os.path.abspath(path)) if not path.startswith("\\\\") \
+                else os.path.normcase(path)
+        except Exception:
+            _target = os.path.normcase(path)
+        try:
+            d = self.sw.GetFirstDocument2() if hasattr(self.sw, "GetFirstDocument2") \
+                else _get0(self.sw, "GetFirstDocument")
+        except Exception:
+            d = None
+        seen = 0
+        while d is not None and seen < 5000:
+            seen += 1
+            try:
+                _p = _safe_str(_get0(d, "GetPathName"))
+                if _p and os.path.normcase(_p) == _target:
+                    return True
+                d = _get0(d, "GetNext")
+            except Exception:
+                break
+        return False
+
     def close_all(self):
+        """Close ONLY the documents this process opened. Anything that was already open when
+        we arrived belongs to whoever opened it."""
         for title in reversed(self._open_titles):
             try:
                 self.sw.CloseDoc(title)
             except Exception:
                 pass
         self._open_titles.clear()
+        if self._borrowed_titles:
+            print(f"[ownership] left {len(self._borrowed_titles)} document(s) open that "
+                  f"were already open before this run: "
+                  f"{', '.join(self._borrowed_titles[:5])}")
+            self._borrowed_titles.clear()
 
     def shutdown(self):
         self.close_all()
@@ -1395,19 +1438,102 @@ def main():
         target if os.path.isdir(target) else os.path.dirname(target),
         "_sw_native_extract.json",
     )
+
+    # THE MANIFEST. Without it the consumer cannot tell whether this extract still describes
+    # the files on disk, and its freshness check silently degrades to comparing file
+    # timestamps — which a copy, a restore or a `touch` defeats, and which cannot see a model
+    # that has been deleted or renamed at all.
+    #
+    # COVERAGE travels with it. Per-file failures are caught and written as error-only
+    # records, and the process still exits zero, so an extraction where every file failed
+    # produced a non-empty list that read downstream as a successful read.
+    _errors = [{"path": r.get("path"), "errors": r.get("errors")}
+               for r in all_results if isinstance(r, dict) and r.get("errors")]
+    _ok = [r for r in all_results
+           if isinstance(r, dict) and not r.get("errors") and r.get("title")]
+    payload = {
+        "schema": "sw_native_extract.v2",
+        "_manifest": {
+            "native_files_fingerprint": _fingerprint_native_files(target),
+            "generated_from": os.path.abspath(target) if not str(target).startswith("\\\\") else target,
+            "solidworks_version": _sw_version_string(session),
+            "extractor_schema": "sw_native_extract.v2",
+            "files_seen": len(all_results),
+            "files_read": len(_ok),
+            "files_failed": len(_errors),
+            "errors": _errors[:200],
+        },
+        "records": all_results,
+    }
+
+    def _write(path: str) -> None:
+        """Atomic: a half-written extract read by the pipeline is worse than none, because it
+        parses to fewer records rather than failing."""
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, path)
+
     try:
-        with open(out_json, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, indent=2)
+        _write(out_json)
     except OSError as _e_write:
         # The models often live on a read-only CAD share. Losing a completed analysis
         # (minutes of SolidWorks document opens) to a write permission error is not
         # acceptable — fall back to the current working directory and say where it went.
         _fallback = os.path.join(os.getcwd(), "_sw_native_extract.json")
         print(f"\nWARNING: could not write to {out_json} ({_e_write})")
-        with open(_fallback, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, indent=2)
+        _write(_fallback)
         out_json = _fallback
+    # The LAST line is the produced path, so a caller can read it back rather than assuming
+    # where the file went — which is wrong whenever the fallback above fires.
     print(f"\nWrote {out_json}")
+    print(f"EXTRACT_PATH={out_json}")
+    if _errors:
+        print(f"COVERAGE: {len(_ok)} of {len(all_results)} file(s) read, "
+              f"{len(_errors)} failed")
+
+
+def _fingerprint_native_files(target: str) -> str:
+    """Same basis as the consumer's native_files_state, so the two can be compared at all."""
+    import hashlib
+    exts = (".sldprt", ".sldasm", ".slddrw")
+    found = []
+    try:
+        root = target if os.path.isdir(target) else os.path.dirname(target)
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not _is_excluded_dir(d)]
+            for fn in filenames:
+                if os.path.splitext(fn)[1].lower() in exts and not fn.startswith("~$"):
+                    try:
+                        st = os.stat(os.path.join(dirpath, fn))
+                    except OSError:
+                        continue
+                    found.append((fn.lower(), st.st_size, int(st.st_mtime)))
+    except Exception:
+        return ""
+    if not found:
+        return ""
+    found.sort()
+    basis = "|".join(f"{n}:{s}:{m}" for n, s, m in found)
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
+
+
+# Folders whose contents are not the live design: superseded models that would otherwise
+# make a drawing-only job look as though native evidence had been ignored.
+_EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
+                        "_bak", "do not use", "dnu", "scrap")
+
+
+def _is_excluded_dir(name: str) -> bool:
+    n = str(name or "").strip().lower()
+    return n.startswith(".") or any(t in n for t in _EXCLUDED_DIR_TOKENS)
+
+
+def _sw_version_string(session: Any) -> str:
+    try:
+        return _safe_str(_get0(session.sw, "RevisionNumber"))
+    except Exception:
+        return ""
 
 
 if __name__ == "__main__":

@@ -158,14 +158,30 @@ class NativeJob:
 
 # ── loading ──────────────────────────────────────────────────────────────────
 def load_native_extract(json_path: str | Path) -> List[Dict[str, Any]]:
+    """Records only. Accepts both shapes: the v2 payload {_manifest, records} and the bare
+    list the analyser wrote before manifests existed — an extract already sitting in a job
+    folder must not stop working because the writer gained a header."""
+    return (load_native_payload(json_path) or {}).get("records") or []
+
+
+def load_native_payload(json_path: str | Path) -> Dict[str, Any]:
+    """The whole extract: manifest and records. Returns {} when there is nothing readable."""
     jp = Path(json_path)
     if not jp.exists():
-        return []
+        return {}
     try:
         data = json.loads(jp.read_text(encoding="utf-8"))
     except Exception:
-        return []
-    return data if isinstance(data, list) else []
+        return {}
+    if isinstance(data, list):
+        # Pre-manifest extract. Say so explicitly rather than reporting an empty manifest,
+        # which would read as "checked, nothing wrong" when nothing was checked.
+        return {"records": data, "_manifest": None, "manifest_absent": True}
+    if isinstance(data, dict):
+        return {"records": data.get("records") or [],
+                "_manifest": data.get("_manifest"),
+                "manifest_absent": not isinstance(data.get("_manifest"), dict)}
+    return {}
 
 
 def _reject_folded_box_as_flat(p: NativePart) -> None:
@@ -366,31 +382,71 @@ def native_extract_for_job(
 
     _run_error = None
     if jp is not None and run and folder is not None and _should_run(jp, folder):
-        _run_error = _run_analyser(folder, analyser=analyser, python_exe=python_exe)
+        _produced: List[str] = []
+        _run_error = _run_analyser(folder, analyser=analyser, python_exe=python_exe,
+                                   out_path=jp, produced=_produced)
+        if _produced and Path(_produced[0]) != jp:
+            # It wrote somewhere else — a read-only share, most often. Read what exists,
+            # not what was requested.
+            jp = Path(_produced[0])
 
     records = load_native_extract(jp) if jp else []
     job = normalize_native_extract(records)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
 
-    if folder is not None:
-        _state = native_files_state(folder)
+    if folder is not None or jp is not None:
+        # FINGERPRINT THE FOLDER THE EXTRACT WAS TAKEN FROM, not the job folder.
+        # The models routinely live somewhere other than the drawings — the analyser's own
+        # header says so — and SDI_SW_EXTRACT_JSON exists precisely for that case. Comparing
+        # the manifest against the JOB folder then compares a fingerprint of the models with
+        # a fingerprint of a folder containing none, which reads as "everything changed" and
+        # would mark a freshly generated extract STALE. The manifest records where it was
+        # generated from; that is the folder to check.
+        _man_early = None
+        if jp is not None and jp.exists():
+            _man_early = (load_native_payload(jp) or {}).get("_manifest")
+        _fp_folder = (_man_early or {}).get("generated_from") or folder
+        _state = native_files_state(_fp_folder) if _fp_folder else {
+            "count": 0, "fingerprint": "", "newest_mtime": 0.0, "files": []}
+        job.meta["fingerprint_folder"] = str(_fp_folder) if _fp_folder else None
+        # An extract generated from somewhere else, with no manifest to say where: nothing
+        # can be verified about its freshness at all, and that must not read as a pass.
+        if (_man_early is None and folder is not None and jp is not None
+                and jp.parent.resolve() != Path(folder).resolve()):
+            job.meta["freshness_unverifiable"] = True
         job.meta["native_files_present"] = _state["count"]
         job.meta["native_files_fingerprint"] = _state["fingerprint"]
-        _recorded = None
         if jp is not None and jp.exists():
-            try:
-                _recorded = json.loads(jp.read_text(encoding="utf-8"))
-                _recorded = (_recorded.get("_manifest") or {}).get("native_files_fingerprint") \
-                    if isinstance(_recorded, dict) else None
-            except Exception:
-                _recorded = None
-            # A list-shaped extract (the analyser's own format) carries no manifest yet, so
-            # fall back to comparing modification times: any native file newer than the
-            # extract means the extract predates a change.
-            if _recorded is None:
-                job.meta["extract_stale"] = _state["newest_mtime"] > jp.stat().st_mtime
-            else:
+            _payload = load_native_payload(jp)
+            _man = _payload.get("_manifest") if isinstance(_payload.get("_manifest"), dict) else None
+            _recorded = (_man or {}).get("native_files_fingerprint")
+            if _recorded:
+                # The real test: does this extract still describe the files on disk? A
+                # fingerprint sees a deleted or renamed model, which a timestamp cannot.
                 job.meta["extract_stale"] = (_recorded != _state["fingerprint"])
+                job.meta["extract_manifest"] = _man
+            else:
+                # No manifest. mtime is the only thing left, and it is genuinely weaker: a
+                # copy, a restore or a touch defeats it, and a deleted model is invisible to
+                # it. Record that the check was WEAK rather than letting a pass on a
+                # timestamp read like a pass on identity.
+                job.meta["extract_stale"] = _state["newest_mtime"] > jp.stat().st_mtime
+                job.meta["freshness_check"] = "mtime_only"
+                job.meta["manifest_absent"] = True
+            # COVERAGE. Per-file failures are written as error-only records and the analyser
+            # still exits zero, so an extraction where every file failed produced a non-empty
+            # list that read downstream as a successful read.
+            if _man:
+                job.meta["files_read"] = _man.get("files_read")
+                job.meta["files_failed"] = _man.get("files_failed")
+                job.meta["extract_errors"] = _man.get("errors")
+            _recs = _payload.get("records") or []
+            _failed = [r for r in _recs if isinstance(r, dict) and r.get("errors")]
+            _read = [r for r in _recs
+                     if isinstance(r, dict) and not r.get("errors") and r.get("title")]
+            job.meta.setdefault("files_read", len(_read))
+            job.meta.setdefault("files_failed", len(_failed))
+            job.meta["extract_incomplete"] = bool(_recs) and not _read
         # NATIVE MODELS PRESENT BUT NO EXTRACT. The strongest source in the building is
         # sitting in the folder unread, and until now that was indistinguishable from a job
         # that simply has no models.
@@ -408,6 +464,16 @@ def native_extract_for_job(
 # carries BOM tables and callouts the analyser reads.
 _NATIVE_EXTS = (".sldprt", ".sldasm", ".slddrw")
 
+# Folders whose contents are not the live design. Mirrors sw_native_analyse._EXCLUDED_DIR_TOKENS
+# — the two must agree, or the consumer counts files the analyser never opens.
+_EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
+                        "_bak", "do not use", "dnu", "scrap")
+
+
+def _is_excluded_dir(name: str) -> bool:
+    n = str(name or "").strip().lower()
+    return n.startswith(".") or any(t in n for t in _EXCLUDED_DIR_TOKENS)
+
 
 def native_files_state(folder: str | Path) -> Dict[str, Any]:
     """Fingerprint the native files in a job folder: how many, and their identity.
@@ -422,13 +488,22 @@ def native_files_state(folder: str | Path) -> Dict[str, Any]:
             return out
         found = []
         for p in sorted(root.rglob("*")):
-            if p.is_file() and p.suffix.lower() in _NATIVE_EXTS:
-                try:
-                    st = p.stat()
-                except OSError:
-                    continue
-                found.append((p.name.lower(), st.st_size, int(st.st_mtime)))
-                out["newest_mtime"] = max(out["newest_mtime"], st.st_mtime)
+            if not p.is_file() or p.suffix.lower() not in _NATIVE_EXTS:
+                continue
+            # SCOPE MUST MATCH THE ANALYSER'S. Counting files it does not read produces the
+            # worst of both: a drawing-only job blocked because an archived model from two
+            # revisions ago was "not read", and a fingerprint that changes when somebody
+            # tidies an Archive folder. ~$ files are SolidWorks lock files, not models.
+            if p.name.startswith("~$") or p.name.startswith("."):
+                continue
+            if any(_is_excluded_dir(part) for part in p.relative_to(root).parts[:-1]):
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            found.append((p.name.lower(), st.st_size, int(st.st_mtime)))
+            out["newest_mtime"] = max(out["newest_mtime"], st.st_mtime)
         out["count"] = len(found)
         out["files"] = [f[0] for f in found]
         if found:
@@ -451,7 +526,9 @@ def _should_run(extract_path: Path, folder: str | Path) -> bool:
 
 
 def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
-                  python_exe: Optional[str] = None) -> Optional[str]:
+                  python_exe: Optional[str] = None,
+                  out_path: Optional[str | Path] = None,
+                  produced: Optional[List[str]] = None) -> Optional[str]:
     """Invoke sw_native_analyse.py on a folder (Windows + SolidWorks only).
 
     Returns None on success, or a description of the failure. It used to swallow every
@@ -461,9 +538,21 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
     if analyser is None:
         analyser = Path(__file__).resolve().parents[2] / "tools" / "solidworks" / "sw_native_analyse.py"
     exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or "python"
+    produced = produced if produced is not None else []
+    cmd = [exe, str(analyser), str(folder)]
+    if out_path:
+        # Tell it where to write, and read back where it ACTUALLY wrote. The analyser falls
+        # back to the working directory when the target is a read-only CAD share, so the
+        # caller cannot assume the path it asked for — it used to read a different file from
+        # the one that had just been produced.
+        cmd += ["--out", str(out_path)]
     try:
-        r = subprocess.run([exe, str(analyser), str(folder)], check=False, timeout=1800,
+        r = subprocess.run(cmd, check=False, timeout=1800,
                            capture_output=True, text=True)
+        for _line in reversed((r.stdout or "").splitlines()):
+            if _line.startswith("EXTRACT_PATH="):
+                produced.append(_line.split("=", 1)[1].strip())
+                break
         if r.returncode != 0:
             _tail = (r.stderr or r.stdout or "").strip().splitlines()
             return (f"the SolidWorks analyser exited {r.returncode}"
@@ -1052,10 +1141,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                         _num((part.get("geometry_rollup") or {}).get("estimated_pierce_count")) or 0)
             _apply(part, "manufacturing_features.cut_out_count",
                    int(nat.cut_out_count), SOURCE_NAME)
-            _apply(part, "manufacturing_features.pierce_count", _native_pierces, SOURCE_NAME)
-            _apply(part, "geometry_rollup.estimated_pierce_count",
-                   _native_pierces, SOURCE_NAME)
-            if _prev and int(_prev) != _native_pierces:
+            _w1 = _apply(part, "manufacturing_features.pierce_count",
+                         _native_pierces, SOURCE_NAME)
+            _w2 = _apply(part, "geometry_rollup.estimated_pierce_count",
+                         _native_pierces, SOURCE_NAME)
+            # Gated on the writes actually landing. The flag claimed the previous count had
+            # been replaced whatever the resolver decided, so a rank-100 estimator value
+            # could survive while the audit trail said SolidWorks had overwritten it.
+            if _prev and int(_prev) != _native_pierces and (_w1 or _w2):
                 part.setdefault("review_flags", []).append(
                     f"pierce_count: {int(_prev)} from an earlier pass replaced by "
                     f"{_native_pierces} from the SolidWorks cut list ({nat.cut_out_count} "

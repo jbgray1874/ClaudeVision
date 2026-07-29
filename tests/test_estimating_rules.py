@@ -976,6 +976,25 @@ def test_every_native_disagreement_reaches_the_resolver():
     eq(counts["qty"], 0, "a rejected write must not be counted as applied")
     eq(counts["material"], 0, "nor a rejected material")
 
+    # Cut-outs, same rule. The flag claimed the previous pierce count had been replaced
+    # whatever the resolver decided, so a rank-100 value could survive while the audit trail
+    # said SolidWorks had overwritten it.
+    recs3 = [{"title": "CCC-01M", "doctype": 1, "route_signals": {
+        "material": "Mild Steel [CR4]", "is_sheet_metal": True, "bend_count": 1,
+        "flat_length_mm": 100.0, "flat_width_mm": 50.0, "thickness_mm": 1.5,
+        "cut_out_count": 8, "bbox_mm": [60.0, 50.0, 20.0]}}]
+    job3 = normalize_native_extract(recs3)
+    parts3 = [{"part_number": "CCC-01M",
+               "manufacturing_features": {"pierce_count": 2,
+                                          "pierce_count_source": "estimator_confirmed"},
+               "geometry_rollup": {"estimated_pierce_count": 2,
+                                   "estimated_pierce_count_source": "estimator_confirmed"}}]
+    apply_native_to_pre_estimate(parts3, job3)
+    eq((parts3[0]["geometry_rollup"] or {}).get("estimated_pierce_count"), 2,
+       "an estimator's pierce count stands against the model")
+    ok(not any("replaced by" in str(f) for f in (parts3[0].get("review_flags") or [])),
+       "and nothing may claim SolidWorks replaced it")
+
 
 def test_source_and_confidence_move_together():
     """Updating the source while leaving the weaker source's confidence behind produces a
@@ -997,6 +1016,161 @@ def test_source_and_confidence_move_together():
        "two independent readings agreeing is a real strengthening")
     eq(source_of(q, "normalized_material"), "drawing_deterministic",
        "but nothing was replaced, so the source is unchanged")
+
+
+def test_automatic_com_execution_is_opt_in():
+    """SAFETY, not caution. The analyser calls Dispatch("SldWorks.Application"), which
+    ATTACHES to a SolidWorks already running on the machine. SolidWorks does not open a
+    document twice, so OpenDoc6 on a file a designer has open returns THEIR document — and
+    the analyser then closes every title it touched, taking unsaved work with it.
+
+    Making acquisition automatic was right. Making it the default on any machine that runs
+    an estimate was not. It is enabled only where SolidWorks belongs to this process."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    assigns = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Assign)
+               and any(getattr(t, "id", "") == "_sw_run" for t in n.targets)]
+    ok(assigns, "file_scan must decide whether to run the analyser explicitly")
+    src_txt = ast.unparse(assigns[0].value)
+    # Opt-IN reads "flag in {truthy}". Opt-OUT reads "flag not in {falsy}" and would run by
+    # default on a designer's workstation.
+    ok(" not in " not in src_txt,
+       f"automatic COM execution must be opt-in, not opt-out: {src_txt}")
+    ok("SDI_SW_RUN_ANALYSER" in src_txt, "and gated on the documented switch")
+
+
+def test_the_analyser_never_closes_a_document_it_did_not_open():
+    """The one irreversible thing this tool could do. close_all() closed every title it had
+    touched; a document the designer already had open is not ours to close."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "tools" / "solidworks"
+           / "sw_native_analyse.py").read_text(encoding="utf-8")
+    ok("_is_already_open" in src,
+       "the analyser must ask what was open BEFORE it opens anything")
+    ok("_borrowed_titles" in src,
+       "and keep borrowed documents apart from the ones it opened")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "close_all"), None)
+    ok(fn is not None, "close_all must exist")
+    body = ast.unparse(fn)
+    ok("_borrowed_titles" not in body or "CloseDoc" not in body.split("_borrowed_titles")[1],
+       "close_all must never call CloseDoc on a borrowed title")
+
+    # The decisive line: a title is added to the close-list ONLY when we opened it. Checked
+    # structurally because COM cannot be exercised here, and dropping the guard is a silent
+    # one-word change that puts a designer's open documents back on the close-list.
+    opener = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "open"
+                   and "OpenDoc6" in ast.unparse(n)), None)
+    ok(opener is not None, "the document-opening helper must exist")
+    guarded = False
+    for node in ast.walk(opener) if opener is not None else []:
+        if isinstance(node, ast.If) and "_already" in ast.unparse(node.test):
+            blk = "".join(ast.unparse(b) for b in node.body)
+            if "_open_titles" in blk and "append" in blk:
+                guarded = True
+    ok(guarded,
+       "the append to _open_titles must be guarded on the document NOT already being open — "
+       "otherwise close_all closes documents this process never opened")
+
+
+def test_an_extract_that_read_nothing_is_not_a_successful_read():
+    """Per-file failures are written as error-only records and the analyser still exits
+    zero, so an extraction where every file failed produced a non-empty list that read
+    downstream as a successful read."""
+    from invariants import check_job
+    j = _job()
+    j["solidworks_native"] = {"extract_incomplete": True, "files_read": 0, "files_failed": 9}
+    r = check_job(j, write_back=False)
+    ok("native_extract_incomplete" in [v["code"] for v in r["violations"]],
+       "an extraction that read nothing must block")
+    ok(not r["may_quote_firm"], "and must stop the price being firm")
+    # Partial coverage is worth seeing but the numbers that were read still stand.
+    j2 = _job()
+    j2["solidworks_native"] = {"files_read": 6, "files_failed": 2}
+    r2 = check_job(j2, write_back=False)
+    ok("native_extract_partial" in [v["code"] for v in r2["violations"]], "partial is flagged")
+    ok(r2["may_quote_firm"], "but does not block — what was read is still valid")
+
+
+def test_freshness_without_a_manifest_says_it_is_weak():
+    """The connector compared a fingerprint the analyser never wrote, so the check silently
+    degraded to file mtime — which a copy, a restore or a touch defeats, and which cannot see
+    a model that has been deleted or renamed at all."""
+    from invariants import check_job
+    j = _job()
+    j["solidworks_native"] = {"manifest_absent": True, "freshness_check": "mtime_only"}
+    codes = [v["code"] for v in check_job(j, write_back=False)["violations"]]
+    ok("native_freshness_unverified" in codes,
+       f"a timestamp-only check must not read as a verified one: {codes}")
+
+
+def test_the_extract_payload_carries_a_manifest_and_still_reads_old_files():
+    """The analyser wrote a bare list while the consumer looked for a dict, so the
+    fingerprint was never compared. The new payload must carry one — and an extract already
+    sitting in a job folder must not stop working because the writer gained a header."""
+    import json as _json, tempfile
+    from pathlib import Path
+    from source_connectors.solidworks import load_native_extract, load_native_payload
+
+    d = Path(tempfile.mkdtemp())
+    v2 = d / "v2.json"
+    v2.write_text(_json.dumps({
+        "schema": "sw_native_extract.v2",
+        "_manifest": {"native_files_fingerprint": "abc123", "files_read": 2, "files_failed": 0},
+        "records": [{"title": "A-01M"}, {"title": "A-02M"}]}), encoding="utf-8")
+    eq(len(load_native_extract(v2)), 2, "records read from the v2 payload")
+    eq(load_native_payload(v2)["_manifest"]["native_files_fingerprint"], "abc123",
+       "and the fingerprint is actually reachable, which it never was before")
+
+    legacy = d / "legacy.json"
+    legacy.write_text(_json.dumps([{"title": "B-01M"}]), encoding="utf-8")
+    eq(len(load_native_extract(legacy)), 1, "a pre-manifest extract still reads")
+    ok(load_native_payload(legacy)["manifest_absent"],
+       "but reports that it has no manifest, rather than an empty one that reads as checked")
+
+
+def test_archived_and_lock_files_are_not_counted_as_unread_models():
+    """native_files_state counted every .SLD* under the folder, including superseded models
+    and SolidWorks lock files the analyser itself skips — so an archived model from two
+    revisions ago could block a drawing-only job for being 'not read'."""
+    import tempfile
+    from pathlib import Path
+    from source_connectors.solidworks import native_files_state
+
+    d = Path(tempfile.mkdtemp())
+    (d / "live.SLDPRT").write_bytes(b"x")
+    (d / "~$live.SLDPRT").write_bytes(b"x")            # SolidWorks lock file
+    (d / "Archive").mkdir()
+    (d / "Archive" / "old_rev.SLDPRT").write_bytes(b"x")
+    (d / "OBSOLETE").mkdir()
+    (d / "OBSOLETE" / "dead.SLDASM").write_bytes(b"x")
+    st = native_files_state(d)
+    eq(st["count"], 1, "only the live model counts")
+    eq(st["files"], ["live.sldprt"], "archived revisions and lock files are not evidence")
+
+
+def test_an_extract_supplied_from_elsewhere_says_it_cannot_be_verified():
+    """The models routinely live somewhere other than the drawings, which is what
+    SDI_SW_EXTRACT_JSON is for. Fingerprinting the JOB folder then compares a fingerprint of
+    the models against a folder containing none — every freshly generated extract would read
+    as STALE. And with no manifest recording where it came from, nothing can be checked at
+    all; that must not read as a pass."""
+    from invariants import check_job
+    j = _job()
+    j["solidworks_native"] = {"freshness_unverifiable": True,
+                              "fingerprint_folder": None, "files_read": 22}
+    r = check_job(j, write_back=False)
+    codes = [v["code"] for v in r["violations"]]
+    ok("native_freshness_unverifiable" in codes,
+       f"an unverifiable extract must say so: {codes}")
+    ok("native_extract_stale" not in codes,
+       "and must NOT be reported as stale — that is a different, checkable fact")
 
 
 def test_the_pipeline_actually_runs_the_analyser():

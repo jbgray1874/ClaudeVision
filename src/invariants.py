@@ -507,7 +507,38 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             f"but were not read: {sw.get('reason') or 'no extract was generated'}. The job has "
             f"been costed from the drawings alone while the models were available.",
             reason=sw.get("reason"), analyser_error=sw.get("analyser_error")))
-    elif sw.get("analyser_error"):
+    if sw.get("extract_incomplete"):
+        out.append(_violation(
+            "native_extract_incomplete", BLOCKING,
+            f"The SolidWorks extraction read no files successfully "
+            f"({sw.get('files_failed')} failed). Per-file failures are written as error-only "
+            f"records and the analyser still exits zero, so a wholly failed extraction "
+            f"produces a non-empty file that reads downstream as a successful read.",
+            files_read=sw.get("files_read"), files_failed=sw.get("files_failed")))
+    elif sw.get("files_failed"):
+        out.append(_violation(
+            "native_extract_partial", WARNING,
+            f"{sw.get('files_failed')} model file(s) could not be read by the analyser "
+            f"({sw.get('files_read')} succeeded). Anything they would have contributed is "
+            f"absent from this estimate.",
+            files_failed=sw.get("files_failed")))
+    if sw.get("freshness_unverifiable"):
+        out.append(_violation(
+            "native_freshness_unverifiable", WARNING,
+            "The extract was supplied from outside the job folder and carries no manifest "
+            "saying which models it was generated from, so nothing about its freshness could "
+            "be checked. Treat this run as diagnostic: regenerate the extract immediately "
+            "before the run, or use one that carries a manifest.",
+            fingerprint_folder=sw.get("fingerprint_folder")))
+    elif sw.get("manifest_absent") and sw.get("found") is not False:
+        out.append(_violation(
+            "native_freshness_unverified", WARNING,
+            "This extract carries no manifest, so it could only be checked for freshness on "
+            "its file timestamp. A copy, a restore or a touched file defeats that, and a "
+            "model deleted or renamed since is invisible to it. Regenerate the extract to "
+            "get a fingerprint check.",
+            freshness_check=sw.get("freshness_check")))
+    if sw.get("analyser_error"):
         out.append(_violation(
             "native_analyser_failed", WARNING,
             f"The SolidWorks analyser reported a problem: {sw.get('analyser_error')}. An "
