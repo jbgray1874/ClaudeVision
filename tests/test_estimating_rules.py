@@ -2451,6 +2451,27 @@ def main() -> int:
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
+
+    # EVERY FIXTURE IN THIS FILE MUST ACTUALLY RUN. globals() only holds what has been
+    # defined by the time main() executes, so a fixture written below the __main__ block is
+    # collected by nobody and reports nothing — it simply is not there. One was, and it sat
+    # "passing" through two mutation checks that should have failed, which is worse than no
+    # fixture at all: a green suite asserting something it never executed.
+    import re as _re
+    _declared = {m.group(1) for m in
+                 _re.finditer(r"^def (test_\w+)", open(__file__, encoding="utf-8").read(),
+                              _re.MULTILINE)}
+    _missing = sorted(_declared - {n for n, _ in tests})
+    if _missing:
+        # Reported here rather than through _fail(): the failure count is tallied inside the
+        # loop below, so anything recorded before it is discarded and the suite still prints
+        # OK — which is the same "green but unexecuted" problem in a different place.
+        print(f"\nFAILED — {len(_missing)} fixture(s) are defined but never run. They sit "
+              f"below the __main__ block, so nothing collects them; move them above it:")
+        for _name in _missing:
+            print(f"      - {_name}")
+        return 1
+
     print(f"\n{len(tests)} regression fixture(s) — each locks a defect that reached a real estimate\n")
     errors = 0
     for name, fn in tests:
@@ -2466,6 +2487,66 @@ def main() -> int:
         errors += new
     print(f"\n{'FAILED' if errors else 'OK'} — {errors} failure(s)\n")
     return 1 if errors else 0
+
+
+def test_a_part_we_make_is_never_sent_to_the_market_for_a_price():
+    """12120-01-101 and -103 are our own weldments — job-prefixed, fabricated here, their
+    material carried by their child BOM lines. Both were priced by an LLM market estimate,
+    and both figures reached the total.
+
+    The gate meant to stop that reads is_assembly_parent, is_sub_assembly, reliability_flags
+    and the part's operations. The caller handed it a three-key stub — number, description,
+    material — so every guard but two text tests was blind, and neither text test matches a
+    number like 12120-01-101. Testing the gate directly passed; the path through the caller
+    was never exercised. That is the fifth time this exact shape has bitten.
+
+    So this drives the CALLER, with a pricing service that records what it was asked."""
+    import estimator
+
+    asked = []
+
+    class _RecordingService:
+        def _select_anchor_price_source(self, part):
+            asked.append(dict(part))
+            from pricing_service import PricingService
+            if not PricingService._web_ai_fallback_allowed(self, part, {"enable_web_ai_fallback": True}):
+                return {"source": "fallback", "unit_price_gbp": 0.0, "confidence": 0.0}
+            return {"source": "llm_market_estimate", "unit_price_gbp": 7.20,
+                    "source_type": "web_ai_fallback", "confidence": 0.35}
+        _web_ai_calls = 0
+
+    _saved = estimator._PRICING_SERVICE_SINGLETON
+    estimator._PRICING_SERVICE_SINGLETON = _RecordingService()
+    try:
+        # A part we fabricate, described the way the real ones are: the number does not end
+        # -GA and the description says nothing about a weldment or an assembly, so the two
+        # text tests that were the gate's only working guards both miss it. What identifies
+        # it is that we weld it — evidence no purchased component can carry.
+        #
+        # The first version of this fixture wrote "BRACKET WELDMENT LH", which the old text
+        # test caught, so both mutations passed and the fixture proved nothing. Same failure
+        # as the defect it is testing.
+        made = {"part_number": "12120-01-101", "description": "BRACKET LH",
+                "normalized_material": "MILD_STEEL",
+                "textual_operations": ["welding", "dress_welds"]}
+        got = estimator._resolve_part_system_cost(made)
+        ok(asked, "the pricing service was reached at all")
+        ok("textual_operations" in asked[-1],
+           "the caller passes the whole part, not a three-key stub")
+        ok(got.get("applied_unit_cost") in (None, 0.0, 0),
+           f"a part we make gets no market price (got {got.get('applied_unit_cost')})")
+
+        # A genuine bought-in with no fabrication evidence still reaches the fallback: this
+        # gate must not become a blanket ban on filling catalogue gaps.
+        asked.clear()
+        bought = {"part_number": "BI-SCREENCABLE", "description": "SCREEN CABLE ASSY",
+                  "textual_operations": ["handling"]}
+        got2 = estimator._resolve_part_system_cost(bought)
+        eq(got2.get("applied_unit_cost"), 7.20,
+           "a real bought-in is still priced by the fallback")
+    finally:
+        estimator._PRICING_SERVICE_SINGLETON = _saved
+
 
 
 if __name__ == "__main__":

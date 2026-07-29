@@ -703,12 +703,34 @@ class PricingService:
           - skip rollup/assembly parents (no own price; searching them is wasted time), and
           - stop once the per-job budget is spent (the rest flag 'estimator to confirm').
         """
+        # A MARKET PRICE ONLY MEANS ANYTHING FOR SOMETHING YOU CAN BUY. The question here is
+        # not "does this look like a parent" but "do we make this part?" — because if we make
+        # it, there is no market price to find, and asking produces a confident number for a
+        # code no supplier has ever listed. 12120-01-101 and -103 are ours; an LLM priced
+        # them anyway, and those figures reached the total.
+        #
+        # Fabrication evidence is the general test — geometry we could actually cut from, or
+        # an operation a purchased component can never incur. It keys on what the part IS, so
+        # a drawing nobody has seen yet is judged the same way. The parent heuristics below
+        # stay as a second net for records that arrive without either.
+        try:
+            from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence
+            _ops = {str(o).strip().lower() for o in
+                    ((part.get("textual_operations") or []) + (part.get("inferred_operations") or []))}
+            if has_fabrication_evidence(part) or (_ops & FABRICATION_OPS):
+                return False
+        except ImportError:
+            pass
+        if part.get("bom_children") or part.get("children"):
+            return False       # it has parts under it, so its cost comes from them
+
         if fallback_policy.get("skip_rollup_parents", True):
             _pn = str(part.get("part_number") or "").upper()
             _desc = str(part.get("description") or "").upper()
             _is_parent = (
                 bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))
                 or "weldment_parent_material_suppressed" in [str(f).lower() for f in (part.get("reliability_flags") or [])]
+                or str(part.get("cost_method") or "").lower().startswith("weldment_parent")
                 or _pn.endswith("-GA") or "-GA-" in _pn
                 or any(t in _desc for t in ("WELDMENT", "ASSEMBLY", "SUB ASSEMBLY", "SUB-ASSEMBLY"))
             )

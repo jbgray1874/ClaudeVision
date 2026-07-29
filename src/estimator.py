@@ -930,8 +930,17 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     ps = _get_pricing_service()
     if ps is not None:
         try:
+            # THE WHOLE PART, NOT A STUB. This used to hand over three keys — number,
+            # description, material — and the fallback gate on the other side reads
+            # is_assembly_parent, is_sub_assembly, reliability_flags and the operations to
+            # decide whether asking a market price even makes sense. None of them were
+            # present, so every guard but the two text tests was blind, and 12120-01-101 and
+            # -103 — weldments we fabricate, whose material is carried by their children —
+            # were sent to an LLM to be priced as if they were catalogue items. An LLM cannot
+            # know what an in-house code costs, and it answered anyway.
             anchor = ps._select_anchor_price_source(
                 {
+                    **{k: v for k, v in part.items() if k != "part_number"},
                     "part_number": part_code,
                     "description": description,
                     "normalized_material": part.get("normalized_material"),
