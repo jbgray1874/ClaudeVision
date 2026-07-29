@@ -2598,7 +2598,21 @@ def test_a_guessed_price_says_so_on_the_estimating_sheet():
 
     label, indicative = _price_origin(_line("llm_market_estimate"))
     eq(indicative, True, "a guessed line is marked indicative")
-    ok("AI ESTIMATE" in label, f"and named as one in the supplier column (got {label!r})")
+    ok("INDICATIVE" in label, f"and named as one in the supplier column (got {label!r})")
+
+    # NAMED, not just categorised. "An AI estimate" is a category; "xAI Grok" answers the
+    # question an estimator actually asks about a number they cannot reproduce. The lookup
+    # records the provider, so a switch needs no edit here.
+    _named = _line("llm_market_estimate")
+    _named["cost_breakdown"]["system_cost"]["source"]["llm_provider"] = "xai"
+    label, _ = _price_origin(_named)
+    ok("Grok" in label, f"the engine that answered is named (got {label!r})")
+
+    _unknown = _line("llm_market_estimate")
+    _unknown["cost_breakdown"]["system_cost"]["source"]["llm_provider"] = "somenewvendor"
+    label, _ = _price_origin(_unknown)
+    ok("somenewvendor" in label,
+       f"a provider this map has not met still names itself (got {label!r})")
 
     label, indicative = _price_origin(_line("udef_sqlserver"))
     eq(indicative, False, "a catalogue line is not")

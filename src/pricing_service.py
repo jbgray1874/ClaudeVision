@@ -803,6 +803,11 @@ class PricingService:
         return {
             "source": result.get("source_type", "web_ai_fallback"),
             "source_type": "web_ai_fallback",
+            # WHICH ENGINE ANSWERED. The lookup records it and nothing carried it forward, so
+            # the estimating sheet could only say "an AI" — true, but an estimator asking
+            # where a price came from deserves the actual name, and if the provider is ever
+            # switched the sheet says so without anybody editing a label.
+            "llm_provider": result.get("llm_provider"),
             "unit_price_gbp": float(result["price_gbp"]),
             "confidence": capped_conf,
             "provenance": (

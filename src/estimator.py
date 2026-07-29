@@ -475,6 +475,9 @@ def _build_price_source_metadata(
         "source_class": _source_class,
         "reproducible": _source_class != "ai_estimate",
         "pricing_mode": _pricing_mode,
+        # Named, not just classified — "an AI estimate" is a category, "xAI Grok" is an answer
+        # to the question an estimator actually asks about a number they cannot reproduce.
+        "llm_provider": metadata.get("llm_provider") or evidence.get("llm_provider"),
         # `applied` means a price was found for this line. `affects_total` is narrower: a
         # bought-in unit cost can be resolved and then not added, because the part was costed
         # as a fabrication instead. Only money that reached the total can move the total.
@@ -964,6 +967,7 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                             # time it reached the sheet.
                             "metadata": {
                                 "pricing_mode": anchor.get("source_type") or anchor.get("source"),
+                                "llm_provider": anchor.get("llm_provider"),
                                 "supplier_name": anchor.get("supplier_name"),
                                 "price_date": anchor.get("price_date"),
                                 "review_reason": anchor.get("review_reason"),

@@ -76,6 +76,21 @@ from typing import Any, Dict, List, Optional, Tuple
 # blunt enough that it cannot be read as a supplier quote.
 _INDICATIVE_TAG = "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]"
 
+# The engine that answered, named. A provider this map has not met yet still names itself
+# from what the lookup recorded, so switching provider needs no edit here.
+_LLM_PROVIDER_NAMES = {
+    "xai": "xAI Grok LLM",
+    "anthropic": "Anthropic Claude LLM",
+    "openai": "OpenAI LLM",
+}
+
+
+def _llm_engine_name(block: Dict[str, Any]) -> str:
+    raw = str(block.get("llm_provider") or "").strip().lower()
+    if not raw or raw == "none":
+        return "AI ESTIMATE"
+    return _LLM_PROVIDER_NAMES.get(raw, f"{raw} LLM")
+
 # How each kind of source is named in the supplier column, so an estimator reading the sheet
 # can see at a glance which lines are firm. Keyed on the source CLASS, never on a part code,
 # so a job nobody has seen yet is labelled by the same rule.
@@ -113,10 +128,12 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     if best is None:
         return "", False
     cls = price_provenance.stamp_source_class(best)
+    if cls == "ai_estimate":
+        return f"{_llm_engine_name(best)} - INDICATIVE", True
     label = _ORIGIN_LABELS.get(cls)
     if label is None:
         label = str(best.get("source_name") or "")
-    return label, cls == "ai_estimate"
+    return label, False
 
 try:
     import openpyxl
