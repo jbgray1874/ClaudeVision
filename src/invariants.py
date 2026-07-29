@@ -426,6 +426,14 @@ def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
         length = _blank_num(p, "blank_length_mm", "overall_length_mm")
         width = _blank_num(p, "blank_width_mm", "overall_width_mm")
         area = _blank_num(p, "blank_area_mm2")
+        # AN AREA NOBODY STORED IS NOT AN OUTLINE NOBODY MEASURED. 12120's DXF-sourced parts
+        # carry their blank as overall_length_mm / overall_width_mm and leave blank_area_mm2
+        # unset — 01M is 126.393 x 82.197 with area None — so this check failed four parts
+        # for a field that was merely never written. The question it asks is whether the part
+        # has an outline; two extents are an outline, and the envelope area follows from them.
+        # Only the two parts with native flats passed, which is what gave the game away.
+        if not area and length and width:
+            area = length * width
         if not (length and width and length > 0 and width > 0) or not (area and area > 0):
             bad.append({"part_number": p.get("part_number"), "geometry_source": src,
                         "blank_length_mm": length, "blank_width_mm": width,

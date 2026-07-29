@@ -2560,6 +2560,22 @@ def test_a_blank_is_found_wherever_the_writer_put_it():
     ok("measured_geometry_without_outline" not in _codes(measured),
        "a blank in normalized_geometry is a blank")
 
+    # 12120's DXF-sourced parts carry their blank ONLY as overall_length_mm /
+    # overall_width_mm and never write blank_area_mm2 — 01M is 126.393 x 82.197 with area
+    # None. Four parts failed for a field that was merely never written, while the two with
+    # native flats passed, which is what gave the game away. Two extents ARE an outline.
+    extents_only = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+                    "flat_pattern_detected": True,
+                    "overall_length_mm": 126.393, "overall_width_mm": 82.197}
+    ok("measured_geometry_without_outline" not in _codes(extents_only),
+       "extents with no stored area are still an outline")
+
+    # One extent is not. A part with a length and no width has not been measured.
+    half = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
+            "overall_length_mm": 126.393}
+    ok("measured_geometry_without_outline" in _codes(half),
+       "and half an outline is still caught")
+
     # The check must still catch the thing it exists for: a measurement claim with no
     # measurement behind it, in any of the three places.
     empty = {"geometry_source": "dxf_flat_pattern", "dxf_measured_outline": True,
