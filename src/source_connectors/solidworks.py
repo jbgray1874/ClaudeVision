@@ -184,6 +184,28 @@ def load_native_payload(json_path: str | Path) -> Dict[str, Any]:
     return {}
 
 
+def _is_flat_solid(p: "NativePart") -> bool:
+    """Is this part a plate — a solid whose smallest dimension IS its thickness?
+
+    A folded part's envelope always stands taller than its material: 12120's 01M is
+    79 x 64.5 x 21.5 at 1.5mm, 06M is 30.9 x 39.09 x 35 at 1.2mm. A part measuring one
+    thickness in its smallest direction has nowhere for a bend to be. Physical, and true of
+    any part from any job.
+    """
+    thk = _num(p.thickness_mm)
+    bbox = [b for b in (_num(v) for v in (p.bbox_mm or [])) if b]
+    if not thk or len(bbox) < 3:
+        return False
+    # Generous: SolidWorks reports the envelope of the modelled solid, which can stand a
+    # fraction over gauge from a countersink or an embossed feature.
+    return min(bbox) <= thk * 1.25 + 0.2
+
+
+def _bbox_text(p: "NativePart") -> str:
+    b = [f"{_num(v):g}" for v in (p.bbox_mm or []) if _num(v)]
+    return (" x ".join(b) + "mm") if b else "unknown"
+
+
 def _reject_folded_box_as_flat(p: NativePart) -> None:
     """Drop a 'flat pattern' that is really the part's FOLDED bounding box.
 
@@ -1120,6 +1142,43 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 out["bends"] += 1
             if _plausible_thk(nat.bend_radius_mm):
                 part["bend_radius_mm"] = float(nat.bend_radius_mm)
+        elif (nat.is_sheet_metal and _plausible_thk(nat.thickness_mm)
+              and not nat.formed_but_no_bend_features and _is_flat_solid(nat)):
+            # THE MODEL SAYS THIS PART DOES NOT FOLD, AND ITS SOLID AGREES.
+            #
+            # A zero bend count on its own proves nothing — that is exactly the failure
+            # `formed_but_no_bend_features` exists for, where a Base Flange hides real folds
+            # from the feature tree. So zero is believed only when the SOLID corroborates it:
+            # a part one thickness thick has nowhere for a bend to be. 12120's 04M is
+            # 60 x 34.04 x 1.5mm at 1.5mm gauge — a plate — and it was being folded.
+            #
+            # The guard requires a sheet-metal cut list with a real thickness, so it fires
+            # only where the model was actually read, never on a part we know nothing about.
+            #
+            # The op is dropped here rather than left to a later gate because nothing
+            # downstream has this evidence: the drawing text, the DXF bend-line heuristic and
+            # the PDF can all suggest a fold, and none of them can see that the part is flat.
+            _ops = part.get("textual_operations")
+            _removed = False
+            if isinstance(_ops, list) and "folding" in _ops:
+                _ops[:] = [o for o in _ops if o != "folding"]
+                _removed = True
+            mf = part.setdefault("manufacturing_features", {})
+            if isinstance(mf, dict):
+                if _num(mf.get("bend_count")):
+                    _removed = True
+                mf["bend_count"] = 0
+                mf["bend_count_source"] = SOURCE_NAME
+            _rf = part.get("risk_flags")
+            if isinstance(_rf, list):
+                _rf[:] = [f for f in _rf if "fold" not in str(f).lower()
+                          and "bend" not in str(f).lower()]
+            if _removed:
+                flags.append(
+                    f"fold REMOVED: the cut list reports 0 bends and the solid is "
+                    f"{_bbox_text(nat)} at {nat.thickness_mm:g}mm — one thickness thick, so "
+                    f"there is nowhere for a bend to be. A fold was routed from the drawing")
+                out["fold_removed"] = out.get("fold_removed", 0) + 1
         elif nat.formed_but_no_bend_features:
             # Real folds that no feature counts — a Base Flange from a multi-segment
             # sketch. Flag it so the fold op still fires and an estimator can set the

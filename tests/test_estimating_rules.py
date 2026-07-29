@@ -934,6 +934,57 @@ def test_the_knowledge_base_reaches_the_resolver_at_the_call_site():
         LE.db, LE._DB_AVAILABLE = _orig_db, _orig_avail
 
 
+def test_a_plate_is_not_folded():
+    """12120's 04M is 60 x 34.04 x 1.5mm at 1.5mm gauge — a flat plate, bends 0 on the cut
+    list — and it was routed into the Fold 1.5mm group off the drawing. A part one thickness
+    thick has nowhere for a bend to be.
+
+    Zero bends ALONE must not be enough to strip the fold: that is exactly the case
+    formed_but_no_bend_features exists for, where a Base Flange hides real folds from the
+    feature tree (12120's 02M, 06M and 08M all count 0 and genuinely fold). The solid has to
+    corroborate it."""
+    from source_connectors.solidworks import (normalize_native_extract,
+                                              apply_native_to_pre_estimate)
+
+    def _job_for(pn, bends, bbox, flat_l, flat_w, thk=1.5, formed=False):
+        rs = {"material": "Mild Steel [CR4]", "is_sheet_metal": True, "bend_count": bends,
+              "flat_length_mm": flat_l, "flat_width_mm": flat_w, "thickness_mm": thk,
+              "bbox_mm": bbox}
+        if formed:
+            rs["formed_but_no_bend_features"] = True
+        return normalize_native_extract([{"title": pn, "doctype": 1, "route_signals": rs}])
+
+    # 04M: plate. The fold came off the drawing and must go.
+    parts = [{"part_number": "04M", "textual_operations": ["laser_cutting", "folding"],
+              "manufacturing_features": {"bend_count": 1},
+              "risk_flags": ["fold_count_uncertain"]}]
+    apply_native_to_pre_estimate(parts, _job_for("04M", 0, [60.0, 34.04, 1.5], 60.0, 34.04))
+    ok("folding" not in (parts[0].get("textual_operations") or []),
+       "a plate must not be folded")
+    eq((parts[0].get("manufacturing_features") or {}).get("bend_count"), 0,
+       "and its bend count must say so")
+    ok(not [f for f in (parts[0].get("risk_flags") or []) if "fold" in str(f).lower()],
+       "with the fold risk flag cleared, not left telling an estimator to check a fold")
+
+    # 01M: genuinely folded — envelope stands far taller than the gauge. Untouched.
+    parts = [{"part_number": "01M", "textual_operations": ["laser_cutting", "folding"],
+              "manufacturing_features": {"bend_count": 6}}]
+    apply_native_to_pre_estimate(parts, _job_for("01M", 6, [79.0, 64.5, 21.5], 126.39, 82.2))
+    ok("folding" in (parts[0].get("textual_operations") or []),
+       "a folded part keeps its fold")
+    eq((parts[0].get("manufacturing_features") or {}).get("bend_count"), 6, "and its count")
+
+    # 08M: cut list counts 0 bends but the solid is 17mm deep at 1.2mm gauge — it folds.
+    # Stripping on a zero count alone would silently un-fold three of 12120's parts.
+    parts = [{"part_number": "08M", "textual_operations": ["laser_cutting", "folding"],
+              "manufacturing_features": {"bend_count": 1}}]
+    apply_native_to_pre_estimate(parts, _job_for("08M", 0, [79.0, 23.0, 17.0], 79.0, 37.79,
+                                                 thk=1.2))
+    ok("folding" in (parts[0].get("textual_operations") or []),
+       "a zero bend COUNT on a part whose solid is deeper than its gauge is not evidence "
+       "of a plate — the fold must survive")
+
+
 def test_every_native_disagreement_reaches_the_resolver():
     """Three branches decided the outcome themselves instead of submitting the observation.
     Same-family material ("keep the drawing value"), a differing thickness on a DXF-backed
