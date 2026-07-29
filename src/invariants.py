@@ -393,8 +393,11 @@ def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
         claims = p.get("dxf_measured_outline") is True or any(t in src for t in _MEASURED_TOKENS)
         if not claims:
             continue
-        # A matched-but-unmeasured file is an honest state and says so in its own name.
-        if "no_geometry" in src or "matched_no_geometry" in src:
+        # A file that measured something less than a blank is an honest state and says so in
+        # its own name. cut_length_only is the case that made this check fire on five parts:
+        # the cut path was genuinely measured, the outline was not, and one flag was claiming
+        # both. Now that they are separate claims, this one is true and takes the allowance.
+        if "no_geometry" in src or "matched_no_geometry" in src or "cut_length_only" in src:
             continue
         length = _num(p.get("blank_length_mm")) or _num((p.get("geometry_rollup") or {}).get("blank_length_mm"))
         width = _num(p.get("blank_width_mm")) or _num((p.get("geometry_rollup") or {}).get("blank_width_mm"))

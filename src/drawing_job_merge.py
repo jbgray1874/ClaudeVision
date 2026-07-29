@@ -380,30 +380,49 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         _blank_area = float((flat or {}).get("blank_area_mm2") or 0.0)
     except (TypeError, ValueError):
         _blank_area = 0.0
-    _measured = bool(flat and flat.get("flat_pattern_detected") and _blank_area > 0)
-    if not _measured:
-        try:
-            _measured = float((raw or {}).get("estimated_cut_length_mm") or 0.0) > 0.0
-        except (TypeError, ValueError):
-            pass
+    # TWO DIFFERENT CLAIMS, AND THEY WERE SHARING ONE FLAG. A DXF can yield a measured cut
+    # PATH without yielding a measured BLANK — the cut layer holds geometry the reader can
+    # follow, but nothing that closes into an outline with an area. Both are real
+    # measurement, and they license completely different things:
+    #
+    #   outline measured   -> we know the blank, so no blank allowance is needed
+    #   cut length measured -> we know the cut time, and nothing at all about the blank
+    #
+    # dxf_measured_outline was being set from EITHER, so five parts on 12120 skipped their
+    # blank allowance on the strength of a measurement that says nothing about their blank.
+    # bought_in_policy already documents the contract this breaks — "dxf_augmented is set
+    # ONLY where an outline was actually measured" — so the reader was right and the writer
+    # was wrong. Keep the claims apart and each gate reads the one it actually needs.
+    _outline_measured = bool(flat and flat.get("flat_pattern_detected") and _blank_area > 0)
+    try:
+        _cut_length_measured = float((raw or {}).get("estimated_cut_length_mm") or 0.0) > 0.0
+    except (TypeError, ValueError):
+        _cut_length_measured = False
 
     part["geometry_source"] = (
-        "dxf_flat_pattern" if (flat and flat.get("flat_pattern_detected") and _blank_area > 0)
-        else ("dxf" if _measured else "dxf_matched_no_geometry")
+        "dxf_flat_pattern" if _outline_measured
+        else ("dxf_cut_length_only" if _cut_length_measured else "dxf_matched_no_geometry")
     )
     part["geometry_source_path"] = str(dxf_path.resolve())
     part["dxf_source_file"] = dxf_path.name
-    part["dxf_measured_outline"] = _measured
-    # Only a MEASURED read counts as augmentation. The filename still gives thickness and
-    # material (dxf_source_file is kept), but the geometry claim is withdrawn.
-    part["dxf_augmented"] = _measured
-    if not _measured:
+    part["dxf_measured_outline"] = _outline_measured
+    part["dxf_measured_cut_length"] = _cut_length_measured
+    # Only a measured OUTLINE counts as augmentation, because augmentation is what tells the
+    # costing path the blank extents can be trusted. The filename still gives thickness and
+    # material (dxf_source_file is kept), and a measured cut length is still recorded above
+    # for the operations that need it — but the blank claim is withdrawn.
+    part["dxf_augmented"] = _outline_measured
+    if not _outline_measured:
+        _what = ("Its cut layer yielded a measured cut path but no closed outline, so the cut "
+                 "time is measured and the blank is not"
+                 if _cut_length_measured else
+                 "Its cut layer holds no line/arc/circle geometry at all")
         part.setdefault("review_flags", []).append(
-            f"DXF '{dxf_path.name}' matched but yielded NO measured outline — its cut layer "
-            f"holds no line/arc/circle geometry (commonly a block/INSERT export, which the "
-            f"reader does not explode). Any blank shown for this part is transcribed from "
-            f"the drawing's dimension text, not measured; cut length and hole count are "
-            f"unavailable. Re-export the flat pattern as exploded geometry to measure it")
+            f"DXF '{dxf_path.name}' matched but yielded NO measured blank outline. {_what} "
+            f"(commonly a block/INSERT export, which the reader does not explode). Any blank "
+            f"shown for this part is transcribed from the drawing's dimension text, not "
+            f"measured, and it takes the blank allowance accordingly. Re-export the flat "
+            f"pattern as exploded geometry to measure it")
     part["dxf_geometry_reliability"] = reliability
     part["dxf_raw_geometry"] = dxf_raw
     # DXF flat-pattern is ground truth for folding: a genuine flat-pattern part

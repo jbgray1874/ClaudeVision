@@ -96,7 +96,15 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     # _detected is also set from drawing EXTENTS as a fallback (drawing_job_merge), which is
     # not measured geometry, and being checked first it let a matched-but-unreadable DXF
     # count as evidence — the exact case this predicate was narrowed to exclude.
-    if part.get("dxf_measured_outline") is False and not part.get("native_flat_pattern"):
+    #
+    # "No blank was measured" is NOT "nothing was measured". A DXF whose cut layer yields a
+    # measured cut path but no closed outline has told us something real: a profile is being
+    # cut. Only the blank claim is absent, and only the blank claim gates the allowance. The
+    # two used to share dxf_measured_outline, so withdrawing the blank claim would otherwise
+    # take the part's fabrication evidence with it and make something we cut look purchased.
+    if (part.get("dxf_measured_outline") is False
+            and not part.get("dxf_measured_cut_length")
+            and not part.get("native_flat_pattern")):
         return False
     if part.get("flat_pattern_detected") or part.get("native_flat_pattern"):
         return True

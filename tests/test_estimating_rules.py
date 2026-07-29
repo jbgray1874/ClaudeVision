@@ -2459,6 +2459,75 @@ def test_route_group_id_is_stable_and_distinguishes_gauges():
 
 
 # ── runner ───────────────────────────────────────────────────────────────────────────
+def test_a_measured_cut_path_is_not_a_measured_blank():
+    """Five parts on 12120 blocked as "measured geometry without an outline" for run after
+    run. The cause was one flag carrying two different claims.
+
+    A DXF can yield a measured cut PATH without yielding a measured BLANK — the cut layer
+    holds geometry the reader can follow, but nothing closing into an outline with an area.
+    Both are real measurement and they license completely different things: knowing the
+    blank means no blank allowance is needed; knowing the cut length says nothing whatever
+    about the blank. dxf_measured_outline was set from EITHER, so those five skipped their
+    blank allowance on the strength of a measurement about something else.
+
+    bought_in_policy already documented the contract this broke — "dxf_augmented is set ONLY
+    where an outline was actually measured" — so the reader was right and the writer wrong.
+
+    Drives the merge, not the flags: it is the writer that was wrong."""
+    import drawing_job_merge as djm
+    from pathlib import Path
+
+    _saved_geom, _saved_flat = djm.build_geometry_summary_for_dxf, djm.extract_flat_pattern_data
+    try:
+        # A cut layer the reader could follow, that never closed into an outline.
+        djm.build_geometry_summary_for_dxf = lambda p: (
+            {}, {"estimated_cut_length_mm": 842.0, "drawing_extents_mm": []}, 0.5)
+        djm.extract_flat_pattern_data = lambda p: {"flat_pattern_detected": False}
+        part = {"part_number": "12120-01-05M"}
+        djm.apply_dxf_geometry_to_part(part, Path("05M_1.5mm_MILD_STEEL.DXF"))
+
+        eq(part["dxf_measured_cut_length"], True, "the cut path was measured, and says so")
+        eq(part["dxf_measured_outline"], False, "the blank was not, and says that too")
+        eq(part["dxf_augmented"], False,
+           "so the blank extents are not trusted and the allowance applies")
+        eq(part["geometry_source"], "dxf_cut_length_only",
+           "and the source names exactly what was read")
+        ok(any("blank allowance" in str(f) for f in part.get("review_flags") or []),
+           "with a flag saying so in words")
+
+        # It is still a part we fabricate — something is cutting that path.
+        from bought_in_policy import has_fabrication_evidence
+        eq(has_fabrication_evidence(part), True,
+           "a measured cut path is still evidence we make it")
+
+        # And the invariant stops objecting, because the claim is now true.
+        from invariants import check_job
+        j = _job()
+        j["part_estimates"] = [dict(part, blank_length_mm=None, blank_width_mm=None,
+                                    quantity=1, quantity_source="bom_tree")]
+        ok("measured_geometry_without_outline" not in
+           [v["code"] for v in check_job(j, write_back=False)["violations"]],
+           "an honest cut-length-only part is not a false claim")
+
+        # A real flat pattern still claims the blank, and still must carry one.
+        # Zero for anything the reader asks for and this stub has not named: the point here
+        # is which flags come out, not to re-declare the flat-pattern contract field by field.
+        class _Flat(dict):
+            def __missing__(self, k):
+                return 0.0
+        djm.extract_flat_pattern_data = lambda p: _Flat(
+            flat_pattern_detected=True, blank_area_mm2=10389.3, blank_length_mm=126.39,
+            blank_width_mm=82.2, perimeter_mm=842.0, weight_kg=0.12, hole_count=4,
+            bend_count=2, hole_diameters_mm=[])
+        whole = {"part_number": "12120-01-01M"}
+        djm.apply_dxf_geometry_to_part(whole, Path("01M_1.5mm_MILD_STEEL.DXF"))
+        eq(whole["dxf_measured_outline"], True, "a measured blank still claims one")
+        eq(whole["dxf_augmented"], True, "and is still trusted for extents")
+    finally:
+        djm.build_geometry_summary_for_dxf = _saved_geom
+        djm.extract_flat_pattern_data = _saved_flat
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
