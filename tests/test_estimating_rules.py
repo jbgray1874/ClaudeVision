@@ -4862,9 +4862,28 @@ def test_a_tube_is_not_laser_profiled():
     ok("2085-01" not in _tubes, "and a flat plate is not")
 
     _sf = "tube" if "2085-02" in _tubes else None
-    for _op in ("laser_cutting", "laser", "punch", "guillotine"):
-        ok(_is_spurious_operation(_op, _sf, "MILD_STEEL"),
-           f"'{_op}' is meaningless on tube stock")
+
+    # A TUBE IS NOT LASER-PROFILED — BUT IT IS STILL CUT.
+    #
+    # The first version of this rule DROPPED laser and guillotine on tube stock. That
+    # removed the profile cut which never happens AND the cut-to-length which always does,
+    # and 2085's tubes came out of it with no cutting operation of any kind: the sheet read
+    # as though nobody cut them. The operation is misplaced, not impossible, so it is
+    # relocated to the tube department rather than deleted.
+    from wb_populate import _map_operation
+    for _op in ("laser_cutting", "laser", "guillotine"):
+        ok(not _is_spurious_operation(_op, _sf, "MILD_STEEL"),
+           f"'{_op}' on a tube is misplaced, not impossible — dropping it makes the cut free")
+        _dept = _map_operation(_op, False, _sf)
+        ok(_dept and "laser" not in _dept.lower(),
+           f"'{_op}' must never book a LASER against a tube, got {_dept!r}")
+        eq(_dept, "Tube", f"'{_op}' on a tube is a tube-department cut")
+
+    # Punch stays spurious: a hole through a tube wall is hole work, not a cut to length,
+    # and remapping it would invent a second cut on every punched tube.
+    ok(_is_spurious_operation("punch", _sf, "MILD_STEEL"),
+       "punching a tube is not cutting it to length")
+
     for _op in ("saw", "tube_cut", "welding", "tube_bending", "powder_coating"):
         ok(not _is_spurious_operation(_op, _sf, "MILD_STEEL"),
            f"'{_op}' is real work on a tube and must survive")
@@ -5795,6 +5814,55 @@ def test_the_ga_hierarchy_says_what_is_an_assembly():
        "a part with its own flat pattern stays a leaf whatever the hierarchy claims")
     ok((_bm.get("cost_per_part_gbp") or 0) > 0, "so it keeps its material")
     ok({"laser_cutting", "folding"} <= _bops, "and its cut and fold")
+
+
+def test_a_tube_is_cut_somewhere_or_it_is_cut_for_free():
+    """A tube has no flat blank, so it is not profile-lasered. It is still SAWN TO LENGTH.
+
+    Dropping laser/guillotine on tube stock as "spurious" was half right and expensively so:
+    it removed the profile cut that never happened AND the cut-to-length that always does.
+    2085's tubes came out of that change with no cutting operation of any kind — the sheet
+    was silent on them, which reads as no work rather than as work nobody costed.
+
+    Remapped, not dropped, exactly as fold already was. The module's own predicate says so:
+    an operation that has a correct home for this stock form is not spurious.
+    """
+    from wb_populate import _map_operation, _is_spurious_operation
+
+    for _cut in ("laser", "laser_cutting", "laser_metal", "guillotine"):
+        ok(not _is_spurious_operation(_cut, "tube"),
+           f"'{_cut}' on a tube is misplaced, not impossible — dropping it makes the cut free")
+        eq(_map_operation(_cut, False, "tube"), "Tube",
+           f"'{_cut}' on a tube is a tube-department cut")
+
+    # Explicit tube-cutting words land in the same place, whatever the route called it.
+    for _cut in ("tube_cut", "tube_cutting"):
+        eq(_map_operation(_cut, False, "tube"), "Tube", f"'{_cut}' is a tube cut")
+    eq(_map_operation("saw", False, "tube"), "Saw", "a sawn tube books to the saw")
+
+    # PUNCH IS NOT A CUT TO LENGTH. A hole through a tube wall is hole work, which has its
+    # own operation; remapping it to a cut would invent a second cut on every punched tube.
+    ok(_is_spurious_operation("punch", "tube"), "punching a tube is not cutting it to length")
+
+    # Forming is unchanged — a tube bends on a tube-bender, not a press brake.
+    eq(_map_operation("folding", False, "tube"), "Tubebend", "a tube is bent, not folded")
+
+    # SHEET IS UNTOUCHED. The remap is keyed on stock form, so a plate still lasers.
+    eq(_map_operation("laser_cutting", False, "sheet"), "Laser (Metal)",
+       "a sheet part still profile-lasers")
+    eq(_map_operation("guillotine", False, "sheet"), "Guillotine", "and still guillotines")
+    ok(not _is_spurious_operation("punch", "sheet"), "and is still punchable")
+
+    # The cut has to SEQUENCE as a cut, or the sheet lists it after the weld it precedes.
+    # _SHOP_ORDER is local to populate_workbook, so this reads the table it is declared in.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    _order = _wb.split("_SHOP_ORDER = {")[1].split("}")[0]
+    import re as _re
+    _rank = {m.group(1): int(m.group(2))
+             for m in _re.finditer(r'"([^"]+)":\s*(\d+)', _order)}
+    ok(_rank.get("Tube") is not None, "the Tube department must have a place in the route")
+    ok(_rank["Tube"] < _rank["Tubebend"], "you cut the tube before you bend it")
+    ok(_rank["Tube"] < _rank["Weld (CO2)"], "and before you weld it in")
 
 
 if __name__ == "__main__":

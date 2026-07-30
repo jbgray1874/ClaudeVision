@@ -326,6 +326,24 @@ OP_NAME_MAP_ACRYLIC = {
 _TUBE_OP_REMAP = {
     "folding": "Tubebend",
     "fold":    "Tubebend",
+    # A TUBE IS STILL CUT. IT IS JUST NOT CUT ON A FLAT-BED LASER.
+    #
+    # laser/guillotine on a tube used to be DROPPED as spurious, which is half right and
+    # expensively so: a tube has no flat blank, so it is not profile-lasered -- but it is
+    # sawn to length, and deleting the operation left the cut costing nothing. 2085's tubes
+    # came out of that change with no cutting operation of any kind on the sheet.
+    #
+    # Remapped, not dropped, exactly as fold is. The route said "this part gets cut"; the
+    # stock form says the cut happens in the tube department, not on the laser. Punch stays
+    # spurious below: putting a hole through a tube wall is not cutting it to length, and
+    # hole work has its own operation.
+    "laser":         "Tube",
+    "laser_cutting": "Tube",
+    "laser_metal":   "Tube",
+    "guillotine":    "Tube",
+    "tube_cut":      "Tube",
+    "tube_cutting":  "Tube",
+    "saw":           "Saw",
 }
 
 
@@ -687,7 +705,10 @@ _SPURIOUS_OPS_BY_STOCK_FORM = {
     # labour block, that inherited op would have booked a laser cut on both of them.
     # Dropped, and the drop is flagged by name where it happens, so if SDI ever profiles
     # tube on a tube laser this is one line and the flag says which parts it affected.
-    "tube": {"punch", "punching", "laser", "laser_cutting", "laser_metal", "guillotine"},
+    # PUNCH ONLY. The cutting operations moved to _TUBE_OP_REMAP -- a tube is not
+    # profile-lasered but it IS cut to length, and dropping the op made the cut free.
+    # Putting a hole through a tube wall is not cutting it to length, so punch stays here.
+    "tube": {"punch", "punching"},
     # A solid round bar has NO FLAT BLANK. It cannot be lasered, folded, punched,
     # line-bent, guillotined or diamond-polished. It is cut (Robomac / Saw) and welded.
     # 1310-02 STUD (8mm dia x 65) was carrying Laser £4.91 from the original misread
