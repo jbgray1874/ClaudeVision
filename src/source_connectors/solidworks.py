@@ -863,12 +863,23 @@ def _native_match_index(job: NativeJob):
     _lead_hits: Dict[str, List[str]] = {}
     for _pn in list(job.part_signals) + [r.part_number for r in job.bom] + list(job.assembly_pns):
         _raw = str(_pn or "").strip()
-        _head, _sep, _rest = _raw.partition(" ")
-        if not _sep:
+        # AN EXPLICIT DESCRIPTION BOUNDARY: " - ", and nothing looser.
+        #
+        # "first whitespace, if letters follow" was tried and is too broad. It aliases
+        # "1450 GA" to "1450" — and GA is part of a legitimate SDI code, not a description —
+        # and "M4 Male Grip Knob" to "M4", where M4 is a thread spec that a BOM line could
+        # plausibly carry. Either would put one part's geometry on another.
+        #
+        # Space-dash-space is what SolidWorks files actually use when a description is
+        # appended, and it cannot occur inside a part number. A title without it yields no
+        # alias at all, which is the safe direction: an unmatched part costs a measurement,
+        # a mismatched one costs a wrong price nobody can see.
+        _m = re.search(r"\s+[-\u2013\u2014]\s+", _raw)
+        if not _m:
             continue
-        _rest = _rest.lstrip(" -\u2013\u2014").strip()
-        if not _rest or not any(c.isalpha() for c in _rest):
-            continue          # "12120 01 103" is more code, not a description
+        _head, _rest = _raw[:_m.start()].strip(), _raw[_m.end():].strip()
+        if not _head or not _rest:
+            continue
         _k = _pn_key(_head)
         if _k:
             _lead_hits.setdefault(_k, []).append(_pn)

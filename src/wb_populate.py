@@ -460,6 +460,54 @@ def tube_part_numbers(summary: Dict[str, Any]) -> set:
     return out
 
 
+
+def operation_scope_for(pe: Dict[str, Any], op: str,
+                        scope_by_op: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """"part" or "assembly" for one operation on one part, or None if nobody said.
+
+    Module-level so it can be driven. The first version lived inline in the group loop and
+    its mutation passed clean — the fourth time today a check has verified source text
+    instead of behaviour.
+
+    A CHAINED OPERATION INHERITS THE SCOPE OF WHAT SPAWNED IT. estimator.py adds dress_welds
+    automatically wherever it finds welding, so that row has no route line of its own and
+    therefore no scope. It is the same event: if the weld happens once per assembly, so does
+    dressing it. Without this the weld would be charged once and its dressing three times,
+    which is worse than either answer applied consistently.
+    """
+    _o = str(op or "").strip().lower()
+    if not _o:
+        return None
+    _own = (pe or {}).get("operation_scope") or {}
+    _job = scope_by_op or {}
+    for _key in (_o, _CHAINED_FROM.get(_o)):
+        if not _key:
+            continue
+        _v = _own.get(_key) or _job.get(_key)
+        if _v in ("part", "assembly"):
+            return _v
+    return None
+
+
+def assembly_scoped_qty(group: Dict[str, Any]) -> int:
+    """How many times an ASSEMBLY-scoped operation is charged per finished product.
+
+    Normally once -- that is what assembly scope MEANS. But qty_per_unit on the route line
+    says how many times the operation happens per unit, and a product containing two welded
+    frames is two weldings even though each is assembly-level. The route fold stores it;
+    without this it would be a field the schema asks the LLM for, the fold carries, and
+    nothing ever reads -- which reads as consumed and is not.
+
+    Never below 1: an assembly-scoped operation that reached this point is on the route, and
+    a route line that happens zero times would not be there.
+    """
+    _q = _safe((group or {}).get("qty_per_unit_by_scope") or None, 1) or 1
+    try:
+        return max(1, int(_q))
+    except (TypeError, ValueError):
+        return 1
+
+
 def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None,
                                    extra_ops: Any = None) -> List[str]:
     """Fabrication operations on a part's ROUTE that the estimator put no cost against.
@@ -546,6 +594,12 @@ def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[
 # NOTE: tube-fold and acrylic-fold are NOT in this list — they are REAL operations
 # (tube-bending and line-bending) that get REMAPPED above, not dropped.
 # Only operations that serve no purpose at all go here.
+# Operations the engine ADDS from another operation rather than reading from a route. They
+# carry no route line, so they have no scope of their own and inherit their parent's.
+_CHAINED_FROM = {
+    "dress_welds": "welding",
+}
+
 _SPURIOUS_OPS_BY_STOCK_FORM = {
     # A TUBE HAS NO FLAT BLANK, SO IT IS NEITHER PUNCHED NOR PROFILE-LASERED.
     # 2085's tubes carried laser_cutting, inherited from the shared assembly page the
@@ -2078,10 +2132,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # as how many parts the route line names. Recorded on the group so the emit loop
             # can flag it (or honour it, once the rates are confirmed).
             _op_l = str(op or "").strip().lower()
-            _sc = ((pe.get("operation_scope") or {}).get(_op_l)
-                   or _scope_by_op.get(_op_l))
+            _sc = operation_scope_for(pe, _op_l, _scope_by_op)
             if _sc == "assembly":
                 g["assembly_scoped"] = True
+                _qpu_part = (pe.get("operation_qty_per_unit") or {}).get(_op_l)
+                if _qpu_part:
+                    _prev = _safe(g.get("qty_per_unit_by_scope"), 0) or 0
+                    g["qty_per_unit_by_scope"] = max(_prev, _safe(_qpu_part, 1) or 1)
             _rs = (pe.get("operation_sequence") or {}).get(str(op or "").strip().lower())
             if _rs is not None:
                 try:
@@ -2209,7 +2266,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if g.get("assembly_scoped") and int(_safe(g.get("qty"), 1) or 1) > 1:
             _was = int(_safe(g.get("qty"), 1) or 1)
             if _charge_once:
-                g["qty"] = 1
+                g["qty"] = assembly_scoped_qty(g)
                 _flag(f"labour '{g.get('wb_op')}': ASSEMBLY-scoped operation charged ONCE "
                       f"per product (was qty {_was}, one per part). "
                       f"config.ASSEMBLY_SCOPED_OPS_CHARGE_ONCE is on.", flags)

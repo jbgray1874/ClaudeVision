@@ -5211,18 +5211,26 @@ def test_a_model_file_named_code_plus_description_still_matches():
     eq(_match_native({"part_number": "12120-01-103"}, _e5, _t5, _l5), "12120-01-103",
        "while the part itself still matches exactly")
 
-    # The convention without a dash is real too, and still resolves.
-    _nodash = NativeJob(found=True, part_signals={
-        "2085-02 Outer Tube": NativePart(part_number="2085-02 Outer Tube")})
-    _e6, _t6, _l6 = _native_match_index(_nodash)
-    eq(_match_native({"part_number": "2085-02"}, _e6, _t6, _l6), "2085-02 Outer Tube",
-       "\"<code> <description>\" resolves as well as \"<code> - <description>\"")
-
-    # But whitespace alone is not a description boundary: what follows must read as words.
-    _spaced = NativeJob(found=True, part_signals={
-        "12120 01 103": NativePart(part_number="12120 01 103")})
-    _e7, _t7, _l7 = _native_match_index(_spaced)
-    eq(_l7, {}, "more code after a space is not a description, so it aliases nothing")
+    # THE BOUNDARY IS " - ", AND NOTHING LOOSER.
+    #
+    # "first whitespace, if letters follow" was tried and had to be withdrawn. It aliases
+    # "1450 GA" to "1450" — and GA is part of a legitimate SDI code, not a description — and
+    # "M4 Male Grip Knob" to "M4", where M4 is a thread spec a BOM line could plausibly
+    # carry. Either would put one part's geometry onto another, silently, at the highest
+    # rank in the waterfall.
+    #
+    # Space-dash-space is what the files actually use, and it cannot occur inside a part
+    # number. A title without it yields no alias, which is the safe direction: an unmatched
+    # part costs a measurement, a mismatched one costs a wrong price nobody can see.
+    for _title, _query in (("1450 GA", "1450"),
+                           ("M4 Male Grip Knob", "M4"),
+                           ("2085-02 Outer Tube", "2085-02"),
+                           ("12120 01 103", "12120")):
+        _j = NativeJob(found=True, part_signals={_title: NativePart(part_number=_title)})
+        _ex, _tx, _lx = _native_match_index(_j)
+        eq(_lx, {}, f"'{_title}' has no ' - ' boundary, so it aliases nothing")
+        eq(_match_native({"part_number": _query}, _ex, _tx, _lx), None,
+           f"and '{_query}' does not claim it")
 
     # ISOLATE THE SEPARATOR RULE. With three parts a truncated code is ambiguous and gets
     # dropped anyway, so removing the separator requirement still gives the right answer and
@@ -5278,6 +5286,72 @@ def test_a_model_file_named_code_plus_description_still_matches():
     ok(extract_is_for_this_job([{"part_number": "2085-02"}, {"part_number": "2085-03"}],
                                job)["belongs"],
        "the genuine extract is recognised as this job's once its parts can be matched")
+
+
+def test_a_chained_operation_inherits_the_scope_of_what_spawned_it():
+    """estimator.py adds dress_welds automatically wherever it finds welding, so that row
+    has no route line of its own and therefore no scope of its own.
+
+    It is the same event: if the weld happens once per assembly, so does dressing it.
+    Without the inheritance the weld would be charged once and its dressing once per part —
+    worse than either answer applied consistently, and the kind of split that makes a sheet
+    impossible to reason about.
+    """
+    from wb_populate import operation_scope_for
+
+    _job_scope = {"welding": "assembly"}
+    eq(operation_scope_for({}, "welding", _job_scope), "assembly", "the weld's own scope")
+    eq(operation_scope_for({}, "dress_welds", _job_scope), "assembly",
+       "and its dressing inherits it, having no route line to carry one")
+
+    # An operation with its OWN scope keeps it — inheritance only fills a gap.
+    eq(operation_scope_for({"operation_scope": {"dress_welds": "part"}},
+                           "dress_welds", _job_scope), "part",
+       "an explicit scope on the part beats the inherited one")
+
+    # Nothing said, nothing invented.
+    eq(operation_scope_for({}, "dress_welds", {}), None, "no weld scope, no inherited scope")
+    eq(operation_scope_for({}, "laser_cutting", _job_scope), None,
+       "and an unrelated operation inherits nothing from the weld")
+    eq(operation_scope_for({}, "", _job_scope), None, "an empty operation has no scope")
+
+    # And the loop uses the helper rather than a copy of it.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok("_sc = operation_scope_for(pe, _op_l, _scope_by_op)" in _wb,
+       "the group loop resolves scope through the shared helper")
+
+
+def test_qty_per_unit_is_read_by_the_workbook_not_merely_stored():
+    """The schema asks the LLM for qty_per_unit, the route fold carries it onto the part,
+    and until now the workbook threw it away — an assembly-scoped operation was charged
+    exactly once whatever the route said.
+
+    Once per product is the normal case and stays the default. But a product with two welded
+    frames in it is two weldings, and a field that is asked for, transported and then ignored
+    reads as consumed when it is not.
+    """
+    from wb_populate import assembly_scoped_qty
+
+    eq(assembly_scoped_qty({}), 1, "nothing said means once per product")
+    eq(assembly_scoped_qty({"qty_per_unit_by_scope": 1}), 1, "and one means once")
+    eq(assembly_scoped_qty({"qty_per_unit_by_scope": 2}), 2,
+       "two welded frames per product is two weldings, not one")
+
+    # Never below one: the operation is on the route, so it happens.
+    eq(assembly_scoped_qty({"qty_per_unit_by_scope": 0}), 1, "zero is not a saving")
+    eq(assembly_scoped_qty({"qty_per_unit_by_scope": -3}), 1, "nor is a negative")
+    eq(assembly_scoped_qty({"qty_per_unit_by_scope": "rubbish"}), 1,
+       "an unparseable qty falls back to once rather than raising mid-sheet")
+
+    # And the sheet resolves it through the helper rather than a copy of it.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok('g["qty"] = assembly_scoped_qty(g)' in _wb,
+       "the labour loop takes its assembly qty from the shared helper")
+
+    # The fold must actually put the number where the helper looks for it, or the helper
+    # is correct about a field nothing populates.
+    ok('g["qty_per_unit_by_scope"]' in _wb,
+       "and the group loop records qty_per_unit from the part's route")
 
 
 if __name__ == "__main__":
