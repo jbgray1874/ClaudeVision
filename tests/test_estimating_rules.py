@@ -4255,5 +4255,50 @@ def test_every_fabricated_part_is_in_the_bill_of_materials():
        "the material total still sums every block, which is why the duplicate must be free")
 
 
+def test_every_word_we_ask_for_is_a_word_we_can_cost():
+    """The route vocabulary is a CONTRACT, and it was only honoured on one side.
+
+    The prompts tell the model to return operations from a named list. Five of those words —
+    tube_cut, tube_bending, hole_machining, tapping, edge_banding — had no entry in
+    wb_populate.OP_NAME_MAP, so the model would return exactly the word it was told to use
+    and the workbook would not know which department it belonged to.
+
+    tube_cut is the operation M&S 2085's two tubes need. It was on the asking side of the
+    contract and missing from the paying side, so that route could never have been costed
+    however perfectly it was read. Routes are what this engine is FOR; a word we ask for and
+    cannot pay for is work silently deleted at the last inch.
+    """
+    from llm_full_extract import ROUTE_OPERATIONS
+    from wb_populate import OP_NAME_MAP
+
+    unmapped = [op for op in ROUTE_OPERATIONS if op not in OP_NAME_MAP]
+    eq(unmapped, [],
+       f"every operation the prompts ask for maps to a department (unmapped: {unmapped})")
+
+    eq(OP_NAME_MAP["tube_cut"], "Tube", "cutting a tube to length is the Tube department")
+    eq(OP_NAME_MAP["tube_bending"], "Tubebend",
+       "and bending one is Tubebend — SDI uses a tube-bender, not a press brake")
+
+    # ONE list, read by both prompts. Written out longhand in each, they drift, and the
+    # drift is invisible until a route goes missing from a sheet.
+    import dxf_llm_interpret as dli
+    import llm_full_extract as lfe
+    _joined = ", ".join(ROUTE_OPERATIONS)
+    ok(_joined in dli._PROMPT,
+       "the DXF prompt is BUILT from the shared list, not a copy of it that can drift")
+    # The PDF passes had NO vocabulary at all — they asked for routes and left `operation`
+    # free text, so "Cut to length" or "MIG weld" came back and matched no department. Both
+    # PDF passes share _COMMON_RULES, so stating it once covers transcription and inference.
+    ok(_joined in lfe._COMMON_RULES,
+       "and both PDF passes are told the same list — free-text operations match no department")
+    for _name, _prompt in (("pdf transcription", lfe._PROMPT), ("pdf inference", lfe._INFER_PROMPT)):
+        ok("tube_cut" in _prompt, f"the {_name} prompt offers 'tube_cut'")
+
+    # ONE OPERATION, ONE ROUTE LINE. A weld that joins three parts is one line naming three
+    # part numbers, not three lines — otherwise the same work is booked three times.
+    ok("ONE OPERATION, ONE ROUTE LINE" in lfe._COMMON_RULES,
+       "and told not to repeat a joining operation per part")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -264,6 +264,23 @@ OP_NAME_MAP = {
     "rolling":        "Roll",
     "guillotine":     "Guillotine",
     "linebend":       "Linebend",
+    # ── the words the extract prompts ask for, which had no department ──────────────
+    # llm_full_extract.ROUTE_OPERATIONS is the vocabulary we TELL the model to use. Five of
+    # its words were missing here, so the model returned exactly what it was asked for and
+    # the workbook did not know what department it belonged to. tube_cut is the operation
+    # M&S 2085's two tubes need: it was on the asking side of the contract and absent from
+    # the paying side, so the route could never have been costed however well it was read.
+    # A fixture now cross-checks the two lists.
+    "tube_cut":       "Tube",              # same department as tube_cutting
+    "tube_bending":   "Tubebend",          # SDI bends tube on a tube-bender, not a press
+    "tubebend":       "Tubebend",
+    "edge_banding":   "Edge Banding",
+    # Drilling and tapping are bench operations here. Mapped to the estimators' own
+    # manual-labour department rather than invented as new ones — a department string the
+    # rate table does not carry makes the workbook LOOKUP return 0, which costs the work at
+    # nothing and looks exactly like it was never there.
+    "hole_machining": "Manual labour (Metal)",
+    "tapping":        "Manual labour (Metal)",
 }
 
 # Acrylic/board parts use DIFFERENT (cheaper) labour operations than metal.

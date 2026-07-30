@@ -42,6 +42,10 @@ from typing import Any, Dict, List, Optional
 SOURCE_NAME = "dxf_llm_interpret"
 INFERENCE_SOURCE = "inference"
 
+# One vocabulary, shared with the PDF passes and cross-checked against the workbook's
+# department map. A word we ask for that the sheet cannot cost is work silently deleted.
+from llm_full_extract import ROUTE_OPERATIONS
+
 # A measured value and an independently read one that differ by more than this are not the
 # same answer.
 _DISAGREE_PCT = 0.10
@@ -117,9 +121,7 @@ WHAT MATTERS MOST — the fields only you can answer:
 - is_nested / part_count: one part, or several on a sheet? A nest costed as one part is wrong
   by however many parts are on it.
 - material_inferred / thickness_inferred_mm: ONLY from the text or the filename shown below.
-- operations_implied: from laser_cutting, punch, saw, tube_cut, folding, rolling, tube_bending,
-  welding, dress_welds, hole_machining, tapping, deburring, cnc_routing, edge_banding, glue,
-  powder_coating, wet_spray, diamond_polish, wire_forming, handling.
+- operations_implied: from this list and no other — """ + ", ".join(ROUTE_OPERATIONS) + """.
 
 THE CUT LENGTHS. You have not been given the reader's figures, deliberately — yours is wanted
 as an independent second opinion, and it is compared against the reader's rather than used in

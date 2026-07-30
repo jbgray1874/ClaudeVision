@@ -40,6 +40,24 @@ except Exception:  # pragma: no cover
 DEFAULT_MODEL = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
 SOURCE_NAME = "llm_full_extract"
 
+# THE WORDS WE ASK FOR MUST BE WORDS WE CAN COST.
+#
+# The route vocabulary was written out longhand inside two prompts, and five of the words in
+# it -- tube_cut, tube_bending, hole_machining, tapping, edge_banding -- had no entry in
+# wb_populate.OP_NAME_MAP. So the model would return exactly the word it was told to use, and
+# the workbook would not know what department it belonged to. tube_cut is the operation M&S
+# 2085's two tubes need; it was on the asking side of the contract and missing from the
+# paying side.
+#
+# One list, imported by both prompts and cross-checked against the department map by a
+# fixture, so a word can never again be added on one side only.
+ROUTE_OPERATIONS = (
+    "laser_cutting", "punch", "saw", "tube_cut", "folding", "rolling", "tube_bending",
+    "welding", "dress_welds", "hole_machining", "tapping", "deburring", "cnc_routing",
+    "edge_banding", "glue", "powder_coating", "wet_spray", "diamond_polish",
+    "wire_forming", "handling",
+)
+
 _SCHEMA = """{
   "drawing_info": {
     "drawing_number": "", "revision": "", "title": "", "project": "", "client": "",
@@ -90,10 +108,20 @@ Generate separate process steps per material stream, then a final assembly step 
 them together with material_family "mixed". A finish stated for the metal parts belongs to
 those part numbers only; do not spread it across acrylic or timber that is not coated.
 
+OPERATIONS. `operation` must be one of these exact words and no other — they are what the
+costing model knows how to price, and anything else is dropped:
+""" + ", ".join(ROUTE_OPERATIONS) + """.
+Say it in `description` if you want to be more specific ("cut outer tube to length"), but the
+`operation` field itself must come from that list.
+
 DEPARTMENTS are the shop's own: Laser (Metal), Laser (Acrylic), Fold, Linebend, Tubebend,
 Saw, CNC / Joinery machining, Edge Banding, Gluing / Bonding, Weld (CO2), Spotweld,
 Dress Welds, P.Coat, Spray / Wet Paint, Diamond Polish, Robomac, Assemble/pack (Metal),
 Assemble/pack (Acrylic), Manual labour (Metal).
+
+ONE OPERATION, ONE ROUTE LINE. An operation that joins parts together — a weld, an assembly,
+a finish applied to the built unit — is ONE route line naming every part it acts on, not one
+line per part. Repeating it per part books the same work several times over.
 
 Never invent a part number or a quantity. Put anything you could not find in
 missing_information, and anything that looked wrong in warnings.
