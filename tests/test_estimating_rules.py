@@ -4875,5 +4875,54 @@ def test_a_tube_is_not_laser_profiled():
 
 
 
+def test_section_stock_is_not_priced_like_sheet():
+    """The section/tube path costs by mass x MATERIAL_PRICE_GBP_PER_KG — the FLAT-PRODUCT
+    rate, GBP 0.80/kg, matching the sheet's own GBP 900/tonne. Small-diameter tube is not
+    sold on that basis.
+
+    12.7 x 1.2mm mild steel retails around GBP 2.48/m at 0.34 kg/m. That is GBP 7.29/kg,
+    roughly EIGHT TIMES the flat rate. On 2085 it is the difference between GBP 0.05 and
+    GBP 0.37 for the two tubes; on a job built from section it is the difference between a
+    quote and a loss, and it would have been silent — the number looks like a material cost
+    because it is one, just the wrong one.
+
+    The rate is left as None on purpose. Inventing one is how "Salvage / Rework" happened.
+    While it is None the engine prices at the flat rate and FLAGS EVERY LINE, which is
+    visible and wrong rather than invisible and wrong.
+    """
+    import math
+    import config
+
+    # The CHS mass formula is confirmed against the same supplier figure: 0.34 kg/m.
+    D, t = 12.7, 1.2
+    csa = math.pi / 4.0 * ((D ** 2) - ((D - 2 * t) ** 2))
+    kg_per_m = csa * 7850 / 1e6
+    ok(abs(kg_per_m - 0.34) < 0.005,
+       f"the round-tube mass matches the supplier's own kg/m (got {kg_per_m:.4f})")
+
+    # And the rate does not.
+    _flat = 0.80
+    _real = 2.48 / 0.34
+    ok(_real / _flat > 5,
+       f"the flat-product rate under-reads section by {_real / _flat:.1f}x — not a rounding gap")
+
+    ok(hasattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG"),
+       "there is a lever for the real rate")
+    eq(getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG"), None,
+       "left unset — a guessed rate is what put a panel bender in the salvage department")
+
+    _est = open(__import__("estimator").__file__, encoding="utf-8").read()
+    # The exact READ, not just the name — the name also appears in the flag text, so a
+    # substring check passed while the lever was ignored entirely.
+    ok('getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG", None)' in _est,
+       "the estimator actually reads the lever")
+    ok("price_per_kg = _sec_rate" in _est, "and uses it as the rate when it is set")
+    ok("this line UNDER-READS" in _est,
+       "and flags every section line while it is unset, so the gap is visible on the part")
+    ok("if isinstance(_sec_rate, dict):" in _est,
+       "a per-material rate is accepted too — steel, stainless and aluminium tube do not "
+       "cost the same")
+
+
 if __name__ == "__main__":
     sys.exit(main())

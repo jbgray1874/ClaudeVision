@@ -1119,6 +1119,21 @@ PRICING_SERVICE_POLICY = {
 }
 
 # Section / tube stock costing policy for workbook parity gaps.
+# SECTION STOCK IS NOT PRICED LIKE SHEET, AND THIS ENGINE HAS BEEN PRICING IT LIKE SHEET.
+#
+# The section/tube path costs by mass x MATERIAL_PRICE_GBP_PER_KG, which is the flat-product
+# rate: GBP 0.80/kg, matching the sheet's own GBP 900/tonne. Small-diameter tube is not sold
+# on that basis. A 12.7 x 1.2mm mild steel tube retails around GBP 2.48/m at 0.34 kg/m --
+# GBP 7.29/kg, roughly EIGHT TIMES the flat rate. On M&S 2085 that is the difference between
+# GBP 0.05 and GBP 0.37 for the two tubes; on a job built from section it is the difference
+# between a quote and a loss.
+#
+# Left as None deliberately. Inventing a rate is how "Salvage / Rework" happened. While it is
+# None the engine prices section at the flat rate AND FLAGS EVERY LINE saying so, which is
+# visible and wrong rather than invisible and wrong. Set it to the real trade rate -- or to a
+# dict keyed by material family -- and the flag goes away.
+SECTION_STOCK_PRICE_GBP_PER_KG = None
+
 SECTION_STOCK_POLICY = {
     "enabled": True,
     # Applied after raw mass*price calculation for cut loss / trim waste.

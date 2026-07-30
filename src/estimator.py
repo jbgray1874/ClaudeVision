@@ -1953,6 +1953,22 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             applied_price_per_kg = external_price.get("applied_price_per_kg")
             fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
             price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
+            # SECTION IS NOT PRICED LIKE SHEET. See config.SECTION_STOCK_PRICE_GBP_PER_KG:
+            # the flat-product rate is ~8x too low for small tube. Use the real rate where
+            # the estimators have set one; otherwise carry on at the flat rate and SAY SO on
+            # the part, so the under-read is visible instead of silent.
+            _sec_rate = getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG", None)
+            if isinstance(_sec_rate, dict):
+                _sec_rate = _sec_rate.get(str(material or "").upper())
+            _sec_rate = _safe_float(_sec_rate)
+            if _sec_rate and _sec_rate > 0:
+                price_per_kg = _sec_rate
+            elif price_per_kg is not None:
+                part.setdefault("review_flags", []).append(
+                    f"section material priced at the FLAT-PRODUCT rate GBP {price_per_kg:.2f}/kg. "
+                    f"Small section is not sold on that basis — 12.7x1.2 tube is about "
+                    f"GBP 7.29/kg — so this line UNDER-READS, likely several times over. Set "
+                    f"config.SECTION_STOCK_PRICE_GBP_PER_KG to the trade rate")
             policy = getattr(config, "SECTION_STOCK_POLICY", {}) or {}
             waste_factor = 1.0 + (float(policy.get("waste_factor_pct", 4.0)) / 100.0)
             unit_cost = (unit_mass_kg * price_per_kg * waste_factor) if price_per_kg is not None else None
