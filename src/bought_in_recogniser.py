@@ -119,6 +119,73 @@ def _tokens(s: str) -> List[str]:
     return [w for w in s.split() if len(w) >= _MIN_TOKEN and w not in _STOP and not w.isdigit()]
 def _sig_token_set(s: str) -> Set[str]:
     return set(_tokens(s))
+
+
+# ---------------------------------------------------------------------------
+# SCOPE OF SUPPLY: what the drawing DEPICTS is not what SDI SUPPLIES.
+#
+# A drawing routinely shows things it is not quoting for -- the customer's screen, an
+# existing wall, a monitor arm bought by someone else -- and says so in a standard phrase
+# next to them. 12120's GA carries "SCREEN & CABLE SHOWN FOR REFERENCE"; the recogniser saw
+# the SAFE electrical head-word "cable", minted BI-SCREENCABLE, priced it and booked
+# handling labour against it. Nothing in the engine read the half of the sentence that says
+# it is not ours.
+#
+# These are drawing conventions, not one customer's wording, so the rule inherits to every
+# job. Deliberately excluded: a bare "existing", which is too common a word to carry the
+# meaning on its own, and "typical"/"similar", which qualify how MANY are supplied rather
+# than whether any are.
+# ---------------------------------------------------------------------------
+_SUPPLY_EXCLUSION_MARKERS = (
+    "for reference", "reference only", "ref only", "for ref", "shown for ref",
+    "not supplied", "not included", "not in scope", "excluded from supply", "no supply",
+    "not part of this", "not to be supplied",
+    "by others", "supplied by others", "installed by others", "fitted by others",
+    "by client", "client supplied", "supplied by client",
+    "by customer", "customer supplied", "supplied by customer",
+    "free issue", "customer free issue",
+    "shown dotted", "dotted for clarity", "for clarity only",
+    "for illustration", "illustration only", "indicative only",
+)
+
+
+def _supply_segments(note_text: str) -> List[str]:
+    """The drawing's prose split into the clauses a scope note actually applies to.
+
+    A marker governs its own sentence or line, not the whole page. Splitting on line breaks
+    and sentence punctuation keeps "SCREEN & CABLE SHOWN FOR REFERENCE" from excusing a
+    genuine bought-in listed three notes further down.
+    """
+    _parts = re.split(r"[\n\r;.]+|(?<=\))\s+", str(note_text or ""))
+    _out = []
+    for _p in _parts:
+        _n = re.sub(r"[^a-z0-9 ]", " ", (_p or "").lower())
+        _n = re.sub(r"\s+", " ", _n).strip()
+        if _n:
+            _out.append(" " + _n + " ")
+    return _out
+
+
+def is_reference_only(phrase: str, note_text: str) -> bool:
+    """True when every mention of `phrase` sits in a clause that disclaims supplying it.
+
+    EVERY mention, not any: a drawing that shows a bracket for reference on one view and
+    schedules it as a supplied item elsewhere is supplying it. Erring the other way would
+    turn a scope note into a silent deletion of a real BOM line, which is the more expensive
+    mistake and the harder one to notice.
+    """
+    _ph = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", str(phrase or "").lower())).strip()
+    if not _ph:
+        return False
+    _needle = " " + _ph + " "
+    _seen = _excluded = 0
+    for _seg in _supply_segments(note_text):
+        if _needle not in _seg:
+            continue
+        _seen += 1
+        if any(_m in _seg for _m in _SUPPLY_EXCLUSION_MARKERS):
+            _excluded += 1
+    return _seen > 0 and _seen == _excluded
 # ---------------------------------------------------------------------------
 # Vocabulary + priced reference, loaded ONCE from SDI history.
 # ---------------------------------------------------------------------------
@@ -359,6 +426,14 @@ def recognise_bought_in_in_prose(
             continue
         claimed_spans.append((s, e))
         head = _scan_vocab[phrase]
+        # THE DRAWING SHOWS IT; THE DRAWING ALSO SAYS IT IS NOT OURS.
+        # Checked against the ORIGINAL note_text, not the flattened blob, because the
+        # clause boundaries are what scope the marker -- see _supply_segments.
+        if is_reference_only(phrase, note_text):
+            print(f"   [bought-in] '{phrase}' NOT recognised: every mention is in a clause "
+                  f"that disclaims supply (reference only / by others / customer supplied). "
+                  f"No part, no price, no handling labour.", flush=True)
+            continue
         ambiguous = head in _HEADWORDS_AMBIGUOUS
         desc = phrase.strip().title()
         key = _norm(desc)

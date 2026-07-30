@@ -5683,5 +5683,62 @@ def test_the_fallback_sheet_admits_it_is_a_fallback():
        "directly — otherwise the override exists and does nothing")
 
 
+def test_what_the_drawing_shows_is_not_what_we_supply():
+    """A drawing routinely depicts things it is not quoting for and says so beside them.
+
+    12120's GA carries "SCREEN & CABLE SHOWN FOR REFERENCE". The prose recogniser saw the
+    SAFE electrical head-word 'cable', minted BI-SCREENCABLE, priced it from history and
+    booked handling labour against it. Nothing read the half of the sentence saying it is
+    not ours.
+
+    These are drawing conventions, not one customer's wording, so the rule inherits.
+    """
+    from bought_in_recogniser import is_reference_only, recognise_bought_in_in_prose
+    import bought_in_recogniser as _bir
+
+    _note = "1. SCREEN & CABLE SHOWN FOR REFERENCE\n2. FIT 4x M4 THUMB SCREW"
+    ok(is_reference_only("screen cable", _note), "the cable is shown, not supplied")
+    ok(not is_reference_only("thumb screw", _note),
+       "and the thumb screw in the very next note still is — a scope marker governs its own "
+       "clause, not the page")
+
+    for _marker in ("BY OTHERS", "CUSTOMER SUPPLIED", "NOT SUPPLIED", "FOR REFERENCE ONLY",
+                    "SHOWN DOTTED FOR CLARITY", "FREE ISSUE"):
+        ok(is_reference_only("monitor arm", f"MONITOR ARM {_marker}"),
+           f"'{_marker}' is a scope-of-supply disclaimer")
+
+    # EVERY mention, not any. A part shown for reference on one view and scheduled as
+    # supplied elsewhere is supplied — the opposite reading turns a scope note into a silent
+    # deletion of a real BOM line, which is the more expensive error and the harder to see.
+    ok(not is_reference_only("monitor arm", "MONITOR ARM BY OTHERS. SUPPLY 2x MONITOR ARM"),
+       "a part supplied somewhere on the drawing is supplied")
+    ok(not is_reference_only("cable tie", "SUPPLY 20x CABLE TIE"), "no marker, no exclusion")
+    ok(not is_reference_only("", "anything"), "an empty phrase excludes nothing")
+    ok(not is_reference_only("screen cable", ""), "and empty prose excludes nothing")
+
+    # THE CALLER. The helper being right proves nothing if the loop never asks it — which is
+    # how a built-not-wired capability has shipped repeatedly in this codebase.
+    def _conn():
+        raise RuntimeError("fixtures touch no live service")
+
+    def _stub(code, desc, qty):
+        return {"part_number": code, "description": desc, "quantity": qty}
+
+    _was = dict(_bir._ELECTRICAL_VOCAB)
+    try:
+        # Inject the vocabulary rather than the verdict: the real scan, the real guard.
+        _bir._ELECTRICAL_VOCAB.update({"screen cable": "cable", "thumb screw": "screw"})
+        _got = recognise_bought_in_in_prose(_note, get_connection=_conn, stub_builder=_stub)
+    finally:
+        _bir._ELECTRICAL_VOCAB.clear()
+        _bir._ELECTRICAL_VOCAB.update(_was)
+
+    _codes = sorted(str(i.get("part_number") or "") for i in _got)
+    ok("BI-SCREENCABLE" not in _codes,
+       f"the reference-only cable must never reach a BOM line, got {_codes}")
+    ok("BI-THUMBSCREW" in _codes,
+       f"and the genuine bought-in in the same note must survive, got {_codes}")
+
+
 if __name__ == "__main__":
     sys.exit(main())
