@@ -1047,6 +1047,19 @@ def discover_flat_dxf_files_in_folder(
     subdir = cfg.get("dxf_subdir", "DXF")
     if subdir:
         roots.append(Path(job_folder) / subdir)
+    # A subfolder named for the job is still the DXF subfolder. Only the literal name "DXF"
+    # was matched, so M&S job 2085 — flats in "2085 - DXFs_DEV1" — would have had every part
+    # sized from drawing text had a root copy not happened to exist. Immediate children only:
+    # recursing a job folder pulls in whatever else has been left there, and 12120 already
+    # had another job's DXF sitting beside its own.
+    _tokens = [str(t).upper() for t in (cfg.get("dxf_subdir_tokens") or []) if str(t).strip()]
+    if _tokens:
+        try:
+            for _child in sorted(Path(job_folder).iterdir()):
+                if _child.is_dir() and any(t in _child.name.upper() for t in _tokens):
+                    roots.append(_child)
+        except OSError:
+            pass
     if extra_roots:
         roots.extend(extra_roots)
 
@@ -1076,7 +1089,37 @@ def collect_dxf_paths_for_job(
     if auto_discover_dxf:
         for path in discover_flat_dxf_files_in_folder(job_folder):
             paths[str(path.resolve())] = path
-    return sorted(paths.values(), key=lambda p: p.name.lower())
+    return _drop_duplicate_files(sorted(paths.values(), key=lambda p: p.name.lower()))
+
+
+def _drop_duplicate_files(paths: Sequence[Path]) -> List[Path]:
+    """One file is one file, however many places it has been copied to.
+
+    Deduplication was by resolved PATH, which is right for the same file reached two ways and
+    wrong for the same file COPIED twice. 2085 keeps its plate flat both in the job folder and
+    in "2085 - DXFs_DEV1"; once discovery searches both, the identical file is read twice and
+    the part looks ambiguous when nothing about it is.
+
+    Identical CONTENT is the test, not the name. Two files sharing a name and differing inside
+    are a real ambiguity — a superseded revision beside a current one — and both are kept so
+    the existing candidate scoring can choose between them and flag it. Silently dropping one
+    would pick a revision by accident of filesystem order.
+    """
+    import hashlib
+
+    seen: Dict[str, Path] = {}
+    out: List[Path] = []
+    for path in paths:
+        try:
+            digest = hashlib.sha1(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            out.append(path)          # unreadable here; let the reader report it properly
+            continue
+        if digest in seen:
+            continue                  # byte-identical to one already taken
+        seen[digest] = path
+        out.append(path)
+    return out
 
 
 def collect_dxf_paths_for_pdf_scan(

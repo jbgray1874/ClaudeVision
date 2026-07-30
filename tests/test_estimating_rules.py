@@ -3274,6 +3274,48 @@ def test_a_file_nobody_opened_is_named_in_the_report():
        "and a single-file run is not held against itself")
 
 
+def test_dxfs_are_found_in_a_job_named_subfolder_and_read_once():
+    """M&S job 2085 keeps its flat in TWO places: the job folder, and "2085 - DXFs_DEV1".
+
+    Discovery matched a subfolder named literally "DXF", so the job-named one was invisible.
+    On 2085 that was survivable only because a root copy happened to exist — had the flats
+    lived solely in that subfolder, every part would have been sized from drawing text and
+    nothing would have said so.
+
+    Widening discovery then creates the opposite problem: the same file found twice, read
+    twice, and a part that looks ambiguous when nothing about it is."""
+    import drawing_job_merge as djm
+    from pathlib import Path
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as _tmp:
+        job = Path(_tmp)
+        sub = job / "2085 - DXFs_DEV1"
+        sub.mkdir()
+        _flat = b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n"
+        (job / "2085-01 - Bracket Plate_1.2mm MS.DXF").write_bytes(_flat)
+        (sub / "2085-01 - Bracket Plate_1.2mm MS.DXF").write_bytes(_flat)      # same bytes
+        (sub / "2085-04 - Gusset_1.2mm MS.DXF").write_bytes(_flat + b"\n")     # only in the sub
+
+        found = djm.discover_flat_dxf_files_in_folder(job)
+        _names = sorted(p.name for p in found)
+        ok(any("Gusset" in n for n in _names),
+           f"a flat that exists only in the job-named subfolder is found: {_names}")
+
+        kept = djm.collect_dxf_paths_for_job(job, {}, auto_discover_dxf=True)
+        _plate = [p for p in kept if "Bracket Plate" in p.name]
+        eq(len(_plate), 1, f"and the file copied to both places is read once: {_plate}")
+        ok(any("Gusset" in p.name for p in kept), "without losing the one that is unique")
+
+        # Same name, DIFFERENT bytes is a real ambiguity — a superseded revision beside a
+        # current one — and both must survive for the candidate scoring to choose and flag.
+        (sub / "2085-01 - Bracket Plate_1.2mm MS.DXF").write_bytes(_flat + b"0\nLINE\n")
+        kept2 = djm.collect_dxf_paths_for_job(job, {}, auto_discover_dxf=True)
+        eq(len([p for p in kept2 if "Bracket Plate" in p.name]), 2,
+           "two files sharing a name and differing inside are both kept, not picked by "
+           "accident of filesystem order")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

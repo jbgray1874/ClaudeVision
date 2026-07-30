@@ -40,6 +40,13 @@ DRAWING_JOB_DISCOVERY = {
     "auto_discover_on_pdf_scan": True,
     "exclude_flat_dxf_from_batch": True,
     "dxf_subdir": "DXF",
+    # A SUBFOLDER NAMED FOR THE JOB IS STILL THE DXF SUBFOLDER. Discovery matched the literal
+    # name "DXF" only, so M&S job 2085 — whose flats live in "2085 - DXFs_DEV1" — would have
+    # had every part sized from drawing text if the root copy had not happened to exist. Any
+    # immediate subfolder whose name contains one of these tokens is searched. Immediate only:
+    # recursing a job folder pulls in whatever else has been left in it, and 12120 already had
+    # another job's DXF sitting beside its own.
+    "dxf_subdir_tokens": ["DXF"],
     # All DXFs in job folder — GA sheets filtered by is_ignored_ga_dxf()
     "flat_dxf_glob": "*.[Dd][Xx][Ff]",
     "ignore_dxf_name_tokens": ["-GA_", "_GA_", "-GA.", "_GA."],
