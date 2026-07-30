@@ -5911,5 +5911,85 @@ def test_a_material_stated_once_applies_to_the_whole_drawing():
        "with no general note the part stays blank rather than acquiring a default")
 
 
+def test_every_field_we_ask_the_model_for_has_a_reader():
+    """A field we request, pay for, and never read is indistinguishable from one we never
+    asked for — it costs nothing visible and silently under-costs the job.
+
+    drawing_info.material_general was exactly that. 2085's GA prints "MATERIAL: MILD STEEL"
+    once at assembly level and names none on either tube row; the field name appeared once
+    in the whole codebase, in the schema requesting it, and both tubes reached the sheet
+    with no material and no price.
+
+    Every field in the schema must therefore either have a reader or be listed below with a
+    reason. The list is the point: adding a field to the schema forces a decision about who
+    consumes it, instead of leaving the answer to be discovered from a wrong price.
+
+    Static reads only — a field reached dynamically (dict iteration, a JSON dump) will look
+    unread here. That is the safe direction: it can raise a false alarm, answered by adding
+    a line below, but it cannot miss a genuinely orphaned field.
+    """
+    import ast as _ast, os as _os, re as _re, collections as _c
+
+    # ACKNOWLEDGED UNREAD. Each is here because it is genuinely not needed to cost a job,
+    # NOT because nobody has looked. Anything that affects a price does not belong here.
+    _ACKNOWLEDGED = {
+        "drawn_by":          "who drew it — provenance for the report, never a cost input",
+        "project":           "project name — reported, not costed",
+        "item_no":           "the BOM table's own line number; parts join on part_number",
+        "tolerance_linear":  "tolerance is not yet a cost driver; would gate inspection time",
+        "tolerance_angular": "as above",
+        "tolerances":        "spec-level duplicate of the two above",
+        "timber_note":       "free text about timber grade; material_family already routes it",
+        # NOT benign, and deliberately named rather than quietly tolerated: is_fabricated is
+        # the per-row make/buy verdict. It stays unread until ONE consumer owns make/buy and
+        # everything else reads that verdict — folding a second opinion in blind is how the
+        # silent-wrong-decision class gets reintroduced.
+        "is_fabricated":     "PENDING: make/buy needs a single owning consumer before wiring",
+    }
+
+    _SRC = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "src")
+    _raw = open(_os.path.join(_SRC, "llm_full_extract.py"),
+                encoding="utf-8").read().split('_SCHEMA = """')[1].split('"""')[0]
+    _fields = sorted(set(_re.findall(r'"([a-z_][a-z0-9_]*)"\s*:', _raw)))
+    ok(len(_fields) > 30, f"the schema should carry real content, found {len(_fields)} fields")
+
+    _reads = _c.defaultdict(set)
+    for _dp, _dirs, _fs in _os.walk(_SRC):
+        for _f in _fs:
+            if not _f.endswith(".py") or _f.startswith("_") or ".patch" in _f:
+                continue
+            _p = _os.path.join(_dp, _f)
+            try:
+                _t = _ast.parse(open(_p, encoding="utf-8-sig").read())
+            except SyntaxError:
+                continue
+            for _n in _ast.walk(_t):
+                if (isinstance(_n, _ast.Call) and isinstance(_n.func, _ast.Attribute)
+                        and _n.func.attr in ("get", "pop") and _n.args
+                        and isinstance(_n.args[0], _ast.Constant)
+                        and isinstance(_n.args[0].value, str)):
+                    _reads[_n.args[0].value].add(_f)
+                if (isinstance(_n, _ast.Subscript) and isinstance(_n.ctx, _ast.Load)
+                        and isinstance(_n.slice, _ast.Constant)
+                        and isinstance(_n.slice.value, str)):
+                    _reads[_n.slice.value].add(_f)
+
+    _orphans = [f for f in _fields if f not in _reads and f not in _ACKNOWLEDGED]
+    ok(not _orphans,
+       "asked the model for these and nothing reads them — each is a silent under-cost "
+       "waiting for the job that needs it:\n      " + "\n      ".join(_orphans))
+
+    # The list must not rot into a place things are parked. Anything on it that HAS acquired
+    # a reader should come off, or the list stops meaning what it says.
+    _stale = [f for f in _ACKNOWLEDGED if f in _reads]
+    ok(not _stale,
+       f"these are listed as acknowledged-unread but now have readers — remove them from "
+       f"the list so it keeps meaning something: {_stale}")
+
+    # And the two that caused this: they must stay read.
+    for _f in ("material_general", "finish_general"):
+        ok(_f in _reads, f"'{_f}' is what this fixture exists for — it must have a reader")
+
+
 if __name__ == "__main__":
     sys.exit(main())
