@@ -1132,6 +1132,22 @@ PRICING_SERVICE_POLICY = {
 # None the engine prices section at the flat rate AND FLAGS EVERY LINE saying so, which is
 # visible and wrong rather than invisible and wrong. Set it to the real trade rate -- or to a
 # dict keyed by material family -- and the flag goes away.
+# AN ASSEMBLY-LEVEL OPERATION HAPPENS ONCE, NOT ONCE PER PART IT TOUCHES.
+#
+# The workbook sums a per-part quantity across every part a route line names. On M&S 2085
+# that charged Weld, Dress Welds and P.Coat at qty 3 across three components -- GBP 6.85 of
+# an GBP 11.14 labour figure -- for work done once on one bracket.
+#
+# Whether that is wrong depends on what the throughput rates MEAN. If Weld's 29/hr is
+# assemblies per hour, qty 3 triple-charges. If it is parts welded per hour, qty 3 is right.
+# That is an estimator's ruling about their own rate table, not a decision this engine can
+# make from a drawing, so the default changes nothing: assembly-scoped rows are FLAGGED with
+# both quantities and charged exactly as they are today.
+#
+# Set True once the rates are confirmed as per-assembly, and a route line the extract marks
+# scope="assembly" is charged once per product.
+ASSEMBLY_SCOPED_OPS_CHARGE_ONCE = False
+
 SECTION_STOCK_PRICE_GBP_PER_KG = None
 
 SECTION_STOCK_POLICY = {

@@ -848,23 +848,34 @@ def _native_match_index(job: NativeJob):
     # extract: the model carries 34mm and 20mm bounding boxes for the two tubes, and both
     # were thrown away because a description was appended to the number.
     #
-    # A separator must follow the code, so "2085-0" cannot claim "2085-02 - Outer Tube", and
-    # ambiguity is refused exactly as the tail rule refuses it: a code claimed by two
-    # documents is dropped from the index entirely rather than resolved by luck of ordering.
-    # Putting one job's geometry on another's part is the failure this whole module guards.
+    # THE ALIAS COMES FROM THE DESCRIPTION BOUNDARY, NOT FROM EVERY HYPHEN.
+    #
+    # The first version split the whitespace-stripped key at every separator, so
+    # "12120-01-103" — a code with no description at all — aliased to "12120" AND
+    # "12120-01". The second of those is a real sub-assembly on that very job, and it would
+    # have taken a leaf part's bounding box, material and bend count. Putting one part's
+    # geometry on another is precisely what this module exists to prevent, and the fix for
+    # 2085 had reintroduced it by the front door.
+    #
+    # So the split is done on the ORIGINAL title, at the first whitespace, and only where
+    # what follows contains a letter — which is what makes it a description rather than more
+    # code. "12120-01-103" has no whitespace and yields nothing.
     _lead_hits: Dict[str, List[str]] = {}
-    for k, pn in exact.items():
-        for _sep in ("-", "_", "."):
-            for _i, _c in enumerate(k):
-                if _c == _sep and _i > 0:
-                    _lead_hits.setdefault(k[:_i], []).append(pn)
-    # An ASSEMBLY number cannot claim a part through this tier: "2085" leads
-    # "2085-02 - Outer Tube" and is followed by a separator, so the rule alone would match it
-    # and put the tube's bounding box onto the assembly containing it. It does not, because
-    # every assembly document is indexed in `exact` above and `k not in exact` excludes it.
-    # An explicit assembly exclusion was written here and removed: it was a strict subset of
-    # that clause, and its mutation passed — dead code with a comment claiming it protects
-    # something is worse than no code at all.
+    for _pn in list(job.part_signals) + [r.part_number for r in job.bom] + list(job.assembly_pns):
+        _raw = str(_pn or "").strip()
+        _head, _sep, _rest = _raw.partition(" ")
+        if not _sep:
+            continue
+        _rest = _rest.lstrip(" -\u2013\u2014").strip()
+        if not _rest or not any(c.isalpha() for c in _rest):
+            continue          # "12120 01 103" is more code, not a description
+        _k = _pn_key(_head)
+        if _k:
+            _lead_hits.setdefault(_k, []).append(_pn)
+    # Ambiguity is refused exactly as the tail rule refuses it: a code claimed by two
+    # documents is dropped from the index entirely rather than resolved by luck of ordering.
+    # An assembly cannot claim a part through this tier either — every assembly document is
+    # in `exact`, and `k not in exact` excludes it.
     lead = {k: v[0] for k, v in _lead_hits.items()
             if len(set(v)) == 1 and k not in exact and k not in tail}
     return exact, tail, lead

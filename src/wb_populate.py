@@ -1644,6 +1644,15 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # The route lives on the RAW part records, not on the costed ones this loop walks.
     _route_by_pn = route_operations_by_part(summary)
     _tube_pns = tube_part_numbers(summary)
+    # Scope travels on the extract's routes, not on the part records, so read it from there
+    # too — a part-level record only knows the ops it carries, not how often they happen.
+    _scope_by_op: Dict[str, str] = {}
+    for _r in ((summary.get("llm_full_extract") or {}).get("routes") or []):
+        if isinstance(_r, dict):
+            _o = str(_r.get("operation") or "").strip().lower()
+            _s2 = str(_r.get("scope") or "").strip().lower()
+            if _o and _s2 in ("part", "assembly"):
+                _scope_by_op[_o] = _s2
     _already = {id(p) for p in labour_parts}
     _routed_in = []
     for p in bom_parts:
@@ -2065,6 +2074,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # The sequence the extract read off THIS drawing, if it gave one. Lowest wins:
             # a group can gather several parts, and the row belongs where the first of them
             # is done. None stays None, and the shop's own order applies at sort time.
+            # SCOPE — how often this operation happens per product, which is not the same
+            # as how many parts the route line names. Recorded on the group so the emit loop
+            # can flag it (or honour it, once the rates are confirmed).
+            _op_l = str(op or "").strip().lower()
+            _sc = ((pe.get("operation_scope") or {}).get(_op_l)
+                   or _scope_by_op.get(_op_l))
+            if _sc == "assembly":
+                g["assembly_scoped"] = True
             _rs = (pe.get("operation_sequence") or {}).get(str(op or "").strip().lower())
             if _rs is not None:
                 try:
@@ -2182,8 +2199,28 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         return (0, float(_SHOP_ORDER.get(str(_g.get("wb_op") or ""), _DEFAULT_ORDER)),
                 str(_g.get("wb_op") or ""))
 
+    _charge_once = bool(getattr(config, "ASSEMBLY_SCOPED_OPS_CHARGE_ONCE", False))
     for _key in sorted(_groups.keys(), key=_group_order):
         g = _groups[_key]
+        # An assembly-level operation is done once per product however many parts it joins.
+        # Today it is charged once per part. Whether that is wrong turns on what the
+        # throughput rate MEANS -- assemblies per hour or parts per hour -- which is the
+        # estimators' ruling about their own table, so the default only SAYS SO.
+        if g.get("assembly_scoped") and int(_safe(g.get("qty"), 1) or 1) > 1:
+            _was = int(_safe(g.get("qty"), 1) or 1)
+            if _charge_once:
+                g["qty"] = 1
+                _flag(f"labour '{g.get('wb_op')}': ASSEMBLY-scoped operation charged ONCE "
+                      f"per product (was qty {_was}, one per part). "
+                      f"config.ASSEMBLY_SCOPED_OPS_CHARGE_ONCE is on.", flags)
+            else:
+                _flag(f"labour '{g.get('wb_op')}': the route marks this an ASSEMBLY-level "
+                      f"operation -- done once per product -- but it is charged at qty "
+                      f"{_was}, one per part it names. If the {g.get('wb_op')} rate is "
+                      f"ASSEMBLIES per hour this line is about {_was}x too high; if it is "
+                      f"PARTS per hour it is correct. Nothing changed: set "
+                      f"config.ASSEMBLY_SCOPED_OPS_CHARGE_ONCE once the rates are confirmed.",
+                      flags)
         if row > lb["last_row"]:
             labour_overflow = True
             break

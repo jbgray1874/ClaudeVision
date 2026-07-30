@@ -89,6 +89,7 @@ _SCHEMA = """{
   ],
   "routes": [
     {"sequence": 10, "operation": "", "department": "", "part_numbers": [],
+     "scope": "part|assembly", "qty_per_unit": 1,
      "material_family": "metal|acrylic|timber|wire|tube|mixed",
      "description": "", "inferred": false, "confidence": "high|medium|low", "notes": ""}
   ],
@@ -154,6 +155,17 @@ strictly to the lists.
 ONE OPERATION, ONE ROUTE LINE. An operation that joins parts together — a weld, an assembly,
 a finish applied to the built unit — is ONE route line naming every part it acts on, not one
 line per part. Repeating it per part books the same work several times over.
+
+SCOPE says how often that line happens, and it is not the same as how many parts it names.
+  scope "part"      — done once PER PART. Cutting three brackets is three cuttings.
+  scope "assembly"  — done once per finished PRODUCT, however many parts it involves. Welding
+                      three components into one bracket is ONE welding, not three; dressing
+                      that weld is one dressing; coating the built unit is one coating.
+qty_per_unit is how many times the operation happens per finished product — normally 1 for
+assembly scope, and for part scope the number of those parts in the product.
+
+Getting this wrong is expensive in one direction only: a joining operation marked "part" and
+naming three components is charged three times.
 
 Never invent a part number or a quantity. Put anything you could not find in
 missing_information, and anything that looked wrong in warnings.
@@ -260,7 +272,9 @@ def _cache_write(key: str, obj: Dict[str, Any]) -> None:
     # And say so on failure. A cache that cannot write is a job silently back to being
     # non-reproducible, which is the exact property the cache exists to provide.
     _final = d / f"{_CACHE_VERSION}_{key}.json"
-    _tmp = d / f"{_CACHE_VERSION}_{key}.json.tmp"
+    # The temp name carries the pid: two runs writing the SAME key would otherwise share one
+    # temp file, and the second's rename could publish the first's half-written bytes.
+    _tmp = d / f"{_CACHE_VERSION}_{key}.{os.getpid()}.tmp"
     try:
         with open(_tmp, "w", encoding="utf-8") as fh:
             json.dump({k: v for k, v in obj.items() if k != "_from_cache"},

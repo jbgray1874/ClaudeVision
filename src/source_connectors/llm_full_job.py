@@ -431,6 +431,17 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
             _dept = str(route.get("department") or "").strip()
             if _dept:
                 part.setdefault("operation_department_read", {})[op] = _dept
+            # SCOPE: how often the operation happens, which is NOT how many parts it names.
+            # Welding three components into one bracket is one welding. The workbook has
+            # been summing a per-part quantity across every part a route line names, so an
+            # assembly-level weld, its dressing and the coat of the built unit were each
+            # charged three times on 2085 -- GBP 6.85 of a GBP 11.14 labour figure.
+            _scope = str(route.get("scope") or "").strip().lower()
+            if _scope in ("part", "assembly"):
+                part.setdefault("operation_scope", {})[op] = _scope
+            _qpu = _num(route.get("qty_per_unit"))
+            if _qpu and _qpu > 0:
+                part.setdefault("operation_qty_per_unit", {})[op] = _qpu
             part.setdefault("review_flags", []).append(
                 f"operation '{op}' {'INFERRED' if route.get('inferred') else 'read'} from the "
                 f"drawing pack ({route.get('confidence') or 'confidence unstated'})"

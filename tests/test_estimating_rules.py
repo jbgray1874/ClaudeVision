@@ -5193,6 +5193,37 @@ def test_a_model_file_named_code_plus_description_still_matches():
     eq(_match_native({"part_number": "2085-0"}, e, t, l), None,
        "a truncated code matches nothing")
 
+    # A CODE WITH NO DESCRIPTION MUST YIELD NO ALIAS AT ALL.
+    #
+    # The first version split the whitespace-stripped KEY at every separator, so
+    # "12120-01-103" aliased to both "12120" and "12120-01" — and "12120-01" is a real
+    # sub-assembly on that very job. It would have taken a leaf part's bounding box,
+    # material and bend count. The fix for 2085 reintroduced, by the front door, exactly the
+    # cross-contamination this module exists to prevent.
+    _plain = NativeJob(found=True, part_signals={
+        "12120-01-103": NativePart(part_number="12120-01-103")})
+    _e5, _t5, _l5 = _native_match_index(_plain)
+    eq(_l5, {}, "a hyphenated code with no description produces no leading alias")
+    eq(_match_native({"part_number": "12120-01"}, _e5, _t5, _l5), None,
+       "so a sub-assembly cannot take one of its own children's geometry")
+    eq(_match_native({"part_number": "12120"}, _e5, _t5, _l5), None,
+       "nor can the job number")
+    eq(_match_native({"part_number": "12120-01-103"}, _e5, _t5, _l5), "12120-01-103",
+       "while the part itself still matches exactly")
+
+    # The convention without a dash is real too, and still resolves.
+    _nodash = NativeJob(found=True, part_signals={
+        "2085-02 Outer Tube": NativePart(part_number="2085-02 Outer Tube")})
+    _e6, _t6, _l6 = _native_match_index(_nodash)
+    eq(_match_native({"part_number": "2085-02"}, _e6, _t6, _l6), "2085-02 Outer Tube",
+       "\"<code> <description>\" resolves as well as \"<code> - <description>\"")
+
+    # But whitespace alone is not a description boundary: what follows must read as words.
+    _spaced = NativeJob(found=True, part_signals={
+        "12120 01 103": NativePart(part_number="12120 01 103")})
+    _e7, _t7, _l7 = _native_match_index(_spaced)
+    eq(_l7, {}, "more code after a space is not a description, so it aliases nothing")
+
     # ISOLATE THE SEPARATOR RULE. With three parts a truncated code is ambiguous and gets
     # dropped anyway, so removing the separator requirement still gives the right answer and
     # a mutation passes. It takes a SINGLE-part extract to show what the rule actually does:
@@ -5205,8 +5236,8 @@ def test_a_model_file_named_code_plus_description_still_matches():
     eq(_match_native({"part_number": "2085-02"}, _e1, _t1, _l1), "2085-02 - Outer Tube",
        "the full code still matches on a single-part extract")
     eq(_match_native({"part_number": "2085-0"}, _e1, _t1, _l1), None,
-       "but a truncated one does not, even with nothing to be ambiguous against — the code "
-       "must end where the title's separator is")
+       "but a truncated one does not, even with nothing to be ambiguous against — the alias "
+       "is the whole code before the description, not any prefix of it")
     # AN ASSEMBLY NUMBER MUST NOT CLAIM A PART. "2085" leads "2085-02 - Outer Tube" and is
     # followed by a separator, so it matches on the rule alone — putting the outer tube's
     # bounding box and material onto the assembly that CONTAINS it. Usually the ambiguity
