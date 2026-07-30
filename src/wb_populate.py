@@ -350,13 +350,30 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
         if _ext_mat is not None and _q > 0:
             _p = round(_ext_mat / _q, 4)
         else:
-            # The whole-total fallback survives ONLY where there is no labour to
-            # contaminate it -- a genuine bought-in, which is what it was written for.
-            _lab = (_pe.get("labour_estimate") or {}).get("costs_gbp") or {}
-            if not _lab:
+            # "HAS NO LABOUR" IS NOT THE SAME CONDITION AS "IS A BOUGHT-IN".
+            #
+            # The first version kept the whole-total fallback only for a part with no labour
+            # at all, reasoning that a bought-in has none. But a bought-in DOES carry
+            # handling — bought_in_policy deliberately leaves it, because fitting a purchased
+            # component is real bench time — so a fixing with a handling cost would have lost
+            # its price entirely and shown blank on the sheet.
+            #
+            # The arithmetic answers it without classifying anything: material is the unit
+            # total less the labour on it. That holds for a bought-in and a fabricated part
+            # alike, and it is why the tubes come out unpriced — their total IS their labour,
+            # so the remainder is nothing.
+            _unit_total = _safe(_pe.get("unit_total_cost_gbp"))
+            if _unit_total is None:
                 _ext = _safe(_pe.get("extended_total_cost_gbp"))
                 if _ext is not None and _q > 0:
-                    _p = round(_ext / _q, 4)
+                    _unit_total = _ext / _q
+            _lab = (_pe.get("labour_estimate") or {}).get("costs_gbp") or {}
+            _lab_total = sum(_safe(v) or 0.0 for v in _lab.values())
+            if _unit_total is not None:
+                _material = _unit_total - _lab_total
+                # A rounding tail is not a price. At or below a penny, the arithmetic is
+                # saying there was no material here.
+                _p = round(_material, 4) if _material > 0.01 else None
     return _p
 
 def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
@@ -404,6 +421,42 @@ def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
                 _ros = str(_ro).strip().lower()
                 if _ros in _bucket:
                     _bucket.remove(_ros)
+    return out
+
+
+
+def tube_part_numbers(summary: Dict[str, Any]) -> set:
+    """Part numbers that are section/tube stock, on the evidence rather than on a price.
+
+    material_estimate.stock_form is only stamped where the material successfully COSTED, so
+    a tube nobody could price does not carry it — which makes every stock-form rule silently
+    skip the parts that most need it. The durable evidence is section_stock, written by
+    document_builder when it reads a profile off the drawing, and material_family, read off
+    the BOM. Both live on the RAW records.
+
+    Deliberately structured evidence only. A description containing "TUBE" would catch
+    2085's parts and also a purchased TUBE CLAMP, and this set gates whether an operation is
+    dropped — so it stays on facts the readers established, not on a word.
+    """
+    out = set()
+    if not isinstance(summary, dict):
+        return out
+    _sources = [summary.get("parts"),
+                (summary.get("manufacturing_writeup") or {}).get("parts"),
+                (summary.get("estimate_summary") or {}).get("part_estimates")]
+    for _src in _sources:
+        if not isinstance(_src, list):
+            continue
+        for _p in _src:
+            if not isinstance(_p, dict):
+                continue
+            _pn = str(_p.get("part_number") or "").strip().upper()
+            if not _pn:
+                continue
+            if (_p.get("section_stock")
+                    or str(_p.get("material_family") or "").strip().lower() == "tube"
+                    or str((_p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"):
+                out.add(_pn)
     return out
 
 
@@ -1590,6 +1643,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _FAB_OPS = frozenset()
     # The route lives on the RAW part records, not on the costed ones this loop walks.
     _route_by_pn = route_operations_by_part(summary)
+    _tube_pns = tube_part_numbers(summary)
     _already = {id(p) for p in labour_parts}
     _routed_in = []
     for p in bom_parts:
@@ -1927,6 +1981,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _qty_pu = int(_safe(pe.get("quantity"), 1))
         _is_acr = _is_board(str(pe.get("normalized_material") or ""))
         _sf = (pe.get("material_estimate") or {}).get("stock_form")
+        # STOCK FORM IS ONLY STAMPED WHEN THE MATERIAL COSTED SUCCESSFULLY.
+        #
+        # estimator sets stock_form="tube" inside the two branches that PRODUCE A PRICE — the
+        # catalogue match and the mass calculation. A tube whose material could not be priced
+        # at all (2085's, which have a section but no printed cut length) therefore arrives
+        # with the field blank, and every rule keyed on it silently does nothing. The laser
+        # suppression written for exactly these parts was inert on exactly these parts.
+        #
+        # Identity is not a by-product of pricing. And the evidence for it — section_stock —
+        # is on the RAW record, not this costed one, so it comes through the same bridge the
+        # route does. Reading it off `pe` looked right and resolved to None on the real data:
+        # the fourth time in this job that a fix has been aimed at the wrong record.
+        if not _sf and _pn.strip().upper() in _tube_pns:
+            _sf = "tube"
         _mat = pe.get("normalized_material") or ""
         _me2 = pe.get("material_estimate") or {}
         _ng2 = pe.get("normalized_geometry") or {}

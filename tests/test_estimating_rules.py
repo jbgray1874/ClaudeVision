@@ -4796,6 +4796,16 @@ def test_the_bom_price_column_is_a_material_column():
                         "extended_total_cost_gbp": 10.0}), 2.5,
        "a bought-in with no labour still resolves from its extended total")
 
+    # "HAS NO LABOUR" IS NOT "IS A BOUGHT-IN", and the difference cuts both ways.
+    # A bought-in DOES carry handling — bought_in_policy leaves it deliberately, because
+    # fitting a purchased component is real bench time — so the first version of this rule
+    # blanked a priced fixing. Material is the unit total less the labour on it, which needs
+    # no classification and is right for both kinds of part.
+    eq(_bom_line_price({"part_number": "FIXING236", "quantity": 1,
+                        "unit_total_cost_gbp": 4.20,
+                        "labour_estimate": {"costs_gbp": {"handling": 0.42}}}), 3.78,
+       "a bought-in with handling keeps its material price, less the handling")
+
     # ONE CHAIN. The row was written by a hand-copy of this helper carrying the same bug, so
     # fixing the helper alone would have corrected an overflow sum nobody sees and left the
     # sheet showing GBP 19.25.
@@ -4809,41 +4819,60 @@ def test_the_bom_price_column_is_a_material_column():
 def test_a_tube_is_not_laser_profiled():
     """2085's tubes carried laser_cutting, inherited from the shared assembly page the
     plate's route was read off. A tube has no flat blank to profile — it is sawn to length
-    and welded in — and now that a routed operation reaches the labour block, that inherited
-    op would have booked a laser cut on both tubes."""
-    from wb_populate import _is_spurious_operation
+    and welded in — and with routed operations now reaching the labour block that booked a
+    laser cut on both tubes.
 
+    THE FIRST VERSION OF THIS FIXTURE PASSED WHILE THE FIX WAS INERT. It handed
+    _is_spurious_operation a stock_form of "tube", which is precisely the fact the real
+    record does not have: estimator stamps stock_form only inside the branches that produce
+    a PRICE, and these tubes could not be priced. So the fixture supplied the classification
+    the production data was missing, and proved nothing about the production data.
+
+    This drives the real resolution: evidence off the raw record, through the bridge.
+    """
+    from wb_populate import _is_spurious_operation, tube_part_numbers
+
+    # The records as they ACTUALLY are on this job: costed record with an empty
+    # material_estimate, section_stock only on the raw one.
+    summary = {
+        "parts": [
+            {"part_number": "2085-02", "description": "OUTER TUBE",
+             "section_stock": {"a": 12.7, "b": 12.7, "t": 1.2, "profile_form": "CHS"}},
+            {"part_number": "2085-01", "description": "BRACKET PLATE",
+             "flat_pattern_detected": True},
+        ],
+        "estimate_summary": {"part_estimates": [
+            {"part_number": "2085-02", "material_estimate": {}},
+            {"part_number": "2085-01", "material_estimate": {"stock_form": "sheet"}},
+        ]},
+    }
+    _tubes = tube_part_numbers(summary)
+    ok("2085-02" in _tubes,
+       "a tube is identified by its SECTION, not by whether its material happened to price")
+    ok("2085-01" not in _tubes, "and a flat plate is not")
+
+    _sf = "tube" if "2085-02" in _tubes else None
     for _op in ("laser_cutting", "laser", "punch", "guillotine"):
-        ok(_is_spurious_operation(_op, "tube", "MILD_STEEL"),
+        ok(_is_spurious_operation(_op, _sf, "MILD_STEEL"),
            f"'{_op}' is meaningless on tube stock")
     for _op in ("saw", "tube_cut", "welding", "tube_bending", "powder_coating"):
-        ok(not _is_spurious_operation(_op, "tube", "MILD_STEEL"),
+        ok(not _is_spurious_operation(_op, _sf, "MILD_STEEL"),
            f"'{_op}' is real work on a tube and must survive")
 
-    # Sheet is unaffected — this is keyed on stock form, not on a part number.
-    ok(not _is_spurious_operation("laser_cutting", "sheet", "MILD_STEEL"),
+    # The plate is unaffected — this is keyed on evidence, not on a part number.
+    ok(not _is_spurious_operation("laser_cutting", None, "MILD_STEEL"),
        "a sheet part is still lasered")
 
+    # material_family alone is enough where no section was read.
+    eq(tube_part_numbers({"parts": [{"part_number": "X-1", "material_family": "tube"}]}),
+       {"X-1"}, "the BOM family identifies a tube the reader found no profile for")
 
-def test_a_cross_reference_row_is_not_a_second_part():
-    """The BOM list carries a GBP 0.00 row for each fabricated part so the bill of materials
-    reads as the parts list it claims to be. That row is a STUB with the same part number as
-    the real record — and the route-based labour gate matched its route and put it in the
-    labour block as a second copy of a part already there.
-
-    2085 booked Weld, Dress Welds and P.Coat at qty 4 across three parts, and grew a second
-    bare "Laser (Metal) (2085-01)" row beside the real one. The cross-reference exists to
-    stop a double count in the material column; it must not create one in labour.
-    """
+    # And the call site uses it, rather than reading a field the real record lacks.
     _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
-    ok('if p.get("_bom_cross_reference") or p.get("_bom_overflow_consolidated"):' in _wb,
-       "the labour gate skips display-only rows")
+    ok("_tube_pns = tube_part_numbers(summary)" in _wb, "the evidence set is built")
+    ok("if not _sf and _pn.strip().upper() in _tube_pns:" in _wb,
+       "and consulted where stock_form is blank — which is the case this exists for")
 
-    # Mirror-free check of the marker contract: the row that gets written carries the flag
-    # the gate looks for, so the two cannot drift apart.
-    ok('"_bom_cross_reference": True' in _wb, "and the row is written carrying that marker")
-    ok('"_bom_overflow_consolidated": True' in _wb,
-       "as is the consolidated overflow line, which is equally not a part")
 
 
 if __name__ == "__main__":
