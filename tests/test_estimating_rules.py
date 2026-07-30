@@ -5558,5 +5558,68 @@ def test_every_module_resolves_the_names_it_uses():
                  "reaches it):\n      " + "\n      ".join(_bad))
 
 
+def test_a_weldment_parent_is_a_parent_on_both_axes():
+    """There were two parent tests and they disagreed.
+
+    estimate_material concludes "weldment parent" from a description token, a -WA/-SA suffix
+    or the upstream flag, and suppresses the parent's sheet material. The phantom-fab strip
+    in estimate_part reads ONLY the upstream flag, which is stamped by a rule requiring the
+    part number to be a strict prefix of >=2 others.
+
+    A sub-assembly whose constituents are SIBLINGS has no prefix children, so that rule
+    cannot fire. 12120-01-101 STAND WELD ASSY is built from 12120-01-02M and -03M; it was
+    recognised as a parent by its description, correctly carried no material, and still
+    billed a laser and a fold read off the assembly drawing's linework.
+
+    Same conclusion, suppressed on one axis and not the other. This drives estimate_part --
+    the caller -- because that is where the two axes have to agree.
+    """
+    from estimator import estimate_part
+
+    def _part(desc):
+        return {"part_number": "12120-01-101", "description": desc, "quantity": 1,
+                "normalized_material": "MILD STEEL", "normalized_thickness_mm": 1.5,
+                "material": "MILD STEEL", "thickness_mm": 1.5,
+                "overall_length_mm": 300, "overall_width_mm": 120,
+                "normalized_geometry": {"blank_length_mm": 300, "blank_width_mm": 120,
+                                        "bend_count": 2, "cut_length_mm": 900, "hole_count": 4},
+                "bend_count": 2, "cut_length_mm": 900,
+                "manufacturing_interpretation": {
+                    "stock_form": "sheet",
+                    "operations": ["laser_cutting", "folding", "welding"]},
+                "textual_operations": ["laser_cutting", "folding", "welding"]}
+
+    def _ops(desc):
+        p = _part(desc)
+        out = estimate_part(p, job_quantity=180)
+        _rt = (out.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
+        return p, set(_rt)
+
+    _parent, _p_ops = _ops("STAND WELD ASSY")
+    _leaf, _l_ops = _ops("STAND BRACKET")
+
+    ok(_parent.get("is_assembly_parent"),
+       "a description the material path calls a weldment parent must reach the fab strip")
+    ok(not _leaf.get("is_assembly_parent"),
+       "and an ordinary bracket is still a leaf — the rule must not swallow everything")
+
+    # The leaf is the control: without it, a strip that removed EVERYTHING would pass.
+    ok({"laser_cutting", "folding"} <= _l_ops,
+       f"the leaf must keep the ops the parent is being stripped of, got {sorted(_l_ops)}")
+    ok(not ({"laser_cutting", "folding"} & _p_ops),
+       f"a parent has no flat blank, so it cuts and folds nothing, got {sorted(_p_ops)}")
+
+    # WELDING THE PARENT IS THE WORK. Stripping assembly ops would be the opposite error,
+    # and would silently delete the only operation the parent legitimately owns.
+    ok("welding" in _p_ops, f"the weld is why the assembly exists, got {sorted(_p_ops)}")
+    ok("dress_welds" in _p_ops, "and dressing that weld travels with it")
+    ok("handling" in _p_ops, "the parent is still handled")
+
+    # The material axis, which already worked, must not have regressed.
+    _m = estimate_part(_part("STAND WELD ASSY"), job_quantity=180).get("material_estimate") or {}
+    eq(_m.get("cost_per_part_gbp"), 0.0, "the parent's material is carried by its children")
+    eq(_m.get("blank_length_mm"), None, "and it has no blank of its own")
+
+
 if __name__ == "__main__":
     sys.exit(main())

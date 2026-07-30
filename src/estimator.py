@@ -1627,6 +1627,27 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         or bool(part.get("is_assembly_parent"))
     )
     if _is_weldment_parent:
+        # ONE PARENT TEST, NOT TWO THAT DISAGREE.
+        #
+        # This concludes "parent" from three signals; the phantom-fab strip in estimate_part
+        # reads only part["is_assembly_parent"], which is stamped upstream by a rule needing
+        # the PN to be a strict prefix of >=2 others. A sub-assembly whose constituents are
+        # SIBLINGS -- 12120-01-101 STAND WELD ASSY, built from 12120-01-02M and -03M -- has
+        # no prefix children at all, so that rule cannot fire.
+        #
+        # The result was a parent recognised HERE by its description, correctly carrying no
+        # material, while still billing a laser and a fold read off the assembly drawing's
+        # linework: 101 came out at GBP 0.00 material with GBP 1.92 laser and GBP 0.01 fold.
+        # Suppressed on one axis and not the other, from the same conclusion.
+        #
+        # Record the conclusion where the strip can see it. Assembly ops (weld, dress,
+        # powder, assemble) are deliberately left alone -- welding the parent IS the work.
+        if not part.get("is_assembly_parent"):
+            part["is_assembly_parent"] = True
+            part.setdefault("review_flags", []).append(
+                "weldment/assembly parent recognised by description or PN suffix — "
+                "material carried by children AND geometry-derived fabrication "
+                "(laser/fold/punch) suppressed; assembly ops retained")
         return {
             "material": material,
             "thickness_mm": thickness,
