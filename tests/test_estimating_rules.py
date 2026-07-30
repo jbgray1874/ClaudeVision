@@ -4031,5 +4031,45 @@ def test_the_family_reaches_the_part_that_the_makebuy_rule_reads():
        "and the section is costed at the length the drawing gives")
 
 
+def test_a_part_on_two_pages_is_one_part():
+    """Both 2085 tubes came out at qty 2 the first run the quantity rollup was able to fire.
+
+    The extract's `bom` is the WHOLE PACK flattened, and the rollup summed every row sharing a
+    part number. A tube listed once in the GA's parts table and once more from its own detail
+    page's title block became two tubes. Before the bom/parts bridge existed the rollup could
+    never fire, so this was latent the whole time and surfaced the moment it was joined up.
+
+    Only an explicit_bom_table row carries a PRINTED quantity. A title-block, note or filename
+    row says the part EXISTS — its qty is a default, and adding it is inventing stock.
+    """
+    from source_connectors.llm_full_job import _rollup_quantities
+
+    job = {"bom": [
+        {"part_number": "2085-02", "qty": 1, "source": "explicit_bom_table"},
+        {"part_number": "2085-02", "qty": 1, "source": "title_block"},   # its own detail page
+        {"part_number": "2085-03", "qty": 1, "source": "title_block"},   # detail page only
+        {"part_number": "2085-03", "qty": 1, "source": "filename"},      # and its DXF
+    ]}
+    got = _rollup_quantities(job)
+    eq(got.get("2085-02"), 1, "a table line plus a title block is one tube, not two")
+    eq(got.get("2085-03"), 1, "and two non-table mentions are still one tube")
+
+    # A REAL BOM table that genuinely lists a part on two lines still sums — that is a
+    # printed quantity twice over, and dropping it would lose stock we are told to buy.
+    job2 = {"bom": [
+        {"part_number": "FIXING236", "qty": 4, "source": "explicit_bom_table"},
+        {"part_number": "FIXING236", "qty": 2, "source": "explicit_bom_table"},
+    ]}
+    eq(_rollup_quantities(job2).get("FIXING236"), 6,
+       "two printed BOM lines for the same fixing are six fixings")
+
+    # Sub-assembly children still multiply by the parent's GA quantity.
+    job3 = {"bom": [{"part_number": "2085-SUB", "qty": 2, "source": "explicit_bom_table"}],
+            "assemblies": [{"part_number": "2085-SUB",
+                            "children": [{"part_number": "2085-09", "qty": 3}]}]}
+    eq(_rollup_quantities(job3).get("2085-09"), 6,
+       "three per sub-assembly, two sub-assemblies, is six")
+
+
 if __name__ == "__main__":
     sys.exit(main())

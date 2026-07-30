@@ -83,12 +83,32 @@ def _rollup_quantities(job: Dict[str, Any]) -> Dict[str, int]:
     bom = job.get("bom") or []
     asms = job.get("assemblies") or []
     bom_qty: Dict[str, float] = {}
+    # A PART ON TWO PAGES IS ONE PART.
+    #
+    # This summed every row sharing a part number, and the extract's `bom` is the whole pack
+    # flattened — so a tube listed once in the GA's parts table and once again from its own
+    # detail page's title block came out as qty 2. On 2085 both tubes did exactly that the
+    # first run the rollup was able to fire at all.
+    #
+    # Only an explicit_bom_table row carries a PRINTED quantity. A row sourced from a title
+    # block, a note or a filename tells us the part EXISTS; its qty is a default, not a count,
+    # and adding it is inventing stock. So table rows sum (a part legitimately appears on more
+    # than one line of a real BOM), and everything else only fills in for a part no table
+    # mentioned at all.
+    _fallback: Dict[str, float] = {}
     for line in bom:
         if not isinstance(line, dict):
             continue
         pn = _clean_pn(line.get("part_number"))
-        if pn:
-            bom_qty[pn] = bom_qty.get(pn, 0.0) + (_num(line.get("qty")) or 1.0)
+        if not pn:
+            continue
+        q = _num(line.get("qty")) or 1.0
+        if str(line.get("source") or "").strip().lower() == "explicit_bom_table":
+            bom_qty[pn] = bom_qty.get(pn, 0.0) + q
+        else:
+            _fallback[pn] = max(_fallback.get(pn, 0.0), q)
+    for pn, q in _fallback.items():
+        bom_qty.setdefault(pn, q)
     asm_pns = {_clean_pn(a.get("part_number")) for a in asms if isinstance(a, dict)}
     totals: Dict[str, float] = {}
     # Direct GA leaf lines (a part listed on the GA that is NOT itself a sub-assembly).
