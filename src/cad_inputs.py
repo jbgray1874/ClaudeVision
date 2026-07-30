@@ -44,7 +44,11 @@ CONVERTIBLE = {".dwg"}
 KNOWN_UNREAD = {".step", ".stp", ".iges", ".igs", ".x_t", ".x_b", ".sat", ".stl", ".3dm"}
 
 # Working copies, backups and the analyser's own output are not customer inputs.
-_IGNORED_NAMES = ("~$", ".~", "_sw_native_extract")
+# Windows and macOS leave these in every folder they touch. They are not customer
+# input and listing them as "unrecognised" trains a reader to skim past the section
+# where a real unread file would appear.
+_IGNORED_NAMES = ("~$", ".~", "_sw_native_extract", "thumbs.db", "desktop.ini",
+                  ".ds_store")
 
 
 def _is_noise(path: Path) -> bool:
@@ -65,22 +69,36 @@ def inventory(folder: Path, *, converted: Optional[Sequence[Path]] = None) -> Di
     if not folder.is_dir():
         return {"schema": SCHEMA, "folder": str(folder), "present": False, **out}
 
-    for path in sorted(folder.rglob("*")):
-        if not path.is_file() or _is_noise(path):
-            continue
+    # The same filename can exist in two places under one job folder. Reporting only the
+    # name makes two copies look like one file listed twice, which reads as a bug in the
+    # listing rather than as what it is — a duplicate that may or may not be identical.
+    _files = [p for p in sorted(folder.rglob("*")) if p.is_file() and not _is_noise(p)]
+    _seen: Dict[str, int] = {}
+    for p in _files:
+        _seen[p.name] = _seen.get(p.name, 0) + 1
+
+    def _label(p: Path) -> str:
+        if _seen.get(p.name, 0) < 2:
+            return p.name
+        try:
+            return str(p.relative_to(folder))
+        except ValueError:
+            return str(p)
+
+    for path in _files:
         ext = path.suffix.lower()
         if path.resolve() in made:
-            out["converted"].append(path.name)
+            out["converted"].append(_label(path))
         elif ext in READ_NATIVELY:
-            out["read"].append(path.name)
+            out["read"].append(_label(path))
         elif ext in READ_BY_SOLIDWORKS:
-            out["solidworks"].append(path.name)
+            out["solidworks"].append(_label(path))
         elif ext in KNOWN_UNREAD or ext in CONVERTIBLE:
-            out["unread"].append(path.name)
+            out["unread"].append(_label(path))
         elif ext in (".xlsx", ".xls", ".docx", ".msg", ".eml", ".txt", ".csv", ".zip"):
             continue                      # correspondence and workbooks, not CAD
         else:
-            out["unknown"].append(path.name)
+            out["unknown"].append(_label(path))
     return {"schema": SCHEMA, "folder": str(folder), "present": True, **out}
 
 
