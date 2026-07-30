@@ -4471,5 +4471,60 @@ def test_the_prompt_asks_for_the_vocabulary_that_pays():
        "makes the rule stick")
 
 
+def test_title_variants_resolve_without_guessing():
+    """Exact == on a workbook title is brittle. Sheets drift by a space, a slash, an "&" for
+    "and", a capital, a bracket — and each drift is another silent zero.
+
+    Normalised, NOT fuzzy. No Levenshtein and no token-set ratio anywhere near this: those
+    can land on the wrong department and still produce a cost, which is worse than a loud
+    None. "Laser (Acrylic)" and "Laser (Metal)" are one token apart and must never be
+    confused; a near-miss department is never right, so a number from one is never traceable.
+    """
+    from department_codes import code_for, CODE_TITLES, _norm_title
+
+    # Punctuation, spacing and case drift — absorbed.
+    for _variant, _code in (
+            ("Assemble / pack (Acrylic)", "PACP"),
+            ("assemble  and  pack ( metal )", "PACM"),
+            ("CNC / Joinery machining", "CNCJ"),
+            ("Drilling / Tapping", "DRIL"),
+            ("Spray / Wet Paint", "SPRY"),
+            ("Salvage / Rework", "SALV"),
+            ("Packaging - Carton", "PACP"),
+            ("P Coat", "P/C"),
+            ("WET SPRAY", "SPRY"),
+            ("Weld  (CO2)", "WELD"),
+            ("MCJ", "MC J")):
+        eq(code_for(_variant), _code, f"'{_variant}' resolves to {_code}")
+
+    # Still loud on anything we do not actually recognise. GRIN is the important one: it was
+    # never a department, so it must NOT become costable — a saved job that names it is read
+    # back through LEGACY_TITLES, which is a different question from what to charge.
+    eq(code_for("Grinding / Deburr"), None, "a department that never existed stays unresolved")
+    eq(code_for("Some invented op"), None, "and so does anything invented")
+    eq(code_for(""), None, "and an empty operation is not a department")
+
+    # NORMALISATION MUST NOT MERGE TWO DEPARTMENTS. The whole reason fuzzy is refused is
+    # that a wrong-but-costed department is worse than none; a collision here would do
+    # exactly that, silently, by dict order.
+    _seen = {}
+    for _c, (_t, _ok) in CODE_TITLES.items():
+        _n = _norm_title(_t)
+        ok(_n not in _seen,
+           f"{_c} and {_seen.get(_n)} both normalise to {_n!r} — the match would be ambiguous")
+        _seen[_n] = _c
+    ok(_norm_title("Laser (Acrylic)") != _norm_title("Laser (Metal)"),
+       "the acrylic and metal lasers stay distinct through normalisation")
+    ok(_norm_title("Manual labour (Acrylic)") != _norm_title("Manual labour (Metal)"),
+       "and so do the two manual-labour departments")
+
+    # The canonical string is still what gets WRITTEN, so the workbook's own LOOKUP hits.
+    from department_codes import title_for
+    eq(title_for("CNC / Joinery machining"), "CNC Joinery",
+       "a drifted title in resolves as the canonical title out")
+    eq(title_for("Packaging - Carton"), "Assemble/pack (Acrylic)",
+       "including an old engine title we wrote ourselves")
+
+
 if __name__ == "__main__":
     sys.exit(main())

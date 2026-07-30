@@ -29,10 +29,11 @@ must be confirmed before they are trusted as titles.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional, Tuple
 
 __all__ = [
-    "DEPARTMENT_CODES", "OPERATION_ALIASES", "code_for", "title_for",
+    "DEPARTMENT_CODES", "OPERATION_ALIASES", "TITLE_ALIASES", "code_for", "title_for",
     "unresolved_operations", "CODE_TITLES", "LEGACY_TITLES",
 ]
 
@@ -123,6 +124,26 @@ def _norm(s: Any) -> str:
     return " ".join(str(s or "").strip().lower().replace("_", " ").split())
 
 
+def _norm_title(s: Any) -> str:
+    """Collapse the variations real workbook titles actually exhibit.
+
+    Exact == on a title is brittle: sheets drift by a space, a slash, an "&" for "and", a
+    capital, a bracket. Each drift is another silent zero. This absorbs the punctuation and
+    spacing while keeping the WORDS intact, so "CNC / Joinery machining" and "CNC Joinery
+    machining" are the same string and "Laser (Acrylic)" and "Laser (Metal)" are not.
+
+    Deliberately NOT fuzzy. No Levenshtein, no token-set ratio: those can land on the wrong
+    department and still produce a cost, which is worse than a loud None. A number nobody
+    can trace beats nothing only if it is right, and a near-miss department never is.
+    """
+    t = str(s or "").strip().lower()
+    t = t.replace("&", " and ")
+    t = re.sub(r"[/_\-\u2013\u2014]+", " ", t)   # slash, underscore, hyphen, en/em dash
+    t = re.sub(r"[()\[\]{}]", " ", t)             # brackets
+    t = re.sub(r"[^\w\s]", " ", t)                # any punctuation left (P.Coat -> p coat)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _alias(code: str, *names: str) -> None:
     for n in names:
         OPERATION_ALIASES[_norm(n)] = code
@@ -170,7 +191,7 @@ _alias("OVEN", "oven", "curing", "cure", "bake")
 _alias("PACM", "handling", "assembly", "assemble", "assemble/pack (metal)", "pack",
        "packing", "packaging", "assemble & pack", "final assembly", "fit", "fitting")
 _alias("PACP", "assemble/pack (acrylic)", "assemble/pack acrylic", "assemble acrylic",
-       "carton", "cartoning")
+       "acrylic assembly", "acrylic assemble", "carton", "cartoning")
 _alias("PACJ", "packing joinery", "packaging - joinery")
 _alias("MANM", "manual labour (metal)", "manual labour", "manual handling")
 _alias("MANA", "manual labour (acrylic)")
@@ -181,23 +202,69 @@ for _c in DEPARTMENT_CODES:
     OPERATION_ALIASES.setdefault(_norm(_c), _c)
 
 
+# TITLES ACTUALLY SEEN IN THE WILD -> code. Only strings observed on a real sheet or in a
+# real extract. Nothing speculative: every entry here is a place a silent zero has been, or
+# a spelling this engine itself has written.
+#
+# "Grinding / Deburr" is deliberately ABSENT. GRIN is not a department and never was, so
+# resolving it must stay loud. LEGACY_TITLES handles it separately, for the one job that
+# needs it — reading back a saved estimate whose rows name it — which is not the same
+# question as "what department should this operation cost against".
+TITLE_ALIASES: Dict[str, str] = {}
+
+
+def _title_alias(code: str, *titles: str) -> None:
+    for t in titles:
+        TITLE_ALIASES[_norm_title(t)] = code
+
+
+_title_alias("PACP", "Assemble / pack (Acrylic)", "Assemble/pack Acrylic",
+             "Assemble and pack (Acrylic)", "Packaging - Carton")
+_title_alias("PACM", "Assemble / pack (Metal)", "Assemble and pack (Metal)")
+_title_alias("PACJ", "Packaging - Joinery", "Packing - Joinery")
+_title_alias("CNCJ", "CNC / Joinery machining", "CNC Joinery machining")
+_title_alias("MC J", "Machines Joinery", "MCJ")
+_title_alias("DRIL", "Drilling / Tapping", "Drill")
+_title_alias("BENC", "Bench work / fitting", "Bench Work")
+_title_alias("GLUE", "Gluing / Bonding")
+_title_alias("SPRY", "Spray / Wet Paint", "Wet Paint")
+_title_alias("SALV", "Salvage / Rework")
+_title_alias("PINR", "Pin Router")
+_title_alias("P/C", "P Coat", "Powder Coat")
+_title_alias("WELD", "Weld CO2", "CO2 Weld")
+
+# Two codes whose titles normalise to the same string would make the match ambiguous and
+# the winner an accident of dict order. Checked at import, because finding out on a sheet
+# means finding out from a wrong department that still cost something.
+_seen: Dict[str, str] = {}
+for _c, (_t, _ok) in CODE_TITLES.items():
+    _n = _norm_title(_t)
+    if _n in _seen:
+        raise RuntimeError(
+            f"department title collision after normalisation: {_seen[_n]} and {_c} "
+            f"both normalise to {_n!r}")
+    _seen[_n] = _c
+
+
 def code_for(operation: Any) -> Optional[str]:
-    """The rate-table code for an operation, or None if nothing recognises it.
+    """The rate-table code for an operation or title, or None if nothing recognises it.
 
     None is the whole point: it is the difference between "we could not price this" and a
     zero that reads like "this work does not exist"."""
     n = _norm(operation)
     if not n:
         return None
+    # 1. The operation vocabulary — engine words, model words, and the codes themselves.
     hit = OPERATION_ALIASES.get(n)
     if hit:
         return hit
-    # A model asked for a code and given a department title will sometimes answer with the
-    # title. Match that too rather than dropping the line.
+    # 2. A canonical title, exactly or with its punctuation and spacing collapsed.
+    nt = _norm_title(operation)
     for code, (title, _ok) in CODE_TITLES.items():
-        if _norm(title) == n:
+        if _norm(title) == n or _norm_title(title) == nt:
             return code
-    return None
+    # 3. A title variant we have actually seen.
+    return TITLE_ALIASES.get(nt)
 
 
 def title_for(operation: Any) -> Optional[str]:
