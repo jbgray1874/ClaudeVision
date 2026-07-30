@@ -885,6 +885,40 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         part["solidworks_part_number"] = pn
         flags = part.setdefault("review_flags", [])
 
+        # ── SECTION CUT LENGTH: the model knows what the drawing never printed ────
+        #
+        # A tube's cut length is the one number the section path cannot do without, and on a
+        # GA-only pack nothing prints it — M&S 2085 dimensions its tubes on the views, so
+        # both came through with a profile and no length, unpriced. The model has it: the
+        # part's bounding box is captured already and, for a straight section, its LONGEST
+        # dimension IS the cut length. Measured, rank solidworks_api, not inferred.
+        #
+        # Only where the part already has a SECTION and no length. This never invents a
+        # section for something that is not one, and never overwrites a length the drawing
+        # or the cutting list stated.
+        #
+        # A BENT tube is the honest limitation: the bounding box is its envelope, not its
+        # developed length, so it under-reads. Flagged rather than silently used, because
+        # under-reading a tube is how a job gets quoted short.
+        _ss = part.get("section_stock")
+        if isinstance(_ss, dict) and not _num(_ss.get("length_mm")):
+            _bb = [f for f in (_num(v) for v in (getattr(nat, "bbox_mm", None) or [])) if f]
+            if _bb:
+                _len = max(_bb)
+                _ss = dict(_ss)
+                _ss["length_mm"] = round(_len, 2)
+                _ss["length_source"] = "solidworks_api"
+                part["section_stock"] = _ss
+                out["section_length"] = out.get("section_length", 0) + 1
+                _bent = any(o in (part.get("textual_operations") or [])
+                            for o in ("tube_bending", "rolling"))
+                flags.append(
+                    f"section cut length {_len:.1f}mm taken from the MODEL's bounding box — "
+                    f"the drawing does not print one" +
+                    (". The part is also bent, so this is the ENVELOPE, not the developed "
+                     "length, and it UNDER-READS: confirm the cut length before quoting"
+                     if _bent else ""))
+
         # ── STRUCTURE: assembly row -> parent, never costed for material ──────────
         # The native BOM is FULL DEPTH: a sub-assembly and all of its children appear.
         # Costing both double-counts every gram. Mark the parent; the engine already

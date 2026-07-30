@@ -4924,5 +4924,59 @@ def test_section_stock_is_not_priced_like_sheet():
        "cost the same")
 
 
+def test_the_model_supplies_the_cut_length_the_drawing_never_printed():
+    """A tube's cut length is the one number the section path cannot do without, and on a
+    GA-only pack nothing prints it. M&S 2085 dimensions its tubes on the views, so both came
+    through with a profile and no length — unpriced, and their coated area zero, which
+    under-reads the powder too.
+
+    The model has it. bbox_mm is already captured per part by the native analyser and
+    already reaches NativePart; for a straight section its LONGEST dimension IS the cut
+    length. Measured, rank solidworks_api, not inferred — the answer was in the extract the
+    whole time and nothing read it.
+    """
+    from source_connectors.solidworks import apply_native_to_pre_estimate, NativeJob, NativePart
+
+    def _run(part, bbox, pn="2085-02"):
+        nat = NativePart(part_number=pn, bbox_mm=bbox)
+        job = NativeJob(part_signals={pn: nat}, found=True)
+        apply_native_to_pre_estimate([part], job)
+        return part
+
+    # A tube with a profile and no length takes the model's longest dimension.
+    tube = _run({"part_number": "2085-02", "description": "OUTER TUBE",
+                 "section_stock": {"a": 12.7, "b": 12.7, "t": 1.2, "profile_form": "CHS"}},
+                [150.0, 12.7, 12.7])
+    eq((tube.get("section_stock") or {}).get("length_mm"), 150.0,
+       "the cut length comes from the model's bounding box")
+    eq((tube.get("section_stock") or {}).get("length_source"), "solidworks_api",
+       "and is stamped as measured, not inferred")
+    ok(any("does not print one" in str(f) for f in (tube.get("review_flags") or [])),
+       "with the estimator told where it came from")
+
+    # A length the drawing DID state is never overwritten by an envelope.
+    stated = _run({"part_number": "2085-02",
+                   "section_stock": {"a": 25.0, "b": 25.0, "t": 1.5, "length_mm": 340.0}},
+                  [900.0, 25.0, 25.0])
+    eq((stated.get("section_stock") or {}).get("length_mm"), 340.0,
+       "a stated cut length stands — the bounding box does not overwrite a reading")
+
+    # A part with no section is not given one. This must not invent tube.
+    plate = _run({"part_number": "2085-01", "description": "BRACKET PLATE"},
+                 [90.88, 80.0, 1.2], pn="2085-01")
+    eq(plate.get("section_stock"), None,
+       "a part with no profile is not turned into a section by having a bounding box")
+
+    # A BENT tube's bounding box is its ENVELOPE, not its developed length, so it
+    # under-reads — which is how a job gets quoted short. Used, and said out loud.
+    bent = _run({"part_number": "2085-02",
+                 "section_stock": {"a": 12.7, "b": 12.7, "t": 1.2},
+                 "textual_operations": ["tube_bending", "welding"]},
+                [150.0, 60.0, 12.7])
+    eq((bent.get("section_stock") or {}).get("length_mm"), 150.0, "the envelope is used")
+    ok(any("UNDER-READS" in str(f) for f in (bent.get("review_flags") or [])),
+       "and flagged as the envelope of a bent part, not its developed length")
+
+
 if __name__ == "__main__":
     sys.exit(main())
