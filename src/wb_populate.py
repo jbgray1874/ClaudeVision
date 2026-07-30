@@ -339,6 +339,10 @@ def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None) -> Lis
     if costs is None:
         costs = (pe.get("labour_estimate") or {}).get("costs_gbp") or {}
     _costed = {str(k).strip().lower() for k in (costs or {})}
+    # An operation a MEASUREMENT ruled out is not a missing row — it is an answered
+    # question. Belt and braces with the route fold, which already refuses to re-add one:
+    # this is the last gate before a labour row, and it is the one that spends money.
+    _ruled = {str(k).strip().lower() for k in (pe.get("operations_ruled_out") or {})}
     out: List[str] = []
     for key in ("textual_operations", "operations", "inferred_operations"):
         vals = pe.get(key)
@@ -346,7 +350,8 @@ def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None) -> Lis
             continue
         for o in vals:
             os_ = str(o).strip().lower()
-            if os_ and os_ not in _costed and os_ not in out and os_ in _FAB:
+            if (os_ and os_ not in _costed and os_ not in out and os_ not in _ruled
+                    and os_ in _FAB):
                 out.append(os_)
     return out
 

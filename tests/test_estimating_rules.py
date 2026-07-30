@@ -4647,5 +4647,61 @@ def test_a_routed_operation_with_no_cost_model_still_reaches_the_sheet():
        "and says so, because a time nobody modelled must not read as a time somebody agreed")
 
 
+def test_a_measured_zero_is_not_undone_by_a_reading():
+    """The fold, and the reason it must stay off 2085-01.
+
+    A DXF flat pattern that measures zero bend lines is a MEASUREMENT: the part does not
+    fold. That strip existed, but it deleted the operation and left nothing to say it had —
+    so the LLM route, which reads formed walls off the drawing views, simply added `folding`
+    back. Harmless while a routed operation could not reach the sheet. Not harmless now: a
+    routed operation without a cost model gets a labour row, so the resurrected fold would
+    be CHARGED FOR. An explicit zero overwritten by a conclusion is the exact failure that
+    took three commits on 12120.
+
+    And not silent. The model saw walls, the reader measured no bends, and one of them is
+    wrong about a part being costed — commonly a flat exported as a block, where the bend
+    layer is real but unreadable. That belongs in front of an estimator.
+    """
+    from source_connectors.llm_full_job import apply_routes_to_parts
+    from wb_populate import routed_operations_without_cost as _routed
+
+    part = {"part_number": "2085-01", "description": "BRACKET PLATE",
+            "flat_pattern_detected": True,
+            "operations_ruled_out": {"folding": "DXF flat pattern measured 0 bend lines"}}
+    job = {"routes": [
+        {"operation": "folding", "part_numbers": ["2085-01"], "inferred": True},
+        {"operation": "laser_cutting", "part_numbers": ["2085-01"], "inferred": False},
+    ]}
+    apply_routes_to_parts([part], job)
+
+    ok("folding" not in (part.get("textual_operations") or []),
+       "the measurement stands — a fold the DXF ruled out is not added back by a reading")
+    ok("laser_cutting" in (part.get("textual_operations") or []),
+       "and everything the measurement did NOT answer still comes through")
+    ok(any("not showing its bend lines" in str(f) for f in (part.get("review_flags") or [])),
+       "with the disagreement put in front of a person, because a flat exported as a block "
+       "measures zero bends and folds perfectly well in the shop")
+
+    # The last gate before a labour row refuses it too. Belt and braces, because this is
+    # the one that spends money.
+    eq(_routed({"labour_estimate": {"costs_gbp": {}},
+                "textual_operations": ["folding", "tube_cut"],
+                "operations_ruled_out": {"folding": "DXF measured 0 bend lines"}}),
+       ["tube_cut"],
+       "a ruled-out operation is not a missing row — it is an answered question")
+
+    # A part with no ruling is unaffected: this must not become a blanket suppression.
+    plain = {"part_number": "2085-77"}
+    apply_routes_to_parts([plain], {"routes": [
+        {"operation": "folding", "part_numbers": ["2085-77"], "inferred": True}]})
+    ok("folding" in (plain.get("textual_operations") or []),
+       "a part nothing measured still takes the inferred fold")
+
+    # AND THE RULING HAS TO BE RECORDED IN THE FIRST PLACE.
+    _djm = open(__import__("drawing_job_merge").__file__, encoding="utf-8").read()
+    ok('setdefault("operations_ruled_out", {})["folding"]' in _djm,
+       "the zero-bend strip records WHAT it ruled out, not just that it removed something")
+
+
 if __name__ == "__main__":
     sys.exit(main())

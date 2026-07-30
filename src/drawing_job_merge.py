@@ -474,6 +474,18 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
                     part[_k] = [_o for _o in _ops if _o != "folding"]   # precedence: direct-write ok — removes an op, adds no evidence
+            # RECORD THE RULING, NOT JUST THE REMOVAL.
+            #
+            # This deleted the op and left nothing to say it had. A later pass — the LLM
+            # route, which reads formed walls off the drawing views — simply adds `folding`
+            # back, and now that a routed operation without a cost model reaches the sheet,
+            # it would be COSTED. A measured zero overwritten by a conclusion is the exact
+            # failure that took three commits on 12120.
+            #
+            # An explicit zero is a value. Recorded here so every later pass can see that
+            # this one was measured, not merely absent.
+            part.setdefault("operations_ruled_out", {})["folding"] = (
+                "DXF flat pattern measured 0 bend lines — the part does not fold")
     except Exception:
         pass
 

@@ -393,6 +393,25 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
         for part in parts:
             if not isinstance(part, dict) or _clean_pn(part.get("part_number")) not in wanted:
                 continue
+            # A MEASUREMENT ALREADY ANSWERED THIS, AND IT OUTRANKS A READING.
+            #
+            # Where a DXF flat pattern measured zero bend lines, `folding` was stripped and
+            # the ruling recorded. This pass reads formed walls off the drawing views and
+            # would put it straight back — and now that a routed operation reaches the sheet
+            # whether or not the estimator costed it, putting it back means charging for it.
+            #
+            # Not silent, though: the model saw walls and the reader measured no bends, and
+            # one of them is wrong about a part we are costing. The commonest cause is a
+            # flat exported as a block, where the bend layer is real but unreadable — which
+            # is worth an estimator's attention, not a quiet drop.
+            _ruled = (part.get("operations_ruled_out") or {}).get(op)
+            if _ruled:
+                part.setdefault("review_flags", []).append(
+                    f"operation '{op}' was read from the drawing pack but NOT applied: "
+                    f"{_ruled}. The measurement stands. If the part does fold, the flat "
+                    f"pattern is not showing its bend lines (commonly a block export) — "
+                    f"check the DXF before accepting the route")
+                continue
             ops = part.setdefault("textual_operations", [])
             if not isinstance(ops, list) or op in ops:
                 continue
