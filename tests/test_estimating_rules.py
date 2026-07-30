@@ -5143,6 +5143,15 @@ def test_the_raw_model_response_is_kept():
     _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
     ok('"raw_response": _job.get("_raw_response")' in _fs,
        "and it reaches the sidecar an estimator can actually open")
+    # BOTH RAWS. The first version surfaced only the transcription response — and welding is
+    # a CONCLUSION, so it comes from the inference pass. The deliverable answered a question
+    # nobody was asking and left the one that cost a commit-diff argument unanswerable.
+    ok('_job["_inferred_raw_response"] = _inf.get("_raw_response")' in _fs,
+       "the inference raw is carried onto the job")
+    ok('"inferred_raw_response": _job.get("_inferred_raw_response")' in _fs,
+       "and surfaced — it is where the weld actually is")
+    ok('"inference_from_cache"' in _fs,
+       "with its own cache flag, because the two passes cache independently")
     ok('"from_cache": bool(_job.get("_from_cache"))' in _fs,
        "which also records whether this run re-asked or reused — otherwise a stable number "
        "and a cached one look the same")

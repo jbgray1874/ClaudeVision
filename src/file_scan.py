@@ -2091,6 +2091,14 @@ def _finalize_scan_summary(
                         if _inf.get("found"):
                             _job["inferred_parts"] = _inf.get("parts")
                             _job["inferred_routes"] = _inf.get("routes")
+                            # THE WELD LIVES HERE, NOT IN THE TRANSCRIPTION.
+                            # Keeping the raw response was for answering "did the model say
+                            # welding?" — and welding is a CONCLUSION, so it comes from the
+                            # inference pass. Surfacing only the transcription raw answered
+                            # a question nobody was asking and left the one that cost a
+                            # commit-diff argument still unanswerable from the deliverable.
+                            _job["_inferred_raw_response"] = _inf.get("_raw_response")
+                            _job["_inference_from_cache"] = bool(_inf.get("_from_cache"))
                             # MERGE, not stash. Stashing it on the job was the whole of the
                             # last attempt: apply_full_job_to_pre_estimate reads job["parts"]
                             # and job["routes"] and nothing else, so the inference sat beside
@@ -2127,8 +2135,10 @@ def _finalize_scan_summary(
                     # and not the next can be settled by comparing responses rather than by
                     # inferring from which files a commit happened to touch.
                     "raw_response": _job.get("_raw_response"),
+                    "inferred_raw_response": _job.get("_inferred_raw_response"),
                     "prompt_fingerprint": _job.get("_prompt_fingerprint"),
                     "from_cache": bool(_job.get("_from_cache")),
+                    "inference_from_cache": bool(_job.get("_inference_from_cache")),
                     "counts": _c,
                 }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
