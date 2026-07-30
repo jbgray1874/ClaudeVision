@@ -5740,5 +5740,62 @@ def test_what_the_drawing_shows_is_not_what_we_supply():
        f"and the genuine bought-in in the same note must survive, got {_codes}")
 
 
+def test_the_ga_hierarchy_says_what_is_an_assembly():
+    """The whole-document extract already returns `assemblies` — parent part numbers with
+    their children — and llm_full_job stamps every match is_sub_assembly. pricing_service
+    reads that field. Nothing in the estimator did: both suppressions keyed on
+    is_assembly_parent, a different name for the same idea.
+
+    So 12120-01-103 SCREEN MOUNTING BRACKET, correctly identified as a sub-assembly from the
+    GA tree, still got sheet material, a laser and a fold. Its description carries no
+    assembly token, its children (01M, 06M) are siblings rather than prefixed, and it does
+    not match the ...-0*-... GA pattern — every parent detector missed it while the answer
+    sat on the record under the other name.
+    """
+    from estimator import estimate_part
+
+    def _run(**kw):
+        p = {"part_number": "12120-01-103", "description": "SCREEN MOUNTING BRACKET",
+             "quantity": 1, "normalized_material": "MILD STEEL",
+             "normalized_thickness_mm": 1.5, "material": "MILD STEEL", "thickness_mm": 1.5,
+             "overall_length_mm": 300, "overall_width_mm": 120,
+             "normalized_geometry": {"blank_length_mm": 300, "blank_width_mm": 120,
+                                     "bend_count": 2, "cut_length_mm": 900, "hole_count": 4},
+             "bend_count": 2, "cut_length_mm": 900,
+             "manufacturing_interpretation": {
+                 "stock_form": "sheet",
+                 "operations": ["laser_cutting", "folding", "welding"]},
+             "textual_operations": ["laser_cutting", "folding", "welding"]}
+        p.update(kw)
+        out = estimate_part(p, job_quantity=180)
+        _rt = (out.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
+        return p, (out.get("material_estimate") or {}), set(_rt)
+
+    # Control: the identical part with no hierarchy claim is a leaf and stays one.
+    _leaf, _lm, _lops = _run()
+    ok(not _leaf.get("is_assembly_parent"), "an unclaimed part is a leaf")
+    ok((_lm.get("cost_per_part_gbp") or 0) > 0, "and a leaf buys its own material")
+    ok({"laser_cutting", "folding"} <= _lops, f"and cuts and folds, got {sorted(_lops)}")
+
+    # The GA tree says it is an assembly, and now both axes hear it.
+    _asm, _am, _aops = _run(is_sub_assembly=True)
+    ok(_asm.get("is_assembly_parent"),
+       "a sub-assembly named by the GA hierarchy must reach the fabrication strip")
+    eq(_am.get("cost_per_part_gbp"), 0.0, "its material is carried by its children")
+    ok(not ({"laser_cutting", "folding"} & _aops),
+       f"and it has no blank to cut or fold, got {sorted(_aops)}")
+    ok({"welding", "dress_welds"} <= _aops,
+       f"while the operations that build it survive, got {sorted(_aops)}")
+
+    # MEASUREMENT OUTRANKS A TRANSCRIBED HIERARCHY. A real flat pattern is evidence the part
+    # is a fabricated leaf (dxf 80 > llm_full_extract 40); where they disagree, geometry wins
+    # and nothing is silently zeroed on the strength of a text read.
+    _both, _bm, _bops = _run(is_sub_assembly=True, geometry_source="dxf_flat_pattern")
+    ok(not _both.get("is_assembly_parent"),
+       "a part with its own flat pattern stays a leaf whatever the hierarchy claims")
+    ok((_bm.get("cost_per_part_gbp") or 0) > 0, "so it keeps its material")
+    ok({"laser_cutting", "folding"} <= _bops, "and its cut and fold")
+
+
 if __name__ == "__main__":
     sys.exit(main())

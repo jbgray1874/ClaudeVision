@@ -1621,10 +1621,28 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # is_assembly_parent is stamped upstream (drawing_job_merge) for a part with no
     # flat DXF whose PN is a strict prefix of >=2 others — a roll-up whose material
     # is carried by its costed children (TANK 04 over 04-01/04-02).
+    # THE GA BOM HIERARCHY IS AN AUTHORITY ON WHAT IS AN ASSEMBLY.
+    #
+    # The whole-document extract already returns `assemblies` -- parent part numbers with
+    # their children -- and llm_full_job stamps every match is_sub_assembly. pricing_service
+    # reads that field. NOTHING IN THE ESTIMATOR DID: both suppressions here and in
+    # estimate_part keyed on is_assembly_parent, a different name for the same idea.
+    #
+    # So 12120-01-103 SCREEN MOUNTING BRACKET, correctly identified as a sub-assembly from
+    # the GA tree, was still given sheet material, a laser and a fold -- because its
+    # description carries no assembly token, its children (01M, 06M) are siblings rather
+    # than prefixed, and it does not match the ...-0*-... GA pattern. Every parent detector
+    # missed it while the answer sat on the record under the other name.
+    #
+    # Guarded on _has_own_flat: a real flat pattern is MEASURED evidence the part is a
+    # fabricated leaf, and measurement outranks a transcribed hierarchy (dxf 80 >
+    # llm_full_extract 40). Where they disagree the geometry wins and the part stays a leaf.
+    _sub_asm_by_bom = bool(part.get("is_sub_assembly")) and not _has_own_flat
     _is_weldment_parent = (
         any(_t in _desc_wm for _t in _wm_tokens)
         or (not _has_own_flat and any(re.search(_sfx, _pn_wm) for _sfx in _wm_suffixes))
         or bool(part.get("is_assembly_parent"))
+        or _sub_asm_by_bom
     )
     if _is_weldment_parent:
         # ONE PARENT TEST, NOT TWO THAT DISAGREE.
