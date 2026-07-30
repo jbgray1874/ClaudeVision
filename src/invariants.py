@@ -813,6 +813,78 @@ def check_every_cad_file_was_used(summary: Any) -> List[Dict[str, Any]]:
                        files=unread[:12], count=len(unread), dwg_count=len(_dwg))]
 
 
+def check_uncorroborated_bom_lines_are_not_silent(summary: Any) -> List[Dict[str, Any]]:
+    """A BOM row only one reader could see, carrying real money.
+
+    The BOM is read twice on purpose: a deterministic table reader and a vision pass. Where
+    both agree a row is HIGH confidence; where only one saw it, the row is emitted and
+    FLAGGED, because a vision pass missing a real line is as likely as a table reader
+    inventing one. That design is right and it worked — on M&S 2085 the phantom border-grid
+    row came back A_ONLY with "vision did not corroborate — review" against it.
+
+    And then it was priced at GBP 219.21 of a GBP 273.98 unit cost. Eighty percent of the job
+    from a row the engine had already doubted, because the flag reached a JSON field and
+    nothing downstream weighed it.
+
+    Not dropped here — dropping a real part is silent and far worse than costing a phantom
+    one, which is at least visible in the total. Named, with what it is worth, so nobody has
+    to notice it themselves.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("uncorroborated_bom", "This job is not a readable structure.")
+    rows = ((summary.get("document_analysis") or {}).get("bom_rows")
+            or (summary.get("document_analysis") or {}).get("pooled_bom") or [])
+    if not isinstance(rows, list) or not rows:
+        return []
+
+    flagged = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        _src = str(r.get("bom_source") or "").upper()
+        _flag = str(r.get("bom_flag") or "").strip()
+        if _flag or _src in ("A_ONLY", "B_ONLY", "B_RECOVERED", "B_OVERRIDE"):
+            _pn = str(r.get("part_number") or "").strip()
+            if _pn:
+                flagged[_pn.upper()] = {"part_number": _pn,
+                                        "description": r.get("description"),
+                                        "bom_source": r.get("bom_source"),
+                                        "bom_flag": _flag or None,
+                                        "quantity": r.get("quantity")}
+    if not flagged:
+        return []
+
+    # What did each flagged row actually cost? Only money makes it worth interrupting for.
+    fe = _node(summary, "final_estimate")
+    total = _num((fe.get("totals") or {}).get("material_gbp")) or 0.0
+    costed, worth = [], 0.0
+    for row in (fe.get("material_rows") or []):
+        if not isinstance(row, dict):
+            continue
+        _code = str(row.get("part_code") or row.get("description") or "").upper()
+        for pn, meta in flagged.items():
+            if _code.startswith(pn):
+                _v = _num(row.get("total_value_gbp")) or 0.0
+                costed.append({**meta, "value_gbp": round(_v, 2)})
+                worth += _v
+                break
+    if not costed:
+        return []
+
+    _share = (worth / total * 100.0) if total > 0 else 0.0
+    _sev = BLOCKING if _share >= 25.0 else WARNING
+    return [_violation(
+        "uncorroborated_bom_line_costed", _sev,
+        f"{len(costed)} BOM line(s) that only one reader could see carry "
+        f"GBP {worth:,.2f} of a GBP {total:,.2f} material total ({_share:.0f}%): "
+        + "; ".join(f"{c['part_number']} \u2014 {c['description']} @ GBP {c['value_gbp']:,.2f}"
+                    for c in costed[:6])
+        + ". The BOM is read twice so that a row only one reader finds is doubted, not "
+          "trusted; here the doubt was recorded and then priced anyway.",
+        lines=costed[:10], count=len(costed), value_gbp=round(worth, 2),
+        share_pct=round(_share, 1))]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -985,6 +1057,7 @@ CHECKS = (
     check_a_measured_plate_is_not_charged_for_folding,
     check_prices_are_firm,
     check_every_cad_file_was_used,
+    check_uncorroborated_bom_lines_are_not_silent,
 )
 
 

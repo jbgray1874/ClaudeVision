@@ -33,6 +33,44 @@ _SDI_CODE_RE = re.compile(r"^\d")
 _LETTER_CODE_RE = re.compile(r"^[A-Za-z]+\s*\d+$")
 
 
+# EVERY DRAWING HAS A BORDER, AND IT IS NUMBERED.
+#
+# M&S 2085's sheet is gridded 1-20 across and A-I down. The deterministic table reader
+# swallowed "...14 15 16 17 18 19 20" sitting immediately before the "ITEM NO." header and
+# emitted part_number "1415", description "16 17 18 19", quantity 20. It was priced by an AI
+# market estimate at GBP 10.54 each: GBP 219.21 of a GBP 273.98 unit cost, 80% of the job,
+# from the picture frame.
+#
+# The vision pass refused to corroborate it and the row was flagged "A-only ... review". The
+# flag was right and nothing acted on it. This does: a description with no letters in it is
+# not a description, and a part number that is only digits with no separator is not one of
+# SDI's or a customer's. Neither test alone is safe — a real row can be "1415" if the
+# customer numbers that way, and "M6 x 20" is a real description — so both must hold.
+_ALPHA = None
+
+
+def is_drawing_furniture(code: str, description: str) -> bool:
+    """True when a BOM row is the drawing's own border grid rather than a part.
+
+    Deliberately narrow. Dropping a real BOM line is far worse than costing a phantom one:
+    a phantom is visible in the total and gets challenged, a missing part is silent.
+    """
+    import re as _re
+    desc = str(description or "").strip()
+    code_s = str(code or "").strip()
+    if not desc or not code_s:
+        return False
+    # A description with any letter in it is somebody's words. Only pure digits, spaces and
+    # punctuation can be grid furniture.
+    if _re.search(r"[A-Za-z]", desc):
+        return False
+    # And the code must itself be featureless: digits only, no separator of any kind. Real
+    # numbering here always carries one (2085-01, 12120-01-01M, BI-KNURLEDKNOB, THUM620).
+    if not _re.fullmatch(r"\d+", code_s):
+        return False
+    return True
+
+
 def _norm_code(raw: Any) -> str:
     """Canonicalise a BOM code, but ONLY for formal codes (SDI refs and letter-prefix
     catalogue codes). Descriptions keep their spacing so fuzzy bought-in reconciliation
@@ -81,6 +119,7 @@ def reconciled_bom_rows_for_job(
     result = reconcile_job(pdf_paths, verbose=False, **opts)
 
     flat: List[Dict[str, Any]] = []
+    findings_extra: List[Dict[str, Any]] = []
     for pg in result.get("pages", []):
         parent = pg.get("label")
         for r in pg.get("rows", []):
@@ -90,6 +129,15 @@ def reconciled_bom_rows_for_job(
                 qty = int(r.get("quantity"))
             except (TypeError, ValueError):
                 qty = 1
+            if is_drawing_furniture(code, desc):
+                findings_extra.append({
+                    "code": "bom_row_is_drawing_furniture",
+                    "detail": f"dropped BOM row part='{code}' desc='{desc}' qty={qty} — "
+                              f"a description with no letters in it is not a part name; this "
+                              f"is the drawing's border grid, read as a BOM line",
+                    "page": parent,
+                })
+                continue
             flat.append({
                 # --- the three keys build_document_writeup reads ---
                 "part_number": code,
@@ -109,7 +157,7 @@ def reconciled_bom_rows_for_job(
             })
     return {
         "rows": flat,
-        "findings": result.get("findings", []),
+        "findings": list(result.get("findings", [])) + findings_extra,
         "counts": result.get("counts", {}),
         "pdf_paths": result.get("pdf_paths", []),
         # a_count/b_count = how many BOM tables each reader found across the job.

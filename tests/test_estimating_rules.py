@@ -3470,6 +3470,106 @@ def test_the_dxf_model_pass_judges_but_never_measures():
     eq(dli.interpret({}, caller=_reply), {}, "and nothing measured, nothing to interpret")
 
 
+def test_the_drawing_border_is_not_a_bill_of_materials_line():
+    """M&S 2085's sheet is gridded 1-20 across and A-I down. The table reader swallowed
+    "...14 15 16 17 18 19 20" sitting immediately before the ITEM NO. header and emitted
+    part_number "1415", description "16 17 18 19", quantity 20 — then priced it by AI market
+    estimate at GBP 219.21 of a GBP 273.98 unit cost. Eighty percent of the job, from the
+    picture frame.
+
+    Every drawing has a border and every border is numbered, so this is not one customer's
+    quirk. The test is deliberately narrow in both directions at once — dropping a real BOM
+    line is silent and far worse than costing a phantom one, which at least shows up in the
+    total and gets challenged."""
+    from bom_pipeline import is_drawing_furniture
+
+    eq(is_drawing_furniture("1415", "16 17 18 19"), True, "the border grid is not a part")
+    eq(is_drawing_furniture("12", "1 2 3"), True, "nor is any other run of frame numbers")
+
+    # Real rows, none of which may be lost.
+    for code, desc in (("2085-01", "BRACKET PLATE"), ("2085-02", "OUTER TUBE"),
+                       ("THUM620", "M4x10mm MUSHROOM THUMBSCREW"),
+                       ("BI-PEMSTUD", "M4 THREADED PEM STUD (LENGTH: 30mm)"),
+                       ("12120-01-01M", "MOUNTING BRACKET")):
+        eq(is_drawing_furniture(code, desc), False, f"a real BOM row survives: {code} {desc}")
+
+    # BOTH tests must hold, because either alone is unsafe: a customer may genuinely number
+    # parts "1415", and "M6 x 20" is a perfectly good description made mostly of digits.
+    eq(is_drawing_furniture("1415", "BRACKET"), False,
+       "a digits-only code with a real description is a real part")
+    eq(is_drawing_furniture("2085-01", "16 17 18 19"), False,
+       "and a structured part number is never furniture, whatever sits beside it")
+    eq(is_drawing_furniture("", "16 17"), False, "an empty code decides nothing")
+
+    # THE PREDICATE IS NOT THE FIX. A correct test that nothing calls changes no estimate,
+    # and this suite has now watched four capabilities ship unplugged in one session. The
+    # flattening loop needs a real PDF to drive, so the call site is asserted by its exact
+    # expression — the name alone also appears in the definition and the finding text.
+    import bom_pipeline
+    _src = open(bom_pipeline.__file__, encoding="utf-8").read()
+    ok("if is_drawing_furniture(code, desc):" in _src,
+       "the BOM flattener actually applies it")
+    ok("bom_row_is_drawing_furniture" in _src,
+       "and a dropped row is recorded as a finding, not discarded in silence")
+
+
+def test_a_bom_line_only_one_reader_saw_is_not_costed_in_silence():
+    """The BOM is read twice on purpose, and where only one reader sees a row it is emitted
+    and FLAGGED — a vision pass missing a real line is as likely as a table reader inventing
+    one. On 2085 the phantom came back A_ONLY with "vision did not corroborate — review"
+    against it, and was then priced at 80% of the job. The flag reached a JSON field and
+    nothing downstream weighed it.
+
+    Not dropped here. Named, with what it is worth."""
+    from invariants import check_job
+
+    def _job_with(share_value, corroborated_value=0.10):
+        j = _job()
+        j["document_analysis"] = {"bom_rows": [
+            {"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1,
+             "bom_source": "BOTH", "bom_confidence": "HIGH", "bom_flag": ""},
+            {"part_number": "1415", "description": "16 17 18 19", "quantity": 20,
+             "bom_source": "A_ONLY", "bom_confidence": "MED",
+             "bom_flag": "A-only (vision did not corroborate) — review"},
+        ]}
+        j["final_estimate"]["material_rows"] = [
+            {"workbook_row": 11, "part_code": "2085-01",
+             "total_value_gbp": corroborated_value},
+            {"workbook_row": 12, "part_code": "1415", "total_value_gbp": share_value},
+        ]
+        j["final_estimate"]["totals"] = {"material_gbp": corroborated_value + share_value,
+                                         "labour_gbp": 2.00,
+                                         "unit_gbp": round((corroborated_value + share_value
+                                                            + 2.00) / 0.93, 2)}
+        return j
+
+    r = check_job(_job_with(219.21), write_back=False)
+    v = next((x for x in r["violations"]
+              if x["code"] == "uncorroborated_bom_line_costed"), None)
+    ok(v is not None, "a flagged row carrying money is reported")
+    eq(v["severity"], "blocking", "and dominating the material total blocks the quote")
+    ok("1415" in v["message"], "naming it")
+    ok("219.21" in v["message"], "with what it is worth")
+    ok("2085-01" not in str(v["detail"]["lines"]), "the corroborated row is not implicated")
+
+    # Flagged but trivial — GBP 0.40 against GBP 50 of corroborated material. Worth saying,
+    # not worth stopping a quote for: the severity follows what the line is worth, not the
+    # fact that it was flagged, or every job with one odd row would block.
+    _small = check_job(_job_with(0.40, corroborated_value=50.00), write_back=False)
+    _v2 = next(x for x in _small["violations"]
+               if x["code"] == "uncorroborated_bom_line_costed")
+    eq(_v2["severity"], "warning", "a small uncorroborated line is a warning, not a block")
+
+    # Both readers agreed on everything: nothing to say.
+    j3 = _job()
+    j3["document_analysis"] = {"bom_rows": [
+        {"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1,
+         "bom_source": "BOTH", "bom_confidence": "HIGH", "bom_flag": ""}]}
+    ok("uncorroborated_bom_line_costed" not in
+       [x["code"] for x in check_job(j3, write_back=False)["violations"]],
+       "a BOM both readers saw raises nothing")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
