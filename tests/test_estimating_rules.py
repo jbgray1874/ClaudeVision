@@ -5405,5 +5405,158 @@ def test_a_coated_tube_contributes_coated_area():
        "the coated total sums section area alongside sheet and wire")
 
 
+def test_every_module_resolves_the_names_it_uses():
+    """A name a module never binds is a NameError waiting for the one run that reaches it.
+
+    12120 produced no workbook because populate_workbook called getattr(config, ...) in a
+    module that imports settings as `from config import X as _X` and never binds the bare
+    name `config`. Every fixture passed, because not one of them CALLS populate_workbook —
+    the whole suite tested helpers around a function that could no longer run.
+
+    Importing a module does not catch this: the bad line is inside a function body, so it
+    only raises when that branch executes on a real job. Nor can fixtures realistically call
+    every function on every path. A static scope check can, and does it for every module at
+    once, including the ones written after this was.
+
+    Scope is the import closure from main.py — what a real run actually loads — rather than
+    every .py in src/, which would drag in one-shot patch scripts and paste-in fragments that
+    were never modules and whose noise is where a real finding would hide.
+    """
+    import ast, builtins as _bi, os as _os
+
+    _SRC = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "src")
+    _BUILTIN = set(dir(_bi)) | {"__file__", "__name__", "__doc__", "__spec__",
+                                "__package__", "__builtins__", "__loader__"}
+    _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+    _COMPS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+    def _parse(path):
+        # utf-8-sig: one module carries a BOM, and a BOM is not a syntax error.
+        return ast.parse(open(path, encoding="utf-8-sig").read())
+
+    def _bindings(node):
+        """Names bound directly in this scope — not those bound inside nested scopes."""
+        out, args = set(), getattr(node, "args", None)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)) and args:
+            for a in (list(getattr(args, "posonlyargs", [])) + list(args.args)
+                      + list(args.kwonlyargs)):
+                out.add(a.arg)
+            if args.vararg:
+                out.add(args.vararg.arg)
+            if args.kwarg:
+                out.add(args.kwarg.arg)
+        body = node.body if isinstance(node.body, list) else [node.body]
+        stack = list(body)
+        while stack:
+            s = stack.pop()
+            if isinstance(s, _SCOPES):
+                out.add(getattr(s, "name", ""))
+                continue                      # a nested scope's body is not this one's
+            if isinstance(s, _COMPS):
+                continue                      # nor is a comprehension's
+            if isinstance(s, (ast.Import, ast.ImportFrom)):
+                for a in s.names:
+                    out.add((a.asname or a.name).split(".")[0])
+            elif isinstance(s, ast.Name) and isinstance(s.ctx, (ast.Store, ast.Del)):
+                out.add(s.id)
+            elif isinstance(s, ast.ExceptHandler) and s.name:
+                out.add(s.name)
+            elif isinstance(s, (ast.Global, ast.Nonlocal)):
+                out.update(s.names)
+            stack.extend(ast.iter_child_nodes(s))
+        return out
+
+    def _unresolved(path):
+        tree = _parse(path)
+        # A module that writes its own globals (dxf_reader re-exports an implementation with
+        # globals().update) binds names no static reader can see. Those modules are exempt --
+        # the alternative is naming files in an allowlist, which is where the next real
+        # finding would hide.
+        _src_text = open(path, encoding="utf-8-sig").read()
+        if "globals().update" in _src_text:
+            return []
+        found = []
+
+        def walk(node, scopes, where):
+            if isinstance(node, _SCOPES):
+                _decs = getattr(node, "decorator_list", []) or []
+                for d in _decs:
+                    walk(d, scopes, where)                  # decorators read the OUTER scope
+                inner = scopes + [_bindings(node)]
+                for child in ast.iter_child_nodes(node):
+                    if child in _decs:
+                        continue
+                    walk(child, inner, getattr(node, "name", where))
+                return
+            if isinstance(node, _COMPS):
+                _t = set()
+                for gen in node.generators:
+                    for n2 in ast.walk(gen.target):
+                        if isinstance(n2, ast.Name):
+                            _t.add(n2.id)
+                for child in ast.iter_child_nodes(node):
+                    walk(child, scopes + [_t], where)
+                return
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                if node.id not in _BUILTIN and not any(node.id in s for s in scopes):
+                    found.append((node.lineno, node.id, where))
+                return
+            for child in ast.iter_child_nodes(node):
+                walk(child, scopes, where)
+
+        walk(tree, [_bindings(tree)], "<module>")
+        seen, out = set(), []
+        for ln, name, where in sorted(found):
+            if (name, where) in seen:
+                continue
+            seen.add((name, where))
+            out.append((ln, name, where))
+        return out
+
+    # What a real run loads, walked transitively from the entry point.
+    _local = {f[:-3] for f in _os.listdir(_SRC) if f.endswith(".py")}
+
+    def _imports_of(mod):
+        _p = _os.path.join(_SRC, mod + ".py")
+        if not _os.path.exists(_p):
+            return set()
+        try:
+            _t = _parse(_p)
+        except SyntaxError:
+            return set()
+        _out = set()
+        for n in ast.walk(_t):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    _out.add(a.name.split(".")[0])
+            elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
+                _out.add(n.module.split(".")[0])
+        return {m for m in _out if m in _local}
+
+    _seen, _stack = set(), ["main"]
+    while _stack:
+        _m = _stack.pop()
+        if _m in _seen or _m not in _local:
+            continue
+        _seen.add(_m)
+        _stack.extend(_imports_of(_m))
+
+    ok("main" in _seen, "the entry point itself must be in the checked set")
+    ok("wb_populate" in _seen and "estimator" in _seen,
+       "the workbook and the estimator are on the path a real run loads")
+    ok(len(_seen) > 30, f"the closure looks too small to be the real one ({len(_seen)} modules)")
+
+    _bad = []
+    for _m in sorted(_seen):
+        _p = _os.path.join(_SRC, _m + ".py")
+        try:
+            for _ln, _name, _where in _unresolved(_p):
+                _bad.append(f"{_m}.py:{_ln}: '{_name}' in {_where}()")
+        except SyntaxError as _e:
+            _bad.append(f"{_m}.py: will not parse — {_e}")
+    ok(not _bad, "names used but never bound (each is a NameError on the run that "
+                 "reaches it):\n      " + "\n      ".join(_bad))
+
+
 if __name__ == "__main__":
     sys.exit(main())

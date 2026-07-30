@@ -27,7 +27,7 @@ Design principles carried from the per-part engine:
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import config
 

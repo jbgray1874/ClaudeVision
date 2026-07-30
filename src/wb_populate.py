@@ -27,6 +27,18 @@ from __future__ import annotations
 import os, json, re, shutil, sys
 from datetime import datetime
 
+# THE MODULE ITSELF, not just names lifted out of it.
+#
+# Everything below imports individual settings as `from config import X as _X`, so the bare
+# name `config` was never bound here. A later `getattr(config, ...)` therefore raised
+# NameError at run time, in the middle of populate_workbook, on every job -- and the whole
+# fixture suite passed, because not one fixture CALLS populate_workbook. See
+# test_every_module_resolves_the_names_it_uses.
+try:
+    import config
+except Exception:                                  # pragma: no cover - config must import
+    config = None                                  # getattr(None, x, default) still returns default
+
 # Powder material rate (£/kg). Single source of truth is config.py — the Excel
 # template carries only a static default, which we overwrite on every populate.
 try:
