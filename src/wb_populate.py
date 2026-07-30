@@ -552,6 +552,22 @@ def section_coated_area_m2(part: Dict[str, Any]) -> float:
     return (_perim_mm / 1000.0) * (_len / 1000.0) * float(_q)
 
 
+def template_path() -> str:
+    """The estimate template to populate.
+
+    CELL_MAP pins a UNC path on the estimating share, which is right when the engine runs
+    on the SDI network and a dead end when it does not: populate_workbook returns None, and
+    every job silently falls back to the xlsx_output builder -- which looks identical and
+    is not route-grouped.
+
+    SDI_WB_TEMPLATE overrides it with a local copy. The share stays the default, so nothing
+    changes for a normal run; an operator off the network gets a way through instead of a
+    fallback sheet they have no reason to distrust.
+    """
+    _env = str(os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"')
+    return _env or CELL_MAP["template_path"]
+
+
 def assembly_scoped_qty(group: Dict[str, Any]) -> int:
     """How many times an ASSEMBLY-scoped operation is charged per finished product.
 
@@ -974,9 +990,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         return None
 
     cm = CELL_MAP
-    tpl = cm["template_path"]
+    tpl = template_path()
     if not os.path.exists(tpl):
         print(f"   [wb_populate] TEMPLATE NOT FOUND: {tpl}")
+        print(f"   [wb_populate] the estimate will fall back to the xlsx_output builder, "
+              f"whose labour rows are NOT route-grouped and therefore OVERSTATE assembly "
+              f"operations. If the share is unreachable, point SDI_WB_TEMPLATE at a local "
+              f"copy of the template and re-run.")
         return None
 
     flags: List[str] = []

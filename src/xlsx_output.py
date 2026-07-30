@@ -291,7 +291,25 @@ def _write_estimate(ws, summary):
     # ── Row 1: SDI logo header ─────────────────────────────────────────────
     ws.merge_cells("A1:M1")
     c = ws["A1"]
-    c.value = "SDI Displays Limited — AI Estimate"
+    # A FALLBACK MUST SAY IT IS ONE.
+    #
+    # This builder runs only when populate_workbook could not produce the SDI template --
+    # an unreachable template share, or a fault inside it. The sheet it writes has always
+    # looked exactly like the real thing: same title, same header boxes, same totals block.
+    #
+    # It is NOT the same thing. It has no route grouping, so it emits one row per part per
+    # operation where the template collapses Weld / Dress / P.Coat / Assemble-pack into one
+    # row per job. Read as an estimate it therefore shows every assembly operation charged
+    # at every level of the tree -- which reads as a cost-model defect and is not one.
+    #
+    # Two full review cycles on 12120 were spent diagnosing assembly-scope failures from
+    # this sheet before anyone noticed which writer produced it. That is the cost of a
+    # fallback that cannot be told apart from what it replaced, and it is paid again on
+    # every job until the sheet says so itself.
+    c.value = ("SDI Displays Limited — AI Estimate  ***  FALLBACK SHEET: the SDI template "
+               "could not be populated. Operation rows are NOT route-grouped — weld, dress, "
+               "powder and assemble/pack appear once per part instead of once per job, so "
+               "labour is OVERSTATED. Do not quote from this sheet.  ***")
     c.font = _f(bold=True, size=12, colour=_WHITE)
     c.fill = _fill(_SDI_BLUE)
     c.alignment = _al("center")

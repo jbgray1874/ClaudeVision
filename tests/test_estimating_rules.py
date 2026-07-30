@@ -5621,5 +5621,67 @@ def test_a_weldment_parent_is_a_parent_on_both_axes():
     eq(_m.get("blank_length_mm"), None, "and it has no blank of its own")
 
 
+def test_the_fallback_sheet_admits_it_is_a_fallback():
+    """xlsx_output runs only when populate_workbook could not produce the SDI template, and
+    the sheet it writes has always been indistinguishable from the real one — same title,
+    same header boxes, same totals block.
+
+    It is not the same. It has no route grouping, so it emits one row per part per operation
+    where the template collapses Weld / Dress / P.Coat / Assemble-pack into ONE row per job.
+    Read as an estimate it shows every assembly operation charged at every level of the
+    tree, which reads as a cost-model defect and is not one.
+
+    Two full review cycles on 12120 were spent diagnosing assembly-scope failures from this
+    sheet before anyone checked which writer produced it. The sheet has to say so itself.
+    """
+    import os as _os
+    import wb_populate
+
+    # Read the source rather than import it: xlsx_output needs openpyxl at import time, and
+    # a machine without it must still be able to check that the warning is present.
+    _SRCDIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "src")
+    _src = open(_os.path.join(_SRCDIR, "xlsx_output.py"), encoding="utf-8").read()
+    _title = [l for l in _src.splitlines() if "SDI Displays Limited" in l]
+    ok(_title, "the fallback still writes a title cell")
+    _banner = "\n".join(_src.split("SDI Displays Limited")[1].splitlines()[:6]).upper()
+    ok("FALLBACK" in _banner,
+       "the fallback sheet's own title must carry the word FALLBACK, on the sheet, where "
+       "someone reading the estimate will see it — not only in the console")
+    ok("OVERSTATED" in _banner or "OVERSTATE" in _banner,
+       "and must say which way the number is wrong, since labour is the part that inflates")
+
+    # The claim the banner makes has to be true of the template writer, or the warning is
+    # telling estimators something the code does not do.
+    _wb = open(_os.path.join(_SRCDIR, "wb_populate.py"), encoding="utf-8").read()
+    _one_row = _wb.split("_ONE_ROW_PER_JOB")[1].split("}")[0]
+    for _op in ("Assemble/pack (Metal)", "Weld (CO2)", "Dress Welds", "P.Coat"):
+        ok(_op in _one_row,
+           f"the banner says the template groups {_op} once per job — it must actually do it")
+
+    # And an unreachable share must not be a dead end.
+    _was = _os.environ.get("SDI_WB_TEMPLATE")
+    try:
+        _os.environ["SDI_WB_TEMPLATE"] = r"C:\local\Blank Estimate Sheet.xlsx"
+        eq(wb_populate.template_path(), r"C:\local\Blank Estimate Sheet.xlsx",
+           "SDI_WB_TEMPLATE points the populater at a local copy")
+        _os.environ["SDI_WB_TEMPLATE"] = '  "C:\\quoted\\path.xlsx"  '
+        eq(wb_populate.template_path(), r"C:\quoted\path.xlsx",
+           "a pasted Windows path keeps its quotes and spaces — strip them, not the path")
+        _os.environ["SDI_WB_TEMPLATE"] = ""
+        eq(wb_populate.template_path(), wb_populate.CELL_MAP["template_path"],
+           "and an empty override falls back to the share, not to an empty path")
+    finally:
+        if _was is None:
+            _os.environ.pop("SDI_WB_TEMPLATE", None)
+        else:
+            _os.environ["SDI_WB_TEMPLATE"] = _was
+
+    # The CALL SITE, not merely the definition -- "template_path()" alone also matches the
+    # `def` line, so a helper wired to nothing passed this check the first time it was run.
+    ok("tpl = template_path()" in _wb,
+       "populate_workbook must resolve the template through the override, not from CELL_MAP "
+       "directly — otherwise the override exists and does nothing")
+
+
 if __name__ == "__main__":
     sys.exit(main())
