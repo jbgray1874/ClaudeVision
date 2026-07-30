@@ -40,55 +40,76 @@ except Exception:  # pragma: no cover
 DEFAULT_MODEL = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
 SOURCE_NAME = "llm_full_extract"
 
-_PROMPT = """You are an experienced sheet-metal estimator reading a COMPLETE engineering drawing
-pack (all pages of one product) from SDI Displays. Below is the text and the BOM/parts tables
-extracted from every page, in order.
+_SCHEMA = """{
+  "drawing_info": {
+    "drawing_number": "", "revision": "", "title": "", "project": "", "client": "",
+    "drawn_by": "", "date": "", "scale": "", "material_general": "", "finish_general": "",
+    "colour": "", "tolerance_linear": "", "tolerance_angular": "", "notes": []
+  },
+  "bom": [
+    {"item_no": "", "part_number": "", "description": "", "qty": 0,
+     "material_family": "metal|acrylic|timber|wire|tube|bought_in|mixed|other",
+     "material": "", "thickness_or_section": "", "finish": "", "colour": "",
+     "is_fabricated": true, "is_bought_in": false,
+     "confidence": "high|medium|low",
+     "source": "explicit_bom_table|title_block|notes|inferred_from_views|filename",
+     "comments": ""}
+  ],
+  "routes": [
+    {"sequence": 10, "operation": "", "department": "", "part_numbers": [],
+     "material_family": "metal|acrylic|timber|wire|tube|mixed",
+     "description": "", "inferred": false, "confidence": "high|medium|low", "notes": ""}
+  ],
+  "assemblies": [{"part_number": "", "children": [{"part_number": "", "qty": 0}]}],
+  "spec": {"weld": null, "powder_micron": null, "tolerances": null,
+           "material_grades": [], "timber_note": null},
+  "warnings": [], "missing_information": [],
+  "extraction_confidence": "high|medium|low"
+}"""
 
-Your job: return the COMPLETE structured job — the assembly hierarchy and every part's detail —
-by reasoning over the WHOLE pack at once (the GA lists sub-assemblies; each sub-assembly has its
-own page listing its parts; each tube part has a cut-length table).
+# SHARED RULES. Both passes return the same shape; what differs is whether they are allowed
+# to fill a field the drawing does not state. Keeping the schema identical means the consumer
+# has one thing to read, and the `inferred` flag on every route — plus the `source` on every
+# BOM row — is what separates a reading from a judgement, per item rather than per pass.
+_COMMON_RULES = """
+MATERIAL FAMILIES. Classify every component: metal, acrylic, timber, wire, tube, bought_in.
+thickness_or_section uses the style that suits the family — "1.2mm" for sheet and acrylic,
+"18mm" for board, "\u00d86mm" for wire and round tube, "25x25x1.5 SHS" for box section.
 
-ABSOLUTE RULE — TRANSCRIBE, NEVER INVENT: every value you output must be PRINTED somewhere in the
-pack. Never compute, estimate, or guess. If something is not printed, use null. Read part numbers,
-quantities, lengths and weights EXACTLY as printed.
+MIXED ASSEMBLIES. Keep components PURE. Only a top-level assembly, or a sub-assembly that
+genuinely combines materials, is "mixed" — never force one material onto everything under it.
+Generate separate process steps per material stream, then a final assembly step that brings
+them together with material_family "mixed". A finish stated for the metal parts belongs to
+those part numbers only; do not spread it across acrylic or timber that is not coated.
+
+DEPARTMENTS are the shop's own: Laser (Metal), Laser (Acrylic), Fold, Linebend, Tubebend,
+Saw, CNC / Joinery machining, Edge Banding, Gluing / Bonding, Weld (CO2), Spotweld,
+Dress Welds, P.Coat, Spray / Wet Paint, Diamond Polish, Robomac, Assemble/pack (Metal),
+Assemble/pack (Acrylic), Manual labour (Metal).
+
+Never invent a part number or a quantity. Put anything you could not find in
+missing_information, and anything that looked wrong in warnings.
+"""
+
+_PROMPT = """You are an expert manufacturing engineer specialising in multi-material
+fabrication (sheet metal, acrylic, timber, wire, tube and display/POS work), reading a
+COMPLETE drawing pack from SDI Displays. Below is the text and the tables from every page.
+
+ABSOLUTE RULE FOR THIS PASS — TRANSCRIBE, NEVER INVENT. Every value you output must be
+PRINTED somewhere in the pack. Never compute, estimate or guess. If something is not printed,
+leave it empty or null. This is what makes the result trustworthy; a second pass will fill the
+gaps and will be labelled differently.
+
+Accordingly: every route you return must have inferred=false and be justified by something the
+drawing SAYS — a finish note, a weld callout, "TAP M4", "DEBURR ALL EDGES", "POWDER COATED".
+Do NOT propose a process because a part looks like it would need one. Return an empty routes
+list rather than a plausible one.
 
 Return ONLY valid JSON (no markdown) in this shape:
-{
-  "top_assembly": "<GA drawing number>",
-  "bom": [                          // the GA's own top-level line items, verbatim
-    {"part_number": "...", "description": "...", "qty": <int>, "is_assembly": <true/false>}
-  ],
-  "assemblies": [                   // each sub-assembly and the parts it contains
-    {"part_number": "...", "children": [{"part_number": "...", "qty": <int>}]}
-  ],
-  "parts": [                        // every fabricated/bought part, printed detail only
-    {"part_number": "...", "description": "...", "material": null,
-     "thickness_mm": null, "tube_section": null, "cut_length_mm": null,
-     "overall_size_mm": null, "weight_g": null, "finish": null,
-     "hole_count": null, "fold_or_bend": null, "is_bought_in": <true/false>,
-     "operations_printed": []}
-  ],
-  "spec": {"weld": null, "powder_micron": null, "tolerances": null,
-           "material_grades": [], "timber_note": null}
-}
-Rules: qty must be the PRINTED quantity. A row is is_assembly=true only if it has its own parts
-page in this pack. tube_section like "30 x 30 x 1.5mm". weight_g only a printed weight. Do not
-merge distinct part numbers. Do not drop any BOM row.
-
-operations_printed: the manufacturing operations the DRAWING ITSELF STATES for that part —
-in notes, callouts, the title block or the finish field. These packs say a great deal out
-loud: "POWDER COATED", "ALL WELDS TO BE TIG", "TAP M4", "DEBURR ALL EDGES", "LINE BEND",
-"CSK", "FOLD". Read them; they are printed, so transcribing them is your job, and an
-operation the drawing names is worth far more than one anybody works out later.
-
-Use ONLY these names: laser_cutting, punch, saw, tube_cut, folding, rolling, tube_bending,
-welding, dress_welds, hole_machining, tapping, deburring, cnc_routing, edge_banding, glue,
-powder_coating, wet_spray, diamond_polish, wire_forming, handling.
-
-A finish stated for the whole assembly is printed for that assembly — put it on the assembly
-row, not on parts it does not name. Do NOT add an operation because the part looks like it
-would need one: that is the other pass's job, and it is labelled differently for a reason.
-Empty list when the drawing states nothing.
+""" + _SCHEMA + _COMMON_RULES + """
+Every bom row needs its `source`: explicit_bom_table where you read it from a parts table,
+title_block / notes where the drawing states it elsewhere, filename where that is all there is.
+qty must be the PRINTED quantity. A part is is_bought_in only where the drawing says so.
 """
 
 
@@ -218,38 +239,31 @@ if __name__ == "__main__":
 
 INFERENCE_SOURCE = "inference"
 
-_INFER_PROMPT = """You are an experienced sheet-metal estimator at SDI Displays. You have
-already transcribed everything PRINTED on this drawing pack. Some parts still have no material,
-no size and no manufacturing route, because the drawing does not state them per part.
+_INFER_PROMPT = """You are an expert manufacturing engineer at SDI Displays, working in
+sheet metal, acrylic, timber, wire and tube.
 
-Your job now is the opposite of transcription: say what an estimator would CONCLUDE, so the
-part can be costed at all. This is explicitly inference and will be labelled as such.
+Everything PRINTED on this pack has already been transcribed. What follows are the parts that
+still have no material, no size or no route — because the drawing does not state them. A GA-only
+pack prints almost nothing per part, and a part with nothing against it cannot be costed or
+routed at all: it reaches the estimate as a zero.
 
-Below: the pack text, the BOM, and the parts that are still missing detail.
+Your job now is the opposite of transcription. Say what an experienced estimator would CONCLUDE
+from the same page, so the job can be costed. This is explicitly inference, it is labelled as
+such, and it is ranked below every printed or measured value — it can only fill a hole, never
+overwrite a fact.
 
-For EVERY part listed as missing detail, return:
-  - material            the family, e.g. "MILD STEEL". If the pack states a material anywhere
-                        and nothing contradicts it for this part, that is the answer.
-  - stock_form          one of: sheet, tube, section, wire, bar, board, acrylic, bought_in
-  - thickness_mm        wall or sheet thickness if the views imply one, else null
-  - tube_section        e.g. "12.7 dia x 1.2 wall" or "25 x 25 x 1.5" if a tube, else null
-  - cut_length_mm       only if the views give a length for it, else null
-  - operations          the route, from this vocabulary ONLY:
-                        laser_cutting, punch, saw, tube_cut, folding, rolling, tube_bending,
-                        welding, dress_welds, hole_machining, tapping, deburring,
-                        cnc_routing, edge_banding, glue, powder_coating, wet_spray,
-                        diamond_polish, wire_forming, handling
-  - reason              one sentence, citing what on the drawing led you there
-
-RULES
-- An operation must be justified by the part's nature or the drawing, not by habit. A tube in a
-  welded assembly is cut and welded. A plate with a stated WALL is folded. Do not add grinding,
-  polishing or machining unless something indicates it.
-- Finish applied to the assembly applies to the parts that make it up.
-- If you genuinely cannot tell, use null. A null is honest; a guess dressed as a reading is not.
-- Return ONLY valid JSON: {"parts": [{"part_number": "...", "material": ..., "stock_form": ...,
-  "thickness_mm": ..., "tube_section": ..., "cut_length_mm": ..., "operations": [...],
-  "reason": "..."}]}
+Return ONLY valid JSON in this shape:
+""" + _SCHEMA + _COMMON_RULES + """
+FOR THIS PASS
+- Every route you return must have inferred=true. Set confidence honestly: "high" for a tube in
+  a welded assembly needing cutting and welding, "low" where you are reading the room.
+- Include a bom row ONLY for a part listed below as missing detail, and set its `source` to
+  inferred_from_views. Do not restate parts that were already read.
+- Justify each route in `notes`, citing what on the drawing led you there.
+- A finish applied to an assembly applies to the parts that make it up — but only the ones it
+  would actually be applied to.
+- If you genuinely cannot tell, leave it null and say so in missing_information. A null is
+  honest; a guess dressed as a reading is not, and this engine has been burned by exactly that.
 """
 
 

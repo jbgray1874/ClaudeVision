@@ -3320,35 +3320,47 @@ def test_transcription_and_inference_are_separate_passes():
     """M&S 2085's LLM extract came back with every part field null — material 0, thickness 0,
     tube 0 — on a pack whose text plainly says MATERIAL: MILD STEEL, 1.2 WALL and 12.7.
 
-    The model was not underperforming. It was obeying its instruction: "every value you output
-    must be PRINTED somewhere in the pack... if something is not printed, use null". MILD STEEL
-    is printed once, at assembly level, and the tubes are dimensioned on the views — so a
-    strict transcriber correctly returns null, and the estimate books no material for two of
-    three parts and no operation at all for either tube.
+    The model was not underperforming. It was obeying its instruction: every value must be
+    PRINTED, and if it is not printed, use null. MILD STEEL is printed once at assembly level
+    and the tubes are dimensioned on the views, so a strict transcriber correctly returns
+    nothing — and the job books no material for two of three parts, no operation at all for
+    either tube, and GBP 2.00 of labour on a welded bracket.
 
-    What was missing is not better transcription. It is the judgement an estimator applies
-    after reading the same page. So there are two passes with opposite rules, and the second
-    is stamped `inference` — the lowest rank in the waterfall — so it can never overwrite
-    something printed or measured. It fills holes that would otherwise be silent zeros."""
+    That rule stays: it is what makes the first pass trustworthy. What was missing is the
+    judgement an estimator applies after reading the same page, so there is a second pass with
+    the opposite rule, ranked below everything real."""
     import llm_full_extract as lfe
     from source_precedence import SOURCE_RANK
 
-    ok("TRANSCRIBE, NEVER INVENT" in lfe._PROMPT,
-       "the first pass still refuses to invent — that rule is why it can be trusted")
-    # The SCHEMA line, not just the word: "operations_printed" also appears in the rules
-    # paragraph, so a looser assertion stays true with the field deleted from what is returned.
-    ok('"operations_printed": []' in lfe._PROMPT,
-       "but it now reads the operations the drawing states out loud")
-    for _op in ("POWDER COATED", "TAP M4", "ALL WELDS TO BE TIG"):
-        ok(_op in lfe._PROMPT, f"naming the kind of callout it must not walk past: {_op}")
-    ok("that is the other pass's job" in lfe._PROMPT,
-       "and it is told not to infer, so the two passes cannot blur")
+    # One schema, two rules. The consumer reads one shape; `inferred` per route and `source`
+    # per BOM row separate a reading from a judgement item by item.
+    ok(lfe._SCHEMA in lfe._PROMPT and lfe._SCHEMA in lfe._INFER_PROMPT,
+       "both passes return the same shape")
+    ok(lfe._COMMON_RULES in lfe._PROMPT and lfe._COMMON_RULES in lfe._INFER_PROMPT,
+       "and share the material-family and mixed-assembly rules")
 
-    ok("opposite of transcription" in lfe._INFER_PROMPT,
-       "the second pass is explicitly the other thing")
-    ok("labelled as such" in lfe._INFER_PROMPT, "and knows it will be labelled")
-    ok("A null is honest" in lfe._INFER_PROMPT,
+    ok("TRANSCRIBE, NEVER INVENT" in lfe._PROMPT, "pass one may not invent")
+    ok("inferred=false" in lfe._PROMPT, "so every route it returns is a reading")
+    ok("Return an empty routes\nlist rather than a plausible one" in lfe._PROMPT,
+       "and it is told to return nothing rather than something plausible")
+    ok("opposite of transcription" in lfe._INFER_PROMPT, "pass two is the other thing")
+    ok("inferred=true" in lfe._INFER_PROMPT, "and everything it returns says so")
+    # Whitespace-insensitive: the prompt is wrapped for readability and a line break inside
+    # the sentence is not a change of meaning.
+    _flat = " ".join(lfe._INFER_PROMPT.split())
+    ok("A null is honest" in _flat,
        "with permission to decline, which is what stops it filling every field")
+    ok("cannot tell, leave it null" in _flat, "and an explicit instruction to do so")
+
+    # Multi-material: five families plus bought-in, and the mixed-assembly rule.
+    for fam in ("metal", "acrylic", "timber", "wire", "tube", "bought_in"):
+        ok(fam in lfe._SCHEMA, f"'{fam}' is a material family the schema knows")
+    ok("Keep components PURE" in lfe._COMMON_RULES,
+       "components are pure; only the assembly is mixed")
+    ok("those part numbers only" in lfe._COMMON_RULES,
+       "and a finish is not spread across parts it is not applied to")
+    for dept in ("Laser (Acrylic)", "Linebend", "Tubebend", "Edge Banding", "Robomac"):
+        ok(dept in lfe._COMMON_RULES, f"the shop's own department name is used: {dept}")
 
     # The rank is the whole safety argument: inference must lose to everything real.
     _inf = SOURCE_RANK.get(lfe.INFERENCE_SOURCE)
@@ -3370,20 +3382,21 @@ def test_transcription_and_inference_are_separate_passes():
     ok("2085-01" not in _asked, "one the drawing described is left as the drawing described it")
     ok("BI-KNOB" not in _asked, "and a bought-in is not something we route")
 
-    # No model reachable in the test environment: the pass must return empty, not raise.
     eq(lfe.infer_missing_details("ctx", [], []), {}, "nothing missing, nothing asked")
 
-    # BUILT IS NOT WIRED. The previous commit added the module and connected nothing, and the
-    # one before that did the same with the CAD inventory. A capability nothing calls looks
-    # exactly like a capability that does not work.
+    # BUILT IS NOT WIRED. Three times this session a capability went in with nothing calling
+    # it. A capability nothing calls looks exactly like one that does not work.
     _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
     ok("infer_missing_details(" in _fs, "the inference pass is actually called by the scan")
     ok("parts_missing_detail(" in _fs, "on the parts the first pass left empty")
     ok('_job["inferred_parts"]' in _fs, "and its result is kept on the job")
     _lj = open(__import__("source_connectors.llm_full_job", fromlist=["x"]).__file__,
                encoding="utf-8").read()
-    ok('jp.get("operations_printed")' in _lj,
-       "and the operations the drawing states are read into the part record")
+    ok("apply_routes_to_parts(parts, job)" in _lj,
+       "and the extracted route is folded onto the parts it names")
+    ok('"inference" if route.get("inferred")' in _lj,
+       "with the model's own inferred flag deciding the source rank, so a concluded "
+       "operation never outranks a measured one")
 
 
 def main() -> int:

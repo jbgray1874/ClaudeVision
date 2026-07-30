@@ -272,27 +272,49 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 _flagged = True
                 out["tube"] += 1
 
-        # OPERATIONS THE DRAWING STATES OUT LOUD. These packs say a great deal — POWDER
-        # COATED, ALL WELDS TO BE TIG, TAP M4, DEBURR ALL EDGES — and none of it was being
-        # asked for or read. An operation the drawing NAMES is printed evidence, so it is
-        # added here at transcription strength rather than left to be worked out later.
-        # Additive only: an op the engine already found is not duplicated, and nothing is
-        # removed, because this pass cannot see what a measurement ruled out.
-        _printed = [str(o).strip().lower() for o in (jp.get("operations_printed") or [])
-                    if str(o).strip()]
-        if _printed:
-            _ops = part.setdefault("textual_operations", [])
-            if isinstance(_ops, list):
-                _added = [o for o in _printed if o not in _ops]
-                if _added:
-                    _ops.extend(_added)
-                    part.setdefault("operation_sources", {}).update(
-                        {o: "llm_full_extract" for o in _added})
-                    out["operations"] = out.get("operations", 0) + len(_added)
-                    _flagged = True
-
         if _flagged:
             part.setdefault("review_flags", []).append(
                 "enriched from whole-document LLM extract (transcribed from drawing — verify)")
 
+    out["operations"] += apply_routes_to_parts(parts, job)
     return out
+
+
+def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> int:
+    """Fold the extracted ROUTE onto the parts it names.
+
+    These packs say a great deal out loud — POWDER COATED, ALL WELDS TO BE TIG, TAP M4 — and
+    none of it reached a part record, so M&S 2085 booked no operation at all for either tube
+    and GBP 2.00 of labour on a welded bracket.
+
+    Additive only, and never subtractive: this pass cannot see what a measurement ruled out,
+    and 12120 spent three commits proving how easily a fold grows back. An operation already
+    on the part is left alone; a new one is added with its source recorded, so a route the
+    model INFERRED is distinguishable from one the drawing stated for the rest of its life.
+    """
+    added = 0
+    for route in (job.get("routes") or []):
+        if not isinstance(route, dict):
+            continue
+        op = str(route.get("operation") or "").strip().lower().replace(" ", "_")
+        if not op:
+            continue
+        # `inferred` is the model's own word for whether it read this or concluded it, and it
+        # decides the source rank: a stated operation is transcription, a concluded one is
+        # inference and must never outrank a measurement.
+        src = "inference" if route.get("inferred") else "llm_full_extract"
+        wanted = {_clean_pn(p) for p in (route.get("part_numbers") or []) if p}
+        for part in parts:
+            if not isinstance(part, dict) or _clean_pn(part.get("part_number")) not in wanted:
+                continue
+            ops = part.setdefault("textual_operations", [])
+            if not isinstance(ops, list) or op in ops:
+                continue
+            ops.append(op)
+            part.setdefault("operation_sources", {})[op] = src
+            part.setdefault("review_flags", []).append(
+                f"operation '{op}' {'INFERRED' if route.get('inferred') else 'read'} from the "
+                f"drawing pack ({route.get('confidence') or 'confidence unstated'})"
+                + (f": {route.get('notes')}" if route.get("notes") else ""))
+            added += 1
+    return added
