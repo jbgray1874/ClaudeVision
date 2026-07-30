@@ -319,6 +319,46 @@ _TUBE_OP_REMAP = {
 
 
 
+
+def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
+    """Best-available unit price for a BOM line (mirrors the per-row logic below).
+    Used to sum consolidated overflow value. Withheld/unpriced -> None."""
+    if _pe.get("_price_explicitly_withheld"):
+        return None
+    _me = _pe.get("material_estimate") or {}
+    _p = _safe(_pe.get("unit_cost_gbp") or _pe.get("unit_material_cost_gbp")
+               or _me.get("unit_material_cost_gbp"))
+    if _p is None:
+        # THE BOM PRICE COLUMN IS A MATERIAL COLUMN.
+        #
+        # This fell back to extended_total_cost_gbp, which is the part's WHOLE unit cost
+        # -- material AND labour. On a fabricated part with no material price that puts
+        # its labour in the material column: M&S 2085's tubes showed GBP 19.25 each,
+        # which is GBP 17.80 of powder-coating labour, GBP 0.71 weld, GBP 0.33 dress and
+        # GBP 0.42 handling. Not one penny of it is tube.
+        #
+        # It read as an impossible material price -- 60 metres of stock per bracket --
+        # and it is about to become worse than misleading: now that a routed operation
+        # reaches the labour block, those same operations get their own rows and the
+        # labour is counted twice.
+        #
+        # Material only. A part whose material nobody could price is UNPRICED, and says
+        # so, which is the honest answer and the one an estimator can act on.
+        _ext_mat = _safe(_pe.get("extended_material_cost_gbp")
+                         or _me.get("extended_material_cost_gbp"))
+        _q = int(_safe(_pe.get("quantity"), 1) or 1)
+        if _ext_mat is not None and _q > 0:
+            _p = round(_ext_mat / _q, 4)
+        else:
+            # The whole-total fallback survives ONLY where there is no labour to
+            # contaminate it -- a genuine bought-in, which is what it was written for.
+            _lab = (_pe.get("labour_estimate") or {}).get("costs_gbp") or {}
+            if not _lab:
+                _ext = _safe(_pe.get("extended_total_cost_gbp"))
+                if _ext is not None and _q > 0:
+                    _p = round(_ext / _q, 4)
+    return _p
+
 def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
     """part number -> the operations on its RAW record.
 
@@ -454,7 +494,14 @@ def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[
 # (tube-bending and line-bending) that get REMAPPED above, not dropped.
 # Only operations that serve no purpose at all go here.
 _SPURIOUS_OPS_BY_STOCK_FORM = {
-    "tube": {"punch", "punching"},   # tubes are not punched (no flat blank to punch)
+    # A TUBE HAS NO FLAT BLANK, SO IT IS NEITHER PUNCHED NOR PROFILE-LASERED.
+    # 2085's tubes carried laser_cutting, inherited from the shared assembly page the
+    # plate's route was read off. Nothing measured says either tube is laser-profiled --
+    # they are sawn to length and welded in -- and now that a routed operation reaches the
+    # labour block, that inherited op would have booked a laser cut on both of them.
+    # Dropped, and the drop is flagged by name where it happens, so if SDI ever profiles
+    # tube on a tube laser this is one line and the flag says which parts it affected.
+    "tube": {"punch", "punching", "laser", "laser_cutting", "laser_metal", "guillotine"},
     # A solid round bar has NO FLAT BLANK. It cannot be lasered, folded, punched,
     # line-bent, guillotined or diamond-polished. It is cut (Robomac / Saw) and welded.
     # 1310-02 STUD (8mm dia x 65) was carrying Laser £4.91 from the original misread
@@ -1072,20 +1119,6 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     b = cm["bom"]
 
-    def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
-        """Best-available unit price for a BOM line (mirrors the per-row logic below).
-        Used to sum consolidated overflow value. Withheld/unpriced -> None."""
-        if _pe.get("_price_explicitly_withheld"):
-            return None
-        _me = _pe.get("material_estimate") or {}
-        _p = _safe(_pe.get("unit_cost_gbp") or _pe.get("unit_material_cost_gbp")
-                   or _me.get("unit_material_cost_gbp"))
-        if _p is None:
-            _ext = _safe(_pe.get("extended_total_cost_gbp"))
-            _q = int(_safe(_pe.get("quantity"), 1) or 1)
-            if _ext is not None and _q > 0:
-                _p = round(_ext / _q, 4)
-        return _p
 
     # ── EVERY FABRICATED PART APPEARS IN THE BILL OF MATERIALS ─────────────────────
     #
@@ -1241,13 +1274,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"the sheet with its code and supplier — ESTIMATOR TO PRICE. Not an "
                       f"error.", flags)
         else:
-            price = _safe(pe.get("unit_cost_gbp")
-                          or pe.get("unit_material_cost_gbp")
-                          or me.get("unit_material_cost_gbp"))
-            if price is None:
-                ext = _safe(pe.get("extended_total_cost_gbp"))
-                if ext is not None and qty > 0:
-                    price = round(ext / qty, 4)
+            # ONE price chain, not two. This was a hand-copy of _bom_line_price with the
+            # same whole-total fallback, so fixing the helper alone would have left the
+            # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
+            # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
+            price = _bom_line_price(pe)
         ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
@@ -1563,6 +1594,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _routed_in = []
     for p in bom_parts:
         if id(p) in _already or not isinstance(p, dict):
+            continue
+        # A CROSS-REFERENCE ROW IS A DISPLAY LINE, NOT A PART.
+        #
+        # The BOM list carries a GBP 0.00 row for each fabricated part so the bill of
+        # materials reads as the parts list it claims to be. That row is a stub with the
+        # same part number as the real record — so this gate matched its route and put it in
+        # the labour block as a SECOND copy of a part already there. 2085 booked Weld,
+        # Dress Welds and P.Coat at qty 4 across three parts, and grew a second bare
+        # "Laser (Metal) (2085-01)" row beside the real one. The cross-reference exists to
+        # stop a double count in the material column; it must not create one in labour.
+        if p.get("_bom_cross_reference") or p.get("_bom_overflow_consolidated"):
             continue
         _ops = set(_route_by_pn.get(str(p.get("part_number") or "").strip().upper(), []))
         for _k in ("textual_operations", "operations", "inferred_operations"):

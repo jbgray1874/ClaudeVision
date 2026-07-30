@@ -4757,5 +4757,94 @@ def test_the_route_and_the_cost_live_on_different_records():
        "and the union uses it, so its operations become rows")
 
 
+def test_the_bom_price_column_is_a_material_column():
+    """M&S 2085's tubes showed GBP 19.25 each in the Bill of Materials Price column, and not
+    one penny of it is tube.
+
+    The canonical JSON breaks it down: GBP 17.80 powder-coating labour, GBP 0.71 weld,
+    GBP 0.33 dress welds, GBP 0.42 handling. Material: unpriced. The price chain fell back to
+    extended_total_cost_gbp — the part's WHOLE unit cost, labour included — so a fabricated
+    part with no material price displayed its labour as material.
+
+    It read as an impossible material price (60 metres of stock per bracket, which is what I
+    spent a round deriving from it) and it is about to become worse than misleading: now that
+    a routed operation reaches the labour block, those same operations get their own rows and
+    the labour is counted twice.
+    """
+    from wb_populate import _bom_line_price
+
+    # A fabricated tube: no material price, a labour bundle. The bundle must NOT appear.
+    tube = {"part_number": "2085-02", "quantity": 1,
+            "labour_estimate": {"costs_gbp": {"powder_coating": 17.80, "welding": 0.71,
+                                              "dress_welds": 0.33, "handling": 0.42}},
+            "extended_total_cost_gbp": 19.25}
+    eq(_bom_line_price(tube), None,
+       "a part whose material nobody could price is UNPRICED — not priced at its labour")
+
+    # Material that IS known still comes through, by every legitimate route.
+    eq(_bom_line_price({"part_number": "X", "quantity": 1, "unit_cost_gbp": 3.13}), 3.13,
+       "a bought-in unit price is used")
+    eq(_bom_line_price({"part_number": "Y", "quantity": 2,
+                        "extended_material_cost_gbp": 8.0,
+                        "labour_estimate": {"costs_gbp": {"welding": 5.0}},
+                        "extended_total_cost_gbp": 40.0}), 4.0,
+       "extended MATERIAL divided by qty — never the total, even when a total exists")
+
+    # The whole-total fallback survives where it was written to work: a genuine bought-in
+    # with no labour at all, whose price is only recorded as an extended figure.
+    eq(_bom_line_price({"part_number": "BI-KNOB", "quantity": 4,
+                        "extended_total_cost_gbp": 10.0}), 2.5,
+       "a bought-in with no labour still resolves from its extended total")
+
+    # ONE CHAIN. The row was written by a hand-copy of this helper carrying the same bug, so
+    # fixing the helper alone would have corrected an overflow sum nobody sees and left the
+    # sheet showing GBP 19.25.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    eq(_wb.count("price = _bom_line_price(pe)"), 1,
+       "the BOM row uses the helper rather than a copy of it")
+    ok("ext = _safe(pe.get(\"extended_total_cost_gbp\"))" not in _wb,
+       "and the duplicated whole-total fallback is gone")
+
+
+def test_a_tube_is_not_laser_profiled():
+    """2085's tubes carried laser_cutting, inherited from the shared assembly page the
+    plate's route was read off. A tube has no flat blank to profile — it is sawn to length
+    and welded in — and now that a routed operation reaches the labour block, that inherited
+    op would have booked a laser cut on both tubes."""
+    from wb_populate import _is_spurious_operation
+
+    for _op in ("laser_cutting", "laser", "punch", "guillotine"):
+        ok(_is_spurious_operation(_op, "tube", "MILD_STEEL"),
+           f"'{_op}' is meaningless on tube stock")
+    for _op in ("saw", "tube_cut", "welding", "tube_bending", "powder_coating"):
+        ok(not _is_spurious_operation(_op, "tube", "MILD_STEEL"),
+           f"'{_op}' is real work on a tube and must survive")
+
+    # Sheet is unaffected — this is keyed on stock form, not on a part number.
+    ok(not _is_spurious_operation("laser_cutting", "sheet", "MILD_STEEL"),
+       "a sheet part is still lasered")
+
+
+def test_a_cross_reference_row_is_not_a_second_part():
+    """The BOM list carries a GBP 0.00 row for each fabricated part so the bill of materials
+    reads as the parts list it claims to be. That row is a STUB with the same part number as
+    the real record — and the route-based labour gate matched its route and put it in the
+    labour block as a second copy of a part already there.
+
+    2085 booked Weld, Dress Welds and P.Coat at qty 4 across three parts, and grew a second
+    bare "Laser (Metal) (2085-01)" row beside the real one. The cross-reference exists to
+    stop a double count in the material column; it must not create one in labour.
+    """
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok('if p.get("_bom_cross_reference") or p.get("_bom_overflow_consolidated"):' in _wb,
+       "the labour gate skips display-only rows")
+
+    # Mirror-free check of the marker contract: the row that gets written carries the flag
+    # the gate looks for, so the two cannot drift apart.
+    ok('"_bom_cross_reference": True' in _wb, "and the row is written carrying that marker")
+    ok('"_bom_overflow_consolidated": True' in _wb,
+       "as is the consolidated overflow line, which is equally not a part")
+
+
 if __name__ == "__main__":
     sys.exit(main())
