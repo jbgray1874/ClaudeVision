@@ -162,8 +162,31 @@ def _parse(raw: str) -> Optional[Dict[str, Any]]:
     return obj if isinstance(obj, dict) else None
 
 
-def _call_llm(context: str, model: str) -> Optional[str]:
-    """One TEXT chat call over the whole-document context (xAI OpenAI-compatible)."""
+# THE SYSTEM MESSAGE IS PART OF THE PROMPT, AND THE TWO PASSES NEED OPPOSITE ONES.
+#
+# This function used to hardcode the transcription prompt AND "Never invent" into every call,
+# then append whatever the caller passed as if it were the drawing pack. So the inference pass
+# — whose whole purpose is to conclude what the drawing does not print — was sent
+# "TRANSCRIBE, NEVER INVENT... return an empty routes list rather than a plausible one" FIRST,
+# and its own instructions second. It obeyed the first one. That is why the second pass came
+# back all nulls with no routes, and why the same model in a chat window did better than this
+# engine did: the chat window was not being told to refuse before it was asked to answer.
+#
+# The caller now owns its whole message. Nothing is prepended.
+SYSTEM_TRANSCRIBE = "You transcribe engineering drawings to JSON. Never invent."
+SYSTEM_INFER = (
+    "You are a manufacturing estimator reading an engineering drawing pack and answering in "
+    "JSON. You are being asked what the drawing IMPLIES, not what it prints — say what an "
+    "experienced estimator would conclude, label every conclusion as inferred, and return null "
+    "where you genuinely cannot tell rather than a guess dressed up as a reading."
+)
+
+
+def _call_llm(user_content: str, model: str,
+              system: str = SYSTEM_TRANSCRIBE) -> Optional[str]:
+    """One TEXT chat call (xAI OpenAI-compatible). `user_content` is the COMPLETE user message —
+    prompt and payload both — because a caller whose prompt gets something else stapled in
+    front of it is not in control of what it asked."""
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
         raise RuntimeError("XAI_API_KEY not set (C:\\ClaudeVision\\.env or $env:XAI_API_KEY).")
@@ -172,8 +195,8 @@ def _call_llm(context: str, model: str) -> Optional[str]:
     resp = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "You transcribe engineering drawings to JSON. Never invent."},
-            {"role": "user", "content": _PROMPT + "\n\n--- DRAWING PACK ---\n" + context},
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
         ],
         temperature=0,
     )
@@ -189,7 +212,8 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
         result["error"] = "no document context (pdfplumber missing or empty PDF)"
         return result
     try:
-        raw = _call_llm(ctx, model)
+        raw = _call_llm(_PROMPT + "\n\n--- DRAWING PACK ---\n" + ctx, model,
+                        system=SYSTEM_TRANSCRIBE)
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
@@ -281,19 +305,126 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
             f"===== PARTS STILL MISSING DETAIL =====\n"
             f"{json.dumps(missing, ensure_ascii=False)}\n"
         )
-        raw = _call_llm(payload, model)
+        raw = _call_llm(payload, model, system=SYSTEM_INFER)
         parsed = _parse(raw) if raw else None
     except Exception:
         return {}
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("parts"), list):
+    if not isinstance(parsed, dict):
         return {}
+
+    # The schema calls the component list `bom`; the prompt above also talks about "parts".
+    # Accept either rather than returning nothing because the model picked the other word —
+    # a shape mismatch that silently drops the whole pass is the most expensive kind of bug
+    # here, because it looks exactly like a model that had nothing to say.
+    rows = parsed.get("parts")
+    if not isinstance(rows, list) or not rows:
+        rows = parsed.get("bom") if isinstance(parsed.get("bom"), list) else []
     out = []
-    for row in parsed["parts"]:
+    for row in rows:
         if not isinstance(row, dict) or not row.get("part_number"):
             continue
         row["source"] = INFERENCE_SOURCE
         out.append(row)
-    return {"source": INFERENCE_SOURCE, "parts": out, "found": bool(out)}
+
+    # ROUTES ARE THE POINT OF THIS PASS, AND THEY WERE BEING THROWN AWAY.
+    # _INFER_PROMPT says "Every route you return must have inferred=true", and
+    # apply_routes_to_parts already ranks an inferred route below a stated one. Neither could
+    # ever fire, because this function returned parts only. £2.00 of labour on a welded
+    # three-part bracket was the visible end of that.
+    routes = []
+    for r in (parsed.get("routes") or []):
+        if not isinstance(r, dict) or not str(r.get("operation") or "").strip():
+            continue
+        r["inferred"] = True   # whatever it claimed: this pass is inference by construction
+        routes.append(r)
+
+    return {"source": INFERENCE_SOURCE, "parts": out, "routes": routes,
+            "warnings": parsed.get("warnings") or [],
+            "missing_information": parsed.get("missing_information") or [],
+            "found": bool(out or routes)}
+
+
+# Which datum a field on an inferred row fills. Kept explicit so a new schema key cannot
+# quietly start overwriting a transcribed value just by existing.
+_INFERABLE_FIELDS = ("material", "material_family", "thickness_mm", "tube_section",
+                     "cut_length_mm", "overall_size_mm", "finish", "colour", "weight_g")
+
+
+def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str, int]:
+    """Fold the second pass into the job IN PLACE, gap-fill only, per datum.
+
+    A transcribed value is a reading and always wins; inference can only occupy a hole the
+    transcription left. Every field this fills is recorded in the row's `field_sources` so the
+    distinction survives into the estimate and onto the sheet, rather than being a fact about
+    which pass happened to run.
+
+    Returns counts. Doing the merge here — not at the call site — is deliberate: this is the
+    part with the rules in it, and the call site is the part that cannot be tested.
+    """
+    counts = {"fields": 0, "parts_added": 0, "routes": 0}
+    if not isinstance(job, dict) or not isinstance(inference, dict):
+        return counts
+
+    parts = job.get("parts")
+    if not isinstance(parts, list):
+        parts = []
+        job["parts"] = parts
+    by_pn = {}
+    for p in parts:
+        if isinstance(p, dict) and p.get("part_number"):
+            by_pn[str(p["part_number"]).strip().upper()] = p
+
+    for row in (inference.get("parts") or []):
+        if not isinstance(row, dict) or not row.get("part_number"):
+            continue
+        pn = str(row["part_number"]).strip().upper()
+        target = by_pn.get(pn)
+        if target is None:
+            # A part the transcription never listed at all. Added whole, and every field on it
+            # is inference — it is better costed and flagged than absent and silent.
+            new_row = dict(row)
+            new_row["source"] = INFERENCE_SOURCE
+            new_row["field_sources"] = {k: INFERENCE_SOURCE for k in _INFERABLE_FIELDS
+                                        if row.get(k) not in (None, "", [])}
+            parts.append(new_row)
+            by_pn[pn] = new_row
+            counts["parts_added"] += 1
+            continue
+        srcs = target.setdefault("field_sources", {})
+        for key in _INFERABLE_FIELDS:
+            val = row.get(key)
+            if val in (None, "", []):
+                continue
+            if target.get(key) not in (None, "", []):
+                continue          # transcribed — a reading beats a conclusion, always
+            target[key] = val
+            srcs[key] = INFERENCE_SOURCE
+            counts["fields"] += 1
+
+    routes = job.get("routes")
+    if not isinstance(routes, list):
+        routes = []
+        job["routes"] = routes
+    # An operation the transcription already read for the same part is not repeated: it is
+    # already there at the higher rank, and adding it again would only make it look inferred.
+    seen = {(str(r.get("operation") or "").strip().lower(), str(p).strip().upper())
+            for r in routes if isinstance(r, dict)
+            for p in (r.get("part_numbers") or [])}
+    for r in (inference.get("routes") or []):
+        if not isinstance(r, dict):
+            continue
+        op = str(r.get("operation") or "").strip().lower()
+        pns = [str(p).strip().upper() for p in (r.get("part_numbers") or []) if p]
+        keep = [p for p in pns if (op, p) not in seen]
+        if pns and not keep:
+            continue
+        r["part_numbers"] = keep or pns
+        r["inferred"] = True
+        routes.append(r)
+        for p in keep:
+            seen.add((op, p))
+        counts["routes"] += 1
+    return counts
 
 
 def parts_missing_detail(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

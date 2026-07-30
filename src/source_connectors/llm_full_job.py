@@ -160,6 +160,14 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     Returns counts of what changed."""
     out = {"material": 0, "weight": 0, "thickness": 0, "tube": 0, "assembly_flagged": 0,
            "qty": 0, "operations": 0, "inferred": 0}
+
+    def _src(jp: Dict[str, Any], field: str) -> str:
+        """Which pass produced this datum. The second (inference) pass merges into the same
+        part rows as the first, marking what it filled in `field_sources`; without reading it
+        back here an inferred material would reach the estimate indistinguishable from one
+        printed on the drawing, which is the difference between a reading and a judgement."""
+        fs = jp.get("field_sources")
+        return str((fs or {}).get(field) or SOURCE_NAME)
     if not isinstance(job, dict) or not job.get("found") or not isinstance(parts, list):
         return out
 
@@ -228,6 +236,12 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
             if not _cur_mat:
                 # gap fill — engine had nothing
                 part["normalized_material"] = _new_mat
+                part["material_source"] = _src(jp, "material")
+                if part["material_source"] == "inference":
+                    part.setdefault("review_flags", []).append(
+                        f"material '{_new_mat}' INFERRED — the drawing does not print one for "
+                        f"this part; verify before quoting firm")
+                    out["inferred"] += 1
                 _flagged = True
                 out["material"] += 1
             elif (not _dxf_backed
@@ -254,6 +268,11 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         thk = _num(jp.get("thickness_mm"))
         if thk and thk > 0 and not _num(part.get("normalized_thickness_mm")):
             part["normalized_thickness_mm"] = thk
+            part["thickness_source"] = _src(jp, "thickness_mm")
+            if part["thickness_source"] == "inference":
+                part.setdefault("review_flags", []).append(
+                    f"thickness {thk}mm INFERRED — not printed for this part; verify")
+                out["inferred"] += 1
             _flagged = True
             out["thickness"] += 1
 
@@ -267,7 +286,13 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
             ss = dict(ss) if isinstance(ss, dict) else {}
             _before_len = _num(ss.get("length_mm"))
             ss.update({"a": a, "b": b, "t": t, "length_mm": cut})
+            ss["source"] = _src(jp, "tube_section")
             part["section_stock"] = ss
+            if ss["source"] == "inference":
+                part.setdefault("review_flags", []).append(
+                    f"section {a}x{b}x{t} @ {cut}mm INFERRED from the views — not printed as a "
+                    f"section callout; verify the stock size before quoting firm")
+                out["inferred"] += 1
             if _before_len != cut:
                 _flagged = True
                 out["tube"] += 1

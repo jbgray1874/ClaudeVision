@@ -2043,7 +2043,8 @@ def _finalize_scan_summary(
                 # or a refusal all leave the job exactly as it is today.
                 try:
                     from llm_full_extract import (build_document_context,
-                                                  infer_missing_details, parts_missing_detail)
+                                                  infer_missing_details, merge_inference,
+                                                  parts_missing_detail)
                     _missing = parts_missing_detail(_job.get("parts") or [])
                     if _missing:
                         _inf = infer_missing_details(
@@ -2051,10 +2052,17 @@ def _finalize_scan_summary(
                             _job.get("bom") or [], _missing)
                         if _inf.get("found"):
                             _job["inferred_parts"] = _inf.get("parts")
-                            print(f"   [llm-inference] {len(_inf['parts'])} part(s) had no "
-                                  f"material or size printed — inferred route/spec, stamped "
-                                  f"'inference' (lowest rank, never overwrites a measurement)",
-                                  flush=True)
+                            _job["inferred_routes"] = _inf.get("routes")
+                            # MERGE, not stash. Stashing it on the job was the whole of the
+                            # last attempt: apply_full_job_to_pre_estimate reads job["parts"]
+                            # and job["routes"] and nothing else, so the inference sat beside
+                            # the job it was meant to complete and never reached a price.
+                            _mc = merge_inference(_job, _inf)
+                            print(f"   [llm-inference] {len(_inf.get('parts') or [])} part(s) had "
+                                  f"no material or size printed — filled {_mc['fields']} field(s), "
+                                  f"added {_mc['parts_added']} part(s) and {_mc['routes']} route(s), "
+                                  f"all stamped 'inference' (lowest rank, never overwrites a "
+                                  f"measurement)", flush=True)
                         else:
                             print(f"   [llm-inference] {len(_missing)} part(s) have nothing "
                                   f"printed to cost from and inference returned nothing — "
@@ -2071,10 +2079,12 @@ def _finalize_scan_summary(
                     "source": _job.get("source"),
                     "top_assembly": _job.get("top_assembly"),
                     "bom": _job.get("bom"),
+                    "routes": _job.get("routes"),
                     "assemblies": _job.get("assemblies"),
                     "parts": _job.get("parts"),
                     "spec": _job.get("spec"),
                     "inferred_parts": _job.get("inferred_parts"),
+                    "inferred_routes": _job.get("inferred_routes"),
                     "counts": _c,
                 }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "

@@ -3390,6 +3390,11 @@ def test_transcription_and_inference_are_separate_passes():
     ok("infer_missing_details(" in _fs, "the inference pass is actually called by the scan")
     ok("parts_missing_detail(" in _fs, "on the parts the first pass left empty")
     ok('_job["inferred_parts"]' in _fs, "and its result is kept on the job")
+    # KEPT IS NOT MERGED. The line above passed while the pass was a no-op: the result was
+    # stored at job["inferred_parts"], and apply_full_job_to_pre_estimate reads job["parts"]
+    # and job["routes"] and nothing else. "Kept on the job" was true and worthless.
+    ok("merge_inference(_job, _inf)" in _fs,
+       "and MERGED into the parts and routes the fold actually reads")
     _lj = open(__import__("source_connectors.llm_full_job", fromlist=["x"]).__file__,
                encoding="utf-8").read()
     ok("apply_routes_to_parts(parts, job)" in _lj,
@@ -3671,6 +3676,172 @@ def test_a_part_we_make_is_never_sent_to_the_market_for_a_price():
     finally:
         estimator._PRICING_SERVICE_SINGLETON = _saved
 
+
+def test_the_inference_pass_is_not_told_never_to_invent_first():
+    """The second pass came back all nulls, and the reason was in the message it was sent.
+
+    _call_llm hardcoded the TRANSCRIPTION prompt — "ABSOLUTE RULE FOR THIS PASS: TRANSCRIBE,
+    NEVER INVENT ... Return an empty routes list rather than a plausible one" — plus a system
+    message of "Never invent", and then appended whatever the caller passed as if it were the
+    drawing pack. So the inference pass, whose entire purpose is to conclude what the drawing
+    does not print, was told to refuse before it was asked to answer. It obeyed the first
+    instruction. Estimators got better results pasting the same pack into a chat window,
+    because the chat window was not being told that.
+
+    This asserts what actually goes ON THE WIRE. The first version of this fixture stubbed
+    _call_llm and inspected its arguments, which proved nothing: the defect was INSIDE
+    _call_llm, so replacing it made the mutation pass. The stub goes at the openai boundary
+    instead, and the real _call_llm builds the real message.
+    """
+    import sys as _sys
+    import types as _types
+    import llm_full_extract as lfe
+
+    sent = {}
+
+    class _FakeCompletions:
+        def create(self, model=None, messages=None, temperature=None):
+            sent["system"] = messages[0]["content"]
+            sent["user"] = messages[1]["content"]
+            eq(len(messages), 2, "one system message and one user message, nothing else")
+            _msg = _types.SimpleNamespace(content='{"parts": [], "routes": []}')
+            return _types.SimpleNamespace(choices=[_types.SimpleNamespace(message=_msg)])
+
+    class _FakeClient:
+        def __init__(self, **_kw):
+            self.chat = _types.SimpleNamespace(completions=_FakeCompletions())
+
+    _fake_openai = _types.ModuleType("openai")
+    _fake_openai.OpenAI = _FakeClient
+    _saved_mod = _sys.modules.get("openai")
+    _saved_key = os.environ.get("XAI_API_KEY")
+    _sys.modules["openai"] = _fake_openai
+    os.environ["XAI_API_KEY"] = "test-key-not-used"
+    try:
+        lfe.infer_missing_details("PACK TEXT", [], [{"part_number": "2085-02"}])
+    finally:
+        if _saved_mod is None:
+            _sys.modules.pop("openai", None)
+        else:
+            _sys.modules["openai"] = _saved_mod
+        if _saved_key is None:
+            os.environ.pop("XAI_API_KEY", None)
+        else:
+            os.environ["XAI_API_KEY"] = _saved_key
+
+    ok(sent, "the call was made at all")
+    ok("NEVER INVENT" not in sent.get("user", ""),
+       "the inference pass is not sent the transcription pass's absolute rule")
+    ok("Return an empty routes list rather than a plausible one" not in sent.get("user", ""),
+       "the inference pass is not told to return an empty routes list")
+    ok("the opposite of transcription" in sent.get("user", ""),
+       "it IS sent its own prompt")
+    ok("Never invent." != sent.get("system"),
+       "the inference pass does not run under the transcriber's system message")
+    ok("IMPLIES" in str(sent.get("system", "")),
+       "the inference pass runs under a system message that asks it to infer")
+
+
+def test_the_inference_pass_returns_the_routes_it_was_asked_for():
+    """_INFER_PROMPT says "Every route you return must have inferred=true", and
+    apply_routes_to_parts already ranks an inferred route below a stated one — but
+    infer_missing_details returned {"parts": [...]} and dropped `routes` on the floor. The
+    entire mechanism built for inferred routes could never fire. M&S 2085's welded three-part
+    bracket booked GBP 2.00 of labour with no operation at all against either tube.
+
+    Also accepts `bom` for the component list: the shared schema calls it that, and returning
+    nothing because the model used the schema's own word is the most expensive shape of bug
+    here — it is indistinguishable from a model that had nothing to say.
+    """
+    import llm_full_extract as lfe
+
+    _saved = lfe._call_llm
+    lfe._call_llm = lambda user_content, model, system=None: (
+        '{"bom": [{"part_number": "2085-02", "material": "MILD STEEL",'
+        ' "thickness_or_section": "25x25x1.5 SHS"}],'
+        ' "routes": [{"sequence": 10, "operation": "saw", "part_numbers": ["2085-02"],'
+        '  "inferred": false, "confidence": "high"}]}')
+    try:
+        got = lfe.infer_missing_details("PACK", [], [{"part_number": "2085-02"}])
+    finally:
+        lfe._call_llm = _saved
+
+    eq(len(got.get("routes") or []), 1, "the route survives the pass")
+    eq(got["routes"][0]["inferred"], True,
+       "a route from the inference pass is inferred whatever it claimed")
+    eq(len(got.get("parts") or []), 1, "a component list returned as `bom` is still read")
+    eq(got["parts"][0]["source"], "inference", "and it is stamped inference")
+    ok(got.get("found"), "a pass that produced routes and parts reports that it found something")
+
+
+def test_inference_fills_a_hole_and_never_overwrites_a_reading():
+    """merge_inference is the rule, so it is what gets tested.
+
+    A transcribed value is a reading; an inferred one is a conclusion. Per datum, not per
+    part: a part whose material was printed but whose section was not must take the inferred
+    section and keep the printed material. What was filled is recorded in field_sources, so
+    the distinction survives into the estimate instead of being a fact about which pass ran.
+    """
+    from llm_full_extract import merge_inference
+
+    job = {"parts": [{"part_number": "2085-02", "material": "MILD STEEL"}],
+           "routes": [{"operation": "welding", "part_numbers": ["2085-01"]}]}
+    inf = {"parts": [{"part_number": "2085-02", "material": "ALUMINIUM",
+                      "tube_section": "25x25x1.5 SHS", "cut_length_mm": 340},
+                     {"part_number": "2085-03", "material": "MILD STEEL"}],
+           "routes": [{"operation": "saw", "part_numbers": ["2085-02"]},
+                      {"operation": "welding", "part_numbers": ["2085-01"]}]}
+    counts = merge_inference(job, inf)
+
+    p = next(x for x in job["parts"] if x["part_number"] == "2085-02")
+    eq(p["material"], "MILD STEEL", "a printed material is not overwritten by an inferred one")
+    eq(p["tube_section"], "25x25x1.5 SHS", "but an empty section is filled")
+    eq(p["field_sources"].get("tube_section"), "inference", "and recorded as inference")
+    ok("material" not in p.get("field_sources", {}),
+       "the material the drawing printed is not relabelled inference")
+    eq(counts["parts_added"], 1, "a part the transcription never listed is added whole")
+
+    ops = [(r["operation"], tuple(r.get("part_numbers") or [])) for r in job["routes"]]
+    ok(("saw", ("2085-02",)) in ops, "the inferred route is added")
+    eq(len([o for o in ops if o[0] == "welding"]), 1,
+       "an operation already read for that part is not repeated as inferred")
+
+
+def test_an_inferred_route_reaches_the_part_and_says_it_was_inferred():
+    """The three previous attempts at this all built the mechanism and wired none of it: the
+    pass ran, stamped everything correctly, and stored the result at job["inferred_parts"] —
+    which apply_full_job_to_pre_estimate does not read. It reads job["parts"] and
+    job["routes"]. So the inference sat beside the job it was meant to complete.
+
+    This drives the whole chain: merge, then fold, then check the part.
+    """
+    from llm_full_extract import merge_inference
+    from source_connectors.llm_full_job import apply_full_job_to_pre_estimate
+
+    job = {"found": True, "source": "llm_full_extract",
+           "parts": [{"part_number": "2085-02", "description": "TUBE"}],
+           "routes": []}
+    merge_inference(job, {
+        "parts": [{"part_number": "2085-02", "material": "MILD STEEL",
+                   "tube_section": "25x25x1.5 SHS", "cut_length_mm": 340}],
+        "routes": [{"operation": "saw", "part_numbers": ["2085-02"]},
+                   {"operation": "welding", "part_numbers": ["2085-02"]}]})
+
+    parts = [{"part_number": "2085-02", "description": "TUBE"}]
+    counts = apply_full_job_to_pre_estimate(parts, job)
+    part = parts[0]
+
+    ok("saw" in (part.get("textual_operations") or []),
+       f"the inferred saw operation reaches the part (got {part.get('textual_operations')})")
+    eq((part.get("operation_sources") or {}).get("saw"), "inference",
+       "and carries source 'inference', not 'llm_full_extract'")
+    eq(part.get("material_source"), "inference",
+       "an inferred material is stamped inference, not left indistinguishable from a reading")
+    eq((part.get("section_stock") or {}).get("length_mm"), 340.0,
+       "the inferred cut length drives the tube path")
+    ok(any("INFERRED" in str(f) for f in (part.get("review_flags") or [])),
+       "and the estimator is told on the part which values were concluded, not read")
+    ok(counts["operations"] >= 2, "both inferred operations were folded in")
 
 
 if __name__ == "__main__":

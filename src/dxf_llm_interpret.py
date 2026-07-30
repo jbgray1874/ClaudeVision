@@ -38,6 +38,11 @@ INFERENCE_SOURCE = "inference"
 # A measured value and a read value that differ by more than this are not the same answer.
 _DISAGREE_PCT = 0.10
 
+_SYSTEM = ("You are a process engineer interpreting an already-measured DXF and answering in "
+           "JSON. The measurements are given to you and are exact; your job is to say what "
+           "they mean — which layer is the cut profile, what each hole is for, how the part "
+           "should be made. Say null where you cannot tell.")
+
 _PROMPT = """You are an expert laser and sheet-metal nesting and process engineer at SDI
 Displays, working across mild steel, stainless, aluminium, acrylic, timber, wire and tube.
 
@@ -155,7 +160,10 @@ def interpret(measured: Dict[str, Any], filename: str = "",
             raw = caller(payload)
         else:
             from llm_full_extract import _call_llm, _parse, DEFAULT_MODEL
-            raw = _call_llm(payload, DEFAULT_MODEL)
+            # Its own system message. This pass is asked for judgement over a measurement,
+            # not transcription, and shipping it under "Never invent" would get exactly the
+            # nulls that judgement is supposed to replace.
+            raw = _call_llm(payload, DEFAULT_MODEL, system=_SYSTEM)
         parsed = raw if isinstance(raw, dict) else None
         if parsed is None and raw:
             from llm_full_extract import _parse
