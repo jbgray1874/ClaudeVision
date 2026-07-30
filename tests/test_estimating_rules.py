@@ -5991,5 +5991,63 @@ def test_every_field_we_ask_the_model_for_has_a_reader():
         ok(_f in _reads, f"'{_f}' is what this fixture exists for — it must have a reader")
 
 
+def test_an_operation_already_present_still_gets_its_metadata():
+    """Adding an operation's NAME and merging its METADATA are separate acts, and this fold
+    used to treat them as one: `if op in ops: continue`, placed above everything that reads
+    the route line. Source, sequence, department, SCOPE and qty_per_unit were all skipped.
+
+    The operation survived. The information needed to cost it correctly did not.
+
+    That is how an assembly-level weld loses its scope. If any earlier reader has already
+    put 'welding' on 12120-01-02M, the route line saying scope=assembly, participants
+    02M/03M/101, qty_per_unit 1, sequence 40 was discarded in full — and the workbook then
+    had nothing to tell it the weld happens once rather than once per part it names.
+    """
+    from source_connectors.llm_full_job import apply_routes_to_parts
+
+    _job = {"found": True, "routes": [
+        {"sequence": 40, "operation": "welding", "department": "WELD",
+         "part_numbers": ["12120-01-02M", "12120-01-03M"],
+         "scope": "assembly", "qty_per_unit": 1, "confidence": "high"}]}
+
+    # 02M already carries the operation from an earlier reader; 03M does not.
+    _parts = [{"part_number": "12120-01-02M", "textual_operations": ["welding"]},
+              {"part_number": "12120-01-03M", "textual_operations": []}]
+    _added = apply_routes_to_parts(_parts, _job)
+    _by = {p["part_number"]: p for p in _parts}
+
+    for _pn in ("12120-01-02M", "12120-01-03M"):
+        _p = _by[_pn]
+        eq((_p.get("operation_scope") or {}).get("welding"), "assembly",
+           f"{_pn}: an assembly-scoped weld must carry its scope whether or not the "
+           f"operation name was already on the part")
+        eq((_p.get("operation_sequence") or {}).get("welding"), 40.0, f"{_pn}: and its sequence")
+        eq((_p.get("operation_qty_per_unit") or {}).get("welding"), 1.0, f"{_pn}: and its qty")
+        ok((_p.get("operation_sources") or {}).get("welding"), f"{_pn}: and its source")
+
+    eq(_parts[0]["textual_operations"].count("welding"), 1,
+       "merging metadata must not duplicate the operation itself")
+    eq(_added, 1, "and the counter reports genuinely NEW operations, not metadata merges")
+
+    # GAP-FILL, NEVER OVERWRITE. A stronger earlier source keeps every field it filled.
+    _own = [{"part_number": "12120-01-02M", "textual_operations": ["welding"],
+             "operation_scope": {"welding": "part"},
+             "operation_sequence": {"welding": 10.0}}]
+    apply_routes_to_parts(_own, _job)
+    eq(_own[0]["operation_scope"]["welding"], "part",
+       "a scope already decided by a stronger source is not overwritten by the model")
+    eq(_own[0]["operation_sequence"]["welding"], 10.0, "nor its sequence")
+
+    # A RULED-OUT OPERATION IS STILL REFUSED. The metadata merge must not become a way
+    # back in for work a measurement already excluded.
+    _ruled = [{"part_number": "12120-01-02M", "textual_operations": [],
+               "operations_ruled_out": {"welding": "measured: no weld preparation"}}]
+    apply_routes_to_parts(_ruled, _job)
+    ok("welding" not in (_ruled[0].get("textual_operations") or []),
+       "a measurement that ruled the operation out still stands")
+    ok(not (_ruled[0].get("operation_scope") or {}).get("welding"),
+       "and it acquires no scope either — it is not happening")
+
+
 if __name__ == "__main__":
     sys.exit(main())

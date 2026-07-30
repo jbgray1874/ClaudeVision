@@ -449,25 +449,43 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
                     f"pattern is not showing its bend lines (commonly a block export) — "
                     f"check the DXF before accepting the route")
                 continue
+            # THE NAME IS NOT THE DECISION.
+            #
+            # This used to `continue` whenever the operation name was already on the part,
+            # which skipped everything below it: source, sequence, department, SCOPE and
+            # qty_per_unit. The operation survived and the information needed to cost it
+            # correctly did not.
+            #
+            # That is how an assembly-level weld loses its scope. If any earlier reader has
+            # already put `welding` on 12120-01-02M, this route line -- the one that says
+            # scope=assembly, participants 02M/03M/101, qty_per_unit 1, sequence 40 -- was
+            # discarded in full, and the workbook then had nothing to tell it the weld
+            # happens once rather than once per part it names.
+            #
+            # Adding the name and merging its metadata are separate acts. Metadata merges by
+            # setdefault, so a stronger earlier source still wins every field it filled --
+            # this fills the holes it left, and never overwrites.
             ops = part.setdefault("textual_operations", [])
-            if not isinstance(ops, list) or op in ops:
+            if not isinstance(ops, list):
                 continue
-            ops.append(op)
-            part.setdefault("operation_sources", {})[op] = src
+            _was_present = set(ops)
+            if op not in ops:
+                ops.append(op)
+            part.setdefault("operation_sources", {}).setdefault(op, src)
             # THE SEQUENCE IS AN ANSWER WE ASKED FOR AND THREW AWAY.
             # The schema carries `sequence` (10, 20, 30...) and nothing read it, so the
             # workbook fell back to sorting labour rows ALPHABETICALLY by department —
             # Assemble/pack, Laser, P.Coat. That is not a route, it is a word list.
             _seq = _num(route.get("sequence"))
             if _seq is not None:
-                part.setdefault("operation_sequence", {})[op] = _seq
+                part.setdefault("operation_sequence", {}).setdefault(op, _seq)
             # Grok's own department is kept for comparison, never used as the value: a
             # department string the workbook's rate table does not carry makes its LOOKUP
             # return 0, which costs the work at nothing and reads exactly like it was
             # never there. OP_NAME_MAP stays authoritative; a disagreement is worth seeing.
             _dept = str(route.get("department") or "").strip()
             if _dept:
-                part.setdefault("operation_department_read", {})[op] = _dept
+                part.setdefault("operation_department_read", {}).setdefault(op, _dept)
             # SCOPE: how often the operation happens, which is NOT how many parts it names.
             # Welding three components into one bracket is one welding. The workbook has
             # been summing a per-part quantity across every part a route line names, so an
@@ -475,13 +493,14 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
             # charged three times on 2085 -- GBP 6.85 of a GBP 11.14 labour figure.
             _scope = str(route.get("scope") or "").strip().lower()
             if _scope in ("part", "assembly"):
-                part.setdefault("operation_scope", {})[op] = _scope
+                part.setdefault("operation_scope", {}).setdefault(op, _scope)
             _qpu = _num(route.get("qty_per_unit"))
             if _qpu and _qpu > 0:
-                part.setdefault("operation_qty_per_unit", {})[op] = _qpu
-            part.setdefault("review_flags", []).append(
-                f"operation '{op}' {'INFERRED' if route.get('inferred') else 'read'} from the "
-                f"drawing pack ({route.get('confidence') or 'confidence unstated'})"
-                + (f": {route.get('notes')}" if route.get("notes") else ""))
-            added += 1
+                part.setdefault("operation_qty_per_unit", {}).setdefault(op, _qpu)
+            if op not in _was_present:
+                part.setdefault("review_flags", []).append(
+                    f"operation '{op}' {'INFERRED' if route.get('inferred') else 'read'} from "
+                    f"the drawing pack ({route.get('confidence') or 'confidence unstated'})"
+                    + (f": {route.get('notes')}" if route.get("notes") else ""))
+                added += 1
     return added
