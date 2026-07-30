@@ -3316,6 +3316,64 @@ def test_dxfs_are_found_in_a_job_named_subfolder_and_read_once():
            "accident of filesystem order")
 
 
+def test_transcription_and_inference_are_separate_passes():
+    """M&S 2085's LLM extract came back with every part field null — material 0, thickness 0,
+    tube 0 — on a pack whose text plainly says MATERIAL: MILD STEEL, 1.2 WALL and 12.7.
+
+    The model was not underperforming. It was obeying its instruction: "every value you output
+    must be PRINTED somewhere in the pack... if something is not printed, use null". MILD STEEL
+    is printed once, at assembly level, and the tubes are dimensioned on the views — so a
+    strict transcriber correctly returns null, and the estimate books no material for two of
+    three parts and no operation at all for either tube.
+
+    What was missing is not better transcription. It is the judgement an estimator applies
+    after reading the same page. So there are two passes with opposite rules, and the second
+    is stamped `inference` — the lowest rank in the waterfall — so it can never overwrite
+    something printed or measured. It fills holes that would otherwise be silent zeros."""
+    import llm_full_extract as lfe
+    from source_precedence import SOURCE_RANK
+
+    ok("TRANSCRIBE, NEVER INVENT" in lfe._PROMPT,
+       "the first pass still refuses to invent — that rule is why it can be trusted")
+    # The SCHEMA line, not just the word: "operations_printed" also appears in the rules
+    # paragraph, so a looser assertion stays true with the field deleted from what is returned.
+    ok('"operations_printed": []' in lfe._PROMPT,
+       "but it now reads the operations the drawing states out loud")
+    for _op in ("POWDER COATED", "TAP M4", "ALL WELDS TO BE TIG"):
+        ok(_op in lfe._PROMPT, f"naming the kind of callout it must not walk past: {_op}")
+    ok("that is the other pass's job" in lfe._PROMPT,
+       "and it is told not to infer, so the two passes cannot blur")
+
+    ok("opposite of transcription" in lfe._INFER_PROMPT,
+       "the second pass is explicitly the other thing")
+    ok("labelled as such" in lfe._INFER_PROMPT, "and knows it will be labelled")
+    ok("A null is honest" in lfe._INFER_PROMPT,
+       "with permission to decline, which is what stops it filling every field")
+
+    # The rank is the whole safety argument: inference must lose to everything real.
+    _inf = SOURCE_RANK.get(lfe.INFERENCE_SOURCE)
+    ok(_inf is not None, f"'{lfe.INFERENCE_SOURCE}' is a known source")
+    for stronger in ("solidworks_api", "dxf", "drawing_deterministic", "bom_tree",
+                     "llm_full_extract"):
+        ok(SOURCE_RANK[stronger] > _inf,
+           f"{stronger} ({SOURCE_RANK[stronger]}) outranks inference ({_inf})")
+
+    # Only parts with nothing to cost from are asked about again.
+    _missing = lfe.parts_missing_detail([
+        {"part_number": "2085-02", "description": "OUTER TUBE"},
+        {"part_number": "2085-01", "description": "PLATE", "material": "MILD STEEL",
+         "thickness_mm": 1.2},
+        {"part_number": "BI-KNOB", "description": "KNOB", "is_bought_in": True},
+    ])
+    _asked = {m["part_number"] for m in _missing}
+    ok("2085-02" in _asked, "a part with no material and no size is asked about")
+    ok("2085-01" not in _asked, "one the drawing described is left as the drawing described it")
+    ok("BI-KNOB" not in _asked, "and a bought-in is not something we route")
+
+    # No model reachable in the test environment: the pass must return empty, not raise.
+    eq(lfe.infer_missing_details("ctx", [], []), {}, "nothing missing, nothing asked")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first

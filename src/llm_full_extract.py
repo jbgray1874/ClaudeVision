@@ -65,7 +65,8 @@ Return ONLY valid JSON (no markdown) in this shape:
     {"part_number": "...", "description": "...", "material": null,
      "thickness_mm": null, "tube_section": null, "cut_length_mm": null,
      "overall_size_mm": null, "weight_g": null, "finish": null,
-     "hole_count": null, "fold_or_bend": null, "is_bought_in": <true/false>}
+     "hole_count": null, "fold_or_bend": null, "is_bought_in": <true/false>,
+     "operations_printed": []}
   ],
   "spec": {"weld": null, "powder_micron": null, "tolerances": null,
            "material_grades": [], "timber_note": null}
@@ -73,6 +74,21 @@ Return ONLY valid JSON (no markdown) in this shape:
 Rules: qty must be the PRINTED quantity. A row is is_assembly=true only if it has its own parts
 page in this pack. tube_section like "30 x 30 x 1.5mm". weight_g only a printed weight. Do not
 merge distinct part numbers. Do not drop any BOM row.
+
+operations_printed: the manufacturing operations the DRAWING ITSELF STATES for that part —
+in notes, callouts, the title block or the finish field. These packs say a great deal out
+loud: "POWDER COATED", "ALL WELDS TO BE TIG", "TAP M4", "DEBURR ALL EDGES", "LINE BEND",
+"CSK", "FOLD". Read them; they are printed, so transcribing them is your job, and an
+operation the drawing names is worth far more than one anybody works out later.
+
+Use ONLY these names: laser_cutting, punch, saw, tube_cut, folding, rolling, tube_bending,
+welding, dress_welds, hole_machining, tapping, deburring, cnc_routing, edge_banding, glue,
+powder_coating, wet_spray, diamond_polish, wire_forming, handling.
+
+A finish stated for the whole assembly is printed for that assembly — put it on the assembly
+row, not on parts it does not name. Do NOT add an operation because the part looks like it
+would need one: that is the other pass's job, and it is labelled differently for a reason.
+Empty list when the drawing states nothing.
 """
 
 
@@ -181,3 +197,110 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ── second pass: infer what the drawing implies but does not print ───────────────────
+#
+# The prompt above forbids inference, and it is right to: transcription is what stops a model
+# filling a title block from imagination. But a GA-only pack prints almost nothing per part.
+# M&S 2085 states MATERIAL: MILD STEEL once, at assembly level, and dimensions its tubes on
+# the views — so a strict transcriber correctly returns null for every part field, and the
+# estimate books no material for two of the three parts and no operation at all for either
+# tube. £2.00 of labour on a welded three-part bracket.
+#
+# What is missing is not better transcription. It is the judgement an estimator applies after
+# reading the same page: a tube in a welded assembly is cut to length and welded in; a plate
+# with a wall is folded; an assembly finished RAL9006 means every part is coated.
+#
+# So this is a SEPARATE pass with the opposite rule, and everything it returns is stamped
+# `inference` — rank 20, the lowest in the waterfall — so it can never overwrite a printed or
+# measured value. It fills holes that would otherwise be silent zeros, and says that it did.
+
+INFERENCE_SOURCE = "inference"
+
+_INFER_PROMPT = """You are an experienced sheet-metal estimator at SDI Displays. You have
+already transcribed everything PRINTED on this drawing pack. Some parts still have no material,
+no size and no manufacturing route, because the drawing does not state them per part.
+
+Your job now is the opposite of transcription: say what an estimator would CONCLUDE, so the
+part can be costed at all. This is explicitly inference and will be labelled as such.
+
+Below: the pack text, the BOM, and the parts that are still missing detail.
+
+For EVERY part listed as missing detail, return:
+  - material            the family, e.g. "MILD STEEL". If the pack states a material anywhere
+                        and nothing contradicts it for this part, that is the answer.
+  - stock_form          one of: sheet, tube, section, wire, bar, board, acrylic, bought_in
+  - thickness_mm        wall or sheet thickness if the views imply one, else null
+  - tube_section        e.g. "12.7 dia x 1.2 wall" or "25 x 25 x 1.5" if a tube, else null
+  - cut_length_mm       only if the views give a length for it, else null
+  - operations          the route, from this vocabulary ONLY:
+                        laser_cutting, punch, saw, tube_cut, folding, rolling, tube_bending,
+                        welding, dress_welds, hole_machining, tapping, deburring,
+                        cnc_routing, edge_banding, glue, powder_coating, wet_spray,
+                        diamond_polish, wire_forming, handling
+  - reason              one sentence, citing what on the drawing led you there
+
+RULES
+- An operation must be justified by the part's nature or the drawing, not by habit. A tube in a
+  welded assembly is cut and welded. A plate with a stated WALL is folded. Do not add grinding,
+  polishing or machining unless something indicates it.
+- Finish applied to the assembly applies to the parts that make it up.
+- If you genuinely cannot tell, use null. A null is honest; a guess dressed as a reading is not.
+- Return ONLY valid JSON: {"parts": [{"part_number": "...", "material": ..., "stock_form": ...,
+  "thickness_mm": ..., "tube_section": ..., "cut_length_mm": ..., "operations": [...],
+  "reason": "..."}]}
+"""
+
+
+def infer_missing_details(context: str, bom: List[Dict[str, Any]],
+                          missing: List[Dict[str, Any]],
+                          model: str = DEFAULT_MODEL) -> Dict[str, Any]:
+    """Second pass over parts the transcription left empty. {} on any failure — a job that
+    cannot reach the model estimates exactly as it does today."""
+    if not missing:
+        return {}
+    try:
+        payload = (
+            f"{_INFER_PROMPT}\n\n===== PACK TEXT =====\n{context[:40000]}\n\n"
+            f"===== BOM =====\n{json.dumps(bom, ensure_ascii=False)}\n\n"
+            f"===== PARTS STILL MISSING DETAIL =====\n"
+            f"{json.dumps(missing, ensure_ascii=False)}\n"
+        )
+        raw = _call_llm(payload, model)
+        parsed = _parse(raw) if raw else None
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("parts"), list):
+        return {}
+    out = []
+    for row in parsed["parts"]:
+        if not isinstance(row, dict) or not row.get("part_number"):
+            continue
+        row["source"] = INFERENCE_SOURCE
+        out.append(row)
+    return {"source": INFERENCE_SOURCE, "parts": out, "found": bool(out)}
+
+
+def parts_missing_detail(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Which transcribed parts have nothing to cost from.
+
+    A part with no material AND no size is not merely thin — nothing downstream can price it
+    or route it, so it reaches the sheet as a bought-in guess or as nothing at all. Those are
+    the only ones worth asking a second question about; a part the drawing described is left
+    exactly as the drawing described it.
+    """
+    out = []
+    for p in parts or []:
+        if not isinstance(p, dict) or not p.get("part_number"):
+            continue
+        if p.get("is_bought_in"):
+            continue
+        has_material = bool(p.get("material"))
+        has_size = any(p.get(k) for k in
+                       ("thickness_mm", "tube_section", "cut_length_mm", "overall_size_mm"))
+        if not has_material or not has_size:
+            out.append({"part_number": p.get("part_number"),
+                        "description": p.get("description"),
+                        "has_material": has_material, "has_size": has_size})
+    return out
