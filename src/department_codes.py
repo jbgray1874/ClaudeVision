@@ -164,14 +164,24 @@ _alias("ROLL", "roll", "rolling", "roll form")
 _alias("WELD", "welding", "weld", "mig weld", "tig weld", "co2 weld", "mig", "tig",
        "weld (co2)", "welding (mig/tig)", "fabricate", "fabrication")
 _alias("SPOT", "spotweld", "spot weld", "spot_weld", "resistance welding")
+# Linishing a WELD is dressing it, and that is its own department. Only the general
+# post-cut edge work above is manual labour.
 _alias("DRES", "dress_welds", "dress welds", "dress", "dressing", "linish", "linishing",
-       "linisher")
+       "linisher", "weld dress")
 _alias("BENC", "bench_work", "bench work", "bench work joinery")
 # DEBURRING IS METAL WORK AND BENC IS A JOINERY BENCH.
 # BENC's real title is "Bench Work Joinery". Deburring and fettling a steel part at the
 # joinery bench rate is the wrong rate, so they go to MANM, Manual labour (Metal). Raised
 # with the estimators; a wrong-but-visible department beats a right-sounding zero.
-_alias("MANM", "deburring", "deburr", "fettling", "finishing")
+# DEBURRING IS METAL WORK. BENC's real title is "Bench Work Joinery", so putting steel
+# deburring there costs it at a joinery rate — the same class of error as the old GRIN
+# mapping, and harder to spot, because the work costs SOMETHING and just not against the
+# right department. BENC is left for wood, MDF and timber.
+#
+# "finishing" is deliberately NOT an alias. It is ambiguous — it can mean deburring or it
+# can mean powder coating — and a word that could be either must stay loud rather than
+# quietly take money from one department and give it to another.
+_alias("MANM", "deburring", "deburr", "fettling", "metal deburr", "edge deburr")
 _alias("DRIL", "hole_machining", "hole machining", "drilling", "drill", "tapping", "tap",
        "countersink", "countersinking")
 _alias("CNCJ", "cnc_routing", "cnc routing", "cnc_joinery", "cnc joinery", "routing",

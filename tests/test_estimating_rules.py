@@ -4402,6 +4402,18 @@ def test_every_department_we_emit_exists_in_the_rate_table():
     eq(code_for(OP_NAME_MAP["deburring"]), "MANM",
        "deburring pointed at GRIN, which does not exist; BENC is a JOINERY bench, so metal "
        "deburring goes to manual labour (metal)")
+    # Confirmed with the estimators: general edge work after laser/saw/punch is MANM;
+    # linishing a WELD BEAD is its own department. Costing a dressed weld as deburring
+    # books shop time against the wrong machine at the wrong rate.
+    for _op in ("deburring", "fettling", "metal deburr", "edge deburr"):
+        eq(code_for(_op), "MANM", f"'{_op}' is manual labour (metal)")
+    for _op in ("linishing", "weld dress", "dress welds"):
+        eq(code_for(_op), "DRES", f"'{_op}' is weld dressing, not deburring")
+    eq(code_for("finishing"), None,
+       "'finishing' is ambiguous — it can mean deburring or powder coating, so it stays "
+       "loud rather than quietly moving money between departments")
+    ok(code_for("bench work") == "BENC" and code_for("deburring") != "BENC",
+       "BENC is left for joinery")
     eq(OP_NAME_MAP["hole_machining"], "Drill (Acrylic)",
        "and drilling/tapping uses the DRIL row, whose title says Acrylic but is the row the "
        "shop books metal drilling against")
