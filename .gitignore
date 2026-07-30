@@ -47,3 +47,4 @@ Thumbs.db
 # ── Explicit keeps (override the broad ignores above) ────────────────────
 !requirements.txt
 !corpus/*.jsonl
+cache/

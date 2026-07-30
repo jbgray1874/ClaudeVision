@@ -3778,8 +3778,14 @@ def test_the_inference_pass_is_not_told_never_to_invent_first():
     _fake_openai.OpenAI = _FakeClient
     _saved_mod = _sys.modules.get("openai")
     _saved_key = os.environ.get("XAI_API_KEY")
+    _saved_ref = os.environ.get("SDI_LLM_EXTRACT_REFRESH")
     _sys.modules["openai"] = _fake_openai
     os.environ["XAI_API_KEY"] = "test-key-not-used"
+    # THE CACHE WOULD ANSWER THIS BEFORE THE MODEL DOES. Extract results are now cached on
+    # content, so a fixture that must observe a LIVE call has to bypass it — otherwise it
+    # silently stops testing anything the moment a real run has populated the cache, which
+    # is exactly what happened while this was being written.
+    os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
     try:
         lfe.infer_missing_details("PACK TEXT", [], [{"part_number": "2085-02"}])
     finally:
@@ -3791,6 +3797,10 @@ def test_the_inference_pass_is_not_told_never_to_invent_first():
             os.environ.pop("XAI_API_KEY", None)
         else:
             os.environ["XAI_API_KEY"] = _saved_key
+        if _saved_ref is None:
+            os.environ.pop("SDI_LLM_EXTRACT_REFRESH", None)
+        else:
+            os.environ["SDI_LLM_EXTRACT_REFRESH"] = _saved_ref
 
     ok(sent, "the call was made at all")
     ok("NEVER INVENT" not in sent.get("user", ""),
@@ -5029,6 +5039,81 @@ def test_a_native_extract_for_another_job_is_refused():
     ok("_sw_job = None" in _fs,
        "and drops the extract, so neither its geometry NOR its blockers reach this job")
     ok('"refused_wrong_job": True' in _fs, "recording why, on the job")
+
+
+def test_the_same_pack_produces_the_same_route():
+    """M&S 2085 was run twice with identical inputs and identical code. The first returned a
+    route including welding and dress_welds; the second did not. Labour fell from GBP 11.14
+    to GBP 5.19 and the unit cost from GBP 12.13 to GBP 5.73 — a 53% drop representing no
+    manufacturing saving whatsoever, only the model reconsidering an inference it had already
+    made. temperature=0 does not make a model deterministic.
+
+    This is the route-side twin of the price problem this engine already refuses to tolerate:
+    a figure that will not repeat cannot be quoted. Prices got a reproducibility gate; routes
+    got nothing, because until the route reached the sheet nobody could see it move.
+
+    The extract is keyed on the CONTENT it came from — document text, model, prompt — so a
+    redrawn pack, a model change or a prompt edit all miss and re-ask, and a re-run of the
+    same job on the same code returns the same answer by construction.
+    """
+    import tempfile
+    import llm_full_extract as lfe
+
+    _saved_dir = os.environ.get("SDI_LLM_EXTRACT_CACHE_DIR")
+    _saved_ref = os.environ.get("SDI_LLM_EXTRACT_REFRESH")
+    os.environ["SDI_LLM_EXTRACT_CACHE_DIR"] = tempfile.mkdtemp()
+    os.environ.pop("SDI_LLM_EXTRACT_REFRESH", None)
+    try:
+        k = lfe._cache_key("full", "PACK TEXT", "grok-4.3", lfe._PROMPT, lfe.SYSTEM_TRANSCRIBE)
+        eq(lfe._cache_read(k), None, "nothing cached yet")
+
+        _route = {"found": True, "routes": [{"operation": "welding", "inferred": True},
+                                            {"operation": "tube_cut", "inferred": True}]}
+        lfe._cache_write(k, _route)
+        _back = lfe._cache_read(k)
+        eq([r["operation"] for r in _back["routes"]], ["welding", "tube_cut"],
+           "the SAME route comes back — the weld does not get reconsidered")
+        ok(_back.get("_from_cache"), "and it is marked as a reuse, not a fresh read")
+
+        # A CHANGED PACK MUST MISS. Otherwise a redrawn drawing silently keeps the old route,
+        # which is a worse failure than the instability being fixed.
+        eq(lfe._cache_read(lfe._cache_key("full", "PACK TEXT REVISED", "grok-4.3",
+                                          lfe._PROMPT, lfe.SYSTEM_TRANSCRIBE)), None,
+           "a revised pack is a different key")
+        eq(lfe._cache_read(lfe._cache_key("full", "PACK TEXT", "grok-9",
+                                          lfe._PROMPT, lfe.SYSTEM_TRANSCRIBE)), None,
+           "and so is a different model")
+        eq(lfe._cache_read(lfe._cache_key("full", "PACK TEXT", "grok-4.3",
+                                          lfe._PROMPT + " extra rule",
+                                          lfe.SYSTEM_TRANSCRIBE)), None,
+           "and so is an edited prompt — a rule change must be re-asked, not remembered")
+
+        os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
+        eq(lfe._cache_read(k), None, "and a deliberate refresh always re-asks")
+    finally:
+        os.environ.pop("SDI_LLM_EXTRACT_REFRESH", None)
+        if _saved_ref is not None:
+            os.environ["SDI_LLM_EXTRACT_REFRESH"] = _saved_ref
+        if _saved_dir is None:
+            os.environ.pop("SDI_LLM_EXTRACT_CACHE_DIR", None)
+        else:
+            os.environ["SDI_LLM_EXTRACT_CACHE_DIR"] = _saved_dir
+
+    # BOTH PASSES. The inferred route is the unstable half — welding on 2085 was a
+    # conclusion, not a reading, and it is the one that vanished.
+    # THE EXACT KEY THE PRODUCTION PATH BUILDS, not one this fixture composes. Computing the
+    # key here and asserting on it tests the fixture's arithmetic: dropping `ctx` or `_PROMPT`
+    # from extract_full_job's key left this green, because the fixture went on hashing them.
+    # That is the mirror mistake, for the third time today.
+    _src = open(lfe.__file__, encoding="utf-8").read()
+    ok('_key = _cache_key("full", ctx, model, _PROMPT, SYSTEM_TRANSCRIBE)' in _src,
+       "the transcription key covers the pack text, the model AND the prompt — drop the text "
+       "and a redrawn drawing silently keeps the old route; drop the prompt and a rule change "
+       "is never re-asked")
+    ok("_cache_write(_key, obj)" in _src, "and the result is stored")
+    ok('_ikey = _cache_key("infer", payload, model, SYSTEM_INFER)' in _src,
+       "the inference key covers its whole payload — which is where the weld came from")
+    ok("_cache_write(_ikey, _res)" in _src, "and it is stored too")
 
 
 if __name__ == "__main__":

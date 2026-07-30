@@ -26,6 +26,7 @@ Standalone:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -180,6 +181,85 @@ qty must be the PRINTED quantity. A part is is_bought_in only where the drawing 
 """
 
 
+
+# ── THE SAME PACK MUST PRODUCE THE SAME ROUTE ────────────────────────────────────────
+#
+# M&S 2085 was run twice with identical inputs and identical code. The first run returned a
+# route including welding and dress_welds; the second did not. Labour fell from GBP 11.14 to
+# GBP 5.19 and the unit cost from GBP 12.13 to GBP 5.73 -- a 53% drop that represents no
+# manufacturing saving whatsoever, only the model reconsidering an inference it had already
+# made. temperature=0 does not make a model deterministic, and an estimate that moves by half
+# between identical runs cannot be an estimate.
+#
+# This is the route-side twin of the price problem this engine already refuses to tolerate:
+# a figure that will not repeat cannot be quoted. Prices got a reproducibility gate; routes
+# got nothing, because until the route reached the sheet nobody could see it move.
+#
+# So the extract is cached on the CONTENT it was derived from. The key covers the document
+# text, the model, and the prompt -- so a redrawn pack, a model change, or a prompt edit all
+# miss and re-ask, while a re-run of the same job on the same code returns the same answer,
+# by construction rather than by hope.
+#
+# SDI_LLM_EXTRACT_REFRESH=1 forces a fresh call. SDI_LLM_EXTRACT_CACHE_DIR relocates it.
+_CACHE_VERSION = "v1"
+
+
+def _cache_dir() -> Optional[Path]:
+    raw = os.environ.get("SDI_LLM_EXTRACT_CACHE_DIR")
+    if not raw:
+        # Beside the repo, not at a hardcoded Windows path. A literal
+        # r"C:\ClaudeVision\cache\llm_extract" default creates a directory named
+        # exactly that in the working tree on any other platform — which is how a
+        # stray "C:\ClaudeVision" folder appeared in this checkout while the cache
+        # was being written. The Windows install still resolves to the same place.
+        raw = str(Path(__file__).resolve().parents[1] / "cache" / "llm_extract")
+    try:
+        d = Path(raw)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception:
+        return None
+
+
+def _cache_key(*parts: Any) -> str:
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(str(p).encode("utf-8", "replace"))
+        h.update(b"\x00")
+    return h.hexdigest()[:32]
+
+
+def _cache_read(key: str) -> Optional[Dict[str, Any]]:
+    if os.environ.get("SDI_LLM_EXTRACT_REFRESH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
+    d = _cache_dir()
+    if not d:
+        return None
+    f = d / f"{_CACHE_VERSION}_{key}.json"
+    try:
+        if f.exists():
+            with open(f, "r", encoding="utf-8") as fh:
+                obj = json.load(fh)
+            if isinstance(obj, dict):
+                obj["_from_cache"] = True
+                return obj
+    except Exception:
+        return None
+    return None
+
+
+def _cache_write(key: str, obj: Dict[str, Any]) -> None:
+    d = _cache_dir()
+    if not d or not isinstance(obj, dict):
+        return
+    try:
+        with open(d / f"{_CACHE_VERSION}_{key}.json", "w", encoding="utf-8") as fh:
+            json.dump({k: v for k, v in obj.items() if k != "_from_cache"},
+                      fh, indent=1, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def build_document_context(pdf_path: str | Path, max_chars: int = 60000) -> str:
     """Compact whole-document context: per-page free text + any BOM/parts tables. This is what the
     LLM reasons over — the same content a person sees flipping through the pack."""
@@ -278,6 +358,16 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     if not ctx:
         result["error"] = "no document context (pdfplumber missing or empty PDF)"
         return result
+    # Same pack, same model, same prompt -> same answer. See the cache block above: 2085
+    # returned a route with welding on one run and without it on the next, and the unit cost
+    # halved. An estimate that moves by half between identical runs is not an estimate.
+    _key = _cache_key("full", ctx, model, _PROMPT, SYSTEM_TRANSCRIBE)
+    _hit = _cache_read(_key)
+    if _hit is not None:
+        print(f"   [llm-full-extract] reusing the cached read for this pack "
+              f"(unchanged drawings, model and prompt) — the route does not get "
+              f"reconsidered between runs", flush=True)
+        return _hit
     try:
         raw = _call_llm(_PROMPT + "\n\n--- DRAWING PACK ---\n" + ctx, model,
                         system=SYSTEM_TRANSCRIBE)
@@ -292,6 +382,7 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     obj["source"] = SOURCE_NAME
     obj["found"] = True
     normalize_job(obj)
+    _cache_write(_key, obj)
     return obj
 
 
@@ -467,6 +558,10 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
             f"===== PARTS STILL MISSING DETAIL =====\n"
             f"{json.dumps(missing, ensure_ascii=False)}\n"
         )
+        _ikey = _cache_key("infer", payload, model, SYSTEM_INFER)
+        _ihit = _cache_read(_ikey)
+        if _ihit is not None:
+            return _ihit
         raw = _call_llm(payload, model, system=SYSTEM_INFER)
         parsed = _parse(raw) if raw else None
     except Exception:
@@ -504,10 +599,14 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
         r["inferred"] = True   # whatever it claimed: this pass is inference by construction
         routes.append(r)
 
-    return {"source": INFERENCE_SOURCE, "parts": out, "routes": routes,
+    _res = {"source": INFERENCE_SOURCE, "parts": out, "routes": routes,
             "warnings": parsed.get("warnings") or [],
             "missing_information": parsed.get("missing_information") or [],
             "found": bool(out or routes)}
+    # The INFERRED route is the unstable half — welding on 2085 was a conclusion, not a
+    # reading, and it is the one that vanished. Cached on the same terms as the rest.
+    _cache_write(_ikey, _res)
+    return _res
 
 
 # Which datum a field on an inferred row fills. Kept explicit so a new schema key cannot
