@@ -5354,5 +5354,56 @@ def test_qty_per_unit_is_read_by_the_workbook_not_merely_stored():
        "and the group loop records qty_per_unit from the part's route")
 
 
+def test_a_coated_tube_contributes_coated_area():
+    """The coated-area sum had two contributors, sheet and wire, and section stock matched
+    neither — the sheet loop excludes it on stock_form AND again on a "TUBE" description
+    guard. So every powder-coated tube, box section and angle on every job contributed zero
+    area, an under-charge that grows with how much section the job carries.
+
+    Powder lands on the outside, so the coated surface is outer perimeter x cut length. The
+    wall thickness does not enter it.
+    """
+    from wb_populate import section_coated_area_m2
+
+    # 2085's outer tube: 12.7 CHS x 1.2 wall, 34 mm long, two off per product.
+    _chs = {"part_number": "2085-02", "quantity": 2,
+            "section_stock": {"a": 12.7, "b": 12.7, "t": 1.2, "profile_form": "CHS"},
+            "material_estimate": {"stock_form": "tube",
+                                  "stock_estimate": {"section_length_mm": 34.0}}}
+    _got = section_coated_area_m2(_chs)
+    _want = (3.14159265 * 12.7 / 1000.0) * (34.0 / 1000.0) * 2
+    ok(abs(_got - _want) < 1e-9, f"pi x D x L x qty, got {_got}")
+    ok(_got > 0, "a coated tube is not a zero-area part")
+
+    # A square section is not a round one: 2(a+b), not pi x D.
+    _shs = {"quantity": 1, "section_stock": {"a": 30.0, "b": 30.0, "t": 2.0, "profile_form": "SHS"},
+            "material_estimate": {"stock_estimate": {"section_length_mm": 1000.0}}}
+    eq(round(section_coated_area_m2(_shs), 6), round(2.0 * 0.060 * 1.0, 6),
+       "a 30x30 box is 120 mm of perimeter per metre, not 94.2")
+
+    # The wall does not change the OUTSIDE, so it does not change the coated area.
+    _thick = {"quantity": 1, "section_stock": {"a": 30.0, "b": 30.0, "t": 5.0, "profile_form": "SHS"},
+              "material_estimate": {"stock_estimate": {"section_length_mm": 1000.0}}}
+    eq(round(section_coated_area_m2(_thick), 6), round(section_coated_area_m2(_shs), 6),
+       "powder lands on the outside — wall thickness is irrelevant to coverage")
+
+    # Acrylic tube is diamond polished, never coated.
+    _acr = dict(_chs, normalized_material="ACRYLIC")
+    eq(section_coated_area_m2(_acr), 0.0, "acrylic is polished, not powder coated")
+
+    # No profile or no length means unmeasured, not zero-sized: contribute nothing rather
+    # than invent a diameter.
+    eq(section_coated_area_m2({"section_stock": {"a": 12.7}}), 0.0, "no length, no claim")
+    eq(section_coated_area_m2({"section_stock": {},
+                               "material_estimate": {"stock_estimate": {"section_length_mm": 34.0}}}),
+       0.0, "no profile, no claim")
+    eq(section_coated_area_m2({}), 0.0, "a part with no section stock is not a section")
+
+    # And the powder sum actually adds it, or the helper is right about a total nobody uses.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok("_sheet_powder_area_m2 + _wire_powder_area_m2 + _section_powder_area_m2" in _wb,
+       "the coated total sums section area alongside sheet and wire")
+
+
 if __name__ == "__main__":
     sys.exit(main())

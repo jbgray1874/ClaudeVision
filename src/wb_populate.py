@@ -489,6 +489,57 @@ def operation_scope_for(pe: Dict[str, Any], op: str,
     return None
 
 
+_ACRYLIC_NEVER_POWDER = {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA", "POLYCARBONATE"}
+
+
+def section_coated_area_m2(part: Dict[str, Any]) -> float:
+    """Powder-coated surface of one SECTION-STOCK part (tube, box, angle, flat bar), m2.
+
+    The coated-area sum had exactly two contributors: sheet (L x W x 2) and wire (pi x d x L).
+    Section stock matched neither. The sheet loop excludes it twice over -- once on stock_form,
+    once on a "TUBE" description guard added to stop garbled view geometry inventing 24 m2 of
+    phantom blank -- and nothing put the real cylinder surface back. So every powder-coated
+    tube, box section and angle on every job has been contributing ZERO coated area, which is
+    an under-charge that grows with how much section the job contains.
+
+    The wall is irrelevant: powder lands on the OUTSIDE. So the coated surface is the outer
+    perimeter times the cut length.
+
+        round / CHS      pi x D
+        everything else  2 x (a + b)
+
+    2(a+b) is right for a closed box and also right for an open angle or channel, where powder
+    reaches both faces of both legs: two legs of width a and b, coated top and bottom, is the
+    same number. A flat bar is that with b = t. The end faces are ignored -- on a 34 mm tube
+    they are under 1% and counting them would imply a precision this does not have.
+
+    Returns 0.0 when the profile or the length is missing, because an unmeasured tube is not a
+    zero-area one and inventing a size here would be worse than the gap it fills.
+    """
+    _p = part or {}
+    _ss = _p.get("section_stock") or {}
+    if not _ss:
+        return 0.0
+    _mat = str(_p.get("normalized_material")
+               or (_p.get("material_estimate") or {}).get("material") or "").upper().replace("_", " ")
+    if _mat in _ACRYLIC_NEVER_POWDER or _p.get("acrylic_no_powder"):
+        return 0.0          # acrylic tube is polished, never coated
+    _a = _safe(_ss.get("a"))
+    _b = _safe(_ss.get("b"))
+    if not _a:
+        return 0.0
+    _me = _p.get("material_estimate") or {}
+    _len = _safe((_me.get("stock_estimate") or {}).get("section_length_mm")) or _safe(_ss.get("length_mm"))
+    if not _len or _len <= 0:
+        return 0.0
+    if str(_ss.get("profile_form") or "").strip().upper() in ("CHS", "ROUND", "TUBE_ROUND"):
+        _perim_mm = 3.14159265 * _a
+    else:
+        _perim_mm = 2.0 * (_a + (_b or _a))
+    _q = _safe(_p.get("quantity"), 1) or 1
+    return (_perim_mm / 1000.0) * (_len / 1000.0) * float(_q)
+
+
 def assembly_scoped_qty(group: Dict[str, Any]) -> int:
     """How many times an ASSEMBLY-scoped operation is charged per finished product.
 
@@ -1116,7 +1167,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if _sl and _sw:
             _sheet_powder_area_m2 += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
 
-    _powder_area_m2 = _sheet_powder_area_m2 + _wire_powder_area_m2
+    # ── SECTION AREA TOO ────────────────────────────────────────────────────────
+    # Sheet and wire were the only two contributors. A powder-coated tube, box section or
+    # angle matched neither and contributed nothing at all — see section_coated_area_m2.
+    _section_powder_area_m2 = 0.0
+    _section_powder_diag = []
+    for _cp in _all_pes_pw:
+        _ca = section_coated_area_m2(_cp)
+        if _ca > 0:
+            _section_powder_area_m2 += _ca
+            _section_powder_diag.append(f"{_cp.get('part_number')}({_ca:.5f} m2)")
+
+    _powder_area_m2 = _sheet_powder_area_m2 + _wire_powder_area_m2 + _section_powder_area_m2
+    if _section_powder_area_m2 > 0:
+        _flag(f"POWDER: section stock adds {_section_powder_area_m2:.5f} m2 of coated surface "
+              f"({', '.join(_section_powder_diag)}) — outer perimeter x cut length. Until now "
+              f"section contributed ZERO to the coated total, since the sum saw only flat "
+              f"blanks and wire.", flags)
     _powder_by_area_kg = _powder_area_m2 * float(_POWDER_KG_PER_M2)
 
     # ── A MINIMUM PER PIECE, NOT JUST A COVERAGE RATE ───────────────────────────
