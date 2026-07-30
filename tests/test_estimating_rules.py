@@ -3373,6 +3373,18 @@ def test_transcription_and_inference_are_separate_passes():
     # No model reachable in the test environment: the pass must return empty, not raise.
     eq(lfe.infer_missing_details("ctx", [], []), {}, "nothing missing, nothing asked")
 
+    # BUILT IS NOT WIRED. The previous commit added the module and connected nothing, and the
+    # one before that did the same with the CAD inventory. A capability nothing calls looks
+    # exactly like a capability that does not work.
+    _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
+    ok("infer_missing_details(" in _fs, "the inference pass is actually called by the scan")
+    ok("parts_missing_detail(" in _fs, "on the parts the first pass left empty")
+    ok('_job["inferred_parts"]' in _fs, "and its result is kept on the job")
+    _lj = open(__import__("source_connectors.llm_full_job", fromlist=["x"]).__file__,
+               encoding="utf-8").read()
+    ok('jp.get("operations_printed")' in _lj,
+       "and the operations the drawing states are read into the part record")
+
 
 def main() -> int:
     global _COLLECT_ONLY

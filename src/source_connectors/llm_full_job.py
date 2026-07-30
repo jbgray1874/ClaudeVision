@@ -158,7 +158,8 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     fills a field only where the engine has nothing solid, EXCEPT it deliberately provides
     section_stock + stated_weight so the good paths win over garbled vision geometry.
     Returns counts of what changed."""
-    out = {"material": 0, "weight": 0, "thickness": 0, "tube": 0, "assembly_flagged": 0, "qty": 0}
+    out = {"material": 0, "weight": 0, "thickness": 0, "tube": 0, "assembly_flagged": 0,
+           "qty": 0, "operations": 0, "inferred": 0}
     if not isinstance(job, dict) or not job.get("found") or not isinstance(parts, list):
         return out
 
@@ -270,6 +271,25 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
             if _before_len != cut:
                 _flagged = True
                 out["tube"] += 1
+
+        # OPERATIONS THE DRAWING STATES OUT LOUD. These packs say a great deal — POWDER
+        # COATED, ALL WELDS TO BE TIG, TAP M4, DEBURR ALL EDGES — and none of it was being
+        # asked for or read. An operation the drawing NAMES is printed evidence, so it is
+        # added here at transcription strength rather than left to be worked out later.
+        # Additive only: an op the engine already found is not duplicated, and nothing is
+        # removed, because this pass cannot see what a measurement ruled out.
+        _printed = [str(o).strip().lower() for o in (jp.get("operations_printed") or [])
+                    if str(o).strip()]
+        if _printed:
+            _ops = part.setdefault("textual_operations", [])
+            if isinstance(_ops, list):
+                _added = [o for o in _printed if o not in _ops]
+                if _added:
+                    _ops.extend(_added)
+                    part.setdefault("operation_sources", {}).update(
+                        {o: "llm_full_extract" for o in _added})
+                    out["operations"] = out.get("operations", 0) + len(_added)
+                    _flagged = True
 
         if _flagged:
             part.setdefault("review_flags", []).append(

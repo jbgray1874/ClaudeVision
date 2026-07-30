@@ -2031,6 +2031,37 @@ def _finalize_scan_summary(
                     overlay_drawing_facts(_job, extract_drawing_facts(str(pdf_path)))
                 except Exception as _e_ov:
                     print(f"   [llm-full-extract] overlay skipped ({_e_ov})", flush=True)
+                # SECOND PASS — what the drawing IMPLIES but does not print. The pass above
+                # is forbidden from inventing, and rightly so; on a GA-only pack that leaves
+                # parts with no material and no size, which nothing downstream can price or
+                # route. M&S 2085 booked GBP 2.00 of labour on a welded three-part bracket
+                # because neither tube carried a single operation.
+                #
+                # Asked only about parts the first pass left empty, and everything it returns
+                # is stamped `inference` — the lowest rank in the waterfall — so it can never
+                # overwrite a printed or measured value. Failure-isolated: no model, no key,
+                # or a refusal all leave the job exactly as it is today.
+                try:
+                    from llm_full_extract import (build_document_context,
+                                                  infer_missing_details, parts_missing_detail)
+                    _missing = parts_missing_detail(_job.get("parts") or [])
+                    if _missing:
+                        _inf = infer_missing_details(
+                            build_document_context(str(pdf_path)),
+                            _job.get("bom") or [], _missing)
+                        if _inf.get("found"):
+                            _job["inferred_parts"] = _inf.get("parts")
+                            print(f"   [llm-inference] {len(_inf['parts'])} part(s) had no "
+                                  f"material or size printed — inferred route/spec, stamped "
+                                  f"'inference' (lowest rank, never overwrites a measurement)",
+                                  flush=True)
+                        else:
+                            print(f"   [llm-inference] {len(_missing)} part(s) have nothing "
+                                  f"printed to cost from and inference returned nothing — "
+                                  f"they stay empty rather than guessed", flush=True)
+                except Exception as _e_inf:
+                    print(f"   [llm-inference] skipped ({_e_inf}) — run continues", flush=True)
+
                 _c = apply_full_job_to_pre_estimate(_pre_estimate_parts, _job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
                 # Keep the WHOLE extract on the summary so it can be dumped to a retrievable
@@ -2043,6 +2074,7 @@ def _finalize_scan_summary(
                     "assemblies": _job.get("assemblies"),
                     "parts": _job.get("parts"),
                     "spec": _job.get("spec"),
+                    "inferred_parts": _job.get("inferred_parts"),
                     "counts": _c,
                 }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
