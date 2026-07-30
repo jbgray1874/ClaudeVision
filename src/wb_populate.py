@@ -239,10 +239,12 @@ OP_NAME_MAP = {
     # Deburr / linish — a quick hand finishing pass. It was unmapped, so the WB fuzzy-matched it
     # to CNCJ (£64.07/hr) and, with no throughput default, billed ~22 hrs. Map it to its real
     # dept so it costs at the deburr rate, not CNC joinery. (Throughput default added above.)
-    "deburring":      "Grinding / Deburr",
-    "deburr":         "Grinding / Deburr",
-    "linisher":       "Grinding / Deburr",
-    "linishing":      "Grinding / Deburr",
+    # GRIN IS NOT IN THE RATE TABLE. These four pointed at "Grinding / Deburr" and the
+    # workbook has no such row (H173:K204), so every deburr and every linish on every job
+    # LOOKUPed to zero — priced at nothing, and indistinguishable on the sheet from work
+    # nobody found. BENC and DRES are the rows that exist.
+    "deburr":         "Bench work / fitting",
+    "linisher":       "Dress Welds",
     # Diamond polish (acrylic edge finish). Unmapped it fell through to a raw op name with no
     # throughput default → ~0.67/hr / £52 on a single diffuser. (Metal DPOL is gated out upstream.)
     "diamond_polish": "Diamond Polish",
@@ -275,12 +277,13 @@ OP_NAME_MAP = {
     "tube_bending":   "Tubebend",          # SDI bends tube on a tube-bender, not a press
     "tubebend":       "Tubebend",
     "edge_banding":   "Edge Banding",
-    # Drilling and tapping are bench operations here. Mapped to the estimators' own
-    # manual-labour department rather than invented as new ones — a department string the
-    # rate table does not carry makes the workbook LOOKUP return 0, which costs the work at
-    # nothing and looks exactly like it was never there.
-    "hole_machining": "Manual labour (Metal)",
-    "tapping":        "Manual labour (Metal)",
+    # Drilling and tapping share a bench and share the rate table's DRIL row. The previous
+    # commit sent them to "Manual labour (Metal)" on my own guess; the rate table
+    # (H173:K204) carries DRIL "Drilling / Tapping", so that is where they go.
+    "hole_machining": "Drilling / Tapping",
+    "tapping":        "Drilling / Tapping",
+    "deburring":      "Bench work / fitting",
+    "linishing":      "Dress Welds",
 }
 
 # Acrylic/board parts use DIFFERENT (cheaper) labour operations than metal.
@@ -331,7 +334,26 @@ def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[
     if is_acrylic and key in OP_NAME_MAP_ACRYLIC:
         return OP_NAME_MAP_ACRYLIC[key]
     # Standard metal
-    return OP_NAME_MAP.get(key)
+    _hit = OP_NAME_MAP.get(key)
+    if _hit:
+        return _hit
+
+    # ── LAST RESORT: THE ALIAS TABLE, NOT A SILENT NONE ──────────────────────────
+    # OP_NAME_MAP is keyed on the engine's own operation words. A route now also arrives
+    # from a model, and a model writing about manufacturing produces English — "Cut to
+    # length", "MIG weld", "Laser cut" — or answers with the department code it was asked
+    # for. None of those are engine words, so this returned None and the operation was
+    # dropped without a sound.
+    #
+    # department_codes resolves all of it against the rate table's own closed vocabulary
+    # (H173:K204). Returning None still means "nothing recognises this", which is what the
+    # caller must flag — but it now means it far less often, and never for a word we
+    # ourselves asked the model to use.
+    try:
+        from department_codes import title_for as _title_for
+        return _title_for(op)
+    except Exception:
+        return None
 
 
 # Operations that are genuinely impossible / meaningless for a given stock form

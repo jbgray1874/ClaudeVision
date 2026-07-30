@@ -58,6 +58,17 @@ ROUTE_OPERATIONS = (
     "wire_forming", "handling",
 )
 
+# THE SHOP'S CLOSED VOCABULARY, ASKED FOR DIRECTLY.
+#
+# ROUTE_OPERATIONS above are the engine's words and they all resolve. But a model writing
+# about manufacturing produces "Cut to length", "MIG weld", "Laser cut" — sensible English
+# that no rate table row matches, so the line costs zero and reads on the sheet exactly like
+# work nobody identified. Asking for the CODE removes the translation step: the answer is
+# already in the vocabulary that pays.
+from department_codes import CODE_TITLES, DEPARTMENT_CODES  # noqa: E402
+
+_DEPT_VOCAB = ", ".join(sorted(DEPARTMENT_CODES))
+
 _SCHEMA = """{
   "drawing_info": {
     "drawing_number": "", "revision": "", "title": "", "project": "", "client": "",
@@ -108,16 +119,36 @@ Generate separate process steps per material stream, then a final assembly step 
 them together with material_family "mixed". A finish stated for the metal parts belongs to
 those part numbers only; do not spread it across acrylic or timber that is not coated.
 
-OPERATIONS. `operation` must be one of these exact words and no other — they are what the
-costing model knows how to price, and anything else is dropped:
-""" + ", ".join(ROUTE_OPERATIONS) + """.
-Say it in `description` if you want to be more specific ("cut outer tube to length"), but the
-`operation` field itself must come from that list.
+OPERATIONS AND DEPARTMENTS ARE A CLOSED LIST. This is the single most important rule here.
 
-DEPARTMENTS are the shop's own: Laser (Metal), Laser (Acrylic), Fold, Linebend, Tubebend,
-Saw, CNC / Joinery machining, Edge Banding, Gluing / Bonding, Weld (CO2), Spotweld,
-Dress Welds, P.Coat, Spray / Wet Paint, Diamond Polish, Robomac, Assemble/pack (Metal),
-Assemble/pack (Acrylic), Manual labour (Metal).
+`department` MUST be one of these exact codes, and nothing else:
+""" + _DEPT_VOCAB + """
+
+They are the shop's own department codes and they are the only strings the costing sheet can
+price. Anything else — "Cut to length", "MIG weld", "Laser cut", a code you invent, a blank —
+produces no rate and no cost, and the operation disappears from the estimate without a trace.
+A wrong code can be corrected by an estimator; an unrecognised one is silently free.
+
+  tube cutting, sawing or notching a tube ....... TUBE   (or SAW for bar and section)
+  CO2 / MIG / TIG welding ....................... WELD
+  spot welding .................................. SPOT
+  laser cutting sheet metal ..................... LASM   (acrylic: LASA)
+  press brake / forming a flat part .............. FOLD
+  bending tube .................................. TBEN   (line bending: LINE)
+  drilling, tapping, countersinking ............. DRIL
+  deburring, fettling, bench finishing .......... BENC
+  dressing or linishing a weld .................. DRES
+  powder coating ................................ P/C    (wet paint: SPRY)
+  CNC routing / joinery machining ............... CNCJ
+  edge banding .................................. EDGE
+  gluing or bonding ............................. GLUE
+  assembly, fitting, handling, packing .......... PACM
+
+`operation` should be the matching engine word from:
+""" + ", ".join(ROUTE_OPERATIONS) + """.
+Put the specific wording in `description` instead ("cut outer tube to length") — that field is
+free text and is read by a person, so nothing is lost by keeping `operation` and `department`
+strictly to the lists.
 
 ONE OPERATION, ONE ROUTE LINE. An operation that joins parts together — a weld, an assembly,
 a finish applied to the built unit — is ONE route line naming every part it acts on, not one

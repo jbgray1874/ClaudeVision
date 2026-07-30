@@ -3359,8 +3359,11 @@ def test_transcription_and_inference_are_separate_passes():
        "components are pure; only the assembly is mixed")
     ok("those part numbers only" in lfe._COMMON_RULES,
        "and a finish is not spread across parts it is not applied to")
-    for dept in ("Laser (Acrylic)", "Linebend", "Tubebend", "Edge Banding", "Robomac"):
-        ok(dept in lfe._COMMON_RULES, f"the shop's own department name is used: {dept}")
+    # The prompt used to name departments by TITLE ("Laser (Acrylic)", "Tubebend"). It now
+    # asks for the rate table's own CODES, because a title is one paraphrase away from a
+    # string no LOOKUP resolves, and an unresolved department costs nothing in silence.
+    for dept in ("LASA", "LINE", "TBEN", "EDGE", "ROBO"):
+        ok(dept in lfe._COMMON_RULES, f"the shop's own department code is used: {dept}")
 
     # The rank is the whole safety argument: inference must lose to everything real.
     _inf = SOURCE_RANK.get(lfe.INFERENCE_SOURCE)
@@ -4370,6 +4373,82 @@ def test_labour_rows_come_out_in_manufacturing_order():
        "with the drawing's own sequence taking precedence when the extract gave one")
     ok('g["route_sequence"] = (_rs if g.get("route_sequence") is None' in _wb,
        "which means it has to be carried onto the group in the first place")
+
+
+def test_every_department_we_emit_exists_in_the_rate_table():
+    """The rate table (H173:K204) is a CLOSED vocabulary and the only one that pays.
+
+    A string it cannot resolve produces a blank department, a zero rate and a zero cost —
+    and a zero-cost labour line is indistinguishable, on the sheet, from work nobody
+    identified. Silent, always reduces the price, nothing in the output says it happened.
+
+    The engine had two vocabularies and neither was the rate table. Diffed against it,
+    OP_NAME_MAP pointed four operations at "Grinding / Deburr" — GRIN — and there IS no GRIN
+    row, so every deburr and every linish on every job has been costing nothing.
+    """
+    from department_codes import code_for, DEPARTMENT_CODES, CODE_TITLES
+    from wb_populate import OP_NAME_MAP, OP_NAME_MAP_ACRYLIC
+
+    for _name, _m in (("OP_NAME_MAP", OP_NAME_MAP), ("OP_NAME_MAP_ACRYLIC", OP_NAME_MAP_ACRYLIC)):
+        bad = {op: t for op, t in _m.items() if code_for(t) is None}
+        eq(bad, {}, f"every {_name} title resolves to a rate-table code (bad: {bad})")
+
+    # The specific one that was free: GRIN is not a department.
+    eq(code_for(OP_NAME_MAP["deburring"]), "BENC",
+       "deburring is bench work — it was pointed at GRIN, which the rate table does not have")
+    ok("GRIN" not in DEPARTMENT_CODES and "TAP" not in DEPARTMENT_CODES
+       and "COUN" not in DEPARTMENT_CODES and "HAND" not in DEPARTMENT_CODES,
+       "and GRIN/TAP/COUN/HAND are confirmed absent, which is why they cost nothing")
+
+    # Every title we would ever write maps back into the closed set.
+    for _code, (_title, _confirmed) in CODE_TITLES.items():
+        ok(_code in DEPARTMENT_CODES, f"{_code} is a real rate-table code")
+        eq(code_for(_title), _code, f"'{_title}' resolves back to {_code}")
+
+
+def test_free_text_from_a_model_still_lands_on_a_department():
+    """A model writing about manufacturing produces English — "Cut to length", "MIG weld",
+    "Laser cut" — sensible to a person and invisible to every LOOKUP. The prompt now asks
+    for the code, but a prompt is a request, not a guarantee, so the alias table catches
+    what comes back anyway. A wrong code an estimator can correct; an unrecognised one is
+    silently free."""
+    from wb_populate import _map_operation
+    from department_codes import code_for, unresolved_operations
+
+    for _text, _code in (("tube_cut", "TUBE"), ("Cut to length", "SAW"), ("MIG weld", "WELD"),
+                         ("CO2 weld", "WELD"), ("Laser cut", "LASM"), ("press brake", "FOLD"),
+                         ("Saw tube", "SAW"), ("edge banding", "EDGE"),
+                         ("tapping", "DRIL"), ("hole_machining", "DRIL")):
+        eq(code_for(_text), _code, f"'{_text}' is understood as {_code}")
+
+    # A model answering in codes, as instructed, is understood too.
+    for _c in ("TUBE", "WELD", "LASM", "FOLD", "P/C", "PACM"):
+        eq(code_for(_c), _c, f"the code {_c} is its own alias")
+
+    # And it reaches an actual workbook title through the real mapping function.
+    eq(_map_operation("MIG weld", False), "Weld (CO2)",
+       "free text resolves all the way to a title the sheet can price")
+    eq(_map_operation("tube_cut", False), "Tube", "and so does the token that started this")
+
+    # Unrecognised stays unrecognised. None is the point: it is the difference between
+    # "we could not price this" and a zero that reads as "this work does not exist".
+    eq(_map_operation("frobnicate", False), None, "nonsense is not quietly mapped to something")
+    eq(unresolved_operations(["welding", "frobnicate", "MIG weld"]), ["frobnicate"],
+       "and can be reported rather than swallowed")
+
+
+def test_the_prompt_asks_for_the_vocabulary_that_pays():
+    """The prompts were asking for free text, so the model had no way to answer costably."""
+    import llm_full_extract as lfe
+    from department_codes import DEPARTMENT_CODES
+
+    for _code in ("TUBE", "WELD", "LASM", "FOLD", "TBEN", "DRIL", "P/C", "PACM"):
+        ok(_code in lfe._COMMON_RULES, f"the prompt names {_code}")
+    ok(", ".join(sorted(DEPARTMENT_CODES)) in lfe._COMMON_RULES,
+       "the whole closed list is built from the code table, not copied where it can drift")
+    ok("silently free" in lfe._COMMON_RULES,
+       "and the model is told what happens when it invents one, which is the part that "
+       "makes the rule stick")
 
 
 if __name__ == "__main__":
