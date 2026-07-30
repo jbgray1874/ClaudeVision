@@ -425,6 +425,40 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             f"pattern as exploded geometry to measure it")
     part["dxf_geometry_reliability"] = reliability
     part["dxf_raw_geometry"] = dxf_raw
+
+    # ── THE SECOND READ OF THE SAME FILE ─────────────────────────────────────────────
+    # ezdxf has now measured everything it can. What it cannot say is what the geometry
+    # MEANS — which layer is the cut profile, what each hole is for, whether this is one
+    # part or a nest — and those are the answers that decide how a part is made and, in the
+    # nest case, whether its price is out by a factor of six.
+    #
+    # Measurement above is untouched: this is gap-fill and judgement, stamped `inference`.
+    # Failure-isolated and off unless a key is present, so a job with no model reaching it
+    # costs exactly as it does today.
+    try:
+        import os as _os_di
+        _di_flag = _os_di.getenv("SDI_DXF_LLM_INTERPRET", "").strip().lower()
+        if _di_flag not in {"0", "false", "no", "off"} and (
+                _di_flag in {"1", "true", "yes", "on"} or _os_di.getenv("XAI_API_KEY")):
+            from dxf_llm_interpret import interpret as _dxf_interpret, apply_to_part as _dxf_apply
+            _measured = {
+                "layers": (raw or {}).get("layers") or (geometry or {}).get("layers"),
+                "entity_counts": (raw or {}).get("entity_counts"),
+                "text_entities": (raw or {}).get("text_entities"),
+                "blank_mm": [part.get("overall_length_mm"), part.get("overall_width_mm")],
+                "hole_diameters_mm": part.get("hole_sizes_mm"),
+                "closed_contour_count": (raw or {}).get("closed_contour_count"),
+                "cut_length_mm": dxf_raw.get("estimated_cut_length_mm"),
+            }
+            _interp = _dxf_interpret(_measured, filename=dxf_path.name)
+            if _interp:
+                _ic = _dxf_apply(part, _interp)
+                print(f"   [dxf-interpret] {dxf_path.name}: {_interp.get('recommended_process')}"
+                      f"/{_interp.get('complexity')} — filled {_ic['filled']}, "
+                      f"raised {_ic['flags']} for review", flush=True)
+    except Exception as _e_di:
+        print(f"   [dxf-interpret] skipped for {dxf_path.name} ({_e_di}) — run continues",
+              flush=True)
     # DXF flat-pattern is ground truth for folding: a genuine flat-pattern part
     # whose resolved DXF bend count is 0 does NOT fold. Strip a stale 'folding'
     # op that a shared/document note baked into the ops upstream. Runs at the
