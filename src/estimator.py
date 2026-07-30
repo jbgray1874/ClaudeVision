@@ -5,7 +5,7 @@ import os
 import re
 import time
 from datetime import date, datetime, timezone
-from math import floor
+from math import floor, pi as _PI
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -1935,10 +1935,18 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                 }
             density = MATERIAL_DENSITY_KG_PER_M3.get(material or "", MATERIAL_DENSITY_KG_PER_M3.get("MILD STEEL"))
-            # SHS/RHS approximation: A = outer - inner (mm^2)
+            # A ROUND TUBE IS NOT A SQUARE ONE.
+            #
+            # This was the only formula: A = outer - inner, on the sides of a rectangle. Round
+            # tube carries its outside diameter in a and b, so a 12.7 x 1.2 CHS computed as
+            # 12.7 x 12.7 square gives 55.2mm2 against a true 43.4mm2 — 27% heavy on every
+            # metre of every round tube we buy, which is most of the tube we buy.
             inner_a = max(0.0, side_a_mm - (2.0 * wall_t_mm))
             inner_b = max(0.0, side_b_mm - (2.0 * wall_t_mm))
-            area_mm2 = max(0.0, (side_a_mm * side_b_mm) - (inner_a * inner_b))
+            if str(_ss.get("profile_form") or "").upper() == "CHS":
+                area_mm2 = max(0.0, _PI / 4.0 * ((side_a_mm ** 2) - (inner_a ** 2)))
+            else:
+                area_mm2 = max(0.0, (side_a_mm * side_b_mm) - (inner_a * inner_b))
             kg_per_m = (area_mm2 * (density or 7850.0)) / 1_000_000.0
             unit_length_m = length_mm / 1000.0
             unit_mass_kg = kg_per_m * unit_length_m

@@ -106,6 +106,44 @@ def _detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
                     "source_text": text[max(0, wm.start() - 40):wm.start() + 20].strip(),
                 }
 
+            # ── PATH 3: ROUND tube — a diameter beside the WALL callout ──────────────
+            #
+            # ROUND TUBE HAD NO PATH AT ALL, AND IT IS THE COMMONEST TUBE WE BUY.
+            #
+            # Paths 1 and 2 both need a PAIR of sides: 'a x b x t', or two unqualified EXT
+            # dimensions. A round tube has one dimension and a wall, so both fall through and
+            # return None — no section, no tube stock form, no saw and no weld.
+            #
+            # M&S 2085 is exactly this. Its GA reads "12.7  1.2 WALL" for the outer tube and
+            # "10.0" for the inner (12.7 less two 1.2 walls is a 10.3 bore — they telescope).
+            # Neither tube got a section, so neither reached the labour path, and a welded
+            # three-part bracket booked GBP 2.00 of labour with no operation against either.
+            #
+            # The rule is the same one PATH 2 uses, with one dimension instead of two: a wall
+            # thickness only exists on hollow section, and the number beside it is the size.
+            # Reached only when PATH 2 could not find a pair, so a rectangular section is never
+            # read as round. Flagged for verification like PATH 2 — this is a reading of a
+            # layout convention, not a printed section callout.
+            _before = up[max(0, wm.start() - 30):wm.start()]
+            _dia_nums = [float(n) for n in re.findall(r"(\d+(?:\.\d+)?)", _before)]
+            _dia = next((d for d in reversed(_dia_nums) if wall * 2 < d <= 300), None)
+            if _dia:
+                return {
+                    # a and b are the OUTSIDE DIAMETER. Anything reading them as the sides of
+                    # a square gets a cross-section 27% too big, so profile_form is not
+                    # decoration — the mass calculation switches on it.
+                    "a": _dia,
+                    "b": _dia,
+                    "t": wall,
+                    "outside_diameter_mm": _dia,
+                    "length_mm": None,
+                    "profile_form": "CHS",
+                    "keyword": "WALL",
+                    "detection_path": "round_wall_notation",
+                    "review_section_profile": True,
+                    "source_text": text[max(0, wm.start() - 40):wm.start() + 20].strip(),
+                }
+
     return None
 
 

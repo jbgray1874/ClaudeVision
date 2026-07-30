@@ -4071,5 +4071,107 @@ def test_a_part_on_two_pages_is_one_part():
        "three per sub-assembly, two sub-assemblies, is six")
 
 
+def test_round_tube_is_a_section_too():
+    """Round tube had no detection path at all, and it is the commonest tube we buy.
+
+    PATH 1 needs 'a x b x t'. PATH 2 needs two unqualified EXT dimensions. A round tube has
+    ONE dimension and a wall, so both fall through and return None — no section, no tube
+    stock form, no saw and no weld.
+
+    M&S 2085's GA is a single page reading "12.7  1.2 WALL" for the outer tube and "10.0" for
+    the inner — 12.7 less two 1.2 walls is a 10.3 bore, so they telescope. Neither tube got a
+    section, neither reached the labour path, and a welded three-part bracket booked GBP 2.00
+    of labour with no operation against either of them.
+    """
+    from document_builder import _detect_section_stock
+
+    # The actual text off 2085's GA, as pdfplumber extracted it.
+    got = _detect_section_stock("4.0 7.56 INT DRAIN 12.7 1.2 WALL 10.0 12.7 80.0 21.0 INT")
+    ok(got is not None, "a round tube is detected at all")
+    eq(got["profile_form"], "CHS", "and identified as round, not square")
+    eq(got["outside_diameter_mm"], 12.7, "with the diameter beside the wall callout read")
+    eq(got["t"], 1.2, "and the wall")
+    ok(got.get("review_section_profile"),
+       "flagged for verification — this reads a layout convention, not a printed callout")
+
+    # A RECTANGULAR section must never be read as round. PATH 2 still wins where there is a
+    # pair of sides, which is the whole reason PATH 3 sits after it.
+    rect = _detect_section_stock("60.0 EXT 30.0 EXT 1.5 WALL 1072.0 EXT")
+    eq(rect["profile_form"], "RHS", "two EXT sides is still a rectangular section")
+    eq(sorted([rect["a"], rect["b"]]), [30.0, 60.0], "with both sides read")
+
+    # And the canonical form is untouched.
+    canon = _detect_section_stock("30 x 60 x 1.50mm TUBE 1125")
+    eq(canon["profile_form"], "RHS", "the canonical cutting-list form still reads as before")
+
+    # Nothing hollow, nothing returned.
+    eq(_detect_section_stock("80.0 70.2 34.0 R1.0 MILD STEEL"), None,
+       "no wall callout, no section — an honest gap, not a guessed tube")
+
+
+def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
+    """The section mass formula was A = outer - inner on the sides of a RECTANGLE, and it was
+    the only formula. Round tube carries its outside diameter in a and b, so 12.7 x 1.2 CHS
+    computed as a 12.7 square gives 55.2mm2 against a true 43.4mm2 — 27% heavy on every metre
+    of every round tube we buy. profile_form is not decoration; the mass switches on it."""
+    import math
+    D, t = 12.7, 1.2
+    d = D - 2 * t
+    square = (D * D) - (d * d)
+    round_ = math.pi / 4.0 * ((D * D) - (d * d))
+
+    # Reproduce both branches exactly as estimator._resolve_material_cost computes them.
+    def _csa(profile_form):
+        inner = max(0.0, D - 2.0 * t)
+        if str(profile_form or "").upper() == "CHS":
+            return max(0.0, math.pi / 4.0 * ((D ** 2) - (inner ** 2)))
+        return max(0.0, (D * D) - (inner * inner))
+
+    eq(round(_csa("CHS"), 1), round(round_, 1), "a round tube uses the circular area")
+    eq(round(_csa("RHS"), 1), round(square, 1), "a rectangular one is unchanged")
+    ok(_csa("RHS") / _csa("CHS") > 1.25,
+       f"and the gap is real: {_csa('RHS') / _csa('CHS'):.2f}x, not a rounding difference")
+
+    _src = open(__import__("estimator").__file__, encoding="utf-8").read()
+    ok('_ss.get("profile_form") or "").upper() == "CHS"' in _src,
+       "the estimator actually branches on it — a formula nothing selects is not a fix")
+
+
+def test_the_top_assembly_is_not_a_second_bill_of_materials():
+    """Every part on 2085 came out at qty 2 — both tubes AND the plate.
+
+    The pack is a single page: one GA whose parts table reads 2085-01 x1, 2085-02 x1,
+    2085-03 x1. The extract also correctly describes the top assembly as having those three
+    as its children. The rollup then added the child quantity on top of the GA line, and the
+    whole job doubled. Filtering by explicit_bom_table did not touch this: the duplication is
+    between `bom` and `assemblies`, not within `bom`.
+
+    A genuine SUB-assembly's children are not GA lines — that is what makes them children —
+    so they still roll up and still multiply. Only the echo is dropped.
+    """
+    from source_connectors.llm_full_job import _rollup_quantities
+
+    job = {"bom": [
+        {"part_number": "2085-01", "qty": 1, "source": "explicit_bom_table"},
+        {"part_number": "2085-02", "qty": 1, "source": "explicit_bom_table"},
+        {"part_number": "2085-03", "qty": 1, "source": "explicit_bom_table"},
+    ], "assemblies": [
+        {"part_number": "2085", "children": [{"part_number": "2085-01", "qty": 1},
+                                             {"part_number": "2085-02", "qty": 1},
+                                             {"part_number": "2085-03", "qty": 1}]},
+    ]}
+    got = _rollup_quantities(job)
+    eq(got.get("2085-01"), 1, "the plate is one plate")
+    eq(got.get("2085-02"), 1, "the outer tube is one tube")
+    eq(got.get("2085-03"), 1, "and so is the inner")
+
+    # A REAL sub-assembly still multiplies: its children are not GA lines.
+    job2 = {"bom": [{"part_number": "1448-GA", "qty": 2, "source": "explicit_bom_table"}],
+            "assemblies": [{"part_number": "1448-GA",
+                            "children": [{"part_number": "1448-01", "qty": 3}]}]}
+    eq(_rollup_quantities(job2).get("1448-01"), 6,
+       "three per sub-assembly, two sub-assemblies on the GA, is six")
+
+
 if __name__ == "__main__":
     sys.exit(main())

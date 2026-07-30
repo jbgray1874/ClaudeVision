@@ -116,6 +116,17 @@ def _rollup_quantities(job: Dict[str, Any]) -> Dict[str, int]:
         if pn not in asm_pns:
             totals[pn] = totals.get(pn, 0.0) + q
     # Children of each sub-assembly, multiplied by how many of that assembly the GA calls for.
+    #
+    # A PART ALREADY COUNTED AS A GA LINE IS NOT COUNTED AGAIN AS SOMEBODY'S CHILD.
+    #
+    # 2085 is a single-page pack: one GA whose parts table reads 2085-01 x1, 2085-02 x1,
+    # 2085-03 x1. The extract also -- correctly -- describes the top assembly as having those
+    # three as its children. This loop then added the child qty on top of the GA line and
+    # every part in the job came out at 2. The tubes doubled; so did the plate.
+    #
+    # A genuine SUB-assembly's children are not GA lines (that is what makes them children),
+    # so they still roll up and still multiply. Only the echo is dropped.
+    _direct = set(totals)
     for a in asms:
         if not isinstance(a, dict):
             continue
@@ -124,7 +135,7 @@ def _rollup_quantities(job: Dict[str, Any]) -> Dict[str, int]:
             if not isinstance(ch, dict):
                 continue
             cpn = _clean_pn(ch.get("part_number"))
-            if cpn:
+            if cpn and cpn not in _direct:
                 totals[cpn] = totals.get(cpn, 0.0) + (_num(ch.get("qty")) or 1.0) * amult
     return {k: int(round(v)) for k, v in totals.items() if v and v > 0}
 
