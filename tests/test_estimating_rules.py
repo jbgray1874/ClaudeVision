@@ -5865,5 +5865,51 @@ def test_a_tube_is_cut_somewhere_or_it_is_cut_for_free():
     ok(_rank["Tube"] < _rank["Weld (CO2)"], "and before you weld it in")
 
 
+def test_a_material_stated_once_applies_to_the_whole_drawing():
+    """The schema asks for drawing_info.material_general and finish_general, Grok returns
+    them, and until now the field name appeared exactly once in the entire codebase: in the
+    schema requesting it. Extracted, transported, never read.
+
+    2085 is the case this exists for. Its GA prints "MATERIAL: MILD STEEL" once at assembly
+    level and names no material on either tube row, so the tubes reached the sheet with no
+    material at all and could not be priced. The drawing does say what they are made of — it
+    says it once, in the place nobody looked.
+
+    Strictly a gap-fill: weaker than a part-level reading, so it never overrides one.
+    """
+    from source_connectors.llm_full_job import apply_full_job_to_pre_estimate
+
+    _job = {"found": True,
+            "drawing_info": {"material_general": "MILD STEEL",
+                             "finish_general": "POWDER COATED"},
+            "parts": [{"part_number": "2085-02", "description": "OUTER TUBE"},
+                      {"part_number": "2085-01", "description": "BRACKET PLATE",
+                       "material": "STAINLESS STEEL", "finish": "BRUSHED"}]}
+    _parts = [{"part_number": "2085-02"}, {"part_number": "2085-01"}]
+    _counts = apply_full_job_to_pre_estimate(_parts, _job)
+    _tube = {p["part_number"]: p for p in _parts}["2085-02"]
+    _plate = {p["part_number"]: p for p in _parts}["2085-01"]
+
+    ok(_tube.get("normalized_material"),
+       "a tube whose row states no material still has one — the GA states it for the job")
+    eq(_tube.get("normalized_material"), "MILD_STEEL", "and it is the drawing's own material")
+    eq(_tube.get("normalized_finish"), "POWDER COATED", "same for the general finish note")
+    ok(_counts.get("material_from_general"), "the inheritance is counted, not silent")
+    ok(any("GENERAL material note" in str(f) for f in (_tube.get("review_flags") or [])),
+       "and flagged on the part: inherited evidence is not the same as a printed row")
+
+    # A ROW THAT SPEAKS FOR ITSELF IS NOT OVERRULED. The general note is the weaker source.
+    eq(_plate.get("normalized_material"), "STAINLESS_STEEL",
+       "a part naming its own material keeps it — a job-level note never overrides a row")
+    eq(_plate.get("normalized_finish"), "BRUSHED", "nor its own finish")
+
+    # NOTHING STATED, NOTHING INVENTED.
+    _bare = [{"part_number": "X-1"}]
+    apply_full_job_to_pre_estimate(_bare, {"found": True, "drawing_info": {},
+                                           "parts": [{"part_number": "X-1"}]})
+    ok(not _bare[0].get("normalized_material"),
+       "with no general note the part stays blank rather than acquiring a default")
+
+
 if __name__ == "__main__":
     sys.exit(main())

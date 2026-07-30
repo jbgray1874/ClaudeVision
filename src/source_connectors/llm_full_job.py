@@ -202,6 +202,12 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     if not isinstance(job, dict) or not job.get("found") or not isinstance(parts, list):
         return out
 
+    # The drawing's general notes: stated once, applying to every part that states nothing
+    # of its own. Read here because nothing else in the engine reads them at all.
+    _di = job.get("drawing_info") or {}
+    _job_material = str(_di.get("material_general") or "").strip()
+    _job_finish = str(_di.get("finish_general") or "").strip()
+
     by_pn = {_clean_pn(p.get("part_number")): p for p in (job.get("parts") or []) if isinstance(p, dict)}
     assembly_pns = {_clean_pn(a.get("part_number")) for a in (job.get("assemblies") or []) if isinstance(a, dict)}
     qty_rollup = _rollup_quantities(job)
@@ -269,7 +275,29 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 _flagged = True
                 out["qty"] += 1
 
+        # A MATERIAL STATED ONCE FOR THE WHOLE DRAWING STILL APPLIES TO EVERY PART ON IT.
+        #
+        # The schema asks for drawing_info.material_general and Grok returns it. Nothing in
+        # the engine has ever read it -- the field appears exactly once in the whole
+        # codebase, in the schema that requests it.
+        #
+        # 2085 is the case this exists for: the GA prints "MATERIAL: MILD STEEL" once at
+        # assembly level and names no material on either tube row, so the tubes reached the
+        # sheet with no material at all and could not be priced. The drawing does say what
+        # they are made of. It just says it once, in the place nobody looked.
+        #
+        # Strictly weaker than a part-level reading: this only fills a part the row itself
+        # left blank, and it never overrides. Flagged on the part, because "inherited from
+        # the drawing's general note" is a different quality of evidence from "printed on
+        # this row" and an estimator quoting firm needs to see which one they have.
         mat = jp.get("material")
+        if not mat and _job_material:
+            mat = _job_material
+            if not str(part.get("normalized_material") or "").strip():
+                part.setdefault("review_flags", []).append(
+                    f"material '{_norm_material(_job_material)}' inherited from the drawing's "
+                    f"GENERAL material note — this part's own BOM row states none")
+                out["material_from_general"] = out.get("material_from_general", 0) + 1
         if mat:
             _new_mat = _norm_material(mat)
             _cur_mat = str(part.get("normalized_material") or "").strip().upper()
@@ -307,7 +335,16 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # normalized_finish, which is exactly the field the powder gate reads. On this job the
         # gate's assembly-pointer path saved it; on a pack that states the finish per part in
         # the BOM table, the coat would simply not be costed.
+        # Same for the finish: "SURFACE FINISH: POWDER COATED" printed once on the GA covers
+        # every part it does not contradict. drawing_info.finish_general was equally unread.
         _fin = jp.get("finish")
+        if not _fin and _job_finish:
+            _fin = _job_finish
+            if not str(part.get("normalized_finish") or "").strip():
+                part.setdefault("review_flags", []).append(
+                    f"finish '{_job_finish}' inherited from the drawing's GENERAL finish note "
+                    f"— this part's own BOM row states none")
+                out["finish_from_general"] = out.get("finish_from_general", 0) + 1
         if _fin and not str(part.get("normalized_finish") or "").strip():
             part["normalized_finish"] = _fin
             part["finish_source"] = _src(jp, "finish")
