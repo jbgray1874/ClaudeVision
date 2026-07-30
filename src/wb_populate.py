@@ -956,6 +956,38 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _p = round(_ext / _q, 4)
         return _p
 
+    # ── EVERY FABRICATED PART APPEARS IN THE BILL OF MATERIALS ─────────────────────
+    #
+    # The template costs a nested sheet part in the Sheet Steel block and a board panel in
+    # Other Sheet, so neither has ever appeared in the "Bill of Materials (Per Unit)" list.
+    # That is arithmetically correct and practically wrong: on M&S 2085 an estimator opens
+    # the sheet, reads the bill of materials, and the main part of the job — the bracket
+    # plate everything else welds into — is not in it. You have to know the template's
+    # internals to work out that it is costed twenty rows further down.
+    #
+    # So they are listed, and listed FIRST, with the block carrying their cost named on the
+    # line. The price is deliberately ZERO: Total Material Cost (M92) sums BOM + Wire +
+    # Sheet Steel + Other Sheet, so a priced duplicate here would double that part's
+    # material and the sheet would be wrong in a way nobody would spot.
+    _xref_rows: List[Dict[str, Any]] = []
+    for _blk_name, _blk in (("Sheet Steel", steel_parts), ("Other Sheet Material", board_parts),
+                            ("Wire", wire_parts)):
+        for _xp in _blk:
+            if not isinstance(_xp, dict) or not _xp.get("part_number"):
+                continue
+            _xref_rows.append({
+                "part_number": _xp.get("part_number"),
+                "description": f"{_xp.get('description') or ''} — costed in {_blk_name} below",
+                "quantity": int(_safe(_xp.get("quantity"), 1) or 1),
+                "unit_cost_gbp": 0.0,
+                "_bom_cross_reference": True,
+            })
+    if _xref_rows:
+        bom_parts = _xref_rows + list(bom_parts)
+        _flag(f"BOM: {len(_xref_rows)} fabricated part(s) listed in the Bill of Materials for "
+              f"completeness at GBP 0.00 — their material is costed in the Sheet Steel / Other "
+              f"Sheet / Wire block, and pricing them here too would double it.", flags)
+
     # ── BOM overflow: spill-in-code, no template surgery, no lines dropped ──────────
     # The template's BOM block holds a fixed number of rows. A big job (e.g. Cocktails,
     # 48 bought-in/tube lines) exceeds it. Rather than fail the whole sheet (dropping to
@@ -1371,6 +1403,46 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                      # this excludes the PVC sticker and metal fasteners, which are not stated_weight).
                      or (str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "stated_weight"
                          and _is_board(_pe_material(p)))]
+
+    # ── IF WE KNOW THE ROUTE, WE COST THE ROUTE ──────────────────────────────────
+    #
+    # Every rule above decides by CLASSIFICATION: is this steel, board, wire, a tube, a
+    # board panel. A part the engine could not classify gets no labour row no matter what it
+    # is doing — so an operation we read off the drawing, or concluded from it, is simply
+    # dropped on the floor at the last step before the sheet.
+    #
+    # M&S 2085 spent four runs proving it. Its tubes are round; the section detector only
+    # knew rectangular; no section meant no `tube` stock form; and no stock form meant that
+    # even a saw and a weld sitting on the part in black and white would never have reached
+    # the labour block. Fixing the detector fixes THIS job. This fixes the shape of it: the
+    # route we extracted is the route we cost, and a classification gap can no longer silently
+    # delete work.
+    #
+    # Gated on FABRICATION operations specifically, never on handling/assembly, because
+    # bought_in_policy already strips fabrication ops from anything purchased — so a part
+    # still carrying one is something we make. That is what kept BI-ADHESIVECABLE from
+    # getting an Assemble/pack line, and it stays kept.
+    try:
+        from bought_in_policy import FABRICATION_OPS as _FAB_OPS
+    except Exception:
+        _FAB_OPS = frozenset()
+    _already = {id(p) for p in labour_parts}
+    _routed_in = []
+    for p in bom_parts:
+        if id(p) in _already or not isinstance(p, dict):
+            continue
+        _ops = set()
+        for _k in ("textual_operations", "operations", "inferred_operations"):
+            _v = p.get(_k)
+            if isinstance(_v, list):
+                _ops |= {str(o).strip().lower() for o in _v if str(o).strip()}
+        if _ops & _FAB_OPS:
+            labour_parts.append(p)
+            _routed_in.append(f"{p.get('part_number')} ({', '.join(sorted(_ops & _FAB_OPS))})")
+    if _routed_in:
+        _flag(f"labour: {len(_routed_in)} part(s) pulled into the labour block because they "
+              f"carry a fabrication route, not because the engine classified their stock: "
+              f"{'; '.join(_routed_in[:6])}. A route we read is a route we cost.", flags)
     # Powder gate: costs_gbp carries powder_coating blind to finish (part_estimates
     # has finish=None). The reliable drawing-derived signal is textual_operations on
     # the fuller manufacturing_writeup.parts record. Build {part_number -> is_powder}.

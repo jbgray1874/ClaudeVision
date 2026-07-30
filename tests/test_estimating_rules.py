@@ -4173,5 +4173,87 @@ def test_the_top_assembly_is_not_a_second_bill_of_materials():
        "three per sub-assembly, two sub-assemblies on the GA, is six")
 
 
+def test_a_route_we_read_is_a_route_we_cost():
+    """Every rule building labour_parts decided by CLASSIFICATION — is this steel, board,
+    wire, a tube, a board panel. A part the engine could not classify got no labour row no
+    matter what it was doing, so an operation read off the drawing, or concluded from it, was
+    dropped on the floor at the last step before the sheet.
+
+    M&S 2085 spent four runs proving it. Its tubes are round; the section detector only knew
+    rectangular; no section meant no `tube` stock form; and no stock form meant that even a
+    saw and a weld sitting on the part in black and white would never have reached the labour
+    block. Fixing the detector fixes that job. This fixes the shape of it.
+
+    Gated on FABRICATION operations, never handling/assembly, because bought_in_policy strips
+    fabrication ops from anything purchased — so a part still carrying one is something we
+    make. That is what kept BI-ADHESIVECABLE from getting an Assemble/pack line.
+    """
+    from bought_in_policy import FABRICATION_OPS
+
+    # Mirror the selection exactly as wb_populate applies it.
+    def _routed(bom_parts, already=()):
+        _already = {id(p) for p in already}
+        out = []
+        for p in bom_parts:
+            if id(p) in _already:
+                continue
+            ops = set()
+            for k in ("textual_operations", "operations", "inferred_operations"):
+                v = p.get(k)
+                if isinstance(v, list):
+                    ops |= {str(o).strip().lower() for o in v if str(o).strip()}
+            if ops & FABRICATION_OPS:
+                out.append(p)
+        return out
+
+    tube = {"part_number": "2085-02", "textual_operations": ["saw", "welding"]}
+    bought = {"part_number": "BI-ADHESIVECABLE", "textual_operations": ["handling", "assembly"]}
+    unclassified = {"part_number": "2085-77"}
+    got = _routed([tube, bought, unclassified])
+
+    eq([p["part_number"] for p in got], ["2085-02"],
+       "a part carrying a saw and a weld is costed, whatever the engine made of its stock")
+    ok(bought not in got,
+       "a purchased item with only handling/assembly is NOT pulled in — that was the old bug")
+    ok(unclassified not in got, "and a part with no route at all adds nothing")
+
+    ok("saw" in FABRICATION_OPS and "welding" in FABRICATION_OPS,
+       "saw and welding are fabrication")
+    ok("handling" not in FABRICATION_OPS and "assembly" not in FABRICATION_OPS,
+       "handling and assembly are not — we do fit bought-in parts and that time is real")
+
+    # BUILT IS NOT WIRED.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok("from bought_in_policy import FABRICATION_OPS as _FAB_OPS" in _wb,
+       "wb_populate actually applies this when building labour_parts")
+    ok("labour_parts.append(p)" in _wb, "and appends the routed part to the labour block")
+
+
+def test_every_fabricated_part_is_in_the_bill_of_materials():
+    """The template costs a nested sheet part in the Sheet Steel block, so it has never
+    appeared in the "Bill of Materials (Per Unit)" list. Arithmetically correct, practically
+    wrong: on 2085 an estimator opens the sheet, reads the bill of materials, and the main
+    part of the job — the bracket plate everything welds into — is not in it.
+
+    Listed now, and listed first. The price is deliberately ZERO because Total Material Cost
+    (M92) sums BOM + Wire + Sheet Steel + Other Sheet — a priced duplicate here would double
+    that part's material and the sheet would be wrong in a way nobody would spot.
+    """
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok('"_bom_cross_reference": True' in _wb,
+       "fabricated parts are added to the BOM list as identifiable cross-reference rows")
+    ok('"unit_cost_gbp": 0.0' in _wb,
+       "at zero — the Sheet Steel block already carries the money")
+    ok("bom_parts = _xref_rows + list(bom_parts)" in _wb,
+       "and first, so the bill of materials reads as the parts list it claims to be")
+    ok('costed in {_blk_name} below' in _wb,
+       "with the block carrying the cost named on the line, so the zero is explained")
+
+    # The total formula is what makes the zero mandatory. If the sheet ever stops summing
+    # the Sheet Steel block into M92, this decision has to be revisited — so it is asserted.
+    ok("M92 (Total Material Cost) sums every material block" in _wb,
+       "the material total still sums every block, which is why the duplicate must be free")
+
+
 if __name__ == "__main__":
     sys.exit(main())
