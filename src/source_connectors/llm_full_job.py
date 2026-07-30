@@ -299,6 +299,27 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 _flagged = True
                 out["material"] += 1
 
+        # FINISH AND COLOUR WERE READ, PROJECTED, AND THEN DROPPED HERE.
+        #
+        # The extract asks for them per BOM row and Grok returns them — 2085's GA states
+        # "SURFACE FINISH: POWDER COATED  COLOUR: RAL9006". project_row carried them onto the
+        # LLM part row and this fold never looked at them, so they never reached
+        # normalized_finish, which is exactly the field the powder gate reads. On this job the
+        # gate's assembly-pointer path saved it; on a pack that states the finish per part in
+        # the BOM table, the coat would simply not be costed.
+        _fin = jp.get("finish")
+        if _fin and not str(part.get("normalized_finish") or "").strip():
+            part["normalized_finish"] = _fin
+            part["finish_source"] = _src(jp, "finish")
+            _sf = part.setdefault("surface_finishes", [])
+            if isinstance(_sf, list) and _fin not in _sf:
+                _sf.append(_fin)
+            _flagged = True
+        _col = jp.get("colour")
+        if _col and not str(part.get("normalized_colour") or "").strip():
+            part["normalized_colour"] = _col
+            _flagged = True
+
         wt = _num(jp.get("weight_g"))
         if wt and wt > 0 and not _num(part.get("stated_weight_g")):
             part["stated_weight_g"] = round(wt, 2)
@@ -377,6 +398,20 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
                 continue
             ops.append(op)
             part.setdefault("operation_sources", {})[op] = src
+            # THE SEQUENCE IS AN ANSWER WE ASKED FOR AND THREW AWAY.
+            # The schema carries `sequence` (10, 20, 30...) and nothing read it, so the
+            # workbook fell back to sorting labour rows ALPHABETICALLY by department —
+            # Assemble/pack, Laser, P.Coat. That is not a route, it is a word list.
+            _seq = _num(route.get("sequence"))
+            if _seq is not None:
+                part.setdefault("operation_sequence", {})[op] = _seq
+            # Grok's own department is kept for comparison, never used as the value: a
+            # department string the workbook's rate table does not carry makes its LOOKUP
+            # return 0, which costs the work at nothing and reads exactly like it was
+            # never there. OP_NAME_MAP stays authoritative; a disagreement is worth seeing.
+            _dept = str(route.get("department") or "").strip()
+            if _dept:
+                part.setdefault("operation_department_read", {})[op] = _dept
             part.setdefault("review_flags", []).append(
                 f"operation '{op}' {'INFERRED' if route.get('inferred') else 'read'} from the "
                 f"drawing pack ({route.get('confidence') or 'confidence unstated'})"

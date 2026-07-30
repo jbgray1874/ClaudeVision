@@ -1809,6 +1809,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             })
             if op and op not in g.setdefault("engine_ops", []):
                 g["engine_ops"].append(str(op))
+            # The sequence the extract read off THIS drawing, if it gave one. Lowest wins:
+            # a group can gather several parts, and the row belongs where the first of them
+            # is done. None stays None, and the shop's own order applies at sort time.
+            _rs = (pe.get("operation_sequence") or {}).get(str(op or "").strip().lower())
+            if _rs is not None:
+                try:
+                    _rs = float(_rs)
+                    g["route_sequence"] = (_rs if g.get("route_sequence") is None
+                                           else min(float(g["route_sequence"]), _rs))
+                except (TypeError, ValueError):
+                    pass
             g["qty"] += _qty_pu
             _bh = _safe(batch_hours.get(op))
             if _bh and _bh > 0:
@@ -1884,7 +1895,41 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"sheet (clinch x4 @60/hr, pem x2 @120/hr both = 15s/insert). Knurled "
                   f"knob & thumbscrew are hand-assembled (Assemble/pack), not counted.", flags)
 
-    for _key in sorted(_groups.keys()):
+    # ── LABOUR ROWS COME OUT IN MANUFACTURING ORDER, NOT ALPHABETICAL ORDER ─────────
+    #
+    # This was sorted(_groups.keys()), and the keys start with the department name — so
+    # 2085's sheet read Assemble/pack, Laser, P.Coat. Pack before cut. That is not a route,
+    # it is a word list, and an estimator reading down it cannot sanity-check a sequence
+    # that is not in sequence.
+    #
+    # The extract already returns `sequence` per route (10, 20, 30...) and it was thrown
+    # away. Where it is present it wins, because it is the model reading THIS drawing's
+    # order of work. Where it is absent — a job with no routes extracted, or an operation
+    # the engine inferred itself — the shop's own order applies: you cut before you form,
+    # form before you weld, weld before you coat, and you pack last. That is a fact about
+    # the shop, not about a job, so it is inheritable by every job that follows.
+    _SHOP_ORDER = {
+        "Laser (Metal)": 10, "Laser (Acrylic)": 10, "Punch": 10, "Guillotine": 10,
+        "Saw": 15, "Tube": 15, "CNC / Joinery machining": 15,
+        "Fold": 20, "Linebend": 20, "Tubebend": 20, "Roll": 20, "Robomac": 20,
+        "Manual labour (Metal)": 25,
+        "Edge Banding": 28, "Gluing / Bonding": 28,
+        "Weld (CO2)": 30, "Spotweld": 30,
+        "Dress Welds": 35, "Grinding / Deburr": 38,
+        "P.Coat": 60, "Spray / Wet Paint": 60, "Diamond Polish": 62,
+        "Assemble/pack (Metal)": 90, "Assemble/pack (Acrylic)": 90,
+    }
+    _DEFAULT_ORDER = 50          # something we do not recognise sits mid-route, not last
+
+    def _group_order(_k):
+        _g = _groups[_k]
+        _read = _g.get("route_sequence")
+        if _read is not None:
+            return (0, float(_read), str(_g.get("wb_op") or ""))
+        return (0, float(_SHOP_ORDER.get(str(_g.get("wb_op") or ""), _DEFAULT_ORDER)),
+                str(_g.get("wb_op") or ""))
+
+    for _key in sorted(_groups.keys(), key=_group_order):
         g = _groups[_key]
         if row > lb["last_row"]:
             labour_overflow = True

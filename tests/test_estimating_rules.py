@@ -4300,5 +4300,77 @@ def test_every_word_we_ask_for_is_a_word_we_can_cost():
        "and told not to repeat a joining operation per part")
 
 
+def test_the_finish_grok_read_reaches_the_part():
+    """finish and colour were read, projected onto the LLM part row, and then dropped.
+
+    The extract asks for them per BOM row and Grok returns them — 2085's GA states
+    "SURFACE FINISH: POWDER COATED  COLOUR: RAL9006 - WHITE ALUMINIUM". project_row carried
+    them across and apply_full_job_to_pre_estimate never looked, so they never reached
+    normalized_finish — which is exactly the field the powder gate reads. On 2085 the gate's
+    assembly-pointer path saved it; on a pack stating the finish per part in the BOM table,
+    the coat would simply not have been costed.
+    """
+    from llm_full_extract import normalize_job
+    from source_connectors.llm_full_job import apply_full_job_to_pre_estimate
+
+    job = {"found": True, "source": "llm_full_extract", "routes": [], "bom": [
+        {"part_number": "2085-01", "description": "BRACKET PLATE", "qty": 1,
+         "material_family": "metal", "material": "MILD STEEL",
+         "thickness_or_section": "1.2mm",
+         "finish": "POWDER COATED", "colour": "RAL9006 - WHITE ALUMINIUM"}]}
+    normalize_job(job)
+    parts = [{"part_number": "2085-01"}]
+    apply_full_job_to_pre_estimate(parts, job)
+
+    eq(parts[0].get("normalized_finish"), "POWDER COATED",
+       "the finish reaches the field the powder gate reads")
+    ok("POWDER COATED" in (parts[0].get("surface_finishes") or []),
+       "and its fallback field too")
+    eq(parts[0].get("normalized_colour"), "RAL9006 - WHITE ALUMINIUM", "with the colour")
+
+    # A finish the engine already established is not overwritten by a read one.
+    parts2 = [{"part_number": "2085-01", "normalized_finish": "RAW"}]
+    apply_full_job_to_pre_estimate(parts2, job)
+    eq(parts2[0]["normalized_finish"], "RAW", "an established finish stands")
+
+
+def test_labour_rows_come_out_in_manufacturing_order():
+    """2085's sheet read Assemble/pack, Laser, P.Coat. Pack before cut.
+
+    The rows were emitted with sorted(_groups.keys()), and the keys start with the
+    department name — so the route came out ALPHABETICALLY. That is not a route, it is a
+    word list, and an estimator reading down it cannot sanity-check a sequence that is not
+    in sequence.
+
+    The extract already returns `sequence` per route and it was thrown away. Where it is
+    present it wins — it is the model reading THIS drawing's order of work. Where it is
+    absent, the shop's own order applies: cut, form, weld, coat, pack.
+    """
+    import re as _re
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    _blk = _wb[_wb.index("_SHOP_ORDER = {"):]
+    _blk = _blk[:_blk.index("}")]
+    order = dict(_re.findall(r'"([^"]+)":\s*(\d+)', _blk))
+
+    for _earlier, _later in (("Laser (Metal)", "Fold"), ("Fold", "Weld (CO2)"),
+                             ("Weld (CO2)", "P.Coat"),
+                             ("P.Coat", "Assemble/pack (Metal)"),
+                             ("Tube", "Weld (CO2)"), ("Saw", "Fold")):
+        ok(int(order[_earlier]) < int(order[_later]),
+           f"{_earlier} is done before {_later}")
+
+    # Alphabetical would put Assemble/pack first and Laser second — the exact order the
+    # 2085 sheet came out in. This is what the fixture is defending against.
+    ok(int(order["Assemble/pack (Metal)"]) > int(order["Laser (Metal)"]),
+       "pack is not the first operation on the sheet, whatever the alphabet says")
+
+    ok('sorted(_groups.keys(), key=_group_order)' in _wb,
+       "and the emit loop actually uses the ordering — a table nothing sorts by is a comment")
+    ok('_read = _g.get("route_sequence")' in _wb,
+       "with the drawing's own sequence taking precedence when the extract gave one")
+    ok('g["route_sequence"] = (_rs if g.get("route_sequence") is None' in _wb,
+       "which means it has to be carried onto the group in the first place")
+
+
 if __name__ == "__main__":
     sys.exit(main())
