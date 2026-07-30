@@ -31,11 +31,31 @@ from typing import Any, Dict, List
 
 __all__ = [
     "is_bought_in",
+    "bought_in_reason",
     "has_fabrication_evidence",
     "bought_in_conflict",
     "strip_fabrication_ops",
     "FABRICATION_OPS",
+    "FABRICATED_FAMILIES",
 ]
+
+# THE FAMILY IS AN ANSWER TO THIS QUESTION, AND IT WAS BEING THROWN AWAY.
+#
+# Every BOM row the extract returns is classified metal / acrylic / timber / wire / tube /
+# bought_in. Five of those six are things we cut and form here; only one is a purchase. That
+# classification was read from the drawing and then consumed by nothing at all.
+#
+# On M&S 2085 the two tubes arrived with no material — the GA states MILD STEEL once, at
+# assembly level — and an unidentified part falls through to BOUGHT_IN by default. Being
+# bought-in, every fabrication operation was stripped, so the saw and the weld never
+# happened, and the outer tube was priced at GBP 86.04 by a market estimate. GBP 2.00 of
+# labour on a welded three-part bracket.
+#
+# A stated family beats a defaulted material, which is all "BOUGHT_IN with nothing else on
+# the record" ever was. It does NOT beat catalogue identity — a BI- code, a bought-in page
+# role, an explicit flag — because that is the module's founding rule and the failure mode of
+# getting it wrong is fabrication labour booked against something we simply buy.
+FABRICATED_FAMILIES = frozenset({"metal", "acrylic", "timber", "wire", "tube"})
 
 # Code families that are bought-in by construction. BI- is SDI's own prefix; the rest are
 # commercial lines that are never fabricated.
@@ -62,27 +82,47 @@ def _upper(v: Any) -> str:
     return str(v or "").strip().upper()
 
 
+def bought_in_reason(part: Dict[str, Any]) -> str:
+    """WHICH rule decided, in words, or "" for a part we make.
+
+    is_bought_in returns a bare boolean, and when a part turned out to be classified wrongly
+    there was no way to tell which of seven rules had fired without reading the record by
+    hand. This returns the answer and the reason together so a wrong classification is
+    diagnosable from the run itself."""
+    if not isinstance(part, dict):
+        return ""
+    # Catalogue identity first — these are the strong signals and they are not overridable.
+    if part.get("is_bought_in") or part.get("_bought_in_from_text_scan"):
+        return "flagged bought-in on the record"
+    if "bought_in" in [str(r).lower() for r in (part.get("page_roles") or [])]:
+        return "the drawing page is a bought-in page"
+    src = str(part.get("source") or "").lower()
+    for tok in _BOUGHT_IN_SOURCE_TOKENS:
+        if tok in src:
+            return f"read from a bought-in-only source ({tok})"
+    if _upper(part.get("part_number")).startswith(_BOUGHT_IN_PREFIXES):
+        return "the part number is a bought-in code family"
+
+    fam = str(part.get("material_family") or "").strip().lower()
+    if fam == "bought_in":
+        return "the drawing classifies it as a purchased component"
+    if _upper(part.get("normalized_material")) == "BOUGHT_IN" or _upper(part.get("material")) == "BOUGHT_IN":
+        # The weakest signal there is: "we could not identify the material". A family read
+        # from the drawing is a positive statement and outranks that absence.
+        if fam in FABRICATED_FAMILIES:
+            return ""
+        return "no material was identified, so it defaulted to bought-in"
+    return ""
+
+
 def is_bought_in(part: Dict[str, Any]) -> bool:
     """True when the part is purchased rather than made.
 
     Union of every rule the codebase previously applied separately, so adopting this
-    predicate cannot make any consumer classify FEWER parts as bought-in than before."""
-    if not isinstance(part, dict):
-        return False
-    if _upper(part.get("normalized_material")) == "BOUGHT_IN":
-        return True
-    if _upper(part.get("material")) == "BOUGHT_IN":
-        return True
-    if part.get("is_bought_in") or part.get("_bought_in_from_text_scan"):
-        return True
-    if "bought_in" in [str(r).lower() for r in (part.get("page_roles") or [])]:
-        return True
-    src = str(part.get("source") or "").lower()
-    if any(tok in src for tok in _BOUGHT_IN_SOURCE_TOKENS):
-        return True
-    if _upper(part.get("part_number")).startswith(_BOUGHT_IN_PREFIXES):
-        return True
-    return False
+    predicate cannot make any consumer classify FEWER parts as bought-in than before — with
+    one deliberate exception, documented at FABRICATED_FAMILIES: a part the drawing puts in a
+    fabricated family is not bought-in merely because its material went unidentified."""
+    return bool(bought_in_reason(part))
 
 
 def has_fabrication_evidence(part: Dict[str, Any]) -> bool:

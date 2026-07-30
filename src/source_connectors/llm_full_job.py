@@ -191,6 +191,15 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         if not jp:
             continue
         _flagged = False
+
+        # The family the drawing was classified into, carried onto the part record because
+        # bought_in_policy uses it to decide make/buy. Without this the classification stops
+        # at the extract and a tube reads as an unidentified purchase.
+        _fam = str(jp.get("material_family") or "").strip().lower()
+        if _fam and not part.get("material_family"):
+            part["material_family"] = _fam
+        if jp.get("is_bought_in"):
+            part["is_bought_in"] = True
         # SOURCE WATERFALL: a DXF flat pattern (or SolidWorks native) is MEASURED truth and wins
         # on GEOMETRY. Where it exists (e.g. 12120), the LLM must NOT override the blank/section —
         # it only fills material/finish the engine lacks. The LLM drives geometry ONLY for the

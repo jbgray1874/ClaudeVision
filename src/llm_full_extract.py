@@ -49,7 +49,9 @@ _SCHEMA = """{
   "bom": [
     {"item_no": "", "part_number": "", "description": "", "qty": 0,
      "material_family": "metal|acrylic|timber|wire|tube|bought_in|mixed|other",
-     "material": "", "thickness_or_section": "", "finish": "", "colour": "",
+     "material": "", "thickness_or_section": "",
+     "cut_length_mm": null, "weight_g": null,
+     "finish": "", "colour": "",
      "is_fabricated": true, "is_bought_in": false,
      "confidence": "high|medium|low",
      "source": "explicit_bom_table|title_block|notes|inferred_from_views|filename",
@@ -75,6 +77,12 @@ _COMMON_RULES = """
 MATERIAL FAMILIES. Classify every component: metal, acrylic, timber, wire, tube, bought_in.
 thickness_or_section uses the style that suits the family — "1.2mm" for sheet and acrylic,
 "18mm" for board, "\u00d86mm" for wire and round tube, "25x25x1.5 SHS" for box section.
+The family decides whether we MAKE the part or BUY it, so it is not decoration: metal, acrylic,
+timber, wire and tube are all things we cut and form here. Reserve bought_in for a component
+purchased complete, and set is_bought_in to match it.
+
+cut_length_mm is the length a tube, wire or extruded section is sawn to. Without it a section
+cannot be costed at all \u2014 the section size alone does not say how much of it we buy.
 
 MIXED ASSEMBLIES. Keep components PURE. Only a top-level assembly, or a sub-assembly that
 genuinely combines materials, is "mixed" — never force one material onto everything under it.
@@ -224,7 +232,102 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
         return result
     obj["source"] = SOURCE_NAME
     obj["found"] = True
+    normalize_job(obj)
     return obj
+
+
+# ── the bridge between what the model returns and what the engine reads ──────────────
+#
+# THE SCHEMA SAYS `bom`. THREE CONSUMERS READ `parts`. NOTHING JOINED THEM.
+#
+# apply_full_job_to_pre_estimate keys on job["parts"], overlay_drawing_facts iterates
+# job["parts"], and parts_missing_detail is handed job["parts"]. When the multi-material
+# schema replaced the old one, the component list was renamed to `bom` and all three went
+# quietly to zero: no material, no thickness, no section reached any part, and because the
+# missing-detail list came back empty the inference pass was never even asked to run.
+#
+# M&S 2085 is the whole of that failure in one sheet. Two tubes with no material, no section
+# and no operation; the outer tube priced at GBP 86.04 by a market estimate because nothing
+# said we make it; GBP 2.00 of labour on a welded three-part bracket, all of it booked to the
+# one part that happened to have a DXF. Every downstream fix looked like a costing bug.
+#
+# So this projects `bom` onto the field names the engine reads, once, at the source. Both
+# shapes work: a job that already carries `parts` is left alone.
+_FABRICATED_FAMILIES = frozenset({"metal", "acrylic", "timber", "wire", "tube"})
+_RE_SECTION_3D = re.compile(r"\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?")
+_RE_SINGLE_DIM = re.compile(r"([\d.]+)\s*mm", re.I)
+
+
+def _split_size(raw: Any, family: str):
+    """thickness_or_section -> (thickness_mm, tube_section). The prompt asks for one field in
+    whichever style suits the family; the engine has two, and they drive different costing
+    paths — a thickness feeds sheet nesting, a section feeds the tube/bar catalogue."""
+    s = str(raw or "").strip()
+    if not s:
+        return None, None
+    if _RE_SECTION_3D.search(s):
+        return None, s                      # 25x25x1.5 SHS — a section, verbatim
+    if family in ("tube", "wire"):
+        return None, s                      # Ø6mm — a section we cannot decompose, kept as read
+    m = _RE_SINGLE_DIM.search(s)
+    if m:
+        try:
+            return float(m.group(1)), None  # 1.2mm / 18mm — a sheet or board thickness
+        except ValueError:
+            pass
+    return None, None
+
+
+def project_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """One BOM row -> one part record in the shape the engine reads. None if unusable."""
+    if not isinstance(row, dict):
+        return None
+    pn = str(row.get("part_number") or "").strip()
+    if not pn:
+        return None
+    fam = str(row.get("material_family") or "").strip().lower()
+    thk, sec = _split_size(row.get("thickness_or_section"), fam)
+    # THE FAMILY IS THE MAKE/BUY ANSWER, and it is the reason this matters beyond plumbing.
+    # A tube is stock we saw and weld, not a component we purchase — but with nothing
+    # carrying the family through, a tube with no material read as an unidentified bought-in,
+    # had its fabrication operations stripped by bought_in_policy, and was priced by the
+    # market instead of costed from a route.
+    bought = bool(row.get("is_bought_in")) or fam == "bought_in"
+    if fam in _FABRICATED_FAMILIES:
+        bought = False
+    return {
+        "part_number": pn,
+        "description": row.get("description"),
+        "material": row.get("material") or None,
+        "material_family": fam or None,
+        "thickness_mm": thk if thk is not None else row.get("thickness_mm"),
+        "tube_section": sec or row.get("tube_section"),
+        "cut_length_mm": row.get("cut_length_mm"),
+        "weight_g": row.get("weight_g"),
+        "finish": row.get("finish") or None,
+        "colour": row.get("colour") or None,
+        "is_bought_in": bought,
+        "confidence": row.get("confidence"),
+        "source": row.get("source"),
+    }
+
+
+def normalize_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Project the schema's `bom` onto the `parts` shape the engine reads. In place."""
+    if not isinstance(job, dict):
+        return job
+    if isinstance(job.get("parts"), list) and job["parts"]:
+        return job                           # already in the shape the consumers want
+    parts: List[Dict[str, Any]] = []
+    seen = set()
+    for row in (job.get("bom") or []):
+        p = project_row(row)
+        if not p or p["part_number"].upper() in seen:
+            continue
+        seen.add(p["part_number"].upper())
+        parts.append(p)
+    job["parts"] = parts
+    return job
 
 
 def main() -> None:
@@ -321,10 +424,14 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
         rows = parsed.get("bom") if isinstance(parsed.get("bom"), list) else []
     out = []
     for row in rows:
-        if not isinstance(row, dict) or not row.get("part_number"):
+        # Projected through the same bridge as the transcription pass: the inference pass
+        # answers in the SAME schema, so it comes back with thickness_or_section too, and a
+        # merge that reads thickness_mm would silently find nothing on every row.
+        p = project_row(row)
+        if not p:
             continue
-        row["source"] = INFERENCE_SOURCE
-        out.append(row)
+        p["source"] = INFERENCE_SOURCE
+        out.append(p)
 
     # ROUTES ARE THE POINT OF THIS PASS, AND THEY WERE BEING THROWN AWAY.
     # _INFER_PROMPT says "Every route you return must have inferred=true", and

@@ -3843,6 +3843,133 @@ def test_an_inferred_route_reaches_the_part_and_says_it_was_inferred():
        "and the estimator is told on the part which values were concluded, not read")
     ok(counts["operations"] >= 2, "both inferred operations were folded in")
 
+def test_the_schema_says_bom_and_the_engine_reads_parts():
+    """M&S 2085's whole sheet, in one disconnection.
+
+    When the multi-material schema went in, the component list was renamed `bom`. Three
+    consumers key on job["parts"]: apply_full_job_to_pre_estimate, overlay_drawing_facts and
+    parts_missing_detail. All three went silently to zero. No material, no thickness and no
+    section reached any part; and because the missing-detail list came back empty, the
+    inference pass — written precisely for this job — was never asked to run at all.
+
+    What reached the estimator looked like a costing bug: two tubes with no material and no
+    operation, the outer one priced at GBP 86.04 by a market estimate because nothing said we
+    make it, and GBP 2.00 of labour on a welded three-part bracket.
+    """
+    from llm_full_extract import normalize_job, parts_missing_detail
+
+    job = {"found": True, "bom": [
+        {"part_number": "2085-01", "description": "BRACKET PLATE", "qty": 1,
+         "material_family": "metal", "material": "MILD STEEL",
+         "thickness_or_section": "1.2mm"},
+        {"part_number": "2085-02", "description": "OUTER TUBE", "qty": 1,
+         "material_family": "tube", "material": "", "thickness_or_section": "25x25x1.5 SHS",
+         "cut_length_mm": 340},
+        {"part_number": "BI-KNOB", "description": "KNURLED KNOB", "qty": 2,
+         "material_family": "bought_in", "is_bought_in": True},
+        # A section on a METAL row. The family branch does not save this one: without the
+        # section test, "40 x 40 x 2mm SHS" reads as a 2mm sheet thickness and the part is
+        # nested and lasered as flat plate instead of sawn from box.
+        {"part_number": "2085-04", "description": "LEG", "qty": 4,
+         "material_family": "metal", "thickness_or_section": "40 x 40 x 2mm SHS"},
+    ]}
+    normalize_job(job)
+
+    eq(len(job["parts"]), 4, "every BOM row becomes a part record the engine can read")
+    plate = next(p for p in job["parts"] if p["part_number"] == "2085-01")
+    tube = next(p for p in job["parts"] if p["part_number"] == "2085-02")
+    knob = next(p for p in job["parts"] if p["part_number"] == "BI-KNOB")
+
+    eq(plate["thickness_mm"], 1.2, "'1.2mm' on a metal row is a sheet thickness")
+    eq(plate["tube_section"], None, "and not a section")
+    eq(tube["tube_section"], "25x25x1.5 SHS", "'25x25x1.5 SHS' is a section")
+    eq(tube["thickness_mm"], None, "and not a thickness")
+    eq(tube["cut_length_mm"], 340, "the cut length comes through, or the section cannot be costed")
+    eq(tube["is_bought_in"], False, "a tube is stock we saw, not a component we purchase")
+    eq(knob["is_bought_in"], True, "and a bought_in family still is one")
+
+    leg = next(p for p in job["parts"] if p["part_number"] == "2085-04")
+    eq(leg["tube_section"], "40 x 40 x 2mm SHS",
+       "a section is a section whatever family the row is in")
+    eq(leg["thickness_mm"], None,
+       "it is NOT a 2mm sheet — that would nest and laser a part we saw from box")
+
+    _asked = {m["part_number"] for m in parts_missing_detail(job["parts"])}
+    ok("2085-02" in _asked,
+       "the tube with no material is now what the inference pass gets asked about")
+
+
+def test_a_job_already_in_the_parts_shape_is_left_alone():
+    """The bridge must not rewrite a job that already arrived in the shape the engine reads —
+    an older cached extract, or a caller that built the job itself."""
+    from llm_full_extract import normalize_job
+    job = {"found": True, "parts": [{"part_number": "X-1", "material": "MILD STEEL"}],
+           "bom": [{"part_number": "SOMETHING-ELSE"}]}
+    normalize_job(job)
+    eq(len(job["parts"]), 1, "the existing parts list is untouched")
+    eq(job["parts"][0]["part_number"], "X-1", "and not replaced from bom")
+
+
+def test_an_unidentified_tube_is_not_a_purchase():
+    """A GA states MILD STEEL once, at assembly level. Its tubes therefore carry no material
+    of their own, and an unidentified material falls through to BOUGHT_IN by default. Being
+    bought-in, strip_fabrication_ops removed the saw and the weld, so the part had no route
+    and was priced by a market estimate instead of costed.
+
+    The drawing DID say what it was: material_family "tube". That classification was read and
+    consumed by nothing. A stated family is a positive statement and outranks the absence of
+    a material — but it must not outrank catalogue identity, which is the module's whole
+    founding rule, so both directions are asserted here.
+    """
+    from bought_in_policy import is_bought_in, bought_in_reason, strip_fabrication_ops
+
+    tube = {"part_number": "2085-02", "description": "OUTER TUBE",
+            "material_family": "tube", "normalized_material": "BOUGHT_IN",
+            "textual_operations": ["saw", "welding", "handling"]}
+    ok(not is_bought_in(tube), "a tube whose material went unidentified is still a tube")
+    eq(bought_in_reason(tube), "", "and nothing claims otherwise")
+    eq(strip_fabrication_ops(tube), [], "so its saw and weld survive")
+    ok("welding" in tube["textual_operations"], "the weld is still on the part")
+
+    # Catalogue identity is NOT overridable by a family. A supplier's own part can perfectly
+    # well be a metal one; we still buy it.
+    catalogue = {"part_number": "BI-KNURLEDKNOB", "material_family": "metal"}
+    ok(is_bought_in(catalogue), "a BI- code is bought-in whatever family it is in")
+    ok("code family" in bought_in_reason(catalogue), "and says which rule decided")
+
+    flagged = {"part_number": "2085-09", "material_family": "tube", "is_bought_in": True}
+    ok(is_bought_in(flagged), "an explicit bought-in flag is not overridden by a family")
+
+    # And a genuinely unidentified part is unchanged: this must not become a blanket amnesty.
+    unknown = {"part_number": "2085-77", "normalized_material": "BOUGHT_IN"}
+    ok(is_bought_in(unknown), "no family and no material is still bought-in")
+    ok("defaulted" in bought_in_reason(unknown), "and says so, rather than just returning True")
+
+
+def test_the_family_reaches_the_part_that_the_makebuy_rule_reads():
+    """bought_in_policy reads part["material_family"]. The extract produced it. Nothing
+    carried it from one to the other — which is the same shape of gap as the one above, one
+    layer down, and would have left the fix inert."""
+    from llm_full_extract import normalize_job
+    from source_connectors.llm_full_job import apply_full_job_to_pre_estimate
+    from bought_in_policy import is_bought_in
+
+    job = {"found": True, "source": "llm_full_extract", "routes": [], "bom": [
+        {"part_number": "2085-02", "description": "OUTER TUBE", "qty": 1,
+         "material_family": "tube", "thickness_or_section": "25x25x1.5 SHS",
+         "cut_length_mm": 340}]}
+    normalize_job(job)
+
+    parts = [{"part_number": "2085-02", "description": "OUTER TUBE",
+              "normalized_material": "BOUGHT_IN", "textual_operations": ["saw"]}]
+    apply_full_job_to_pre_estimate(parts, job)
+
+    eq(parts[0].get("material_family"), "tube", "the family reaches the part record")
+    ok(not is_bought_in(parts[0]),
+       "so the make/buy rule can see it and the tube keeps its route")
+    eq((parts[0].get("section_stock") or {}).get("length_mm"), 340.0,
+       "and the section is costed at the length the drawing gives")
+
 
 if __name__ == "__main__":
     sys.exit(main())
