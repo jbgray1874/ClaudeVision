@@ -4538,5 +4538,114 @@ def test_title_variants_resolve_without_guessing():
        "including an old engine title we wrote ourselves")
 
 
+def test_a_section_callout_belongs_to_the_part_it_describes():
+    """M&S 2085 is one sheet: a GA carrying the parts table and every detail view. Its parts
+    therefore all share the same page text, so the "12.7  1.2 WALL" printed for the tubes was
+    offered to every part on the drawing — and the BRACKET PLATE took it.
+
+    The plate left the Sheet Steel block, its nesting and laser calculator went blank, and
+    the one measured part in the job stopped being costed as sheet at all. The run reported
+    "0 steel" where it had reported 1.
+
+    Two guards, both on evidence: measured flat geometry means sheet, and the
+    lower-confidence WALL detections need the part to look like section stock on its own
+    account. The canonical cutting-list form is unambiguous and still applies to anything.
+    """
+    from document_builder import _detect_section_stock, _apply_post_build_fixes
+
+    _ga = "4.0 7.56 INT DRAIN 12.7 1.2 WALL 10.0 12.7 80.0 MATERIAL: MILD STEEL"
+    ok(_detect_section_stock(_ga) is not None,
+       "the tubes' section is still read off the drawing")
+
+    def _run(part):
+        """Drive the REAL post-build pass over a one-page pack. The first version of this
+        fixture re-implemented the guard and its mutation passed — the same defect shape as
+        the bug being tested."""
+        summary = {"pages": [{"page": 1, "text": _ga, "page_number": 1}]}
+        p = dict(part, pages=[1], page_roles=["assembly"], materials=["MILD STEEL"])
+        _apply_post_build_fixes([p], summary)
+        return p.get("section_stock")
+
+    eq(_run({"part_number": "2085-01", "description": "BRACKET PLATE",
+             "material_family": "metal", "flat_pattern_detected": True}), None,
+       "a part with a measured flat pattern is sheet — it does not become tube because a "
+       "tube is dimensioned elsewhere on the same drawing")
+
+    ok(_run({"part_number": "2085-02", "description": "OUTER TUBE",
+             "material_family": "tube"}) is not None,
+       "the tube still gets its section")
+
+    eq(_run({"part_number": "2085-09", "description": "BACK PANEL",
+             "material_family": "metal"}), None,
+       "and neither does an unmeasured plate, on shared page text")
+
+    # THE FLAT-GEOMETRY GUARD ON ITS OWN. The two guards overlap on a part called "BRACKET
+    # PLATE", so removing either still gives the right answer there and a mutation passes.
+    # This is the case only measurement settles: a flat part whose NAME reads like section.
+    # On a job literally called "Rail Nav Bracket" that is not a contrived example.
+    eq(_run({"part_number": "2085-11", "description": "RAIL MOUNT BRACKET",
+             "material_family": "metal", "flat_pattern_detected": True}), None,
+       "a measured flat pattern beats a description that merely sounds like section stock")
+    ok(_run({"part_number": "2085-12", "description": "RAIL MOUNT BRACKET",
+             "material_family": "metal"}) is not None,
+       "and without the measurement, the same description DOES take the section — which is "
+       "what makes the guard above the thing doing the work")
+
+    # PATH 1 is a cutting-list line naming the part's own stock. Unambiguous, and it applies
+    # regardless — narrowing that would lose every tube the reader currently gets right.
+    ok(_detect_section_stock("30 x 60 x 1.50mm TUBE 1125")["detection_path"]
+       == "canonical_profile",
+       "a canonical cutting-list callout is not one of the corroborated paths")
+
+
+def test_a_routed_operation_with_no_cost_model_still_reaches_the_sheet():
+    """The last gate, and the one every fix so far was blocked behind.
+
+    The labour loop built its operation list from labour_estimate.costs_gbp alone — the
+    operations the estimator managed to put a NUMBER against. An operation on the part's
+    route with no time model behind it was not merely uncosted, it was invisible: no row, no
+    flag, nothing on the sheet saying the job includes it.
+
+    2085 proved every other link works. Both tubes carry tube_cut and tube_bending, the
+    plate carries folding, all three map to real departments (Tube, Tubebend, Fold), and the
+    invariant reported them "named but not priced" while the sheet showed five labour rows
+    on one part. The route was right the whole way down and stopped here.
+    """
+    from wb_populate import _map_operation, routed_operations_without_cost as _routed
+
+    def _ops_for(pe):
+        """Calls the REAL helper. The first version of this mirrored the logic instead, and
+        the mutation that deleted the fabrication-only guard passed clean."""
+        costs = (pe.get("labour_estimate") or {}).get("costs_gbp") or {}
+        return list(costs.keys()) + _routed(pe, costs)
+
+    tube = {"part_number": "2085-02",
+            "labour_estimate": {"costs_gbp": {"welding": 0.31}},
+            "textual_operations": ["tube_cut", "tube_bending", "welding", "handling"]}
+    got = _ops_for(tube)
+    ok("tube_cut" in got, "a routed tube cut with no cost model still gets a row")
+    ok("tube_bending" in got, "and so does the bend")
+    eq(got.count("welding"), 1, "an operation the estimator costed is not duplicated")
+    ok("handling" not in got,
+       "handling with no cost is NOT a missing row — that is how a bought-in got an "
+       "Assemble/pack line it should never have had")
+
+    # And they map to departments the rate table can pay.
+    eq(_map_operation("tube_cut", False, "tube"), "Tube", "tube_cut is the Tube department")
+    eq(_map_operation("tube_bending", False, "tube"), "Tubebend", "and the bend is Tubebend")
+    eq(_map_operation("folding", False, ""), "Fold", "the plate's fold is Fold")
+
+    # A part with neither a cost nor a route still produces nothing.
+    eq(_ops_for({"part_number": "X"}), [], "nothing routed and nothing costed is no row")
+
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok("routed_operations_without_cost(pe, costs)" in _wb
+       and "ops = ops + _routed_extra" in _wb,
+       "the labour loop actually takes the union — this is the fifth time a fix has been "
+       "built and not wired, and it is the one that decides whether the route is costed")
+    ok("throughput default so the work appears on the sheet" in _wb,
+       "and says so, because a time nobody modelled must not read as a time somebody agreed")
+
+
 if __name__ == "__main__":
     sys.exit(main())

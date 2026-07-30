@@ -317,6 +317,40 @@ _TUBE_OP_REMAP = {
 }
 
 
+
+def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None) -> List[str]:
+    """Fabrication operations on a part's ROUTE that the estimator put no cost against.
+
+    Module-level and pure so it can actually be driven. The first version of this lived
+    inline in the middle of a six-hundred-line function, and the fixture written for it
+    mirrored the logic instead of calling it — so the mutation that deleted the guard passed.
+    That is the same defect shape as the bug it was testing.
+
+    Only FABRICATION operations count. Handling and assembly without a cost are not a
+    missing row: bought_in_policy deliberately leaves those on purchased parts, and treating
+    them as missing work is how BI-ADHESIVECABLE got an Assemble/pack line it never earned.
+    """
+    try:
+        from bought_in_policy import FABRICATION_OPS as _FAB
+    except Exception:
+        return []
+    if not isinstance(pe, dict):
+        return []
+    if costs is None:
+        costs = (pe.get("labour_estimate") or {}).get("costs_gbp") or {}
+    _costed = {str(k).strip().lower() for k in (costs or {})}
+    out: List[str] = []
+    for key in ("textual_operations", "operations", "inferred_operations"):
+        vals = pe.get(key)
+        if not isinstance(vals, list):
+            continue
+        for o in vals:
+            os_ = str(o).strip().lower()
+            if os_ and os_ not in _costed and os_ not in out and os_ in _FAB:
+                out.append(os_)
+    return out
+
+
 def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[str]:
     """Map an engine operation name to the correct WB department name.
 
@@ -1757,10 +1791,36 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         le = pe.get("labour_estimate") or {}
         costs = le.get("costs_gbp") or {}
         batch_hours = le.get("batch_hours") or {}
+        _pn = str(pe.get("part_number") or "")
         ops = list(costs.keys())
+
+        # ── A ROUTED OPERATION WITH NO COST MODEL IS STILL WORK ──────────────────────
+        #
+        # This list came only from labour_estimate.costs_gbp — the operations the estimator
+        # managed to put a NUMBER against. An operation that is on the part's route but has
+        # no time model behind it was not merely uncosted, it was invisible: no row, no
+        # flag, nothing on the sheet to say the job includes it.
+        #
+        # M&S 2085 is that exactly. Both tubes carry tube_cut and tube_bending, the plate
+        # carries folding, all three map to real departments (Tube, Tubebend, Fold) — and
+        # the invariant reported them as "named but not priced" while the sheet showed five
+        # labour rows on one part. The route was right the whole way down and stopped here.
+        #
+        # So the union is taken. An operation the estimator costed keeps its number; one it
+        # did not gets a row anyway, timed from the department's own throughput default (the
+        # same default the sheet already uses when it cannot size-band a part) and flagged
+        # by name. Every filter below still runs — spurious-by-stock-form, the powder gate,
+        # the diamond-polish gate — so this widens what reaches them, not what survives them.
+        _routed_extra = routed_operations_without_cost(pe, costs)
+        if _routed_extra:
+            ops = ops + _routed_extra
+            _flag(f"labour {_pn or '?'}: {len(_routed_extra)} routed operation(s) carry no "
+                  f"cost model ({', '.join(_routed_extra)}) — costed from the department's "
+                  f"throughput default so the work appears on the sheet. Confirm the times.",
+                  flags)
+
         if not ops:
             continue
-        _pn = str(pe.get("part_number") or "")
         _qty_pu = int(_safe(pe.get("quantity"), 1))
         _is_acr = _is_board(str(pe.get("normalized_material") or ""))
         _sf = (pe.get("material_estimate") or {}).get("stock_form")

@@ -877,8 +877,49 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # base upright leg, a 30x60x1.5mm tube listed only on its detail page).
         if not part.get("section_stock"):
             _sec = _detect_section_stock(combined_text)
+            # A SECTION READ OFF A SHARED PAGE BELONGS TO THE PART IT DESCRIBES, NOT TO
+            # EVERY PART ON THAT PAGE.
+            #
+            # combined_text is the text of the part's PAGES. On a single-sheet pack — one GA
+            # carrying the parts table and every detail view — all three parts share it, so
+            # a section callout anywhere on the drawing is offered to all of them. M&S 2085
+            # prints "12.7  1.2 WALL" for its tubes, and the BRACKET PLATE took it: it left
+            # the Sheet Steel block, its nesting and laser calculator went blank, and the
+            # only measured part in the job stopped being costed as sheet.
+            #
+            # Two guards, both keyed on evidence rather than on the drawing:
+            #   - measured flat geometry says the part is sheet. A flat pattern is not tube.
+            #   - the lower-confidence detections (a WALL callout with no cutting-list line)
+            #     need the part to look like section stock on its own account. PATH 1's
+            #     canonical "30 x 60 x 1.5mm TUBE 1125" is unambiguous and still applies.
             if _sec:
-                part["section_stock"] = _sec
+                _measured_flat = bool(part.get("flat_pattern_detected")
+                                      or part.get("dxf_measured_outline")
+                                      or part.get("native_flat_pattern")
+                                      or part.get("dxf_augmented"))
+                _path = str(_sec.get("detection_path") or "")
+                _needs_corroboration = _path in ("wall_notation", "round_wall_notation")
+                _fam = str(part.get("material_family") or "").strip().lower()
+                _desc = " ".join(str(part.get(k) or "") for k in
+                                 ("description", "part_name", "title")).upper()
+                _looks_like_section = (
+                    _fam in ("tube", "wire")
+                    or any(w in _desc for w in ("TUBE", "RHS", "SHS", "CHS", "BOX SECTION",
+                                                "SECTION", "BAR", "ROD", "UPRIGHT", "LEG",
+                                                "RAIL", "POST"))
+                )
+                if _measured_flat:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page text was NOT applied — "
+                        f"the part has measured flat geometry, so it is sheet, not section. "
+                        f"The callout belongs to another part on the same drawing")
+                elif _needs_corroboration and not _looks_like_section:
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from this part's page text was NOT applied — "
+                        f"nothing about this part says it is section stock, and the callout is "
+                        f"shared page text that describes a different part on the drawing")
+                else:
+                    part["section_stock"] = _sec
 
         geo_reliability = float(
             (part.get("geometry_rollup") or {})
