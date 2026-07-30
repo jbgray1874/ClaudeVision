@@ -1940,6 +1940,44 @@ def _finalize_scan_summary(
                 print(f"   [solidworks] {_sw_job.meta.get('native_files_present')} native model "
                       f"file(s) are in this job folder but were NOT read: "
                       f"{_sw_job.meta.get('native_unread_reason')}", flush=True)
+            # ── AN EXTRACT FOR ANOTHER JOB IS WORSE THAN NO EXTRACT ──────────────
+            # M&S 2085 was costed against 12120_sw_extract_v7.json — top assembly
+            # 12120-01-GA, a different customer's job, bound through a persistent
+            # SDI_SW_EXTRACT_JSON. The connector took it, matched nothing, applied
+            # nothing, and stamped a native_extract_partial BLOCKER describing 12120's
+            # unreadable model onto 2085's estimate. The estimator was told a released
+            # component might be missing, about a pack with nothing to do with the job.
+            #
+            # Zeros are survivable. What this opens is not: SDI numbers sequentially, so
+            # -01/-02/-03 collide across jobs constantly, and a colliding pair would have
+            # had one job's bounding boxes, materials and bend counts written onto the
+            # other's parts at the HIGHEST rank in the waterfall.
+            _sw_id = None
+            if _sw_job and _sw_job.found:
+                from source_connectors.solidworks import extract_is_for_this_job
+                _sw_id = extract_is_for_this_job(_pre_estimate_parts, _sw_job)
+                if not _sw_id.get("belongs"):
+                    print(f"   [solidworks] REFUSED this extract — it is not for this job. "
+                          f"It describes {_sw_id.get('candidates')} part(s) under top "
+                          f"assembly '{_sw_id.get('top_assembly') or '?'}' and matches NONE "
+                          f"of this job's {_sw_id.get('job_parts')} part(s).\n"
+                          f"                extract: {_sw_job.meta.get('extract_path')}\n"
+                          f"                Nothing from it has been applied, and its "
+                          f"warnings are ITS job's, not this one's. Point "
+                          f"SDI_SW_EXTRACT_JSON at this job's extract, or unset it.",
+                          flush=True)
+                    summary["solidworks_native"] = {
+                        "source": "solidworks_api",
+                        "found": False,
+                        "refused_wrong_job": True,
+                        "extract_path": _sw_job.meta.get("extract_path"),
+                        "extract_top_assembly": _sw_id.get("top_assembly"),
+                        "extract_part_count": _sw_id.get("candidates"),
+                        "job_part_count": _sw_id.get("job_parts"),
+                        "reason": ("the extract matches none of this job's parts, so it "
+                                   "describes a different job"),
+                    }
+                    _sw_job = None
             if _sw_job and _sw_job.found:
                 _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts

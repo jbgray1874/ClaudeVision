@@ -4978,5 +4978,58 @@ def test_the_model_supplies_the_cut_length_the_drawing_never_printed():
        "and flagged as the envelope of a bent part, not its developed length")
 
 
+def test_a_native_extract_for_another_job_is_refused():
+    """M&S 2085 was costed against 12120_sw_extract_v7.json — top assembly 12120-01-GA, a
+    different customer's job, bound through a persistent SDI_SW_EXTRACT_JSON. The connector
+    took it, matched nothing, applied nothing, and stamped a native_extract_partial BLOCKER
+    describing 12120's unreadable model onto 2085's estimate. The estimator was told a
+    released component might be missing, about a pack with nothing to do with the job.
+
+    Zeros are survivable. What it opens is not: SDI numbers sequentially, so -01/-02/-03
+    collide across jobs constantly, and a colliding pair would have had one job's bounding
+    boxes, materials and bend counts written onto the other's parts — silently, at the
+    HIGHEST rank in the waterfall.
+
+    The test is evidence, not names: a folder can be called anything and a job renumbered,
+    but an extract describing THIS job matches at least one of its parts.
+    """
+    from source_connectors.solidworks import (extract_is_for_this_job, NativeJob, NativePart,
+                                              apply_native_to_pre_estimate)
+
+    _parts = [{"part_number": "2085-02"}, {"part_number": "2085-03"}]
+    _foreign = NativeJob(found=True, meta={"top_assembly": "12120-01-GA"},
+                         part_signals={"12120-01-01M": NativePart(part_number="12120-01-01M"),
+                                       "12120-01-103": NativePart(part_number="12120-01-103")})
+    _v = extract_is_for_this_job(_parts, _foreign)
+    ok(not _v["belongs"], "an extract matching none of this job's parts does not belong to it")
+    eq(_v["matched"], 0, "and reports that nothing matched")
+    eq(_v["top_assembly"], "12120-01-GA",
+       "naming the job it DOES describe, so the estimator can see what went wrong")
+
+    _own = NativeJob(found=True, meta={"top_assembly": "2085-GA"},
+                     part_signals={"2085-02": NativePart(part_number="2085-02")})
+    ok(extract_is_for_this_job(_parts, _own)["belongs"],
+       "a single genuine match is enough — a partial extract is still this job's")
+
+    # A pack with no part signals at all is not evidence of the wrong job, just of a thin
+    # extract. Refusing that would throw away the BOM rows it may still carry.
+    ok(extract_is_for_this_job(_parts, NativeJob(found=True))["belongs"],
+       "an empty extract is not a foreign one")
+
+    # THE INDEX IS SHARED. This check must run the SAME matcher the fold runs, or it
+    # verifies its own copy rather than the code — the mistake made twice in fixtures today.
+    _sw = open(__import__("source_connectors.solidworks", fromlist=["x"]).__file__,
+               encoding="utf-8").read()
+    eq(_sw.count("exact, tail = _native_match_index(job)"), 2,
+       "the identity check and the fold build their match index the same way, once")
+
+    # And the call site actually refuses, rather than logging and carrying on.
+    _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
+    ok('if not _sw_id.get("belongs"):' in _fs, "the scan checks before applying")
+    ok("_sw_job = None" in _fs,
+       "and drops the extract, so neither its geometry NOR its blockers reach this job")
+    ok('"refused_wrong_job": True' in _fs, "recording why, on the job")
+
+
 if __name__ == "__main__":
     sys.exit(main())

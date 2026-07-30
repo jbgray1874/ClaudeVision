@@ -818,6 +818,66 @@ def _reject_dxf_geometry(part: Dict[str, Any], nat: "NativePart",
                  f"costed from the SolidWorks flat {fl:g} x {fw:g}mm")
 
 
+def _native_match_index(job: NativeJob):
+    """The (exact, tail) index every native match runs through. ONE construction.
+
+    It was built inline inside apply_native_to_pre_estimate, so the job-identity check
+    below would have had to reproduce it — and a check that reproduces the thing it is
+    checking tests its own copy, not the code. That mistake has been made twice today
+    already, in fixtures; this avoids making it a third time in production.
+    """
+    exact = {_pn_key(pn): pn for pn in job.part_signals}
+    for r in job.bom:
+        exact.setdefault(_pn_key(r.part_number), r.part_number)
+    for a in job.assembly_pns:
+        exact.setdefault(_pn_key(a), a)
+    # Unique trailing-segment index ('12120-01-01M' -> '01M'), built only from keys that are
+    # unambiguous; a tail claimed by two parts is dropped from the index entirely.
+    _tail_hits: Dict[str, List[str]] = {}
+    for k, pn in exact.items():
+        seg = k.rsplit("-", 1)[-1]
+        if seg and seg != k:
+            _tail_hits.setdefault(seg, []).append(pn)
+    tail = {k: v[0] for k, v in _tail_hits.items() if len(v) == 1 and k not in exact}
+    return exact, tail
+
+
+def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, Any]:
+    """Does this extract actually describe the job in front of us?
+
+    AN EXTRACT FOR ANOTHER JOB IS WORSE THAN NO EXTRACT.
+
+    M&S 2085 was costed against `12120_sw_extract_v7.json` — top assembly 12120-01-GA, a
+    different customer's job. The connector took it, matched nothing, applied nothing, and
+    stamped a `native_extract_partial` BLOCKER describing 12120's unreadable file onto
+    2085's estimate. An estimator reading that job was told a released component might be
+    missing, about a model pack that has nothing to do with it.
+
+    Here it produced zeros, which is survivable. The failure mode it opens is not: two jobs
+    whose part numbers collide — and SDI's are sequential, so -01, -02, -03 collide
+    constantly — would have had one job's bounding boxes, materials and bend counts written
+    onto the other's parts, silently, at the highest rank in the waterfall.
+
+    The test is evidence, not names. A folder can be called anything and a job can be
+    renumbered, but an extract that describes THIS job matches at least one of its parts.
+    Zero matches against a non-empty extract means the two are unrelated.
+
+    Returns {"belongs": bool, "matched": int, "candidates": int, "top_assembly": str}.
+    """
+    exact, tail = _native_match_index(job)
+    matched = 0
+    for part in parts or []:
+        if isinstance(part, dict) and _match_native(part, exact, tail):
+            matched += 1
+    return {
+        "belongs": bool(matched) or not job.part_signals,
+        "matched": matched,
+        "candidates": len(job.part_signals),
+        "job_parts": len([p for p in (parts or []) if isinstance(p, dict)]),
+        "top_assembly": str((job.meta or {}).get("top_assembly") or ""),
+    }
+
+
 def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, int]:
     """Fold the SolidWorks native extract into the PRE-ESTIMATE part records — i.e. BEFORE
     costing — so the engine's existing paths fire with modelled truth instead of inferred
@@ -853,23 +913,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     if not job or not job.found or not isinstance(parts, list):
         return out
 
-    exact = {_pn_key(pn): pn for pn in job.part_signals}
-    for r in job.bom:
-        exact.setdefault(_pn_key(r.part_number), r.part_number)
-    # The TOP assembly is not a line in its own BOM, so index the assembly documents too.
-    # Without this the GA row falls through and gets costed as if it were a leaf part —
+    # The TOP assembly is not a line in its own BOM, so the index covers assembly documents
+    # too. Without that the GA row falls through and gets costed as if it were a leaf part —
     # the single largest over-count this connector exists to stop.
     asm_keys = {_pn_key(a) for a in job.assembly_pns}
-    for a in job.assembly_pns:
-        exact.setdefault(_pn_key(a), a)
-    # Unique trailing-segment index ('12120-01-01M' -> '01M'), built only from keys that
-    # are unambiguous; a tail claimed by two parts is dropped from the index entirely.
-    _tail_hits: Dict[str, List[str]] = {}
-    for k, pn in exact.items():
-        seg = k.rsplit("-", 1)[-1]
-        if seg and seg != k:
-            _tail_hits.setdefault(seg, []).append(pn)
-    tail = {k: v[0] for k, v in _tail_hits.items() if len(v) == 1 and k not in exact}
+    exact, tail = _native_match_index(job)
 
     bom_by_pn = {_pn_key(r.part_number): r for r in job.bom}
 
