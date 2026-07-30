@@ -5030,8 +5030,9 @@ def test_a_native_extract_for_another_job_is_refused():
     # verifies its own copy rather than the code — the mistake made twice in fixtures today.
     _sw = open(__import__("source_connectors.solidworks", fromlist=["x"]).__file__,
                encoding="utf-8").read()
-    eq(_sw.count("exact, tail = _native_match_index(job)"), 2,
-       "the identity check and the fold build their match index the same way, once")
+    eq(_sw.count("exact, tail, lead = _native_match_index(job)"), 2,
+       "the identity check and the fold build their match index the same way, once — "
+       "including the leading-code tier, or the guard refuses extracts the fold could match")
 
     # And the call site actually refuses, rather than logging and carrying on.
     _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
@@ -5155,6 +5156,97 @@ def test_the_raw_model_response_is_kept():
     ok('"from_cache": bool(_job.get("_from_cache"))' in _fs,
        "which also records whether this run re-asked or reused — otherwise a stable number "
        "and a cached one look the same")
+
+
+def test_a_model_file_named_code_plus_description_still_matches():
+    """SolidWorks files are routinely named "<code> - <description>", so the document title
+    arrives as "2085-02 - Outer Tube" and the BOM's "2085-02" matches neither exactly nor by
+    trailing segment.
+
+    On M&S 2085 that threw away a GENUINE extract. The model carries 34mm and 20mm bounding
+    boxes for the two tubes — the cut lengths the drawing never printed, which is the whole
+    reason 7e7cdbd exists — and both were discarded because a description was appended to
+    the number. Worse, zero matches is exactly what the wrong-job guard treats as foreign, so
+    the job's own extract was refused as somebody else's.
+
+    A separator must follow the code, and ambiguity is refused exactly as the tail rule
+    refuses it. Putting one job's geometry on another's part is what this module guards.
+    """
+    from source_connectors.solidworks import (_native_match_index, _match_native,
+                                              extract_is_for_this_job, NativeJob, NativePart)
+
+    job = NativeJob(found=True, meta={"top_assembly": "2085 - Assembly"}, part_signals={
+        "2085-01 - Bracket Plate": NativePart(part_number="2085-01 - Bracket Plate"),
+        "2085-02 - Outer Tube": NativePart(part_number="2085-02 - Outer Tube",
+                                           bbox_mm=[34.0, 12.7, 12.7]),
+        "2085-03 - Inner Tube": NativePart(part_number="2085-03 - Inner Tube",
+                                           bbox_mm=[20.0, 10.0, 10.0])})
+    e, t, l = _native_match_index(job)
+
+    eq(_match_native({"part_number": "2085-02"}, e, t, l), "2085-02 - Outer Tube",
+       "the BOM's code finds the model file that leads with it")
+    eq(_match_native({"part_number": "2085-03"}, e, t, l), "2085-03 - Inner Tube",
+       "and so does the other tube")
+
+    # A PARTIAL CODE MUST NOT CLAIM IT. A separator has to follow, or "2085-0" swallows
+    # everything under 2085 and one part's geometry lands on another.
+    eq(_match_native({"part_number": "2085-0"}, e, t, l), None,
+       "a truncated code matches nothing")
+
+    # ISOLATE THE SEPARATOR RULE. With three parts a truncated code is ambiguous and gets
+    # dropped anyway, so removing the separator requirement still gives the right answer and
+    # a mutation passes. It takes a SINGLE-part extract to show what the rule actually does:
+    # there, "2085-0" would uniquely claim "2085-02 - Outer Tube" and put that tube's
+    # geometry on whatever part happened to be numbered 2085-0.
+    _one = NativeJob(found=True, part_signals={
+        "2085-02 - Outer Tube": NativePart(part_number="2085-02 - Outer Tube",
+                                           bbox_mm=[34.0, 12.7, 12.7])})
+    _e1, _t1, _l1 = _native_match_index(_one)
+    eq(_match_native({"part_number": "2085-02"}, _e1, _t1, _l1), "2085-02 - Outer Tube",
+       "the full code still matches on a single-part extract")
+    eq(_match_native({"part_number": "2085-0"}, _e1, _t1, _l1), None,
+       "but a truncated one does not, even with nothing to be ambiguous against — the code "
+       "must end where the title's separator is")
+    # AN ASSEMBLY NUMBER MUST NOT CLAIM A PART. "2085" leads "2085-02 - Outer Tube" and is
+    # followed by a separator, so it matches on the rule alone — putting the outer tube's
+    # bounding box and material onto the assembly that CONTAINS it. Usually the ambiguity
+    # rule catches it, because a job number leads several parts; on a single-part extract
+    # nothing does. The assembly documents are known, so they are excluded explicitly.
+    _asm = NativeJob(found=True, assembly_pns=["2085"], part_signals={
+        "2085-02 - Outer Tube": NativePart(part_number="2085-02 - Outer Tube",
+                                           bbox_mm=[34.0, 12.7, 12.7])})
+    _e4, _t4, _l4 = _native_match_index(_asm)
+    eq(_match_native({"part_number": "2085"}, _e4, _t4, _l4), "2085",
+       "the assembly matches ITSELF exactly")
+    eq(_match_native({"part_number": "2085-02"}, _e4, _t4, _l4), "2085-02 - Outer Tube",
+       "and the part still finds its own model")
+    ok("2085" not in _l4,
+       "but the assembly number is not a leading key for the parts inside it — it is indexed "
+       "EXACTLY as a document, and the lead tier excludes anything already in exact")
+    eq(_match_native({"part_number": "2085-99"}, e, t, l), None, "and an absent one likewise")
+
+    # AMBIGUITY IS REFUSED, not resolved by dict order — the same discipline as the tail rule.
+    _amb = NativeJob(found=True, part_signals={
+        "2085-02 - Outer Tube": NativePart(part_number="2085-02 - Outer Tube"),
+        "2085-02 - Outer Tube Rev B": NativePart(part_number="2085-02 - Outer Tube Rev B")})
+    _e2, _t2, _l2 = _native_match_index(_amb)
+    eq(_match_native({"part_number": "2085-02"}, _e2, _t2, _l2), None,
+       "a code claimed by two documents is dropped, not guessed between")
+
+    # An exact title still wins outright, and the earlier trailing-segment rule survives.
+    _mix = NativeJob(found=True, part_signals={
+        "12120-01-01M": NativePart(part_number="12120-01-01M"),
+        "2085-02": NativePart(part_number="2085-02")})
+    _e3, _t3, _l3 = _native_match_index(_mix)
+    eq(_match_native({"part_number": "2085-02"}, _e3, _t3, _l3), "2085-02", "exact wins")
+    eq(_match_native({"part_number": "01M"}, _e3, _t3, _l3), "12120-01-01M",
+       "and the trailing-segment match still works")
+
+    # AND THE GUARD NOW ACCEPTS THE JOB'S OWN EXTRACT. It was refusing this one, correctly by
+    # its own rule and wrongly in fact, because nothing could match.
+    ok(extract_is_for_this_job([{"part_number": "2085-02"}, {"part_number": "2085-03"}],
+                               job)["belongs"],
+       "the genuine extract is recognised as this job's once its parts can be matched")
 
 
 if __name__ == "__main__":

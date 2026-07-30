@@ -252,12 +252,28 @@ def _cache_write(key: str, obj: Dict[str, Any]) -> None:
     d = _cache_dir()
     if not d or not isinstance(obj, dict):
         return
+    # ATOMIC, AND NOT SILENT. A half-written entry is worse than none: the next run reads
+    # it, json.load raises, _cache_read swallows it and re-asks — which is survivable — but
+    # a TRUNCATED yet still-valid JSON would be reused as if it were the whole answer. Write
+    # beside and rename, which is atomic on both platforms this runs on.
+    #
+    # And say so on failure. A cache that cannot write is a job silently back to being
+    # non-reproducible, which is the exact property the cache exists to provide.
+    _final = d / f"{_CACHE_VERSION}_{key}.json"
+    _tmp = d / f"{_CACHE_VERSION}_{key}.json.tmp"
     try:
-        with open(d / f"{_CACHE_VERSION}_{key}.json", "w", encoding="utf-8") as fh:
+        with open(_tmp, "w", encoding="utf-8") as fh:
             json.dump({k: v for k, v in obj.items() if k != "_from_cache"},
                       fh, indent=1, ensure_ascii=False)
-    except Exception:
-        pass
+        os.replace(_tmp, _final)
+    except Exception as exc:
+        try:
+            _tmp.unlink()
+        except Exception:
+            pass
+        print(f"   [llm-extract] could NOT cache this read ({exc}) — the next run will "
+              f"re-ask the model, so this job is not reproducible until it can write to "
+              f"{d}", flush=True)
 
 
 def build_document_context(pdf_path: str | Path, max_chars: int = 60000) -> str:

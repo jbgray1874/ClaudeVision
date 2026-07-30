@@ -673,7 +673,7 @@ def _pn_key(s: Any) -> str:
 
 
 def _match_native(part: Dict[str, Any], exact: Dict[str, str],
-                  tail: Dict[str, str]) -> Optional[str]:
+                  tail: Dict[str, str], lead: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Resolve a pre-estimate part to a native part number. Exact (whitespace/case
     insensitive) first; then a UNIQUE trailing-segment match, which covers the common
     case where the PDF prints '01M' against the model's '12120-01-01M'. Ambiguous tails
@@ -683,7 +683,10 @@ def _match_native(part: Dict[str, Any], exact: Dict[str, str],
         return None
     if pk in exact:
         return exact[pk]
-    return tail.get(pk)
+    _hit = tail.get(pk)
+    if _hit:
+        return _hit
+    return (lead or {}).get(pk)
 
 
 def _has_costable_geometry(part: Dict[str, Any]) -> bool:
@@ -839,7 +842,32 @@ def _native_match_index(job: NativeJob):
         if seg and seg != k:
             _tail_hits.setdefault(seg, []).append(pn)
     tail = {k: v[0] for k, v in _tail_hits.items() if len(v) == 1 and k not in exact}
-    return exact, tail
+    # LEADING-CODE INDEX. SolidWorks files are routinely named "<code> - <description>", so
+    # the document title comes through as "2085-02 - Outer Tube" and the BOM's "2085-02"
+    # matches neither exactly nor by trailing segment. On M&S 2085 that refused a GENUINE
+    # extract: the model carries 34mm and 20mm bounding boxes for the two tubes, and both
+    # were thrown away because a description was appended to the number.
+    #
+    # A separator must follow the code, so "2085-0" cannot claim "2085-02 - Outer Tube", and
+    # ambiguity is refused exactly as the tail rule refuses it: a code claimed by two
+    # documents is dropped from the index entirely rather than resolved by luck of ordering.
+    # Putting one job's geometry on another's part is the failure this whole module guards.
+    _lead_hits: Dict[str, List[str]] = {}
+    for k, pn in exact.items():
+        for _sep in ("-", "_", "."):
+            for _i, _c in enumerate(k):
+                if _c == _sep and _i > 0:
+                    _lead_hits.setdefault(k[:_i], []).append(pn)
+    # An ASSEMBLY number cannot claim a part through this tier: "2085" leads
+    # "2085-02 - Outer Tube" and is followed by a separator, so the rule alone would match it
+    # and put the tube's bounding box onto the assembly containing it. It does not, because
+    # every assembly document is indexed in `exact` above and `k not in exact` excludes it.
+    # An explicit assembly exclusion was written here and removed: it was a strict subset of
+    # that clause, and its mutation passed — dead code with a comment claiming it protects
+    # something is worse than no code at all.
+    lead = {k: v[0] for k, v in _lead_hits.items()
+            if len(set(v)) == 1 and k not in exact and k not in tail}
+    return exact, tail, lead
 
 
 def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, Any]:
@@ -864,10 +892,10 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict
 
     Returns {"belongs": bool, "matched": int, "candidates": int, "top_assembly": str}.
     """
-    exact, tail = _native_match_index(job)
+    exact, tail, lead = _native_match_index(job)
     matched = 0
     for part in parts or []:
-        if isinstance(part, dict) and _match_native(part, exact, tail):
+        if isinstance(part, dict) and _match_native(part, exact, tail, lead):
             matched += 1
     return {
         "belongs": bool(matched) or not job.part_signals,
@@ -917,14 +945,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     # too. Without that the GA row falls through and gets costed as if it were a leaf part —
     # the single largest over-count this connector exists to stop.
     asm_keys = {_pn_key(a) for a in job.assembly_pns}
-    exact, tail = _native_match_index(job)
+    exact, tail, lead = _native_match_index(job)
 
     bom_by_pn = {_pn_key(r.part_number): r for r in job.bom}
 
     for part in parts:
         if not isinstance(part, dict):
             continue
-        pn = _match_native(part, exact, tail)
+        pn = _match_native(part, exact, tail, lead)
         if not pn:
             continue
         nat = job.part_signals.get(pn)
