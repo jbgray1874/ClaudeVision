@@ -2123,6 +2123,12 @@ def _finalize_scan_summary(
                     "spec": _job.get("spec"),
                     "inferred_parts": _job.get("inferred_parts"),
                     "inferred_routes": _job.get("inferred_routes"),
+                    # What the model literally returned, so a route that appears on one run
+                    # and not the next can be settled by comparing responses rather than by
+                    # inferring from which files a commit happened to touch.
+                    "raw_response": _job.get("_raw_response"),
+                    "prompt_fingerprint": _job.get("_prompt_fingerprint"),
+                    "from_cache": bool(_job.get("_from_cache")),
                     "counts": _c,
                 }
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "

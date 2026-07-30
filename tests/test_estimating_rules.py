@@ -5116,5 +5116,37 @@ def test_the_same_pack_produces_the_same_route():
     ok("_cache_write(_ikey, _res)" in _src, "and it is stored too")
 
 
+def test_the_raw_model_response_is_kept():
+    """"The model did not say it" and "we did not read it" produce identical artefacts.
+
+    2085's weld appeared, vanished, and came back across three runs of the same drawing.
+    Settling which of the two it was took reading a commit diff and noticing that no line of
+    the prompt, parser, route-fold or department map had changed between the runs — so the
+    same code on the same input could not have produced different routes, therefore the input
+    differed. That reasoning is sound and it is not a method: it works once, by luck of the
+    commit boundaries falling in a useful place.
+
+    _llm_extract.json holds the PARSED job, so it can never answer the question. The raw
+    response can, directly, and it costs nothing to keep.
+    """
+    import llm_full_extract as lfe
+
+    _src = open(lfe.__file__, encoding="utf-8").read()
+    ok('obj["_raw_response"] = (raw or "")[:20000]' in _src,
+       "the transcription pass keeps what the model actually returned")
+    ok('"_raw_response": (raw or "")[:20000],' in _src,
+       "and so does the inference pass, which is the unstable half")
+    ok('obj["_prompt_fingerprint"]' in _src,
+       "with a fingerprint of the prompt it was answering, so a response cannot be compared "
+       "against the wrong question")
+
+    _fs = open(__import__("file_scan").__file__, encoding="utf-8").read()
+    ok('"raw_response": _job.get("_raw_response")' in _fs,
+       "and it reaches the sidecar an estimator can actually open")
+    ok('"from_cache": bool(_job.get("_from_cache"))' in _fs,
+       "which also records whether this run re-asked or reused — otherwise a stable number "
+       "and a cached one look the same")
+
+
 if __name__ == "__main__":
     sys.exit(main())

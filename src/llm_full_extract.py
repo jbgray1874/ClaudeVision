@@ -382,6 +382,13 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     obj["source"] = SOURCE_NAME
     obj["found"] = True
     normalize_job(obj)
+    # THE RAW RESPONSE, KEPT. Without it "the model did not say it" and "we did not read
+    # it" are indistinguishable from every saved artefact, because _llm_extract.json holds
+    # the PARSED job. 2085's vanishing weld was settled by reading a commit diff and
+    # noticing the parse path had not changed between two runs — which works once and is
+    # not a method. Truncated, because this is for answering a question, not an archive.
+    obj["_raw_response"] = (raw or "")[:20000]
+    obj["_prompt_fingerprint"] = _cache_key(_PROMPT, SYSTEM_TRANSCRIBE)
     _cache_write(_key, obj)
     return obj
 
@@ -602,6 +609,10 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
     _res = {"source": INFERENCE_SOURCE, "parts": out, "routes": routes,
             "warnings": parsed.get("warnings") or [],
             "missing_information": parsed.get("missing_information") or [],
+            # The inferred route is the unstable half — 2085's weld was a conclusion, not a
+            # reading, and it is the one that came and went. Keep what the model actually
+            # said so the next disagreement is settled by evidence, not by archaeology.
+            "_raw_response": (raw or "")[:20000],
             "found": bool(out or routes)}
     # The INFERRED route is the unstable half — welding on 2085 was a conclusion, not a
     # reading, and it is the one that vanished. Cached on the same terms as the rest.
