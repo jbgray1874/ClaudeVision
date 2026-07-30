@@ -318,7 +318,57 @@ _TUBE_OP_REMAP = {
 
 
 
-def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None) -> List[str]:
+
+def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
+    """part number -> the operations on its RAW record.
+
+    THE ROUTE AND THE COST LIVE ON DIFFERENT RECORDS, AND THE SHEET ONLY READS ONE.
+
+    estimator.estimate_part builds a costed part_estimate and never copies
+    textual_operations onto it, so estimate_summary.part_estimates — which is what
+    wb_populate walks — has no route at all. The route stays on summary["parts"] and
+    summary["manufacturing_writeup"]["parts"].
+
+    That is why 2085's tube_cut was visible to the invariant and invisible to the sheet:
+    invariants._parts falls through to summary["parts"] and found it, wb_populate read
+    part_estimates and found nothing. Both were right about the record they were looking at.
+    It is the same wrong-record shape as _parts() returning geometry to a price check, and
+    the same shape as the bom/parts bridge — the third time in this job.
+    """
+    out: Dict[str, List[str]] = {}
+    if not isinstance(summary, dict):
+        return out
+    _sources = [summary.get("parts"),
+                (summary.get("manufacturing_writeup") or {}).get("parts")]
+    for _src in _sources:
+        if not isinstance(_src, list):
+            continue
+        for _p in _src:
+            if not isinstance(_p, dict):
+                continue
+            _pn = str(_p.get("part_number") or "").strip().upper()
+            if not _pn:
+                continue
+            _bucket = out.setdefault(_pn, [])
+            for _k in ("textual_operations", "operations", "inferred_operations"):
+                _v = _p.get(_k)
+                if not isinstance(_v, list):
+                    continue
+                for _o in _v:
+                    _os = str(_o).strip().lower()
+                    if _os and _os not in _bucket:
+                        _bucket.append(_os)
+            # A ruling by measurement travels with the route, or the sheet would re-add
+            # exactly what the measurement removed.
+            for _ro in (_p.get("operations_ruled_out") or {}):
+                _ros = str(_ro).strip().lower()
+                if _ros in _bucket:
+                    _bucket.remove(_ros)
+    return out
+
+
+def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None,
+                                   extra_ops: Any = None) -> List[str]:
     """Fabrication operations on a part's ROUTE that the estimator put no cost against.
 
     Module-level and pure so it can actually be driven. The first version of this lived
@@ -344,8 +394,11 @@ def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None) -> Lis
     # this is the last gate before a labour row, and it is the one that spends money.
     _ruled = {str(k).strip().lower() for k in (pe.get("operations_ruled_out") or {})}
     out: List[str] = []
-    for key in ("textual_operations", "operations", "inferred_operations"):
-        vals = pe.get(key)
+    _pools = [pe.get(k) for k in ("textual_operations", "operations", "inferred_operations")]
+    # extra_ops carries the route off the RAW record, which the costed part_estimate does
+    # not have. Without it this function can only ever see an empty list on a real job.
+    _pools.append(list(extra_ops or []))
+    for vals in _pools:
         if not isinstance(vals, list):
             continue
         for o in vals:
@@ -1504,12 +1557,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         from bought_in_policy import FABRICATION_OPS as _FAB_OPS
     except Exception:
         _FAB_OPS = frozenset()
+    # The route lives on the RAW part records, not on the costed ones this loop walks.
+    _route_by_pn = route_operations_by_part(summary)
     _already = {id(p) for p in labour_parts}
     _routed_in = []
     for p in bom_parts:
         if id(p) in _already or not isinstance(p, dict):
             continue
-        _ops = set()
+        _ops = set(_route_by_pn.get(str(p.get("part_number") or "").strip().upper(), []))
         for _k in ("textual_operations", "operations", "inferred_operations"):
             _v = p.get(_k)
             if isinstance(_v, list):
@@ -1816,7 +1871,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # same default the sheet already uses when it cannot size-band a part) and flagged
         # by name. Every filter below still runs — spurious-by-stock-form, the powder gate,
         # the diamond-polish gate — so this widens what reaches them, not what survives them.
-        _routed_extra = routed_operations_without_cost(pe, costs)
+        _routed_extra = routed_operations_without_cost(
+            pe, costs, _route_by_pn.get(_pn.strip().upper()))
         if _routed_extra:
             ops = ops + _routed_extra
             _flag(f"labour {_pn or '?'}: {len(_routed_extra)} routed operation(s) carry no "

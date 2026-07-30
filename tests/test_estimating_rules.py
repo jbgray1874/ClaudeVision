@@ -4639,7 +4639,7 @@ def test_a_routed_operation_with_no_cost_model_still_reaches_the_sheet():
     eq(_ops_for({"part_number": "X"}), [], "nothing routed and nothing costed is no row")
 
     _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
-    ok("routed_operations_without_cost(pe, costs)" in _wb
+    ok("_routed_extra = routed_operations_without_cost(" in _wb
        and "ops = ops + _routed_extra" in _wb,
        "the labour loop actually takes the union — this is the fifth time a fix has been "
        "built and not wired, and it is the one that decides whether the route is costed")
@@ -4701,6 +4701,60 @@ def test_a_measured_zero_is_not_undone_by_a_reading():
     _djm = open(__import__("drawing_job_merge").__file__, encoding="utf-8").read()
     ok('setdefault("operations_ruled_out", {})["folding"]' in _djm,
        "the zero-bend strip records WHAT it ruled out, not just that it removed something")
+
+
+def test_the_route_and_the_cost_live_on_different_records():
+    """2085's tube_cut was visible to the invariant and invisible to the sheet, and both
+    were right about the record they were reading.
+
+    estimator.estimate_part builds a costed part_estimate and never copies
+    textual_operations onto it. estimate_summary.part_estimates — which is what wb_populate
+    walks — therefore has no route at all. The route stays on summary["parts"], which is
+    where invariants._parts falls through to and finds it.
+
+    So `operation_named_but_not_priced: tube_cut` was reported by a check reading one
+    collection while the labour block read another, and every fix aimed at the labour block
+    was aimed past the problem. Third time this wrong-record shape has cost a day: _parts()
+    handing geometry to a price check, the schema saying `bom` while the engine read `parts`,
+    and now this.
+    """
+    from wb_populate import route_operations_by_part, routed_operations_without_cost
+
+    summary = {"parts": [
+        {"part_number": "2085-02", "textual_operations": ["tube_cut", "welding"]},
+        {"part_number": "2085-01", "textual_operations": ["folding", "laser_cutting"],
+         "operations_ruled_out": {"folding": "DXF flat pattern measured 0 bend lines"}},
+    ]}
+    routes = route_operations_by_part(summary)
+    eq(routes["2085-02"], ["tube_cut", "welding"], "the tube's route is found on the raw record")
+    ok("folding" not in routes["2085-01"],
+       "and a ruling by measurement travels WITH the route — otherwise the sheet re-adds "
+       "exactly what the measurement removed")
+    ok("laser_cutting" in routes["2085-01"], "while everything unruled comes through")
+
+    # manufacturing_writeup.parts is the other place a route can live; both are read.
+    summary2 = {"manufacturing_writeup": {"parts": [
+        {"part_number": "X-1", "textual_operations": ["saw"]}]}}
+    eq(route_operations_by_part(summary2).get("X-1"), ["saw"],
+       "the writeup parts are read too — a route in either place reaches the sheet")
+
+    # The costed record carries the COST and nothing else; the union needs both halves.
+    costed = {"part_number": "2085-02", "labour_estimate": {"costs_gbp": {"welding": 1.0}}}
+    eq(routed_operations_without_cost(costed, None, routes["2085-02"]), ["tube_cut"],
+       "the routed operation with no cost model is found, which it cannot be from the "
+       "costed record alone")
+    eq(routed_operations_without_cost(costed, None, None), [],
+       "and without the bridge there is nothing to find — which is exactly what the sheet "
+       "was seeing")
+
+    # BUILT IS NOT WIRED — sixth time. Both call sites must use it.
+    _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok("_route_by_pn = route_operations_by_part(summary)" in _wb,
+       "the bridge is built once in populate_workbook")
+    ok("_ops = set(_route_by_pn.get(" in _wb,
+       "the labour_parts gate uses it, so a routed part reaches the labour block at all")
+    ok("_route_by_pn.get(_pn.strip().upper())" in _wb,
+       "and the union uses it, so its operations become rows")
 
 
 if __name__ == "__main__":
