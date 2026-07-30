@@ -243,7 +243,7 @@ OP_NAME_MAP = {
     # workbook has no such row (H173:K204), so every deburr and every linish on every job
     # LOOKUPed to zero — priced at nothing, and indistinguishable on the sheet from work
     # nobody found. BENC and DRES are the rows that exist.
-    "deburr":         "Bench work / fitting",
+    "deburr":         "Manual labour (Metal)",
     "linisher":       "Dress Welds",
     # Diamond polish (acrylic edge finish). Unmapped it fell through to a raw op name with no
     # throughput default → ~0.67/hr / £52 on a single diffuser. (Metal DPOL is gated out upstream.)
@@ -252,14 +252,14 @@ OP_NAME_MAP = {
     # (config.SDI_OPERATION_CODES). If a title does not match a row in the WB rate table the
     # WB LOOKUP returns 0 for that line — the run will show which the template actually carries,
     # then we finalise the strings. Rates all exist engine-side (SAW/CNCJ/GLUE/SPRY).
-    "cnc_routing":    "CNC / Joinery machining",
-    "cnc":            "CNC / Joinery machining",
-    "cnc_joinery":    "CNC / Joinery machining",
-    "glue":           "Gluing / Bonding",
-    "gluing":         "Gluing / Bonding",
-    "wet_spray":      "Spray / Wet Paint",
-    "spray":          "Spray / Wet Paint",
-    "bench_work":     "Bench work / fitting",
+    "cnc_routing":    "CNC Joinery",
+    "cnc":            "CNC Joinery",
+    "cnc_joinery":    "CNC Joinery",
+    "glue":           "Glue",
+    "gluing":         "Glue",
+    "wet_spray":      "Wet Spray",
+    "spray":          "Wet Spray",
+    "bench_work":     "Manual labour (Metal)",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
     "roll":           "Roll",
@@ -279,10 +279,10 @@ OP_NAME_MAP = {
     "edge_banding":   "Edge Banding",
     # Drilling and tapping share a bench and share the rate table's DRIL row. The previous
     # commit sent them to "Manual labour (Metal)" on my own guess; the rate table
-    # (H173:K204) carries DRIL "Drilling / Tapping", so that is where they go.
-    "hole_machining": "Drilling / Tapping",
-    "tapping":        "Drilling / Tapping",
-    "deburring":      "Bench work / fitting",
+    # (H173:K204) carries DRIL "Drill (Acrylic)", so that is where they go.
+    "hole_machining": "Drill (Acrylic)",
+    "tapping":        "Drill (Acrylic)",
+    "deburring":      "Manual labour (Metal)",
     "linishing":      "Dress Welds",
 }
 
@@ -1402,9 +1402,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # garbage ~0.17/hr on no-DXF timber parts, so grouped CNC/Glue/Spray lines billed
         # 5-6 hrs/part (£1,050 CNC + £610 spray + £472 glue on Cocktails). Sane defaults let
         # the floor cap them back to ~a minute or two per part. UNMEASURED, config-tunable.
-        "CNC / Joinery machining":   30,    # UNMEASURED — CNC router pass
-        "Gluing / Bonding":          40,    # UNMEASURED — manual glue-up
-        "Spray / Wet Paint":         60,    # UNMEASURED — wet spray booth
+        "CNC Joinery":   30,    # UNMEASURED — CNC router pass
+        "Glue":          40,    # UNMEASURED — manual glue-up
+        "Wet Spray":         60,    # UNMEASURED — wet spray booth
         # Dress Welds (DRES): linish/grind the CO2 weld bead — a quick hand pass, like deburr.
         # Had no default, so the engine's garbage ~0.88/hr stood: a grouped 16-part line billed
         # 18.6 hrs / £533 — the single largest labour line on Cocktails and the whole gap to the
@@ -1932,13 +1932,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # the shop, not about a job, so it is inheritable by every job that follows.
     _SHOP_ORDER = {
         "Laser (Metal)": 10, "Laser (Acrylic)": 10, "Punch": 10, "Guillotine": 10,
-        "Saw": 15, "Tube": 15, "CNC / Joinery machining": 15,
+        "Saw": 15, "Tube": 15, "CNC Joinery": 15,
         "Fold": 20, "Linebend": 20, "Tubebend": 20, "Roll": 20, "Robomac": 20,
         "Manual labour (Metal)": 25,
-        "Edge Banding": 28, "Gluing / Bonding": 28,
+        "Edge Banding": 28, "Glue": 28,
         "Weld (CO2)": 30, "Spotweld": 30,
         "Dress Welds": 35, "Grinding / Deburr": 38,
-        "P.Coat": 60, "Spray / Wet Paint": 60, "Diamond Polish": 62,
+        "P.Coat": 60, "Wet Spray": 60, "Diamond Polish": 62,
         "Assemble/pack (Metal)": 90, "Assemble/pack (Acrylic)": 90,
     }
     _DEFAULT_ORDER = 50          # something we do not recognise sits mid-route, not last

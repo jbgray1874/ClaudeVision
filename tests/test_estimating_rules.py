@@ -4389,21 +4389,39 @@ def test_every_department_we_emit_exists_in_the_rate_table():
     from department_codes import code_for, DEPARTMENT_CODES, CODE_TITLES
     from wb_populate import OP_NAME_MAP, OP_NAME_MAP_ACRYLIC
 
+    # EXACT, not merely resolvable. The workbook's LOOKUP matches the title string in
+    # column H character for character, so a title that is close enough for our own alias
+    # table to understand still produces a zero rate on the sheet. "CNC / Joinery machining"
+    # resolved fine here and would have paid nothing there; the row is called "CNC Joinery".
+    _exact = {t for t, _c in CODE_TITLES.values()}
     for _name, _m in (("OP_NAME_MAP", OP_NAME_MAP), ("OP_NAME_MAP_ACRYLIC", OP_NAME_MAP_ACRYLIC)):
-        bad = {op: t for op, t in _m.items() if code_for(t) is None}
-        eq(bad, {}, f"every {_name} title resolves to a rate-table code (bad: {bad})")
+        bad = {op: t for op, t in _m.items() if t not in _exact}
+        eq(bad, {}, f"every {_name} title is column-H exact (bad: {bad})")
 
-    # The specific one that was free: GRIN is not a department.
-    eq(code_for(OP_NAME_MAP["deburring"]), "BENC",
-       "deburring is bench work — it was pointed at GRIN, which the rate table does not have")
+    # The specific ones that were free: GRIN is not a department at all.
+    eq(code_for(OP_NAME_MAP["deburring"]), "MANM",
+       "deburring pointed at GRIN, which does not exist; BENC is a JOINERY bench, so metal "
+       "deburring goes to manual labour (metal)")
+    eq(OP_NAME_MAP["hole_machining"], "Drill (Acrylic)",
+       "and drilling/tapping uses the DRIL row, whose title says Acrylic but is the row the "
+       "shop books metal drilling against")
+    eq(code_for("Assemble/pack (Acrylic)"), "PACP",
+       "acrylic assembly is PACP — it was forced to PACM on a guess")
+    eq(CODE_TITLES["SALV"][0], "Salvagnini",
+       "SALV is a panel bender, not salvage/rework — the guess would have sent reworked "
+       "parts to a forming machine")
     ok("GRIN" not in DEPARTMENT_CODES and "TAP" not in DEPARTMENT_CODES
        and "COUN" not in DEPARTMENT_CODES and "HAND" not in DEPARTMENT_CODES,
        "and GRIN/TAP/COUN/HAND are confirmed absent, which is why they cost nothing")
 
-    # Every title we would ever write maps back into the closed set.
+    # Every title we would ever write maps back into the closed set, and every one is now
+    # confirmed against the live table rather than plausibly guessed.
     for _code, (_title, _confirmed) in CODE_TITLES.items():
         ok(_code in DEPARTMENT_CODES, f"{_code} is a real rate-table code")
         eq(code_for(_title), _code, f"'{_title}' resolves back to {_code}")
+        ok(_confirmed, f"{_code}'s title was read off the rate table, not inferred")
+    eq(len(CODE_TITLES), len(DEPARTMENT_CODES),
+       "every code in the table has a title, and no title exists for a code that does not")
 
 
 def test_free_text_from_a_model_still_lands_on_a_department():
@@ -4418,7 +4436,9 @@ def test_free_text_from_a_model_still_lands_on_a_department():
     for _text, _code in (("tube_cut", "TUBE"), ("Cut to length", "SAW"), ("MIG weld", "WELD"),
                          ("CO2 weld", "WELD"), ("Laser cut", "LASM"), ("press brake", "FOLD"),
                          ("Saw tube", "SAW"), ("edge banding", "EDGE"),
-                         ("tapping", "DRIL"), ("hole_machining", "DRIL")):
+                         ("tapping", "DRIL"), ("hole_machining", "DRIL"),
+                         ("Assemble/pack (Acrylic)", "PACP"), ("Salvagnini", "SALV"),
+                         ("CNC Joinery", "CNCJ"), ("Wet Spray", "SPRY")):
         eq(code_for(_text), _code, f"'{_text}' is understood as {_code}")
 
     # A model answering in codes, as instructed, is understood too.

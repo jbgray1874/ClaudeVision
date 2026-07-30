@@ -177,6 +177,29 @@ def _dept_to_engine_ops() -> Dict[str, List[str]]:
                     bucket.append(str(eng))
     except Exception:
         pass
+    # HISTORICAL TITLES MUST KEEP RESOLVING.
+    #
+    # The titles the engine writes were corrected against the workbook's own rate table
+    # ("Spray / Wet Paint" is really "Wet Spray", "CNC / Joinery machining" is "CNC
+    # Joinery"). Every job JSON already saved on disk carries the OLD string, and inverting
+    # only the current map makes those rows read as an unknown operation — so a finished job
+    # re-opened tomorrow silently loses its finish.
+    #
+    # department_codes resolves both spellings to the same code, so an old title finds the
+    # engine ops of whatever the row is called now. Added under the live map, never over it.
+    try:
+        from department_codes import LEGACY_TITLES, CODE_TITLES
+        for _old_title, _code in LEGACY_TITLES.items():
+            _entry = CODE_TITLES.get(_code)
+            if not _entry:
+                continue
+            _key = str(_old_title).strip().lower()
+            _current = str(_entry[0]).strip().lower()
+            if _key in inv or _current not in inv:
+                continue
+            inv[_key] = list(inv[_current])
+    except Exception:
+        pass
     _DEPT_TO_ENGINE_OPS = inv
     return inv
 
