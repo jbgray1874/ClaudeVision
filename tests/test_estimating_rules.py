@@ -3399,6 +3399,77 @@ def test_transcription_and_inference_are_separate_passes():
        "operation never outranks a measured one")
 
 
+def test_the_dxf_model_pass_judges_but_never_measures():
+    """ezdxf reads a DXF exactly — entities, loops, areas, cut lengths, hole diameters. What it
+    cannot say is what the geometry MEANS: which layer is the cut profile and which the bend
+    lines, whether a 7mm circle is a clearance hole or a keyhole, whether the file is one part
+    or a nest of six. That is process judgement and it is what a model is for.
+
+    The model is asked for the geometry too, deliberately — and its numbers are NOT used. The
+    measurement stands. A second independent read that differs materially means one of them is
+    wrong about a file we are about to cost, and neither silently winning is the right answer.
+
+    It is sent the extraction, never the file: a DXF is tens of thousands of coordinate
+    triples, and a model handed those produces a confident cut length with nothing behind it —
+    the exact failure removed from prices, not to be reintroduced through geometry."""
+    import dxf_llm_interpret as dli
+    from source_precedence import SOURCE_RANK
+
+    measured = {
+        "layers": ["CUT", "BEND", "DIMS"], "entity_counts": {"LINE": 42, "CIRCLE": 3},
+        "bounding_box_mm": [90.88, 80.0], "blank_mm": [90.88, 80.0],
+        "closed_contour_count": 4, "hole_diameters_mm": [7.0, 4.0, 4.0],
+        "hole_count": 3, "cut_length_mm": 374.31,
+        "text_entities": ["2085-01", "1.2 MS"],
+    }
+
+    # The payload is the extraction, not the file.
+    _payload = dli.build_payload(measured, "2085-01 - Bracket Plate_1.2mm MS.DXF")
+    ok("374.31" in _payload, "the model is shown what was measured")
+    ok("CUT" in _payload and "BEND" in _payload, "including the layer names it must classify")
+
+    def _reply(_prompt):
+        return {
+            "geometry": {"total_cut_length_mm": 374.0, "hole_count": 3,
+                         "overall_width_mm": 90.9, "overall_height_mm": 80.0,
+                         "holes": [{"diameter_mm": 7.0, "count": 1, "type": "keyhole"},
+                                   {"diameter_mm": 4.0, "count": 2, "type": "round"}]},
+            "manufacturing": {"recommended_process": "laser", "complexity": "simple",
+                              "is_flat_pattern": True, "is_nested": False, "part_count": 1,
+                              "material_inferred": "MILD STEEL", "thickness_inferred_mm": 1.2,
+                              "profile_role_by_layer": {"CUT": "cut", "BEND": "bend",
+                                                        "DIMS": "dimension"},
+                              "operations_implied": ["laser_cutting", "folding"]},
+            "warnings": [], "extraction_confidence": "high"}
+
+    got = dli.interpret(measured, caller=_reply)
+    eq(got["profile_role_by_layer"]["BEND"], "bend", "the bend layer is identified")
+    eq(got["hole_types"][0]["type"], "keyhole",
+       "and a 7mm circle is called what it is, which a diameter alone cannot say")
+    eq(got["recommended_process"], "laser", "with the process judgement taken")
+    eq(got["disagreements"], [], "agreeing reads raise nothing")
+
+    # Everything it judged is ranked below every measurement.
+    _inf = SOURCE_RANK[got["interpretation_source"]]
+    for stronger in ("solidworks_api", "dxf", "drawing_deterministic"):
+        ok(SOURCE_RANK[stronger] > _inf,
+           f"{stronger} outranks the model's interpretation ({_inf})")
+
+    # A materially different read is a finding, not a coin toss.
+    def _wrong(_prompt):
+        r = _reply(_prompt)
+        r["geometry"]["total_cut_length_mm"] = 748.0      # double
+        return r
+    _dis = dli.interpret(measured, caller=_wrong)["disagreements"]
+    eq([d["field"] for d in _dis], ["total_cut_length_mm"], "the disagreement is named")
+    eq(_dis[0]["measured"], 374.31, "with the measured value kept as the answer")
+    ok(_dis[0]["difference_pct"] > 90, "and the size of the gap quantified")
+
+    # A model that cannot be reached leaves the geometry costing the part exactly as today.
+    eq(dli.interpret(measured, caller=lambda _p: None), {}, "no model, no interpretation")
+    eq(dli.interpret({}, caller=_reply), {}, "and nothing measured, nothing to interpret")
+
+
 def main() -> int:
     global _COLLECT_ONLY
     _COLLECT_ONLY = True          # collect every failure in a test, don't stop at the first
