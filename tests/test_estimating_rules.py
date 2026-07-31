@@ -8743,5 +8743,134 @@ def test_the_two_provenance_writers_do_not_fight_over_one_sheet_name():
        "and must not leave the collision behind under a different call")
 
 
+# ── closing the reporting layer — the last three ─────────────────────────────────────
+def test_the_provenance_headline_prefers_the_workbook_not_the_part_column():
+    """Its fallback summed the part column and called the result "Est. Total / engine
+    part-sum". Once that column became material-only the label was wrong twice over: it is
+    not the engine part-sum, and it is not a job total. Driven with a workbook unit cost of
+    £6.33 and £0.10 of part material, the sheet printed "Est. Total: £0.10".
+
+    The Decision Report already had the right hierarchy — Sell Price cell, else the
+    workbook's calculated unit, and only then anything engine-side. Fixing one and not the
+    other is how the two tabs disagreed in the first place."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify what these sheets write")
+        return
+    from estimation_report import add_provenance_sheet
+    from job_decision_report import add_decision_report_sheet
+
+    _job = _job_2085_as_printed()
+    # No "Sell Price" cell to reference — this is the fallback path, and the only one
+    # where either sheet has to choose a number for itself.
+    for _fn, _tab in ((add_provenance_sheet, "AI Provenance"),
+                      (add_decision_report_sheet, "Decision Report")):
+        _wb = Workbook()
+        _fn(_wb, _job, {"job_number": "2085"})
+        _text = " ".join(str(c.value) for r in _wb[_tab].iter_rows()
+                         for c in r if c.value)
+        ok("6.33" in _text,
+           f"{_tab} must fall back to what the Estimate sheet calculated")
+        ok("0.13" not in _text.split("RECONCILIATION")[0].split("MATERIAL COST")[0]
+           or "Unit cost" in _text,
+           f"{_tab} must not present the material column as a job total")
+        ok("Est. Total" not in _text,
+           f"{_tab} must not label a workbook figure as an engine estimate")
+
+    # AND WITH NO WORKBOOK AT ALL it says so, rather than dressing part material as a total.
+    _nowb = _job_2085_as_printed()
+    _nowb.pop("final_estimate", None)
+    _wb2 = Workbook()
+    add_provenance_sheet(_wb2, _nowb, {})
+    _t2 = " ".join(str(c.value) for r in _wb2["AI Provenance"].iter_rows()
+                   for c in r if c.value)
+    ok("no workbook total" in _t2.lower(),
+       f"with nothing calculated, the sheet says what the figure actually is")
+
+
+def test_the_canonical_part_list_reaches_the_saved_json():
+    """populate_workbook stamps the canonical list onto the IN-MEMORY summary, and the two
+    workbook tabs are written from that — so they were right, and the fix looked done.
+
+    The quote and the job report are generated from the SAVED JSON (generate_report takes a
+    path, not an object), which was written before the workbook existed and never received
+    it. Both silently fell back to raw part_estimates: merged duplicates back, rolled
+    quantities gone, and the bought-in BOM lines the sheet charges missing again — the exact
+    divergence the shared list exists to close, live in the two customer-facing files.
+
+    Structural, because reaching that write needs the estimators' template and a live
+    Excel; everything downstream of it is covered behaviourally elsewhere."""
+    import inspect
+    import main as _main
+
+    _src = inspect.getsource(_main)
+    ok('["canonical_part_estimates"]) = _canon_pes' in _src,
+       "the saved JSON must receive the canonical part list")
+    # It has to land in the block that WRITES the file, and before that write.
+    _stamp = _src.index('["canonical_part_estimates"]) = _canon_pes')
+    _write = _src.index("json.dump(_doc, _fh_w")
+    ok(_stamp < _write, "and be stamped before the document is written back")
+
+    # The consumer side, driven for real: with the list absent the accessor falls back, and
+    # with it present every deliverable resolves to the sheet's rows.
+    from costed_facts import job_parts
+    _job = _diverging_job()
+    eq({p["part_number"] for p in job_parts(_job)},
+       {"12120-01-04M", "BI-PEMSTUD", "STD PART"},
+       "without the list, the reports show the raw engine set — the defect")
+    import wb_populate as W
+    _job["estimate_summary"]["canonical_part_estimates"] = \
+        W.canonicalise_part_estimates_for_workbook(
+            _job, _job["estimate_summary"]["part_estimates"])
+    eq({p["part_number"] for p in job_parts(_job)},
+       {"12120-01-04M", "STD PART", "BI-KNOB"},
+       "with it, they show the sheet's")
+
+
+def test_the_material_breakdown_adds_back_to_the_sheets_material_total():
+    """The workbook's material total also carries lines belonging to no single part — the
+    powder consumable, and the per-line scrap the sheet adds. On 2085 the part column is
+    about £0.09 against a workbook material total of £0.1334, so a breakdown of only the
+    parts is short, and silently so."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify what this sheet writes")
+        return
+    from job_decision_report import add_decision_report_sheet
+
+    _job = _job_2085_as_printed()
+    for _bucket in ("canonical_part_estimates", "part_estimates"):
+        _job["estimate_summary"][_bucket][0]["material_estimate"][
+            "unit_material_cost_gbp"] = 0.09
+
+    _wb = Workbook()
+    add_decision_report_sheet(_wb, _job, {"job_number": "2085"})
+    _ws = _wb["Decision Report"]
+    _rows = {}
+    for _r in range(1, _ws.max_row + 1):
+        _label = _ws.cell(row=_r, column=1).value
+        if _label:
+            _rows[str(_label)] = _ws.cell(row=_r, column=9).value
+
+    eq(_rows.get("MILD_STEEL"), 0.09, "the parts account for what they account for")
+    eq(_rows.get("Powder / scrap / other workbook material"), 0.04,
+       "and the rest is named rather than left as a silent shortfall")
+    eq(_rows.get("TOTAL MATERIAL (agrees with the Estimate sheet)"), 0.13,
+       "so the section adds back to the workbook's own material total")
+
+    # NO RESIDUAL ROW WHEN THERE IS NO RESIDUAL. Without this the fixture would pass against
+    # a version that always invents a balancing line, which would hide a real shortfall by
+    # construction.
+    _exact = _job_2085_as_printed()
+    _wb2 = Workbook()
+    add_decision_report_sheet(_wb2, _exact, {"job_number": "2085"})
+    _t2 = " ".join(str(c.value) for r in _wb2["Decision Report"].iter_rows()
+                   for c in r if c.value)
+    ok("Powder / scrap" not in _t2,
+       "a breakdown that already reconciles gets no balancing row")
+
+
 if __name__ == "__main__":
     sys.exit(main())

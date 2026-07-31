@@ -807,6 +807,21 @@ def main() -> None:
                         with open(_canon_wl, encoding="utf-8") as _fh_r:
                             _doc = json.load(_fh_r)
                         _doc["workbook_labour"] = _wl
+                        # THE CANONICAL PART LIST HAS TO REACH THE FILE, NOT JUST THIS RUN.
+                        #
+                        # populate_workbook stamps it onto the in-memory summary, and the
+                        # two workbook tabs are written from that — so they were right. The
+                        # quote and job report are generated from the SAVED JSON
+                        # (_gen_job_report takes a path, not an object), which was written
+                        # before the workbook existed and never received it. Both fell back
+                        # to raw part_estimates, which is the exact divergence the shared
+                        # list exists to close: merged duplicates back, rolled quantities
+                        # gone, and the bought-in BOM lines the sheet charges missing again.
+                        _canon_pes = ((summary.get("estimate_summary") or {})
+                                      .get("canonical_part_estimates"))
+                        if isinstance(_canon_pes, list) and _canon_pes:
+                            ((_doc.setdefault("estimate_summary", {}))
+                             ["canonical_part_estimates"]) = _canon_pes
                         if _wl.get("mode") == "canonical":
                             ((_doc.setdefault("estimate_summary", {}))
                              .setdefault("canonical_route_shadow", {}))["mode"] = "cutover"

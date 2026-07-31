@@ -401,14 +401,23 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     ws = replace_generated_sheet(wb, "AI Provenance")
     scan_meta = scan_meta or {}
 
-    # Engine part-sum (material + light handling) — kept as the fallback total.
-    _engine_total = sum(p["extended_cost"] for p in provenance)
     # Authoritative total = the WB's Sell Price, found by label so it survives layout
     # shifts. If present we write a LIVE cross-sheet formula (Excel computes on open),
-    # so this sheet agrees with the WB and the Decision Report. Else fall back to sum.
+    # so this sheet agrees with the WB and the Decision Report. Else fall back below.
     _sell_ref = _find_wb_sell_price_ref(wb)
     from costed_facts import job_totals
     _totals = job_totals(summary)
+
+    # THE HEADLINE FIGURE IS THE WORKBOOK'S.
+    #
+    # This summed the part column and called the result "Est. Total / engine part-sum".
+    # Once that column became material-only the label was wrong twice over: it is not the
+    # engine part-sum, and it is not a job total — driven with a workbook unit cost of
+    # £6.33 and £0.10 of part material, this sheet printed "Est. Total: £0.10". The
+    # Decision Report already prefers the workbook; this is the same hierarchy.
+    _part_material_total = sum(p["extended_cost"] for p in provenance)
+    _wb_unit = _totals.get("unit_gbp")
+    _engine_total = float(_wb_unit) if _wb_unit is not None else _part_material_total
 
     def cell(row, col, value="", bold=False, bg=None, fg="000000",
              align="left", wrap=False, size=10, border=False, num_fmt=None):
@@ -435,7 +444,10 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     scan_dt  = scan_meta.get("scan_date") or datetime.now().strftime("%d/%m/%Y %H:%M")
     # Header total text: prefer the WB Sell Price label when we can reference it.
     _tot_txt = ("Sell Price: see Estimate sheet (mirrored below)"
-                if _sell_ref else f"Est. Total: £{_engine_total:.2f}")
+                if _sell_ref else
+                f"Unit cost (calculated by the Estimate sheet): £{_engine_total:.2f}"
+                if _wb_unit is not None else
+                f"Part material only — no workbook total: £{_engine_total:.2f}")
     cell(2, 1,
          f"Drawing: {pdf_name}   |   Job: {job_no}   |   Scanned: {scan_dt}   |   "
          f"Parts: {len(provenance)}   |   {_tot_txt}",
@@ -533,7 +545,9 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     row += 1
     ws.merge_cells(f"A{row}:L{row}")
     # Authoritative total: WB Sell Price (live formula) when found, else engine sum.
-    _total_label = "SELL PRICE (from Estimate sheet)" if _sell_ref else "ESTIMATE TOTAL (engine part-sum)"
+    _total_label = ("SELL PRICE (from Estimate sheet)" if _sell_ref
+                    else "UNIT COST (calculated by the Estimate sheet)" if _wb_unit is not None
+                    else "PART MATERIAL ONLY — no workbook total")
     cell(row, 1,  _total_label, bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
          align="right", size=11)
     if _sell_ref:

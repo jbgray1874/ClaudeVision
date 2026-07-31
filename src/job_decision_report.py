@@ -774,6 +774,17 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         _e = part_material_cost(part)[1] if _canonical else float(
             _est_lookup.get(part.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
         mat_totals[mat] = mat_totals.get(mat, 0) + _e
+    # WHAT THE PARTS DO NOT ACCOUNT FOR.
+    #
+    # The sheet's material total also carries lines that belong to no single part — the
+    # powder consumable, and the per-line scrap the workbook adds. On 2085 the part column
+    # is about £0.09 against a workbook material total of £0.1334, so a breakdown of only
+    # the parts is short and silently so. Named as its own row, from the difference, so the
+    # section adds back to the authoritative figure instead of merely being near it.
+    if _mat_total is not None:
+        _residual = round(float(_mat_total) - sum(mat_totals.values()), 4)
+        if abs(_residual) >= 0.005:
+            mat_totals["Powder / scrap / other workbook material"] = _residual
     for mi, (mat, cost) in enumerate(sorted(
             mat_totals.items(), key=lambda x: x[1], reverse=True)):
         bg = C_ALT if mi % 2 == 0 else C_WHITE
@@ -787,6 +798,18 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         _c(ws, row, 11, f"{pct:.1f}%", bg=bg, align="center",
            size=10, border=True)
         _c(ws, row, 12, "", bg=bg, border=True)
+        ws.row_dimensions[row].height = 18
+        row += 1
+    # The section must be checkable against the sheet, not just internally consistent.
+    if _mat_total is not None:
+        ws.merge_cells(f"A{row}:H{row}")
+        _c(ws, row, 1, "TOTAL MATERIAL (agrees with the Estimate sheet)",
+           bold=True, bg=C_SECTION, size=10, border=True)
+        _c(ws, row, 9, sum(mat_totals.values()), bg=C_SECTION, align="right", bold=True,
+           num_fmt="£#,##0.00", size=10, border=True)
+        _c(ws, row, 10, "", bg=C_SECTION, border=True)
+        _c(ws, row, 11, "100.0%", bg=C_SECTION, align="center", size=10, border=True)
+        _c(ws, row, 12, "", bg=C_SECTION, border=True)
         ws.row_dimensions[row].height = 18
         row += 1
     # ── Footer ─────────────────────────────────────────────────────────────────
