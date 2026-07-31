@@ -1039,6 +1039,87 @@ def check_a_measured_plate_is_not_charged_for_folding(summary: Any) -> List[Dict
         parts=bad, count=len(bad))]
 
 
+def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
+    """Report route-compiler discrepancies without changing the live gate during shadow mode.
+
+    These become BLOCKING at cutover. While the workbook still renders legacy rows they are
+    WARNINGs: the purpose of shadow mode is to expose every difference before changing a
+    price, not to make an unused diagnostic prevent an otherwise valid estimate.
+    """
+    shadow = _node(summary, "canonical_route_shadow")
+    if not shadow:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    if shadow.get("compiler_error"):
+        return [_violation(
+            "canonical_route_compiler_failed", WARNING,
+            f"The shadow route compiler failed: {shadow.get('compiler_error')}. "
+            "Legacy pricing still stands; cutover is forbidden until this is resolved.")]
+
+    decisions = {
+        str(item.get("decision_id")): item
+        for item in (shadow.get("decisions") or [])
+        if isinstance(item, dict) and item.get("decision_id")
+    }
+    for decision in decisions.values():
+        if decision.get("status") == "unverified":
+            out.append(_violation(
+                "canonical_route_decision_unverified", WARNING,
+                f"Route decision {decision.get('decision_id')} for "
+                f"{decision.get('operation')} on {decision.get('target_id')} contains "
+                "equal-ranked or metadata conflicts. Legacy pricing still stands.",
+                decision_id=decision.get("decision_id"),
+                operation=decision.get("operation"),
+                target_id=decision.get("target_id"),
+                conflicts=decision.get("conflicts") or []))
+
+    seen_rows: Dict[str, int] = {}
+    for row in shadow.get("priced_route_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        decision_id = str(row.get("decision_id") or "")
+        seen_rows[decision_id] = seen_rows.get(decision_id, 0) + 1
+        decision = decisions.get(decision_id)
+        if not decision:
+            out.append(_violation(
+                "priced_route_row_without_decision", WARNING,
+                f"A shadow priced route row for {row.get('operation')} has no canonical "
+                "OperationDecision. It cannot be used at cutover.",
+                row=row))
+        elif decision.get("status") != "required":
+            out.append(_violation(
+                "non_required_decision_has_priced_row", WARNING,
+                f"Decision {decision_id} is {decision.get('status')} but produced a shadow "
+                "priced row. A ruled-out operation must never reach pricing.",
+                decision_id=decision_id, row=row))
+    for decision_id, count in seen_rows.items():
+        if decision_id and count > 1:
+            out.append(_violation(
+                "decision_joined_to_multiple_priced_rows", WARNING,
+                f"Decision {decision_id} joined to {count} shadow priced rows. One job event "
+                "must produce at most one route row.",
+                decision_id=decision_id, row_count=count))
+
+    important_codes = {
+        "forbidden_decision_priced",
+        "required_operation_unpriced",
+        "assembly_operation_costed_on_multiple_participants",
+        "legacy_cost_maps_multiple_decisions",
+        "legacy_cost_without_canonical_decision",
+        "assembly_scope_without_target",
+    }
+    for issue in shadow.get("issues") or []:
+        if not isinstance(issue, dict) or issue.get("code") not in important_codes:
+            continue
+        out.append(_violation(
+            f"canonical_route_{issue.get('code')}", WARNING,
+            f"Shadow route comparison found {issue.get('code')}. Legacy pricing still "
+            "stands; this must be resolved before workbook cutover.",
+            issue=issue))
+    return out
+
+
 CHECKS = (
     check_schemas,
     check_workbook_adapters_read_everything,
@@ -1055,6 +1136,7 @@ CHECKS = (
     check_prices_are_reproducible,
     check_price_disagreement_is_declared,
     check_a_measured_plate_is_not_charged_for_folding,
+    check_canonical_route_shadow,
     check_prices_are_firm,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,

@@ -6049,5 +6049,319 @@ def test_an_operation_already_present_still_gets_its_metadata():
        "and it acquires no scope either — it is not happening")
 
 
+def test_route_arbitration_is_ranked_but_metadata_is_gap_filled():
+    """Status and metadata are different questions. A strong source can confirm an operation
+    while weaker, non-conflicting route evidence supplies its assembly scope and sequence."""
+    from route_compiler import (
+        REQUIRED, RULED_OUT, UNVERIFIED, arbitrate_event, make_claim,
+    )
+
+    _strong = make_claim(
+        "welding", REQUIRED, "solidworks_api", "101", "101",
+        participants=["02M", "03M"], reason="native feature confirms weld")
+    _route = make_claim(
+        "welding", REQUIRED, "inference", "101", "101",
+        scope="assembly", participants=["02M", "03M"], qty_per_unit=1,
+        sequence=40, reason="weld upstand to base", route_id="route:weld-101")
+    _decision = arbitrate_event("decision:weld-101", [_strong, _route])
+
+    eq(_decision.status, REQUIRED, "strong measured positive claim decides status")
+    eq(_decision.source, "solidworks_api", "the status source remains the strong source")
+    eq(_decision.scope, "assembly", "missing scope is filled from compatible route evidence")
+    eq(_decision.sequence, 40.0, "missing sequence is filled independently")
+    eq(_decision.qty_per_unit, 1.0, "assembly multiplicity comes from the route")
+    eq(_decision.participants, ["02M", "03M"],
+       "participants describe work without multiplying it")
+
+    _yes = make_claim("folding", REQUIRED, "dxf", "04M", "04M", scope="part")
+    _no = make_claim("folding", RULED_OUT, "dxf", "04M", "04M", scope="part",
+                     reason="zero measured bend lines")
+    _conflict = arbitrate_event("decision:fold-04m", [_yes, _no])
+    eq(_conflict.status, UNVERIFIED, "equal-rank disagreement must be explicit")
+    eq(_conflict.qty_per_unit, None, "unverified work receives no invented quantity")
+    ok(any(c.get("field") == "status" for c in _conflict.conflicts),
+       "the conflict remains auditable")
+
+    _weak_yes = make_claim("folding", REQUIRED, "inference", "04M", "04M")
+    _measured_no = make_claim("folding", RULED_OUT, "dxf", "04M", "04M",
+                              reason="DXF measured zero bend lines")
+    _ruled = arbitrate_event("decision:fold-04m", [_weak_yes, _measured_no])
+    eq(_ruled.status, RULED_OUT, "measured negative evidence outranks inference")
+    eq(_ruled.qty_per_unit, None, "ruled-out work has no quantity")
+
+
+def test_12120_job_route_is_one_event_per_assembly_not_per_part():
+    """One weld targets 101, participant count is not quantity, assembly parents do not
+    regain leaf operations, and a DXF ruling survives the LLM route."""
+    from route_compiler import (
+        NOT_APPLICABLE, REQUIRED, RULED_OUT, compile_job_route,
+        project_priced_route,
+    )
+
+    _parts = [
+        {"part_number": "12120-01-101", "description": "STAND WELD ASSY",
+         "is_sub_assembly": True, "is_assembly_parent": True,
+         "textual_operations": ["laser_cutting", "folding"],
+         "operation_sources": {"laser_cutting": "inference", "folding": "inference"}},
+        {"part_number": "12120-01-103", "description": "SCREEN MOUNTING BRACKET",
+         "is_sub_assembly": True, "is_assembly_parent": True,
+         "textual_operations": ["laser_cutting"],
+         "operation_sources": {"laser_cutting": "inference"}},
+        {"part_number": "12120-01-01M"},
+        {"part_number": "12120-01-02M", "textual_operations": ["welding"]},
+        {"part_number": "12120-01-03M", "textual_operations": ["welding"]},
+        {"part_number": "12120-01-04M",
+         "operations_ruled_out": {"folding": "DXF measured zero bend lines"},
+         "operation_ruling_sources": {"folding": "dxf"}},
+        {"part_number": "12120-01-08M"},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "12120-01-GA"},
+        "assemblies": [
+            {"part_number": "12120-01-GA", "children": [
+                {"part_number": "12120-01-101", "qty": 1},
+                {"part_number": "12120-01-103", "qty": 1},
+                {"part_number": "12120-01-04M", "qty": 1},
+                {"part_number": "12120-01-08M", "qty": 1},
+            ]},
+            {"part_number": "12120-01-101", "children": [
+                {"part_number": "12120-01-02M", "qty": 1},
+                {"part_number": "12120-01-03M", "qty": 1},
+            ]},
+            {"part_number": "12120-01-103", "children": [
+                {"part_number": "12120-01-01M", "qty": 1},
+            ]},
+        ],
+        "routes": [
+            {"operation": "welding", "sequence": 40,
+             "part_numbers": ["12120-01-02M", "12120-01-03M"],
+             "scope": "assembly", "qty_per_unit": 1, "inferred": True},
+            {"operation": "folding", "sequence": 30,
+             "part_numbers": ["12120-01-04M"],
+             "scope": "part", "qty_per_unit": 1, "inferred": True},
+            {"operation": "powder_coating", "sequence": 50,
+             "part_numbers": [
+                 "12120-01-01M", "12120-01-04M", "12120-01-08M",
+                 "12120-01-101", "12120-01-103"],
+             "scope": "assembly", "qty_per_unit": 1, "inferred": True},
+        ],
+    }
+
+    _graph = compile_job_route(_parts, _extract)
+    _decisions = _graph["decisions"]
+    _welds = [d for d in _decisions
+              if d["operation"] == "welding" and d["status"] == REQUIRED]
+    eq(len(_welds), 1, "two participating parts compile to one welding event")
+    eq(_welds[0]["target_id"], "12120-01-101", "the hierarchy owns the weld")
+    eq(_welds[0]["participants"], ["12120-01-02M", "12120-01-03M"],
+       "both children remain visible on that event")
+    eq(_welds[0]["qty_per_unit"], 1.0,
+       "two participants do not become two welding charges")
+
+    _parent_leaf = [
+        d for d in _decisions
+        if d["target_id"] in ("12120-01-101", "12120-01-103")
+        and d["operation"] in ("laser_cutting", "folding")
+    ]
+    ok(_parent_leaf, "raw parent claims remain auditable")
+    ok(all(d["status"] == NOT_APPLICABLE for d in _parent_leaf),
+       "hierarchy rules them out instead of deleting or costing them")
+
+    _fold_04 = [d for d in _decisions
+                if d["target_id"] == "12120-01-04M"
+                and d["operation"] == "folding"]
+    eq(len(_fold_04), 1, "inferred and measured fold claims arbitrate once")
+    eq(_fold_04[0]["status"], RULED_OUT, "DXF ruling survives the route fold")
+    eq(_fold_04[0]["qty_per_unit"], None, "the ruled-out fold has no multiplicity")
+
+    _powder_targets = sorted(
+        d["target_id"] for d in _decisions
+        if d["operation"] == "powder_coating" and d["status"] == REQUIRED)
+    eq(_powder_targets, [
+        "12120-01-04M", "12120-01-08M", "12120-01-101", "12120-01-103"],
+       "assemblies and standalone leaves are distinct without coating 01M twice")
+
+    _estimates = [
+        {"part_number": "12120-01-02M",
+         "labour_estimate": {"costs_gbp": {"welding": 0.50}}},
+        {"part_number": "12120-01-03M",
+         "labour_estimate": {"costs_gbp": {"welding": 0.50}}},
+        {"part_number": "12120-01-101",
+         "labour_estimate": {"costs_gbp": {"laser_cutting": 2.00}}},
+    ]
+    _shadow = project_priced_route(_graph, _estimates)
+    _weld_rows = [r for r in _shadow["priced_route_rows"]
+                  if r["operation"] == "welding"]
+    eq(len(_weld_rows), 1, "one decision produces one shadow weld row")
+    eq(_weld_rows[0]["qty_per_unit"], 1.0, "projection keeps route multiplicity")
+    ok(any(i.get("code") == "assembly_operation_costed_on_multiple_participants"
+           for i in _shadow["issues"]),
+       "legacy participant charging is exposed before cutover")
+    ok(any(i.get("code") == "forbidden_decision_priced"
+           for i in _shadow["issues"]),
+       "legacy Laser on a parent is identified as resurrection")
+
+
+def test_estimator_preserves_route_context_without_changing_legacy_fields():
+    """The costed record retains route evidence in a nested shadow field."""
+    from estimator import estimate_part
+
+    _part = {
+        "part_number": "TEST-01M",
+        "normalized_material": "MILD_STEEL",
+        "normalized_thickness_mm": 1.5,
+        "overall_length_mm": 100,
+        "overall_width_mm": 50,
+        "quantity": 1,
+        "textual_operations": ["folding"],
+        "inferred_operations": ["laser_cutting"],
+        "operation_sources": {"folding": "drawing_deterministic",
+                              "laser_cutting": "inference"},
+        "operation_scope": {"folding": "part"},
+        "operation_sequence": {"folding": 30},
+        "operation_qty_per_unit": {"folding": 1},
+        "operations_ruled_out": {"punch": "DXF measured no punched features"},
+        "operation_ruling_sources": {"punch": "dxf"},
+        "manufacturing_features": {"bend_count": 1},
+        "geometry_rollup": {"estimated_cut_length_mm": 300.0},
+    }
+    _estimate = estimate_part(_part, job_quantity=180)
+    _context = _estimate.get("route_context") or {}
+    eq(_context.get("textual_operations"), _part["textual_operations"],
+       "costed record preserves required route names")
+    eq((_context.get("operation_scope") or {}).get("folding"), "part",
+       "scope reaches the costed record")
+    eq((_context.get("operation_sequence") or {}).get("folding"), 30,
+       "sequence reaches the costed record")
+    eq((_context.get("operations_ruled_out") or {}).get("punch"),
+       "DXF measured no punched features", "negative decisions reach the costed record")
+    ok("textual_operations" not in _estimate,
+       "legacy top-level fields remain untouched during shadow mode")
+
+
+def test_2085_legacy_route_compiles_to_one_assembly_event():
+    """Old cached extracts have no scope field. Hierarchy still makes one weld and one coat,
+    Dress inherits that weld event, and sheet-Laser text cannot profile tube stock."""
+    from route_compiler import NOT_APPLICABLE, REQUIRED, compile_job_route
+
+    _parts = [
+        {"part_number": "2085-01", "description": "BRACKET PLATE",
+         "textual_operations": ["powder_coating", "welding", "laser_cutting"],
+         "inferred_operations": ["dress_welds"]},
+        {"part_number": "2085-02", "description": "OUTER TUBE",
+         "section_stock": {"profile_form": "CHS"},
+         "textual_operations": [
+             "powder_coating", "tube_cut", "welding", "laser_cutting"],
+         "inferred_operations": ["dress_welds"]},
+        {"part_number": "2085-03", "description": "INNER TUBE",
+         "section_stock": {"profile_form": "CHS"},
+         "textual_operations": [
+             "powder_coating", "tube_cut", "welding", "laser_cutting"],
+         "inferred_operations": ["dress_welds"]},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "2085-GA"},
+        "assemblies": [{"part_number": "2085-GA", "children": [
+            {"part_number": "2085-01", "qty": 1},
+            {"part_number": "2085-02", "qty": 1},
+            {"part_number": "2085-03", "qty": 1},
+        ]}],
+        "routes": [
+            {"operation": "powder_coating", "sequence": 10,
+             "part_numbers": ["2085-01", "2085-02", "2085-03"],
+             "inferred": False},
+            {"operation": "tube_cut", "sequence": 10,
+             "part_numbers": ["2085-02", "2085-03"], "inferred": True},
+            {"operation": "laser_cutting", "sequence": 20,
+             "part_numbers": ["2085-01"], "inferred": True},
+            {"operation": "welding", "sequence": 30,
+             "part_numbers": ["2085-01", "2085-02", "2085-03"],
+             "inferred": True},
+        ],
+    }
+    _graph = compile_job_route(_parts, _extract)
+    _decisions = _graph["decisions"]
+
+    for _operation in ("welding", "powder_coating", "dress_welds"):
+        _events = [d for d in _decisions
+                   if d["operation"] == _operation and d["status"] == REQUIRED]
+        eq(len(_events), 1, f"{_operation} is one job event, not three part events")
+        eq(_events[0]["target_id"], "2085-GA", f"{_operation} belongs to the assembly")
+        eq(_events[0]["scope"], "assembly", f"{_operation} retains assembly scope")
+        eq(_events[0]["qty_per_unit"], 1.0, f"{_operation} occurs once per product")
+
+    _tube_lasers = [
+        d for d in _decisions
+        if d["operation"] == "laser_cutting"
+        and d["target_id"] in ("2085-02", "2085-03")
+    ]
+    eq(len(_tube_lasers), 2, "both stale tube-Laser claims remain auditable")
+    ok(all(d["status"] == NOT_APPLICABLE for d in _tube_lasers),
+       "tube stock routes to tube_cut rather than sheet Laser")
+    _tube_cuts = [
+        d for d in _decisions
+        if d["operation"] == "tube_cut" and d["status"] == REQUIRED
+    ]
+    eq(sorted(d["target_id"] for d in _tube_cuts), ["2085-02", "2085-03"],
+       "each tube retains its real cut event")
+
+
+def test_estimate_document_stamps_the_shadow_route_without_using_it_for_price():
+    """The real estimate_document call site runs the compiler and stamps its audit contract."""
+    from estimator import estimate_document
+
+    _part = {
+        "part_number": "TEST-02M",
+        "normalized_material": "MILD_STEEL",
+        "normalized_thickness_mm": 1.5,
+        "overall_length_mm": 80,
+        "overall_width_mm": 40,
+        "quantity": 1,
+        "textual_operations": ["laser_cutting"],
+        "geometry_rollup": {"estimated_cut_length_mm": 240.0},
+    }
+    _summary = {
+        "assumed_job_quantity": 180,
+        "llm_full_extract": {
+            "routes": [{
+                "operation": "laser_cutting", "part_numbers": ["TEST-02M"],
+                "scope": "part", "qty_per_unit": 1, "sequence": 10,
+                "inferred": True,
+            }],
+            "assemblies": [],
+        },
+    }
+    _estimate = estimate_document([_part], summary=_summary)
+    _shadow = _estimate.get("canonical_route_shadow") or {}
+    eq(_shadow.get("schema"), "priced_route_shadow.v1",
+       "estimate_document stamps the canonical shadow contract")
+    ok(not _shadow.get("compiler_error"), "the integration executes the real compiler")
+    eq(len(_shadow.get("priced_route_rows") or []), 1,
+       "one required decision projects to one shadow row")
+    ok(_estimate.get("part_estimates"),
+       "legacy part estimates remain the source of the live total during shadow mode")
+
+
+def test_route_shadow_invariant_reports_but_does_not_block_before_cutover():
+    """Shadow differences are loud but cannot alter a live quote before the switch."""
+    from invariants import check_canonical_route_shadow
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "schema": "priced_route_shadow.v1",
+        "mode": "shadow",
+        "decisions": [{
+            "decision_id": "decision:x", "operation": "laser_cutting",
+            "target_id": "101", "status": "not_applicable", "conflicts": []}],
+        "priced_route_rows": [],
+        "issues": [{
+            "code": "forbidden_decision_priced",
+            "decision_id": "decision:x", "operation": "laser_cutting"}],
+    }}}
+    _violations = check_canonical_route_shadow(_summary)
+    ok(_violations, "a resurrection discrepancy must be reported")
+    eq({v["severity"] for v in _violations}, {"warning"},
+       "shadow diagnostics do not change the firm-price gate before cutover")
+
+
 if __name__ == "__main__":
     sys.exit(main())
