@@ -6363,5 +6363,350 @@ def test_route_shadow_invariant_reports_but_does_not_block_before_cutover():
        "shadow diagnostics do not change the firm-price gate before cutover")
 
 
+def test_hierarchy_quantities_and_pressed_hardware_become_canonical_route_facts():
+    from route_compiler import REQUIRED, compile_job_route
+
+    _parts = [
+        {"part_number": "ASSY", "description": "WELD ASSY"},
+        {"part_number": "PLATE", "description": "PLATE", "quantity": 1},
+        {"part_number": "BI-PEMSTUD", "description": "M4 THREADED PEM STUD",
+         "page_roles": ["bought_in"], "quantity": 2},
+        {"part_number": "BI-CLINCH", "description": "M4 SELF-CLINCH NUT",
+         "page_roles": ["bought_in"], "quantity": 4},
+    ]
+    _extract = {
+        "assemblies": [{"part_number": "ASSY", "children": [
+            {"part_number": "PLATE", "qty": 1},
+            {"part_number": "STD PART", "qty": 2},
+            {"part_number": "FIXING", "qty": 4},
+        ]}],
+        "parts": [
+            {"part_number": "STD PART", "description": "M4 THREADED PEM STUD",
+             "is_bought_in": True},
+            {"part_number": "FIXING", "description": "M4 SELF-CLINCH NUT",
+             "is_bought_in": True},
+        ],
+        "routes": [],
+    }
+    _graph = compile_job_route(_parts, _extract)
+    _nodes = {n["part_number"]: n for n in _graph["nodes"]}
+    eq(_nodes["ASSY"]["kind"], "assembly", "the parent is not a sheet part")
+    eq(_nodes["STD PART"]["kind"], "bought_in",
+       "explicit BOM evidence classifies hardware")
+    eq(_nodes["STD PART"]["qty_per_unit"], 2.0,
+       "hierarchy quantity beats a flat guess")
+    eq(_nodes["FIXING"]["qty_per_unit"], 4.0, "all child multiplicities survive")
+    eq(_nodes["STD PART"]["evidence"]["raw_aliases"], ["BI-PEMSTUD"],
+       "generated bought-in identities reconcile to the explicit BOM code")
+    _insert = [
+        d for d in _graph["decisions"]
+        if d["operation"] == "hardware_insertion" and d["status"] == REQUIRED
+    ]
+    eq(len(_insert), 1, "pressed hardware produces one assembly route event")
+    eq(_insert[0]["target_id"], "ASSY", "the assembly owns the insertion event")
+    eq(_insert[0]["participants"], ["FIXING", "STD PART"],
+       "the inserted BOM lines remain auditable")
+    eq(_insert[0]["qty_per_unit"], 1.0,
+       "six inserts do not become six assembly events")
+    ok(_insert[0]["sequence"] < 20,
+       "pressed hardware is routed before the folding stage")
+
+
+def test_canonical_workbook_groups_price_decisions_not_raw_route_words():
+    from route_compiler import compile_job_route, project_priced_route
+    from wb_populate import canonical_labour_groups
+
+    _parts = [
+        {"part_number": "ASSY", "description": "WELD ASSY",
+         "textual_operations": ["laser_cutting"]},
+        {"part_number": "P1", "description": "PLATE 1",
+         "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 1.5},
+        {"part_number": "P2", "description": "PLATE 2",
+         "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 1.5},
+        {"part_number": "PEM", "description": "M4 THREADED PEM STUD",
+         "page_roles": ["bought_in"], "quantity": 2},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "ASSY"},
+        "assemblies": [{"part_number": "ASSY", "children": [
+            {"part_number": "P1", "qty": 1},
+            {"part_number": "P2", "qty": 1},
+            {"part_number": "PEM", "qty": 2},
+        ]}],
+        "routes": [
+            {"operation": "laser_cutting", "sequence": 10, "scope": "part",
+             "part_numbers": ["P1", "P2"], "inferred": True},
+            {"operation": "welding", "sequence": 30, "scope": "assembly",
+             "part_numbers": ["P1", "P2"], "inferred": True},
+        ],
+    }
+    _estimates = [
+        {"part_number": "P1", "quantity": 1, "normalized_material": "MILD_STEEL",
+         "normalized_thickness_mm": 1.5,
+         "material_estimate": {"stock_form": "sheet"},
+         "labour_estimate": {"batch_hours": {"laser_cutting": 1.0}}},
+        {"part_number": "P2", "quantity": 1, "normalized_material": "MILD_STEEL",
+         "normalized_thickness_mm": 1.5,
+         "material_estimate": {"stock_form": "sheet"},
+         "labour_estimate": {"batch_hours": {"laser_cutting": 1.5}}},
+        {"part_number": "PEM", "quantity": 2, "page_roles": ["bought_in"],
+         "labour_estimate": {}},
+    ]
+    _graph = compile_job_route(_parts, _extract)
+    _shadow = project_priced_route(_graph, _estimates)
+    _summary = {
+        "parts": _parts,
+        "estimate_summary": {
+            "part_estimates": _estimates,
+            "canonical_route_shadow": _shadow,
+        },
+    }
+    _groups = canonical_labour_groups(_summary, _estimates, 180)
+    _laser = [g for g in _groups.values() if g["wb_op"] == "Laser (Metal)"]
+    eq(len(_laser), 1, "same-gauge leaf decisions share one tooling setup")
+    eq(_laser[0]["qty"], 2.0, "both required leaf events reach that setup")
+    eq(len(_laser[0]["decision_ids"]), 2,
+       "grouping retains both canonical identities")
+    _weld = [g for g in _groups.values() if g["wb_op"] == "Weld (CO2)"]
+    eq(len(_weld), 1, "assembly welding is one priced event")
+    eq(_weld[0]["qty"], 1.0, "participants do not multiply assembly welding")
+    eq(_weld[0]["bh"], 0.0,
+       "participant batch hours cannot leak into assembly pricing")
+    ok(not any(
+        g["wb_op"] == "Laser (Metal)" and "ASSY" in g.get("parts", [])
+        for g in _groups.values()
+    ), "the assembly parent's raw Laser word is not resurrected")
+    _insert = [
+        g for g in _groups.values()
+        if "hardware_insertion" in g.get("engine_ops", [])
+    ]
+    eq(len(_insert), 1, "pressed hardware is rendered from its decision")
+    eq(_insert[0]["qty"], 1.0, "insertion is one assembly event")
+    eq(round(_insert[0]["bh"], 4), 1.5,
+       "two inserts x 15 seconds x 180 units becomes 1.5 batch hours")
+
+
+def test_canonical_workbook_rows_carry_every_source_decision_exactly_once():
+    from wb_populate import build_workbook_labour
+
+    _groups = {
+        ("setup",): {
+            "workbook_row": 95,
+            "wb_op": "Laser (Metal)",
+            "material": "MILD_STEEL",
+            "thickness": 1.5,
+            "parts": ["P1", "P2"],
+            "group_key": ("setup",),
+            "engine_ops": ["laser_cutting"],
+            "qty": 2,
+            "canonical_route": True,
+            "decision_ids": ["decision:p1", "decision:p2"],
+        },
+    }
+    _record = build_workbook_labour(_groups)
+    eq(_record["schema"], "workbook_labour_rows.v3",
+       "canonical identity has an explicit schema")
+    eq(_record["mode"], "canonical", "the renderer records which authority it used")
+    eq(_record["rows"][0]["decision_ids"], ["decision:p1", "decision:p2"],
+       "shared setup does not erase either route decision")
+
+
+def test_cutover_invariants_block_missing_unverified_or_resurrected_decisions():
+    from invariants import check_canonical_route_shadow
+
+    _summary = {
+        "estimate_summary": {"canonical_route_shadow": {
+            "schema": "priced_route_shadow.v1",
+            "mode": "cutover",
+            "decisions": [
+                {"decision_id": "required", "operation": "welding",
+                 "target_id": "ASSY", "status": "required", "conflicts": []},
+                {"decision_id": "uncertain", "operation": "folding",
+                 "target_id": "P1", "status": "unverified",
+                 "conflicts": [{"field": "status"}]},
+                {"decision_id": "no", "operation": "laser_cutting",
+                 "target_id": "ASSY", "status": "not_applicable", "conflicts": []},
+            ],
+            "priced_route_rows": [
+                {"decision_id": "required", "operation": "welding"},
+            ],
+            "issues": [],
+        }},
+        "workbook_labour": {
+            "schema": "workbook_labour_rows.v3",
+            "mode": "canonical",
+            "rows": [{
+                "workbook_row": 95,
+                "decision_ids": ["no"],
+                "wb_operation": "Laser (Metal)",
+            }],
+        },
+    }
+    _violations = check_canonical_route_shadow(_summary)
+    eq({v["severity"] for v in _violations}, {"blocking"},
+       "cutover discrepancies cannot be advisory")
+    _codes = {v["code"] for v in _violations}
+    ok("canonical_route_decision_unverified" in _codes,
+       "equal-rank uncertainty blocks automatic pricing")
+    ok("canonical_non_required_decision_priced" in _codes,
+       "a ruled-out event cannot reach the workbook")
+    ok("canonical_required_decision_not_rendered" in _codes,
+       "required work cannot disappear during rendering")
+
+
+def test_canonical_cutover_never_falls_back_to_the_legacy_workbook_builder():
+    from pathlib import Path
+    _root = Path(__file__).resolve().parents[1]
+    _main = (_root / "src" / "main.py").read_text(encoding="utf-8")
+    ok("NO fallback workbook written: canonical route cutover is" in _main,
+       "a compiler failure must fail closed")
+    ok("if _canonical_cutover:" in _main,
+       "the fallback guard reads the real production switch")
+    _wb = (_root / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    ok("for pe in ([] if _canonical_cutover else labour_parts):" in _wb,
+       "canonical mode cannot execute the raw-route rescue loop")
+
+
+def test_canonical_bom_identity_quantity_and_missing_lines_reach_the_workbook():
+    from wb_populate import canonicalise_part_estimates_for_workbook
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "nodes": [
+            {
+                "part_number": "GA", "description": "TOP", "kind": "assembly",
+                "qty_per_unit": 1, "parents": [], "children": [
+                    {"part_number": "FIXINGTBC", "qty": 2},
+                    {"part_number": "THUM620", "qty": 4},
+                    {"part_number": "PLATE", "qty": 1},
+                    {"part_number": "MISSING-LEAF", "qty": 1},
+                ], "evidence": {},
+            },
+            {
+                "part_number": "FIXINGTBC", "description": "M4 KNURLED KNOB",
+                "kind": "bought_in", "qty_per_unit": 2, "parents": ["GA"],
+                "children": [], "evidence": {"raw_aliases": ["BI-KNURLEDKNOB"]},
+            },
+            {
+                "part_number": "THUM620", "description": "M4 THUMBSCREW",
+                "kind": "bought_in", "qty_per_unit": 4, "parents": ["GA"],
+                "children": [], "evidence": {},
+            },
+            {
+                "part_number": "PLATE", "description": "PLATE",
+                "kind": "leaf", "qty_per_unit": 1, "parents": ["GA"],
+                "children": [], "evidence": {},
+            },
+            {
+                "part_number": "MISSING-LEAF", "description": "MISSING PLATE",
+                "kind": "leaf", "qty_per_unit": 1, "parents": ["GA"],
+                "children": [], "evidence": {},
+            },
+        ],
+        "decisions": [],
+        "issues": [],
+    }}}
+    _estimates = [
+        {
+            "part_number": "BI-KNURLEDKNOB", "description": "KNOB",
+            "quantity": 1, "unit_cost_gbp": 1.25,
+            "material_estimate": {"stock_form": "bought_in"},
+        },
+        {
+            "part_number": "PLATE", "description": "PLATE", "quantity": 1,
+            "material_estimate": {"stock_form": "sheet"},
+        },
+    ]
+    _normalised = canonicalise_part_estimates_for_workbook(_summary, _estimates)
+    _by_id = {item["part_number"]: item for item in _normalised}
+    eq(_by_id["FIXINGTBC"]["quantity"], 2,
+       "explicit hierarchy quantity replaces the generated alias guess")
+    eq(_by_id["FIXINGTBC"]["unit_cost_gbp"], 1.25,
+       "identity reconciliation retains the priced evidence")
+    eq(_by_id["THUM620"]["quantity"], 4,
+       "an explicit unpriced hardware line remains visible")
+    ok(_by_id["THUM620"]["_price_explicitly_withheld"],
+       "missing hardware pricing is explicit rather than silently absent")
+    ok("MISSING-LEAF" not in _by_id,
+       "fabricated geometry is never invented to fill a missing estimate")
+    _issues = _summary["estimate_summary"]["canonical_route_shadow"]["issues"]
+    ok(any(
+        issue.get("code") == "bom_leaf_without_estimate"
+        and issue.get("part_number") == "MISSING-LEAF"
+        for issue in _issues
+    ), "a missing fabricated BOM leaf becomes a release blocker")
+
+
+def test_canonical_powder_grouping_respects_finish_and_empty_routes_keep_v3():
+    from wb_populate import build_workbook_labour, canonical_labour_groups
+
+    _decisions = [
+        {
+            "decision_id": "coat:black", "operation": "powder_coating",
+            "status": "required", "target_id": "BLACK", "participants": ["BLACK"],
+            "scope": "part", "qty_per_unit": 1, "sequence": 70,
+        },
+        {
+            "decision_id": "coat:white", "operation": "powder_coating",
+            "status": "required", "target_id": "WHITE", "participants": ["WHITE"],
+            "scope": "part", "qty_per_unit": 1, "sequence": 70,
+        },
+    ]
+    _summary = {
+        "parts": [
+            {"part_number": "BLACK", "normalized_finish": "RAL 9005 BLACK"},
+            {"part_number": "WHITE", "normalized_finish": "RAL 9010 WHITE"},
+        ],
+        "estimate_summary": {"canonical_route_shadow": {
+            "nodes": [
+                {"part_number": "BLACK", "kind": "leaf", "qty_per_unit": 1},
+                {"part_number": "WHITE", "kind": "leaf", "qty_per_unit": 1},
+            ],
+            "decisions": _decisions,
+            "issues": [],
+        }},
+    }
+    _estimates = [
+        {"part_number": "BLACK", "normalized_finish": "RAL 9005 BLACK"},
+        {"part_number": "WHITE", "normalized_finish": "RAL 9010 WHITE"},
+    ]
+    _groups = canonical_labour_groups(_summary, _estimates, 180)
+    _powder = [
+        group for group in _groups.values()
+        if "powder_coating" in group.get("engine_ops", [])
+    ]
+    eq(len(_powder), 2, "different powder colours require different setup rows")
+    _empty = build_workbook_labour({}, canonical_mode=True)
+    eq(_empty["schema"], "workbook_labour_rows.v3",
+       "a valid no-operation canonical job does not masquerade as legacy")
+    eq(_empty["mode"], "canonical", "authority survives an empty route")
+
+
+def test_shop_sequence_fills_only_required_events_after_arbitration():
+    from route_compiler import RULED_OUT, compile_job_route
+
+    _graph = compile_job_route(
+        [
+            {
+                "part_number": "P1",
+                "textual_operations": ["tapping"],
+                "operations_ruled_out": {"folding": "DXF measured zero bends"},
+                "operation_ruling_sources": {"folding": "dxf"},
+            },
+        ],
+        {"routes": [], "assemblies": []},
+    )
+    _by_operation = {
+        decision["operation"]: decision for decision in _graph["decisions"]
+    }
+    eq(_by_operation["tapping"]["sequence"], 20.0,
+       "unsequenced tapping is placed before folding and welding")
+    eq(_by_operation["tapping"]["field_provenance"]["sequence"],
+       "shop_sequence_rule", "the fallback order remains auditable")
+    eq(_by_operation["folding"]["status"], RULED_OUT,
+       "shop ordering cannot promote a negative decision")
+    eq(_by_operation["folding"]["sequence"], None,
+       "ruled-out work receives no invented route position")
+
+
 if __name__ == "__main__":
     sys.exit(main())

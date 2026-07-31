@@ -42,6 +42,7 @@ LEAF_ONLY_OPERATIONS = frozenset({
 # inference is retained as an issue so a new extract with explicit scope can supersede it.
 ASSEMBLY_EVENT_OPERATIONS = frozenset({
     "welding", "dress_welds", "powder_coating", "assembly", "handling",
+    "hardware_insertion",
 })
 TUBE_INAPPLICABLE_OPERATIONS = frozenset({
     "laser_cutting", "punch", "guillotine",
@@ -49,16 +50,46 @@ TUBE_INAPPLICABLE_OPERATIONS = frozenset({
 
 CONFIDENCE_VALUE = {"low": 0.25, "medium": 0.60, "high": 0.90}
 
+OPERATION_ALIASES = {
+    "handling": "assembly",
+    "insert_hardware": "hardware_insertion",
+    "insert_pem": "hardware_insertion",
+    "pem_insertion": "hardware_insertion",
+    "clinch_insertion": "hardware_insertion",
+}
+
+# Shop-order fallback for a required event whose evidence named the work but omitted its
+# sequence. It fills only the sequence field after status arbitration; it can never turn a
+# negative or uncertain claim into required work.
+DEFAULT_OPERATION_SEQUENCE = {
+    "laser_cutting": 10,
+    "punch": 10,
+    "guillotine": 10,
+    "saw": 15,
+    "tube_cut": 15,
+    "hardware_insertion": 18,
+    "hole_machining": 20,
+    "drilling": 20,
+    "tapping": 20,
+    "folding": 30,
+    "tube_bending": 30,
+    "welding": 40,
+    "dress_welds": 41,
+    "powder_coating": 70,
+    "assembly": 90,
+}
+
 
 def clean_part_number(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).upper()
 
 
 def clean_operation(value: Any) -> str:
-    return re.sub(
+    cleaned = re.sub(
         r"_+", "_",
         re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()),
     ).strip("_")
+    return OPERATION_ALIASES.get(cleaned, cleaned)
 
 
 def number(value: Any, default: Optional[float] = None) -> Optional[float]:
@@ -95,6 +126,7 @@ class PartNode:
     part_number: str
     description: str = ""
     kind: str = "leaf"  # leaf | assembly | bought_in
+    qty_per_unit: float = 1.0
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -202,13 +234,100 @@ def _raw_parts(parts: Sequence[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any
     return result
 
 
+def _extract_part_records(llm_extract: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Canonical BOM identities and classifications read by the full-job extract."""
+    result: Dict[str, Dict[str, Any]] = {}
+    for pool_name in ("bom", "parts"):
+        for item in llm_extract.get(pool_name) or []:
+            if not isinstance(item, Mapping):
+                continue
+            identity = clean_part_number(item.get("part_number"))
+            if not identity:
+                continue
+            record = result.setdefault(identity, {})
+            for key, value in item.items():
+                if value not in (None, "", [], {}):
+                    record[key] = value
+            if item.get("qty") is not None and record.get("quantity") is None:
+                record["quantity"] = item.get("qty")
+            if item.get("is_bought_in"):
+                record["is_bought_in"] = True
+    return result
+
+
+def _description_tokens(value: Any) -> Set[str]:
+    ignored = {"THE", "AND", "FOR", "WITH", "PART", "STD", "MM"}
+    return {
+        token for token in re.findall(r"[A-Z0-9]+", str(value or "").upper())
+        if len(token) >= 3 and token not in ignored and not re.fullmatch(r"M\d+", token)
+    }
+
+
+def _bought_in_record(record: Mapping[str, Any]) -> bool:
+    return bool(
+        record.get("is_bought_in")
+        or "bought_in" in {
+            str(item).strip().lower()
+            for item in (record.get("page_roles") or [])
+        }
+        or str(record.get("material_family") or "").strip().lower() == "bought_in"
+    )
+
+
+def _raw_identity_aliases(
+    raw: Mapping[str, Mapping[str, Any]],
+    extracted: Mapping[str, Mapping[str, Any]],
+) -> Dict[str, str]:
+    """Reconcile generated BI-* identities with the explicit BOM code they came from."""
+    extracted_bought_in = {
+        identity: record for identity, record in extracted.items()
+        if _bought_in_record(record)
+    }
+    aliases: Dict[str, str] = {}
+    for identity, record in raw.items():
+        if identity in extracted or not _bought_in_record(record):
+            continue
+        tokens = _description_tokens(record.get("description"))
+        if len(tokens) < 2:
+            continue
+        matches = []
+        for candidate, candidate_record in extracted_bought_in.items():
+            candidate_tokens = _description_tokens(candidate_record.get("description"))
+            if not tokens or not candidate_tokens:
+                continue
+            smaller = tokens if len(tokens) <= len(candidate_tokens) else candidate_tokens
+            larger = candidate_tokens if smaller is tokens else tokens
+            if not smaller.issubset(larger):
+                continue
+            matches.append(candidate)
+        if len(matches) == 1:
+            aliases[identity] = matches[0]
+    return aliases
+
+
 def build_part_graph(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build canonical nodes and hierarchy edges from the whole job."""
     llm_extract = llm_extract or {}
-    raw = _raw_parts(parts)
+    raw_original = _raw_parts(parts)
+    extracted = _extract_part_records(llm_extract)
+    aliases = _raw_identity_aliases(raw_original, extracted)
+    raw: Dict[str, Mapping[str, Any]] = {}
+    for identity, record in raw_original.items():
+        canonical_identity = aliases.get(identity, identity)
+        canonical_record = dict(record)
+        canonical_record["part_number"] = canonical_identity
+        raw.setdefault(canonical_identity, canonical_record)
+    records: Dict[str, Dict[str, Any]] = {
+        identity: dict(record) for identity, record in extracted.items()
+    }
+    for identity, record in raw.items():
+        merged = records.setdefault(identity, {})
+        for key, value in record.items():
+            if value not in (None, "", [], {}):
+                merged[key] = value
     children: Dict[str, Dict[str, float]] = {}
     parents: Dict[str, Set[str]] = {}
 
@@ -231,13 +350,39 @@ def build_part_graph(
 
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
-    identities: Set[str] = set(raw) | set(children) | set(parents)
+    if not top_id:
+        roots = sorted(set(children) - set(parents))
+        if len(roots) == 1:
+            top_id = roots[0]
+        else:
+            ga_roots = [item for item in roots if re.search(r"(?:^|-)GA$", item)]
+            if len(ga_roots) == 1:
+                top_id = ga_roots[0]
+    identities: Set[str] = set(raw) | set(extracted) | set(children) | set(parents)
     if top_id:
         identities.add(top_id)
 
+    quantities: Dict[str, float] = {}
+
+    def add_descendants(identity: str, factor: float, path: Set[str]) -> None:
+        if identity in path:
+            return
+        quantities[identity] = quantities.get(identity, 0.0) + factor
+        next_path = set(path)
+        next_path.add(identity)
+        for child_id, child_qty in (children.get(identity) or {}).items():
+            add_descendants(child_id, factor * child_qty, next_path)
+
+    if top_id:
+        add_descendants(top_id, 1.0, set())
+    for identity in identities:
+        if identity not in quantities:
+            quantities[identity] = number(
+                (records.get(identity) or {}).get("quantity"), 1.0) or 1.0
+
     nodes: List[PartNode] = []
     for identity in sorted(identities):
-        record = raw.get(identity) or {}
+        record = records.get(identity) or {}
         is_assembly = bool(
             identity in children
             or identity == top_id
@@ -248,7 +393,7 @@ def build_part_graph(
             "type", "part_type", "source_type", "normalized_material",
         )).upper()
         is_bought_in = bool(
-            record.get("is_bought_in")
+            _bought_in_record(record)
             or "BOUGHT" in type_text
             or identity.startswith("BI-")
         )
@@ -257,6 +402,7 @@ def build_part_graph(
             part_number=identity,
             description=str(record.get("description") or ""),
             kind=kind,
+            qty_per_unit=quantities.get(identity, 1.0),
             parents=sorted(parents.get(identity) or []),
             children=[
                 ChildEdge(part_number=child_id, qty=qty)
@@ -264,16 +410,40 @@ def build_part_graph(
             ],
             evidence={
                 "raw_record_present": identity in raw,
+                "extract_record_present": identity in extracted,
+                "raw_aliases": sorted(
+                    alias for alias, canonical in aliases.items()
+                    if canonical == identity
+                ),
                 "is_sub_assembly": bool(record.get("is_sub_assembly")),
                 "is_assembly_parent": bool(record.get("is_assembly_parent")),
             },
         ))
 
+    graph_issues = []
+    if top_id:
+        for node in nodes:
+            if (
+                node.part_number != top_id
+                and not node.parents
+                and node.part_number not in {"PACKAGING", "DELIVERY", "POWDER"}
+            ):
+                graph_issues.append({
+                    "code": "bom_node_disconnected",
+                    "part_number": node.part_number,
+                    "kind": node.kind,
+                    "description": node.description,
+                })
+
     return {
         "nodes": nodes,
         "raw": raw,
+        "records": records,
+        "aliases": aliases,
+        "issues": graph_issues,
         "parents": parents,
         "children": {key: set(value) for key, value in children.items()},
+        "quantities": quantities,
         "top_assembly": top_id,
     }
 
@@ -482,9 +652,10 @@ def compile_job_route(
     graph = build_part_graph(parts, llm_extract)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
+    graph_quantities = graph["quantities"]
     claims_by_event: Dict[str, List[OperationClaim]] = {}
     explicit_memberships: Dict[Tuple[str, str], Set[str]] = {}
-    issues: List[Dict[str, Any]] = []
+    issues: List[Dict[str, Any]] = list(graph.get("issues") or [])
 
     def add_claim(event_id: str, claim: OperationClaim) -> None:
         claims_by_event.setdefault(event_id, []).append(claim)
@@ -548,6 +719,13 @@ def compile_job_route(
                         if item == assembly_id
                         or _is_descendant(item, assembly_id, graph["parents"])
                     ]
+                    if (
+                        operation == "assembly"
+                        and members == [assembly_id]
+                        and graph["children"].get(assembly_id)
+                    ):
+                        members = sorted(graph["children"][assembly_id])
+                    covered.add(assembly_id)
                     covered.update(members)
                     targets.append(("assembly", assembly_id, members))
                 # Mixed assembly routes (for example powder) can also name standalone leaves.
@@ -593,7 +771,11 @@ def compile_job_route(
                 target_id=target_id,
                 scope=scope,
                 participants=members,
-                qty_per_unit=route.get("qty_per_unit"),
+                qty_per_unit=(
+                    route.get("qty_per_unit")
+                    if route.get("qty_per_unit") is not None
+                    else graph_quantities.get(target_id, 1.0)
+                ),
                 sequence=route.get("sequence"),
                 confidence=route.get("confidence"),
                 reason=route.get("notes") or route.get("description"),
@@ -612,10 +794,10 @@ def compile_job_route(
     for part_number, part in raw.items():
         operation_sources = part.get("operation_sources") or {}
         scopes = part.get("operation_scope") or {}
-        quantities = part.get("operation_qty_per_unit") or {}
+        operation_quantities = part.get("operation_qty_per_unit") or {}
         sequences = part.get("operation_sequence") or {}
 
-        seen: Set[Tuple[str, str]] = set()
+        seen: Set[str] = set()
         for field_name, fallback_source in (
             ("textual_operations", "unknown"),
             ("operations", "unknown"),
@@ -623,9 +805,9 @@ def compile_job_route(
         ):
             for raw_operation in part.get(field_name) or []:
                 operation = clean_operation(raw_operation)
-                if not operation or (field_name, operation) in seen:
+                if not operation or operation in seen:
                     continue
-                seen.add((field_name, operation))
+                seen.add(operation)
                 source = str(operation_sources.get(operation) or fallback_source)
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
@@ -690,7 +872,12 @@ def compile_job_route(
                     scope = template.scope if template else scopes.get(operation, "part")
                     route_id = template.route_id if template else ""
                     claim_status = REQUIRED
-                    if (
+                    if template is None and operation == "assembly":
+                        # Generic per-record handling is a pricing default, not evidence that
+                        # every leaf and bought-in line is assembled independently. Canonical
+                        # assembly events are created from the hierarchy below.
+                        claim_status = NOT_APPLICABLE
+                    elif (
                         template is None
                         and kinds.get(part_number) == "assembly"
                         and source == "unknown"
@@ -709,7 +896,11 @@ def compile_job_route(
                         # participant here would conflict at equal rank with the full route.
                         participants=(
                             template.participants if template else [part_number]),
-                        qty_per_unit=quantities.get(operation),
+                        qty_per_unit=(
+                            operation_quantities.get(operation)
+                            if operation_quantities.get(operation) is not None
+                            else graph["quantities"].get(target_id, 1.0)
+                        ),
                         sequence=sequences.get(operation),
                         reason=f"{field_name} on existing part record",
                         route_id=route_id,
@@ -747,6 +938,150 @@ def compile_job_route(
                     reason=reason,
                     route_id=template.route_id if template else "",
                 ))
+
+    # Pressed fasteners are a route fact carried by the BOM, not a workbook-side guess.
+    # One insertion event belongs to the lowest assembly containing the PEM/clinch items;
+    # the number of inserts remains visible through the participant quantities.
+    insertion_parts = []
+    for part_number, part in graph["records"].items():
+        if kinds.get(part_number) != "bought_in":
+            continue
+        description = " ".join((
+            str(part.get("part_number") or ""),
+            str(part.get("description") or ""),
+        )).upper()
+        if any(token in description for token in (
+            "SELF-CLINCH", "SELF CLINCH", "CLINCH NUT", "PEM STUD",
+            "PEM NUT", "PRESS-IN", "PRESS IN",
+        )):
+            insertion_parts.append(part_number)
+    if insertion_parts:
+        existing_insertions = [
+            (event_id, event_claims[0])
+            for event_id, event_claims in claims_by_event.items()
+            if event_claims and event_claims[0].operation == "hardware_insertion"
+        ]
+        if existing_insertions:
+            for insertion_event_id, template in existing_insertions:
+                add_claim(insertion_event_id, make_claim(
+                    "hardware_insertion", REQUIRED, "bom_tree",
+                    subject_id=template.target_id,
+                    target_id=template.target_id,
+                    scope=template.scope,
+                    participants=template.participants,
+                    qty_per_unit=template.qty_per_unit,
+                    sequence=template.sequence,
+                    reason="PEM/self-clinch BOM corroborates the extracted insertion event",
+                    route_id=template.route_id,
+                ))
+        else:
+            insertion_target = (
+                _lowest_common_assembly(
+                    insertion_parts, graph["parents"], kinds)
+                or graph["top_assembly"]
+                or insertion_parts[0]
+            )
+            insertion_route_id = stable_id("route", {
+                "operation": "hardware_insertion",
+                "target_id": insertion_target,
+                "participants": sorted(insertion_parts),
+            })
+            insertion_event_id = stable_id("decision", {
+                "route_id": insertion_route_id,
+                "operation": "hardware_insertion",
+                "scope": "assembly",
+                "target_id": insertion_target,
+            })
+            add_claim(insertion_event_id, make_claim(
+                "hardware_insertion", REQUIRED, "bom_tree",
+                subject_id=insertion_target,
+                target_id=insertion_target,
+                scope="assembly",
+                participants=insertion_parts,
+                qty_per_unit=graph_quantities.get(insertion_target, 1.0),
+                sequence=18,
+                reason="PEM/self-clinch hardware in the BOM requires a pressed insertion event",
+                route_id=insertion_route_id,
+            ))
+
+    # Every non-welded assembly node is an actual assembly event. This replaces the old
+    # blanket `handling` operation copied onto every leaf and bought-in line.
+    current_decisions = [
+        arbitrate_event(event_id, event_claims)
+        for event_id, event_claims in claims_by_event.items()
+        if event_claims
+    ]
+    existing_assembly_targets = {
+        decision.target_id for decision in current_decisions
+        if decision.operation == "assembly" and decision.status == REQUIRED
+    }
+    welded_targets = {
+        decision.target_id for decision in current_decisions
+        if decision.operation == "welding" and decision.status == REQUIRED
+    }
+    for node in graph["nodes"]:
+        if (
+            node.kind != "assembly"
+            or not node.children
+            or node.part_number in existing_assembly_targets
+            or node.part_number in welded_targets
+        ):
+            continue
+        assembly_route_id = stable_id("route", {
+            "operation": "assembly",
+            "target_id": node.part_number,
+            "participants": [edge.part_number for edge in node.children],
+        })
+        assembly_event_id = stable_id("decision", {
+            "route_id": assembly_route_id,
+            "operation": "assembly",
+            "scope": "assembly",
+            "target_id": node.part_number,
+        })
+        add_claim(assembly_event_id, make_claim(
+            "assembly", REQUIRED, "bom_tree",
+            subject_id=node.part_number,
+            target_id=node.part_number,
+            scope="assembly",
+            participants=[edge.part_number for edge in node.children],
+            qty_per_unit=node.qty_per_unit,
+            sequence=90 if node.part_number == graph["top_assembly"] else 60,
+            reason="non-welded BOM parent requires one assembly event",
+            route_id=assembly_route_id,
+        ))
+
+    # A vague weld word stranded on a parent does not create a second weld when a specific
+    # descendant assembly already owns the extracted welding event.
+    explicit_weld_targets = {
+        decision.target_id
+        for event_id, event_claims in claims_by_event.items()
+        for decision in [arbitrate_event(event_id, event_claims)]
+        if decision.operation == "welding"
+        and decision.status == REQUIRED
+        and decision.source != "unknown"
+    }
+    for event_id, event_claims in list(claims_by_event.items()):
+        template = event_claims[0]
+        if (
+            template.operation == "welding"
+            and template.status == UNVERIFIED
+            and kinds.get(template.target_id) == "assembly"
+            and any(
+                _is_descendant(
+                    weld_target, template.target_id, graph["parents"])
+                for weld_target in explicit_weld_targets
+            )
+        ):
+            add_claim(event_id, make_claim(
+                "welding", NOT_APPLICABLE, "bom_tree",
+                subject_id=template.target_id,
+                target_id=template.target_id,
+                scope=template.scope,
+                participants=template.participants,
+                sequence=template.sequence,
+                reason="a specific descendant assembly owns the welding event",
+                route_id=template.route_id,
+            ))
 
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent
     # instead of deleting evidence from whichever record happens to be in hand.
@@ -803,6 +1138,14 @@ def compile_job_route(
         for event_id, claims in claims_by_event.items()
         if claims
     ]
+    for decision in decisions:
+        if (
+            decision.status == REQUIRED
+            and decision.sequence is None
+            and decision.operation in DEFAULT_OPERATION_SEQUENCE
+        ):
+            decision.sequence = float(DEFAULT_OPERATION_SEQUENCE[decision.operation])
+            decision.field_provenance["sequence"] = "shop_sequence_rule"
     decisions.sort(key=lambda item: (
         item.sequence is None,
         item.sequence if item.sequence is not None else 10**9,

@@ -1,5 +1,8 @@
 # ClaudeVision canonical route compiler — shadow proposal
 
+> Historical shadow-design record. The reviewed implementation has now progressed to the
+> guarded workbook cutover documented in `ROUTE_COMPILER_CUTOVER.md`.
+
 This is an isolated review copy. The canonical repository at `C:\ClaudeVision` was not
 modified.
 

@@ -807,6 +807,9 @@ def main() -> None:
                         with open(_canon_wl, encoding="utf-8") as _fh_r:
                             _doc = json.load(_fh_r)
                         _doc["workbook_labour"] = _wl
+                        if _wl.get("mode") == "canonical":
+                            ((_doc.setdefault("estimate_summary", {}))
+                             .setdefault("canonical_route_shadow", {}))["mode"] = "cutover"
                         # ...and the on-disk copy, which is what the HTML deliverables read.
                         # Both must agree or the .xlsx tabs and the HTML diverge again.
                         _rc_doc = _rrf(_doc)
@@ -827,7 +830,7 @@ def main() -> None:
             else:
                 raise RuntimeError("populate_workbook returned None")
         except Exception as _wb_exc:
-            print(f"\n[wb_populate] failed ({_wb_exc}) — falling back to xlsx_output", flush=True)
+            print(f"\n[wb_populate] failed ({_wb_exc})", flush=True)
             # Full traceback so the failing line is visible, not just the message.
             # A bare exception message (e.g. a KeyError with only a key name) hides
             # where in populate_workbook's 400+ lines it died; the fallback to the
@@ -836,12 +839,22 @@ def main() -> None:
             print("   [wb_populate] traceback:", flush=True)
             _tb.print_exc()
             try:
-                from xlsx_output import write_estimate_xlsx
-                _fallback = write_estimate_xlsx(summary, out_dir=OUTPUT_DIR / "estimates")
-                xlsx_path = str(_fallback)
-                print(f"   -> Fallback estimate xlsx: {_fallback.resolve()}")
-            except Exception as _fb_exc:
-                print(f"   -> Fallback also failed: {_fb_exc}", flush=True)
+                from config import CANONICAL_ROUTE_WORKBOOK_CUTOVER as _canonical_cutover
+            except Exception:
+                _canonical_cutover = False
+            if _canonical_cutover:
+                print("   -> NO fallback workbook written: canonical route cutover is "
+                      "enabled, and the legacy builder can resurrect or multiply rejected "
+                      "operations. Fix the canonical failure and re-run.", flush=True)
+            else:
+                try:
+                    from xlsx_output import write_estimate_xlsx
+                    _fallback = write_estimate_xlsx(
+                        summary, out_dir=OUTPUT_DIR / "estimates")
+                    xlsx_path = str(_fallback)
+                    print(f"   -> Fallback estimate xlsx: {_fallback.resolve()}")
+                except Exception as _fb_exc:
+                    print(f"   -> Fallback also failed: {_fb_exc}", flush=True)
 
         # SDI Intelligence — Decision Report + Provenance sheets
         # Added to whichever output was produced (wb_populate or fallback).
