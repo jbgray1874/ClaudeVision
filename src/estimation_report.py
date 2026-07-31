@@ -36,7 +36,8 @@ except ImportError:
 # Report — one source of truth, so both supplementary sheets behave identically.
 # Fallbacks keep this module importable if job_decision_report is unavailable.
 try:
-    from job_decision_report import _is_bought_in, _find_wb_sell_price_ref
+    from job_decision_report import (_is_bought_in, _find_wb_sell_price_ref,
+                                     replace_generated_sheet)
 except Exception:  # pragma: no cover - defensive
     def _is_bought_in(part: Dict) -> bool:
         mat = str(part.get("normalized_material") or part.get("material") or "").upper()
@@ -52,6 +53,14 @@ except Exception:  # pragma: no cover - defensive
         if pn.startswith(("BI-", "FIXING", "VINYL", "PACKAGING", "DELIVERY")):
             return True
         return False
+
+    def replace_generated_sheet(wb, title):
+        if title in wb.sheetnames:
+            del wb[title]
+        for _n in [n for n in wb.sheetnames
+                   if n.startswith(title) and n[len(title):].isdigit()]:
+            del wb[_n]
+        return wb.create_sheet(title)
 
     def _find_wb_sell_price_ref(wb):
         try:
@@ -382,7 +391,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     provenance = build_provenance(summary)
     if not provenance:
         return
-    ws = wb.create_sheet("AI Provenance")
+    ws = replace_generated_sheet(wb, "AI Provenance")
     scan_meta = scan_meta or {}
 
     # Engine part-sum (material + light handling) — kept as the fallback total.

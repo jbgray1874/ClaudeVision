@@ -856,8 +856,59 @@ def main() -> None:
                 except Exception as _fb_exc:
                     print(f"   -> Fallback also failed: {_fb_exc}", flush=True)
 
+        # ── Price read-back: stamp the REAL Excel-computed totals into the JSON ──
+        # wb_populate writes Excel FORMULAS; the true unit cost is computed by Excel on load,
+        # not in Python. The JSON's workbook_equivalent_pricing is a reconstruction that can
+        # drift from the spreadsheet. Open the populated .xlsx via Excel COM, read the real
+        # Material/Labour/Unit totals, and write them into the JSON so every consumer agrees.
+        # Failure-isolated: any error leaves the JSON unchanged and never breaks the run.
+        if xlsx_path:
+            try:
+                from wep_readback_from_xlsx import stamp_real_totals_into_json as _stamp_wep
+                _canon_json = (summary.get("saved_output_paths") or {}).get("json")
+                if _canon_json and Path(_canon_json).exists():
+                    _stamp_wep(str(xlsx_path), str(_canon_json))
+                else:
+                    print("   [wep-readback] canonical JSON path not found — readback skipped.", flush=True)
+            except Exception as _wep_exc:
+                print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
+
+        # THE READ-BACK STAMPS THE FILE ON DISK, NOT THIS SUMMARY.
+        #
+        # Everything after this point describes the job from the in-memory summary, and
+        # without pulling the stamped blocks back into it the two provenance tabs are
+        # written from a job that has no final_estimate at all. On 2085 that showed exactly
+        # as you would expect: the Ext GBP column summed the engine's per-part figures to
+        # GBP 44.75 against a Sell Price of GBP 6.33, with the money columns unlabelled and
+        # no reconciliation line, because the code that writes both asks whether Excel has
+        # calculated yet and the honest answer at that moment was no.
+        if xlsx_path:
+            try:
+                _canon_json = (summary.get("saved_output_paths") or {}).get("json")
+                if _canon_json and Path(_canon_json).exists():
+                    with open(_canon_json, encoding="utf-8") as _fh_fe:
+                        _stamped = json.load(_fh_fe)
+                    if isinstance(_stamped.get("final_estimate"), dict):
+                        summary["final_estimate"] = _stamped["final_estimate"]
+                    _s_es = _stamped.get("estimate_summary")
+                    if isinstance(_s_es, dict):
+                        _m_es = summary.setdefault("estimate_summary", {})
+                        for _k in ("workbook_equivalent_pricing", "cost_breakdown",
+                                   "final_estimate"):
+                            if isinstance(_s_es.get(_k), dict):
+                                _m_es[_k] = _s_es[_k]
+                    print(f"   [wep-readback] calculated totals merged into the run — the "
+                          f"report sheets can now reconcile against them", flush=True)
+            except Exception as _fe_exc:
+                print(f"   [wep-readback] totals not merged ({_fe_exc}) — the report sheets "
+                      f"will show engine figures and say so", flush=True)
+
         # SDI Intelligence — Decision Report + Provenance sheets
         # Added to whichever output was produced (wb_populate or fallback).
+        #
+        # AFTER the read-back, deliberately. These sheets state what Excel calculated and
+        # reconcile the engine's per-part figures against it; written before the read-back
+        # they had nothing to reconcile against and silently fell back to engine-only.
         if xlsx_path:
             try:
                 import openpyxl as _opxl
@@ -875,23 +926,6 @@ def main() -> None:
                 print(f"   -> Decision Report + AI Provenance sheets added")
             except Exception as _rep_exc:
                 print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
-
-        # ── Price read-back: stamp the REAL Excel-computed totals into the JSON ──
-        # wb_populate writes Excel FORMULAS; the true unit cost is computed by Excel on load,
-        # not in Python. The JSON's workbook_equivalent_pricing is a reconstruction that can
-        # drift from the spreadsheet. Open the populated .xlsx via Excel COM, read the real
-        # Material/Labour/Unit totals, and write them into the JSON so every consumer agrees.
-        # Failure-isolated: any error leaves the JSON unchanged and never breaks the run.
-        if xlsx_path:
-            try:
-                from wep_readback_from_xlsx import stamp_real_totals_into_json as _stamp_wep
-                _canon_json = (summary.get("saved_output_paths") or {}).get("json")
-                if _canon_json and Path(_canon_json).exists():
-                    _stamp_wep(str(xlsx_path), str(_canon_json))
-                else:
-                    print("   [wep-readback] canonical JSON path not found — readback skipped.", flush=True)
-            except Exception as _wep_exc:
-                print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
 
         # ── Invariants: does this job hold together? ─────────────────────────────────
         # Everything above has finished writing. The workbook has calculated, the read-back

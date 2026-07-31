@@ -8210,5 +8210,201 @@ def test_the_shared_part_list_keeps_the_evidence_the_tabs_are_built_from():
        "with no workbook built, the engine's part estimates are the list")
 
 
+# ── review of 2529cce, and what job 2085 showed on the sheet ─────────────────────────
+def test_lacquer_is_applied_by_the_spray_department():
+    """The first finish rule asked whether the finish text contained the OPERATION's name —
+    "does 'LACQUERED' contain 'spray'?" — and ruled wet_spray out when it did not.
+
+    Lacquer IS applied through the wet-spray booth. That undercosted the exact timber route
+    the gate was written to protect: the panel keeps its finish on the drawing and loses the
+    department that applies it. A finish phrase and a department name are different
+    vocabularies and cannot be compared by substring."""
+    from finish_rules import finish_contradiction as fc, finish_families
+
+    for _finish in ("LACQUERED", "PAINTED", "VARNISHED", "WET SPRAY RAL9005"):
+        eq(fc("wet_spray", _finish), None,
+           f"{_finish} goes through the spray booth — wet_spray must survive it")
+        eq(finish_families(_finish), {"wet_spray"}, f"{_finish} is a wet-spray finish")
+
+    # ...and the contradictions it exists for still fire.
+    ok(fc("powder_coating", "LACQUERED"), "a lacquered panel is not powder coated")
+    ok(fc("diamond_polish", "POWDER COATED RAL9005"),
+       "a polished edge does not survive a powder coat")
+    ok(fc("wet_spray", "POWDER COATED"), "and powder is not sprayed")
+    ok(fc("powder_coating", "RAW"), "an explicitly bare part is not coated")
+
+    # AN UNRECOGNISED PHRASE DECIDES NOTHING. Ruling work out on a finish we could not read
+    # is how a gate becomes a delete.
+    eq(fc("powder_coating", "AS DRAWING REV C"), None,
+       "an unread finish is not a contradiction")
+    eq(fc("powder_coating", "SEE ASSEMBLY"), None, "nor is a pointer")
+    eq(fc("powder_coating", ""), None, "nor is silence")
+
+
+def test_a_finish_token_inside_a_longer_word_is_not_that_finish():
+    """Two ways to get this wrong, and the first version had one of each.
+
+    Plain substring matching read "AS DRAWING REV C" as a BARE finish — "d-RAW-ing"
+    contains RAW — which would strip powder from any part whose finish field points at the
+    drawing. Anchoring both ends then broke the other way: drawings write LACQUERED,
+    PAINTED, ANODISED, and \bLACQUER\b matches none of them.
+
+    The boundary belongs before the stem and nowhere else."""
+    from finish_rules import finish_families
+
+    eq(finish_families("AS DRAWING REV C"), set(),
+       "'drawing' does not contain a RAW finish")
+    eq(finish_families("LACQUERED"), {"wet_spray"}, "but the -ED form is still lacquer")
+    eq(finish_families("ANODISED CLEAR"), {"anodise"}, "and -ISED is still anodising")
+    eq(finish_families("POWDER-COATED"), {"powder"}, "a hyphen is a word boundary")
+    eq(finish_families("SELF  COLOUR"), {"bare"}, "and so is any run of whitespace")
+    eq(finish_families("UNPAINTED"), set(),
+       "a stem buried mid-word is not that stem — conservative is the safe direction")
+
+
+def test_the_gates_read_the_merged_record_not_just_the_raw_one():
+    """build_part_graph already reconciles the two extraction paths: `records` is the
+    extracted BOM/parts record overlaid with every non-empty raw value. The gates read
+    `raw`, so a stock form or finish carried only by the extract bypassed them entirely —
+    the rule correct, and simply never shown the evidence."""
+    from route_compiler import compile_job_route
+
+    # Nothing on the raw record says bar or lacquer. Both facts arrive via the extract.
+    _parts = [{"part_number": "BAR-01", "description": "Stud", "quantity": 1},
+              {"part_number": "TMB-02", "description": "Ply panel", "quantity": 1}]
+    _extract = {
+        "top_assembly": {"part_number": "GA"},
+        "assemblies": [{"part_number": "GA", "children": [
+            {"part_number": "BAR-01", "qty": 1}, {"part_number": "TMB-02", "qty": 1}]}],
+        "parts": [
+            {"part_number": "BAR-01", "_bar_recognised": True, "wire_gauge_mm": 8.0},
+            {"part_number": "TMB-02", "normalized_finish": "LACQUERED"},
+        ],
+        "routes": [
+            {"operation": "laser_cutting", "part_numbers": ["BAR-01"], "scope": "part"},
+            {"operation": "powder_coating", "part_numbers": ["TMB-02"], "scope": "part"},
+        ]}
+    _d = {(x["operation"], x["target_id"]): x
+          for x in compile_job_route(_parts, _extract)["decisions"]}
+    eq(_d[("laser_cutting", "BAR-01")]["status"], "not_applicable",
+       "a bar identified only by the extract is still a bar")
+    eq(_d[("powder_coating", "TMB-02")]["status"], "not_applicable",
+       "a finish stated only in the extract still contradicts")
+
+
+def test_regenerating_a_report_sheet_replaces_it_rather_than_duplicating_it():
+    """openpyxl's create_sheet does not overwrite: asked for a name already in the book it
+    silently returns "AI Provenance1". The estimators' template can already carry these
+    tabs, so a re-run produced BOTH — the stale sheet keeping the name an estimator opens,
+    and the fresh one hidden behind a suffix. 2085 shipped with both."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify what these sheets write")
+        return
+    from job_decision_report import add_decision_report_sheet
+    from estimation_report import add_provenance_sheet
+
+    _job = {"manufacturing_writeup": {"parts": [
+                {"part_number": "P1", "description": "Panel", "quantity": 1}]},
+            "estimate_summary": {"part_estimates": [
+                {"part_number": "P1", "unit_total_cost_gbp": 1.0,
+                 "extended_total_cost_gbp": 1.0}]}}
+
+    wb = Workbook()
+    wb.create_sheet("AI Provenance")      # already in the template
+    wb.create_sheet("Decision Report")
+    for _ in range(2):                    # and re-run twice over
+        add_decision_report_sheet(wb, _job, {})
+        add_provenance_sheet(wb, _job, {})
+
+    eq([n for n in wb.sheetnames if n.startswith("AI Provenance")], ["AI Provenance"],
+       f"exactly one provenance tab, got {wb.sheetnames}")
+    eq([n for n in wb.sheetnames if n.startswith("Decision Report")], ["Decision Report"],
+       f"exactly one decision report, got {wb.sheetnames}")
+    # And it is the GENERATED one that survives, not the template's empty placeholder.
+    ok(wb["AI Provenance"].max_row > 3, "the surviving provenance tab is the written one")
+    ok(wb["Decision Report"].max_row > 3, "and so is the surviving decision report")
+
+
+def test_the_decision_report_names_every_operation_the_sheet_charges():
+    """Job 2085, on the sheet: the Decision Report described the tubes as "powder coating,
+    welding" while AI Provenance — two tabs away in the same file, from the same source —
+    listed tube_cut, welding, dress_welds, powder_coating and assembly.
+
+    The explanation was built from a whitelist of eight phrases and anything outside it
+    vanished. The tube cut is exactly the operation this engine has already lost once, and
+    a provenance sheet that omits a charged operation is evidence for a route we did not
+    price."""
+    from job_decision_report import _ops_explanation
+
+    _job = {
+        "workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                            "rows": [
+            {"workbook_row": 97, "wb_operation": "Tube",
+             "engine_operations": ["tube_cut"], "part_numbers": ["2085-02"]},
+            {"workbook_row": 98, "wb_operation": "Weld (CO2)",
+             "engine_operations": ["welding"], "part_numbers": ["2085-02"]},
+            {"workbook_row": 99, "wb_operation": "Dress Welds",
+             "engine_operations": ["dress_welds"], "part_numbers": ["2085-02"]},
+            {"workbook_row": 100, "wb_operation": "P.Coat",
+             "engine_operations": ["powder_coating"], "part_numbers": ["2085-02"]},
+            {"workbook_row": 101, "wb_operation": "Assemble/pack (Metal)",
+             "engine_operations": ["assembly"], "part_numbers": ["2085-02"]},
+        ]}}
+    _txt = _ops_explanation({"part_number": "2085-02", "description": "OUTER TUBE"},
+                            None, _job)
+    for _needle, _what in (("tube cutting", "the sawn-to-length cut"),
+                           ("weld dressing", "the dressing of the weld"),
+                           ("welding", "the weld"),
+                           ("powder coating", "the coat"),
+                           ("assembly", "the assemble/pack")):
+        ok(_needle in _txt.lower(), f"{_what} is charged and must be named, got {_txt!r}")
+
+    # An operation with no written phrase is still named, plainly, rather than dropped.
+    _odd = {"workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                                "rows": [{"workbook_row": 5, "wb_operation": "Wrap",
+                                          "engine_operations": ["shrink_wrapping"],
+                                          "part_numbers": ["X1"]}]}}
+    ok("shrink wrapping" in _ops_explanation({"part_number": "X1"}, None, _odd).lower(),
+       "an unrecognised operation is named plainly, never omitted")
+
+
+def test_the_report_sheets_are_written_after_excel_has_calculated():
+    """On 2085 the Ext GBP column summed the engine's per-part figures to GBP 44.75 against
+    a Sell Price of GBP 6.33, with the money columns unlabelled and no reconciliation line
+    anywhere on the page.
+
+    The code for both was correct and inert: main.py wrote the two tabs BEFORE the Excel
+    read-back, so at the moment they asked whether the workbook had calculated, the honest
+    answer was no. And the read-back stamps the JSON on disk, not the in-memory summary the
+    tabs are written from, so ordering alone was not enough."""
+    import inspect
+    import main as _main
+
+    _src = inspect.getsource(_main)
+    _readback = _src.index("stamp_real_totals_into_json")
+    _tabs = _src.index("add_decision_report_sheet(_wb")
+    ok(_readback < _tabs,
+       "the report sheets must be written after the read-back, or they have nothing to "
+       "reconcile against")
+    ok(_src.index('summary["final_estimate"] = _stamped') < _tabs,
+       "and the calculated totals must be merged into the in-memory summary first — the "
+       "read-back stamps the file on disk, not the object the tabs are rendered from")
+
+    # The behaviour that depends on it, driven directly: with the calculated totals present
+    # the money columns declare their basis and the page reconciles.
+    from costed_facts import job_totals
+    _with = job_totals({"estimate_summary": {"part_estimates": [
+                            {"part_number": "A", "extended_total_cost_gbp": 44.75}]},
+                        "final_estimate": {"totals": {"unit_gbp": 6.33,
+                                                      "material_gbp": 0.13,
+                                                      "labour_gbp": 5.75}}})
+    eq(_with["source"], "excel_calculated", "Excel is authoritative once it has run")
+    eq(_with["unit_gbp"], 6.33, "and its figure is the one shown")
+    eq(round(_with["engine_part_sum_gbp"], 2), 44.75,
+       "with the engine sum kept so the gap is stated rather than left to be noticed")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -1252,15 +1252,23 @@ def compile_job_route(
         template = event_claims[0]
         if template.scope != "part":
             continue
-        raw_part = raw.get(template.target_id) or {}
+        # THE MERGED RECORD, NOT THE RAW ONE.
+        #
+        # build_part_graph already reconciles the two extraction paths: `records` is the
+        # extracted BOM/parts record overlaid with every non-empty raw value. Reading `raw`
+        # here meant a stock form or finish that only the extract carried bypassed the gate
+        # entirely — the rule was correct and simply never saw the evidence, which is the
+        # same failure mode as the gate the cutover switched off.
+        record = graph["records"].get(template.target_id) or {}
         # A bar is recognised from its own drawing's bar schedule, upstream of costing, and
         # only where no flat pattern was detected — a part with a flat blank is not a bar.
         stock_form = "wire" if (
-            raw_part.get("_bar_recognised")
-            or raw_part.get("bar_schedule")
-        ) else ""
+            record.get("_bar_recognised")
+            or record.get("bar_schedule")
+        ) else str(record.get("stock_form")
+                   or (record.get("material_estimate") or {}).get("stock_form") or "")
         material = str(
-            raw_part.get("normalized_material") or raw_part.get("material") or "")
+            record.get("normalized_material") or record.get("material") or "")
         reason = impossibility_reason(template.operation, stock_form, material)
         if not reason:
             # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES.
@@ -1271,7 +1279,7 @@ def compile_job_route(
             # path with a P.Coat row and a powder-coated face with a Diamond Polish row.
             # Fires only where the part's own finish is stated and unambiguous.
             reason = finish_contradiction(
-                template.operation, stated_finish(raw_part))
+                template.operation, stated_finish(record))
         if not reason:
             continue
         add_claim(event_id, make_claim(

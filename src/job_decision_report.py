@@ -88,6 +88,27 @@ def _c(ws, row, col, value="", bold=False, bg=None, fg="000000",
     return cell
 
 
+def replace_generated_sheet(wb, title: str):
+    """Create `title`, replacing any existing sheet of that name.
+
+    openpyxl's create_sheet does NOT overwrite — asked for a name already in the book it
+    silently returns "AI Provenance1". The estimators' template can already contain these
+    tabs, and re-running a job against a workbook that has them produced BOTH: the stale
+    sheet keeping the name an estimator looks for, and the fresh one hidden behind a
+    suffix. 2085 shipped with both.
+
+    These sheets are generated wholesale from the summary every run, so replacing is the
+    correct semantic — there is nothing in the old one worth merging, and leaving it is
+    worse than deleting it because it still reads as this job's provenance."""
+    if title in wb.sheetnames:
+        del wb[title]
+    # Anything openpyxl previously suffixed is also a stale copy of this sheet.
+    for _name in [n for n in wb.sheetnames
+                  if n.startswith(title) and n[len(title):].isdigit()]:
+        del wb[_name]
+    return wb.create_sheet(title)
+
+
 def _find_wb_sell_price_ref(wb) -> Optional[str]:
     """Locate the WB's Sell Price VALUE cell by scanning for its LABEL, and return a
     cross-sheet formula reference string like "='Estimate'!M143".
@@ -288,24 +309,58 @@ def _ops_explanation(part: Dict, est: Optional[Dict] = None,
     geo = str(part.get("geometry_source") or "")
     if not ops:
         return "No operations detected — assembly-only record"
-    sources = []
-    if "laser_cutting" in ops:
-        sources.append("laser cutting (flat DXF detected)" if "dxf" in geo
+    # EVERY OPERATION GETS NAMED.
+    #
+    # This was a whitelist of eight phrases, and any operation outside it vanished from the
+    # sentence. On 2085 the tubes read "powder coating, welding" here while AI Provenance —
+    # two tabs away in the same file, from the same source — listed tube_cut, welding,
+    # dress_welds, powder_coating and assembly. Same job, two different routes on the page,
+    # because a renderer that can only describe what it recognises silently under-reports
+    # everything else, and the tube cut is exactly the operation this engine has already
+    # lost once.
+    #
+    # An operation with no written explanation is still an operation. Naming it plainly
+    # beats omitting it — the sheet charges it either way.
+    _PHRASES = {
+        "cnc_routing":        "CNC routing (timber/MDF material)",
+        "folding":            "folding (bend lines in DXF)",
+        "powder_coating":     "powder coating (finish specified in drawing)",
+        "wet_spray":          "wet spray (finish specified in drawing)",
+        "edge_banding":       "edge banding (MDF/timber with 'EDGED' finish)",
+        "welding":            "welding (assembly drawing indicates welds)",
+        "handling":           "handling / assembly (bench time)",
+        "assembly":           "handling / assembly (bench time)",
+        "dress_welds":        "weld dressing (linishing the welded joint)",
+        "tube_cut":           "tube cutting (sawn to length — section stock has no flat blank)",
+        "tube_bending":       "tube bending (tube bender, not the press brake)",
+        "linebend":           "line bending (acrylic heat-bent, not press-braked)",
+        "line_bending":       "line bending (acrylic heat-bent, not press-braked)",
+        "diamond_polish":     "diamond polishing (acrylic edge finish)",
+        "hardware_insertion": "hardware insertion (PEM / clinch studs pressed in)",
+        "saw":                "sawing to length",
+        "guillotine":         "guillotine shearing",
+        "punch":              "punching",
+        "hole_machining":     "hole machining / drilling",
+        "drilling":           "hole machining / drilling",
+        "tapping":            "tapping",
+        "deburring":          "deburring",
+        "linishing":          "linishing",
+        "robomac":            "Robomac cutting (wire / bar stock)",
+    }
+    sources: List[str] = []
+    _seen = set()
+    for _op in ops:
+        _key = str(_op).strip().lower()
+        if not _key or _key in _seen:
+            continue
+        _seen.add(_key)
+        if _key == "laser_cutting":
+            _phrase = ("laser cutting (flat DXF detected)" if "dxf" in geo
                        else "laser cutting (inferred from material/geometry)")
-    if "cnc_routing" in ops:
-        sources.append("CNC routing (timber/MDF material)")
-    if "folding" in ops:
-        sources.append("folding (bend lines in DXF)")
-    if "powder_coating" in ops:
-        sources.append("powder coating (finish specified in drawing)")
-    if "wet_spray" in ops:
-        sources.append("wet spray (finish specified in drawing)")
-    if "edge_banding" in ops:
-        sources.append("edge banding (MDF/timber with 'EDGED' finish)")
-    if "welding" in ops:
-        sources.append("welding (assembly drawing indicates welds)")
-    if "handling" in ops:
-        sources.append("handling / assembly (bench time)")
+        else:
+            _phrase = _PHRASES.get(_key, _key.replace("_", " "))
+        if _phrase not in sources:
+            sources.append(_phrase)
     # "Read from the drawing" is not "charged". Saying which one this is costs a word and
     # stops an unpriced reading being mistaken for the route the sheet contains.
     _lead = "Operations" if _priced else "Read from drawing — NOT YET PRICED"
@@ -352,7 +407,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     _canonical = priced_route_known(summary)
 
     scan_meta = scan_meta or {}
-    ws = wb.create_sheet("Decision Report")
+    ws = replace_generated_sheet(wb, "Decision Report")
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = C_BLUE
     # ── Column widths ──────────────────────────────────────────────────────────

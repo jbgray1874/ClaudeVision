@@ -41,16 +41,66 @@ POWDER_POINTER_HINTS = (
     "SEE ASSEMBLY", "SEE GA", "AS ASSEMBLY", "PER ASSEMBLY", "REFER TO ASSEMBLY",
 )
 
-# Operations whose whole purpose is to apply or produce a surface. Only these can be
-# contradicted by a stated finish; a fold is not a finish claim.
-_FINISH_OPERATIONS = {
+# A FINISH FAMILY IS NOT A KEYWORD MATCH ON THE OPERATION NAME.
+#
+# The first version of this rule asked whether the finish text contained the operation's
+# own name — "does 'LACQUERED' contain 'spray'?" — and ruled wet_spray out when it did not.
+# Lacquer IS applied through the wet-spray department, so that undercosted the exact timber
+# route this gate exists to protect. A finish phrase and a department name are different
+# vocabularies and cannot be compared by substring.
+#
+# So the drawing's words are resolved to a FAMILY, and an operation is contradicted only
+# when the finish names a family that is recognised and is not this operation's. A phrase
+# that resolves to nothing decides nothing — an unrecognised finish is not a contradiction,
+# it is an unread one, and removing work on that basis is how a gate becomes a delete.
+FINISH_FAMILIES = {
+    "powder": ("POWDER",),
+    # Lacquer, paint and varnish all go through the spray booth.
+    "wet_spray": ("LACQUER", "PAINT", "WET SPRAY", "SPRAY", "ENAMEL", "VARNISH"),
+    "polish": ("DIAMOND POLISH", "FLAME POLISH", "POLISH"),
+    "anodise": ("ANODIS",),
+    "plate": ("PLATED", "PLATING", "ZINC", "NICKEL", "CHROME", "GALVAN"),
+    # An explicit statement that the part is NOT finished. The legacy gate treated these
+    # the same way, and it is the reading that keeps powder off a bare bracket.
+    "bare": ("RAW", "SELF COLOUR", "SELF-COLOUR", "MILL FINISH", "SCRAPED",
+             "UNFINISHED", "NO FINISH", "NONE"),
+}
+
+# Operations whose whole purpose is to apply or produce a surface, and the family each one
+# belongs to. Only these can be contradicted by a stated finish; a fold is not a finish
+# claim.
+_OPERATION_FAMILY = {
     "powder_coating": "powder",
-    "wet_spray": "spray",
+    "wet_spray": "wet_spray",
     "diamond_polish": "polish",
     "diamond_polishing": "polish",
-    "anodising": "anodis",
-    "plating": "plat",
+    "anodising": "anodise",
+    "plating": "plate",
 }
+
+
+def finish_families(finish_text: str) -> set:
+    """The finish families the drawing's words name, or an empty set when none are
+    recognised. Empty means unread, never "no finish" — "RAW" is how a drawing says that,
+    and it has its own family.
+
+    THE TOKENS ARE STEMS, AND THE BOUNDARY BELONGS ONLY AT THE START.
+
+    Plain substring matching read "AS DRAWING REV C" as a BARE finish, because "d-RAW-ing"
+    contains RAW — which would have ruled powder coating off any part whose finish field
+    points at the drawing. The same lesson as the bought-in exclusion matcher: a token
+    inside a longer word is not that token.
+
+    Anchoring BOTH ends then broke the opposite way: drawings write LACQUERED, PAINTED,
+    ANODISED, POLISHED, and \\bLACQUER\\b matches none of them. So the boundary is required
+    before the stem and free after it — "LACQUERED" matches, "DRAWING" does not, and
+    "UNPAINTED" does not either, which is the conservative direction."""
+    upper = str(finish_text or "").upper()
+    return {
+        family for family, tokens in FINISH_FAMILIES.items()
+        if any(re.search(r"\b" + re.escape(token).replace(r"\ ", r"\s+"), upper)
+               for token in tokens)
+    }
 
 
 def stated_finish(record: Mapping[str, Any]) -> str:
@@ -83,21 +133,26 @@ def finish_contradiction(operation: str, finish_text: str) -> Optional[str]:
     reason — a finish line that simply vanishes from a route is indistinguishable from one
     that was never read."""
     op = str(operation or "").strip().lower()
-    needle = _FINISH_OPERATIONS.get(op)
-    if needle is None:
+    family = _OPERATION_FAMILY.get(op)
+    if family is None:
         return None
     finish = str(finish_text or "").strip().upper()
     if not finish or _is_pointer(finish):
         # Nothing stated, or stated somewhere else. Absence is not evidence.
         return None
 
-    # DIAMOND POLISH ON A POWDER FINISH. Polishing an edge and then burying it under powder
-    # is not a route, it is boilerplate that survived from the acrylic template. The powder
-    # is the stated finish, so the polish is the line that goes.
-    if op in ("diamond_polish", "diamond_polishing") and finish_is_powder(finish):
+    named = finish_families(finish)
+    if not named:
+        # The drawing says SOMETHING and we do not recognise it. That is an unread finish,
+        # not a contradiction, and work must not be removed on the strength of it.
+        return None
+    if family in named:
+        return None
+
+    # A recognised finish that is not this operation's. Named both ways round so the
+    # decision explains itself: what the drawing said, and what it therefore is not.
+    if family == "polish" and "powder" in named:
         return (f"the drawing states {finish!r} — a diamond-polished edge does not survive "
                 f"a powder finish")
-
-    if needle in finish.lower():
-        return None
-    return (f"the drawing states {finish!r}, which is not {op.replace('_', ' ')}")
+    return (f"the drawing states {finish!r}, which is "
+            f"{', '.join(sorted(named))}, not {op.replace('_', ' ')}")
