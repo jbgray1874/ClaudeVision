@@ -7064,5 +7064,96 @@ def test_an_unattributed_claim_is_never_promoted_to_a_measurement():
     ok(_m.source_rank > 0, "which must actually be greater than an unattributed one")
 
 
+def test_an_engine_minted_code_yields_to_the_canonical_one():
+    """12120 shipped the same PEM stud twice: STD PART qty 2 from the GA BOM, and
+    BI-PEMSTUD qty 2 minted by the prose recogniser from the same words. Four studs where
+    the drawing calls for two — free while both were unpriced, wrong the moment either got
+    a price.
+
+    A "BI-" code is not a part number a draughtsman wrote; it is one this engine invented
+    from a phrase. Where a synthesised code describes an item the canonical graph already
+    holds, the graph wins. Keyed on that distinction rather than on PEM studs, so any
+    recogniser-minted duplicate of a drawing item resolves the same way.
+    """
+    from wb_populate import canonicalise_part_estimates_for_workbook as _cz
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "decisions": [{"operation": "handling"}],
+        "nodes": [
+            {"part_number": "STD PART", "kind": "bought_in", "qty_per_unit": 2,
+             "description": "M4 THREADED PEM STUD (LENGTH: 30mm)"},
+            {"part_number": "12120-01-01M", "kind": "leaf", "qty_per_unit": 1,
+             "description": "MOUNTING BRACKET"},
+        ]}}}
+    _pes = [
+        {"part_number": "STD PART", "description": "M4 THREADED PEM STUD (LENGTH: 30mm)",
+         "quantity": 2},
+        {"part_number": "BI-PEMSTUD", "description": "M4 THREADED PEM STUD (LENGTH: 30mm)",
+         "quantity": 2, "material_estimate": {"unit_material_cost_gbp": 0.44}},
+        {"part_number": "12120-01-01M", "description": "MOUNTING BRACKET", "quantity": 1},
+        {"part_number": "BI-KNURLEDKNOB", "description": "Knurled Knob", "quantity": 2},
+    ]
+    _out = _cz(_summary, _pes)
+    _codes = [p.get("part_number") for p in _out]
+
+    eq(_codes.count("STD PART"), 1, "the stud appears once")
+    ok("BI-PEMSTUD" not in _codes,
+       f"the engine-minted duplicate is absorbed, not listed beside it, got {_codes}")
+    _stud = [p for p in _out if p["part_number"] == "STD PART"][0]
+    eq(_stud.get("quantity"), 2, "at the quantity the drawing states, not doubled")
+    ok((_stud.get("material_estimate") or {}).get("unit_material_cost_gbp"),
+       "and the costed record survives the merge — identity reconciliation must never "
+       "discard the pricing evidence")
+    eq(_stud.get("_canonical_source_part_number"), "BI-PEMSTUD",
+       "what it was merged from stays recorded")
+
+    # A SYNTHESISED CODE WITH NO CANONICAL TWIN IS LEFT ALONE. Without this the fixture
+    # would pass against a rule that simply deleted every BI- line.
+    ok("BI-KNURLEDKNOB" in _codes,
+       f"a bought-in the graph does not name is kept, got {_codes}")
+
+    # AND A REAL CODE IS NEVER ABSORBED, however well its description matches. Only codes
+    # this engine MINTED yield. Dropping the "BI-" test made no fixture fail the first time
+    # this was mutated, which would have let a genuine second part with a similar
+    # description be silently merged away — a missing BOM line, the error that costs most
+    # and shows least.
+    _rival = [
+        {"part_number": "STD PART", "description": "M4 THREADED PEM STUD (LENGTH: 30mm)",
+         "quantity": 2},
+        {"part_number": "PEM-M4-30", "description": "M4 THREADED PEM STUD (LENGTH: 30mm)",
+         "quantity": 2},
+    ]
+    _rc = [p.get("part_number") for p in _cz(_summary, _rival)]
+    ok("PEM-M4-30" in _rc,
+       f"a drawing code is not absorbed by another drawing code, got {_rc}")
+
+
+def test_the_drill_row_keeps_the_rate_table_title_and_says_what_it_is():
+    """DRIL's column-H title is literally "Drill (Acrylic)", and the shop books metal
+    drilling and tapping to that same row.
+
+    The TITLE cannot be changed: it is the lookup key. A title the rate table does not carry
+    returns a rate of zero and costs the work at nothing — which is how GRIN silently zeroed
+    every deburr on every job. So the title stays exactly as the workbook has it and the
+    description says what the work actually is, which is the half an estimator reads.
+    """
+    import os as _os
+    _wb = open(_os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "src", "wb_populate.py"), encoding="utf-8").read()
+
+    from department_codes import CODE_TITLES
+    eq(CODE_TITLES["DRIL"][0], "Drill (Acrylic)",
+       "the rate-table title is the lookup key and must not be renamed")
+
+    ok('_rd += " [metal drill/tap' in _wb,
+       "a metal part drilled on the DRIL row says so in its description")
+    ok('"ACRYLIC" not in _matx.upper()' in _wb,
+       "and only when the material is NOT acrylic — an acrylic part needs no note")
+    ok('wb_op = str(_map_operation' not in _wb.replace(
+           'wb_op == "Drill (Acrylic)"', ''),
+       "the note is added to the description, never to the operation title")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -847,6 +847,37 @@ def canonicalise_part_estimates_for_workbook(
         for alias in ((node.get("evidence") or {}).get("raw_aliases") or [])
         if str(alias).strip()
     }
+    # A SYNTHESISED CODE YIELDS TO A CANONICAL ONE FOR THE SAME ITEM.
+    #
+    # 12120 shipped the same PEM stud twice: STD PART qty 2 from the GA BOM, and BI-PEMSTUD
+    # qty 2 minted by the prose recogniser from the same words. Four studs where the drawing
+    # calls for two. Free while both were unpriced; wrong the moment either got a price.
+    #
+    # A "BI-" code is not a part number the draughtsman wrote -- it is one this engine
+    # invented from a phrase ("BI-" + the phrase, uppercased). So where a synthesised code
+    # describes the same item as a code the canonical graph already holds, the graph wins.
+    # Keyed on that distinction, not on PEM studs: any recogniser-minted duplicate of a
+    # drawing item resolves the same way.
+    def _desc_key(_t: Any) -> str:
+        return re.sub(r"[^A-Z0-9]+", " ", str(_t or "").upper()).strip()
+
+    _canonical_by_desc = {}
+    for _ident, _node in nodes.items():
+        _dk = _desc_key(_node.get("description"))
+        if _dk and _dk not in _canonical_by_desc:
+            _canonical_by_desc[_dk] = _ident
+    _synth_merged: List[str] = []
+    for _est in part_estimates or []:
+        if not isinstance(_est, dict):
+            continue
+        _sid = str(_est.get("part_number") or "").strip().upper()
+        if not _sid.startswith("BI-") or _sid in nodes or _sid in aliases:
+            continue
+        _target = _canonical_by_desc.get(_desc_key(_est.get("description")))
+        if _target and _target != _sid:
+            aliases[_sid] = _target
+            _synth_merged.append(f"{_sid} -> {_target}")
+
     normalised: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     for estimate in part_estimates or []:
@@ -878,6 +909,10 @@ def canonicalise_part_estimates_for_workbook(
                 "unit_cost_gbp", "unit_total_cost_gbp", "material_estimate"))
             if new_score > old_score:
                 normalised[identity] = item
+
+    if _synth_merged:
+        print(f"   [wb_populate] canonical identity absorbed {len(_synth_merged)} "
+              f"engine-minted duplicate(s): {', '.join(_synth_merged)}", flush=True)
 
     # An explicit bought-in BOM line must remain visible even when no pricing record was
     # created. It is safer as an unpriced estimator row than absent from the BOM.
@@ -2848,7 +2883,21 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _detail = " (%d hole%s)" % (g["holes"], "" if g["holes"] == 1 else "s")
         _pl = g["parts"]
         _ptxt = ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6) if len(_pl) > 6 else "")
+        # "DRILL (ACRYLIC)" ON A STEEL PART IS THE RIGHT ROW WITH A MISLEADING NAME.
+        #
+        # DRIL's column-H title in the rate table is literally "Drill (Acrylic)", and the
+        # shop books metal drilling and tapping against that same row. The TITLE cannot be
+        # changed: it is the lookup key, and a title the rate table does not carry returns a
+        # rate of zero and costs the work at nothing -- which is how GRIN silently zeroed
+        # every deburr on every job.
+        #
+        # So the title stays exactly as the workbook has it and the DESCRIPTION says what
+        # the work actually is, which is the half an estimator reads.
         _rd = str(wb_op)
+        if (wb_op == "Drill (Acrylic)"
+                and _matx and "ACRYLIC" not in _matx.upper()
+                and "PERSPEX" not in _matx.upper()):
+            _rd += " [metal drill/tap — DRIL is the rate-table row the shop books this to]"
         if _spec:
             _rd += " — " + " ".join(_spec)
         if _ptxt:

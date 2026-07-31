@@ -362,12 +362,45 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
                             "No costed operations could be resolved for this job, so nothing "
                             "can be compared against what the reports name.")
 
+    # AN OPERATION ABSORBED BY A CANONICAL EVENT IS NOT AN OPERATION NOBODY CHARGED FOR.
+    #
+    # Under the canonical route the workbook prices DECISIONS, and a part-level `handling`
+    # claim is covered by the assembly/pack event that owns that part -- it is superseded,
+    # not lost. Reporting it as unpriced invites exactly the wrong correction: adding a
+    # handling row on top of the assembly/pack that already contains it, and double-charging
+    # the bench time.
+    #
+    # Only operations superseded by a REQUIRED canonical decision covering the same part are
+    # excused. An operation nobody decided is still reported, because that is the case this
+    # check exists for.
+    _absorbed: Dict[str, set] = {}
+    _canon = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+              or summary.get("canonical_route_shadow") or {})
+    for _d in (_canon.get("decisions") or []):
+        if not isinstance(_d, dict) or str(_d.get("status") or "") != "required":
+            continue
+        _op = str(_d.get("operation") or "").strip().lower()
+        if not _op:
+            continue
+        for _pn in ([_d.get("target_id")] + list(_d.get("participants") or [])):
+            _k = str(_pn or "").strip().upper()
+            if _k:
+                _absorbed.setdefault(_k, set()).add(_op)
+
+    # What an assembly/pack event covers on a part: the bench work it IS.
+    _ABSORBED_BY_ASSEMBLY = {"assembly", "assemble", "handling", "packing", "pack"}
+
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
         pn = str(p.get("part_number") or "?")
+        _here = _absorbed.get(pn.strip().upper(), set())
+        _covered_by_assembly = bool(_here & _ABSORBED_BY_ASSEMBLY)
         for op in (p.get("operations") or p.get("textual_operations") or []):
-            if isinstance(op, str) and op and op not in costed:
-                named.setdefault(op, []).append(pn)
+            if not (isinstance(op, str) and op and op not in costed):
+                continue
+            if op.strip().lower() in _ABSORBED_BY_ASSEMBLY and _covered_by_assembly:
+                continue          # superseded by the canonical assembly/pack event
+            named.setdefault(op, []).append(pn)
     if not named:
         return []
     return [_violation(
