@@ -149,8 +149,15 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
 
 try:
     import openpyxl
+    # The estimator-input surfacing SHADES cells and writes coloured banners, so it needs
+    # these by name. Imported at module scope rather than inside the writer: that writer is
+    # failure-isolated, so a NameError there would have been swallowed into a flag saying
+    # the block "could not be written" — the block silently doing nothing while reporting
+    # itself as merely unlucky.
+    from openpyxl.styles import Font, PatternFill, Border, Side
 except ImportError:
     openpyxl = None
+    Font = PatternFill = Border = Side = None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL MAP — the ONE place to edit if the WB layout changes.
@@ -1354,6 +1361,130 @@ def _clean_error_cells(ws, flags=None):
     return wrapped
 
 
+# ── estimator-input surfacing ────────────────────────────────────────────────────────
+# An estimator reads the Estimate tab, not the console. Everything below writes ONTO that
+# tab: the cells they must fill are coloured as inputs, and the two figures that look like
+# a finished price carry a count of what is still missing.
+
+C_INPUT_FILL = "FFF2CC"     # amber — "type here"
+C_INPUT_EDGE = "BF8F00"
+C_ALERT_FILL = "FFC7CE"     # red — "this is not a price yet"
+C_ALERT_TEXT = "9C0006"
+
+
+def _mark_input_cell(ws, row: int, col: int) -> None:
+    """Colour a cell as something a person must fill in.
+
+    Deliberately a FILL and a border, not a comment: comments are hidden until hovered, and
+    the whole failure was that the missing input was discoverable rather than visible."""
+    if openpyxl is None:
+        return
+    try:
+        _c = ws.cell(row=row, column=col)
+        _c.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
+        _s = Side(style="medium", color=C_INPUT_EDGE)
+        _c.border = Border(left=_s, right=_s, top=_s, bottom=_s)
+    except Exception:
+        pass
+
+
+def _find_label_cell(ws, *needles: str):
+    """(row, col) of the first cell whose text contains every needle, or None.
+
+    Found by LABEL, never by a hardcoded address: the estimators' template shifts its
+    totals down as the BOM block grows, and a fixed row silently goes stale — the same
+    reason _find_wb_sell_price_ref scans."""
+    _want = [n.lower() for n in needles if n]
+    try:
+        for _row in ws.iter_rows():
+            for _cell in _row:
+                _v = _cell.value
+                if isinstance(_v, str) and all(_n in _v.lower() for _n in _want):
+                    return _cell.row, _cell.column
+    except Exception:
+        pass
+    return None
+
+
+def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
+    """Put the outstanding inputs where the estimator is already looking.
+
+    Three places, because one is not enough. Beside Unit Cost and beside Sell Price, so the
+    two figures that read as a finished price carry the count. And a checklist below the
+    totals, so there is somewhere to work from.
+
+    The sheet is NOT prevented from calculating. An estimator needs the working even when
+    it is incomplete, and a blanked total would break the read-back and every deliverable
+    downstream of it. What changes is that nothing here can be mistaken for finished."""
+    if openpyxl is None or not inputs:
+        return
+    try:
+        from estimator_inputs import banner_text
+        _banner = banner_text(inputs)
+
+        # ── beside the two figures that look like a price ──────────────────────
+        _last_row = 0
+        # ONE BANNER PER ROW. "unit cost" also matches "Total Unit Cost Price", so the same
+        # row was found twice and the second pass walked past the first banner and wrote
+        # another beside it.
+        _done_rows = set()
+        for _needles in (("unit cost",), ("sell price",), ("total unit cost",)):
+            _hit = _find_label_cell(ws, *_needles)
+            if not _hit:
+                continue
+            _r, _c = _hit
+            _last_row = max(_last_row, _r)
+            if _r in _done_rows:
+                continue
+            _done_rows.add(_r)
+            # PAST THE VALUE, NOT AT A FIXED OFFSET.
+            #
+            # The value sits somewhere to the right of its label and the gap differs per
+            # row, so a fixed +3 landed exactly on the Total Unit Cost figure. The write
+            # was refused — the formula is safe either way — but a refused banner is no
+            # banner, and the sheet went out looking finished again. Walk right past every
+            # populated cell, then take the first free one.
+            _col = _c + 1
+            _seen_value = False
+            for _step in range(1, 12):
+                if ws.cell(row=_r, column=_c + _step).value not in (None, ""):
+                    _seen_value = True
+                    _col = _c + _step + 1
+                elif _seen_value:
+                    _col = _c + _step
+                    break
+            _target = ws.cell(row=_r, column=_col)
+            if _target.value in (None, ""):
+                _target.value = _banner
+                _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
+                _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
+
+        # ── the checklist ──────────────────────────────────────────────────────
+        _start = max(_last_row + 3, int(CELL_MAP["labour"]["last_row"]) + 6)
+        _c1 = ws.cell(row=_start, column=3)
+        _c1.value = f"OUTSTANDING ESTIMATOR INPUTS ({len(inputs)}) — this sheet is NOT a price until these are filled"
+        _c1.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        _c1.fill = PatternFill("solid", fgColor="1F3864")
+        _r = _start + 1
+        for _i, _item in enumerate(inputs, 1):
+            _lbl = ws.cell(row=_r, column=3)
+            _lbl.value = (f"{_i}.  {_item.get('part') or _item.get('where') or ''}"
+                          f"{'  —  ' if _item.get('part') or _item.get('where') else ''}"
+                          f"{_item.get('what') or ''}")
+            _lbl.font = Font(name="Arial", size=10, color=C_ALERT_TEXT)
+            _lbl.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
+            _where = ws.cell(row=_r, column=11)
+            _where.value = _item.get("where") or ""
+            _where.font = Font(name="Arial", size=9, italic=True)
+            _r += 1
+        _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding — listed on the Estimate tab "
+              f"from row {_start}, with each input cell shaded. Unit Cost and Sell Price "
+              f"are marked PROVISIONAL until they are filled.", flags)
+    except Exception as _exc:
+        _flag(f"estimator-input block not written ({_exc}) — the sheet still calculates, "
+              f"but the outstanding inputs are only in these flags.", flags)
+
+
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
@@ -1478,6 +1609,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         return None
 
     flags: List[str] = []
+    # Everything a person still has to type before this sheet is a price. Collected as it
+    # is discovered rather than re-derived at the end, so a gate that finds a gap and a
+    # block that reports it cannot drift apart.
+    _inputs: List[Dict[str, Any]] = []
 
     # part estimates live under estimate_summary.part_estimates (or top-level parts)
     pes = (
@@ -2004,6 +2139,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=b["col_scrap"],    value=0.04)  # 4% default; WB applies
         if price is None:
             _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
+            # A BLANK THAT LOOKS LIKE A ZERO IS WORSE THAN AN ERROR.
+            #
+            # "£-" in the Price column reads as a real zero, and on 2085 two unpriced tubes
+            # sat under a Unit Cost of £6.33 that looked finished. The line now says what is
+            # missing and what would fill it, and the cell an estimator types into is
+            # coloured as an input rather than left looking like a result.
+            from estimator_inputs import input_note_for_line as _input_note
+            _note = _input_note(pe)
+            _inputs.append({
+                "kind": _note["kind"], "part": pe.get("part_number") or "",
+                "where": f"BOM row {row}", "what": _note["note"], "row": row,
+                "col": b["col_price"],
+            })
+            ws.cell(row=row, column=b["col_desc"],
+                    value=f"{str(desc)[:70]}  —  {_note['note']}"[:200])
+            _mark_input_cell(ws, row, b["col_price"])
         row += 1
 
     # Itemise every spilled BOM line on a dedicated sheet so nothing is hidden behind the
@@ -3056,6 +3207,36 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _clean_error_cells(ws, flags)
 
     # ── Append AI supplementary sheets (renamed to avoid clashing with WB) ──
+    # ── the inputs that are not BOM lines ──────────────────────────────────────
+    # MARGIN. A sheet whose Sell Price equals its cost has not had a commercial decision
+    # made on it. Zero is a legitimate answer, but it has to be a chosen one.
+    try:
+        _m_hit = _find_label_cell(ws, "margin applied")
+        if _m_hit:
+            _m_val = ws.cell(row=_m_hit[0], column=_m_hit[1] + 3)
+            if not _safe(_m_val.value):
+                _inputs.append({
+                    "kind": "margin_unset", "part": "MARGIN",
+                    "where": f"Estimate {_m_val.coordinate}",
+                    "what": "MARGIN NOT SET — Sell Price currently equals cost; set the "
+                            "margin or confirm 0% is intended",
+                })
+                _mark_input_cell(ws, _m_hit[0], _m_hit[1] + 3)
+    except Exception:
+        pass
+    # POWDER COVERAGE. The rate in use is the template's 100%-transfer assumption, which
+    # nothing achieves; the flag already says so at length, but it says it to a console.
+    if _powder_kg_total and getattr(config, "POWDER_KG_PER_M2", None) is not None:
+        _inputs.append({
+            "kind": "assumption_unconfirmed", "part": "POWDER",
+            "where": "BOM — POWDER line",
+            "what": (f"POWDER COVERAGE UNCONFIRMED — booked at "
+                     f"{_POWDER_KG_PER_M2} kg/m2 (the template's 100% transfer efficiency). "
+                     f"Measured sheets imply 1.7-4.9x more. Confirm the rate "
+                     f"(config.POWDER_KG_PER_M2) or override the quantity here."),
+        })
+
+    _write_estimator_inputs(ws, _inputs, flags)
     _append_ai_sheets(wb, summary, flags)
 
     # ── Force Excel to recalc on open ──────────────────────────────────────
@@ -3159,7 +3340,13 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
                 pe.get("supplier") or "",
                 " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
             ])
-    _add("AI Provenance",
+    # NAMED FOR WHAT IT IS, AND NOT WHAT THE OTHER WRITER CALLS ITS SHEET.
+    #
+    # This is bought-in PRICE provenance; estimation_report.add_provenance_sheet writes a
+    # whole-estimate provenance report and asked for the same name. openpyxl does not
+    # overwrite, so the job shipped with "AI Provenance" and "AI Provenance1" — the
+    # duplicate tab seen on 2085. Two sheets, two purposes, two names.
+    _add("AI Price Provenance",
          ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier", "Review Flags"],
          prov_rows)
 

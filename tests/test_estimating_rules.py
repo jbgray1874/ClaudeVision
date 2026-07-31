@@ -8612,5 +8612,136 @@ def test_both_2085_tabs_describe_the_same_route():
        "the tube cut in particular — this engine has lost it once already")
 
 
+# ── the Estimate tab must not look finished when it is not — job 2085 ────────────────
+def test_an_unpriced_line_says_what_is_missing_and_what_would_fill_it():
+    """2085's Estimate tab showed Unit Cost GBP 6.33 and Sell Price GBP 6.33, and both read
+    as a completed price. Neither tube contributed any material, the powder rate is a
+    known-wrong assumption, packaging and delivery were zero, and the margin was 0%. Every
+    one of those was stated — in a console flag that scrolls past, or as a "GBP -" that
+    reads like a real zero.
+
+    A blank that looks like a zero is worse than an error. An error stops someone; a
+    plausible number does not."""
+    from estimator_inputs import (input_note_for_line, material_input_note,
+                                  section_summary, banner_text)
+
+    _outer = {"part_number": "2085-02", "description": "OUTER TUBE",
+              "section_stock": {"a": 12.7, "t": 1.2, "profile_form": "CHS",
+                                "length_mm": 34.0}}
+    _inner = {"part_number": "2085-03", "description": "INNER TUBE",
+              "section_stock": {"a": 10.0, "t": 1.2, "profile_form": "CHS"}}
+
+    eq(section_summary(_outer), "12.7 x 1.2 CHS",
+       "the section is named as far as we read it, so it can be priced without the drawing")
+    _note = material_input_note(_outer)
+    ok("MATERIAL UNPRICED" in _note, f"the line must say it is unpriced, got {_note!r}")
+    ok("34mm" in _note, f"and name the cut length we read, got {_note!r}")
+    ok("section rate" in _note, f"and name the figure that is missing, got {_note!r}")
+
+    # A length we did NOT read must be asked for, never defaulted.
+    _note2 = material_input_note(_inner)
+    ok("NOT READ" in _note2, f"an unread cut length is asked for, got {_note2!r}")
+    ok("34" not in _note2, "and never borrowed from the other tube")
+
+    # A PLACEHOLDER IS A DIFFERENT JOB FROM AN UNPRICED PART. One is a commercial figure to
+    # decide, the other a rate to look up, and a checklist that conflates them gets ignored.
+    _pack = {"part_number": "PACKAGING", "_price_explicitly_withheld": True,
+             "description": "Packaging (box / pallet — per-unit share, estimator to price)"}
+    eq(input_note_for_line(_pack)["kind"], "placeholder_unpriced",
+       "a withheld placeholder is not an unpriced material line")
+    eq(input_note_for_line(_outer)["kind"], "material_unpriced", "and vice versa")
+
+    # The banner counts, because "PROVISIONAL" alone says nothing about how much is missing.
+    ok("3 ESTIMATOR INPUTS REQUIRED" in banner_text([{}, {}, {}]), "the count is the point")
+    eq(banner_text([]), "", "and a complete sheet carries no banner at all")
+
+
+def test_the_provisional_banner_never_overwrites_a_total():
+    """The banner sits beside Unit Cost and Sell Price — the two figures that read as a
+    finished price. It must land PAST the value, not on it: the gap between a label and its
+    figure differs per row, and a fixed offset put the banner exactly on the Total Unit Cost
+    cell. The write was refused, so the formula was safe either way, but a refused banner is
+    no banner and the sheet went out looking finished again."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify what is written to the Estimate tab")
+        return
+    import wb_populate as W
+
+    wb = Workbook()
+    ws = wb.active
+    ws["I200"] = "Total Unit Cost Price"; ws["L200"] = 6.33
+    ws["I206"] = "Sell Price";            ws["L206"] = 6.33
+    _inputs = [{"kind": "material_unpriced", "part": "2085-02", "where": "BOM row 12",
+                "what": "MATERIAL UNPRICED: 12.7 x 1.2 CHS, cut length 34mm"},
+               {"kind": "placeholder_unpriced", "part": "PACKAGING", "where": "BOM row 14",
+                "what": "NOT YET PRICED: enter the per-unit figure for this line"}]
+    _flags = []
+    W._write_estimator_inputs(ws, _inputs, _flags)
+
+    eq((ws["L200"].value, ws["L206"].value), (6.33, 6.33),
+       "the sheet's own figures must be untouched — a blanked total breaks the read-back "
+       "and every deliverable downstream of it")
+    for _r, _what in ((200, "Unit Cost"), (206, "Sell Price")):
+        _banners = [c.coordinate for c in ws[_r]
+                    if c.value and "PROVISIONAL" in str(c.value)]
+        eq(len(_banners), 1,
+           f"{_what} carries exactly one provisional banner, got {_banners}")
+        ok("2 ESTIMATOR INPUTS" in str(ws[_banners[0]].value),
+           f"{_what}'s banner names the count")
+
+    # The checklist itself, below the totals, with somewhere to work from.
+    _col_c = [str(ws.cell(row=r, column=3).value or "") for r in range(1, ws.max_row + 1)]
+    _all = " ".join(_col_c)
+    ok("OUTSTANDING ESTIMATOR INPUTS (2)" in _all, f"the checklist is written and counted")
+    ok("2085-02" in _all and "PACKAGING" in _all, "and names every outstanding line")
+    ok(any("ESTIMATOR INPUTS: 2 outstanding" in f for f in _flags),
+       "and the run says where it put them")
+
+    # A COMPLETE SHEET GETS NOTHING. Without this the fixture would pass against a version
+    # that banners every job, which would make the banner mean nothing within a week.
+    wb2 = Workbook(); ws2 = wb2.active
+    ws2["I200"] = "Sell Price"; ws2["L200"] = 6.33
+    W._write_estimator_inputs(ws2, [], [])
+    ok(not any(c.value and "PROVISIONAL" in str(c.value)
+               for r in ws2.iter_rows() for c in r),
+       "a sheet with no outstanding inputs carries no banner")
+
+
+def test_an_input_cell_is_shaded_so_it_reads_as_a_cell_to_type_in():
+    """Deliberately a fill, not a comment. Comments are hidden until hovered, and the whole
+    failure was that the missing input was discoverable rather than visible."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify cell formatting")
+        return
+    import wb_populate as W
+
+    ws = Workbook().active
+    W._mark_input_cell(ws, 12, 10)
+    _c = ws.cell(row=12, column=10)
+    ok(_c.fill is not None and "FFF2CC" in str(_c.fill.fgColor.rgb or ""),
+       f"the cell an estimator types into is shaded, got {_c.fill.fgColor.rgb!r}")
+    ok(_c.border is not None and _c.border.left is not None
+       and _c.border.left.style == "medium", "and edged, so it reads as an input")
+
+
+def test_the_two_provenance_writers_do_not_fight_over_one_sheet_name():
+    """wb_populate writes bought-in PRICE provenance; estimation_report writes the
+    whole-estimate provenance report. Both asked for "AI Provenance". openpyxl does not
+    overwrite, so 2085 shipped with "AI Provenance" and "AI Provenance1" — the duplicate
+    tab, which was never a template problem at all. Two sheets, two purposes, two names."""
+    import inspect
+    import wb_populate as W
+
+    _src = inspect.getsource(W._append_ai_sheets)
+    ok('_add("AI Price Provenance"' in _src,
+       "the price-provenance sheet must not claim the report's name")
+    ok('_add("AI Provenance"' not in _src,
+       "and must not leave the collision behind under a different call")
+
+
 if __name__ == "__main__":
     sys.exit(main())
