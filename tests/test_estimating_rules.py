@@ -6179,6 +6179,24 @@ def test_a_reference_only_row_is_excluded_on_the_extract_path_too():
     # Disclaimed on the drawing's own notes, and disclaimed in the row's own text.
     ok(bom_row_is_reference_only("Screen Cable", "", "SCREEN & CABLE SHOWN FOR REFERENCE"),
        "a row the notes disclaim is not supplied")
+
+    # THE TEXT AS THE PDF ACTUALLY RETURNS IT. 12120's disclaimer wraps:
+    #     SCREEN & CABLE SHOWN
+    #     FOR REFERENCE
+    # The first version of this rule split on every newline, so it saw one clause naming the
+    # cable with no marker and another carrying the marker with nothing to attach it to —
+    # and the cable was supplied and priced. The fixture wrote it on ONE line and passed,
+    # which is why the defect reached a real estimate.
+    _wrapped = "SCREEN & CABLE SHOWN\nFOR REFERENCE"
+    ok(bom_row_is_reference_only("Screen Cable", "", _wrapped),
+       "a disclaimer wrapped across lines still disclaims — a PDF line break is layout, "
+       "not a sentence")
+    _numbered = "1. SCREEN & CABLE SHOWN\nFOR REFERENCE\n2. FIT 4x M4 THUMB SCREW"
+    ok(bom_row_is_reference_only("Screen Cable", "", _numbered),
+       "wrapped inside a numbered note, still disclaimed")
+    ok(not bom_row_is_reference_only("Thumb Screw", "", _numbered),
+       "and note 2's hardware is untouched — a NUMBERED note IS a boundary even though a "
+       "bare line break is not")
     ok(bom_row_is_reference_only("Monitor Arm", "by others", ""),
        "nor is one whose own row text says who supplies it")
     ok(not bom_row_is_reference_only("Power Cable", "", "SUPPLY 1x POWER CABLE"),
@@ -6207,6 +6225,17 @@ def test_a_reference_only_row_is_excluded_on_the_extract_path_too():
     ok("THUM620" in _kept,
        f"and the hardware in the very next note stays — a scope marker governs its own "
        f"clause, not the page, got {_kept}")
+
+    # THE EARLY RETURN WAS A BYPASS. A job arriving already in the parts shape — from a
+    # cache, a sidecar, or a caller that projected it itself — skipped the filter entirely.
+    _pre = {"drawing_info": {"notes": ["SCREEN & CABLE SHOWN", "FOR REFERENCE"]},
+            "parts": [{"part_number": "BI-SCREENCABLE", "description": "Screen Cable"},
+                      {"part_number": "THUM620", "description": "Thumbscrew"}]}
+    normalize_job(_pre)
+    _pre_kept = [p["part_number"] for p in _pre["parts"]]
+    ok("BI-SCREENCABLE" not in _pre_kept,
+       f"an already-projected job is filtered too, got {_pre_kept}")
+    ok("THUM620" in _pre_kept, f"and its genuine hardware survives, got {_pre_kept}")
 
     # Excluded, not vanished: an estimator has to be able to see what was dropped and why.
     ok(any("reference only" in str(w).lower() for w in (_job.get("warnings") or [])),
@@ -6246,7 +6275,10 @@ def test_an_operation_the_engine_adds_records_where_it_came_from():
     estimate_part(_p, job_quantity=100)
     _src = _p.get("operation_sources") or {}
 
-    for _op in ("laser_cutting", "dress_welds"):
+    # HANDLING WAS THE THIRTEEN. 12120's shadow reported thirteen handling decisions at
+    # `unknown 0` — because handling was added to the local costing list and never to the
+    # record. The commit that cited them did not fix them.
+    for _op in ("laser_cutting", "dress_welds", "handling"):
         ok(_src.get(_op), f"the engine added '{_op}' and must record where it came from")
         ok(rank(_src[_op]) > 0,
            f"'{_op}' carries source '{_src.get(_op)}' which ranks 0 — arbitration cannot "
@@ -6264,6 +6296,14 @@ def test_an_operation_the_engine_adds_records_where_it_came_from():
     record_operation(_q, "folding", "inference")
     eq(_q["operation_sources"]["folding"], "dxf",
        "a measured attribution is not replaced by the engine's own guess")
+
+    # RANK, NOT ARRIVAL ORDER. setdefault protected a strong attribution from a weak one and
+    # equally blocked a MEASUREMENT from upgrading an earlier guess — the same defect facing
+    # the other way. Whoever writes first must not win by writing first.
+    _u = {"operation_sources": {"folding": "inference"}}
+    record_operation(_u, "folding", "dxf")
+    eq(_u["operation_sources"]["folding"], "dxf",
+       "a measurement upgrades an earlier inference rather than being refused as a duplicate")
 
     # NO WRITER MAY BYPASS THE ONE WRITER. Seven call sites appended operations directly;
     # converting six and missing one would leave exactly the hole this exists to close, and

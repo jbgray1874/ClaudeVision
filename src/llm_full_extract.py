@@ -503,8 +503,7 @@ def normalize_job(job: Dict[str, Any]) -> Dict[str, Any]:
     """Project the schema's `bom` onto the `parts` shape the engine reads. In place."""
     if not isinstance(job, dict):
         return job
-    if isinstance(job.get("parts"), list) and job["parts"]:
-        return job                           # already in the shape the consumers want
+    _already_projected = isinstance(job.get("parts"), list) and bool(job["parts"])
     # WHAT THE DRAWING SHOWS IS NOT WHAT WE SUPPLY -- AND THIS IS THE SECOND DOOR.
     #
     # The prose recogniser was guarded first, and 12120 still shipped BI-SCREENCABLE with no
@@ -519,6 +518,26 @@ def normalize_job(job: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:                                   # pragma: no cover - import guard
         _ref_only = None
     _notes = " ".join(str(n) for n in ((job.get("drawing_info") or {}).get("notes") or []))
+
+    # THE EARLY RETURN WAS A BYPASS. A job arriving already in the parts shape -- from a
+    # cache, a sidecar, or a caller that projected it itself -- skipped the exclusion
+    # entirely. The supply-scope test applies to the rows however they got here.
+    if _already_projected:
+        _kept, _dropped = [], []
+        for _p in job["parts"]:
+            if (_ref_only is not None and isinstance(_p, dict)
+                    and _ref_only(_p.get("description"), _p.get("comments"), _notes)):
+                _dropped.append(f"{_p.get('part_number')} ({_p.get('description') or ''})".strip())
+            else:
+                _kept.append(_p)
+        job["parts"] = _kept
+        if _dropped:
+            job.setdefault("warnings", []).append(
+                "BOM rows NOT taken as supplied parts — the drawing shows them and "
+                "disclaims supplying them: " + "; ".join(_dropped))
+            print(f"   [llm-extract] {len(_dropped)} pre-projected part(s) excluded as "
+                  f"reference-only: {'; '.join(_dropped)}", flush=True)
+        return job
 
     parts: List[Dict[str, Any]] = []
     seen = set()

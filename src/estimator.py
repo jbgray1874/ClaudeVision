@@ -101,8 +101,19 @@ def record_operation(part: Dict[str, Any], op: str, source: str,
     _ops = part.setdefault(_key, [])
     if isinstance(_ops, list) and _o not in _ops:
         _ops.append(_o)
-    # setdefault: a source already recorded by a stronger reader is never overwritten.
-    part.setdefault("operation_sources", {}).setdefault(_o, source)
+    # RANK, NOT ARRIVAL ORDER.
+    #
+    # setdefault protected a strong existing attribution from a weak new one -- and equally
+    # blocked a MEASUREMENT from upgrading an earlier guess, which is the same defect in the
+    # other direction. Whoever writes first should not win by writing first.
+    try:
+        from source_precedence import rank as _rank
+    except Exception:                                   # pragma: no cover - import guard
+        _rank = lambda _s: 0                            # noqa: E731
+    _srcs = part.setdefault("operation_sources", {})
+    _existing = _srcs.get(_o)
+    if not _existing or _rank(source) > _rank(_existing):
+        _srcs[_o] = source
 
 
 def _first(values: List[Any]) -> Any:
@@ -2546,6 +2557,10 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # Every fabricated part also needs handling/assembly time at the bench.
     if (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and "handling" not in ops:
         ops = list(ops) + ["handling"]
+        # 12120's shadow reported THIRTEEN handling decisions at `unknown 0`. This is why:
+        # handling was added to the local costing list and never to the record, so it
+        # reached the compiler with no provenance at all.
+        record_operation(part, "handling", "inference")
 
     # ── BOUGHT-IN PARTS TAKE NO FABRICATION LABOUR ───────────────────────────────
     # Runs before every route rule below, because a purchased component is not a routing

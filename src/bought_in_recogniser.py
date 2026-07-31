@@ -156,7 +156,23 @@ def _supply_segments(note_text: str) -> List[str]:
     and sentence punctuation keeps "SCREEN & CABLE SHOWN FOR REFERENCE" from excusing a
     genuine bought-in listed three notes further down.
     """
-    _parts = re.split(r"[\n\r;.]+|(?<=\))\s+", str(note_text or ""))
+    # A BARE NEWLINE IS A LINE WRAP, NOT A CLAUSE BOUNDARY.
+    #
+    # This split on every newline, and 12120's real PDF text wraps the disclaimer:
+    #
+    #     SCREEN & CABLE SHOWN
+    #     FOR REFERENCE
+    #
+    # which became two clauses -- one naming the cable with no marker, one carrying the
+    # marker with nothing to attach it to -- so the cable was supplied and priced. The
+    # synthetic fixture wrote it on one line and passed.
+    #
+    # What IS a boundary: sentence punctuation, and a newline that starts a new numbered or
+    # bulleted note. Those keep note 2's hardware safe from note 1's disclaimer. A newline
+    # in the middle of a note is layout, and the PDF reader's line breaks are not the
+    # draughtsman's sentences.
+    _parts = re.split(r"[;.]+|\n(?=\s*(?:\d+[.)]|[-*\u2022])\s)|(?<=\))\s+",
+                      str(note_text or ""))
     _out = []
     for _p in _parts:
         _n = re.sub(r"[^a-z0-9 ]", " ", (_p or "").lower())
