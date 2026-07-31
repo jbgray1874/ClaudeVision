@@ -7398,6 +7398,52 @@ def test_a_route_group_quantity_is_not_each_targets_quantity():
            f"{_t.get('target_id')} via the adapter is one tube, not the group's two — got "
            f"{_t.get('qty_per_unit')}")
 
+    # BOTH DOORS AT ONCE — THE PRODUCTION SHAPE, AND THE ONLY ONE THAT FAILS.
+    #
+    # 2085 has a route line AND part records carrying the same operation, so the event
+    # receives two claims. Driving each path alone proves neither: on the live job the route
+    # claim said 1 and the corroborating claim said 2, and because operation_sources now
+    # attributes both to `inference` they arrive at EQUAL RANK. Equal rank plus disagreeing
+    # metadata is a conflict, so arbitration refused to price it and the Tube row vanished
+    # from the sheet entirely -- labour fell to GBP 4.11 with the cut missing rather than
+    # doubled.
+    #
+    # Fail-closed did its job. The fix is to make the two claims agree, not to price a
+    # conflict; this pins the agreement.
+    def _tube_record(_pn, _desc):
+        return {"part_number": _pn, "description": _desc, "quantity": 1,
+                "textual_operations": ["tube_cut"],
+                "operation_qty_per_unit": {"tube_cut": 2},
+                "operation_scope": {"tube_cut": "part"},
+                "operation_sources": {"tube_cut": "inference"}}
+
+    _both_parts = [{"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1},
+                   _tube_record("2085-02", "OUTER TUBE"),
+                   _tube_record("2085-03", "INNER TUBE")]
+    _both_extract = {
+        "found": True,
+        "bom": [{"part_number": p["part_number"], "description": p["description"], "qty": 1}
+                for p in _both_parts],
+        "assemblies": [{"part_number": "2085-GA",
+                        "children": [{"part_number": p["part_number"], "qty": 1}
+                                     for p in _both_parts]}],
+        "routes": [{"sequence": 10, "operation": "tube_cut", "scope": "part",
+                    "qty_per_unit": 2, "inferred": True,
+                    "part_numbers": ["2085-02", "2085-03"]}]}
+    _bd = [d for d in compile_job_route(_both_parts, _both_extract).get("decisions") or []
+           if d.get("operation") == "tube_cut"]
+    eq(len(_bd), 2, f"one decision per tube, got {len(_bd)}")
+    for _t in _bd:
+        eq(_t.get("status"), "required",
+           f"{_t.get('target_id')}: the two claims must AGREE, not conflict — an unverified "
+           f"cut is dropped from the sheet and the tube is cut for free")
+        eq(_t.get("qty_per_unit"), 1.0, f"{_t.get('target_id')} is one tube")
+        _qs = {c.get("qty_per_unit") for c in (_t.get("claims") or [])}
+        eq(_qs, {1.0},
+           f"{_t.get('target_id')}: every claim on the event agrees on quantity, got {_qs}")
+    eq(sum(d.get("qty_per_unit") or 0 for d in _bd), 2.0,
+       "and the group still totals the two cuts the route stated")
+
 
 def test_the_top_assembly_is_packed_whatever_joined_it():
     """Excluding every welded parent from assembly events is right for an INTERMEDIATE
@@ -7464,6 +7510,81 @@ def test_the_top_assembly_is_packed_whatever_joined_it():
        f"the welded INTERMEDIATE assembly is not packed as well as welded, got {_targets}")
     ok(any(t.endswith("SA01") for t in _targets),
        f"while the top assembly above it still is, got {_targets}")
+
+
+def test_an_operation_the_compiler_rejected_is_not_reported_unpriced():
+    """2085's tube records still carry laser_cutting — inherited from the shared assembly
+    page the plate's route was read off — and the canonical route correctly rules it
+    not_applicable, because a tube has no flat blank to profile.
+
+    Reading the raw part field and reporting it as unpriced resurrects the very word the
+    compiler rejected, and invites someone to put the laser row back. Decided-against is not
+    the same as uncharged: only a required decision, or no decision at all, leaves an
+    operation answerable to this check.
+    """
+    from invariants import check_no_unpriced_operations_named as _chk
+
+    _summary = {
+        "workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                            "rows": [{"wb_operation": "Tube",
+                                      "engine_operations": ["tube_cut"],
+                                      "part_numbers": ["2085-02"], "qty_per_unit": 1.0}]},
+        "estimate_summary": {"canonical_route_shadow": {"decisions": [
+            {"operation": "laser_cutting", "status": "not_applicable",
+             "target_id": "2085-02", "participants": ["2085-02"]}]}},
+        "parts": [{"part_number": "2085-02",
+                   "textual_operations": ["tube_cut", "laser_cutting"]},
+                  {"part_number": "2085-03", "textual_operations": ["tapping"]}],
+    }
+    _v = _chk(_summary)
+    _ops = (_v[0].get("detail") or {}).get("operations") if _v else {}
+
+    ok("laser_cutting" not in (_ops or {}),
+       f"an operation the compiler ruled not_applicable is not 'work nobody charged for' — "
+       f"got {_ops}")
+
+    # laser_cutting ALONE proves nothing here. _TUBE_OP_REMAP sends laser to the Tube
+    # department for tube stock, so the department inversion already treats the two as
+    # siblings and the Tube row excuses it whatever the decision said. Both mutations of
+    # the decided-against rule passed against that version of this fixture.
+    #
+    # `folding` is not a sibling of anything on this row, so it can only be excused by the
+    # decision itself.
+    _fold = {
+        "workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                            "rows": [{"wb_operation": "Tube",
+                                      "engine_operations": ["tube_cut"],
+                                      "part_numbers": ["2085-01"], "qty_per_unit": 1.0}]},
+        "estimate_summary": {"canonical_route_shadow": {"decisions": [
+            {"operation": "folding", "status": "ruled_out", "target_id": "2085-01",
+             "participants": ["2085-01"]}]}},
+        "parts": [{"part_number": "2085-01", "textual_operations": ["folding"]}],
+    }
+    eq(_chk(_fold), [],
+       "a fold the DXF ruled out is decided, not uncharged — reporting it invites putting "
+       "the fold back on a part measured flat")
+
+    # And with no decision it is reported, so the rule cannot simply excuse everything.
+    _nodec = dict(_fold, estimate_summary={"canonical_route_shadow": {"decisions": []}})
+    ok(_chk(_nodec), "with no decision at all, an uncharged fold is still reported")
+
+    # A REQUIRED DECISION THAT REACHED NO ROW IS THE WHOLE POINT OF THE CHECK. Excusing
+    # every decided operation regardless of status would hide work the compiler said must
+    # happen and the sheet never charged — the exact silent under-charge this exists to
+    # catch, and it broke no fixture until this case was written.
+    _req = dict(_fold, estimate_summary={"canonical_route_shadow": {"decisions": [
+        {"operation": "folding", "status": "required", "target_id": "2085-01",
+         "participants": ["2085-01"]}]}})
+    _rv = _chk(_req)
+    ok(_rv, "a REQUIRED fold that no row charges must still be reported")
+    eq(sorted((_rv[0].get("detail") or {}).get("operations") or {}), ["folding"],
+       "naming the operation the compiler required and the sheet omitted")
+
+    # AND THE CHECK STILL REPORTS WHAT NOBODY DECIDED. Without this the fixture would pass
+    # against a version that excused everything.
+    eq(sorted(_ops or {}), ["tapping"],
+       f"an operation with no decision at all is still reported, got {_ops}")
+    eq((_ops or {}).get("tapping"), ["2085-03"], "against the part that carries it")
 
 
 if __name__ == "__main__":

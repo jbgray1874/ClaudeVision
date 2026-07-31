@@ -424,10 +424,35 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
     if not _rows:
         _by_part, _job_wide = {}, _fallback
 
+    # AN OPERATION THE COMPILER DECIDED AGAINST IS NOT AN OPERATION NOBODY CHARGED FOR.
+    #
+    # 2085's tube records still carry laser_cutting -- inherited from the shared assembly
+    # page the plate's route was read off -- and the canonical route correctly rules it
+    # not_applicable: a tube has no flat blank to profile. Reading the raw part field and
+    # reporting it as unpriced resurrects the very word the compiler rejected, and invites
+    # someone to add the laser row back.
+    #
+    # Decided-against is not the same as uncharged. Only a REQUIRED decision, or no decision
+    # at all, leaves an operation answerable to this check.
+    _decided_against: Dict[str, set] = {}
+    _canon = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+              or summary.get("canonical_route_shadow") or {})
+    for _d in (_canon.get("decisions") or []):
+        if not isinstance(_d, dict) or str(_d.get("status") or "") == "required":
+            continue
+        _op = str(_d.get("operation") or "").strip().lower()
+        if not _op:
+            continue
+        for _pn in ([_d.get("target_id")] + list(_d.get("participants") or [])):
+            _k = str(_pn or "").strip().upper()
+            if _k:
+                _decided_against.setdefault(_k, set()).add(_op)
+
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
         pn = str(p.get("part_number") or "?")
-        _covered = _by_part.get(pn.strip().upper(), set()) | _job_wide
+        _covered = (_by_part.get(pn.strip().upper(), set()) | _job_wide
+                    | _decided_against.get(pn.strip().upper(), set()))
         for op in (p.get("operations") or p.get("textual_operations") or []):
             if isinstance(op, str) and op and op.strip().lower() not in _covered:
                 named.setdefault(op, []).append(pn)
