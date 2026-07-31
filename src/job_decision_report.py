@@ -163,39 +163,28 @@ def _find_wb_sell_price_ref(wb) -> Optional[str]:
         return None
 
 
-def _conf_info(part: Dict, unit_cost: float = 0.0) -> tuple:
-    """Return (confidence_float, label, bg_colour, fg_colour, explanation)"""
-    mat    = str(part.get("normalized_material") or part.get("material") or "").upper()
-    geo    = str(part.get("geometry_source") or "")
-    src    = str(part.get("material_source") or "")
-    unit   = float(unit_cost or 0)
-    thks   = part.get("thicknesses_mm") or []
-    tol    = {0.5, 1.0, 1.5, 2.0, 3.0}
-    has_thk = any(t and round(float(t), 1) not in tol for t in thks)
-    if _is_bought_in(part):
-        return 1.0, "BOUGHT-IN", C_BOUGHT, "555555", "Hardware/bought-in component — not fabricated"
-    if "knowledge_base" in src:
-        return 0.99, "HIGH ✓", C_HIGH, C_HIGH_TXT, \
-               "Previously confirmed by estimator — from SDI knowledge base"
-    if "dxf_flat_pattern" in geo and has_thk and mat in ("MILD_STEEL","MDF","ACRYLIC","TIMBER"):
-        return 0.92, "HIGH ✓", C_HIGH, C_HIGH_TXT, \
-               "DXF flat pattern matched — exact geometry, material from DXF filename"
-    if "dxf_flat_pattern" in geo and mat in ("MILD_STEEL","MDF","ACRYLIC","TIMBER"):
-        return 0.80, "HIGH ✓", C_HIGH, C_HIGH_TXT, \
-               "DXF flat pattern matched — exact geometry, thickness needs confirming"
-    if "dxf" in geo and unit > 0:
-        return 0.75, "MEDIUM", C_MED, C_MED_TXT, \
-               "DXF geometry used — material or thickness inferred from context"
-    if unit == 0 and mat not in ("BOUGHT_IN",):
-        return 0.25, "REVIEW ⚠", C_LOW, C_LOW_TXT, \
-               "Zero cost — thickness or geometry not extracted. Manual review needed"
-    if not mat or mat in ("UNKNOWN","LED","CARD"):
-        return 0.20, "REVIEW ⚠", C_LOW, C_LOW_TXT, \
-               f"Material unresolved ({mat!r}). Check drawing and resubmit"
-    if "pdf" in geo and unit > 0:
-        return 0.60, "MEDIUM", C_MED, C_MED_TXT, \
-               "PDF geometry extraction — accuracy depends on drawing detail level"
-    return 0.50, "MEDIUM", C_MED, C_MED_TXT, "AI inference — no DXF available"
+def _conf_info(part: Dict, unit_cost: float = 0.0, summary: Any = None) -> tuple:
+    """(score, label, bg, fg, explanation) — from the ONE shared confidence authority.
+
+    This function used to carry its own ladder, and estimation_report carried a different
+    one, and calibration.py a third. The two report tabs disagreed about the same part in
+    the same file: 2085-01 came out 0.92 HIGH here and 0.70 MEDIUM there. Its ladder also
+    claimed "material from DXF filename" without ever reading material_source, so the
+    confidence REASON contradicted the Material Source column on its own row.
+
+    The score survives only because callers threshold on it. It is derived FROM the status
+    the shared assessment returned — never averaged, because averaging is how a part with
+    no material price at all lands in the sixties and reads as partial knowledge.
+    """
+    from confidence import (assess_part, STATUS_FILL, UNKNOWN, ASSUMED,
+                            REPORTED, MEASURED, CONFIRMED)
+    _a = assess_part(part, summary)
+    _status = _a["overall"]
+    _bg, _fg = STATUS_FILL.get(_status, ("EDEDED", "555555"))
+    _score = {UNKNOWN: 0.20, ASSUMED: 0.45, REPORTED: 0.70,
+              MEASURED: 0.90, CONFIRMED: 0.99}.get(_status, 0.20)
+    _why = _a.get("reason") or "; ".join(_a.get("decided_by") or [])
+    return _score, _a["overall_label"], _bg, _fg, _why
 
 
 def _mat_source_explanation(part: Dict) -> str:
@@ -556,7 +545,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
                                  if t and round(float(t), 1) not in tol), "—")
             else:
                 real_thk = next((f"{float(t):.1f}mm" for t in thks if t), "—")
-        conf, conf_label, conf_bg, conf_fg, conf_expl = _conf_info(part, unit)
+        conf, conf_label, conf_bg, conf_fg, conf_expl = _conf_info(part, unit, summary)
         mat_why  = _mat_source_explanation(part)
         thk_why  = _thk_source_explanation(part)
         ops_why  = _ops_explanation(part, _est_lookup.get(pn), summary)

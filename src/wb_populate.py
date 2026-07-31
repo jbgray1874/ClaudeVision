@@ -1485,6 +1485,15 @@ def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) 
               f"but the outstanding inputs are only in these flags.", flags)
 
 
+# Operations whose throughput default was NOT derived from the estimating corpus. Kept
+# beside the defaults it describes so the two cannot drift: adding a measured rate without
+# removing its name here would overstate what we know about it.
+_THROUGHPUT_UNMEASURED = frozenset({
+    "Tubebend", "Tube", "Guillotine", "Drill (Acrylic)", "Grinding / Deburr",
+    "CNC Joinery", "Glue", "Wet Spray", "Dress Welds", "Diamond Polish",
+})
+
+
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
@@ -1582,6 +1591,11 @@ def build_workbook_labour(
                 "material": g.get("material"),
                 "thickness_mm": g.get("thickness"),
                 "qty_per_unit": g.get("qty"),
+                # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
+                # historical / historical_unbanded / engine_derived / unmeasured_default.
+                # Without this the audit tabs present an unmeasured constant and the
+                # estimators' own calculator as the same kind of claim.
+                "rate_basis": g.get("rate_basis"),
                 "part_numbers": list(g.get("parts") or []),
             }
             for g in sorted(_rows, key=lambda g: g["workbook_row"])
@@ -3089,6 +3103,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=lb["col_qty"],       value=_qty)
 
         default_tp = _THROUGHPUT_DEFAULTS.get(wb_op or "")
+        # HOW THIS RATE WAS ARRIVED AT, as data rather than a code comment.
+        #
+        # Tube 40/hr is an UNMEASURED constant; P.Coat 458/hr is a historical observation;
+        # the laser rate is the estimators' OWN calculator read off the template. Three
+        # very different claims, and the audit tabs presented all three identically because
+        # the only place the difference was recorded was a "# UNMEASURED" comment.
+        _rate_basis = ("unmeasured_default" if (wb_op or "") in _THROUGHPUT_UNMEASURED
+                       else "historical" if default_tp else "engine_derived")
 
         # ── SIZE-BANDED DEFAULT, keyed on the job's largest part AREA ────────────────
         # For Assemble/pack and P.Coat one number cannot be right - a small part is packed
@@ -3108,10 +3130,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"size - a small part runs faster than a big one, and one median cannot "
                       f"say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
                 default_tp = _banded
+                _rate_basis = "size_banded"
         elif _bands and _max_part_area_m2 <= 0:
             _flag(f"throughput for '{wb_op}': wanted to size-band it but no fabricated part "
                   f"area was computed - using the un-banded default {default_tp}/hr. Not "
                   f"guessing a band.", flags)
+            # A historical median applied WITHOUT the band it was measured in. Weaker than
+            # a banded rate and stronger than a constant nobody measured — a distinction
+            # the sheet made in a console line and nowhere an estimator reads.
+            if _rate_basis != "unmeasured_default":
+                _rate_basis = "historical_unbanded"
 
         # Assembly, packing and welding time is NOT in the DXF. There is no geometry from
         # which to derive "how long does it take to pack this" — the engine's derived value
@@ -3144,6 +3172,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
         if _laser_formula:
             ws.cell(row=row, column=lb["col_throughput"], value=_laser_formula)
+            # The estimators' own calculator, on their own cutting speeds. The strongest
+            # basis on the sheet, and previously indistinguishable from a guess.
+            _rate_basis = "template_calculated"
             _flag(f"laser throughput now READS THE TEMPLATE'S OWN Laser Rate Calculator "
                   f"(rows {_rws}) instead of the engine's time model. The calculator uses "
                   f"the estimators' cutting speeds, the blank size, the hole count and the "
@@ -3170,12 +3201,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                         _flag(f"throughput FLOOR hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {default_tp/_derived:.1f}x SLOWER than the default "
                               f"{default_tp}/hr — using default (was OVER-charging).", flags)
+                # Derived from this job's own geometry unless a guard replaced it with the
+                # default, in which case the default's own basis stands.
+                if throughput == _derived:
+                    _rate_basis = "engine_derived"
                 ws.cell(row=row, column=lb["col_throughput"], value=round(throughput, 4))
             elif default_tp:
                 ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
             else:
                 _flag(f"labour op '{wb_op}' has no batch_hours and no default throughput — "
                       f"WB hours/cost will be #DIV/0! for this row.", flags)
+        g["rate_basis"] = _rate_basis
         # Remember WHICH sheet row this group became. The calculated read-back
         # returns rows keyed only by their position, and without this join key it
         # cannot recover which engine operations and which parts a row represents —

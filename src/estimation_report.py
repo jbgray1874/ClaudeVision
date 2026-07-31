@@ -239,15 +239,21 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
                    + list(part.get("inferred_operations") or []))
             _ops_priced = False
         # ── Material provenance ────────────────────────────────────────────────
+        # ONE SHARED ASSESSMENT, FIELD BY FIELD.
+        #
+        # This block scored MATERIAL confidence from `geometry_source` — "dxf_flat" in geo
+        # raised it to 95% — while printing the label from `material_source`. The score and
+        # the label described different fields, so the 95% was never a statement about the
+        # material at all. And a bought-in scored 1.0 for being bought-in, which is how two
+        # unpriced placeholders were counted among the job's HIGH-confidence parts.
+        from confidence import assess_part as _assess
+        _assessment = _assess(part, summary)
+        _by_field = {f["field"]: f for f in _assessment["fields"]}
+        _mat_field = _by_field.get("material identity") or {}
         if _bought:
             mat_source_str = "Bought-in / catalogue component — no fabrication material"
-            mat_conf       = 1.0
         else:
             mat_source   = part.get("material_source") or geo
-            mat_conf     = 0.9 if "knowledge_base" in mat_source else \
-                           0.95 if "dxf_filename" in mat_source or "dxf_flat" in geo else \
-                           0.7  if "pn_suffix" in mat_source else \
-                           0.6  if "pdf" in geo else 0.5
             mat_source_str = source_label(mat_source)
         # ── Thickness provenance ───────────────────────────────────────────────
         # DXF filename FIRST — most reliable, and avoids real 2mm/3mm acrylic
@@ -279,8 +285,7 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
                 if thk_clean:
                     thk_val = thk_clean[0]
                     thk_source = "DXF geometry" if "dxf" in geo else "PDF text"
-        thk_conf     = 0.95 if "dxf" in thk_source.lower() else \
-                       0.7  if thk_val else 0.2
+        _thk_field = _by_field.get("thickness") or {}
         # ── Geometry provenance ────────────────────────────────────────────────
         geo_data     = part.get("geometry_rollup") or {}
         cut_len      = float(geo_data.get("estimated_cut_length_mm") or 0)
@@ -328,11 +333,10 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
                 elif "JOINERY" in dxf:
                     overrides_fired.append("DXF filename JOINERY → MDF")
         # ── Overall confidence ─────────────────────────────────────────────────
-        if _bought:
-            overall_conf = 1.0
-        else:
-            overall_conf = min(mat_conf, thk_conf if thk_val else 0.6,
-                               geo_conf_raw if geo_conf_raw > 0 else 0.7)
+        # The WEAKEST REQUIRED field, never a mean — and a bought-in is judged on the
+        # fields it actually has, so "no fabrication thickness" cannot drag it down and
+        # "it is bought-in" cannot prop it up.
+        _status = _assessment["overall"]
         # ── Rate / price source ────────────────────────────────────────────────
         # The engine tags every price with a source; it lives on the material
         # estimate (part_estimate.material_estimate.price_source), not top-level.
@@ -365,10 +369,11 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "quantity":          qty,
             "material":          mat,
             "material_source":   mat_source_str,
-            "material_conf":     mat_conf,
+            "material_status":   (_mat_field.get("status") or "unknown"),
+            "material_reason":   (_mat_field.get("reason") or ""),
             "thickness_mm":      thk_val,
             "thickness_source":  thk_source,
-            "thickness_conf":    thk_conf,
+            "thickness_status":  (_thk_field.get("status") or "unknown"),
             "cut_length_mm":     cut_len,
             "n_holes":           n_holes,
             "n_bends":           n_bends,
@@ -380,7 +385,11 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "priced_by":         _priced_by,
             "unit_cost":         unit,
             "extended_cost":     ext,
-            "overall_confidence":overall_conf,
+            "overall_status":    _status,
+            "overall_label":     _assessment["overall_label"],
+            "overall_reason":    _assessment.get("reason") or "",
+            "decided_by":        list(_assessment.get("decided_by") or []),
+            "fields":            _assessment["fields"],
             "is_bought_in":      _bought,
             "flags":             flags,
             "overrides_fired":   overrides_fired,
@@ -456,9 +465,12 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # ── Legend ─────────────────────────────────────────────────────────────────
     ws.merge_cells("A3:O3")
     cell(3, 1,
-         "CONFIDENCE KEY:   🟢 HIGH ≥85%  (Knowledge Base / DXF file)     "
-         "🟡 MEDIUM 60-85%  (PDF extraction / PN suffix)     "
-         "🔴 LOW <60%  (AI inference only — review recommended)",
+         "STATUS — the WEAKEST field decides the line, never an average:   "
+         "CONFIRMED/MEASURED — read from a model, a DXF or the estimators' own calculator   "
+         "REPORTED — read from the drawing; reproducible, not verified   "
+         "ASSUMED — a default or an inference is standing in   "
+         "UNKNOWN — a required field has no reading   "
+         "N/A — that field does not exist for this line",
          bg="F0F0F0", align="left", size=9)
     ws.row_dimensions[3].height = 16
     ws.row_dimensions[4].height = 6  # spacer
@@ -486,13 +498,18 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     for i, p in enumerate(provenance):
         bg = C_ALT_ROW if i % 2 == 0 else "FFFFFF"
         # Bought-ins get a neutral grey; fabricated parts keep the confidence colour.
-        conf_bg = C_BOUGHT if p.get("is_bought_in") else confidence_colour(p["overall_confidence"])
+        # Shaded by STATUS, from the shared table, so both tabs colour a status the same
+        # way. A bought-in is no longer given a neutral grey that reads as "fine": an
+        # unpriced placeholder shades UNKNOWN like anything else missing a required field.
+        from confidence import STATUS_FILL as _SF
+        conf_bg = _SF.get(p.get("overall_status"), ("EDEDED", "555555"))[0]
         cell(row, 1,  p["part_number"],        bg=bg,       border=True)
         cell(row, 2,  p["description"],        bg=bg,       border=True, wrap=True)
         cell(row, 3,  p["quantity"],            bg=bg,       align="center", border=True)
         cell(row, 4,  p["material"],            bg=conf_bg,  bold=True, border=True)
         cell(row, 5,  p["material_source"],     bg=conf_bg,  border=True, wrap=True, size=9)
-        cell(row, 6,  "—" if p.get("is_bought_in") else f"{p['material_conf']:.0%}",
+        cell(row, 6,  {"n/a": "N/A"}.get(p.get("material_status"),
+                                          str(p.get("material_status") or "").upper()),
                                                 bg=conf_bg,  align="center", border=True)
         cell(row, 7,  f"{p['thickness_mm']}mm" if p["thickness_mm"] else "—",
                                                 bg=bg,       align="center", border=True)
@@ -583,9 +600,16 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         ws.row_dimensions[row].height = 32
     row += 2
     ws.merge_cells(f"A{row}:O{row}")
-    high_count = sum(1 for p in provenance if p["overall_confidence"] >= 0.85)
-    med_count  = sum(1 for p in provenance if 0.60 <= p["overall_confidence"] < 0.85)
-    low_count  = sum(1 for p in provenance if p["overall_confidence"] < 0.60)
+    # COUNTED BY STATUS, and a placeholder is not a confident line.
+    #
+    # This counted "HIGH: 3 parts" on 2085 when only one part was high: PACKAGING and
+    # DELIVERY scored 1.0 for being bought-in, so two lines carrying no price at all were
+    # reported as the most confident items on the job.
+    from confidence import counts_by_status as _counts
+    _by_status = _counts([{"overall": p.get("overall_status")} for p in provenance])
+    high_count = _by_status.get("measured", 0) + _by_status.get("confirmed", 0)
+    med_count  = _by_status.get("reported", 0)
+    low_count  = _by_status.get("assumed", 0) + _by_status.get("unknown", 0)
     cell(row, 1,
          f"Confidence summary:  "
          f"🟢 HIGH: {high_count} parts   "

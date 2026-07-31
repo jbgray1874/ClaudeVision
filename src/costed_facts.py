@@ -147,6 +147,7 @@ def _workbook_rows(source: Any) -> Optional[List[Dict[str, Any]]]:
                 "decision_id": _acc.get("decision_id"),
                 "decision_ids": list(_acc.get("decision_ids") or []),
                 "route_group_id": _acc.get("route_group_id"),
+                "rate_basis": _acc.get("rate_basis"),
                 "qty_per_unit": r.get("qty_per_unit"),
                 "batch_hours": r.get("batch_hours"),
                 "total_value_gbp": r.get("total_value_gbp"),
@@ -697,9 +698,35 @@ def reconcile_risk_flags(summary: Any) -> Dict[str, int]:
         if isinstance(mw, dict) and isinstance(mw.get("parts"), list):
             buckets.append(mw["parts"])
 
+    # ── stale PRE-COST learning flags ─────────────────────────────────────────
+    # ZERO_COST_STEEL is raised by the learning engine when a MILD_STEEL part with a DXF
+    # still costs nothing. It runs BEFORE the workbook, and nothing ever revisited it — so
+    # 2085-01 carried "review material/thickness" onto the audit tab while the sheet two
+    # tabs away charged it £0.13 of material and a laser row. A flag that the finished job
+    # contradicts is worse than no flag: it sends an estimator to check something that is
+    # already answered, and it makes the engine look like it disagrees with itself.
+    #
+    # Superseded, not deleted. The cue was real at the time it fired.
     for parts in buckets:
         for p in parts:
-            if not isinstance(p, dict) or not isinstance(p.get("risk_flags"), list):
+            if not isinstance(p, dict):
+                continue
+            _lf = str(p.get("_learning_flag") or "")
+            if "ZERO_COST_STEEL" in _lf:
+                _unit, _ext = part_material_cost(p)
+                _priced = bool(_unit) or bool(priced_rows_for_part(summary,
+                                                                   p.get("part_number")))
+                if _priced:
+                    p["_learning_flag"] = " | ".join(
+                        s for s in _lf.split(" | ") if "ZERO_COST_STEEL" not in s)
+                    p.setdefault("superseded_risk_flags", []).append({
+                        "flag": "ZERO_COST_STEEL",
+                        "reason": ("raised before costing, when this part had no cost; the "
+                                   "finished workbook prices its material and charges it on "
+                                   "a labour row, so it is no longer a review item"),
+                    })
+                    out["superseded"] += 1
+            if not isinstance(p.get("risk_flags"), list):
                 continue
             route = {str(o).lower() for o in
                      operations_for_part(summary, p.get("part_number"), p)}

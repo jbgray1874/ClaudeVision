@@ -8872,5 +8872,222 @@ def test_the_material_breakdown_adds_back_to_the_sheets_material_total():
        "a breakdown that already reconciles gets no balancing row")
 
 
+# ── one confidence authority, field by field — job 2085 ──────────────────────────────
+def _2085_with_rate_bases() -> dict:
+    _job = _job_2085_as_printed()
+    for _r in _job["workbook_labour"]["rows"]:
+        _r["rate_basis"] = {
+            "Laser": "template_calculated",
+            "Tube": "unmeasured_default",
+            "Dress Welds": "unmeasured_default",
+            "P.Coat": "historical_unbanded",
+            "Assemble/pack (Metal)": "historical_unbanded",
+        }.get(_r["wb_operation"], "historical")
+    _job["manufacturing_writeup"]["parts"][0].update({
+        "material_source": "llm_full_extract",
+        "geometry_source": "dxf_flat_pattern",
+        "dxf_source_file": "2085-01 - Bracket Plate_1.2mm MS.DXF",
+        "thicknesses_mm": [1.2],
+        "_learning_flag": "ZERO_COST_STEEL — review material/thickness",
+    })
+    return _job
+
+
+def test_the_weakest_field_decides_the_line_and_nothing_is_averaged():
+    """A scalar confidence has to average things that are not commensurable, and averaging
+    is how a job hides its own gap. 2085's tubes have NO material at all; a mean of
+    "material known, thickness unknown, geometry unknown, route known" lands in the sixties
+    and reads as partial knowledge rather than an absent input."""
+    from confidence import assess_part, UNKNOWN, ASSUMED, MEASURED, NOT_APPLICABLE
+
+    _job = _2085_with_rate_bases()
+    _tube = dict(_job["estimate_summary"]["canonical_part_estimates"][1])
+    _a = assess_part(_tube, _job)
+
+    eq(_a["overall"], UNKNOWN,
+       "a part with no material price is UNKNOWN, not a percentage")
+    _by = {f["field"]: f["status"] for f in _a["fields"]}
+    eq(_by["material price"], UNKNOWN, "the tube material was never read")
+    eq(_by["thickness"], UNKNOWN, "nor its wall")
+    # THE ROUTE IS KNOWN, and must still say so. A single figure could not carry both
+    # facts; the point of the field list is that the gap is located, not just totalled.
+    eq(_by["route"], MEASURED, "while the route IS known — five operations charged")
+    ok("material price" in _a["decided_by"],
+       f"and the report names WHICH field decided it, got {_a['decided_by']}")
+
+
+def test_a_bought_in_placeholder_is_not_a_confident_line():
+    """PACKAGING and DELIVERY scored 1.00 for being bought-in, so two lines carrying no
+    price at all were counted among the job's HIGH-confidence parts. Being purchased rather
+    than made says nothing about whether anyone has priced it.
+
+    But a bought-in must be judged on the fields it HAS: thickness and geometry are
+    NOT_APPLICABLE and cannot drag it down, or "no fabrication thickness" becomes a defect
+    on a box of packaging."""
+    from confidence import assess_part, UNKNOWN, NOT_APPLICABLE, counts_by_status
+
+    _job = _2085_with_rate_bases()
+    _pack = dict(_job["estimate_summary"]["canonical_part_estimates"][3])
+    _a = assess_part(_pack, _job)
+
+    eq(_a["overall"], UNKNOWN, "an unpriced placeholder is not a confident line")
+    _by = {f["field"]: f["status"] for f in _a["fields"]}
+    eq(_by["material price"], UNKNOWN, "because it carries no price")
+    eq(_by["thickness"], NOT_APPLICABLE, "not because it has no thickness")
+    eq(_by["geometry"], NOT_APPLICABLE, "or no geometry")
+    ok("thickness" not in _a["decided_by"] and "geometry" not in _a["decided_by"],
+       f"a field that does not exist cannot decide the line, got {_a['decided_by']}")
+
+    # And a PRICED bought-in is not dragged down by the same N/A fields.
+    _priced_bi = {"part_number": "BI-KNOB", "description": "Knurled knob", "quantity": 4,
+                  "page_roles": ["bought_in"],
+                  "material_estimate": {"unit_material_cost_gbp": 0.42,
+                                        "price_source": {"source_name": "bought_in price book"}}}
+    ok(assess_part(_priced_bi, _job)["overall"] != UNKNOWN,
+       "a bought-in that HAS a price is not punished for having no thickness")
+
+    _counts = counts_by_status([assess_part(dict(p), _job)
+                                for p in _job["estimate_summary"]["canonical_part_estimates"]])
+    eq(_counts.get("measured", 0) + _counts.get("confirmed", 0), 0,
+       f"no part on 2085 is high-confidence — the sheet said 3, got {_counts}")
+
+
+def test_material_confidence_is_not_raised_by_the_geometry_source():
+    """AI Provenance scored MATERIAL at 95% because "dxf_flat" appeared in
+    `geometry_source`, while printing the label from `material_source`. The score and the
+    label described different fields, so the 95% was never a statement about the material.
+    A DXF flat pattern says nothing about alloy."""
+    from confidence import assess_part, ASSUMED, MEASURED, REPORTED
+
+    _base = {"part_number": "X1", "normalized_material": "MILD_STEEL",
+             "geometry_source": "dxf_flat_pattern"}
+    _mat = {f["field"]: f for f in assess_part(_base, None)["fields"]}["material identity"]
+    ok(_mat["status"] in (ASSUMED, REPORTED),
+       f"geometry must not raise material confidence, got {_mat['status']}")
+
+    # A material source that IS a material reading does raise it.
+    _named = dict(_base, material_source="dxf_filename:PART_1.2mm_MS.DXF")
+    _mat2 = {f["field"]: f for f in assess_part(_named, None)["fields"]}["material identity"]
+    eq(_mat2["status"], MEASURED, "a material code read from the DXF filename is measured")
+
+
+def test_both_tabs_report_the_same_status_for_the_same_part():
+    """2085-01 came out 0.92 HIGH on the Decision Report and 0.70 MEDIUM on AI Provenance —
+    same part, same data, same file, two private confidence ladders. There was a third in
+    calibration.py that the reporting pipeline never called."""
+    from confidence import assess_part
+    from job_decision_report import _conf_info
+    from estimation_report import build_provenance
+
+    from costed_facts import job_parts
+
+    _job = _2085_with_rate_bases()
+    _prov = {p["part_number"]: p for p in build_provenance(_job)}
+    # THE SAME RECORD BOTH TABS ACTUALLY ITERATE. Both read job_parts — the canonical
+    # estimate overlaid on the drawing record — and assessing the raw drawing record
+    # instead reports a different status for a reason that has nothing to do with the
+    # confidence model. Comparing the wrong record is how you "prove" a disagreement that
+    # production does not have, and miss one it does.
+    for _p in job_parts(_job):
+        _pn = _p["part_number"]
+        _shared = assess_part(_p, _job)
+        _, _label, _, _, _ = _conf_info(_p, 0.0, _job)
+        eq(_label, _shared["overall_label"],
+           f"{_pn}: the Decision Report must report the shared status")
+        eq(_prov[_pn]["overall_status"], _shared["overall"],
+           f"{_pn}: and AI Provenance the same one")
+    eq(sorted(_prov), sorted(p["part_number"] for p in job_parts(_job)),
+       "and both tabs must be describing the same set of lines in the first place")
+
+
+def test_a_labour_rate_says_how_it_was_arrived_at():
+    """Tube 40/hr is an UNMEASURED constant, P.Coat 458/hr a historical observation used
+    UNBANDED because no part area was computed, and the laser rate the estimators' OWN
+    calculator read off the template. Three very different claims, and the audit tabs
+    presented all three identically — the only record of the difference was a "# UNMEASURED"
+    code comment."""
+    import wb_populate as W
+    from confidence import assess_part, ASSUMED, MEASURED, REPORTED
+
+    ok("Tube" in W._THROUGHPUT_UNMEASURED, "the tube rate is not measured, and says so")
+    ok("Weld (CO2)" not in W._THROUGHPUT_UNMEASURED,
+       "while the weld rate was derived from the corpus")
+
+    _job = _2085_with_rate_bases()
+    _tube = dict(_job["estimate_summary"]["canonical_part_estimates"][1])
+    _rate = {f["field"]: f
+             for f in assess_part(_tube, _job)["fields"]}["labour rate"]
+    eq(_rate["status"], ASSUMED,
+       "a row priced on an unmeasured constant is an assumption, not a measurement")
+    ok("unmeasured" in _rate["source"], f"and names it, got {_rate['source']!r}")
+
+    # A job whose rates are all template-calculated or banded is not downgraded.
+    _clean = _2085_with_rate_bases()
+    for _r in _clean["workbook_labour"]["rows"]:
+        _r["rate_basis"] = "template_calculated"
+    _rate2 = {f["field"]: f for f in assess_part(
+        dict(_clean["estimate_summary"]["canonical_part_estimates"][1]),
+        _clean)["fields"]}["labour rate"]
+    eq(_rate2["status"], MEASURED,
+       "the estimators' own calculator is the strongest basis on the sheet")
+
+
+def test_a_pre_cost_flag_the_finished_job_contradicts_is_superseded():
+    """ZERO_COST_STEEL fires when a MILD_STEEL part with a DXF still costs nothing. It runs
+    BEFORE the workbook and nothing revisited it, so 2085-01 carried "review
+    material/thickness" onto the audit tab while the sheet two tabs away charged it £0.13
+    of material and a laser row. A flag the finished job contradicts sends an estimator to
+    check something already answered."""
+    from costed_facts import reconcile_risk_flags
+
+    _job = _2085_with_rate_bases()
+    _plate = _job["manufacturing_writeup"]["parts"][0]
+    ok("ZERO_COST_STEEL" in str(_plate.get("_learning_flag")), "the flag starts present")
+
+    reconcile_risk_flags(_job)
+    ok("ZERO_COST_STEEL" not in str(_plate.get("_learning_flag") or ""),
+       "a part the workbook prices no longer carries a zero-cost review flag")
+    ok(any(f.get("flag") == "ZERO_COST_STEEL"
+           for f in (_plate.get("superseded_risk_flags") or [])),
+       "superseded, not deleted — the cue was real when it fired")
+
+    # A PART THAT REALLY IS UNPRICED KEEPS IT. Without this the rule would excuse every
+    # zero-cost steel part on the job, which is the flag's whole purpose.
+    _job2 = _2085_with_rate_bases()
+    _job2["manufacturing_writeup"]["parts"].append({
+        "part_number": "2085-99", "description": "UNCOSTED PLATE",
+        "normalized_material": "MILD_STEEL", "material_estimate": {},
+        "_learning_flag": "ZERO_COST_STEEL — review material/thickness"})
+    reconcile_risk_flags(_job2)
+    ok("ZERO_COST_STEEL" in str(
+        _job2["manufacturing_writeup"]["parts"][-1].get("_learning_flag") or ""),
+       "a genuinely uncosted steel part keeps the flag")
+
+
+def test_there_is_exactly_one_confidence_authority():
+    """Three implementations is how the two tabs came to disagree. calibration.py carries a
+    fourth scalar that the reporting pipeline never called — dead, and therefore available
+    to be revived by anyone who finds it and does not know why it is dead."""
+    import inspect
+    import calibration, estimation_report, job_decision_report
+
+    ok("DEPRECATED FOR CONFIDENCE" in
+       inspect.getdoc(calibration.line_confidence_and_provisos or (lambda: None)) or "",
+       "the retired scalar must say so, at the top, where someone about to call it looks")
+
+    # NEITHER REPORT MAY SCORE CONFIDENCE ITSELF. Read the source rather than the behaviour:
+    # a private ladder can agree with the shared one today and drift tomorrow, which is
+    # exactly what happened before.
+    for _mod, _name in ((job_decision_report, "Decision Report"),
+                        (estimation_report, "AI Provenance")):
+        _src = inspect.getsource(_mod)
+        ok("from confidence import" in _src,
+           f"{_name} must read the shared authority")
+        ok("line_confidence_and_provisos" not in _src,
+           f"{_name} must not call the retired scalar")
+    ok("mat_conf" not in inspect.getsource(estimation_report),
+       "AI Provenance must not keep its own material score")
+
+
 if __name__ == "__main__":
     sys.exit(main())
