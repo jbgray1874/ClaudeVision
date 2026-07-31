@@ -169,11 +169,17 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
     provenance = []
     # SDI Intelligence — cost lives in estimate_summary.part_estimates, keyed by
     # part_number. Build a lookup so the provenance report shows real costs.
+    # PRE-FILTER engine figures; the sheet's totals are Excel's. See the reconciliation
+    # note the provenance sheet writes under its total.
     _est_lookup = {}
     for _pe in (summary.get("estimate_summary") or {}).get("part_estimates", []):
         _pn = _pe.get("part_number")
         if _pn:
             _est_lookup[_pn] = _pe
+    from costed_facts import (canonical_quantity, decision_ids_for_part,
+                              operations_for_part, priced_route_known,
+                              priced_rows_for_part)
+    _canonical = priced_route_known(summary)
     for part in parts:
         pn   = part.get("part_number") or "—"
         desc = part.get("description") or "—"
@@ -184,7 +190,14 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             mat = "Bought-in"
         else:
             mat = part.get("normalized_material") or part.get("material") or "Unknown"
-        qty  = part.get("quantity", 1)
+        # Quantity PER TOP-LEVEL UNIT from the compiled hierarchy, not the BOM row's
+        # per-parent figure. A part reached through a sub-assembly needs the parent's
+        # multiplicity rolled in, which is what the workbook charges on; without it this
+        # sheet under-states every item below the first level.
+        _cq = canonical_quantity(summary, pn)
+        qty  = _cq if _cq is not None else part.get("quantity", 1)
+        if isinstance(qty, float) and qty.is_integer():
+            qty = int(qty)
         _pe = _est_lookup.get(pn, {})
         unit = float(_pe.get("unit_total_cost_gbp") or 0)
         ext  = float(_pe.get("extended_total_cost_gbp") or 0)
@@ -194,10 +207,17 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # + inferred lists here made one workbook describe two different routes: laser,
         # powder and weld against timber panels the Estimate sheet charges saw, glue, CNC
         # and spray for. Falls back to the raw lists only when no workbook rows exist.
-        from costed_facts import operations_for_part
-        ops = operations_for_part(summary, pn, _pe) or (
-            list(part.get("textual_operations") or [])
-            + list(part.get("inferred_operations") or []))
+        ops = operations_for_part(summary, pn, _pe)
+        _ops_priced = True
+        if not ops and not _canonical:
+            # No workbook — nothing is priced yet, so the drawing's own reading is the best
+            # available evidence. Labelled as unpriced below rather than passed off as the
+            # route. Once the workbook HAS run, a part in no labour row carries no charged
+            # operation, and reaching for the raw lists there is how the gated-off route —
+            # powder on timber, weld/dress on artefact records — came back onto the page.
+            ops = (list(part.get("textual_operations") or [])
+                   + list(part.get("inferred_operations") or []))
+            _ops_priced = False
         # ── Material provenance ────────────────────────────────────────────────
         if _bought:
             mat_source_str = "Bought-in / catalogue component — no fabrication material"
@@ -299,6 +319,25 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         _ps = ((_pe.get("material_estimate") or {}).get("price_source")
                or _pe.get("price_source") or {})
         rate_basis = _price_basis_label(_ps, mat)
+        # ── Route text, and the audit trail behind it ──────────────────────────
+        _ops_text = (", ".join(ops) if ops
+                     else ("none charged" if _canonical else "—"))
+        if not _ops_priced:
+            _ops_text += "  (read from drawing — not yet priced)"
+        if not _canonical:
+            _priced_by = "— no workbook built"
+        else:
+            _rows_for_part = priced_rows_for_part(summary, pn)
+            _wb_rows = sorted({int(float(r["workbook_row"])) for r in _rows_for_part
+                               if r.get("workbook_row")})
+            _dids = decision_ids_for_part(summary, pn)
+            if _wb_rows or _dids:
+                _priced_by = "\n".join(filter(None, [
+                    ("Estimate row " + ", ".join(str(r) for r in _wb_rows)) if _wb_rows else "",
+                    " · ".join(_dids) if _dids else "",
+                ]))
+            else:
+                _priced_by = "not priced on any labour row"
         provenance.append({
             "part_number":       pn,
             "rate_basis":        rate_basis,
@@ -316,7 +355,9 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "geometry_source":   geo_source,
             "geometry_conf":     geo_conf_raw,
             "dxf_file":          part.get("dxf_source_file") or "—",
-            "operations":        ", ".join(ops) if ops else "—",
+            "operations":        _ops_text,
+            # Part -> the Estimate rows charging it -> the compiler decisions behind them.
+            "priced_by":         _priced_by,
             "unit_cost":         unit,
             "extended_cost":     ext,
             "overall_confidence":overall_conf,
@@ -346,6 +387,8 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # shifts. If present we write a LIVE cross-sheet formula (Excel computes on open),
     # so this sheet agrees with the WB and the Decision Report. Else fall back to sum.
     _sell_ref = _find_wb_sell_price_ref(wb)
+    from costed_facts import job_totals
+    _totals = job_totals(summary)
 
     def cell(row, col, value="", bold=False, bg=None, fg="000000",
              align="left", wrap=False, size=10, border=False, num_fmt=None):
@@ -362,11 +405,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
             c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
         return c
     # ── Title block ────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:N1")
+    ws.merge_cells("A1:O1")
     cell(1, 1, "SDI Intelligence — Estimate Provenance Report",
          bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG, align="center", size=13)
     ws.row_dimensions[1].height = 28
-    ws.merge_cells("A2:N2")
+    ws.merge_cells("A2:O2")
     pdf_name = scan_meta.get("pdf_name") or summary.get("source_file") or "—"
     job_no   = scan_meta.get("job_number") or "—"
     scan_dt  = scan_meta.get("scan_date") or datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -379,7 +422,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
          bg="2F5496", fg=C_HEADER_FG, align="center", size=10)
     ws.row_dimensions[2].height = 18
     # ── Legend ─────────────────────────────────────────────────────────────────
-    ws.merge_cells("A3:N3")
+    ws.merge_cells("A3:O3")
     cell(3, 1,
          "CONFIDENCE KEY:   🟢 HIGH ≥85%  (Knowledge Base / DXF file)     "
          "🟡 MEDIUM 60-85%  (PDF extraction / PN suffix)     "
@@ -388,13 +431,17 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     ws.row_dimensions[3].height = 16
     ws.row_dimensions[4].height = 6  # spacer
     # ── Column headers ─────────────────────────────────────────────────────────
+    # The money columns are the ENGINE's per-part figures. Once Excel has calculated the
+    # sheet they are not what the job is charged, and a column headed plainly "Unit £" next
+    # to a Sell Price that disagrees is the report contradicting itself.
+    _money_basis = " (engine)" if _totals["source"] == "excel_calculated" else ""
     headers = [
         ("Part Number",       15), ("Description",     28), ("Qty", 5),
         ("Material",          14), ("Mat. Source",      32), ("Conf.",  8),
         ("Thickness",          9), ("Thk. Source",      22), ("Geometry Source", 26),
         ("Cut (mm)",          10), ("Ops",              22),
-        ("Unit £",             9), ("Ext £",             9),
-        ("Rate / source",     34),
+        (f"Unit £{_money_basis}",  11), (f"Ext £{_money_basis}", 11),
+        ("Rate / source",     34), ("Priced by — sheet row / decision", 26),
     ]
     for ci, (hdr, width) in enumerate(headers, 1):
         c = cell(5, ci, hdr, bold=True, bg=C_SECTION, fg=C_HEADER_FG,
@@ -428,19 +475,20 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         _rb = p.get("rate_basis") or "—"
         cell(row, 14, _rb, bg=(C_LOW if _rb.startswith("⚠") else bg),
              border=True, size=9, wrap=True)
+        cell(row, 15, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
         ws.row_dimensions[row].height = 28
         row += 1
         # ── Flags / warnings ───────────────────────────────────────────────────
         if p["flags"]:
             for flag in p["flags"]:
-                ws.merge_cells(f"B{row}:N{row}")
+                ws.merge_cells(f"B{row}:O{row}")
                 cell(row, 1, "⚠",              bg=C_LOW, align="center", size=9)
                 cell(row, 2, f"REVIEW: {flag}", bg=C_LOW, size=9, wrap=True)
                 ws.row_dimensions[row].height = 16
                 row += 1
         # ── Override rules that fired ──────────────────────────────────────────
         if p["overrides_fired"]:
-            ws.merge_cells(f"B{row}:N{row}")
+            ws.merge_cells(f"B{row}:O{row}")
             cell(row, 1, "🧠",                  bg=C_RULE, align="center", size=9)
             cell(row, 2, "Learning: " + " | ".join(p["overrides_fired"]),
                  bg=C_RULE, size=9)
@@ -452,7 +500,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 avg  = hm.get("AvgCost") or hm.get("avg_cost") or 0
                 cnt  = hm.get("SampleCount") or hm.get("sample_count") or 0
                 hmat = hm.get("Material") or hm.get("material") or "?"
-                ws.merge_cells(f"B{row}:N{row}")
+                ws.merge_cells(f"B{row}:O{row}")
                 cell(row, 1, "📚",              bg=C_HIST, align="center", size=9)
                 cell(row, 2,
                      f"Historical: {cnt} SDI estimate(s) for this part as "
@@ -474,8 +522,28 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         cell(row, 13, f"£{_engine_total:.2f}",  bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
              align="right", size=12)
     ws.row_dimensions[row].height = 22
+    # Two calculators on one page. The Ext £ column sums the engine's per-part figures; the
+    # total row shows what Excel computed from the accepted labour and material rows. They
+    # differ, and saying which is authoritative is not optional on a sheet whose whole
+    # purpose is to be checkable.
+    if _totals["source"] == "excel_calculated":
+        row += 1
+        ws.merge_cells(f"A{row}:O{row}")
+        _mat, _lab = _totals.get("material_gbp"), _totals.get("labour_gbp")
+        _split = (" (material £{:,.2f} + labour £{:,.2f})".format(float(_mat), float(_lab))
+                  if _mat is not None and _lab is not None else "")
+        cell(row, 1,
+             f"RECONCILIATION — the Estimate sheet calculated "
+             f"£{float(_totals.get('unit_gbp') or 0):,.2f} per unit{_split}. The Ext £ "
+             f"column above sums the engine's own per-part figures to "
+             f"£{float(_totals.get('engine_part_sum_gbp') or 0):,.2f}. Different "
+             f"calculators; the workbook is authoritative. Per-part cost is not recoverable "
+             f"from the sheet — a labour row is one department's batch value across every "
+             f"part in its group — so these columns are shown on the engine basis.",
+             bg=C_KB, size=9, wrap=True)
+        ws.row_dimensions[row].height = 32
     row += 2
-    ws.merge_cells(f"A{row}:N{row}")
+    ws.merge_cells(f"A{row}:O{row}")
     high_count = sum(1 for p in provenance if p["overall_confidence"] >= 0.85)
     med_count  = sum(1 for p in provenance if 0.60 <= p["overall_confidence"] < 0.85)
     low_count  = sum(1 for p in provenance if p["overall_confidence"] < 0.60)

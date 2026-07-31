@@ -7611,5 +7611,235 @@ def test_the_quote_header_is_the_logo_not_a_labelled_field():
        f"and centres its content rather than relying on the removed label's offset, got {_css[:80]!r}")
 
 
+
+# ── the two provenance sheets vs the route the sheet charges — job 12120 ─────────────
+def _canonical_12120_summary() -> dict:
+    """A job in the shape the canonical cutover produces: a compiled hierarchy, accepted
+    workbook rows carrying their decision ids, and Excel's own calculated totals.
+
+    `BI-KNOB` is the knurled knob: BOM qty 2 inside sub-assembly `101`, and `101` is used
+    twice, so the job needs FOUR per unit and the workbook charges four.
+    `12120-01-09M` reached no labour row at all — its drawing text still says powder and
+    weld, and the priced route says neither.
+    """
+    return {
+        "manufacturing_writeup": {"parts": [
+            {"part_number": "12120-01-04M", "description": "Bracket", "quantity": 1,
+             "normalized_material": "MILD_STEEL", "thicknesses_mm": [1.5],
+             "geometry_source": "dxf_flat_pattern"},
+            {"part_number": "BI-KNOB", "description": "Knurled knob", "quantity": 2,
+             "normalized_material": "BOUGHT_IN", "page_roles": ["bought_in"]},
+            {"part_number": "12120-01-09M", "description": "Blank plate", "quantity": 1,
+             "normalized_material": "MILD_STEEL", "thicknesses_mm": [2.0],
+             "textual_operations": ["powder_coating", "welding"]},
+        ]},
+        "workbook_labour": {
+            "schema": "workbook_labour_rows.v3", "mode": "canonical", "rows": [
+                {"workbook_row": 41, "wb_operation": "Laser",
+                 "engine_operations": ["laser_cutting"], "qty_per_unit": 1.0,
+                 "part_numbers": ["12120-01-04M"], "decision_ids": ["d0003-laser"]},
+                {"workbook_row": 47, "wb_operation": "Weld (CO2)",
+                 "engine_operations": ["welding"], "qty_per_unit": 1.0,
+                 "part_numbers": ["12120-GA"], "decision_ids": ["d0011-weld"]},
+            ]},
+        "final_estimate": {
+            "schema": "final_estimate.v2",
+            "totals": {"material_gbp": 10.07, "labour_gbp": 31.37, "unit_gbp": 41.44},
+            "labour_rows": [
+                {"workbook_row": 41, "operation": "Laser", "total_value_gbp": 18.0},
+                {"workbook_row": 47, "operation": "Weld (CO2)", "total_value_gbp": 22.0},
+            ]},
+        "estimate_summary": {
+            "part_estimates": [
+                {"part_number": "12120-01-04M", "unit_total_cost_gbp": 3.0,
+                 "extended_total_cost_gbp": 3.0},
+                {"part_number": "BI-KNOB", "unit_total_cost_gbp": 1.2,
+                 "extended_total_cost_gbp": 4.8},
+                {"part_number": "12120-01-09M", "unit_total_cost_gbp": 0.9,
+                 "extended_total_cost_gbp": 0.9},
+            ],
+            "canonical_route_shadow": {"mode": "cutover", "nodes": [
+                {"part_number": "12120-GA", "kind": "assembly", "qty_per_unit": 1.0,
+                 "evidence": {}},
+                {"part_number": "101", "kind": "assembly", "qty_per_unit": 2.0,
+                 "evidence": {}},
+                {"part_number": "BI-KNOB", "kind": "bought_in", "qty_per_unit": 4.0,
+                 "evidence": {"raw_aliases": ["KNURLED KNOB"]}},
+                {"part_number": "12120-01-04M", "kind": "leaf", "qty_per_unit": 1.0,
+                 "evidence": {}},
+                {"part_number": "12120-01-09M", "kind": "leaf", "qty_per_unit": 1.0,
+                 "evidence": {}},
+            ], "decisions": []},
+        },
+    }
+
+
+def test_canonical_quantity_is_per_unit_not_per_parent():
+    """A BOM row says how many the PARENT takes. The knurled knob is qty 2 in sub-assembly
+    `101`, and `101` is used twice — the job needs four, and the workbook charges four.
+
+    Every report read the row's own `quantity` and printed 2, so the provenance sheets
+    disagreed with the Estimate tab in the same file for every part below the first level.
+    wb_populate already rolls the multiplicity through, but on a LOCAL copy that is never
+    stamped back, which is why fixing it there fixed nothing on the reports."""
+    from costed_facts import canonical_quantity, canonical_identity
+
+    _job = _canonical_12120_summary()
+    eq(canonical_quantity(_job, "BI-KNOB"), 4.0,
+       "the knob is needed four times per unit, not twice")
+    eq(canonical_quantity(_job, "12120-01-04M"), 1.0, "a first-level leaf is unchanged")
+
+    # A record can arrive under a spelling the graph merged away. Looking the number up
+    # verbatim misses the node, and a miss is indistinguishable from having no graph.
+    eq(canonical_identity(_job, "knurled knob"), "BI-KNOB",
+       "a raw alias must resolve to the canonical identity")
+    eq(canonical_quantity(_job, "KNURLED KNOB"), 4.0, "and carry the rolled quantity")
+
+    # No graph -> None, so the caller keeps the row quantity rather than being handed a
+    # defaulted 1 that looks like an answer.
+    eq(canonical_quantity({"manufacturing_writeup": {"parts": []}}, "BI-KNOB"), None,
+       "an unknown part must report no canonical quantity, not a default")
+
+
+def test_decision_ids_survive_the_excel_readback():
+    """The audit trail must not end at the workbook.
+
+    `final_estimate` is preferred over `workbook_labour` once Excel has been read back —
+    it is the only structure carrying calculated values. Its projection dropped
+    `decision_ids`, so the compiler's decisions became unreachable from every downstream
+    deliverable on exactly the runs where the route IS canonical."""
+    from costed_facts import (decision_ids_for_part, priced_rows_for_part,
+                              priced_route_known, _workbook_rows)
+
+    _job = _canonical_12120_summary()
+    ok(priced_route_known(_job), "a job with accepted rows has a known priced route")
+    ok(any(r.get("_calculated") for r in (_workbook_rows(_job) or [])),
+       "the calculated rows are the preferred source once the read-back has run")
+    eq(decision_ids_for_part(_job, "12120-01-04M"), ["d0003-laser"],
+       "the laser decision must still be reachable after the Excel join")
+    eq([r["workbook_row"] for r in priced_rows_for_part(_job, "12120-01-04M")], [41],
+       "and the sheet row that charges it")
+    eq(decision_ids_for_part(_job, "12120-01-09M"), [],
+       "a part on no labour row is priced by no decision")
+
+
+def test_job_totals_prefer_what_excel_calculated():
+    """Two calculators, and the reports were quietly showing the wrong one. The engine's
+    per-part sum is a different arithmetic from the Estimate sheet's — on this job £8.70
+    against £41.44 — and neither figure means anything unlabelled."""
+    from costed_facts import job_totals
+
+    _t = job_totals(_canonical_12120_summary())
+    eq(_t["source"], "excel_calculated", "the workbook is authoritative once it has run")
+    eq(_t["unit_gbp"], 41.44, "the sheet's unit price")
+    eq(round(_t["engine_part_sum_gbp"], 2), 8.70, "and the engine sum, kept to reconcile")
+
+    # Excel errors are carried as null by the read-back. Coercing one to 0.0 here would
+    # turn missing data into a figure that reconciles.
+    _err = _canonical_12120_summary()
+    _err["final_estimate"]["totals"]["labour_gbp"] = None
+    eq(job_totals(_err)["labour_gbp"], None, "a #DIV/0! stays missing, it does not become 0")
+
+    # No workbook -> the engine sum is all there is, and it says so.
+    _nowb = {"estimate_summary": {"part_estimates": [
+        {"part_number": "X", "extended_total_cost_gbp": 5.0}]}}
+    eq(job_totals(_nowb)["source"], "engine_part_sum", "with no workbook, the engine sum")
+
+
+def test_a_part_on_no_labour_row_is_not_described_from_the_drawing():
+    """`12120-01-09M` reached no labour row. Its drawing text still says POWDER COATED and
+    carries the weld specification legend — the range-wide note that applies to the
+    customer's whole product family, not to this job.
+
+    Both provenance sheets fell back to those raw lists whenever the costed lookup came
+    back empty, which is precisely the case where a gate had removed the operation. The
+    report then narrated the route the workbook had just decided against, inside the same
+    file as the Estimate tab that charges neither."""
+    from job_decision_report import _ops_explanation
+    from estimation_report import build_provenance
+
+    _job = _canonical_12120_summary()
+    _blank = _job["manufacturing_writeup"]["parts"][2]
+
+    _txt = _ops_explanation(_blank, None, _job)
+    ok("No operation charged" in _txt,
+       f"the priced route is known and holds this part in no row, got {_txt!r}")
+    ok("powder" not in _txt.lower() and "weld" not in _txt.lower(),
+       f"and must not name the operations the gates removed, got {_txt!r}")
+
+    _prov = {p["part_number"]: p for p in build_provenance(_job)}
+    eq(_prov["12120-01-09M"]["operations"], "none charged",
+       "the provenance sheet must say so too, not list the drawing's words")
+
+    # AND THE FALLBACK MUST STILL WORK WHERE IT IS HONEST. With no workbook nothing has
+    # been priced, so the drawing's reading is the best evidence there is — labelled as
+    # unpriced rather than passed off as the route. Without this the fixture would pass
+    # against a version that simply deleted the fallback.
+    _nowb = dict(_job)
+    _nowb.pop("workbook_labour", None)
+    _nowb.pop("final_estimate", None)
+    _txt2 = _ops_explanation(_blank, None, _nowb)
+    ok("NOT YET PRICED" in _txt2, f"an unpriced job says so, got {_txt2!r}")
+    ok("powder" in _txt2.lower(), f"and still reports what the drawing said, got {_txt2!r}")
+
+
+def test_the_provenance_sheets_trace_every_part_to_a_sheet_row_and_a_decision():
+    """The canonical cutover exists to make the route auditable, and neither sheet showed
+    any of it: no decision id, no sheet row, and per-part money columns whose sum does not
+    reconcile to the workbook total printed a few rows below them.
+
+    Drives the real writers — a helper returning the right string proves nothing about what
+    lands in a cell."""
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        _fail("openpyxl is required to verify what these sheets actually write; the "
+              "workbook pipeline depends on it, so its absence is a broken environment, "
+              "not a reason to report this fixture green")
+        return
+    from openpyxl import Workbook
+    from job_decision_report import add_decision_report_sheet
+    from estimation_report import add_provenance_sheet
+
+    _job = _canonical_12120_summary()
+
+    wb = Workbook()
+    add_decision_report_sheet(wb, _job, {"job_number": "12120"})
+    ws = wb["Decision Report"]
+    _by_pn = {ws.cell(row=r, column=1).value: r for r in range(6, ws.max_row + 1)}
+
+    eq(ws.cell(row=_by_pn["BI-KNOB"], column=3).value, 4,
+       "the Qty column must show the per-unit quantity the sheet charges")
+
+    _trace = str(ws.cell(row=_by_pn["12120-01-04M"], column=12).value or "")
+    ok("41" in _trace, f"the Estimate row charging this part, got {_trace!r}")
+    ok("d0003-laser" in _trace, f"and the decision behind it, got {_trace!r}")
+    eq(str(ws.cell(row=_by_pn["12120-01-09M"], column=12).value or ""),
+       "not priced on any labour row", "a part in no row says so plainly")
+
+    ok(str(ws.cell(row=5, column=9).value or "").endswith("(engine)"),
+       "the per-part money columns must name their basis once Excel has calculated the job")
+
+    _all = " ".join(str(c.value) for r in ws.iter_rows() for c in r if c.value)
+    ok("RECONCILIATION" in _all, "the two calculators must be reconciled on the page")
+    ok("41.44" in _all and "8.70" in _all,
+       "naming both the sheet's figure and the engine sum")
+
+    # ── and the same facts on the AI Provenance tab ────────────────────────────
+    wb2 = Workbook()
+    add_provenance_sheet(wb2, _job, {"job_number": "12120"})
+    ws2 = wb2["AI Provenance"]
+    _rows2 = {ws2.cell(row=r, column=1).value: r for r in range(6, ws2.max_row + 1)}
+    eq(ws2.cell(row=_rows2["BI-KNOB"], column=3).value, 4,
+       "the provenance sheet charges the same quantity as the Estimate tab")
+    ok("d0011-weld" in " ".join(
+        str(ws2.cell(row=r, column=15).value or "") for r in _rows2.values())
+       or "d0003-laser" in " ".join(
+           str(ws2.cell(row=r, column=15).value or "") for r in _rows2.values()),
+       "the provenance sheet carries the decision trail")
+    _all2 = " ".join(str(c.value) for r in ws2.iter_rows() for c in r if c.value)
+    ok("RECONCILIATION" in _all2 and "41.44" in _all2,
+       "and reconciles its own column against what Excel calculated")
+
 if __name__ == "__main__":
     sys.exit(main())

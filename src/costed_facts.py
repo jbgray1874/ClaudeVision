@@ -41,6 +41,12 @@ __all__ = [
     "parts_with_operation",
     "part_numbers_with_operation",
     "operations_for_part",
+    "priced_route_known",
+    "priced_rows_for_part",
+    "canonical_identity",
+    "canonical_quantity",
+    "decision_ids_for_part",
+    "job_totals",
     "costed_finish_label",
     "costed_finish_ops",
     "reconcile_risk_flags",
@@ -130,6 +136,15 @@ def _workbook_rows(source: Any) -> Optional[List[Dict[str, Any]]]:
                 "wb_operation": r.get("operation") or _acc.get("wb_operation"),
                 "engine_operations": _acc.get("engine_operations") or [],
                 "part_numbers": _acc.get("part_numbers") or [],
+                # The canonical decision(s) this sheet row exists because of. Carried
+                # through the join or the audit trail stops at the workbook: once Excel has
+                # been read back, `final_estimate` is preferred over `workbook_labour`, and
+                # a projection that drops these makes the compiler's decision IDs
+                # unreachable from every downstream deliverable precisely on the runs where
+                # the route IS canonical.
+                "decision_id": _acc.get("decision_id"),
+                "decision_ids": list(_acc.get("decision_ids") or []),
+                "route_group_id": _acc.get("route_group_id"),
                 "qty_per_unit": r.get("qty_per_unit"),
                 "batch_hours": r.get("batch_hours"),
                 "total_value_gbp": r.get("total_value_gbp"),
@@ -311,6 +326,144 @@ def operations_for_part(source: Any, part_number: Any,
     if isinstance(part_estimate, dict):
         return list(costed_operations([part_estimate]))
     return []
+
+
+def priced_route_known(source: Any) -> bool:
+    """True once the workbook has told us which operations this job actually charges.
+
+    The distinction every narrating deliverable needs. While this is False there is no
+    priced route, so falling back to the drawing's own textual/inferred operation lists is
+    the best available answer. Once it is True, a part named in NO workbook row carries no
+    charged operation — and printing the drawing's words for it instead of saying so puts a
+    route on the page that the Estimate sheet two tabs away does not contain. That is the
+    exact failure this module exists to prevent, and an `or raw_lists` fallback reintroduces
+    it for every part the gates dropped."""
+    return _workbook_rows(source) is not None
+
+
+# ── canonical BOM identity and multiplicity ──────────────────────────────────
+# The route compiler rolls quantity THROUGH the hierarchy: a node's `qty_per_unit` is how
+# many are needed per top-level unit. A BOM row's own `quantity` is per PARENT, so for
+# anything reached through a sub-assembly the two differ by the parent's multiplicity — a
+# knob at qty 2 inside a sub-assembly used twice is 4 per unit, and the BOM row says 2.
+#
+# wb_populate already applies this when it builds the sheet (canonicalise_part_estimates_
+# for_workbook overwrites `quantity` from the node), but it does that on a LOCAL copy that
+# is never stamped back. So the sheet charges the rolled quantity while every report reading
+# manufacturing_writeup still prints the per-parent one.
+
+
+def _canonical_nodes(source: Any) -> Dict[str, Dict[str, Any]]:
+    """identity -> canonical graph node, from the compiled route."""
+    if not isinstance(source, dict):
+        return {}
+    payload = ((source.get("estimate_summary") or {}).get("canonical_route_shadow")
+               if isinstance(source.get("estimate_summary"), dict) else None) \
+        or source.get("canonical_route_shadow") or {}
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for node in payload.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        identity = str(node.get("part_number") or "").strip().upper()
+        if identity:
+            out[identity] = node
+    return out
+
+
+def canonical_identity(source: Any, part_number: Any) -> str:
+    """The canonical part identity for a part number, resolving raw aliases.
+
+    A record can reach a report under a spelling the graph merged away (a synthesised BI-
+    code, a raw variant). Looking the number up verbatim then misses the node and silently
+    falls back to the uncanonical value, which is indistinguishable from having no node."""
+    pn = str(part_number or "").strip().upper()
+    if not pn:
+        return ""
+    nodes = _canonical_nodes(source)
+    if pn in nodes:
+        return pn
+    for identity, node in nodes.items():
+        for alias in ((node.get("evidence") or {}).get("raw_aliases") or []):
+            if str(alias).strip().upper() == pn:
+                return identity
+    return pn
+
+
+def canonical_quantity(source: Any, part_number: Any) -> Optional[float]:
+    """Quantity PER TOP-LEVEL UNIT, from the compiled hierarchy.
+
+    None when the graph does not know the part — the caller keeps whatever it had, rather
+    than being handed a defaulted 1 that looks like a real answer."""
+    node = _canonical_nodes(source).get(canonical_identity(source, part_number))
+    if not isinstance(node, dict) or node.get("qty_per_unit") is None:
+        return None
+    qty = _num(node.get("qty_per_unit"))
+    return qty if qty > 0 else None
+
+
+def priced_rows_for_part(source: Any, part_number: Any) -> List[Dict[str, Any]]:
+    """The workbook labour rows this part is charged on, in sheet order.
+
+    The join that makes a report auditable: a part on the page -> the sheet rows it is
+    priced in -> the compiler decisions that put it there. Matched through canonical
+    identity, so a record that reached the caller under a merged-away alias still finds its
+    rows instead of silently looking unpriced."""
+    pn = canonical_identity(source, part_number)
+    rows = _workbook_rows(source)
+    if not pn or rows is None:
+        return []
+    out = [r for r in rows
+           if any(canonical_identity(source, x) == pn
+                  for x in (r.get("part_numbers") or []))]
+    return sorted(out, key=lambda r: _num(r.get("workbook_row")))
+
+
+def decision_ids_for_part(source: Any, part_number: Any) -> List[str]:
+    """Canonical OperationDecision ids behind the rows this part is charged on.
+
+    Taken from the workbook rows rather than the decision list directly, so it names only
+    decisions that survived every gate and reached the sheet."""
+    out: List[str] = []
+    for r in priced_rows_for_part(source, part_number):
+        ids = [str(d) for d in (r.get("decision_ids") or []) if d]
+        if not ids and r.get("decision_id"):
+            ids = [str(r["decision_id"])]
+        for d in ids:
+            if d not in out:
+                out.append(d)
+    return out
+
+
+def job_totals(source: Any) -> Dict[str, Any]:
+    """The authoritative per-unit totals, and where they came from.
+
+    `final_estimate.totals` is what the Estimate sheet CALCULATED; everything the engine
+    summed on its own is a different calculator and can differ materially. Reports need both
+    — the workbook figure to show, and the engine sum to reconcile against — plus an honest
+    label for which is which. `source` is "excel_calculated" or "engine_part_sum"."""
+    out: Dict[str, Any] = {
+        "material_gbp": None, "labour_gbp": None, "unit_gbp": None,
+        "engine_part_sum_gbp": None, "source": "engine_part_sum",
+    }
+    engine = sum(_num(p.get("extended_total_cost_gbp"))
+                 for p in _part_estimates(source))
+    out["engine_part_sum_gbp"] = round(engine, 4) if engine else 0.0
+    fe = source.get("final_estimate") if isinstance(source, dict) else None
+    if not isinstance(fe, dict) and isinstance(source, dict) \
+            and isinstance(source.get("estimate_summary"), dict):
+        fe = source["estimate_summary"].get("final_estimate")
+    totals = fe.get("totals") if isinstance(fe, dict) else None
+    if isinstance(totals, dict):
+        for key in ("material_gbp", "labour_gbp", "unit_gbp"):
+            # Excel errors are carried as null by the read-back and must stay null here:
+            # coercing a #DIV/0! to 0.0 turns missing data into a figure that reconciles.
+            if totals.get(key) is not None:
+                out[key] = _num(totals.get(key))
+        if out["unit_gbp"] is not None:
+            out["source"] = "excel_calculated"
+    return out
 
 
 def parts_with_operation(source: Any, *ops: str) -> List[Dict[str, Any]]:

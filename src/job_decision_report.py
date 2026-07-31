@@ -264,14 +264,26 @@ def _ops_explanation(part: Dict, est: Optional[Dict] = None,
     """
     # Canonical where the workbook has run (the route the Estimate sheet two tabs away
     # actually charges); the part's own PRE-FILTER costed fields only as a fallback.
-    from costed_facts import operations_for_part
-    _costed: List[str] = operations_for_part(summary, part.get("part_number"), est)
-    if _costed:
-        ops = _costed
-    else:
-        # No costed record (a bought-in or suppressed row) — fall back to the raw lists so
-        # the sheet still says something, rather than going blank.
+    from costed_facts import operations_for_part, priced_route_known
+    ops: List[str] = operations_for_part(summary, part.get("part_number"), est)
+    if not ops and priced_route_known(summary):
+        # THE PRICED ROUTE IS KNOWN AND THIS PART IS IN NONE OF IT.
+        #
+        # That is an answer, not a gap, and the honest one is to say so. The old fallback
+        # reached for the drawing's textual + inferred lists here, which is where the
+        # suppressed route came back: every part a gate removed — powder on a timber panel,
+        # weld/dress on an artefact record — lost its costed evidence and was then described
+        # from the specification legend instead. The report ended up narrating exactly the
+        # operations the workbook had just decided against.
+        return ("No operation charged on this job — the priced route contains this part "
+                "in no labour row")
+    _priced = True
+    if not ops:
+        # No workbook yet (a report generated from a JSON alone). Nothing has been priced,
+        # so the drawing's own reading is the best available evidence — and it is labelled
+        # as such below rather than presented as what we charged.
         ops = list(part.get("textual_operations") or []) + list(part.get("inferred_operations") or [])
+        _priced = False
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     geo = str(part.get("geometry_source") or "")
     if not ops:
@@ -294,8 +306,11 @@ def _ops_explanation(part: Dict, est: Optional[Dict] = None,
         sources.append("welding (assembly drawing indicates welds)")
     if "handling" in ops:
         sources.append("handling / assembly (bench time)")
-    return "Operations: " + ", ".join(sources) if sources else \
-           f"Detected: {', '.join(ops)}"
+    # "Read from the drawing" is not "charged". Saying which one this is costs a word and
+    # stops an unpriced reading being mistaken for the route the sheet contains.
+    _lead = "Operations" if _priced else "Read from drawing — NOT YET PRICED"
+    return f"{_lead}: " + ", ".join(sources) if sources else \
+           f"{_lead}: {', '.join(ops)}"
 
 
 def add_decision_report_sheet(wb, summary: Dict[str, Any],
@@ -310,22 +325,34 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
 
     # SDI Intelligence — cost lives in estimate_summary.part_estimates,
     # keyed by part_number. Build a lookup so the report shows real costs.
+    #
+    # PRE-FILTER, and the columns fed from it say so. These are the engine's own per-part
+    # numbers; the Estimate sheet's totals are calculated by Excel from the accepted labour
+    # and material rows, and the two are different calculators. Per-part cost is not
+    # recoverable from the sheet — a labour row is a department's batch value across every
+    # part in the group — so the honest presentation is the engine figure, labelled as the
+    # engine figure, reconciled against the workbook below.
     _est_lookup = {}
     for _pe in (summary.get("estimate_summary") or {}).get("part_estimates", []):
         _pn = _pe.get("part_number")
         if _pn:
             _est_lookup[_pn] = _pe
 
+    from costed_facts import (canonical_quantity, decision_ids_for_part,
+                              job_totals, priced_route_known, priced_rows_for_part)
+    _totals = job_totals(summary)
+    _canonical = priced_route_known(summary)
+
     scan_meta = scan_meta or {}
     ws = wb.create_sheet("Decision Report")
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = C_BLUE
     # ── Column widths ──────────────────────────────────────────────────────────
-    col_widths = [16, 30, 6, 14, 10, 34, 34, 34, 10, 10, 14]
+    col_widths = [16, 30, 6, 14, 10, 34, 34, 34, 10, 10, 14, 26]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     # ── Title ──────────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:K1")
+    ws.merge_cells("A1:L1")
     _c(ws, 1, 1, "SDI Intelligence — Estimate Decision Report",
        bold=True, bg=C_NAVY, fg=C_WHITE, align="center", size=14)
     ws.row_dimensions[1].height = 30
@@ -357,7 +384,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             total_line = "Total (Sell Price): see Estimate sheet — mirrored below"
         else:
             total_line = f"Total Estimate: £{total:,.2f}"
-    ws.merge_cells("A2:K2")
+    ws.merge_cells("A2:L2")
     _c(ws, 2, 1,
        f"Drawing: {pdf_name}   |   Job: {job_no}   |   "
        f"{total_line}   |   "
@@ -366,7 +393,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
        bg=C_BLUE, fg=C_WHITE, align="center", size=10)
     ws.row_dimensions[2].height = 16
     # ── Key ────────────────────────────────────────────────────────────────────
-    ws.merge_cells("A3:K3")
+    ws.merge_cells("A3:L3")
     _c(ws, 3, 1,
        "CONFIDENCE:   ✅ HIGH — DXF matched or knowledge base confirmed   "
        "⚡ MEDIUM — PDF extraction or AI inference   "
@@ -375,13 +402,18 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     ws.row_dimensions[3].height = 14
     ws.row_dimensions[4].height = 6  # spacer
     # ── Column headers ─────────────────────────────────────────────────────────
+    # The money columns are the ENGINE's per-part figures, and once a workbook exists they
+    # are not what the sheet charges. Naming the basis in the header is the difference
+    # between a working figure and a price the reader will quote from.
+    _money_basis = " (engine)" if _totals["source"] == "excel_calculated" else ""
     headers = [
         "Part Number", "Description", "Qty",
         "Material", "Thickness",
         "Material Source — WHY",
         "Thickness Source — WHY",
         "Operations — HOW DETECTED",
-        "Unit £", "Ext £", "Confidence"
+        f"Unit £{_money_basis}", f"Ext £{_money_basis}", "Confidence",
+        "Priced by — sheet row / decision",
     ]
     for ci, hdr in enumerate(headers, 1):
         _c(ws, 5, ci, hdr, bold=True, bg=C_NAVY, fg=C_WHITE,
@@ -393,7 +425,18 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     for i, part in enumerate(parts):
         pn   = str(part.get("part_number") or "—")
         desc = str(part.get("description") or "—")
-        qty  = int(part.get("quantity") or 1)
+        # QUANTITY PER TOP-LEVEL UNIT, not per parent.
+        #
+        # A BOM row states how many the PARENT takes. For anything reached through a
+        # sub-assembly that is not the quantity the job needs: a knob at qty 2 inside a
+        # sub-assembly used twice is 4 per unit. The compiled hierarchy rolls the
+        # multiplicity through, and the workbook already charges on the rolled figure —
+        # so the raw row quantity here made the report disagree with its own Estimate sheet
+        # for every part below the first level. Falls back to the row when the graph does
+        # not know the part.
+        _cq = canonical_quantity(summary, pn)
+        qty  = int(_cq) if _cq is not None and float(_cq).is_integer() else (
+            _cq if _cq is not None else int(part.get("quantity") or 1))
         # Bought-in components carry no fabrication material — show a clean label
         # instead of a defaulted/mis-inferred one (e.g. "MILD_STEEL" on a foam tape).
         if _is_bought_in(part):
@@ -444,6 +487,23 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
            num_fmt="£#,##0.00", border=True)
         _c(ws, row, 11, conf_label, bg=conf_bg, fg=conf_fg,
            align="center", bold=True, size=8, border=True)
+        # ── Traceability: part -> the sheet rows charging it -> the decisions behind them.
+        # Without this the Decision Report asserts a route and offers nothing to check it
+        # against; with it every line on the page can be walked back to the Estimate tab and
+        # forward to the compiler decision that put it there.
+        _prows = priced_rows_for_part(summary, pn) if _canonical else []
+        if _prows:
+            _wbrows = sorted({int(float(r["workbook_row"])) for r in _prows
+                              if r.get("workbook_row")})
+            _dids = decision_ids_for_part(summary, pn)
+            _trace = ("Estimate row " + ", ".join(str(r) for r in _wbrows)) if _wbrows else ""
+            if _dids:
+                _trace = (_trace + "\n" if _trace else "") + " · ".join(_dids)
+        elif _canonical:
+            _trace = "not priced on any labour row"
+        else:
+            _trace = "— no workbook built"
+        _c(ws, row, 12, _trace, bg=bg, size=8, border=True, wrap=True)
         ws.row_dimensions[row].height = 36
         row += 1
         if (conf < 0.5 or unit == 0) and not _is_bought_in(part):
@@ -466,17 +526,41 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         _c(ws, row, 10, total, bold=True, bg=C_NAVY, fg=C_WHITE,
            align="right", size=13, num_fmt="£#,##0.00")
     _c(ws, row, 11, "", bg=C_NAVY)
+    _c(ws, row, 12, "", bg=C_NAVY)
     ws.row_dimensions[row].height = 24
+    # ── Reconciliation: the engine part-sum against what Excel calculated ───────
+    # Two calculators, both on this page: the Ext £ column sums the engine's per-part
+    # figures, the total row shows the workbook's. They are not the same arithmetic and on
+    # real jobs they differ materially. Leaving the reader to notice — and to guess which to
+    # believe — is what made this sheet read as the engine contradicting itself.
+    if _totals["source"] == "excel_calculated":
+        row += 1
+        ws.merge_cells(f"A{row}:L{row}")
+        _eng = float(_totals.get("engine_part_sum_gbp") or 0.0)
+        _unit = float(_totals.get("unit_gbp") or 0.0)
+        _mat = _totals.get("material_gbp")
+        _lab = _totals.get("labour_gbp")
+        _parts_txt = " (material £{:,.2f} + labour £{:,.2f})".format(
+            float(_mat), float(_lab)) if _mat is not None and _lab is not None else ""
+        _c(ws, row, 1,
+           f"RECONCILIATION — the Estimate sheet calculated £{_unit:,.2f} per unit"
+           f"{_parts_txt}. The Ext £ column above sums the engine's own per-part figures to "
+           f"£{_eng:,.2f}; the two are different calculators and the workbook is "
+           f"authoritative. Per-part cost is not recoverable from the sheet — a labour row "
+           f"is one department's batch value across every part in its group — so the "
+           f"per-part columns are shown on the engine basis and labelled as such.",
+           bg=C_LIGHT, size=9, wrap=True, italic=True)
+        ws.row_dimensions[row].height = 34
     # ── Parts requiring review ─────────────────────────────────────────────────
     if review_parts:
         row += 2
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, f"⚠  PARTS REQUIRING REVIEW ({len(review_parts)} items)",
            bold=True, bg="FFC7CE", fg="9C0006", size=11)
         ws.row_dimensions[row].height = 20
         row += 1
         for pn, desc, reason in review_parts:
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "⚠", bg="FFC7CE", align="center", size=9)
             _c(ws, row, 2, f"{pn}  —  {desc}  |  {reason}",
                bg="FFC7CE", fg="9C0006", size=9, wrap=True)
@@ -485,12 +569,12 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     # ── Insufficient data / unreliable-cost section ────────────────────────────
     if ds.get("status") == "insufficient_data":
         row += 2
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, "⚠  INSUFFICIENT DATA — DO NOT QUOTE FROM THIS TOTAL",
            bold=True, bg="FFC7CE", fg="9C0006", size=11)
         ws.row_dimensions[row].height = 20
         row += 1
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         # Do NOT cite a second, static "provisional total" here. The authoritative total is
         # the workbook Sell Price shown in the SELL PRICE row directly above (a live cross-
         # sheet formula). The engine part-sum (ds.document_total_provisional_gbp) is a
@@ -508,7 +592,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         ws.row_dimensions[row].height = 28
         row += 1
         for up in (ds.get("unreliable_parts") or [])[:12]:
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "✗", bg="FFC7CE", align="center", size=9)
             _c(ws, row, 2,
                f"{up.get('part_number')}  —  {up.get('description')}  |  "
@@ -526,12 +610,12 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
                      and not _has_real_dxf_geometry(p))]
     if _inferred or _no_dxf:
         row += 2
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, "⚠  DRAWINGS OUTSTANDING — PROVISIONAL / MISSING COSTS",
            bold=True, bg="FFE699", fg="7F6000", size=11)
         ws.row_dimensions[row].height = 20
         row += 1
-        ws.merge_cells(f"A{row}:K{row}")
+        ws.merge_cells(f"A{row}:L{row}")
         _c(ws, row, 1, "These parts have no flat DXF. Request the DXF from the "
            "drawing office; figures below are AI-inferred and provisional.",
            bg="FFF2CC", fg="7F6000", size=9, wrap=True)
@@ -543,7 +627,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             _bn = {"historical_sdilive": "from SDILive history",
                    "sibling_borrow": "borrowed from similar part",
                    "category_default": "typical size for type"}.get(basis, basis)
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "✎", bg="FFF2CC", align="center", size=9)
             _c(ws, row, 2, f"{p.get('part_number')}  —  {p.get('description')}  |  "
                f"INFERRED ({_bn}): {gi.get('blank_length_mm')}×{gi.get('blank_width_mm')}mm "
@@ -551,7 +635,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             ws.row_dimensions[row].height = 18
             row += 1
         for p in _no_dxf:
-            ws.merge_cells(f"B{row}:K{row}")
+            ws.merge_cells(f"B{row}:L{row}")
             _c(ws, row, 1, "✗", bg="FFC7CE", align="center", size=9)
             _c(ws, row, 2, f"{p.get('part_number')}  —  {p.get('description')}  |  "
                f"NO DXF + could not infer — PRICE MANUALLY (currently £0)",
@@ -560,8 +644,14 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             row += 1
     # ── Cost breakdown by material ─────────────────────────────────────────────
     row += 2
-    ws.merge_cells(f"A{row}:K{row}")
-    _c(ws, row, 1, "COST BREAKDOWN BY MATERIAL TYPE",
+    ws.merge_cells(f"A{row}:L{row}")
+    # Named base. These are engine per-part figures and the percentages are shares of their
+    # own sum — not of the Sell Price in the total row above, which is a different number.
+    # An unlabelled "%" next to an unlabelled "£" invited exactly that reading.
+    _c(ws, row, 1,
+       "COST BREAKDOWN BY MATERIAL TYPE"
+       + ("  —  engine per-part basis; % of the engine part-sum, not of the Sell Price"
+          if _totals["source"] == "excel_calculated" else ""),
        bold=True, bg=C_BLUE, fg=C_WHITE, size=11)
     ws.row_dimensions[row].height = 20
     row += 1
@@ -585,11 +675,12 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         _c(ws, row, 10, "", bg=bg, border=True)
         _c(ws, row, 11, f"{pct:.1f}%", bg=bg, align="center",
            size=10, border=True)
+        _c(ws, row, 12, "", bg=bg, border=True)
         ws.row_dimensions[row].height = 18
         row += 1
     # ── Footer ─────────────────────────────────────────────────────────────────
     row += 2
-    ws.merge_cells(f"A{row}:K{row}")
+    ws.merge_cells(f"A{row}:L{row}")
     _c(ws, row, 1,
        f"Generated by SDI Intelligence  |  wearesdi.com  |  "
        f"{datetime.now().strftime('%d/%m/%Y %H:%M')}  |  "
