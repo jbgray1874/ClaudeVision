@@ -388,13 +388,46 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
                 _siblings.setdefault(_o, set()).update(_low)
     except Exception:
         _siblings = {}
-    _covered = {str(o).strip().lower() for o in costed}
-    for _o in list(_covered):
-        _covered |= _siblings.get(_o, set())
+    # COVERAGE IS PER PART, NOT JOB-WIDE.
+    #
+    # Expanding aliases across the whole job excused `handling` on EVERY part the moment any
+    # row charged the assembly department -- including parts no assembly/pack row names. A
+    # part whose bench time genuinely never reached the sheet would have gone unreported,
+    # which is an under-charge dressed as a clean check.
+    #
+    # A row names the parts it covers, so ask the question where it belongs: is THIS part's
+    # operation charged on a row that includes THIS part.
+    _by_part: Dict[str, set] = {}
+    _job_wide: set = set()
+    try:
+        from costed_facts import _workbook_rows as _wb_rows, _row_engine_ops as _row_ops
+        _rows = _wb_rows(summary)
+    except Exception:
+        _rows = None
+    for _r in (_rows or []):
+        _ops = {str(o).strip().lower() for o in (_row_ops(_r) or [])}
+        for _o in set(_ops):
+            _ops |= _siblings.get(_o, set())
+        _pns = [str(x or "").strip().upper() for x in (_r.get("part_numbers") or []) if x]
+        if _pns:
+            for _pn in _pns:
+                _by_part.setdefault(_pn, set()).update(_ops)
+        else:
+            # A row naming no parts can only be judged job-wide.
+            _job_wide |= _ops
+
+    # Fallback when no workbook rows are available (a quote built from JSON alone): the
+    # job-wide set is all there is, and saying so beats inventing per-part precision.
+    _fallback = {str(o).strip().lower() for o in costed}
+    for _o in list(_fallback):
+        _fallback |= _siblings.get(_o, set())
+    if not _rows:
+        _by_part, _job_wide = {}, _fallback
 
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
         pn = str(p.get("part_number") or "?")
+        _covered = _by_part.get(pn.strip().upper(), set()) | _job_wide
         for op in (p.get("operations") or p.get("textual_operations") or []):
             if isinstance(op, str) and op and op.strip().lower() not in _covered:
                 named.setdefault(op, []).append(pn)

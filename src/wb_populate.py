@@ -905,8 +905,17 @@ def canonicalise_part_estimates_for_workbook(
     # would absorb the synthesised line into whichever happened to be seen first, and the
     # sheet would show the quantity against the wrong part with nothing to indicate it.
     # An ambiguous match is not a match.
+    # ONLY A CANONICAL BOUGHT-IN MAY ABSORB A SYNTHESISED BOUGHT-IN.
+    #
+    # The index covered every node, so a recogniser-minted code could be merged into a
+    # fabricated LEAF or an assembly whose description happened to match -- putting a
+    # purchased item's identity and price onto a part we make, which is the make/buy error
+    # this engine has a whole gate for elsewhere. A BI- code is a bought-in by construction;
+    # its only legitimate twin is a bought-in.
     _desc_hits: Dict[str, List[str]] = {}
     for _ident, _node in nodes.items():
+        if str(_node.get("kind") or "").strip().lower() != "bought_in":
+            continue
         _dk = _desc_key(_node.get("description"))
         if _dk:
             _desc_hits.setdefault(_dk, []).append(_ident)

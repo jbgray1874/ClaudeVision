@@ -7259,5 +7259,69 @@ def test_an_ambiguous_description_match_is_not_a_match():
        f"one candidate still absorbs the duplicate, got {_u}")
 
 
+def test_a_synthesised_code_is_never_absorbed_into_a_part_we_make():
+    """The candidate index covered every canonical node, so a recogniser-minted code could
+    merge into a fabricated LEAF whose description happened to match — putting a purchased
+    item's identity and price onto a part we make.
+
+    A BI- code is a bought-in by construction. Its only legitimate twin is a bought-in.
+    """
+    from wb_populate import canonicalise_part_estimates_for_workbook as _cz
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "decisions": [{"operation": "handling"}],
+        "nodes": [{"part_number": "12120-01-01M", "kind": "leaf", "qty_per_unit": 1,
+                   "description": "MOUNTING BRACKET"}]}}}
+    _pes = [
+        {"part_number": "12120-01-01M", "description": "MOUNTING BRACKET", "quantity": 1},
+        {"part_number": "BI-MOUNTINGBRACKET", "description": "Mounting Bracket",
+         "quantity": 1, "material_estimate": {"unit_material_cost_gbp": 8.40}},
+    ]
+    _codes = [p.get("part_number") for p in _cz(_summary, _pes)]
+    ok("BI-MOUNTINGBRACKET" in _codes,
+       f"a fabricated leaf must not absorb a bought-in code — that is a make/buy error "
+       f"with a price attached, got {_codes}")
+
+    # A CANONICAL BOUGHT-IN STILL ABSORBS IT, or the restriction has simply disabled the
+    # dedup this exists to perform.
+    _bi = {"estimate_summary": {"canonical_route_shadow": {
+        "decisions": [{"operation": "handling"}],
+        "nodes": [{"part_number": "STD PART", "kind": "bought_in", "qty_per_unit": 2,
+                   "description": "M4 THREADED PEM STUD (LENGTH: 30mm)"}]}}}
+    _p2 = [{"part_number": "STD PART", "description": "M4 THREADED PEM STUD (LENGTH: 30mm)",
+            "quantity": 2},
+           {"part_number": "BI-PEMSTUD",
+            "description": "M4 THREADED PEM STUD (LENGTH: 30mm)", "quantity": 2}]
+    _c2 = [p.get("part_number") for p in _cz(_bi, _p2)]
+    ok("BI-PEMSTUD" not in _c2, f"a canonical bought-in still absorbs it, got {_c2}")
+
+
+def test_operation_coverage_is_asked_per_part_not_job_wide():
+    """Expanding department aliases across the whole job excused `handling` on EVERY part
+    the moment any row charged the assembly department — including parts no assembly/pack
+    row names.
+
+    A part whose bench time genuinely never reached the sheet would then go unreported: an
+    under-charge dressed as a clean check. A row names the parts it covers, so the question
+    belongs there — is THIS part's operation charged on a row that includes THIS part.
+    """
+    from invariants import check_no_unpriced_operations_named as _chk
+
+    _summary = {
+        "workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                            "rows": [{"wb_operation": "Assemble/pack (Metal)",
+                                      "engine_operations": ["assembly"],
+                                      "part_numbers": ["P1"], "qty_per_unit": 1.0}]},
+        "parts": [{"part_number": "P1", "textual_operations": ["handling"]},
+                  {"part_number": "P2", "textual_operations": ["handling"]}],
+    }
+    _v = _chk(_summary)
+    ok(_v, "P2's handling is charged on no row that names P2 — it must be reported")
+    _ops = (_v[0].get("detail") or {}).get("operations") or {}
+    eq(sorted(_ops), ["handling"], f"and named as handling, got {_ops}")
+    eq(_ops.get("handling"), ["P2"],
+       f"against P2 only — P1 IS covered by the row that names it, got {_ops}")
+
+
 if __name__ == "__main__":
     sys.exit(main())
