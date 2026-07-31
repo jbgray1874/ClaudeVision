@@ -436,6 +436,74 @@ def decision_ids_for_part(source: Any, part_number: Any) -> List[str]:
     return out
 
 
+def job_parts(source: Any) -> List[Dict[str, Any]]:
+    """THE ONE PART LIST EVERY DELIVERABLE MUST DESCRIBE.
+
+    Five deliverables were reading three different lists:
+
+      Estimate sheet                      the canonicalised list
+      Decision Report, AI Provenance      manufacturing_writeup.parts
+      quote HTML, job report, xlsx        estimate_summary.part_estimates
+
+    and the first of those was a local variable in populate_workbook, discarded the moment
+    the workbook was saved. Canonicalising is not cosmetic: it merges recogniser-minted
+    duplicates into the drawing's own code, rolls sub-assembly multiplicity into every
+    quantity, and ADDS explicit bought-in BOM lines that never got a pricing record. So a
+    bought-in the sheet charges appeared on no other page, a duplicate appeared on every
+    page but the sheet, and quantities differed wherever a part sits below the first level.
+    Totals were only the visible end of it.
+
+    Each record is the canonical estimate — identity, quantity, cost, material — overlaid on
+    the manufacturing_writeup record for the same part, which is where the provenance and
+    geometry fields live that the Decision Report and AI Provenance columns are built from.
+    Joined through canonical identity, so a record that reached us under a merged-away alias
+    still finds its evidence.
+
+    Falls back to part_estimates when no workbook has been built, because then there is no
+    canonical list and the engine's own is the only one there is."""
+    if not isinstance(source, dict):
+        return []
+    est_summary = source.get("estimate_summary")
+    canonical = (est_summary or {}).get("canonical_part_estimates") \
+        if isinstance(est_summary, dict) else None
+    if not isinstance(canonical, list) or not canonical:
+        canonical = _part_estimates(source)
+
+    provenance: Dict[str, Dict[str, Any]] = {}
+    for record in ((source.get("manufacturing_writeup") or {}).get("parts") or []):
+        if isinstance(record, dict) and record.get("part_number"):
+            provenance.setdefault(
+                canonical_identity(source, record["part_number"]), record)
+
+    node = source.get("workbook_labour")
+    if not isinstance(node, dict) and isinstance(est_summary, dict):
+        node = est_summary.get("workbook_labour")
+    skipped = {str(x).strip().upper()
+               for x in ((node or {}).get("skipped_part_numbers") or [])}
+
+    out: List[Dict[str, Any]] = []
+    for estimate in canonical:
+        if not isinstance(estimate, dict):
+            continue
+        identity = str(estimate.get("part_number") or "").strip().upper()
+        merged = dict(provenance.get(identity) or {})
+        # The estimate wins on everything it actually carries. A key present but empty must
+        # not clobber a real reading from the drawing record — that is how a part with a
+        # costed thickness and no geometry fields ended up looking like it had neither.
+        for key, value in estimate.items():
+            if value not in (None, "", [], {}) or key not in merged:
+                merged[key] = value
+        # ...except identity and multiplicity, which are the canonical answer by definition.
+        merged["part_number"] = estimate.get("part_number")
+        if estimate.get("quantity") is not None:
+            merged["quantity"] = estimate.get("quantity")
+        # A part the workbook set aside is still part of the job and must stay visible, but
+        # nothing may present it as priced.
+        merged["_sheet_skipped"] = identity in skipped
+        out.append(merged)
+    return out
+
+
 def job_totals(source: Any) -> Dict[str, Any]:
     """The authoritative per-unit totals, and where they came from.
 

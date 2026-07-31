@@ -1489,6 +1489,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _canonical_cutover = canonical_route_cutover_enabled(summary)
     if _canonical_cutover:
         pes = canonicalise_part_estimates_for_workbook(summary, list(pes))
+        # THE LIST THE SHEET IS BUILT FROM HAS TO SURVIVE THE SHEET.
+        #
+        # This was a local variable, discarded the moment the workbook was saved, and it is
+        # not the list any other deliverable reads. Canonicalising merges recogniser-minted
+        # duplicates into the drawing's own code, rolls sub-assembly multiplicity into each
+        # quantity, and ADDS explicit bought-in BOM lines that never got a pricing record.
+        # So the Estimate sheet showed one set of rows and the Decision Report, AI
+        # Provenance, quote HTML and job report each showed a different one — a bought-in
+        # the sheet charges appearing on no other page, a duplicate on every page but the
+        # sheet, and quantities that differ wherever a part sits below the first level.
+        #
+        # Published under its own key rather than overwriting part_estimates: the engine's
+        # pre-canonical record is what project_priced_route reconciles decisions against and
+        # what the read-back and learning paths expect. Consumers read it through
+        # costed_facts.job_parts, which falls back to part_estimates when no workbook ran.
+        ((summary.setdefault("estimate_summary", {}))
+         ["canonical_part_estimates"]) = pes
     _canonical_kinds = canonical_part_kinds(summary) if _canonical_cutover else {}
     if _canonical_cutover:
         canonical_route_payload(summary)["mode"] = "cutover"

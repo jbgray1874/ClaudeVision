@@ -126,7 +126,14 @@ def _extract_headline(summary: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_parts(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return _get(summary, "estimate_summary", "part_estimates", default=[]) or []
+    """The canonical job part list, shared with the sheet and every other deliverable.
+
+    Reading part_estimates here put this report on a different set of rows from the
+    Estimate sheet in the same job: cost streams that omitted a bought-in the sheet
+    charges, and quantities that differ for anything below the first level."""
+    from costed_facts import job_parts
+    return job_parts(summary) or (
+        _get(summary, "estimate_summary", "part_estimates", default=[]) or [])
 
 
 def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:

@@ -165,7 +165,11 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
     Extract provenance data from a scan summary.
     Returns list of part provenance records.
     """
-    parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    # The canonical job part list — the same rows the Estimate sheet was built from, each
+    # overlaid on its manufacturing_writeup entry so the provenance fields below survive.
+    from costed_facts import job_parts as _job_parts
+    parts = _job_parts(summary) or (
+        (summary.get("manufacturing_writeup") or {}).get("parts") or [])
     provenance = []
     # SDI Intelligence — cost lives in estimate_summary.part_estimates, keyed by
     # part_number. Build a lookup so the provenance report shows real costs.

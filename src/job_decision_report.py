@@ -319,7 +319,15 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     if not _OK:
         return
 
-    parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    # THE SAME ROWS THE ESTIMATE SHEET HAS. job_parts is the canonical list the sheet was
+    # built from, each record overlaid on its manufacturing_writeup entry so the provenance
+    # columns below still have the geometry, thickness and material-source fields they read.
+    # Iterating manufacturing_writeup directly put this tab on a different set of rows from
+    # the sheet two tabs away: a bought-in the sheet charges appearing nowhere here, a
+    # recogniser-minted duplicate appearing here and not there.
+    from costed_facts import job_parts
+    parts = job_parts(summary) or (
+        (summary.get("manufacturing_writeup") or {}).get("parts") or [])
     if not parts:
         return
 

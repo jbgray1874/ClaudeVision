@@ -450,7 +450,13 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     unit_price = (unit_cost * MARKUP_FACTOR) if isinstance(unit_cost, (int, float)) else None
     order_value = (unit_price * qty) if (unit_price is not None and qty) else None
 
-    parts = es.get("part_estimates") or []
+    # ONE part list across every deliverable (costed_facts.job_parts): the canonical
+    # list the Estimate sheet was built from, not the engine's pre-canonical one. They are
+    # different sets -- merged duplicates, rolled quantities, and bought-in BOM lines the
+    # sheet adds -- so a quote built from part_estimates named materials and finishes for a
+    # job the sheet does not contain.
+    from costed_facts import job_parts as _job_parts
+    parts = _job_parts(summary) or (es.get("part_estimates") or [])
     material = _materials_line(parts)
     finish = _finish_line(summary, parts)
     ops = _collect_operations(parts, summary)

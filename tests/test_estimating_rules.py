@@ -8046,5 +8046,169 @@ def test_a_finish_stated_only_in_surface_finishes_is_still_stated():
     ok(W._is_spurious_operation is not None, "the legacy entry point still exists")
 
 
+# ── one job, one part list — across every deliverable ────────────────────────────────
+def _diverging_job() -> dict:
+    """A job whose three part lists genuinely disagree, in the three ways they really do.
+
+      STD PART      absorbs the recogniser-minted BI-PEMSTUD (same item, two codes)
+      STD PART      is qty 2 on its BOM row and 4 per unit through the hierarchy
+      BI-KNOB       is an explicit canonical bought-in with no pricing record at all
+    """
+    _pes = [
+        {"part_number": "12120-01-04M", "description": "Bracket", "quantity": 1,
+         "normalized_material": "MILD_STEEL", "unit_total_cost_gbp": 3.0,
+         "extended_total_cost_gbp": 3.0,
+         # PRESENT AND EMPTY. A costing record carries these slots whether or not anything
+         # was read into them, so an overlay that lets the estimate win unconditionally
+         # wipes the drawing's real readings and empties every "WHY" column.
+         "thicknesses_mm": [], "geometry_source": "", "dxf_source_file": None},
+        {"part_number": "BI-PEMSTUD", "description": "PEM stud", "quantity": 2,
+         "page_roles": ["bought_in"], "normalized_material": "BOUGHT_IN"},
+        {"part_number": "STD PART", "description": "PEM stud", "quantity": 2,
+         "page_roles": ["bought_in"], "normalized_material": "BOUGHT_IN"},
+    ]
+    return {
+        "manufacturing_writeup": {"parts": [
+            {"part_number": "12120-01-04M", "description": "Bracket", "quantity": 1,
+             "normalized_material": "MILD_STEEL", "thicknesses_mm": [1.5],
+             "geometry_source": "dxf_flat_pattern"},
+            {"part_number": "BI-PEMSTUD", "description": "PEM stud", "quantity": 2,
+             "page_roles": ["bought_in"]},
+            {"part_number": "STD PART", "description": "PEM stud", "quantity": 2,
+             "page_roles": ["bought_in"]},
+        ]},
+        "estimate_summary": {
+            "part_estimates": _pes,
+            "canonical_route_shadow": {"mode": "cutover", "decisions": [], "nodes": [
+                {"part_number": "12120-01-04M", "kind": "leaf", "qty_per_unit": 1.0,
+                 "evidence": {}},
+                {"part_number": "STD PART", "kind": "bought_in", "qty_per_unit": 4.0,
+                 "description": "PEM stud", "evidence": {"raw_aliases": ["BI-PEMSTUD"]}},
+                {"part_number": "BI-KNOB", "kind": "bought_in", "qty_per_unit": 4.0,
+                 "description": "Knurled knob", "evidence": {}},
+            ]}},
+    }
+
+
+def test_every_deliverable_describes_the_same_part_list():
+    """The Estimate sheet, both provenance tabs, the quote and the job report have to be
+    describing ONE job. They were reading three different lists, and the sheet's own —
+    the canonicalised one — was a local variable in populate_workbook, discarded the moment
+    the workbook was saved.
+
+    Canonicalising is not cosmetic. It merges recogniser-minted duplicates into the
+    drawing's own code, rolls sub-assembly multiplicity into every quantity, and ADDS
+    explicit bought-in BOM lines that never got a pricing record. So a bought-in the sheet
+    charges appeared on no other page, a duplicate appeared on every page but the sheet, and
+    quantities differed for anything below the first level. Totals were the visible end of
+    a mismatch that ran through all of the content."""
+    import wb_populate as W
+    from costed_facts import job_parts
+
+    _job = _diverging_job()
+    _sheet_list = W.canonicalise_part_estimates_for_workbook(
+        _job, _job["estimate_summary"]["part_estimates"])
+    _sheet = {str(p["part_number"]).upper() for p in _sheet_list}
+
+    # THE DIVERGENCE IS REAL, or this fixture proves nothing. The raw lists must differ
+    # from the sheet's before we assert that everything now agrees with it.
+    _raw = {str(p["part_number"]).upper()
+            for p in _job["manufacturing_writeup"]["parts"]}
+    ok(_raw != _sheet,
+       f"the drawing-record list must differ from the sheet's, got {sorted(_raw)}")
+    ok("BI-KNOB" in _sheet and "BI-KNOB" not in _raw,
+       "a canonical bought-in with no pricing record is on the sheet and nowhere else")
+
+    # populate_workbook publishes the sheet's list; from there every consumer reads it.
+    _job["estimate_summary"]["canonical_part_estimates"] = _sheet_list
+
+    eq({str(p["part_number"]).upper() for p in job_parts(_job)}, _sheet,
+       "the shared accessor must resolve to exactly the sheet's rows")
+
+    # ── every consumer, through its own entry point ────────────────────────────
+    from job_report_html import _extract_parts
+    from xlsx_output import _part_ests
+    for _label, _fn in (("job report HTML", _extract_parts),
+                        ("xlsx fallback writer", _part_ests)):
+        eq({str(p["part_number"]).upper() for p in _fn(_job)}, _sheet,
+           f"{_label} must name the same parts as the Estimate sheet")
+
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        _fail("openpyxl is required to verify the two provenance tabs")
+        return
+    from openpyxl import Workbook
+    from job_decision_report import add_decision_report_sheet
+    from estimation_report import add_provenance_sheet
+
+    wb = Workbook()
+    add_decision_report_sheet(wb, _job, {"job_number": "12120"})
+    ws = wb["Decision Report"]
+    _tab = {str(ws.cell(row=r, column=1).value).upper()
+            for r in range(6, ws.max_row + 1)
+            if ws.cell(row=r, column=1).value} & (_sheet | _raw)
+    eq(_tab, _sheet, "the Decision Report must name the same parts as the sheet")
+
+    wb2 = Workbook()
+    add_provenance_sheet(wb2, _job, {"job_number": "12120"})
+    ws2 = wb2["AI Provenance"]
+    _tab2 = {str(ws2.cell(row=r, column=1).value).upper()
+             for r in range(6, ws2.max_row + 1)
+             if ws2.cell(row=r, column=1).value} & (_sheet | _raw)
+    eq(_tab2, _sheet, "and so must AI Provenance")
+
+
+def test_the_shared_part_list_keeps_the_evidence_the_tabs_are_built_from():
+    """The canonical list is a COSTING record. The provenance columns — thickness source,
+    geometry source, DXF filename, material source — are built from the drawing record.
+    Switching the tabs to the canonical list without joining the two would have emptied
+    every "WHY" column on the sheets whose entire purpose is to answer why."""
+    from costed_facts import job_parts
+    import wb_populate as W
+
+    _job = _diverging_job()
+    _job["estimate_summary"]["canonical_part_estimates"] = \
+        W.canonicalise_part_estimates_for_workbook(
+            _job, _job["estimate_summary"]["part_estimates"])
+    _by_pn = {p["part_number"]: p for p in job_parts(_job)}
+
+    eq(_by_pn["12120-01-04M"].get("thicknesses_mm"), [1.5],
+       "the drawing record's evidence must survive the join")
+    eq(_by_pn["12120-01-04M"].get("geometry_source"), "dxf_flat_pattern",
+       "and so must its geometry provenance")
+    # Identity and multiplicity are the canonical answer, whatever the drawing row said.
+    eq(_by_pn["STD PART"].get("quantity"), 4.0,
+       "quantity is the rolled per-unit figure, not the BOM row's")
+    eq(_by_pn["12120-01-04M"].get("unit_total_cost_gbp"), 3.0,
+       "and the costed fields come through")
+
+    eq(_by_pn["12120-01-04M"].get("dxf_source_file"), None,
+       "an absent reading stays absent — the join invents nothing")
+
+    # A part with no drawing record at all still appears — it is on the sheet.
+    ok("BI-KNOB" in _by_pn, "a canonical bought-in with no drawing record is still a row")
+
+    # THE PUBLISHING STEP, checked structurally. Everything above proves the consumers read
+    # the canonical list once it is on the summary; only populate_workbook can put it there,
+    # and reaching that line needs the estimators' template and a live Excel. So this asserts
+    # the link exists rather than leaving the whole chain resting on an unverified write —
+    # the list was a discarded local for exactly as long as nothing looked.
+    import inspect
+    _src = inspect.getsource(W.populate_workbook)
+    ok("canonical_part_estimates" in _src,
+       "populate_workbook must publish the list it builds the sheet from")
+    ok(_src.index("canonicalise_part_estimates_for_workbook")
+       < _src.index("canonical_part_estimates"),
+       "and publish it AFTER canonicalising, or it publishes the pre-canonical list")
+
+    # WITH NO WORKBOOK there is no canonical list, and the engine's own is all there is.
+    # Without this the accessor would return nothing on a job that never reached Excel.
+    _nowb = _diverging_job()
+    eq({p["part_number"] for p in job_parts(_nowb)},
+       {"12120-01-04M", "BI-PEMSTUD", "STD PART"},
+       "with no workbook built, the engine's part estimates are the list")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -147,7 +147,11 @@ def _w(ws, widths):
         ws.column_dimensions[get_column_letter(i)].width = w
 
 # ── Data helpers ───────────────────────────────────────────────────────────────
-def _part_ests(summary): return (summary.get("estimate_summary") or {}).get("part_estimates") or []
+def _part_ests(summary):
+    # Same canonical list as the populated template and every other deliverable.
+    from costed_facts import job_parts
+    return job_parts(summary) or (
+        (summary.get("estimate_summary") or {}).get("part_estimates") or [])
 
 def _meta(summary):
     da = summary.get("document_analysis") or {}
