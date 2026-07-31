@@ -6163,5 +6163,57 @@ def estimate_part_offline_safe(part):
     return estimate_part(part, job_quantity=100)
 
 
+def test_a_reference_only_row_is_excluded_on_the_extract_path_too():
+    """The prose recogniser was guarded first, and 12120 still shipped BI-SCREENCABLE with
+    no recogniser message at all — the row arrived through the whole-document extract's own
+    `bom` list, a different door into the same mistake.
+
+    One predicate, two doors. The marker vocabulary is shared with is_reference_only rather
+    than restated, so a phrase added for one path covers both, and nothing here knows the
+    word 'cable' — a rule that did would need extending for the next screen, monitor arm or
+    customer bracket somebody draws for reference.
+    """
+    from llm_full_extract import normalize_job
+    from bought_in_recogniser import bom_row_is_reference_only
+
+    # Disclaimed on the drawing's own notes, and disclaimed in the row's own text.
+    ok(bom_row_is_reference_only("Screen Cable", "", "SCREEN & CABLE SHOWN FOR REFERENCE"),
+       "a row the notes disclaim is not supplied")
+    ok(bom_row_is_reference_only("Monitor Arm", "by others", ""),
+       "nor is one whose own row text says who supplies it")
+    ok(not bom_row_is_reference_only("Power Cable", "", "SUPPLY 1x POWER CABLE"),
+       "and a cable the drawing asks for IS supplied — the rule is about scope, not cables")
+
+    _job = {"drawing_info": {"notes": ["1. SCREEN & CABLE SHOWN FOR REFERENCE",
+                                       "2. FIT 4x M4 THUMB SCREW"]},
+            "bom": [
+                {"part_number": "BI-SCREENCABLE", "description": "Screen Cable", "qty": 1},
+                {"part_number": "THUM620", "description": "M4x10mm Mushroom Thumbscrew",
+                 "qty": 4},
+                {"part_number": "BI-MONARM", "description": "Monitor Arm",
+                 "comments": "by others", "qty": 1},
+                {"part_number": "BI-PWRCABLE", "description": "Power Cable", "qty": 1},
+            ]}
+    normalize_job(_job)
+    _kept = [p["part_number"] for p in _job["parts"]]
+
+    ok("BI-SCREENCABLE" not in _kept,
+       f"the reference-only cable must not become a supplied part, got {_kept}")
+    ok("BI-MONARM" not in _kept, f"nor the monitor arm supplied by others, got {_kept}")
+
+    # A GENUINELY SUPPLIED CABLE STAYS. Without this the fixture would pass just as well
+    # against a rule that dropped every cable, which is the failure mode to avoid.
+    ok("BI-PWRCABLE" in _kept, f"a supplied cable stays in the BOM, got {_kept}")
+    ok("THUM620" in _kept,
+       f"and the hardware in the very next note stays — a scope marker governs its own "
+       f"clause, not the page, got {_kept}")
+
+    # Excluded, not vanished: an estimator has to be able to see what was dropped and why.
+    ok(any("reference only" in str(w).lower() for w in (_job.get("warnings") or [])),
+       "the exclusion is recorded on the job rather than being silent")
+    ok(any("BI-SCREENCABLE" in str(w) for w in (_job.get("warnings") or [])),
+       "and it names the row it dropped")
+
+
 if __name__ == "__main__":
     sys.exit(main())

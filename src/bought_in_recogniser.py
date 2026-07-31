@@ -166,6 +166,33 @@ def _supply_segments(note_text: str) -> List[str]:
     return _out
 
 
+def bom_row_is_reference_only(description: Any, comments: Any = "",
+                              note_text: Any = "") -> bool:
+    """A BOM row the drawing DEPICTS but does not supply.
+
+    The prose recogniser was guarded first, and 12120 then shipped BI-SCREENCABLE anyway
+    with no recogniser message at all -- because the row reached the estimate through the
+    whole-document extract's own `bom` list, which is a different door into the same
+    mistake. One predicate, two doors: the marker vocabulary is shared with
+    is_reference_only rather than restated, so a phrase added for one path covers both.
+
+    Two ways a row qualifies. Its OWN text can carry the disclaimer, which is the common
+    case when the model transcribes "SCREEN & CABLE - SHOWN FOR REFERENCE" into a row's
+    description or comments. Or the drawing's notes can disclaim every mention of it, which
+    is the same test the prose path uses.
+
+    Deliberately NOT keyed on the word cable, or on any part name. A rule that knows about
+    cables would have to be extended for the next screen, monitor arm or customer bracket
+    somebody shows for reference.
+    """
+    _own = " ".join(str(x or "") for x in (description, comments)).strip()
+    if _own:
+        for _seg in _supply_segments(_own):
+            if any(_m in _seg for _m in _SUPPLY_EXCLUSION_MARKERS):
+                return True
+    return is_reference_only(description, note_text)
+
+
 def is_reference_only(phrase: str, note_text: str) -> bool:
     """True when every mention of `phrase` sits in a clause that disclaims supplying it.
 

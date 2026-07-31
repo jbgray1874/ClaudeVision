@@ -505,15 +505,42 @@ def normalize_job(job: Dict[str, Any]) -> Dict[str, Any]:
         return job
     if isinstance(job.get("parts"), list) and job["parts"]:
         return job                           # already in the shape the consumers want
+    # WHAT THE DRAWING SHOWS IS NOT WHAT WE SUPPLY -- AND THIS IS THE SECOND DOOR.
+    #
+    # The prose recogniser was guarded first, and 12120 still shipped BI-SCREENCABLE with no
+    # recogniser message at all: the row arrived through the whole-document extract's own
+    # `bom` list instead. Same mistake, different path, so the same predicate applies here
+    # rather than a second rule that knows about cables.
+    #
+    # The drawing's general notes are passed in as context, so a row whose description is
+    # disclaimed on the page is caught even when the row itself repeats none of the wording.
+    try:
+        from bought_in_recogniser import bom_row_is_reference_only as _ref_only
+    except Exception:                                   # pragma: no cover - import guard
+        _ref_only = None
+    _notes = " ".join(str(n) for n in ((job.get("drawing_info") or {}).get("notes") or []))
+
     parts: List[Dict[str, Any]] = []
     seen = set()
+    _excluded: List[str] = []
     for row in (job.get("bom") or []):
         p = project_row(row)
         if not p or p["part_number"].upper() in seen:
             continue
+        if _ref_only is not None and _ref_only(row.get("description"),
+                                               row.get("comments"), _notes):
+            _excluded.append(f"{p['part_number']} ({p.get('description') or ''})".strip())
+            continue
         seen.add(p["part_number"].upper())
         parts.append(p)
     job["parts"] = parts
+    if _excluded:
+        job.setdefault("warnings", []).append(
+            "BOM rows NOT taken as supplied parts — the drawing shows them and disclaims "
+            "supplying them (reference only / by others / customer supplied): "
+            + "; ".join(_excluded))
+        print(f"   [llm-extract] {len(_excluded)} BOM row(s) excluded as reference-only: "
+              f"{'; '.join(_excluded)}", flush=True)
     return job
 
 
