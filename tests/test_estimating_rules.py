@@ -6215,5 +6215,68 @@ def test_a_reference_only_row_is_excluded_on_the_extract_path_too():
        "and it names the row it dropped")
 
 
+def test_an_operation_the_engine_adds_records_where_it_came_from():
+    """STEP 0 OF THE ROUTE CUTOVER, and the reason it comes first.
+
+    operation_sources was written in exactly one place — the LLM route fold — so every
+    operation the deterministic reader, SolidWorks or the estimator itself concluded carried
+    no source at all. rank("") is 0 and llm_full_extract is 40, so ranked arbitration over
+    those claims would hand every contested operation to the model by default.
+
+    12120's own shadow measured the scale: thirteen handling decisions, tapping and one
+    welding all came out `unknown 0`. A third of the route with no provenance. Fixing that
+    after switching arbitration on would make the compiler look wrong when the missing thing
+    is underneath it.
+
+    This changes no number. Nothing reads operation_sources for costing — the route compiler
+    reads it in shadow, and the arbitration that follows at cutover.
+    """
+    from estimator import estimate_part, record_operation
+    from source_precedence import rank
+
+    _p = {"part_number": "X-01", "description": "BRACKET", "quantity": 1,
+          "normalized_material": "MILD STEEL", "normalized_thickness_mm": 1.5,
+          "material": "MILD STEEL", "thickness_mm": 1.5,
+          "normalized_geometry": {"blank_length_mm": 120, "blank_width_mm": 80,
+                                  "bend_count": 2, "cut_length_mm": 400, "hole_count": 3},
+          "bend_count": 2, "cut_length_mm": 400,
+          "manufacturing_interpretation": {"stock_form": "sheet",
+                                           "operations": ["welding"]},
+          "textual_operations": ["welding"]}
+    estimate_part(_p, job_quantity=100)
+    _src = _p.get("operation_sources") or {}
+
+    for _op in ("laser_cutting", "dress_welds"):
+        ok(_src.get(_op), f"the engine added '{_op}' and must record where it came from")
+        ok(rank(_src[_op]) > 0,
+           f"'{_op}' carries source '{_src.get(_op)}' which ranks 0 — arbitration cannot "
+           f"weigh a claim it cannot attribute")
+
+    # The RANKS have to mean something, not merely be non-zero. A weld the engine chained a
+    # dressing from is a rule, not a guess, and must outrank a bare inference.
+    ok(rank(_src["dress_welds"]) > rank(_src["laser_cutting"]),
+       f"a chained rule ({_src['dress_welds']}) outranks an inference "
+       f"({_src['laser_cutting']})")
+
+    # Gap-fill, never overwrite: a stronger reader that already attributed an operation
+    # keeps its attribution.
+    _q = {"operation_sources": {"folding": "dxf"}}
+    record_operation(_q, "folding", "inference")
+    eq(_q["operation_sources"]["folding"], "dxf",
+       "a measured attribution is not replaced by the engine's own guess")
+
+    # NO WRITER MAY BYPASS THE ONE WRITER. Seven call sites appended operations directly;
+    # converting six and missing one would leave exactly the hole this exists to close, and
+    # nothing would fail.
+    import os as _os, re as _re
+    _src_text = open(_os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "src", "estimator.py"), encoding="utf-8").read()
+    _bare = _re.findall(r'\["(?:textual|inferred)_operations"\]\s*\.append\(', _src_text)
+    ok(not _bare,
+       f"{len(_bare)} operation(s) are appended without going through record_operation, so "
+       f"they reach the route with no source — use record_operation instead")
+
+
 if __name__ == "__main__":
     sys.exit(main())

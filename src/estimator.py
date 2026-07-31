@@ -76,6 +76,35 @@ def _get_pricing_service():
         return None
 
 
+def record_operation(part: Dict[str, Any], op: str, source: str,
+                     *, inferred: bool = True) -> None:
+    """The only way this module puts an operation onto a part.
+
+    STEP 0 OF THE ROUTE CUTOVER, and the reason it comes first.
+    operation_sources was written in exactly one place -- the LLM route fold -- so every
+    operation the deterministic reader, SolidWorks, or the estimator itself concluded
+    carried NO source at all. rank("") is 0, and llm_full_extract is 40, so any arbitration
+    over those claims would silently hand every contested operation to the model.
+
+    12120's own shadow proves the scale: thirteen handling decisions, tapping, and one
+    welding all came out as `unknown 0`. That is a third of the route with no provenance,
+    and it has to be fixed BEFORE ranked arbitration decides anything, or the compiler will
+    look wrong when the data underneath it is what is missing.
+
+    This changes no number today. Nothing reads operation_sources for costing; it is read by
+    the route compiler in shadow, and by the arbitration that follows at cutover.
+    """
+    _o = str(op or "").strip().lower()
+    if not _o:
+        return
+    _key = "inferred_operations" if inferred else "textual_operations"
+    _ops = part.setdefault(_key, [])
+    if isinstance(_ops, list) and _o not in _ops:
+        _ops.append(_o)
+    # setdefault: a source already recorded by a stronger reader is never overwritten.
+    part.setdefault("operation_sources", {}).setdefault(_o, source)
+
+
 def _first(values: List[Any]) -> Any:
     return values[0] if values else None
 
@@ -2513,9 +2542,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if not _has_cut_op and cut_length_mm and cut_length_mm > 0 and not _section_no_dxf:
         if _mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS:
             ops = list(ops) + ["laser_cutting"]
-            part.setdefault("inferred_operations", [])
-            if "laser_cutting" not in part["inferred_operations"]:
-                part["inferred_operations"].append("laser_cutting")
+            record_operation(part, "laser_cutting", "inference")
     # Every fabricated part also needs handling/assembly time at the bench.
     if (_mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS) and "handling" not in ops:
         ops = list(ops) + ["handling"]
@@ -2595,9 +2622,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         and "dress_welds" not in ops
     ):
         ops = list(ops) + ["dress_welds"]
-        part.setdefault("inferred_operations", [])
-        if "dress_welds" not in part["inferred_operations"]:
-            part["inferred_operations"].append("dress_welds")
+        record_operation(part, "dress_welds", "override_rule")
 
     setup_times_min: Dict[str, float] = {}
     run_times_min: Dict[str, float] = {}
@@ -2622,9 +2647,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     _punch_hole_signal = int(max(holes or 0, pierces or 0))
     if (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
         ops = [o for o in ops if o != "laser_cutting"] + ["punch"]
-        part.setdefault("inferred_operations", [])
-        if "punch" not in part["inferred_operations"]:
-            part["inferred_operations"].append("punch")
+        record_operation(part, "punch", "inference")
 
     # Known peg-family panels carry a measured machine cycle time; force punch
     # (drop laser) so the calibrated time below replaces the collapsed hit model.
@@ -2633,9 +2656,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         ops = [o for o in ops if o != "laser_cutting"]
         if "punch" not in ops:
             ops = ops + ["punch"]
-        part.setdefault("inferred_operations", [])
-        if "punch" not in part["inferred_operations"]:
-            part["inferred_operations"].append("punch")
+        record_operation(part, "punch", "inference")
 
     if "laser_cutting" in ops:
         rule = LABOUR_RULES["laser_cutting"]
@@ -2708,9 +2729,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         )
         if _fold_evidence:
             ops = list(ops) + ["folding"]
-            part.setdefault("inferred_operations", [])
-            if "folding" not in part["inferred_operations"]:
-                part["inferred_operations"].append("folding")
+            record_operation(part, "folding", "inference")
 
     if "folding" in ops:
         rule = LABOUR_RULES["folding"]
@@ -3315,9 +3334,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     _existing_ops = list(_part_ops(part) or [])
     _cutting_ops = {"laser_cutting", "guillotine", "plasma_cutting", "waterjet"}
     if _is_sheet_metal and _has_blank and not any(op in _cutting_ops for op in _existing_ops):
-        part.setdefault("textual_operations", [])
-        if "laser_cutting" not in part["textual_operations"]:
-            part["textual_operations"] = ["laser_cutting"] + part["textual_operations"]
+        record_operation(part, "laser_cutting", "inference", inferred=False)
 
     op_set = {str(op).strip().lower() for op in _part_ops(part) if str(op).strip()}
     no_ops_except_handling = op_set <= {"handling"}
@@ -4597,7 +4614,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     continue
                 _existing = list(_p.get("textual_operations") or []) + list(_p.get("inferred_operations") or [])
                 if _coat_op not in _existing:
-                    _p.setdefault("inferred_operations", []).append(_coat_op)
+                    record_operation(_p, _coat_op, "drawing_deterministic")
                 if not _p.get("surface_finishes"):
                     _p["surface_finishes"] = list(_finishes)
             if debug:
