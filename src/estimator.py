@@ -43,8 +43,28 @@ def _get_pricing_service():
     """Return a shared PricingService, or None if it can't be constructed
     (e.g. DB unavailable). Cached; never raises into the estimate path."""
     global _PRICING_SERVICE_SINGLETON, _PRICING_SERVICE_FAILED
+    # SDI_OFFLINE MEANS OFFLINE, NOT "OFFLINE FOR learning_engine".
+    #
+    # The rules suite sets SDI_OFFLINE=1 before importing anything, and one module honoured
+    # it. Everything costing reached straight past it: estimate_part -> estimate_material ->
+    # _resolve_material_price -> PricingService -> SQL Server, and from there the xAI price
+    # lookup. Two fixtures that call estimate_part therefore made live database and LLM
+    # calls on any machine that could reach them -- fast where nothing is routable, minutes
+    # or an indefinite block on the SDI network, where pyodbc.connect has no timeout.
+    #
+    # A suite that dials production is not isolated, cannot run in CI, and makes every
+    # fixture depend on a server being up. That was already written down in
+    # test_the_rules_suite_touches_no_live_service; the guard it checks simply did not cover
+    # the path that spends money.
+    #
+    # Ordered after the singleton check on purpose: the guard exists to stop this process
+    # CONSTRUCTING a connection, not to stop it using a service it was explicitly handed.
+    # A fixture that injects a recording stub is testing what the caller passes, and must
+    # still get its stub -- offline means "do not dial out", not "do not cost".
     if _PRICING_SERVICE_SINGLETON is not None:
         return _PRICING_SERVICE_SINGLETON
+    if os.environ.get("SDI_OFFLINE"):
+        return None
     if _PRICING_SERVICE_FAILED:
         return None
     try:

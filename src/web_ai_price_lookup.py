@@ -241,6 +241,21 @@ def _call_anthropic_llm(prompt: str, model: str = "claude-sonnet-4-20250514") ->
         return None
 
 
+def _offline() -> bool:
+    """True when the process has declared itself offline.
+
+    The rules suite sets SDI_OFFLINE=1 before importing anything so that fixtures cannot
+    reach a live service. Exactly one module honoured it, and every outbound path in
+    costing went straight past -- including this one, which is a paid LLM call. A fixture
+    that prices a part was therefore billing real money on any machine with a key.
+
+    Guarded at the network primitives rather than at each of the four call sites
+    (pricing_service, note_scan, bay_rollup, probe_pipeline), so a fifth caller added later
+    inherits it instead of having to remember.
+    """
+    return bool(os.environ.get("SDI_OFFLINE"))
+
+
 def _call_xai_llm(
     prompt: str,
     *,
@@ -258,6 +273,8 @@ def _call_xai_llm(
     budget + lower reasoning effort + temperature 0 so the same notes prompt returns the
     same item list run-to-run (the reasoning trace, not sampling, was the instability).
     """
+    if _offline():
+        return None          # SDI_OFFLINE: no paid call from a fixture
     import urllib.request
     import urllib.error
     # Importing config runs its os.environ.setdefault(...) for the keys and carries
@@ -665,6 +682,19 @@ def lookup_web_ai_price(
         web_query (str)
         + source-specific fields
     """
+    if _offline():
+        # Same shape the exhausted-every-source path returns, so callers need no new branch.
+        return {
+            "found": False,
+            "source_type": "none",
+            "price_gbp": None,
+            "unit": None,
+            "confidence": 0.0,
+            "review_flag": True,
+            "review_reason": "SDI_OFFLINE is set - no catalogue, web or AI lookup was "
+                             "attempted. This is a test/offline run, not evidence that no "
+                             "price exists.",
+        }
     # 1. Catalogue URLs
     if catalogue_sources:
         result = _catalogue_lookup(catalogue_sources, spec)

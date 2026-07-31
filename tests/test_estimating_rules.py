@@ -6049,5 +6049,102 @@ def test_an_operation_already_present_still_gets_its_metadata():
        "and it acquires no scope either — it is not happening")
 
 
+def test_costing_a_part_reaches_no_live_service():
+    """test_the_rules_suite_touches_no_live_service has guarded exactly one module.
+
+    Everything that costs went straight past it: estimate_part -> estimate_material ->
+    _resolve_material_price -> PricingService -> SQL Server, and from there the xAI price
+    lookup. Two fixtures added this session call estimate_part four times each, so on a
+    machine that can reach those services the suite made live database and paid LLM calls —
+    minutes on the SDI network, and pyodbc.connect has no timeout at all, so it could block
+    indefinitely. On a machine where nothing is routable it failed instantly and looked fine.
+
+    A guard that only covers the module nobody was worried about is not a guard.
+    """
+    import os as _os
+    import estimator as _est
+    import web_ai_price_lookup as _web
+
+    eq(_os.environ.get("SDI_OFFLINE"), "1", "the suite declares itself offline")
+
+    # OBSERVE THE ATTEMPT, NOT THE RETURN VALUE.
+    #
+    # The first version of this fixture asserted _get_pricing_service() is None. On a
+    # machine where SQL is unreachable a REMOVED guard also returns None, so it proved the
+    # guard only where the guard does not matter — the exact environment-dependence this
+    # exists to remove, and its mutation passed clean.
+    import pricing_service as _ps
+    _attempts = []
+
+    class _Tripwire:
+        def __init__(self, *a, **k):
+            _attempts.append("constructed")
+
+    _real_cls, _saved_s, _saved_f = (_ps.PricingService,
+                                     _est._PRICING_SERVICE_SINGLETON,
+                                     _est._PRICING_SERVICE_FAILED)
+    try:
+        _ps.PricingService = _Tripwire
+        _est._PRICING_SERVICE_SINGLETON = None
+        _est._PRICING_SERVICE_FAILED = False
+        _got = _est._get_pricing_service()
+        eq(_attempts, [], "offline must not even ATTEMPT to construct a PricingService")
+        eq(_got, None, "and returns nothing rather than a connection")
+    finally:
+        _ps.PricingService = _real_cls
+        _est._PRICING_SERVICE_SINGLETON = _saved_s
+        _est._PRICING_SERVICE_FAILED = _saved_f
+
+    # The paid LLM call, guarded at the primitive rather than at each of its four callers
+    # (pricing_service, note_scan, bay_rollup, probe_pipeline) so a fifth inherits it.
+    # A key is set for the duration, or the function returns before reaching the network
+    # and the tripwire could never fire whether the guard existed or not.
+    import urllib.request as _ur
+    _calls = []
+
+    def _no_net(*a, **k):
+        _calls.append("dialled")
+        raise AssertionError("a fixture reached the network")
+
+    _real_open, _had_key = _ur.urlopen, _os.environ.get("XAI_API_KEY")
+    try:
+        _ur.urlopen = _no_net
+        _os.environ["XAI_API_KEY"] = "test-key-not-real"
+        eq(_web._call_xai_llm("price a bracket"), None, "no paid model call from a fixture")
+        eq(_calls, [], "and no request is made — the guard returns before the network")
+    finally:
+        _ur.urlopen = _real_open
+        if _had_key is None:
+            _os.environ.pop("XAI_API_KEY", None)
+        else:
+            _os.environ["XAI_API_KEY"] = _had_key
+    _r = _web.lookup_web_ai_price({"material": "MILD STEEL", "description": "M4 knob"})
+    eq(_r.get("found"), False, "and the lookup reports nothing found")
+    ok("SDI_OFFLINE" in str(_r.get("review_reason") or ""),
+       "saying WHY — an offline run is not evidence that no price exists, and a blank "
+       "price column that means 'we did not look' must not read as 'there is none'")
+
+    # THE CALLER. A part must still cost end-to-end offline, or the guard has simply
+    # broken costing instead of isolating it.
+    _p = {"part_number": "GUARD-01", "description": "BRACKET", "quantity": 1,
+          "normalized_material": "MILD STEEL", "normalized_thickness_mm": 1.5,
+          "material": "MILD STEEL", "thickness_mm": 1.5,
+          "normalized_geometry": {"blank_length_mm": 120, "blank_width_mm": 80,
+                                  "bend_count": 1, "cut_length_mm": 400},
+          "manufacturing_interpretation": {"stock_form": "sheet",
+                                           "operations": ["laser_cutting", "folding"]},
+          "textual_operations": ["laser_cutting", "folding"]}
+    _out = estimate_part_offline_safe(_p)
+    ok(_out is not None, "estimate_part still returns offline")
+    ok((_out.get("material_estimate") or {}).get("cost_per_part_gbp") is not None,
+       "and still prices from the configured rates rather than needing the database")
+
+
+def estimate_part_offline_safe(part):
+    """estimate_part, imported at call time so the module-level guard is already in force."""
+    from estimator import estimate_part
+    return estimate_part(part, job_quantity=100)
+
+
 if __name__ == "__main__":
     sys.exit(main())
