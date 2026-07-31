@@ -698,50 +698,27 @@ _CHAINED_FROM = {
     "dress_welds": "welding",
 }
 
-_SPURIOUS_OPS_BY_STOCK_FORM = {
-    # A TUBE HAS NO FLAT BLANK, SO IT IS NEITHER PUNCHED NOR PROFILE-LASERED.
-    # 2085's tubes carried laser_cutting, inherited from the shared assembly page the
-    # plate's route was read off. Nothing measured says either tube is laser-profiled --
-    # they are sawn to length and welded in -- and now that a routed operation reaches the
-    # labour block, that inherited op would have booked a laser cut on both of them.
-    # Dropped, and the drop is flagged by name where it happens, so if SDI ever profiles
-    # tube on a tube laser this is one line and the flag says which parts it affected.
-    # PUNCH ONLY. The cutting operations moved to _TUBE_OP_REMAP -- a tube is not
-    # profile-lasered but it IS cut to length, and dropping the op made the cut free.
-    # Putting a hole through a tube wall is not cutting it to length, so punch stays here.
-    "tube": {"punch", "punching"},
-    # A solid round bar has NO FLAT BLANK. It cannot be lasered, folded, punched,
-    # line-bent, guillotined or diamond-polished. It is cut (Robomac / Saw) and welded.
-    # 1310-02 STUD (8mm dia x 65) was carrying Laser £4.91 from the original misread
-    # that treated its DIAMETER as an 8mm sheet THICKNESS.
-    "wire": {
-        "laser", "laser_cutting", "laser_metal",
-        "fold", "folding",
-        "punch", "punching",
-        "linebend", "line_bend",
-        "guillotine",
-        "diamond_polish",
-    },
-}
-# Acrylic doesn't get punched either (laser or CNC cut, not punch press).
-_SPURIOUS_OPS_BY_MATERIAL = {
-    "acrylic": {"punch", "punching"},
-}
-
+# THE TABLES LIVE IN stock_form_rules SO THE ROUTE COMPILER READS THE SAME ONES.
+#
+# They were defined here, inside the legacy labour loop's reach, and the canonical cutover
+# replaced that loop entirely — so every rule below stopped being applied the moment the
+# cutover was switched on, silently, because a gate nobody asks reports nothing. Aliased
+# rather than moved so existing readers of these names keep working.
+from stock_form_rules import (  # noqa: E402
+    IMPOSSIBLE_OPS_BY_STOCK_FORM as _SPURIOUS_OPS_BY_STOCK_FORM,
+    IMPOSSIBLE_OPS_BY_MATERIAL as _SPURIOUS_OPS_BY_MATERIAL,
+    is_impossible_operation as _stock_form_forbids,
+)
 
 def _is_spurious_operation(op: str, stock_form: str, material: str = "") -> bool:
     """True if this operation is physically impossible for this stock form / material.
-    Note: fold/folding on tubes and acrylic is NOT spurious — it's remapped to the
-    correct WB operation (Tubebend / Linebend) by _map_operation, not dropped here."""
-    key = str(op).lower()
-    sf = str(stock_form or "").lower()
-    if key in _SPURIOUS_OPS_BY_STOCK_FORM.get(sf, set()):
-        return True
-    mat = str(material or "").lower()
-    for mat_key, bad in _SPURIOUS_OPS_BY_MATERIAL.items():
-        if mat_key in mat and key in bad:
-            return True
-    return False
+
+    Note: fold/folding on tubes and acrylic is NOT spurious — it's remapped to the correct
+    WB operation (Tubebend / Linebend) by _map_operation, not dropped here.
+
+    Kept as the legacy loop's entry point; the rules themselves are in stock_form_rules so
+    the route compiler decides from the same table rather than a copy of it."""
+    return _stock_form_forbids(op, stock_form, material)
 
 
 def _safe(v, default=None):
@@ -2542,11 +2519,15 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Diamond-polish gate: diamond_polish is spurious on powder-coated parts
     # (mutually exclusive finishes; boilerplate misfire). Build {pn -> finish is
     # powder} from the fuller record's normalized_finish.
+    # Read through finish_rules so this legacy gate and the compiler's canonical one cannot
+    # disagree about what "the drawing says powder" means. Also picks up surface_finishes,
+    # which this loop ignored — a part stating its powder finish only there read as
+    # unfinished, and kept a diamond polish under a coat it will never survive.
+    from finish_rules import finish_is_powder as _fin_is_powder, stated_finish as _stated_fin
     _finish_is_powder = {}
     for _mp in _mw_parts:
         _pn = str(_mp.get("part_number") or "")
-        _fin = str(_mp.get("normalized_finish") or "").upper()
-        _finish_is_powder[_pn] = "POWDER" in _fin
+        _finish_is_powder[_pn] = _fin_is_powder(_stated_fin(_mp))
 
     # ── LABOUR — GROUPED BY SETUP, NOT BY PART ──────────────────────────────
     # The WB books SETUP on every row (Fold 30min = £20.24, P.Coat 15min = £88.86,

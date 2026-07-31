@@ -7841,5 +7841,210 @@ def test_the_provenance_sheets_trace_every_part_to_a_sheet_row_and_a_decision():
     ok("RECONCILIATION" in _all2 and "41.44" in _all2,
        "and reconciles its own column against what Excel calculated")
 
+# ── stock form vs the canonical route — jobs 1310 (bar) and the acrylic family ───────
+def test_a_stock_form_gate_the_canonical_path_never_asks_is_not_a_gate():
+    """The physical-impossibility rules lived inside wb_populate's legacy labour loop. The
+    canonical cutover replaced that loop wholesale — `for pe in ([] if _canonical_cutover
+    else labour_parts)` — so every one of them stopped running the moment the cutover was
+    enabled, silently, because a gate nobody asks reports nothing.
+
+    A solid 8mm round bar came back out of the canonical path carrying a Laser (Metal) row:
+    the exact 1310-02 STUD defect (diameter read as sheet thickness) the wire rules were
+    written for. Acrylic came back punched.
+
+    Ruled out in the COMPILER, where route authority lives, as a not_applicable decision
+    carrying its reason — not dropped in the renderer, where a vanished line is
+    indistinguishable from one that was never read."""
+    from route_compiler import compile_job_route
+    import wb_populate as W
+
+    _parts = [
+        {"part_number": "1310-02", "description": "STUD 8mm DIA x 65",
+         "normalized_material": "MILD_STEEL", "quantity": 1,
+         "_bar_recognised": True, "wire_gauge_mm": 8.0, "wire_length_mm": 65.0},
+        {"part_number": "ACR-01", "description": "Acrylic face panel",
+         "normalized_material": "ACRYLIC", "quantity": 1},
+        {"part_number": "MS-01", "description": "Mild steel bracket",
+         "normalized_material": "MILD_STEEL", "quantity": 1},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "GA"},
+        "assemblies": [{"part_number": "GA", "children": [
+            {"part_number": "1310-02", "qty": 1}, {"part_number": "ACR-01", "qty": 1},
+            {"part_number": "MS-01", "qty": 1}]}],
+        "routes": [
+            {"operation": "laser_cutting", "part_numbers": ["1310-02"], "scope": "part"},
+            {"operation": "punch", "part_numbers": ["ACR-01"], "scope": "part"},
+            {"operation": "laser_cutting", "part_numbers": ["MS-01"], "scope": "part"},
+        ]}
+    _graph = compile_job_route(_parts, _extract)
+    _status = {(d["operation"], d["target_id"]): d for d in _graph["decisions"]}
+
+    eq(_status[("laser_cutting", "1310-02")]["status"], "not_applicable",
+       "a laser cannot profile a solid round bar")
+    ok("wire" in (_status[("laser_cutting", "1310-02")].get("reason") or ""),
+       "and the decision must carry why, or an estimator cannot tell it from a lost line")
+    eq(_status[("punch", "ACR-01")]["status"], "not_applicable",
+       "a punch press shatters acrylic")
+
+    # AND THE GATE MUST NOT SWALLOW REAL WORK. Without this the fixture would pass against
+    # a version that ruled out every operation it was shown.
+    eq(_status[("laser_cutting", "MS-01")]["status"], "required",
+       "a mild steel bracket is still lasered")
+
+    # END TO END: the decision has to reach the sheet, not just the graph. Asserting on the
+    # compiler alone proved nothing about what gets charged — the whole defect was a rule
+    # that was correct and never consulted.
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "mode": "cutover", "nodes": _graph["nodes"], "decisions": _graph["decisions"]}}}
+    _pes = [
+        {"part_number": "1310-02", "normalized_material": "MILD_STEEL", "quantity": 1,
+         "material_estimate": {"stock_form": "wire", "material": "MILD_STEEL"}},
+        {"part_number": "ACR-01", "normalized_material": "ACRYLIC", "quantity": 1,
+         "normalized_thickness_mm": 5.0,
+         "material_estimate": {"stock_form": "sheet", "material": "ACRYLIC"}},
+        {"part_number": "MS-01", "normalized_material": "MILD_STEEL", "quantity": 1,
+         "normalized_thickness_mm": 2.0,
+         "material_estimate": {"stock_form": "sheet", "material": "MILD_STEEL"}},
+    ]
+    _rows = W.canonical_labour_groups(_summary, _pes, order_qty=180)
+    _charged = {(g["wb_op"], tuple(g["parts"])) for g in _rows.values()}
+    ok(not any(pn == ("1310-02",) for _op, pn in _charged),
+       f"no row may charge the bar any flat-blank work, got {sorted(_charged)}")
+    ok(not any(op == "Punch" for op, _pn in _charged),
+       f"and none may punch the acrylic, got {sorted(_charged)}")
+    ok(("Laser (Metal)", ("MS-01",)) in _charged,
+       f"while the steel bracket is still lasered, got {sorted(_charged)}")
+
+
+def test_the_impossibility_rules_have_one_home():
+    """Two copies of these tables — one in the renderer, one in the compiler — is how one
+    of them goes quietly stale while both look maintained. wb_populate's legacy entry point
+    must resolve to the same rules the compiler decides from."""
+    import wb_populate as W
+    from stock_form_rules import (IMPOSSIBLE_OPS_BY_STOCK_FORM,
+                                  is_impossible_operation)
+
+    ok(W._SPURIOUS_OPS_BY_STOCK_FORM is IMPOSSIBLE_OPS_BY_STOCK_FORM,
+       "the renderer must read the shared table, not a copy of it")
+    eq(W._is_spurious_operation("laser_cutting", "wire", "MILD_STEEL"),
+       is_impossible_operation("laser_cutting", "wire", "MILD_STEEL"),
+       "and reach the same verdict as the compiler")
+
+    # A TUBE IS STILL CUT. The expensive half of this distinction: an over-broad entry here
+    # deleted 2085's tube cut entirely and costed both tubes as if they arrived at length.
+    ok(not is_impossible_operation("laser_cutting", "tube", "MILD_STEEL"),
+       "cutting a tube is redirected to the saw by the operation map, never deleted")
+    ok(is_impossible_operation("punch", "tube", "MILD_STEEL"),
+       "while a hole through a tube wall is not how it is cut to length")
+
+
+def test_a_stated_finish_outranks_the_specification_legend():
+    """The other half of the gates the cutover switched off, and the expensive half.
+
+    These packs carry a range-wide specification legend — "POWDER COATED STEEL" — that
+    applies to the customer's whole product family, not to this job. wb_populate's legacy
+    loop dropped powder from a part whose own drawing states a different finish, and dropped
+    diamond polish from a part that is powder coated. Under the canonical cutover a
+    lacquered timber panel came back with a P.Coat row and a powder-coated steel face came
+    back with a Diamond Polish row.
+
+    The part's own title block wins over the legend. Ruled out in the compiler, carrying the
+    stated finish as the reason."""
+    from route_compiler import compile_job_route
+    import wb_populate as W
+
+    _parts = [
+        {"part_number": "TMB-01", "description": "Birch ply panel",
+         "normalized_material": "MDF", "normalized_finish": "LACQUERED", "quantity": 1},
+        {"part_number": "MS-02", "description": "Steel face",
+         "normalized_material": "MILD_STEEL",
+         "normalized_finish": "POWDER COATED RAL9005", "quantity": 1},
+        {"part_number": "ACR-02", "description": "Acrylic edge lit",
+         "normalized_material": "ACRYLIC",
+         "normalized_finish": "DIAMOND POLISHED EDGES", "quantity": 1},
+        {"part_number": "PTR-01", "description": "Bracket",
+         "normalized_material": "MILD_STEEL",
+         "normalized_finish": "SEE ASSEMBLY", "quantity": 1},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "GA"},
+        "assemblies": [{"part_number": "GA", "children": [
+            {"part_number": p["part_number"], "qty": 1} for p in _parts]}],
+        "routes": [
+            {"operation": "powder_coating", "part_numbers": ["TMB-01"], "scope": "part"},
+            {"operation": "diamond_polish", "part_numbers": ["MS-02"], "scope": "part"},
+            {"operation": "diamond_polish", "part_numbers": ["ACR-02"], "scope": "part"},
+            {"operation": "powder_coating", "part_numbers": ["PTR-01"], "scope": "part"},
+        ]}
+    _d = {(x["operation"], x["target_id"]): x
+          for x in compile_job_route(_parts, _extract)["decisions"]}
+
+    eq(_d[("powder_coating", "TMB-01")]["status"], "not_applicable",
+       "a panel the drawing says is LACQUERED does not go through the powder booth")
+    ok("LACQUERED" in (_d[("powder_coating", "TMB-01")].get("reason") or ""),
+       "and the decision names the finish it read")
+    eq(_d[("diamond_polish", "MS-02")]["status"], "not_applicable",
+       "a polished edge does not survive a powder coat")
+
+    # THE RULE MUST NOT FIRE WHERE THE DRAWING SUPPORTS THE OPERATION, or it is not a gate,
+    # it is a delete. Both of these would fail against an over-broad version.
+    eq(_d[("diamond_polish", "ACR-02")]["status"], "required",
+       "a part whose stated finish IS a diamond polish keeps it")
+    # A finish that defers to another drawing states nothing about THIS part. Reading a
+    # pointer as a non-powder finish would strip powder off every part in a pack that
+    # specifies it once, on the GA.
+    eq(_d[("powder_coating", "PTR-01")]["status"], "required",
+       "'SEE ASSEMBLY' is a pointer, not a contradiction — it decides nothing here")
+
+    # END TO END, because the defect was never in the rule — it was that nothing asked it.
+    _summary = {"manufacturing_writeup": {"parts": _parts},
+                "estimate_summary": {"canonical_route_shadow": {
+                    "mode": "cutover",
+                    "nodes": [{"part_number": p["part_number"], "kind": "leaf",
+                               "qty_per_unit": 1.0, "evidence": {}} for p in _parts],
+                    "decisions": list(_d.values())}}}
+    _pes = [{"part_number": p["part_number"],
+             "normalized_material": p["normalized_material"],
+             "normalized_finish": p["normalized_finish"], "quantity": 1,
+             "normalized_thickness_mm": 3.0,
+             "material_estimate": {"stock_form": "sheet",
+                                   "material": p["normalized_material"]}}
+            for p in _parts]
+    _charged = {(g["wb_op"], tuple(g["parts"]))
+                for g in W.canonical_labour_groups(_summary, _pes, order_qty=100).values()}
+    # Asserted per OPERATION, not per part: the top assembly's Assemble/pack row names every
+    # part in the job and always will. Packing a lacquered panel is not coating it.
+    ok(not any(op == "P.Coat" and "TMB-01" in pn for op, pn in _charged),
+       f"no coating row may name the lacquered panel, got {sorted(_charged)}")
+    ok(not any(op == "Diamond Polish" and "MS-02" in pn for op, pn in _charged),
+       f"nor may a polish row name the powder-coated face, got {sorted(_charged)}")
+    ok(("Diamond Polish", ("ACR-02",)) in _charged,
+       f"while the acrylic keeps its polish, got {sorted(_charged)}")
+    ok(("P.Coat", ("PTR-01",)) in _charged,
+       f"and the pointer-finish bracket keeps its coat, got {sorted(_charged)}")
+
+
+def test_a_finish_stated_only_in_surface_finishes_is_still_stated():
+    """The legacy diamond-polish gate read normalized_finish alone. A part whose powder
+    finish was captured in surface_finishes read as unfinished, so the gate saw no powder
+    and left a diamond polish on a coat it will never survive. Both readers now resolve the
+    stated finish the same way."""
+    import wb_populate as W
+    from finish_rules import stated_finish, finish_is_powder, finish_contradiction
+
+    eq(stated_finish({"surface_finishes": ["Powder coated", "RAL 9005"]}),
+       "POWDER COATED RAL 9005", "surface_finishes is a statement of finish")
+    ok(finish_is_powder(stated_finish({"surface_finishes": ["Powder coated"]})),
+       "and must be recognised as powder")
+    # normalized_finish still wins when both are present.
+    eq(stated_finish({"normalized_finish": "Lacquered", "surface_finishes": ["Powder"]}),
+       "LACQUERED", "the normalised reading is preferred over the raw list")
+    # A blank finish decides nothing — absence of a reading is not a reading.
+    eq(finish_contradiction("powder_coating", ""), None,
+       "an unstated finish must not rule anything out")
+    ok(W._is_spurious_operation is not None, "the legacy entry point still exists")
+
+
 if __name__ == "__main__":
     sys.exit(main())

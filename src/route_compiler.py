@@ -1230,6 +1230,61 @@ def compile_job_route(
                 route_id=template.route_id,
             ))
 
+    # SOLID BAR AND ACRYLIC — the other two stock forms that cannot have work done to them.
+    #
+    # These rules already existed, inside wb_populate's legacy labour loop. The canonical
+    # cutover replaced that loop wholesale (`for pe in ([] if _canonical_cutover else
+    # labour_parts)`), so they stopped running the moment the cutover was switched on, and
+    # nothing failed — a gate nobody asks reports nothing. A solid 8mm round bar came back
+    # out of the canonical path carrying a Laser (Metal) row, which is precisely the misread
+    # (diameter taken for sheet thickness) the wire rules were written to catch.
+    #
+    # Expressed the same way the tube block above expresses it: a deterministic claim that
+    # the operation is NOT APPLICABLE, so the positive claim stays in the audit trail and
+    # the reason travels with the decision. A route line that simply vanishes is
+    # indistinguishable from one that was never read.
+    #
+    # The rules themselves are in stock_form_rules, read by both the compiler and the
+    # workbook renderer — a second copy here is how one of them goes quietly stale.
+    from stock_form_rules import impossibility_reason
+    from finish_rules import finish_contradiction, stated_finish
+    for event_id, event_claims in list(claims_by_event.items()):
+        template = event_claims[0]
+        if template.scope != "part":
+            continue
+        raw_part = raw.get(template.target_id) or {}
+        # A bar is recognised from its own drawing's bar schedule, upstream of costing, and
+        # only where no flat pattern was detected — a part with a flat blank is not a bar.
+        stock_form = "wire" if (
+            raw_part.get("_bar_recognised")
+            or raw_part.get("bar_schedule")
+        ) else ""
+        material = str(
+            raw_part.get("normalized_material") or raw_part.get("material") or "")
+        reason = impossibility_reason(template.operation, stock_form, material)
+        if not reason:
+            # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES.
+            #
+            # The other half of the gates the cutover switched off. These packs carry a
+            # range-wide specification legend that applies to the customer's whole product
+            # family, which is how a lacquered timber panel came back out of the canonical
+            # path with a P.Coat row and a powder-coated face with a Diamond Polish row.
+            # Fires only where the part's own finish is stated and unambiguous.
+            reason = finish_contradiction(
+                template.operation, stated_finish(raw_part))
+        if not reason:
+            continue
+        add_claim(event_id, make_claim(
+            template.operation, NOT_APPLICABLE, "drawing_deterministic",
+            subject_id=template.target_id,
+            target_id=template.target_id,
+            scope="part",
+            participants=[template.target_id],
+            sequence=template.sequence,
+            reason=reason,
+            route_id=template.route_id,
+        ))
+
     decisions = [
         arbitrate_event(event_id, claims)
         for event_id, claims in claims_by_event.items()
