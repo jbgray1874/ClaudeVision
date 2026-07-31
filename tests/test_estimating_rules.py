@@ -6124,6 +6124,23 @@ def test_costing_a_part_reaches_no_live_service():
        "saying WHY — an offline run is not evidence that no price exists, and a blank "
        "price column that means 'we did not look' must not read as 'there is none'")
 
+    # THE THIRD AND WIDEST PATH: the legacy connector factory, reached by
+    # _resolve_part_system_cost on every part estimate_part prices. It builds a SQL Server
+    # connector, an MS Access connector that opens a file on the estimating share, and a web
+    # connector. A mounted-but-slow share blocks with no timeout, which is what stopped this
+    # suite dead on the estimating machine while it finished in seconds where the network
+    # was simply absent.
+    import price_sources as _psrc
+    eq(_psrc.build_price_connectors(), {},
+       "offline builds no connector at all, so nothing can dial SQL, Access or the web")
+    _r2 = _psrc.get_best_price(
+        _psrc.PriceRequest(kind="part_system_cost", part_code="X", description="bracket"))
+    ok(not (_r2.get("selected") or {}).get("unit_price_gbp"),
+       "and no price is returned from a source that was never queried")
+    ok(_r2.get("audit_trail"),
+       "while the audit trail still says WHY — an offline run that found no price must not "
+       "read like a part with no price")
+
     # THE CALLER. A part must still cost end-to-end offline, or the guard has simply
     # broken costing instead of isolating it.
     _p = {"part_number": "GUARD-01", "description": "BRACKET", "quantity": 1,

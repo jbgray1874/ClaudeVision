@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+import os
 import config
 from source_connectors import AccessPriceConnector, SpreadsheetPriceConnector, SqlServerPriceConnector, WebPriceConnector
 
@@ -158,6 +159,22 @@ def _price_disagreement(usable: List[PriceCandidate]) -> Optional[Dict[str, Any]
 
 
 def build_price_connectors(config_map: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # SDI_OFFLINE: BUILD NOTHING THAT CAN DIAL OUT.
+    #
+    # This is the third and widest outbound path from costing, after the PricingService
+    # singleton and the xAI lookup. It constructs a SQL Server connector, an MS Access
+    # connector that opens a file on \\sdi-dc01\shareddata$, and a web connector -- and
+    # estimate_part reaches it through _resolve_part_system_cost on every part it prices.
+    # A share that is mounted but slow blocks with no timeout, which is what stopped the
+    # rules suite dead on the estimating machine while finishing in seconds anywhere the
+    # network was absent.
+    #
+    # Returning no connectors rather than a stub price: get_best_price then records
+    # "connector_not_configured" against every source in its audit trail and returns its own
+    # no-result. Nothing is invented, and the reason an offline run found no price is
+    # written down instead of looking like a price that does not exist.
+    if os.environ.get("SDI_OFFLINE"):
+        return {}
     cfg = config_map or config.PRICE_SOURCE_CONFIG
     connectors: Dict[str, Any] = {}
 
