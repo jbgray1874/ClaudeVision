@@ -7155,5 +7155,50 @@ def test_the_drill_row_keeps_the_rate_table_title_and_says_what_it_is():
        "the note is added to the description, never to the operation title")
 
 
+def test_two_names_for_one_department_are_one_operation():
+    """OP_NAME_MAP carries synonyms, so Assemble/pack (Metal) inverts to handling, assembly
+    AND assemble. The canonical workbook row declares engine_operations ['assembly']; the
+    part record carries 'handling'. Same bench work, two names for it.
+
+    Comparing the NAMES reported 12120's handling as work nobody charged for, while the
+    three PACM rows on the sheet were charging for exactly that. A false positive here is
+    not noise: it invites adding a handling row on top of the assembly/pack that already
+    contains it, and double-charging the bench.
+
+    An earlier attempt treated this as supersession — excusing handling wherever a canonical
+    assembly decision covered the part. That was a guess at the cause, it was a no-op in the
+    case its own fixture tested, and it would have excused a genuinely uncharged handling
+    operation on any part an assembly event touched. This fixture uses the row shape the
+    live run actually produced, so it cannot pass for the wrong reason.
+    """
+    from invariants import check_no_unpriced_operations_named as _chk
+    from costed_facts import _dept_to_engine_ops
+
+    _sibs = _dept_to_engine_ops().get("assemble/pack (metal)") or []
+    ok("handling" in _sibs and "assembly" in _sibs,
+       f"handling and assembly must be aliases of one department, got {_sibs}")
+
+    # THE ROW SHAPE THE CANONICAL RUN EMITS, verbatim from 12120's JSON.
+    _canonical = {
+        "workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                            "rows": [{"wb_operation": "Assemble/pack (Metal)",
+                                      "engine_operations": ["assembly"],
+                                      "qty_per_unit": 1.0}]},
+        "parts": [{"part_number": "P1", "textual_operations": ["handling"]}],
+    }
+    eq(_chk(_canonical), [],
+       "a part whose handling is charged under the assembly/pack department is not "
+       "'work nobody charged for' — the row and the part just name it differently")
+
+    # AND THE CHECK STILL DOES ITS JOB. Without this the fixture would pass against a
+    # version that reported nothing at all.
+    _with_gap = dict(_canonical, parts=[{"part_number": "P1",
+                                         "textual_operations": ["handling", "tapping"]}])
+    _v = _chk(_with_gap)
+    ok(_v, "an operation no department charged for is still reported")
+    eq(sorted((_v[0].get("detail") or {}).get("operations") or {}), ["tapping"],
+       "and only that one — the aliased pair must not be dragged back in")
+
+
 if __name__ == "__main__":
     sys.exit(main())

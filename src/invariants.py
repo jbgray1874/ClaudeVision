@@ -362,45 +362,42 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
                             "No costed operations could be resolved for this job, so nothing "
                             "can be compared against what the reports name.")
 
-    # AN OPERATION ABSORBED BY A CANONICAL EVENT IS NOT AN OPERATION NOBODY CHARGED FOR.
+    # ALIASES OF ONE DEPARTMENT ARE ONE OPERATION.
     #
-    # Under the canonical route the workbook prices DECISIONS, and a part-level `handling`
-    # claim is covered by the assembly/pack event that owns that part -- it is superseded,
-    # not lost. Reporting it as unpriced invites exactly the wrong correction: adding a
-    # handling row on top of the assembly/pack that already contains it, and double-charging
-    # the bench time.
+    # OP_NAME_MAP carries synonyms, so Assemble/pack (Metal) inverts to handling, assembly
+    # AND assemble. The canonical workbook row declares engine_operations ['assembly']; the
+    # part record carries 'handling'. Same bench work, two names for it -- and comparing the
+    # NAMES reported 12120's handling as work nobody charged for, while the three PACM rows
+    # on the sheet were charging for exactly that.
     #
-    # Only operations superseded by a REQUIRED canonical decision covering the same part are
-    # excused. An operation nobody decided is still reported, because that is the case this
-    # check exists for.
-    _absorbed: Dict[str, set] = {}
-    _canon = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
-              or summary.get("canonical_route_shadow") or {})
-    for _d in (_canon.get("decisions") or []):
-        if not isinstance(_d, dict) or str(_d.get("status") or "") != "required":
-            continue
-        _op = str(_d.get("operation") or "").strip().lower()
-        if not _op:
-            continue
-        for _pn in ([_d.get("target_id")] + list(_d.get("participants") or [])):
-            _k = str(_pn or "").strip().upper()
-            if _k:
-                _absorbed.setdefault(_k, set()).add(_op)
-
-    # What an assembly/pack event covers on a part: the bench work it IS.
-    _ABSORBED_BY_ASSEMBLY = {"assembly", "assemble", "handling", "packing", "pack"}
+    # A false positive here is not noise. It invites the wrong correction: adding a handling
+    # row on top of the assembly/pack that already contains it, and double-charging the
+    # bench. The comparison belongs at the department, which is what the rate table pays.
+    #
+    # An earlier attempt treated this as SUPERSESSION -- excusing handling wherever a
+    # canonical assembly decision covered the part. That was a guess at the cause, it was a
+    # no-op in the case its fixture tested, and it would have excused a genuinely uncharged
+    # handling operation on any part an assembly event touched. This is the actual cause,
+    # and it fixes every alias pair rather than one.
+    try:
+        from costed_facts import _dept_to_engine_ops
+        _siblings: Dict[str, set] = {}
+        for _ops in (_dept_to_engine_ops() or {}).values():
+            _low = {str(x).strip().lower() for x in _ops}
+            for _o in _low:
+                _siblings.setdefault(_o, set()).update(_low)
+    except Exception:
+        _siblings = {}
+    _covered = {str(o).strip().lower() for o in costed}
+    for _o in list(_covered):
+        _covered |= _siblings.get(_o, set())
 
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
         pn = str(p.get("part_number") or "?")
-        _here = _absorbed.get(pn.strip().upper(), set())
-        _covered_by_assembly = bool(_here & _ABSORBED_BY_ASSEMBLY)
         for op in (p.get("operations") or p.get("textual_operations") or []):
-            if not (isinstance(op, str) and op and op not in costed):
-                continue
-            if op.strip().lower() in _ABSORBED_BY_ASSEMBLY and _covered_by_assembly:
-                continue          # superseded by the canonical assembly/pack event
-            named.setdefault(op, []).append(pn)
+            if isinstance(op, str) and op and op.strip().lower() not in _covered:
+                named.setdefault(op, []).append(pn)
     if not named:
         return []
     return [_violation(
