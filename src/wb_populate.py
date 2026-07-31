@@ -272,6 +272,7 @@ OP_NAME_MAP = {
     "wet_spray":      "Wet Spray",
     "spray":          "Wet Spray",
     "bench_work":     "Manual labour (Metal)",
+    "hardware_insertion": "Manual labour (Metal)",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
     "roll":           "Roll",
@@ -784,6 +785,379 @@ def _is_timber(mat: str) -> bool:
     return any(k in m for k in _TIMBER_TOKENS)
 
 
+class CanonicalRouteUnavailable(RuntimeError):
+    """The authoritative route was requested but could not be compiled."""
+
+
+def canonical_route_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(summary, dict):
+        return {}
+    payload = (
+        (summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+        or summary.get("canonical_route_shadow")
+        or {}
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
+def canonical_route_cutover_enabled(summary: Dict[str, Any]) -> bool:
+    requested = bool(getattr(
+        config, "CANONICAL_ROUTE_WORKBOOK_CUTOVER", False))
+    if not requested:
+        return False
+    payload = canonical_route_payload(summary)
+    if not payload:
+        raise CanonicalRouteUnavailable(
+            "canonical route cutover is enabled but no compiled route is present")
+    if payload.get("compiler_error"):
+        raise CanonicalRouteUnavailable(
+            f"canonical route compiler failed: {payload.get('compiler_error')}")
+    if not isinstance(payload.get("decisions"), list):
+        raise CanonicalRouteUnavailable(
+            "canonical route cutover is enabled but decisions are missing")
+    return True
+
+
+def canonical_part_kinds(summary: Dict[str, Any]) -> Dict[str, str]:
+    """Part identity -> canonical hierarchy kind."""
+    out: Dict[str, str] = {}
+    for node in canonical_route_payload(summary).get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        part_number = str(node.get("part_number") or "").strip().upper()
+        kind = str(node.get("kind") or "").strip().lower()
+        if part_number and kind in {"leaf", "assembly", "bought_in"}:
+            out[part_number] = kind
+    return out
+
+
+def canonicalise_part_estimates_for_workbook(
+    summary: Dict[str, Any],
+    part_estimates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Apply canonical BOM identity and multiplicity without losing cost evidence."""
+    nodes = {
+        str(node.get("part_number") or "").strip().upper(): node
+        for node in canonical_route_payload(summary).get("nodes") or []
+        if isinstance(node, dict) and node.get("part_number")
+    }
+    aliases = {
+        str(alias).strip().upper(): identity
+        for identity, node in nodes.items()
+        for alias in ((node.get("evidence") or {}).get("raw_aliases") or [])
+        if str(alias).strip()
+    }
+    normalised: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for estimate in part_estimates or []:
+        if not isinstance(estimate, dict):
+            continue
+        source_id = str(estimate.get("part_number") or "").strip().upper()
+        identity = aliases.get(source_id, source_id)
+        if not identity:
+            continue
+        item = dict(estimate)
+        node = nodes.get(identity) or {}
+        if identity != source_id:
+            item["_canonical_source_part_number"] = source_id
+            item["part_number"] = identity
+        if node.get("qty_per_unit") is not None:
+            item["quantity"] = node.get("qty_per_unit")
+        if not item.get("description") and node.get("description"):
+            item["description"] = node.get("description")
+        if identity not in normalised:
+            normalised[identity] = item
+            order.append(identity)
+        else:
+            # Prefer the record that actually carries a price/material estimate; aliases
+            # exist to reconcile identity, never to discard the costed evidence.
+            old = normalised[identity]
+            old_score = sum(bool(old.get(key)) for key in (
+                "unit_cost_gbp", "unit_total_cost_gbp", "material_estimate"))
+            new_score = sum(bool(item.get(key)) for key in (
+                "unit_cost_gbp", "unit_total_cost_gbp", "material_estimate"))
+            if new_score > old_score:
+                normalised[identity] = item
+
+    # An explicit bought-in BOM line must remain visible even when no pricing record was
+    # created. It is safer as an unpriced estimator row than absent from the BOM.
+    for identity, node in nodes.items():
+        if node.get("kind") != "bought_in" or identity in normalised:
+            continue
+        normalised[identity] = {
+            "part_number": identity,
+            "description": node.get("description") or "",
+            "quantity": node.get("qty_per_unit") or 1,
+            "page_roles": ["bought_in"],
+            "material_estimate": {},
+            "_price_explicitly_withheld": True,
+            "review_flag": True,
+            "review_flags": [
+                "Explicit canonical BOM item has no pricing record; estimator to price."
+            ],
+        }
+        order.append(identity)
+
+    # A fabricated leaf in the explicit hierarchy cannot disappear merely because an
+    # upstream adapter failed to produce a cost record. Bought-ins are made visible above;
+    # fabricated leaves need geometry/material investigation and therefore block release.
+    payload = canonical_route_payload(summary)
+    existing_issues = {
+        (
+            str(issue.get("code") or ""),
+            str(issue.get("part_number") or "").strip().upper(),
+        )
+        for issue in (payload.get("issues") or [])
+        if isinstance(issue, dict)
+    }
+    for identity, node in nodes.items():
+        if (
+            node.get("kind") == "leaf"
+            and node.get("parents")
+            and identity not in normalised
+            and ("bom_leaf_without_estimate", identity) not in existing_issues
+        ):
+            payload.setdefault("issues", []).append({
+                "code": "bom_leaf_without_estimate",
+                "part_number": identity,
+                "description": node.get("description") or "",
+                "parents": list(node.get("parents") or []),
+                "message": (
+                    "An explicit fabricated BOM leaf has no estimate record and cannot "
+                    "be placed in a material block."
+                ),
+            })
+    return [normalised[identity] for identity in order]
+
+
+def _canonical_finish_signature(
+    identities: List[str],
+    estimates: Dict[str, Dict[str, Any]],
+    raw: Dict[str, Dict[str, Any]],
+) -> str:
+    """Stable finish/setup identity; different colours must not share a booth setup."""
+    values: List[str] = []
+    for identity in identities:
+        for record in (estimates.get(identity) or {}, raw.get(identity) or {}):
+            for key in (
+                "normalized_finish", "finish", "surface_finish",
+                "surface_finishes", "finish_general",
+            ):
+                value = record.get(key)
+                if isinstance(value, dict):
+                    value = value.get("description") or value.get("name") or value.get("value")
+                if isinstance(value, (list, tuple, set)):
+                    candidates = value
+                else:
+                    candidates = [value]
+                for candidate in candidates:
+                    text = re.sub(r"\s+", " ", str(candidate or "").strip()).upper()
+                    if text and text not in values:
+                        values.append(text)
+    return " | ".join(sorted(values)) or "FINISH-UNSPECIFIED"
+
+
+def _canonical_record_index(
+    summary: Dict[str, Any],
+    part_estimates: List[Dict[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    estimates = {
+        str(item.get("part_number") or "").strip().upper(): item
+        for item in (part_estimates or [])
+        if isinstance(item, dict) and item.get("part_number")
+    }
+    raw: Dict[str, Dict[str, Any]] = {}
+    for pool in (
+        summary.get("parts"),
+        (summary.get("manufacturing_writeup") or {}).get("parts"),
+    ):
+        if not isinstance(pool, list):
+            continue
+        for item in pool:
+            if not isinstance(item, dict):
+                continue
+            part_number = str(item.get("part_number") or "").strip().upper()
+            if part_number:
+                raw.setdefault(part_number, item)
+    return estimates, raw
+
+
+def canonical_labour_groups(
+    summary: Dict[str, Any],
+    part_estimates: List[Dict[str, Any]],
+    order_qty: int,
+    skipped_part_numbers: Any = (),
+    all_fabricated_are_wire: bool = False,
+) -> Dict[Any, Dict[str, Any]]:
+    """Render required OperationDecisions into workbook pricing groups.
+
+    Route authority stays in the compiler. This function may combine compatible part-level
+    decisions into one tooling setup, but it never creates an operation from a raw word or
+    a missing legacy cost. Assembly decisions remain one group per target event.
+    """
+    payload = canonical_route_payload(summary)
+    estimates, raw = _canonical_record_index(summary, part_estimates)
+    node_qty = {
+        str(node.get("part_number") or "").strip().upper():
+            (_safe(node.get("qty_per_unit"), 1) or 1)
+        for node in (payload.get("nodes") or [])
+        if isinstance(node, dict) and node.get("part_number")
+    }
+    skipped = {
+        str(item).strip().upper() for item in (skipped_part_numbers or [])
+        if str(item).strip()
+    }
+    tube_pns = tube_part_numbers(summary)
+    groups: Dict[Any, Dict[str, Any]] = {}
+
+    for decision in payload.get("decisions") or []:
+        if not isinstance(decision, dict) or decision.get("status") != "required":
+            continue
+        decision_id = str(decision.get("decision_id") or "").strip()
+        operation = str(decision.get("operation") or "").strip().lower()
+        target_id = str(decision.get("target_id") or "").strip().upper()
+        participants = [
+            str(item).strip().upper()
+            for item in (decision.get("participants") or [])
+            if str(item).strip()
+        ]
+        participants = list(dict.fromkeys(participants))
+        if not decision_id or not operation:
+            continue
+        if target_id in skipped or any(item in skipped for item in participants):
+            continue
+
+        candidate_ids = list(dict.fromkeys(
+            [target_id] + participants))
+        representative_id = next(
+            (item for item in candidate_ids if item in estimates), "")
+        pe = estimates.get(representative_id) or {}
+        raw_part = raw.get(representative_id) or {}
+        material = str(
+            pe.get("normalized_material")
+            or (pe.get("material_estimate") or {}).get("material")
+            or raw_part.get("normalized_material")
+            or ""
+        )
+        thickness = _safe(
+            pe.get("normalized_thickness_mm")
+            or (pe.get("material_estimate") or {}).get("thickness_mm"),
+            0,
+        ) or 0
+        stock_form = str(
+            (pe.get("material_estimate") or {}).get("stock_form") or ""
+        ).lower()
+        if not stock_form and representative_id in tube_pns:
+            stock_form = "tube"
+        is_acrylic = _is_board(material)
+        wb_op = _map_operation(operation, is_acrylic, stock_form)
+        if wb_op is None:
+            wb_op = operation
+        if (
+            wb_op == "Weld (CO2)"
+            and stock_form in {"wire", "bar"}
+            and all_fabricated_are_wire
+        ):
+            wb_op = "Spotweld"
+
+        scope = str(decision.get("scope") or "part").lower()
+        sequence = _safe(decision.get("sequence"))
+        qty = _safe(decision.get("qty_per_unit"), 1) or 1
+        if operation == "hardware_insertion":
+            key = ("canonical-event", decision_id)
+        elif operation == "powder_coating":
+            # One colour/booth setup can carry several separately identified coated
+            # objects. Different finishes remain separate setups.
+            finish_signature = _canonical_finish_signature(
+                candidate_ids, estimates, raw)
+            key = ("canonical-finish-setup", wb_op, finish_signature)
+        elif scope == "assembly":
+            key = ("canonical-event", decision_id)
+        elif wb_op == "Robomac":
+            key = ("canonical-event", decision_id)
+        else:
+            # Compatible leaf events share one tooling setup. Decision identities remain
+            # attached individually, so no event disappears in the grouping.
+            key = (
+                "canonical-setup", wb_op, material.upper(),
+                "%g" % thickness, "%g" % sequence if sequence is not None else "",
+            )
+
+        group = groups.setdefault(key, {
+            "wb_op": wb_op,
+            "material": material,
+            "thickness": thickness,
+            "group_key": key,
+            "qty": 0,
+            "bh": 0.0,
+            "parts": [],
+            "targets": [],
+            "bends": 0,
+            "holes": 0,
+            "engine_ops": [],
+            "decision_ids": [],
+            "canonical_route": True,
+            "assembly_scoped": scope == "assembly",
+            "route_sequence": sequence,
+        })
+        if decision_id not in group["decision_ids"]:
+            group["decision_ids"].append(decision_id)
+        if operation not in group["engine_ops"]:
+            group["engine_ops"].append(operation)
+        if target_id and target_id not in group["targets"]:
+            group["targets"].append(target_id)
+        for part_number in participants or ([target_id] if target_id else []):
+            if part_number and part_number not in group["parts"]:
+                group["parts"].append(part_number)
+        group["qty"] += qty
+        if sequence is not None:
+            group["route_sequence"] = (
+                sequence if group.get("route_sequence") is None
+                else min(float(group["route_sequence"]), sequence)
+            )
+
+        if operation == "hardware_insertion":
+            insert_count = sum(node_qty.get(item, 1) for item in participants)
+            group["qty"] = qty
+            group["bh"] += (
+                float(order_qty) * insert_count
+                * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
+            )
+            group["work_units"] = insert_count
+            continue
+
+        # Geometry-derived batch hours are valid for leaf events. Assembly work uses the
+        # department throughput because summing participant hours is the old over-count.
+        if scope == "part" and representative_id:
+            batch_hours = (
+                (estimates[representative_id].get("labour_estimate") or {})
+                .get("batch_hours") or {}
+            )
+            normalised_hours = {
+                str(name).strip().lower(): value
+                for name, value in batch_hours.items()
+            }
+            hours = _safe(normalised_hours.get(operation))
+            if hours and hours > 0:
+                group["bh"] += hours
+
+            geometry = estimates[representative_id].get("normalized_geometry") or {}
+            if operation == "folding":
+                group["bends"] += int(_safe(
+                    geometry.get("estimated_bend_line_count"), 0) or 0) * int(qty)
+            elif operation in {"hole_machining", "drilling", "punch"}:
+                group["holes"] += int(_safe(
+                    geometry.get("estimated_hole_count"), 0) or 0) * int(qty)
+
+    for group in groups.values():
+        group["decision_ids"] = sorted(set(group.get("decision_ids") or []))
+        group["decision_id"] = (
+            group["decision_ids"][0]
+            if len(group["decision_ids"]) == 1 else None
+        )
+    return groups
+
+
 def _is_tube(pe: Dict[str, Any]) -> bool:
     """A part is tube if its description/geometry indicates section/tube stock
     (no flat-pattern DXF; priced by length). Heuristic: 'tube' in desc, or the
@@ -953,7 +1327,11 @@ def _num_or_none(v: Any) -> Optional[float]:
     return f if f == f else None
 
 
-def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[str, Any]:
+def build_workbook_labour(
+    groups: Any,
+    skipped_part_numbers: Any = (),
+    canonical_mode: bool = False,
+) -> Dict[str, Any]:
     """The CANONICAL ROUTE RECORD: the labour rows the workbook accepted, each keyed to the
     sheet row it was written to.
 
@@ -973,8 +1351,12 @@ def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[s
     """
     _rows = [g for g in (groups.values() if isinstance(groups, dict) else (groups or []))
              if isinstance(g, dict) and g.get("workbook_row")]
+    _canonical = bool(canonical_mode) or (
+        bool(_rows) and all(g.get("canonical_route") for g in _rows)
+    )
     return {
-        "schema": "workbook_labour_rows.v2",
+        "schema": "workbook_labour_rows.v3" if _canonical else "workbook_labour_rows.v2",
+        "mode": "canonical" if _canonical else "legacy",
         "identity": ("route_group_id is stable across runs and template revisions; "
                      "workbook_row is the join key within THIS run's sheet."),
         "note": ("Labour rows as ACCEPTED by wb_populate, keyed to the sheet row each was "
@@ -991,6 +1373,8 @@ def build_workbook_labour(groups: Any, skipped_part_numbers: Any = ()) -> Dict[s
                 # key: that holds the mapped department name.
                 "engine_operations": list(g.get("engine_ops") or []),
                 "engine_operation": (list(g.get("engine_ops") or []) or [None])[0],
+                "decision_id": g.get("decision_id"),
+                "decision_ids": list(g.get("decision_ids") or []),
                 "material": g.get("material"),
                 "thickness_mm": g.get("thickness"),
                 "qty_per_unit": g.get("qty"),
@@ -1029,6 +1413,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         or summary.get("parts")
         or []
     )
+    _canonical_cutover = canonical_route_cutover_enabled(summary)
+    if _canonical_cutover:
+        pes = canonicalise_part_estimates_for_workbook(summary, list(pes))
+    _canonical_kinds = canonical_part_kinds(summary) if _canonical_cutover else {}
+    if _canonical_cutover:
+        canonical_route_payload(summary)["mode"] = "cutover"
+        _flag(
+            "CANONICAL BOM/ROUTE CUTOVER is active: hierarchy controls material placement "
+            "and required OperationDecisions are the only source of labour rows.",
+            flags,
+        )
 
     wb = openpyxl.load_workbook(tpl, data_only=False, keep_vba=False)
     if cm["estimate_sheet"] not in wb.sheetnames:
@@ -1073,6 +1468,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     wire_parts = []
     for pe in pes:
         pn = str(pe.get("part_number") or "").upper()
+        canonical_kind = _canonical_kinds.get(pn)
         me = pe.get("material_estimate") or {}
         stock_form = str(me.get("stock_form") or "").lower()
         rflags = [str(f).lower() for f in (me.get("reliability_flags") or [])]
@@ -1098,7 +1494,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             continue
 
         # 2. weldment/assembly parent — material carried by children, labour only
-        if "weldment_parent_material_suppressed" in rflags:
+        if canonical_kind == "assembly":
+            excluded.append(pe)
+            print(f"   [wb_populate] excluded canonical assembly parent: {pn} "
+                  "(material belongs to leaf children)")
+        elif "weldment_parent_material_suppressed" in rflags:
             weldment_parts.append(pe)
         elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
             # assembly rollup (e.g. 1453-GA-C kick plate ASSEMBLY, 1455-C-101 weldment):
@@ -2123,8 +2523,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Grouping these into one row UNDER-charges — the failure mode we cannot see.
     _PER_PART_OPS = {"Robomac"}
 
-    _groups = {}
-    for pe in labour_parts:
+    _groups = (
+        canonical_labour_groups(
+            summary,
+            list(pes),
+            order_qty,
+            skipped_part_numbers=_skip_pns,
+            all_fabricated_are_wire=_all_fabricated_are_wire,
+        )
+        if _canonical_cutover else {}
+    )
+    if _canonical_cutover:
+        _flag(
+            f"canonical route rendered {len(_groups)} labour pricing group(s); "
+            "the raw-route rescue and legacy per-part cost union were not consulted.",
+            flags,
+        )
+    for pe in ([] if _canonical_cutover else labour_parts):
         if str(pe.get("part_number") or "") in _skip_pns:
             continue   # phantom excluded from Sheet Steel — drop its ops too
         le = pe.get("labour_estimate") or {}
@@ -2309,7 +2724,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # come from bom_parts, which by now carry the reconciled quantities (self-clinch 1->4,
     # PEM added), so this books labour on the true insert count. Injected here — like the
     # Robomac row above — because the insert count is a BOM fact, not a per-part route op.
-    if _BOOK_MANM_INSERT_LABOUR and _MANM_INSERT_SECONDS_EACH > 0:
+    if (not _canonical_cutover
+            and _BOOK_MANM_INSERT_LABOUR and _MANM_INSERT_SECONDS_EACH > 0):
         _ins_tokens = [str(t).upper() for t in (_MANM_INSERT_PART_TOKENS or [])]
         _insert_count = 0
         _insert_parts: List[str] = []
@@ -2383,7 +2799,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # Today it is charged once per part. Whether that is wrong turns on what the
         # throughput rate MEANS -- assemblies per hour or parts per hour -- which is the
         # estimators' ruling about their own table, so the default only SAYS SO.
-        if g.get("assembly_scoped") and int(_safe(g.get("qty"), 1) or 1) > 1:
+        if (not g.get("canonical_route")
+                and g.get("assembly_scoped")
+                and int(_safe(g.get("qty"), 1) or 1) > 1):
             _was = int(_safe(g.get("qty"), 1) or 1)
             if _charge_once:
                 g["qty"] = assembly_scoped_qty(g)
@@ -2411,8 +2829,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # (When the parts themselves carry POWDER, they are coated individually before
         #  assembly and the per-part count is right — so this only applies to the
         #  assembly-level case.)
-        _qty = 1 if (wb_op in _PACK_OPS
-                     or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
+        if g.get("canonical_route"):
+            _qty = int(_safe(g.get("qty"), 1) or 1)
+        else:
+            _qty = 1 if (wb_op in _PACK_OPS
+                         or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
 
         _matx = str(g["material"] or "").replace("_", " ").strip()
         _spec = []
@@ -2536,7 +2957,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     # The canonical route record — built here, after the write loop, so every row carries
     # the sheet row it actually landed on. See build_workbook_labour for why that matters.
-    summary["workbook_labour"] = build_workbook_labour(_groups, _skip_pns)
+    summary["workbook_labour"] = build_workbook_labour(
+        _groups, _skip_pns, canonical_mode=_canonical_cutover)
 
     _flag(f"labour: {len(_groups)} grouped row(s) — setup is booked once per tooling group, "
           f"not once per part.", flags)
@@ -2662,6 +3084,57 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     _add("AI Provenance",
          ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier", "Review Flags"],
          prov_rows)
+
+    # The costing sheet shows only accepted required rows. These two review sheets preserve
+    # the full hierarchy and every route decision, including ruled-out and unverified work.
+    canonical = canonical_route_payload(summary)
+    if canonical:
+        bom_rows = []
+        for node in canonical.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            bom_rows.append([
+                node.get("part_number"),
+                node.get("description"),
+                node.get("kind"),
+                node.get("qty_per_unit"),
+                ", ".join(node.get("parents") or []),
+                ", ".join(
+                    f"{edge.get('part_number')} x{edge.get('qty')}"
+                    for edge in (node.get("children") or [])
+                    if isinstance(edge, dict)
+                ),
+            ])
+        _add(
+            "Canonical BOM",
+            ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children"],
+            bom_rows,
+        )
+
+        route_rows = []
+        for decision in canonical.get("decisions") or []:
+            if not isinstance(decision, dict):
+                continue
+            route_rows.append([
+                decision.get("sequence"),
+                decision.get("operation"),
+                decision.get("status"),
+                decision.get("target_id"),
+                decision.get("scope"),
+                decision.get("qty_per_unit"),
+                ", ".join(decision.get("participants") or []),
+                decision.get("source"),
+                decision.get("reason"),
+                decision.get("decision_id"),
+            ])
+        _add(
+            "Canonical Route",
+            [
+                "Seq", "Operation", "Status", "Target", "Scope", "Qty/unit",
+                "Participants", "Source", "Reason", "Decision ID",
+            ],
+            route_rows,
+        )
 
 
 # ── standalone test entry ──────────────────────────────────────────────────

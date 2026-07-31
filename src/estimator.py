@@ -3548,6 +3548,26 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # part and never copied here, so the record that carries the folding MONEY had no
         # idea the part was flat, and nothing downstream could compare the two.
         "native_flat_solid": part.get("native_flat_solid"),
+        # Preserve the evidence which explains the route on the costed record. This nested
+        # field is shadow-only during migration: no existing workbook consumer reads it, so
+        # adding it cannot alter a price or labour row.
+        "route_context": {
+            "textual_operations": list(part.get("textual_operations") or []),
+            "inferred_operations": list(part.get("inferred_operations") or []),
+            "operations": list(part.get("operations") or []),
+            "operation_sources": dict(part.get("operation_sources") or {}),
+            "operation_sequence": dict(part.get("operation_sequence") or {}),
+            "operation_scope": dict(part.get("operation_scope") or {}),
+            "operation_qty_per_unit": dict(
+                part.get("operation_qty_per_unit") or {}),
+            "operation_department_read": dict(
+                part.get("operation_department_read") or {}),
+            "operations_ruled_out": dict(part.get("operations_ruled_out") or {}),
+            "operation_ruling_sources": dict(
+                part.get("operation_ruling_sources") or {}),
+            "is_sub_assembly": bool(part.get("is_sub_assembly")),
+            "is_assembly_parent": bool(part.get("is_assembly_parent")),
+        },
         "cost_breakdown": {
             "material": {
                 "unit_material_mass_kg": material.get("unit_material_mass_kg"),
@@ -4854,8 +4874,37 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             for p in part_estimates
         ],
     }
+
+    # Compile the route in shadow mode. The workbook remains on its legacy path until the
+    # 2085 and 12120 projections agree and the cutover is explicitly enabled.
+    try:
+        from route_compiler import compile_job_route, project_priced_route
+        _route_graph = compile_job_route(
+            parts,
+            (summary or {}).get("llm_full_extract")
+            if isinstance(summary, dict) else {},
+        )
+        canonical_route_shadow = project_priced_route(
+            _route_graph, part_estimates)
+    except Exception as route_error:
+        # A shadow diagnostic must never turn an executable estimate into a fallback sheet.
+        # The failure is stamped for review and will become blocking before cutover.
+        canonical_route_shadow = {
+            "schema": "priced_route_shadow.v1",
+            "mode": "shadow",
+            "compiler_error": f"{type(route_error).__name__}: {route_error}",
+            "nodes": [],
+            "decisions": [],
+            "priced_route_rows": [],
+            "issues": [{
+                "code": "canonical_route_compiler_failed",
+                "message": f"{type(route_error).__name__}: {route_error}",
+            }],
+        }
+
     out_doc: Dict[str, Any] = {
         "part_estimates": part_estimates,
+        "canonical_route_shadow": canonical_route_shadow,
         "powder_coating_summary": powder_coating_summary,
         "estimate_policy_manifest": _build_estimate_policy_manifest(),
         "estimate_review_signals": _build_estimate_review_signals(part_estimates),

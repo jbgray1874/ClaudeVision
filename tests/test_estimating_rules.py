@@ -6316,6 +6316,752 @@ def test_an_operation_the_engine_adds_records_where_it_came_from():
     ok(not _bare,
        f"{len(_bare)} operation(s) are appended without going through record_operation, so "
        f"they reach the route with no source — use record_operation instead")
+def test_route_arbitration_is_ranked_but_metadata_is_gap_filled():
+    """Status and metadata are different questions. A strong source can confirm an operation
+    while weaker, non-conflicting route evidence supplies its assembly scope and sequence."""
+    from route_compiler import (
+        REQUIRED, RULED_OUT, UNVERIFIED, arbitrate_event, make_claim,
+    )
+
+    _strong = make_claim(
+        "welding", REQUIRED, "solidworks_api", "101", "101",
+        participants=["02M", "03M"], reason="native feature confirms weld")
+    _route = make_claim(
+        "welding", REQUIRED, "inference", "101", "101",
+        scope="assembly", participants=["02M", "03M"], qty_per_unit=1,
+        sequence=40, reason="weld upstand to base", route_id="route:weld-101")
+    _decision = arbitrate_event("decision:weld-101", [_strong, _route])
+
+    eq(_decision.status, REQUIRED, "strong measured positive claim decides status")
+    eq(_decision.source, "solidworks_api", "the status source remains the strong source")
+    eq(_decision.scope, "assembly", "missing scope is filled from compatible route evidence")
+    eq(_decision.sequence, 40.0, "missing sequence is filled independently")
+    eq(_decision.qty_per_unit, 1.0, "assembly multiplicity comes from the route")
+    eq(_decision.participants, ["02M", "03M"],
+       "participants describe work without multiplying it")
+
+    _yes = make_claim("folding", REQUIRED, "dxf", "04M", "04M", scope="part")
+    _no = make_claim("folding", RULED_OUT, "dxf", "04M", "04M", scope="part",
+                     reason="zero measured bend lines")
+    _conflict = arbitrate_event("decision:fold-04m", [_yes, _no])
+    eq(_conflict.status, UNVERIFIED, "equal-rank disagreement must be explicit")
+    eq(_conflict.qty_per_unit, None, "unverified work receives no invented quantity")
+    ok(any(c.get("field") == "status" for c in _conflict.conflicts),
+       "the conflict remains auditable")
+
+    _weak_yes = make_claim("folding", REQUIRED, "inference", "04M", "04M")
+    _measured_no = make_claim("folding", RULED_OUT, "dxf", "04M", "04M",
+                              reason="DXF measured zero bend lines")
+    _ruled = arbitrate_event("decision:fold-04m", [_weak_yes, _measured_no])
+    eq(_ruled.status, RULED_OUT, "measured negative evidence outranks inference")
+    eq(_ruled.qty_per_unit, None, "ruled-out work has no quantity")
+
+
+def test_12120_job_route_is_one_event_per_assembly_not_per_part():
+    """One weld targets 101, participant count is not quantity, assembly parents do not
+    regain leaf operations, and a DXF ruling survives the LLM route."""
+    from route_compiler import (
+        NOT_APPLICABLE, REQUIRED, RULED_OUT, compile_job_route,
+        project_priced_route,
+    )
+
+    _parts = [
+        {"part_number": "12120-01-101", "description": "STAND WELD ASSY",
+         "is_sub_assembly": True, "is_assembly_parent": True,
+         "textual_operations": ["laser_cutting", "folding"],
+         "operation_sources": {"laser_cutting": "inference", "folding": "inference"}},
+        {"part_number": "12120-01-103", "description": "SCREEN MOUNTING BRACKET",
+         "is_sub_assembly": True, "is_assembly_parent": True,
+         "textual_operations": ["laser_cutting"],
+         "operation_sources": {"laser_cutting": "inference"}},
+        {"part_number": "12120-01-01M"},
+        {"part_number": "12120-01-02M", "textual_operations": ["welding"]},
+        {"part_number": "12120-01-03M", "textual_operations": ["welding"]},
+        {"part_number": "12120-01-04M",
+         "operations_ruled_out": {"folding": "DXF measured zero bend lines"},
+         "operation_ruling_sources": {"folding": "dxf"}},
+        {"part_number": "12120-01-08M"},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "12120-01-GA"},
+        "assemblies": [
+            {"part_number": "12120-01-GA", "children": [
+                {"part_number": "12120-01-101", "qty": 1},
+                {"part_number": "12120-01-103", "qty": 1},
+                {"part_number": "12120-01-04M", "qty": 1},
+                {"part_number": "12120-01-08M", "qty": 1},
+            ]},
+            {"part_number": "12120-01-101", "children": [
+                {"part_number": "12120-01-02M", "qty": 1},
+                {"part_number": "12120-01-03M", "qty": 1},
+            ]},
+            {"part_number": "12120-01-103", "children": [
+                {"part_number": "12120-01-01M", "qty": 1},
+            ]},
+        ],
+        "routes": [
+            {"operation": "welding", "sequence": 40,
+             "part_numbers": ["12120-01-02M", "12120-01-03M"],
+             "scope": "assembly", "qty_per_unit": 1, "inferred": True},
+            {"operation": "folding", "sequence": 30,
+             "part_numbers": ["12120-01-04M"],
+             "scope": "part", "qty_per_unit": 1, "inferred": True},
+            {"operation": "powder_coating", "sequence": 50,
+             "part_numbers": [
+                 "12120-01-01M", "12120-01-04M", "12120-01-08M",
+                 "12120-01-101", "12120-01-103"],
+             "scope": "assembly", "qty_per_unit": 1, "inferred": True},
+        ],
+    }
+
+    _graph = compile_job_route(_parts, _extract)
+    _decisions = _graph["decisions"]
+    _welds = [d for d in _decisions
+              if d["operation"] == "welding" and d["status"] == REQUIRED]
+    eq(len(_welds), 1, "two participating parts compile to one welding event")
+    eq(_welds[0]["target_id"], "12120-01-101", "the hierarchy owns the weld")
+    eq(_welds[0]["participants"], ["12120-01-02M", "12120-01-03M"],
+       "both children remain visible on that event")
+    eq(_welds[0]["qty_per_unit"], 1.0,
+       "two participants do not become two welding charges")
+
+    _parent_leaf = [
+        d for d in _decisions
+        if d["target_id"] in ("12120-01-101", "12120-01-103")
+        and d["operation"] in ("laser_cutting", "folding")
+    ]
+    ok(_parent_leaf, "raw parent claims remain auditable")
+    ok(all(d["status"] == NOT_APPLICABLE for d in _parent_leaf),
+       "hierarchy rules them out instead of deleting or costing them")
+
+    _fold_04 = [d for d in _decisions
+                if d["target_id"] == "12120-01-04M"
+                and d["operation"] == "folding"]
+    eq(len(_fold_04), 1, "inferred and measured fold claims arbitrate once")
+    eq(_fold_04[0]["status"], RULED_OUT, "DXF ruling survives the route fold")
+    eq(_fold_04[0]["qty_per_unit"], None, "the ruled-out fold has no multiplicity")
+
+    _powder_targets = sorted(
+        d["target_id"] for d in _decisions
+        if d["operation"] == "powder_coating" and d["status"] == REQUIRED)
+    eq(_powder_targets, [
+        "12120-01-04M", "12120-01-08M", "12120-01-101", "12120-01-103"],
+       "assemblies and standalone leaves are distinct without coating 01M twice")
+
+    _estimates = [
+        {"part_number": "12120-01-02M",
+         "labour_estimate": {"costs_gbp": {"welding": 0.50}}},
+        {"part_number": "12120-01-03M",
+         "labour_estimate": {"costs_gbp": {"welding": 0.50}}},
+        {"part_number": "12120-01-101",
+         "labour_estimate": {"costs_gbp": {"laser_cutting": 2.00}}},
+    ]
+    _shadow = project_priced_route(_graph, _estimates)
+    _weld_rows = [r for r in _shadow["priced_route_rows"]
+                  if r["operation"] == "welding"]
+    eq(len(_weld_rows), 1, "one decision produces one shadow weld row")
+    eq(_weld_rows[0]["qty_per_unit"], 1.0, "projection keeps route multiplicity")
+    ok(any(i.get("code") == "assembly_operation_costed_on_multiple_participants"
+           for i in _shadow["issues"]),
+       "legacy participant charging is exposed before cutover")
+    ok(any(i.get("code") == "forbidden_decision_priced"
+           for i in _shadow["issues"]),
+       "legacy Laser on a parent is identified as resurrection")
+
+
+def test_estimator_preserves_route_context_without_changing_legacy_fields():
+    """The costed record retains route evidence in a nested shadow field."""
+    from estimator import estimate_part
+
+    _part = {
+        "part_number": "TEST-01M",
+        "normalized_material": "MILD_STEEL",
+        "normalized_thickness_mm": 1.5,
+        "overall_length_mm": 100,
+        "overall_width_mm": 50,
+        "quantity": 1,
+        "textual_operations": ["folding"],
+        "inferred_operations": ["laser_cutting"],
+        "operation_sources": {"folding": "drawing_deterministic",
+                              "laser_cutting": "inference"},
+        "operation_scope": {"folding": "part"},
+        "operation_sequence": {"folding": 30},
+        "operation_qty_per_unit": {"folding": 1},
+        "operations_ruled_out": {"punch": "DXF measured no punched features"},
+        "operation_ruling_sources": {"punch": "dxf"},
+        "manufacturing_features": {"bend_count": 1},
+        "geometry_rollup": {"estimated_cut_length_mm": 300.0},
+    }
+    _estimate = estimate_part(_part, job_quantity=180)
+    _context = _estimate.get("route_context") or {}
+    eq(_context.get("textual_operations"), _part["textual_operations"],
+       "costed record preserves required route names")
+    eq((_context.get("operation_scope") or {}).get("folding"), "part",
+       "scope reaches the costed record")
+    eq((_context.get("operation_sequence") or {}).get("folding"), 30,
+       "sequence reaches the costed record")
+    eq((_context.get("operations_ruled_out") or {}).get("punch"),
+       "DXF measured no punched features", "negative decisions reach the costed record")
+    ok("textual_operations" not in _estimate,
+       "legacy top-level fields remain untouched during shadow mode")
+
+
+def test_2085_legacy_route_compiles_to_one_assembly_event():
+    """Old cached extracts have no scope field. Hierarchy still makes one weld and one coat,
+    Dress inherits that weld event, and sheet-Laser text cannot profile tube stock."""
+    from route_compiler import NOT_APPLICABLE, REQUIRED, compile_job_route
+
+    _parts = [
+        {"part_number": "2085-01", "description": "BRACKET PLATE",
+         "textual_operations": ["powder_coating", "welding", "laser_cutting"],
+         "inferred_operations": ["dress_welds"]},
+        {"part_number": "2085-02", "description": "OUTER TUBE",
+         "section_stock": {"profile_form": "CHS"},
+         "textual_operations": [
+             "powder_coating", "tube_cut", "welding", "laser_cutting"],
+         "inferred_operations": ["dress_welds"]},
+        {"part_number": "2085-03", "description": "INNER TUBE",
+         "section_stock": {"profile_form": "CHS"},
+         "textual_operations": [
+             "powder_coating", "tube_cut", "welding", "laser_cutting"],
+         "inferred_operations": ["dress_welds"]},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "2085-GA"},
+        "assemblies": [{"part_number": "2085-GA", "children": [
+            {"part_number": "2085-01", "qty": 1},
+            {"part_number": "2085-02", "qty": 1},
+            {"part_number": "2085-03", "qty": 1},
+        ]}],
+        "routes": [
+            {"operation": "powder_coating", "sequence": 10,
+             "part_numbers": ["2085-01", "2085-02", "2085-03"],
+             "inferred": False},
+            {"operation": "tube_cut", "sequence": 10,
+             "part_numbers": ["2085-02", "2085-03"], "inferred": True},
+            {"operation": "laser_cutting", "sequence": 20,
+             "part_numbers": ["2085-01"], "inferred": True},
+            {"operation": "welding", "sequence": 30,
+             "part_numbers": ["2085-01", "2085-02", "2085-03"],
+             "inferred": True},
+        ],
+    }
+    _graph = compile_job_route(_parts, _extract)
+    _decisions = _graph["decisions"]
+
+    for _operation in ("welding", "powder_coating", "dress_welds"):
+        _events = [d for d in _decisions
+                   if d["operation"] == _operation and d["status"] == REQUIRED]
+        eq(len(_events), 1, f"{_operation} is one job event, not three part events")
+        eq(_events[0]["target_id"], "2085-GA", f"{_operation} belongs to the assembly")
+        eq(_events[0]["scope"], "assembly", f"{_operation} retains assembly scope")
+        eq(_events[0]["qty_per_unit"], 1.0, f"{_operation} occurs once per product")
+
+    _tube_lasers = [
+        d for d in _decisions
+        if d["operation"] == "laser_cutting"
+        and d["target_id"] in ("2085-02", "2085-03")
+    ]
+    eq(len(_tube_lasers), 2, "both stale tube-Laser claims remain auditable")
+    ok(all(d["status"] == NOT_APPLICABLE for d in _tube_lasers),
+       "tube stock routes to tube_cut rather than sheet Laser")
+    _tube_cuts = [
+        d for d in _decisions
+        if d["operation"] == "tube_cut" and d["status"] == REQUIRED
+    ]
+    eq(sorted(d["target_id"] for d in _tube_cuts), ["2085-02", "2085-03"],
+       "each tube retains its real cut event")
+
+
+def test_estimate_document_stamps_the_shadow_route_without_using_it_for_price():
+    """The real estimate_document call site runs the compiler and stamps its audit contract."""
+    from estimator import estimate_document
+
+    _part = {
+        "part_number": "TEST-02M",
+        "normalized_material": "MILD_STEEL",
+        "normalized_thickness_mm": 1.5,
+        "overall_length_mm": 80,
+        "overall_width_mm": 40,
+        "quantity": 1,
+        "textual_operations": ["laser_cutting"],
+        "geometry_rollup": {"estimated_cut_length_mm": 240.0},
+    }
+    _summary = {
+        "assumed_job_quantity": 180,
+        "llm_full_extract": {
+            "routes": [{
+                "operation": "laser_cutting", "part_numbers": ["TEST-02M"],
+                "scope": "part", "qty_per_unit": 1, "sequence": 10,
+                "inferred": True,
+            }],
+            "assemblies": [],
+        },
+    }
+    _estimate = estimate_document([_part], summary=_summary)
+    _shadow = _estimate.get("canonical_route_shadow") or {}
+    eq(_shadow.get("schema"), "priced_route_shadow.v1",
+       "estimate_document stamps the canonical shadow contract")
+    ok(not _shadow.get("compiler_error"), "the integration executes the real compiler")
+    eq(len(_shadow.get("priced_route_rows") or []), 1,
+       "one required decision projects to one shadow row")
+    ok(_estimate.get("part_estimates"),
+       "legacy part estimates remain the source of the live total during shadow mode")
+
+
+def test_route_shadow_invariant_reports_but_does_not_block_before_cutover():
+    """Shadow differences are loud but cannot alter a live quote before the switch."""
+    from invariants import check_canonical_route_shadow
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "schema": "priced_route_shadow.v1",
+        "mode": "shadow",
+        "decisions": [{
+            "decision_id": "decision:x", "operation": "laser_cutting",
+            "target_id": "101", "status": "not_applicable", "conflicts": []}],
+        "priced_route_rows": [],
+        "issues": [{
+            "code": "forbidden_decision_priced",
+            "decision_id": "decision:x", "operation": "laser_cutting"}],
+    }}}
+    _violations = check_canonical_route_shadow(_summary)
+    ok(_violations, "a resurrection discrepancy must be reported")
+    eq({v["severity"] for v in _violations}, {"warning"},
+       "shadow diagnostics do not change the firm-price gate before cutover")
+
+
+def test_hierarchy_quantities_and_pressed_hardware_become_canonical_route_facts():
+    from route_compiler import REQUIRED, compile_job_route
+
+    _parts = [
+        {"part_number": "ASSY", "description": "WELD ASSY"},
+        {"part_number": "PLATE", "description": "PLATE", "quantity": 1},
+        {"part_number": "BI-PEMSTUD", "description": "M4 THREADED PEM STUD",
+         "page_roles": ["bought_in"], "quantity": 2},
+        {"part_number": "BI-CLINCH", "description": "M4 SELF-CLINCH NUT",
+         "page_roles": ["bought_in"], "quantity": 4},
+    ]
+    _extract = {
+        "assemblies": [{"part_number": "ASSY", "children": [
+            {"part_number": "PLATE", "qty": 1},
+            {"part_number": "STD PART", "qty": 2},
+            {"part_number": "FIXING", "qty": 4},
+        ]}],
+        "parts": [
+            {"part_number": "STD PART", "description": "M4 THREADED PEM STUD",
+             "is_bought_in": True},
+            {"part_number": "FIXING", "description": "M4 SELF-CLINCH NUT",
+             "is_bought_in": True},
+        ],
+        "routes": [],
+    }
+    _graph = compile_job_route(_parts, _extract)
+    _nodes = {n["part_number"]: n for n in _graph["nodes"]}
+    eq(_nodes["ASSY"]["kind"], "assembly", "the parent is not a sheet part")
+    eq(_nodes["STD PART"]["kind"], "bought_in",
+       "explicit BOM evidence classifies hardware")
+    eq(_nodes["STD PART"]["qty_per_unit"], 2.0,
+       "hierarchy quantity beats a flat guess")
+    eq(_nodes["FIXING"]["qty_per_unit"], 4.0, "all child multiplicities survive")
+    eq(_nodes["STD PART"]["evidence"]["raw_aliases"], ["BI-PEMSTUD"],
+       "generated bought-in identities reconcile to the explicit BOM code")
+    _insert = [
+        d for d in _graph["decisions"]
+        if d["operation"] == "hardware_insertion" and d["status"] == REQUIRED
+    ]
+    eq(len(_insert), 1, "pressed hardware produces one assembly route event")
+    eq(_insert[0]["target_id"], "ASSY", "the assembly owns the insertion event")
+    eq(_insert[0]["participants"], ["FIXING", "STD PART"],
+       "the inserted BOM lines remain auditable")
+    eq(_insert[0]["qty_per_unit"], 1.0,
+       "six inserts do not become six assembly events")
+    ok(_insert[0]["sequence"] < 20,
+       "pressed hardware is routed before the folding stage")
+
+
+def test_canonical_workbook_groups_price_decisions_not_raw_route_words():
+    from route_compiler import compile_job_route, project_priced_route
+    from wb_populate import canonical_labour_groups
+
+    _parts = [
+        {"part_number": "ASSY", "description": "WELD ASSY",
+         "textual_operations": ["laser_cutting"]},
+        {"part_number": "P1", "description": "PLATE 1",
+         "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 1.5},
+        {"part_number": "P2", "description": "PLATE 2",
+         "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 1.5},
+        {"part_number": "PEM", "description": "M4 THREADED PEM STUD",
+         "page_roles": ["bought_in"], "quantity": 2},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "ASSY"},
+        "assemblies": [{"part_number": "ASSY", "children": [
+            {"part_number": "P1", "qty": 1},
+            {"part_number": "P2", "qty": 1},
+            {"part_number": "PEM", "qty": 2},
+        ]}],
+        "routes": [
+            {"operation": "laser_cutting", "sequence": 10, "scope": "part",
+             "part_numbers": ["P1", "P2"], "inferred": True},
+            {"operation": "welding", "sequence": 30, "scope": "assembly",
+             "part_numbers": ["P1", "P2"], "inferred": True},
+        ],
+    }
+    _estimates = [
+        {"part_number": "P1", "quantity": 1, "normalized_material": "MILD_STEEL",
+         "normalized_thickness_mm": 1.5,
+         "material_estimate": {"stock_form": "sheet"},
+         "labour_estimate": {"batch_hours": {"laser_cutting": 1.0}}},
+        {"part_number": "P2", "quantity": 1, "normalized_material": "MILD_STEEL",
+         "normalized_thickness_mm": 1.5,
+         "material_estimate": {"stock_form": "sheet"},
+         "labour_estimate": {"batch_hours": {"laser_cutting": 1.5}}},
+        {"part_number": "PEM", "quantity": 2, "page_roles": ["bought_in"],
+         "labour_estimate": {}},
+    ]
+    _graph = compile_job_route(_parts, _extract)
+    _shadow = project_priced_route(_graph, _estimates)
+    _summary = {
+        "parts": _parts,
+        "estimate_summary": {
+            "part_estimates": _estimates,
+            "canonical_route_shadow": _shadow,
+        },
+    }
+    _groups = canonical_labour_groups(_summary, _estimates, 180)
+    _laser = [g for g in _groups.values() if g["wb_op"] == "Laser (Metal)"]
+    eq(len(_laser), 1, "same-gauge leaf decisions share one tooling setup")
+    eq(_laser[0]["qty"], 2.0, "both required leaf events reach that setup")
+    eq(len(_laser[0]["decision_ids"]), 2,
+       "grouping retains both canonical identities")
+    _weld = [g for g in _groups.values() if g["wb_op"] == "Weld (CO2)"]
+    eq(len(_weld), 1, "assembly welding is one priced event")
+    eq(_weld[0]["qty"], 1.0, "participants do not multiply assembly welding")
+    eq(_weld[0]["bh"], 0.0,
+       "participant batch hours cannot leak into assembly pricing")
+    ok(not any(
+        g["wb_op"] == "Laser (Metal)" and "ASSY" in g.get("parts", [])
+        for g in _groups.values()
+    ), "the assembly parent's raw Laser word is not resurrected")
+    _insert = [
+        g for g in _groups.values()
+        if "hardware_insertion" in g.get("engine_ops", [])
+    ]
+    eq(len(_insert), 1, "pressed hardware is rendered from its decision")
+    eq(_insert[0]["qty"], 1.0, "insertion is one assembly event")
+    eq(round(_insert[0]["bh"], 4), 1.5,
+       "two inserts x 15 seconds x 180 units becomes 1.5 batch hours")
+
+
+def test_canonical_workbook_rows_carry_every_source_decision_exactly_once():
+    from wb_populate import build_workbook_labour
+
+    _groups = {
+        ("setup",): {
+            "workbook_row": 95,
+            "wb_op": "Laser (Metal)",
+            "material": "MILD_STEEL",
+            "thickness": 1.5,
+            "parts": ["P1", "P2"],
+            "group_key": ("setup",),
+            "engine_ops": ["laser_cutting"],
+            "qty": 2,
+            "canonical_route": True,
+            "decision_ids": ["decision:p1", "decision:p2"],
+        },
+    }
+    _record = build_workbook_labour(_groups)
+    eq(_record["schema"], "workbook_labour_rows.v3",
+       "canonical identity has an explicit schema")
+    eq(_record["mode"], "canonical", "the renderer records which authority it used")
+    eq(_record["rows"][0]["decision_ids"], ["decision:p1", "decision:p2"],
+       "shared setup does not erase either route decision")
+
+
+def test_cutover_invariants_block_missing_unverified_or_resurrected_decisions():
+    from invariants import check_canonical_route_shadow
+
+    _summary = {
+        "estimate_summary": {"canonical_route_shadow": {
+            "schema": "priced_route_shadow.v1",
+            "mode": "cutover",
+            "decisions": [
+                {"decision_id": "required", "operation": "welding",
+                 "target_id": "ASSY", "status": "required", "conflicts": []},
+                {"decision_id": "uncertain", "operation": "folding",
+                 "target_id": "P1", "status": "unverified",
+                 "conflicts": [{"field": "status"}]},
+                {"decision_id": "no", "operation": "laser_cutting",
+                 "target_id": "ASSY", "status": "not_applicable", "conflicts": []},
+            ],
+            "priced_route_rows": [
+                {"decision_id": "required", "operation": "welding"},
+            ],
+            "issues": [],
+        }},
+        "workbook_labour": {
+            "schema": "workbook_labour_rows.v3",
+            "mode": "canonical",
+            "rows": [{
+                "workbook_row": 95,
+                "decision_ids": ["no"],
+                "wb_operation": "Laser (Metal)",
+            }],
+        },
+    }
+    _violations = check_canonical_route_shadow(_summary)
+    eq({v["severity"] for v in _violations}, {"blocking"},
+       "cutover discrepancies cannot be advisory")
+    _codes = {v["code"] for v in _violations}
+    ok("canonical_route_decision_unverified" in _codes,
+       "equal-rank uncertainty blocks automatic pricing")
+    ok("canonical_non_required_decision_priced" in _codes,
+       "a ruled-out event cannot reach the workbook")
+    ok("canonical_required_decision_not_rendered" in _codes,
+       "required work cannot disappear during rendering")
+
+
+def test_canonical_cutover_never_falls_back_to_the_legacy_workbook_builder():
+    from pathlib import Path
+    _root = Path(__file__).resolve().parents[1]
+    _main = (_root / "src" / "main.py").read_text(encoding="utf-8")
+    ok("NO fallback workbook written: canonical route cutover is" in _main,
+       "a compiler failure must fail closed")
+    ok("if _canonical_cutover:" in _main,
+       "the fallback guard reads the real production switch")
+    _wb = (_root / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    ok("for pe in ([] if _canonical_cutover else labour_parts):" in _wb,
+       "canonical mode cannot execute the raw-route rescue loop")
+
+
+def test_canonical_bom_identity_quantity_and_missing_lines_reach_the_workbook():
+    from wb_populate import canonicalise_part_estimates_for_workbook
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "nodes": [
+            {
+                "part_number": "GA", "description": "TOP", "kind": "assembly",
+                "qty_per_unit": 1, "parents": [], "children": [
+                    {"part_number": "FIXINGTBC", "qty": 2},
+                    {"part_number": "THUM620", "qty": 4},
+                    {"part_number": "PLATE", "qty": 1},
+                    {"part_number": "MISSING-LEAF", "qty": 1},
+                ], "evidence": {},
+            },
+            {
+                "part_number": "FIXINGTBC", "description": "M4 KNURLED KNOB",
+                "kind": "bought_in", "qty_per_unit": 2, "parents": ["GA"],
+                "children": [], "evidence": {"raw_aliases": ["BI-KNURLEDKNOB"]},
+            },
+            {
+                "part_number": "THUM620", "description": "M4 THUMBSCREW",
+                "kind": "bought_in", "qty_per_unit": 4, "parents": ["GA"],
+                "children": [], "evidence": {},
+            },
+            {
+                "part_number": "PLATE", "description": "PLATE",
+                "kind": "leaf", "qty_per_unit": 1, "parents": ["GA"],
+                "children": [], "evidence": {},
+            },
+            {
+                "part_number": "MISSING-LEAF", "description": "MISSING PLATE",
+                "kind": "leaf", "qty_per_unit": 1, "parents": ["GA"],
+                "children": [], "evidence": {},
+            },
+        ],
+        "decisions": [],
+        "issues": [],
+    }}}
+    _estimates = [
+        {
+            "part_number": "BI-KNURLEDKNOB", "description": "KNOB",
+            "quantity": 1, "unit_cost_gbp": 1.25,
+            "material_estimate": {"stock_form": "bought_in"},
+        },
+        {
+            "part_number": "PLATE", "description": "PLATE", "quantity": 1,
+            "material_estimate": {"stock_form": "sheet"},
+        },
+    ]
+    _normalised = canonicalise_part_estimates_for_workbook(_summary, _estimates)
+    _by_id = {item["part_number"]: item for item in _normalised}
+    eq(_by_id["FIXINGTBC"]["quantity"], 2,
+       "explicit hierarchy quantity replaces the generated alias guess")
+    eq(_by_id["FIXINGTBC"]["unit_cost_gbp"], 1.25,
+       "identity reconciliation retains the priced evidence")
+    eq(_by_id["THUM620"]["quantity"], 4,
+       "an explicit unpriced hardware line remains visible")
+    ok(_by_id["THUM620"]["_price_explicitly_withheld"],
+       "missing hardware pricing is explicit rather than silently absent")
+    ok("MISSING-LEAF" not in _by_id,
+       "fabricated geometry is never invented to fill a missing estimate")
+    _issues = _summary["estimate_summary"]["canonical_route_shadow"]["issues"]
+    ok(any(
+        issue.get("code") == "bom_leaf_without_estimate"
+        and issue.get("part_number") == "MISSING-LEAF"
+        for issue in _issues
+    ), "a missing fabricated BOM leaf becomes a release blocker")
+
+
+def test_canonical_powder_grouping_respects_finish_and_empty_routes_keep_v3():
+    from wb_populate import build_workbook_labour, canonical_labour_groups
+
+    _decisions = [
+        {
+            "decision_id": "coat:black", "operation": "powder_coating",
+            "status": "required", "target_id": "BLACK", "participants": ["BLACK"],
+            "scope": "part", "qty_per_unit": 1, "sequence": 70,
+        },
+        {
+            "decision_id": "coat:white", "operation": "powder_coating",
+            "status": "required", "target_id": "WHITE", "participants": ["WHITE"],
+            "scope": "part", "qty_per_unit": 1, "sequence": 70,
+        },
+    ]
+    _summary = {
+        "parts": [
+            {"part_number": "BLACK", "normalized_finish": "RAL 9005 BLACK"},
+            {"part_number": "WHITE", "normalized_finish": "RAL 9010 WHITE"},
+        ],
+        "estimate_summary": {"canonical_route_shadow": {
+            "nodes": [
+                {"part_number": "BLACK", "kind": "leaf", "qty_per_unit": 1},
+                {"part_number": "WHITE", "kind": "leaf", "qty_per_unit": 1},
+            ],
+            "decisions": _decisions,
+            "issues": [],
+        }},
+    }
+    _estimates = [
+        {"part_number": "BLACK", "normalized_finish": "RAL 9005 BLACK"},
+        {"part_number": "WHITE", "normalized_finish": "RAL 9010 WHITE"},
+    ]
+    _groups = canonical_labour_groups(_summary, _estimates, 180)
+    _powder = [
+        group for group in _groups.values()
+        if "powder_coating" in group.get("engine_ops", [])
+    ]
+    eq(len(_powder), 2, "different powder colours require different setup rows")
+    _empty = build_workbook_labour({}, canonical_mode=True)
+    eq(_empty["schema"], "workbook_labour_rows.v3",
+       "a valid no-operation canonical job does not masquerade as legacy")
+    eq(_empty["mode"], "canonical", "authority survives an empty route")
+
+
+def test_shop_sequence_fills_only_required_events_after_arbitration():
+    from route_compiler import RULED_OUT, compile_job_route
+
+    _graph = compile_job_route(
+        [
+            {
+                "part_number": "P1",
+                "textual_operations": ["tapping"],
+                "operations_ruled_out": {"folding": "DXF measured zero bends"},
+                "operation_ruling_sources": {"folding": "dxf"},
+            },
+        ],
+        {"routes": [], "assemblies": []},
+    )
+    _by_operation = {
+        decision["operation"]: decision for decision in _graph["decisions"]
+    }
+    eq(_by_operation["tapping"]["sequence"], 20.0,
+       "unsequenced tapping is placed before folding and welding")
+    eq(_by_operation["tapping"]["field_provenance"]["sequence"],
+       "shop_sequence_rule", "the fallback order remains auditable")
+    eq(_by_operation["folding"]["status"], RULED_OUT,
+       "shop ordering cannot promote a negative decision")
+    eq(_by_operation["folding"]["sequence"], None,
+       "ruled-out work receives no invented route position")
+
+
+def test_child_finish_words_do_not_duplicate_an_owning_assembly_coat():
+    from route_compiler import REQUIRED, UNVERIFIED, compile_job_route
+
+    _parts = [
+        {
+            "part_number": "WELD-ASSY", "description": "WELD ASSY",
+            "textual_operations": ["powder_coating"],
+            "operation_scope": {"powder_coating": "assembly"},
+        },
+        {
+            "part_number": "CHILD-A", "description": "CHILD A",
+            "normalized_finish": "SEE ASSEMBLY DRAWING",
+            "textual_operations": ["powder_coating"],
+        },
+        {
+            "part_number": "LOOSE-COVER", "description": "LOOSE COVER",
+            "normalized_finish": "SEE ASSEMBLY DRAWING",
+            "textual_operations": ["powder_coating"],
+        },
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "TOP"},
+        "assemblies": [
+            {"part_number": "TOP", "children": [
+                {"part_number": "WELD-ASSY", "qty": 1},
+                {"part_number": "LOOSE-COVER", "qty": 1},
+            ]},
+            {"part_number": "WELD-ASSY", "children": [
+                {"part_number": "CHILD-A", "qty": 1},
+            ]},
+        ],
+        "routes": [{
+            "operation": "powder_coating", "scope": "assembly",
+            "part_numbers": ["WELD-ASSY"], "sequence": 70,
+            "inferred": True,
+        }],
+    }
+    _graph = compile_job_route(_parts, _extract)
+    _powder = [
+        decision for decision in _graph["decisions"]
+        if decision["operation"] == "powder_coating"
+    ]
+    _required = [d for d in _powder if d["status"] == REQUIRED]
+    eq(len(_required), 1,
+       "a child finish word corroborates rather than duplicates its assembly coat")
+    eq(_required[0]["target_id"], "WELD-ASSY",
+       "the explicit assembly remains the owner")
+    _uncertain = [d for d in _powder if d["status"] == UNVERIFIED]
+    eq(len(_uncertain), 1,
+       "a delegated finish with no owning route remains visible for review")
+    eq(_uncertain[0]["target_id"], "TOP",
+       "the unresolved event points at the assembly it delegates to")
+
+
+def test_an_unattributed_claim_is_never_promoted_to_a_measurement():
+    """An operation nobody attributed must rank 0, whatever its status.
+
+    The temptation is to give a NEGATIVE claim the benefit of the doubt — a "ruled out" with
+    no recorded source looks safe to treat as measured, because refusing work is the
+    cautious direction. It is not safe. Rank is how this engine decides which evidence wins,
+    and handing an unattributed ruling dxf's rank of 80 lets an unsourced exclusion beat a
+    real reading. That silently deletes work, which is the more expensive error and the one
+    nobody sees on a sheet.
+
+    The compiler already does this correctly. Nothing was checking it: promoting `unknown`
+    to `dxf` broke no fixture, so the rule could be undone by a future edit with the suite
+    still green. 12120's shadow shows thirteen decisions arriving as `unknown 0` — this is
+    the rule that keeps them honest instead of quietly authoritative.
+    """
+    from route_compiler import make_claim, REQUIRED, RULED_OUT, NOT_APPLICABLE
+    from source_precedence import rank
+
+    for _status in (REQUIRED, RULED_OUT, NOT_APPLICABLE):
+        for _source in ("", None, "   "):
+            _c = make_claim("folding", _status, _source, "P1", "P1")
+            eq(_c.source, "unknown",
+               f"a {_status} claim with source {_source!r} is unattributed, not measured")
+            eq(_c.source_rank, 0,
+               f"and it must rank 0 — got {_c.source_rank}, which would let an unsourced "
+               f"claim outrank a real reading")
+
+    # A REAL SOURCE STILL RANKS. Without this the fixture would pass against a compiler
+    # that ranked everything 0, which would be just as broken in the other direction.
+    _m = make_claim("folding", RULED_OUT, "dxf", "P1", "P1")
+    eq(_m.source, "dxf", "a measured ruling keeps its source")
+    eq(_m.source_rank, rank("dxf"), "and its rank")
+    ok(_m.source_rank > 0, "which must actually be greater than an unattributed one")
 
 
 if __name__ == "__main__":

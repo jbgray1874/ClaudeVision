@@ -1148,6 +1148,21 @@ PRICING_SERVICE_POLICY = {
 # scope="assembly" is charged once per product.
 ASSEMBLY_SCOPED_OPS_CHARGE_ONCE = False
 
+# Canonical BOM/route cutover.
+#
+# On the route-compiler cutover branch the hierarchy-aware OperationDecision graph is the
+# authority for which labour rows exist and where they belong. The workbook still owns rates
+# and formulas; it no longer unions raw route words back into costed records.
+#
+# Set SDI_CANONICAL_ROUTE_WORKBOOK=0 for an emergency comparison with the legacy renderer.
+# The rollback is explicit and visible in the workbook flags; it is not an automatic fallback
+# from a compiler failure, because silently returning to the resurrection path would recreate
+# the defect this switch closes.
+CANONICAL_ROUTE_WORKBOOK_CUTOVER = (
+    str(os.getenv("SDI_CANONICAL_ROUTE_WORKBOOK", "1")).strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
 SECTION_STOCK_PRICE_GBP_PER_KG = None
 
 SECTION_STOCK_POLICY = {
