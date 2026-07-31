@@ -204,6 +204,13 @@ def _mat_source_explanation(part: Dict) -> str:
     # DXF-token / part-number-suffix material heuristics (BI-...T would misread as
     # "-T → MDF/Timber", BI-...M as "-M → Mild Steel"). Return an honest bought-in note.
     if _is_bought_in(part):
+        # "Priced from catalogue/history" states a provenance that does not exist on a
+        # line carrying no price. PACKAGING and DELIVERY are per-unit shares an estimator
+        # fills in, and they are the two lines most likely to be forgotten — so they say so.
+        from costed_facts import is_placeholder_price as _placeholder
+        if _placeholder(part):
+            return ("Bought-in / no fabrication material — NOT YET PRICED, estimator to "
+                    "enter a per-unit figure")
         return "Bought-in / catalogue component — no fabrication material (priced from catalogue/history)"
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     src = str(part.get("material_source") or "")
@@ -402,7 +409,8 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             _est_lookup[_pn] = _pe
 
     from costed_facts import (canonical_quantity, decision_ids_for_part,
-                              job_totals, priced_route_known, priced_rows_for_part)
+                              is_placeholder_price, job_totals, part_material_cost,
+                              priced_route_known, priced_rows_for_part)
     _totals = job_totals(summary)
     _canonical = priced_route_known(summary)
 
@@ -421,7 +429,14 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     ws.row_dimensions[1].height = 30
     pdf_name = scan_meta.get("pdf_name") or summary.get("source_file") or "—"
     job_no   = scan_meta.get("job_number") or "—"
-    total    = sum(float(_est_lookup.get(p.get("part_number"), {}).get("extended_total_cost_gbp") or 0) for p in parts)
+    # THE HEADLINE FIGURE IS THE WORKBOOK'S. Summing the engine's labour-inclusive per-part
+    # totals put "Total Estimate: £44.75" at the top of a 2085 sheet the workbook priced at
+    # £6.33 — and repeated it in the total row whenever the Sell Price cell could not be
+    # located. The engine sum is only a fallback for a job that never reached Excel.
+    _wb_unit = _totals.get("unit_gbp")
+    total = float(_wb_unit) if _wb_unit is not None else sum(
+        float(_est_lookup.get(p.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
+        for p in parts)
 
     # The AUTHORITATIVE total is the WB's Sell Price (computed by the WB's own formulas).
     # Find its cell by label so the report can reference it live; falls back to the engine
@@ -445,8 +460,10 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         # reference, but the authoritative figure is the WB's (see the TOTAL row below).
         if _sell_ref:
             total_line = "Total (Sell Price): see Estimate sheet — mirrored below"
+        elif _wb_unit is not None:
+            total_line = f"Unit cost (calculated by the Estimate sheet): £{total:,.2f}"
         else:
-            total_line = f"Total Estimate: £{total:,.2f}"
+            total_line = f"Total Estimate (engine part-sum — no workbook): £{total:,.2f}"
     ws.merge_cells("A2:L2")
     _c(ws, 2, 1,
        f"Drawing: {pdf_name}   |   Job: {job_no}   |   "
@@ -468,7 +485,8 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     # The money columns are the ENGINE's per-part figures, and once a workbook exists they
     # are not what the sheet charges. Naming the basis in the header is the difference
     # between a working figure and a price the reader will quote from.
-    _money_basis = " (engine)" if _totals["source"] == "excel_calculated" else ""
+    # Material, not "cost". See the per-part note below: labour has no per-part figure.
+    _money_basis = " material" if _canonical else ""
     headers = [
         "Part Number", "Description", "Qty",
         "Material", "Thickness",
@@ -506,8 +524,20 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             mat = "Bought-in"
         else:
             mat = str(part.get("normalized_material") or part.get("material") or "—")
-        unit = float(_est_lookup.get(pn, {}).get("unit_total_cost_gbp") or 0)
-        ext  = float(_est_lookup.get(pn, {}).get("extended_total_cost_gbp") or 0)
+        # PER-PART MONEY IS MATERIAL ONLY.
+        #
+        # unit_total_cost_gbp is an engine-era, LABOUR-INCLUSIVE apportionment. On 2085 it
+        # put GBP 19.25 against each tube on a sheet whose entire unit price is GBP 6.33 —
+        # a number in a column headed like a cost that reconciles to nothing, on the two
+        # parts whose material could not be read at all. Labour is charged per DEPARTMENT
+        # ROW as a batch value across every part in that setup, so there is no per-part
+        # labour figure to show; material is costed per part and sums to the workbook's own
+        # material total, so that is what this column is and what it now says.
+        if _canonical:
+            unit, ext = part_material_cost(part)
+        else:
+            unit = float(_est_lookup.get(pn, {}).get("unit_total_cost_gbp") or 0)
+            ext  = float(_est_lookup.get(pn, {}).get("extended_total_cost_gbp") or 0)
         # Thickness — real value only
         # Thickness column — DXF filename first, then non-tolerance values
         import re as _re_t
@@ -576,7 +606,9 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     ws.merge_cells(f"A{row}:H{row}")
     # Label reflects which number is shown: WB Sell Price (authoritative) if we found it,
     # otherwise the engine part-sum.
-    _total_label = "SELL PRICE (from Estimate sheet)" if _sell_ref else "TOTAL ESTIMATE (engine part-sum)"
+    _total_label = ("SELL PRICE (from Estimate sheet)" if _sell_ref
+                    else "UNIT COST (calculated by the Estimate sheet)" if _wb_unit is not None
+                    else "TOTAL ESTIMATE (engine part-sum — no workbook)")
     _c(ws, row, 1, _total_label, bold=True, bg=C_NAVY, fg=C_WHITE,
        align="right", size=12)
     _c(ws, row, 9, "", bg=C_NAVY)
@@ -599,19 +631,24 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     if _totals["source"] == "excel_calculated":
         row += 1
         ws.merge_cells(f"A{row}:L{row}")
-        _eng = float(_totals.get("engine_part_sum_gbp") or 0.0)
+        # RECONCILE WHAT IS ON THE PAGE. This used to quote the engine part-sum — GBP 44.75
+        # on 2085 — as the figure to reconcile against. Now that the per-part columns are
+        # material, that number is not on this sheet and does not belong in its arithmetic
+        # either: it is an obsolete labour-inclusive total, and repeating it in the
+        # explanation put it back on the page the fix had just removed it from.
         _unit = float(_totals.get("unit_gbp") or 0.0)
         _mat = _totals.get("material_gbp")
         _lab = _totals.get("labour_gbp")
-        _parts_txt = " (material £{:,.2f} + labour £{:,.2f})".format(
-            float(_mat), float(_lab)) if _mat is not None and _lab is not None else ""
+        _col_mat = sum(part_material_cost(p)[1] for p in parts) if _canonical else 0.0
+        _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
+                    f"sheet's £{float(_mat):,.2f}. " if _mat is not None else "")
+        _lab_txt = (f"Labour is £{float(_lab):,.2f} and is charged per department row — a "
+                    f"batch value across every part in that setup, with no per-part figure "
+                    f"to show. The 'Priced by' column names the rows and the decisions "
+                    f"behind each part's share. " if _lab is not None else "")
         _c(ws, row, 1,
-           f"RECONCILIATION — the Estimate sheet calculated £{_unit:,.2f} per unit"
-           f"{_parts_txt}. The Ext £ column above sums the engine's own per-part figures to "
-           f"£{_eng:,.2f}; the two are different calculators and the workbook is "
-           f"authoritative. Per-part cost is not recoverable from the sheet — a labour row "
-           f"is one department's batch value across every part in its group — so the "
-           f"per-part columns are shown on the engine basis and labelled as such.",
+           f"RECONCILIATION — the Estimate sheet calculated £{_unit:,.2f} per unit. "
+           f"{_mat_txt}{_lab_txt}The workbook is authoritative.",
            bg=C_LIGHT, size=9, wrap=True, italic=True)
         ws.row_dimensions[row].height = 34
     # ── Parts requiring review ─────────────────────────────────────────────────
@@ -711,10 +748,15 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     # Named base. These are engine per-part figures and the percentages are shares of their
     # own sum — not of the Sell Price in the total row above, which is a different number.
     # An unlabelled "%" next to an unlabelled "£" invited exactly that reading.
+    # Named base AND named total. An unlabelled "%" beside an unlabelled "£" invited the
+    # reading that these were shares of the Sell Price, which they never were.
+    _mat_total = _totals.get("material_gbp")
     _c(ws, row, 1,
-       "COST BREAKDOWN BY MATERIAL TYPE"
-       + ("  —  engine per-part basis; % of the engine part-sum, not of the Sell Price"
-          if _totals["source"] == "excel_calculated" else ""),
+       "MATERIAL COST BREAKDOWN BY TYPE"
+       + (f"  —  per-part material; the Estimate sheet calculated "
+          f"£{float(_mat_total):,.2f} of material in total"
+          if _mat_total is not None else
+          "  —  per-part material only; labour is charged per department row"),
        bold=True, bg=C_BLUE, fg=C_WHITE, size=11)
     ws.row_dimensions[row].height = 20
     row += 1
@@ -725,12 +767,18 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
             mat = "Bought-in"
         else:
             mat = str(part.get("normalized_material") or part.get("material") or "Unknown")
-        ext  = float(_est_lookup.get(part.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
-        mat_totals[mat] = mat_totals.get(mat, 0) + ext
+        # Same basis as the per-part columns. Built from the engine's labour-inclusive
+        # totals this section reported GBP 44.75 of "material" on a job whose sheet
+        # calculated GBP 0.13 of it — a breakdown by material type that was not a breakdown
+        # of material.
+        _e = part_material_cost(part)[1] if _canonical else float(
+            _est_lookup.get(part.get("part_number"), {}).get("extended_total_cost_gbp") or 0)
+        mat_totals[mat] = mat_totals.get(mat, 0) + _e
     for mi, (mat, cost) in enumerate(sorted(
             mat_totals.items(), key=lambda x: x[1], reverse=True)):
         bg = C_ALT if mi % 2 == 0 else C_WHITE
-        pct = (cost / total * 100) if total > 0 else 0
+        _base = sum(mat_totals.values())
+        pct = (cost / _base * 100) if _base > 0 else 0
         ws.merge_cells(f"A{row}:H{row}")
         _c(ws, row, 1, mat, bg=bg, bold=True, size=10, border=True)
         _c(ws, row, 9, cost, bg=bg, align="right", bold=True,

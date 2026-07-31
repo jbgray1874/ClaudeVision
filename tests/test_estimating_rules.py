@@ -7817,13 +7817,25 @@ def test_the_provenance_sheets_trace_every_part_to_a_sheet_row_and_a_decision():
     eq(str(ws.cell(row=_by_pn["12120-01-09M"], column=12).value or ""),
        "not priced on any labour row", "a part in no row says so plainly")
 
-    ok(str(ws.cell(row=5, column=9).value or "").endswith("(engine)"),
-       "the per-part money columns must name their basis once Excel has calculated the job")
+    # PER-PART MONEY IS MATERIAL. There is no per-part labour figure on a canonical job —
+    # labour is a department row's batch value across every part in its setup — so a column
+    # headed plainly "Unit £" was reporting an engine-era, labour-inclusive apportionment
+    # that reconciles to nothing. On 2085 it read GBP 19.25 against each tube beside a Sell
+    # Price of GBP 6.33.
+    eq(str(ws.cell(row=5, column=9).value or ""), "Unit £ material",
+       "the per-part money column must say what it is")
+    eq(str(ws.cell(row=5, column=10).value or ""), "Ext £ material", "and so must its pair")
 
     _all = " ".join(str(c.value) for r in ws.iter_rows() for c in r if c.value)
-    ok("RECONCILIATION" in _all, "the two calculators must be reconciled on the page")
-    ok("41.44" in _all and "8.70" in _all,
-       "naming both the sheet's figure and the engine sum")
+    ok("RECONCILIATION" in _all, "what is on the page must be reconciled")
+    ok("41.44" in _all, "naming what the Estimate sheet calculated")
+    # THE ENGINE PART-SUM IS NOT QUOTED. It is a labour-inclusive figure that reconciles to
+    # nothing, and repeating it in the explanation put it back on the page the material
+    # basis had just removed it from — on 2085 that was GBP 44.75 beside a GBP 6.33 sheet.
+    ok("8.70" not in _all,
+       f"the obsolete engine part-sum must not be reintroduced by the explanation")
+    ok("charged per department row" in _all,
+       "and the reason there is no per-part labour figure must be stated")
 
     # ── and the same facts on the AI Provenance tab ────────────────────────────
     wb2 = Workbook()
@@ -8404,6 +8416,200 @@ def test_the_report_sheets_are_written_after_excel_has_calculated():
     eq(_with["unit_gbp"], 6.33, "and its figure is the one shown")
     eq(round(_with["engine_part_sum_gbp"], 2), 44.75,
        "with the engine sum kept so the gap is stated rather than left to be noticed")
+
+
+# ── job 2085 as it actually printed — the reporting layer regression ─────────────────
+def _job_2085_as_printed() -> dict:
+    """The 2085 sheet's own shape: a plate and two tubes, one Tube row grouping BOTH tubes,
+    and engine per-part totals of GBP 19.25 a tube on a job the workbook priced at GBP 6.33.
+
+    The tubes' material genuinely could not be read (native models unread), so their real
+    material cost is zero — which is the honest number and the one that flags for review."""
+    _rows = [
+        {"workbook_row": 96, "wb_operation": "Laser", "engine_operations": ["laser_cutting"],
+         "part_numbers": ["2085-01"], "decision_ids": ["d-laser-01"], "qty_per_unit": 1.0},
+        {"workbook_row": 97, "wb_operation": "Tube", "engine_operations": ["tube_cut"],
+         "part_numbers": ["2085-02", "2085-03"],
+         "decision_ids": ["d-tubecut-02", "d-tubecut-03"], "qty_per_unit": 2.0},
+        {"workbook_row": 98, "wb_operation": "Weld (CO2)", "engine_operations": ["welding"],
+         "part_numbers": ["2085-01", "2085-02", "2085-03"],
+         "decision_ids": ["d-weld"], "qty_per_unit": 1.0},
+        {"workbook_row": 99, "wb_operation": "Dress Welds",
+         "engine_operations": ["dress_welds"],
+         "part_numbers": ["2085-01", "2085-02", "2085-03"],
+         "decision_ids": ["d-dress"], "qty_per_unit": 1.0},
+        {"workbook_row": 100, "wb_operation": "P.Coat",
+         "engine_operations": ["powder_coating"],
+         "part_numbers": ["2085-01", "2085-02", "2085-03"],
+         "decision_ids": ["d-pcoat"], "qty_per_unit": 1.0},
+        {"workbook_row": 101, "wb_operation": "Assemble/pack (Metal)",
+         "engine_operations": ["assembly"],
+         "part_numbers": ["2085-01", "2085-02", "2085-03"],
+         "decision_ids": ["d-pack"], "qty_per_unit": 1.0},
+    ]
+    def _dec(_id, _op, _target, _parts, _scope):
+        return {"decision_id": _id, "operation": _op, "status": "required",
+                "target_id": _target, "participants": _parts, "scope": _scope,
+                "qty_per_unit": 1.0}
+    _parts_est = [
+        {"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1,
+         "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 1.2,
+         "unit_total_cost_gbp": 6.25, "extended_total_cost_gbp": 6.25,
+         "material_estimate": {"stock_form": "sheet", "material": "MILD_STEEL",
+                               "unit_material_cost_gbp": 0.13}},
+        {"part_number": "2085-02", "description": "OUTER TUBE", "quantity": 1,
+         "normalized_material": "MILD_STEEL",
+         "unit_total_cost_gbp": 19.25, "extended_total_cost_gbp": 19.25,
+         "material_estimate": {"stock_form": "tube", "material": "MILD_STEEL"}},
+        {"part_number": "2085-03", "description": "INNER TUBE", "quantity": 1,
+         "normalized_material": "MILD_STEEL",
+         "unit_total_cost_gbp": 19.25, "extended_total_cost_gbp": 19.25,
+         "material_estimate": {"stock_form": "tube", "material": "MILD_STEEL"}},
+        {"part_number": "PACKAGING", "description":
+         "Packaging (box / pallet — per-unit share, estimator to price)", "quantity": 1,
+         "page_roles": ["bought_in"], "material_estimate": {},
+         "_price_explicitly_withheld": True},
+        {"part_number": "DELIVERY", "description":
+         "Delivery (per-unit share of order haulage — estimator to price)", "quantity": 1,
+         "page_roles": ["bought_in"], "material_estimate": {},
+         "_price_explicitly_withheld": True},
+    ]
+    return {
+        "manufacturing_writeup": {"parts": [
+            {"part_number": p["part_number"], "description": p["description"],
+             "quantity": 1, "normalized_material": p.get("normalized_material"),
+             "page_roles": p.get("page_roles") or []} for p in _parts_est]},
+        "workbook_labour": {"schema": "workbook_labour_rows.v3", "mode": "canonical",
+                            "rows": _rows},
+        "final_estimate": {
+            "schema": "final_estimate.v2",
+            "totals": {"material_gbp": 0.13, "labour_gbp": 5.75, "unit_gbp": 6.33},
+            "labour_rows": [{"workbook_row": r["workbook_row"],
+                             "operation": r["wb_operation"], "total_value_gbp": 1.0}
+                            for r in _rows]},
+        "estimate_summary": {
+            "part_estimates": _parts_est,
+            "canonical_part_estimates": _parts_est,
+            "canonical_route_shadow": {"mode": "cutover", "decisions": [
+                _dec("d-laser-01", "laser_cutting", "2085-01", ["2085-01"], "part"),
+                _dec("d-tubecut-02", "tube_cut", "2085-02", ["2085-02"], "part"),
+                _dec("d-tubecut-03", "tube_cut", "2085-03", ["2085-03"], "part"),
+                _dec("d-weld", "welding", "2085-GA",
+                     ["2085-01", "2085-02", "2085-03"], "assembly"),
+                _dec("d-dress", "dress_welds", "2085-GA",
+                     ["2085-01", "2085-02", "2085-03"], "assembly"),
+                _dec("d-pcoat", "powder_coating", "2085-GA",
+                     ["2085-01", "2085-02", "2085-03"], "assembly"),
+                _dec("d-pack", "assembly", "2085-GA",
+                     ["2085-01", "2085-02", "2085-03"], "assembly"),
+            ], "nodes": [
+                {"part_number": p["part_number"], "kind": "leaf", "qty_per_unit": 1.0,
+                 "evidence": {}} for p in _parts_est]}},
+    }
+
+
+def test_a_grouped_workbook_row_does_not_give_every_part_every_decision():
+    """A workbook row is a tooling SETUP and can group several parts. 2085's two tubes share
+    one Tube row carrying both tube-cut decisions, so each tube was told it was cut by the
+    other tube's decision as well as its own — the mis-join the canonical route exists to
+    prevent, reappearing in the sheet that documents it.
+
+    An ASSEMBLY-scoped decision legitimately belongs to every participant: the weld is one
+    event across three parts. So this narrows part events without hiding shared ones."""
+    from costed_facts import decision_ids_for_part
+
+    _job = _job_2085_as_printed()
+    eq(decision_ids_for_part(_job, "2085-02"),
+       ["d-tubecut-02", "d-weld", "d-dress", "d-pcoat", "d-pack"],
+       "the outer tube is cut by its OWN decision only")
+    eq(decision_ids_for_part(_job, "2085-03"),
+       ["d-tubecut-03", "d-weld", "d-dress", "d-pcoat", "d-pack"],
+       "and the inner tube by its own")
+    ok("d-tubecut-03" not in decision_ids_for_part(_job, "2085-02"),
+       "neither tube may carry the other's cut")
+    # The shared assembly events must survive, or the fixture passes against a version that
+    # simply drops everything it cannot match one-to-one.
+    ok("d-weld" in decision_ids_for_part(_job, "2085-01"),
+       "one weld event across three parts belongs to all three")
+
+
+def test_no_labour_inclusive_engine_total_is_shown_as_a_per_part_cost():
+    """2085 printed GBP 19.25 against each tube, on a sheet whose whole unit price is
+    GBP 6.33, and summed GBP 44.75 into a "cost breakdown by material type" against
+    GBP 0.13 of material the workbook actually calculated.
+
+    unit_total_cost_gbp is an engine-era, LABOUR-INCLUSIVE apportionment. There is no
+    per-part labour figure on a canonical job — labour is a department row's batch value
+    across every part in its setup — so the per-part column is material, which IS costed
+    per part and sums to the workbook's own material total."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify what these sheets write")
+        return
+    from job_decision_report import add_decision_report_sheet
+    from estimation_report import add_provenance_sheet, build_provenance
+
+    _job = _job_2085_as_printed()
+    wb = Workbook()
+    add_decision_report_sheet(wb, _job, {"job_number": "2085"})
+    ws = wb["Decision Report"]
+    _all = " ".join(str(c.value) for r in ws.iter_rows() for c in r if c.value)
+
+    ok("19.25" not in _all,
+       "the labour-inclusive engine total must not appear anywhere on the sheet")
+    ok("44.75" not in _all, "nor its sum in the material breakdown")
+
+    _by_pn = {ws.cell(row=r, column=1).value: r for r in range(6, ws.max_row + 1)}
+    eq(ws.cell(row=_by_pn["2085-01"], column=9).value, 0.13,
+       "the plate shows the material it was costed at")
+    # The tubes' material genuinely could not be read. Zero is the honest number and the
+    # one that flags — GBP 19.25 hid a missing reading behind a plausible figure.
+    _tube = ws.cell(row=_by_pn["2085-02"], column=9).value
+    ok(_tube in (0, 0.0, "—"), f"an unread tube material reads as nothing, got {_tube!r}")
+
+    # The breakdown reconciles to the workbook's material total, and says so.
+    ok("MATERIAL COST BREAKDOWN" in _all and "0.13" in _all,
+       "the material breakdown must be material, against the sheet's own material total")
+
+    # PACKAGING/DELIVERY are estimator placeholders, not catalogue prices.
+    _pack = str(ws.cell(row=_by_pn["PACKAGING"], column=6).value or "")
+    ok("NOT YET PRICED" in _pack,
+       f"an unpriced placeholder must not claim a catalogue price, got {_pack!r}")
+    ok("catalogue/history" not in _pack, "and must not cite a provenance it does not have")
+
+    # AI Provenance shows the same per-part money on the same basis.
+    _prov = {p["part_number"]: p for p in build_provenance(_job)}
+    eq(_prov["2085-02"]["unit_cost"], 0.0, "the provenance tab agrees about the tube")
+    eq(_prov["2085-01"]["unit_cost"], 0.13, "and about the plate")
+    wb2 = Workbook()
+    add_provenance_sheet(wb2, _job, {"job_number": "2085"})
+    ok("19.25" not in " ".join(str(c.value) for r in wb2["AI Provenance"].iter_rows()
+                               for c in r if c.value),
+       "and never prints the engine total either")
+
+
+def test_both_2085_tabs_describe_the_same_route():
+    """The Decision Report said "powder coating, welding" for the tubes while AI Provenance,
+    in the same file, listed tube_cut, welding, dress_welds, powder_coating and assembly.
+    Two tabs, one job, two routes. They must agree operation for operation."""
+    from estimation_report import build_provenance
+    from job_decision_report import _ops_explanation
+    from costed_facts import operations_for_part
+
+    _job = _job_2085_as_printed()
+    _prov = {p["part_number"]: p for p in build_provenance(_job)}
+    for _pn in ("2085-01", "2085-02", "2085-03"):
+        _canon = operations_for_part(_job, _pn)
+        _dr = _ops_explanation({"part_number": _pn}, None, _job).lower()
+        for _op in _canon:
+            _words = _op.replace("_", " ")
+            ok(_words.split()[0] in _dr,
+               f"{_pn}: the Decision Report omits {_op}, which the sheet charges — got {_dr!r}")
+            ok(_op in _prov[_pn]["operations"],
+               f"{_pn}: AI Provenance omits {_op}")
+    ok("tube cutting" in _ops_explanation({"part_number": "2085-02"}, None, _job).lower(),
+       "the tube cut in particular — this engine has lost it once already")
 
 
 if __name__ == "__main__":

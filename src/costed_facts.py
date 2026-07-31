@@ -33,7 +33,7 @@ equally the authority on the route, which is why (1) exists.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 __all__ = [
     "costed_operations",
@@ -46,6 +46,8 @@ __all__ = [
     "canonical_identity",
     "canonical_quantity",
     "decision_ids_for_part",
+    "part_material_cost",
+    "is_placeholder_price",
     "job_totals",
     "costed_finish_label",
     "costed_finish_ops",
@@ -420,20 +422,98 @@ def priced_rows_for_part(source: Any, part_number: Any) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda r: _num(r.get("workbook_row")))
 
 
+def _decisions_by_id(source: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(source, dict):
+        return {}
+    payload = ((source.get("estimate_summary") or {}).get("canonical_route_shadow")
+               if isinstance(source.get("estimate_summary"), dict) else None) \
+        or source.get("canonical_route_shadow") or {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for decision in (payload or {}).get("decisions") or []:
+        if isinstance(decision, dict) and decision.get("decision_id"):
+            out[str(decision["decision_id"])] = decision
+    return out
+
+
 def decision_ids_for_part(source: Any, part_number: Any) -> List[str]:
     """Canonical OperationDecision ids behind the rows this part is charged on.
 
+    SCOPED TO THE PART, not to the row. A workbook row is a tooling SETUP and can group
+    several parts — 2085's two tubes share one Tube row, which carries both tube-cut
+    decisions. Returning every id on every row the part appears in therefore told each tube
+    it was cut by the other tube's decision as well as its own, which is precisely the
+    mis-join the canonical route exists to prevent, reappearing in the sheet that documents
+    it.
+
+    A decision belongs to a part when the part is its target or one of its participants.
+    An ASSEMBLY-scoped decision legitimately belongs to every participant — the weld event
+    is one event across three parts — so this narrows part events without hiding shared
+    ones.
+
     Taken from the workbook rows rather than the decision list directly, so it names only
     decisions that survived every gate and reached the sheet."""
+    pn = canonical_identity(source, part_number)
+    known = _decisions_by_id(source)
     out: List[str] = []
     for r in priced_rows_for_part(source, part_number):
         ids = [str(d) for d in (r.get("decision_ids") or []) if d]
         if not ids and r.get("decision_id"):
             ids = [str(r["decision_id"])]
         for d in ids:
+            decision = known.get(d)
+            if decision is not None and pn:
+                members = {canonical_identity(source, x) for x in
+                           ([decision.get("target_id")]
+                            + list(decision.get("participants") or []))}
+                # An unresolvable decision keeps the old behaviour rather than vanishing:
+                # a missing shadow must not silently empty the audit trail.
+                if members and pn not in members:
+                    continue
             if d not in out:
                 out.append(d)
     return out
+
+
+def part_material_cost(part: Mapping[str, Any]) -> tuple:
+    """(unit, extended) MATERIAL cost for one part — the only per-part money there is.
+
+    THERE IS NO PER-PART LABOUR FIGURE ON A CANONICAL JOB. Labour is charged per DEPARTMENT
+    ROW, as a batch value across every part in that tooling setup, so any per-part labour
+    number is an engine-era apportionment that reconciles to nothing. On 2085 that showed as
+    GBP 19.25 against each tube on a sheet whose whole unit price is GBP 6.33 — a
+    labour-inclusive engine total sitting in a column headed like a cost.
+
+    Material is different: it IS costed per part, it is what the sheet's material blocks
+    are built from, and it sums to the workbook's own material total. So that is what the
+    per-part column shows, and it is labelled material."""
+    if not isinstance(part, Mapping):
+        return 0.0, 0.0
+    me = part.get("material_estimate")
+    me = me if isinstance(me, Mapping) else {}
+    unit = _num(me.get("unit_material_cost_gbp"))
+    if not unit:
+        unit = _num(me.get("cost_per_part_gbp"))
+    qty = _num(part.get("quantity")) or 1.0
+    return unit, unit * qty
+
+
+def is_placeholder_price(part: Mapping[str, Any]) -> bool:
+    """True when this line carries no price because nobody has priced it yet.
+
+    Distinct from a line that costs nothing. PACKAGING and DELIVERY are per-unit shares an
+    estimator fills in; describing them as "priced from catalogue/history" states a
+    provenance that does not exist, on the two lines most likely to be forgotten."""
+    if not isinstance(part, Mapping):
+        return False
+    if part.get("_price_explicitly_withheld"):
+        return True
+    unit, _ext = part_material_cost(part)
+    if unit:
+        return False
+    text = " ".join(str(part.get(k) or "") for k in
+                    ("description", "review_flag")).lower()
+    flags = " ".join(str(f) for f in (part.get("review_flags") or [])).lower()
+    return "estimator to price" in text or "estimator to price" in flags
 
 
 def job_parts(source: Any) -> List[Dict[str, Any]]:

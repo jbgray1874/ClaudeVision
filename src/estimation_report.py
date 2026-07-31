@@ -190,7 +190,8 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         if _pn:
             _est_lookup[_pn] = _pe
     from costed_facts import (canonical_quantity, decision_ids_for_part,
-                              operations_for_part, priced_route_known,
+                              is_placeholder_price, operations_for_part,
+                              part_material_cost, priced_route_known,
                               priced_rows_for_part)
     _canonical = priced_route_known(summary)
     for part in parts:
@@ -212,8 +213,14 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         if isinstance(qty, float) and qty.is_integer():
             qty = int(qty)
         _pe = _est_lookup.get(pn, {})
-        unit = float(_pe.get("unit_total_cost_gbp") or 0)
-        ext  = float(_pe.get("extended_total_cost_gbp") or 0)
+        # Material only — see costed_facts.part_material_cost. The engine's
+        # unit_total_cost_gbp is labour-inclusive and reconciles to nothing on a canonical
+        # job; labour lives on the department rows, not on the part.
+        if _canonical:
+            unit, ext = part_material_cost(part)
+        else:
+            unit = float(_pe.get("unit_total_cost_gbp") or 0)
+            ext  = float(_pe.get("extended_total_cost_gbp") or 0)
         geo  = str(part.get("geometry_source") or "pdf")
         # Operations as the workbook ACCEPTED them, from the one shared post-costing source.
         # This tab sits inside the same .xlsx as the Estimate, so narrating the raw textual
@@ -447,7 +454,8 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # The money columns are the ENGINE's per-part figures. Once Excel has calculated the
     # sheet they are not what the job is charged, and a column headed plainly "Unit £" next
     # to a Sell Price that disagrees is the report contradicting itself.
-    _money_basis = " (engine)" if _totals["source"] == "excel_calculated" else ""
+    from costed_facts import priced_route_known as _prk
+    _money_basis = " material" if _prk(summary) else ""
     headers = [
         ("Part Number",       15), ("Description",     28), ("Qty", 5),
         ("Material",          14), ("Mat. Source",      32), ("Conf.",  8),
@@ -542,17 +550,21 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     if _totals["source"] == "excel_calculated":
         row += 1
         ws.merge_cells(f"A{row}:O{row}")
+        # Same basis as the Decision Report: reconcile the MATERIAL column against the
+        # sheet's material total, and state labour as what it is — a department-row charge
+        # with no per-part figure. The engine part-sum is an obsolete labour-inclusive
+        # number and is deliberately not quoted here.
         _mat, _lab = _totals.get("material_gbp"), _totals.get("labour_gbp")
-        _split = (" (material £{:,.2f} + labour £{:,.2f})".format(float(_mat), float(_lab))
-                  if _mat is not None and _lab is not None else "")
+        _col_mat = sum(float(p.get("extended_cost") or 0) for p in provenance)
+        _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
+                    f"sheet's £{float(_mat):,.2f}. " if _mat is not None else "")
+        _lab_txt = (f"Labour is £{float(_lab):,.2f}, charged per department row across "
+                    f"every part in that setup — see 'Priced by' for the rows and "
+                    f"decisions behind each part. " if _lab is not None else "")
         cell(row, 1,
              f"RECONCILIATION — the Estimate sheet calculated "
-             f"£{float(_totals.get('unit_gbp') or 0):,.2f} per unit{_split}. The Ext £ "
-             f"column above sums the engine's own per-part figures to "
-             f"£{float(_totals.get('engine_part_sum_gbp') or 0):,.2f}. Different "
-             f"calculators; the workbook is authoritative. Per-part cost is not recoverable "
-             f"from the sheet — a labour row is one department's batch value across every "
-             f"part in its group — so these columns are shown on the engine basis.",
+             f"£{float(_totals.get('unit_gbp') or 0):,.2f} per unit. "
+             f"{_mat_txt}{_lab_txt}The workbook is authoritative.",
              bg=C_KB, size=9, wrap=True)
         ws.row_dimensions[row].height = 32
     row += 2
