@@ -7587,5 +7587,29 @@ def test_an_operation_the_compiler_rejected_is_not_reported_unpriced():
     eq((_ops or {}).get("tapping"), ["2085-03"], "against the part that carries it")
 
 
+def test_the_quote_header_is_the_logo_not_a_labelled_field():
+    """"Prepared for" sat above the embedded customer logo and threw its alignment out on
+    any logo whose aspect ratio differed from the one the offset was tuned against.
+
+    A customer's own mark on a quotation needs no caption explaining whose it is. The label
+    is gone and the block centres its content, so a tall logo and a wide one both sit level
+    with the SDI mark instead of being pushed down by a fixed text offset.
+    """
+    from client_quote_html import build_quote_html
+
+    _job = {"estimate_summary": {}, "invariants": {"may_quote_firm": True, "violations": []}}
+    _html = build_quote_html(_job, job_stem="TEST-HDR")
+
+    ok("Prepared for" not in _html,
+       "the rendered quote must not carry the label — it is the thing that misaligns")
+
+    # The block must still EXIST and still centre, or removing the label has simply left a
+    # customer mark floating against the top of the header.
+    ok('class="cust"' in _html, "the customer block is still rendered")
+    _css = _html.split(".head .cust")[1][:200] if ".head .cust" in _html else ""
+    ok("align-items:center" in _css.replace(" ", "").replace("align-items:center", "align-items:center"),
+       f"and centres its content rather than relying on the removed label's offset, got {_css[:80]!r}")
+
+
 if __name__ == "__main__":
     sys.exit(main())

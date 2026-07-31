@@ -507,9 +507,14 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
             border-radius:4px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.04); }}
   .head {{ display:flex; align-items:center; justify-content:space-between; gap:16px;
            padding:26px 40px 22px; border-bottom:4px solid var(--sdi-yellow); }}
-  .head .cust {{ text-align:right; }}
-  .head .cust .lbl {{ font-size:10px; letter-spacing:.14em; text-transform:uppercase;
-                      color:var(--muted); margin-bottom:6px; }}
+  /* The customer block is the logo, not a labelled field: a caption above the embedded
+     image threw its alignment out on any logo whose aspect ratio differed from the one the
+     offset was tuned against, and a customer's own mark needs no caption saying whose it
+     is. Flex centring replaces the fixed offset, so a tall logo and a wide one both sit
+     level with the SDI mark. */
+  .head .cust {{ text-align:right; display:flex; align-items:center;
+                 justify-content:flex-end; min-height:44px; }}
+  .head .cust img {{ max-height:56px; width:auto; display:block; }}
   .band {{ background:var(--sdi-ink); color:#fff; padding:20px 40px; }}
   /* Not decorative. This is the difference between a price the shop can commit to and one
      the engine could not verify, and it has to survive being printed in black and white. */
@@ -556,10 +561,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   <div class="sheet">
     <div class="head">
       <div class="sdi">{sdi_logo}</div>
-      <div class="cust">
-        <div class="lbl">Prepared for</div>
-        {cust_header}
-      </div>
+      <div class="cust">{cust_header}</div>
     </div>
     <div class="band">
       <h1>Quotation — {_esc(product)}</h1>
