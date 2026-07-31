@@ -789,6 +789,45 @@ class CanonicalRouteUnavailable(RuntimeError):
     """The authoritative route was requested but could not be compiled."""
 
 
+def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None,
+                           parts: Any = (), bends: Any = 0, holes: Any = 0) -> str:
+    """The text an estimator reads on a labour row.
+
+    Module-level so it can be driven. The first check on the DRIL wording asserted that a
+    string appeared in this file, which proves the line was typed, not that it reaches a
+    row -- the failure this run has been correcting all day.
+    """
+    _matx = str(material or "").replace("_", " ").strip()
+    _spec = []
+    if thickness:
+        _spec.append(("%g" % float(thickness)) + "mm")
+    if _matx:
+        _spec.append(_matx)
+    _rd = str(wb_op)
+    # "DRILL (ACRYLIC)" ON A STEEL PART IS THE RIGHT ROW WITH A MISLEADING NAME.
+    #
+    # DRIL's column-H title in the rate table is literally "Drill (Acrylic)", and the shop
+    # books metal drilling and tapping against that same row. The TITLE cannot change: it is
+    # the lookup key, and a title the rate table does not carry returns a rate of zero and
+    # costs the work at nothing -- which is how GRIN silently zeroed every deburr on every
+    # job. So the title stays exactly as the workbook has it, and the DESCRIPTION says what
+    # the work actually is.
+    if (str(wb_op) == "Drill (Acrylic)" and _matx
+            and "ACRYLIC" not in _matx.upper() and "PERSPEX" not in _matx.upper()):
+        _rd += " [metal drill/tap — DRIL is the rate-table row the shop books this to]"
+    if _spec:
+        _rd += " — " + " ".join(_spec)
+    _pl = list(parts or [])
+    if _pl:
+        _rd += " (" + ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6)
+                                            if len(_pl) > 6 else "") + ")"
+    if bends:
+        _rd += " (%d bend%s)" % (int(bends), "" if int(bends) == 1 else "s")
+    elif holes:
+        _rd += " (%d hole%s)" % (int(holes), "" if int(holes) == 1 else "s")
+    return _rd
+
+
 def canonical_route_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(summary, dict):
         return {}
@@ -861,11 +900,18 @@ def canonicalise_part_estimates_for_workbook(
     def _desc_key(_t: Any) -> str:
         return re.sub(r"[^A-Z0-9]+", " ", str(_t or "").upper()).strip()
 
-    _canonical_by_desc = {}
+    # ONE CANDIDATE, OR NONE. Keeping the first node with a given description made the
+    # merge target depend on dict order: two canonical bought-ins sharing a description
+    # would absorb the synthesised line into whichever happened to be seen first, and the
+    # sheet would show the quantity against the wrong part with nothing to indicate it.
+    # An ambiguous match is not a match.
+    _desc_hits: Dict[str, List[str]] = {}
     for _ident, _node in nodes.items():
         _dk = _desc_key(_node.get("description"))
-        if _dk and _dk not in _canonical_by_desc:
-            _canonical_by_desc[_dk] = _ident
+        if _dk:
+            _desc_hits.setdefault(_dk, []).append(_ident)
+    _canonical_by_desc = {_dk: _ids[0] for _dk, _ids in _desc_hits.items() if len(_ids) == 1}
+    _ambiguous = {_dk for _dk, _ids in _desc_hits.items() if len(_ids) > 1}
     _synth_merged: List[str] = []
     for _est in part_estimates or []:
         if not isinstance(_est, dict):
@@ -873,7 +919,13 @@ def canonicalise_part_estimates_for_workbook(
         _sid = str(_est.get("part_number") or "").strip().upper()
         if not _sid.startswith("BI-") or _sid in nodes or _sid in aliases:
             continue
-        _target = _canonical_by_desc.get(_desc_key(_est.get("description")))
+        _dk = _desc_key(_est.get("description"))
+        if _dk in _ambiguous:
+            print(f"   [wb_populate] {_sid} matches MORE THAN ONE canonical item by "
+                  f"description; left as its own line rather than merged into an arbitrary "
+                  f"one — estimator to reconcile", flush=True)
+            continue
+        _target = _canonical_by_desc.get(_dk)
         if _target and _target != _sid:
             aliases[_sid] = _target
             _synth_merged.append(f"{_sid} -> {_target}")
@@ -2871,38 +2923,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                          or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
 
         _matx = str(g["material"] or "").replace("_", " ").strip()
-        _spec = []
-        if g["thickness"]:
-            _spec.append(("%g" % g["thickness"]) + "mm")
-        if _matx:
-            _spec.append(_matx)
-        _detail = ""
-        if g["bends"]:
-            _detail = " (%d bend%s)" % (g["bends"], "" if g["bends"] == 1 else "s")
-        elif g["holes"]:
-            _detail = " (%d hole%s)" % (g["holes"], "" if g["holes"] == 1 else "s")
-        _pl = g["parts"]
-        _ptxt = ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6) if len(_pl) > 6 else "")
-        # "DRILL (ACRYLIC)" ON A STEEL PART IS THE RIGHT ROW WITH A MISLEADING NAME.
-        #
-        # DRIL's column-H title in the rate table is literally "Drill (Acrylic)", and the
-        # shop books metal drilling and tapping against that same row. The TITLE cannot be
-        # changed: it is the lookup key, and a title the rate table does not carry returns a
-        # rate of zero and costs the work at nothing -- which is how GRIN silently zeroed
-        # every deburr on every job.
-        #
-        # So the title stays exactly as the workbook has it and the DESCRIPTION says what
-        # the work actually is, which is the half an estimator reads.
-        _rd = str(wb_op)
-        if (wb_op == "Drill (Acrylic)"
-                and _matx and "ACRYLIC" not in _matx.upper()
-                and "PERSPEX" not in _matx.upper()):
-            _rd += " [metal drill/tap — DRIL is the rate-table row the shop books this to]"
-        if _spec:
-            _rd += " — " + " ".join(_spec)
-        if _ptxt:
-            _rd += " (" + _ptxt + ")"
-        _rd += _detail
+        _rd = labour_row_description(wb_op, g["material"], g["thickness"],
+                                     g["parts"], g["bends"], g["holes"])
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
         ws.cell(row=row, column=lb["col_desc"],      value=_rd[:200])

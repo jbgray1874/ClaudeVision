@@ -7132,27 +7132,48 @@ def test_the_drill_row_keeps_the_rate_table_title_and_says_what_it_is():
     """DRIL's column-H title is literally "Drill (Acrylic)", and the shop books metal
     drilling and tapping to that same row.
 
-    The TITLE cannot be changed: it is the lookup key. A title the rate table does not carry
+    The TITLE cannot change: it is the lookup key. A title the rate table does not carry
     returns a rate of zero and costs the work at nothing — which is how GRIN silently zeroed
-    every deburr on every job. So the title stays exactly as the workbook has it and the
-    description says what the work actually is, which is the half an estimator reads.
+    every deburr on every job. So the title stays and the DESCRIPTION says what the work is,
+    which is the half an estimator reads.
+
+    The first version of this checked that a string appeared in wb_populate.py. That proves
+    the line was typed, not that it reaches a row — the failure this run has been correcting
+    all day. This drives the builder.
     """
+    from wb_populate import labour_row_description as _d
+    from department_codes import CODE_TITLES
+
+    eq(CODE_TITLES["DRIL"][0], "Drill (Acrylic)",
+       "the rate-table title is the lookup key and must not be renamed")
+
+    _metal = _d("Drill (Acrylic)", "MILD STEEL", 1.5, ["12120-01-01M"])
+    ok(_metal.startswith("Drill (Acrylic)"),
+       f"the row still leads with the exact rate-table title, got {_metal!r}")
+    ok("metal drill/tap" in _metal,
+       f"and says what the work actually is, got {_metal!r}")
+
+    # AN ACRYLIC PART NEEDS NO NOTE. Without this the fixture would pass against a version
+    # that appended the note to every drill row, which would be noise on the parts the
+    # department is actually named for.
+    _acrylic = _d("Drill (Acrylic)", "ACRYLIC", 5, ["X-1"])
+    ok("metal drill/tap" not in _acrylic,
+       f"an acrylic part drilled on the acrylic row needs no explanation, got {_acrylic!r}")
+
+    # AND NO OTHER DEPARTMENT IS TOUCHED.
+    _fold = _d("Fold", "MILD STEEL", 1.5, ["A", "B"], bends=2)
+    ok("metal drill/tap" not in _fold, f"the note is DRIL-only, got {_fold!r}")
+    ok(_fold.startswith("Fold —"), f"and other rows read as before, got {_fold!r}")
+
+    # AND THE ROW USES IT. Driving the builder proves the builder; a labour row that
+    # constructed its own text would carry none of this and nothing here would notice.
+    # This checks the CALL, not that a phrase appears somewhere in the file.
     import os as _os
     _wb = open(_os.path.join(
         _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
         "src", "wb_populate.py"), encoding="utf-8").read()
-
-    from department_codes import CODE_TITLES
-    eq(CODE_TITLES["DRIL"][0], "Drill (Acrylic)",
-       "the rate-table title is the lookup key and must not be renamed")
-
-    ok('_rd += " [metal drill/tap' in _wb,
-       "a metal part drilled on the DRIL row says so in its description")
-    ok('"ACRYLIC" not in _matx.upper()' in _wb,
-       "and only when the material is NOT acrylic — an acrylic part needs no note")
-    ok('wb_op = str(_map_operation' not in _wb.replace(
-           'wb_op == "Drill (Acrylic)"', ''),
-       "the note is added to the description, never to the operation title")
+    ok("_rd = labour_row_description(wb_op," in _wb,
+       "the labour row takes its description from the shared builder")
 
 
 def test_two_names_for_one_department_are_one_operation():
@@ -7198,6 +7219,44 @@ def test_two_names_for_one_department_are_one_operation():
     ok(_v, "an operation no department charged for is still reported")
     eq(sorted((_v[0].get("detail") or {}).get("operations") or {}), ["tapping"],
        "and only that one — the aliased pair must not be dragged back in")
+
+
+def test_an_ambiguous_description_match_is_not_a_match():
+    """The synthesised-code merge kept the FIRST canonical node with a given description.
+    Where two canonical bought-ins share a description, the merge target then depended on
+    dict order: the quantity would land against whichever was seen first, on the sheet, with
+    nothing to say it had been a coin toss.
+
+    An ambiguous match is not a match. The line stays separate and says so, because two
+    similar items merged wrongly is a quantity against the wrong part — silent, and worse
+    than an extra row an estimator can see and reconcile.
+    """
+    from wb_populate import canonicalise_part_estimates_for_workbook as _cz
+
+    _amb = {"estimate_summary": {"canonical_route_shadow": {
+        "decisions": [{"operation": "handling"}],
+        "nodes": [
+            {"part_number": "FIXING-A", "kind": "bought_in", "qty_per_unit": 2,
+             "description": "M4 THREADED PEM STUD (LENGTH: 30mm)"},
+            {"part_number": "FIXING-B", "kind": "bought_in", "qty_per_unit": 2,
+             "description": "M4 THREADED PEM STUD (LENGTH: 30mm)"},
+        ]}}}
+    _pes = [{"part_number": "BI-PEMSTUD",
+             "description": "M4 THREADED PEM STUD (LENGTH: 30mm)", "quantity": 2}]
+    _codes = [p.get("part_number") for p in _cz(_amb, _pes)]
+    ok("BI-PEMSTUD" in _codes,
+       f"with two canonical candidates the synthesised line is NOT absorbed into one of "
+       f"them at random, got {_codes}")
+
+    # A UNIQUE match still merges — otherwise this fixture would pass against a rule that
+    # simply stopped merging anything.
+    _uniq = {"estimate_summary": {"canonical_route_shadow": {
+        "decisions": [{"operation": "handling"}],
+        "nodes": [{"part_number": "STD PART", "kind": "bought_in", "qty_per_unit": 2,
+                   "description": "M4 THREADED PEM STUD (LENGTH: 30mm)"}]}}}
+    _u = [p.get("part_number") for p in _cz(_uniq, list(_pes))]
+    ok("BI-PEMSTUD" not in _u and "STD PART" in _u,
+       f"one candidate still absorbs the duplicate, got {_u}")
 
 
 if __name__ == "__main__":
