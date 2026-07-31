@@ -772,9 +772,21 @@ def compile_job_route(
                 target_id=target_id,
                 scope=scope,
                 participants=members,
+                # A ROUTE-GROUP QUANTITY IS NOT EACH TARGET'S QUANTITY.
+                #
+                # 2085's tube_cut names both tubes and states qty_per_unit 2 -- two tubes
+                # per product. Splitting that into a decision per tube while copying the
+                # group total onto each gave 2085-02 x2 and 2085-03 x2, a workbook total of
+                # four cuts on two tubes: 18.25 batch hours and GBP 3.24 where the honest
+                # figure is 9.25 and GBP 1.64. Over half the labour on this job.
+                #
+                # Where the line resolves to ONE target, its stated quantity is that
+                # target's. Where it splits across several, each takes its own multiplicity
+                # from the canonical BOM -- which is the only place that knows how many of
+                # each part the product contains.
                 qty_per_unit=(
                     route.get("qty_per_unit")
-                    if route.get("qty_per_unit") is not None
+                    if (route.get("qty_per_unit") is not None and len(targets) == 1)
                     else graph_quantities.get(target_id, 1.0)
                 ),
                 sequence=route.get("sequence"),
@@ -1077,11 +1089,23 @@ def compile_job_route(
         if decision.operation == "welding" and decision.status == REQUIRED
     }
     for node in graph["nodes"]:
+        # WELDING REPLACES THE JOINING STEP, NOT THE FINAL PACK.
+        #
+        # Excluding every welded parent is right for an INTERMEDIATE assembly -- welding
+        # 12120-01-02M to -03M IS how 101 gets assembled, and a separate assemble event on
+        # top of it would charge the same work twice.
+        #
+        # It is wrong for the TOP assembly, which is the thing that ships. 2085-GA owns the
+        # weld, so it received no assembly event at all and the sheet carried no
+        # Assemble/pack row: a welded bracket that nobody handles or packs. The invariant
+        # was right to report handling as unpriced -- there was genuinely nothing charging
+        # for it.
+        _is_top = node.part_number == graph["top_assembly"]
         if (
             node.kind != "assembly"
             or not node.children
             or node.part_number in existing_assembly_targets
-            or node.part_number in welded_targets
+            or (node.part_number in welded_targets and not _is_top)
         ):
             continue
         assembly_route_id = stable_id("route", {
@@ -1103,7 +1127,8 @@ def compile_job_route(
             participants=[edge.part_number for edge in node.children],
             qty_per_unit=node.qty_per_unit,
             sequence=90 if node.part_number == graph["top_assembly"] else 60,
-            reason="non-welded BOM parent requires one assembly event",
+            reason=("the top assembly is packed whatever joined it"
+                    if _is_top else "non-welded BOM parent requires one assembly event"),
             route_id=assembly_route_id,
         ))
 

@@ -7323,5 +7323,119 @@ def test_operation_coverage_is_asked_per_part_not_job_wide():
        f"against P2 only — P1 IS covered by the row that names it, got {_ops}")
 
 
+def test_a_route_group_quantity_is_not_each_targets_quantity():
+    """2085's tube_cut names both tubes and states qty_per_unit 2 — two tubes per product.
+    Splitting that into a decision per tube while copying the GROUP total onto each gave
+    2085-02 x2 and 2085-03 x2: four cuts on two tubes, 18.25 batch hours and GBP 3.24 where
+    the honest figure is 9.25 and GBP 1.64. Over half the labour on that job.
+
+    Where a line resolves to ONE target its stated quantity is that target's. Where it
+    splits across several, each takes its own multiplicity from the canonical BOM — the only
+    place that knows how many of each part the product contains.
+    """
+    from route_compiler import compile_job_route
+
+    _parts = [{"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1},
+              {"part_number": "2085-02", "description": "OUTER TUBE", "quantity": 1},
+              {"part_number": "2085-03", "description": "INNER TUBE", "quantity": 1}]
+    _extract = {
+        "found": True,
+        "bom": [{"part_number": p["part_number"], "description": p["description"], "qty": 1}
+                for p in _parts],
+        "assemblies": [{"part_number": "2085-GA",
+                        "children": [{"part_number": p["part_number"], "qty": 1}
+                                     for p in _parts]}],
+        "routes": [
+            {"sequence": 10, "operation": "tube_cut", "scope": "part", "qty_per_unit": 2,
+             "part_numbers": ["2085-02", "2085-03"]},
+            {"sequence": 40, "operation": "welding", "scope": "assembly", "qty_per_unit": 1,
+             "part_numbers": ["2085-01", "2085-02", "2085-03"]},
+        ]}
+    _dec = [d for d in compile_job_route(_parts, _extract).get("decisions") or []
+            if d.get("status") == "required"]
+    _tubes = [d for d in _dec if d.get("operation") == "tube_cut"]
+
+    eq(len(_tubes), 2, f"one cut decision per tube, got {len(_tubes)}")
+    for _t in _tubes:
+        eq(_t.get("qty_per_unit"), 1.0,
+           f"{_t.get('target_id')} is one tube, not the group's two — got "
+           f"{_t.get('qty_per_unit')}")
+    eq(sum(d.get("qty_per_unit") or 0 for d in _tubes), 2.0,
+       "and the group still totals two cuts, which is what the route said")
+
+    # A SINGLE-TARGET LINE KEEPS ITS STATED QUANTITY. Without this the fixture would pass
+    # against a rule that ignored route quantities altogether.
+    _weld = [d for d in _dec if d.get("operation") == "welding"]
+    eq(len(_weld), 1, "the weld is one event")
+    eq(_weld[0].get("qty_per_unit"), 1.0, "and keeps the quantity the route stated")
+
+
+def test_the_top_assembly_is_packed_whatever_joined_it():
+    """Excluding every welded parent from assembly events is right for an INTERMEDIATE
+    assembly — welding 12120-01-02M to -03M IS how 101 gets assembled, and a separate
+    assemble event would charge that twice.
+
+    It is wrong for the TOP assembly, which is the thing that ships. 2085-GA owns the weld,
+    so it received no assembly event at all and the sheet carried no Assemble/pack row: a
+    welded bracket nobody handles or packs. The `handling` warning was correct — there was
+    genuinely nothing charging for it.
+    """
+    from route_compiler import compile_job_route
+
+    _parts = [{"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1},
+              {"part_number": "2085-02", "description": "OUTER TUBE", "quantity": 1}]
+    _extract = {
+        "found": True,
+        "bom": [{"part_number": p["part_number"], "description": p["description"], "qty": 1}
+                for p in _parts],
+        "assemblies": [{"part_number": "2085-GA",
+                        "children": [{"part_number": p["part_number"], "qty": 1}
+                                     for p in _parts]}],
+        "routes": [{"sequence": 40, "operation": "welding", "scope": "assembly",
+                    "qty_per_unit": 1, "part_numbers": ["2085-01", "2085-02"]}]}
+    _dec = [d for d in compile_job_route(_parts, _extract).get("decisions") or []
+            if d.get("status") == "required"]
+
+    _asm = [d for d in _dec if d.get("operation") == "assembly"]
+    eq(len(_asm), 1, f"the welded top assembly still gets ONE pack event, got {len(_asm)}")
+    eq(_asm[0].get("target_id"), "2085-GA", "on the thing that ships")
+    ok((_asm[0].get("sequence") or 0) > 40,
+       f"and after the weld, not before it — got sequence {_asm[0].get('sequence')}")
+
+    # THE WELD IS NOT DUPLICATED BY IT.
+    eq(len([d for d in _dec if d.get("operation") == "welding"]), 1,
+       "adding the pack event must not create a second weld")
+
+    # AN INTERMEDIATE WELDED ASSEMBLY STILL GETS NOTHING. This is the case the exclusion
+    # exists for: welding 12120-01-02M to -03M IS how 101 is assembled, so a pack event on
+    # 101 would charge that work twice. Without this the fixture would pass against a rule
+    # that packed every welded parent.
+    _multi = [{"part_number": "12120-01-02M", "quantity": 1, "description": "UPSTAND"},
+              {"part_number": "12120-01-03M", "quantity": 1, "description": "BASE PLATE"},
+              {"part_number": "12120-01-05M", "quantity": 1, "description": "COVER PLATE"}]
+    _mx = {
+        "found": True,
+        "bom": [{"part_number": p["part_number"], "description": p["description"], "qty": 1}
+                for p in _multi],
+        "assemblies": [
+            {"part_number": "12120-01-101",
+             "children": [{"part_number": "12120-01-02M", "qty": 1},
+                          {"part_number": "12120-01-03M", "qty": 1}]},
+            {"part_number": "12120-01-SA01",
+             "children": [{"part_number": "12120-01-101", "qty": 1},
+                          {"part_number": "12120-01-05M", "qty": 1}]},
+        ],
+        "routes": [{"sequence": 40, "operation": "welding", "scope": "assembly",
+                    "qty_per_unit": 1, "target_id": "12120-01-101",
+                    "part_numbers": ["12120-01-02M", "12120-01-03M"]}]}
+    _md = [d for d in compile_job_route(_multi, _mx).get("decisions") or []
+           if d.get("status") == "required" and d.get("operation") == "assembly"]
+    _targets = sorted(str(d.get("target_id")) for d in _md)
+    ok("12120-01-101" not in _targets,
+       f"the welded INTERMEDIATE assembly is not packed as well as welded, got {_targets}")
+    ok(any(t.endswith("SA01") for t in _targets),
+       f"while the top assembly above it still is, got {_targets}")
+
+
 if __name__ == "__main__":
     sys.exit(main())
