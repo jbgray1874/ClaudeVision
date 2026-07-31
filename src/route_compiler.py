@@ -655,6 +655,7 @@ def compile_job_route(
     graph_quantities = graph["quantities"]
     claims_by_event: Dict[str, List[OperationClaim]] = {}
     explicit_memberships: Dict[Tuple[str, str], Set[str]] = {}
+    explicit_assembly_events: Dict[str, List[Tuple[str, str]]] = {}
     issues: List[Dict[str, Any]] = list(graph.get("issues") or [])
 
     def add_claim(event_id: str, claim: OperationClaim) -> None:
@@ -782,6 +783,9 @@ def compile_job_route(
                 route_id=route_id,
             )
             add_claim(event_id, claim)
+            if scope == "assembly":
+                explicit_assembly_events.setdefault(operation, []).append(
+                    (target_id, event_id))
             # The target is a member of its own event for compatibility joins. Otherwise an
             # existing operation on assembly 101 becomes a second part-level weld alongside
             # the explicit assembly event it was describing.
@@ -811,6 +815,29 @@ def compile_job_route(
                 source = str(operation_sources.get(operation) or fallback_source)
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
+                if not event_ids and operation in ASSEMBLY_EVENT_OPERATIONS:
+                    # A child record often repeats its parent's finish/weld wording. If an
+                    # explicit assembly event already owns that operation, the child word is
+                    # corroboration of that event, not a second charge on the child. Choose
+                    # the most-specific owning assembly when nested events exist.
+                    ancestor_events = [
+                        (target_id, event_id)
+                        for target_id, event_id in (
+                            explicit_assembly_events.get(operation) or [])
+                        if _is_descendant(part_number, target_id, graph["parents"])
+                    ]
+                    most_specific = [
+                        (target_id, event_id)
+                        for target_id, event_id in ancestor_events
+                        if not any(
+                            other_target != target_id
+                            and _is_descendant(
+                                other_target, target_id, graph["parents"])
+                            for other_target, _ in ancestor_events
+                        )
+                    ]
+                    if len(most_specific) == 1:
+                        event_ids = [most_specific[0][1]]
                 # Dressing is one event attached to the weld event, not a separate dressing
                 # charge on every participant which happened to carry the inferred word.
                 if not event_ids and operation == "dress_welds":
@@ -860,15 +887,32 @@ def compile_job_route(
                     scope = str(scopes.get(operation) or "part").strip().lower()
                     if scope not in VALID_SCOPES:
                         scope = "part"
+                    compatibility_target = part_number
+                    finish_text = str(
+                        part.get("normalized_finish")
+                        or part.get("finish")
+                        or ""
+                    ).upper()
+                    finish_defers_to_assembly = (
+                        operation == "powder_coating"
+                        and "SEE ASSEMBLY" in finish_text
+                    )
+                    if finish_defers_to_assembly:
+                        immediate_parents = sorted(graph["parents"].get(part_number) or [])
+                        if len(immediate_parents) == 1:
+                            scope = "assembly"
+                            compatibility_target = immediate_parents[0]
                     event_ids = [stable_id("decision", {
                         "origin": "compatibility",
                         "operation": operation,
                         "scope": scope,
-                        "target_id": part_number,
+                        "target_id": compatibility_target,
                     })]
                 for event_id in event_ids:
                     template = (claims_by_event.get(event_id) or [None])[0]
-                    target_id = template.target_id if template else part_number
+                    target_id = (
+                        template.target_id if template else compatibility_target
+                    )
                     scope = template.scope if template else scopes.get(operation, "part")
                     route_id = template.route_id if template else ""
                     claim_status = REQUIRED
@@ -877,6 +921,19 @@ def compile_job_route(
                         # every leaf and bought-in line is assembled independently. Canonical
                         # assembly events are created from the hierarchy below.
                         claim_status = NOT_APPLICABLE
+                    elif (
+                        template is None
+                        and operation == "powder_coating"
+                        and "SEE ASSEMBLY" in str(
+                            part.get("normalized_finish")
+                            or part.get("finish")
+                            or ""
+                        ).upper()
+                    ):
+                        # The leaf explicitly delegates its finish, but no extracted route
+                        # owns it. Pricing it on the leaf would be a guess and can duplicate
+                        # a later assembly coat; keep the unresolved event visible instead.
+                        claim_status = UNVERIFIED
                     elif (
                         template is None
                         and kinds.get(part_number) == "assembly"

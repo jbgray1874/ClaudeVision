@@ -67,7 +67,7 @@ The output workbook also receives `Canonical BOM` and `Canonical Route` audit sh
 ## Validation
 
 ```text
-162 regression fixtures
+163 regression fixtures
 0 failures
 ```
 
@@ -85,6 +85,11 @@ Direct projection of the latest saved job JSONs produced:
 The saved 12120 JSON also contains the old disconnected `BI-SCREENCABLE` record, so the
 compiler correctly reports a blocker on that stale artefact. A fresh run containing the
 already-landed reference-only cable fix should remove it.
+
+The 31 July live run also exposed child records repeating an assembly powder-coat route.
+Children beneath an explicit coated assembly now corroborate that event rather than creating
+another coating charge. A `SEE ASSEMBLY` finish with no owning route remains `unverified`
+and blocks release instead of being silently charged on the leaf.
 
 An actual `.xlsx` render was not executed in this restricted review environment because
 the available validation interpreter does not contain the project workbook dependency.

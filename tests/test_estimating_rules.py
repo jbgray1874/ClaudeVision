@@ -6708,5 +6708,59 @@ def test_shop_sequence_fills_only_required_events_after_arbitration():
        "ruled-out work receives no invented route position")
 
 
+def test_child_finish_words_do_not_duplicate_an_owning_assembly_coat():
+    from route_compiler import REQUIRED, UNVERIFIED, compile_job_route
+
+    _parts = [
+        {
+            "part_number": "WELD-ASSY", "description": "WELD ASSY",
+            "textual_operations": ["powder_coating"],
+            "operation_scope": {"powder_coating": "assembly"},
+        },
+        {
+            "part_number": "CHILD-A", "description": "CHILD A",
+            "normalized_finish": "SEE ASSEMBLY DRAWING",
+            "textual_operations": ["powder_coating"],
+        },
+        {
+            "part_number": "LOOSE-COVER", "description": "LOOSE COVER",
+            "normalized_finish": "SEE ASSEMBLY DRAWING",
+            "textual_operations": ["powder_coating"],
+        },
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "TOP"},
+        "assemblies": [
+            {"part_number": "TOP", "children": [
+                {"part_number": "WELD-ASSY", "qty": 1},
+                {"part_number": "LOOSE-COVER", "qty": 1},
+            ]},
+            {"part_number": "WELD-ASSY", "children": [
+                {"part_number": "CHILD-A", "qty": 1},
+            ]},
+        ],
+        "routes": [{
+            "operation": "powder_coating", "scope": "assembly",
+            "part_numbers": ["WELD-ASSY"], "sequence": 70,
+            "inferred": True,
+        }],
+    }
+    _graph = compile_job_route(_parts, _extract)
+    _powder = [
+        decision for decision in _graph["decisions"]
+        if decision["operation"] == "powder_coating"
+    ]
+    _required = [d for d in _powder if d["status"] == REQUIRED]
+    eq(len(_required), 1,
+       "a child finish word corroborates rather than duplicates its assembly coat")
+    eq(_required[0]["target_id"], "WELD-ASSY",
+       "the explicit assembly remains the owner")
+    _uncertain = [d for d in _powder if d["status"] == UNVERIFIED]
+    eq(len(_uncertain), 1,
+       "a delegated finish with no owning route remains visible for review")
+    eq(_uncertain[0]["target_id"], "TOP",
+       "the unresolved event points at the assembly it delegates to")
+
+
 if __name__ == "__main__":
     sys.exit(main())
