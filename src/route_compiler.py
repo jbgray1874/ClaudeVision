@@ -965,9 +965,24 @@ def compile_job_route(
                         # participant here would conflict at equal rank with the full route.
                         participants=(
                             template.participants if template else [part_number]),
+                        # THE SECOND PLACE THE GROUP TOTAL LEAKED IN.
+                        #
+                        # operation_qty_per_unit on a part record is what the ROUTE LINE
+                        # said, stamped onto every participant by the fold. For 2085's
+                        # tube_cut that is 2 -- two tubes per product -- and reading it back
+                        # per part gave 2085-02 x2 and 2085-03 x2 again, through the
+                        # compatibility adapter this time rather than the route split
+                        # fc3c9b2 fixed. One defect, two doors, and the first fix only
+                        # closed one of them.
+                        #
+                        # A PART-scoped event happens once per instance of that part, so its
+                        # quantity is the part's own BOM multiplicity. The route's stated
+                        # figure describes the group and is kept only where the event covers
+                        # the group -- an assembly-scoped event, which has one target.
                         qty_per_unit=(
                             operation_quantities.get(operation)
-                            if operation_quantities.get(operation) is not None
+                            if (operation_quantities.get(operation) is not None
+                                and scope != "part")
                             else graph["quantities"].get(target_id, 1.0)
                         ),
                         sequence=sequences.get(operation),

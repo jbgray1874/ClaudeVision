@@ -7369,6 +7369,35 @@ def test_a_route_group_quantity_is_not_each_targets_quantity():
     eq(len(_weld), 1, "the weld is one event")
     eq(_weld[0].get("qty_per_unit"), 1.0, "and keeps the quantity the route stated")
 
+    # THE SECOND DOOR. The same group total also reaches the compiler through the
+    # compatibility adapter, as operation_qty_per_unit stamped onto every participant by the
+    # route fold. Fixing only the route split left 2085's tubes doubled by the other path,
+    # and the first fixture could not see it because it drove the route path alone.
+    _adapter_parts = [
+        {"part_number": "2085-01", "description": "BRACKET PLATE", "quantity": 1},
+        {"part_number": "2085-02", "description": "OUTER TUBE", "quantity": 1,
+         "textual_operations": ["tube_cut"], "operation_qty_per_unit": {"tube_cut": 2},
+         "operation_scope": {"tube_cut": "part"}},
+        {"part_number": "2085-03", "description": "INNER TUBE", "quantity": 1,
+         "textual_operations": ["tube_cut"], "operation_qty_per_unit": {"tube_cut": 2},
+         "operation_scope": {"tube_cut": "part"}},
+    ]
+    _adapter_extract = {
+        "found": True,
+        "bom": [{"part_number": p["part_number"], "description": p["description"], "qty": 1}
+                for p in _adapter_parts],
+        "assemblies": [{"part_number": "2085-GA",
+                        "children": [{"part_number": p["part_number"], "qty": 1}
+                                     for p in _adapter_parts]}],
+        "routes": []}
+    _ad = [d for d in compile_job_route(_adapter_parts, _adapter_extract).get("decisions") or []
+           if d.get("operation") == "tube_cut" and d.get("status") == "required"]
+    eq(len(_ad), 2, f"one cut decision per tube through the adapter, got {len(_ad)}")
+    for _t in _ad:
+        eq(_t.get("qty_per_unit"), 1.0,
+           f"{_t.get('target_id')} via the adapter is one tube, not the group's two — got "
+           f"{_t.get('qty_per_unit')}")
+
 
 def test_the_top_assembly_is_packed_whatever_joined_it():
     """Excluding every welded parent from assembly events is right for an INTERMEDIATE
