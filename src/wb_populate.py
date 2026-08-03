@@ -1157,31 +1157,76 @@ def canonicalise_part_estimates_for_workbook(
     return [normalised[identity] for identity in order]
 
 
+# A colour is a code or a named colour. Reading the whole sentence is what let a pointer
+# ("SEE ASSEMBLY DRAWING NOTTINGHAM") read as a second colour and fork the booth setup.
+_RAL_CODE = re.compile(r"\bRAL\s*\d{4}\b")
+_COLOUR_WORDS = frozenset({
+    "WHITE", "BLACK", "SILVER", "GREY", "GRAY", "RED", "BLUE", "GREEN", "YELLOW",
+    "ORANGE", "BROWN", "CREAM", "IVORY", "ANTHRACITE", "GRAPHITE", "CHROME", "GOLD",
+})
+
+
 def _canonical_finish_signature(
     identities: List[str],
     estimates: Dict[str, Dict[str, Any]],
     raw: Dict[str, Dict[str, Any]],
+    operation: str = "",
 ) -> str:
-    """Stable finish/setup identity; different colours must not share a booth setup."""
-    values: List[str] = []
+    """The BOOTH SETUP, not the words the drawings happen to use.
+
+    A SETUP CHANGES WHEN THE COLOUR CHANGES. It does not change because one part's title
+    block says "POWDER COATED NOTTINGHAM" and another's says "SEE ASSEMBLY DRAWING
+    NOTTINGHAM" — that is a pointer the engine has already resolved to the same finish — and
+    it does not change because a third part states no finish at all while the route says it
+    is coated.
+
+    This joined the RAW TEXT, so 11350's one white powder job came out as three booth setups
+    and three lots of setup time: "POWDER COATED NOTTINGHAM", "FINISH-UNSPECIFIED", and
+    "POWDER COATED NOTTINGHAM | SEE ASSEMBLY DRAWING NOTTINGHAM". One colour, one booth, one
+    hang — charged three times.
+
+    So the key is what the setup actually depends on: the finish FAMILY, from the module
+    that already owns that question, and the COLOUR. Different colours still get different
+    setups, which is the thing this function exists to protect — a colour change IS a booth
+    change, and nothing else here is.
+
+    An unread finish contributes NOTHING rather than a token of its own. It is not evidence
+    of a different colour; it is absence, and absence must not fork a setup. If no candidate
+    states anything, they are all one unspecified setup — still one, not one each.
+    """
+    from finish_rules import finish_families, _OPERATION_FAMILY
+
+    families: set = set()
+    colours: set = set()
     for identity in identities:
         for record in (estimates.get(identity) or {}, raw.get(identity) or {}):
-            for key in (
-                "normalized_finish", "finish", "surface_finish",
-                "surface_finishes", "finish_general",
-            ):
+            if not isinstance(record, dict):
+                continue
+            for key in ("normalized_finish", "finish", "surface_finish",
+                        "surface_finishes", "finish_general", "colour", "color",
+                        "normalized_colour", "ral"):
                 value = record.get(key)
                 if isinstance(value, dict):
                     value = value.get("description") or value.get("name") or value.get("value")
-                if isinstance(value, (list, tuple, set)):
-                    candidates = value
-                else:
-                    candidates = [value]
-                for candidate in candidates:
+                for candidate in (value if isinstance(value, (list, tuple, set)) else [value]):
                     text = re.sub(r"\s+", " ", str(candidate or "").strip()).upper()
-                    if text and text not in values:
-                        values.append(text)
-    return " | ".join(sorted(values)) or "FINISH-UNSPECIFIED"
+                    if not text:
+                        continue
+                    families |= finish_families(text)
+                    # A COLOUR IS A RAL CODE OR A NAMED COLOUR, never the whole sentence.
+                    # Reading the sentence is what let a pointer look like a second colour.
+                    colours |= {m.group(0) for m in _RAL_CODE.finditer(text)}
+                    colours |= {w for w in _COLOUR_WORDS if re.search(r"\b" + w + r"\b", text)}
+    # THE OPERATION KNOWS ITS OWN FAMILY. A part the route sends to the powder booth is
+    # powder-coated whether or not its title block says so — 11350's right arm states no
+    # finish at all, and reading that as a distinct setup gave one white job a third booth
+    # hang. The decision is the evidence here; the title block is corroboration.
+    if not families:
+        _op_family = _OPERATION_FAMILY.get(str(operation or "").strip().lower())
+        if _op_family:
+            families = {_op_family}
+    return "|".join(("+".join(sorted(families)) or "FAMILY-UNREAD",
+                     "+".join(sorted(colours)) or "COLOUR-UNREAD"))
 
 
 def _canonical_record_index(
@@ -1296,7 +1341,7 @@ def canonical_labour_groups(
             # One colour/booth setup can carry several separately identified coated
             # objects. Different finishes remain separate setups.
             finish_signature = _canonical_finish_signature(
-                candidate_ids, estimates, raw)
+                candidate_ids, estimates, raw, operation)
             key = ("canonical-finish-setup", wb_op, finish_signature)
         elif scope == "assembly":
             key = ("canonical-event", decision_id)

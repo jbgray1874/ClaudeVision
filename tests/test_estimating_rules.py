@@ -5545,6 +5545,89 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_one_colour_is_one_booth_setup():
+    """A SETUP CHANGES WHEN THE COLOUR CHANGES, and nothing else here does.
+
+    The signature joined the RAW TEXT of every finish field, so 11350's one white powder job
+    came out as three booth setups and three lots of setup time: "POWDER COATED NOTTINGHAM"
+    from the left arm, "FINISH-UNSPECIFIED" from the right arm, and "POWDER COATED
+    NOTTINGHAM | SEE ASSEMBLY DRAWING NOTTINGHAM" from the bar and its sub-assembly. One
+    colour, one booth, one hang — charged three times, and the group even carried a 2.5mm
+    label onto a bar measured at 1mm.
+
+    A pointer the engine has already resolved is not a second colour. An unread finish is
+    not a second colour either — it is absence, and absence must not fork a setup."""
+    import wb_populate as W
+
+    _est = {"11350-01-02": {"normalized_finish": "POWDER COATED NOTTINGHAM"},
+            "11350-01-02 MIR": {},
+            "11350-01-01": {"normalized_finish": "SEE ASSEMBLY DRAWING NOTTINGHAM"},
+            "11350-01-101": {"normalized_finish": "POWDER COATED NOTTINGHAM"}}
+    _sigs = {W._canonical_finish_signature(_ids, _est, {}, "powder_coating")
+             for _ids in (["11350-01-02"], ["11350-01-02 MIR"],
+                          ["11350-01-01", "11350-01-101"])}
+    eq(len(_sigs), 1, f"11350 is ONE booth setup, not three — got {sorted(_sigs)}")
+
+    # A POINTER IS NOT A COLOUR. This is the specific text that forked the setup.
+    eq(W._canonical_finish_signature(["11350-01-01"], _est, {}, "powder_coating"),
+       W._canonical_finish_signature(["11350-01-02"], _est, {}, "powder_coating"),
+       "'SEE ASSEMBLY DRAWING' and 'POWDER COATED' are the same booth")
+
+    # THE OPERATION KNOWS ITS OWN FAMILY. A part the route sends to the booth is coated
+    # whether or not its title block says so.
+    eq(W._canonical_finish_signature(["11350-01-02 MIR"], _est, {}, "powder_coating"),
+       W._canonical_finish_signature(["11350-01-02"], _est, {}, "powder_coating"),
+       "a part with no stated finish joins the setup its route puts it in")
+    # ...but only because the ROUTE said so. With no operation there is nothing to assume.
+    ok(W._canonical_finish_signature(["11350-01-02 MIR"], _est, {}, "")
+       != W._canonical_finish_signature(["11350-01-02"], _est, {}, "powder_coating"),
+       "with no operation the unread finish stays unread rather than being invented")
+
+    # ── WHAT MUST STILL SPLIT, which is the whole point of the function ──────────────
+    _two = {"A": {"normalized_finish": "POWDER COATED RAL 9003 WHITE"},
+            "B": {"normalized_finish": "POWDER COATED RAL 9005 BLACK"}}
+    ok(W._canonical_finish_signature(["A"], _two, {}, "powder_coating")
+       != W._canonical_finish_signature(["B"], _two, {}, "powder_coating"),
+       "two colours are two booth setups — a colour change IS a setup")
+    # EACH COLOUR MECHANISM ALONE. With both a code and a word differing, either one masks
+    # the loss of the other — so test them separately or neither is really held.
+    _code_only = {"A": {"normalized_finish": "POWDER COATED RAL 9003"},
+                  "B": {"normalized_finish": "POWDER COATED RAL 9005"}}
+    ok(W._canonical_finish_signature(["A"], _code_only, {}, "powder_coating")
+       != W._canonical_finish_signature(["B"], _code_only, {}, "powder_coating"),
+       "two RAL codes are two setups even when no colour is named")
+    _word_only = {"A": {"normalized_finish": "POWDER COATED WHITE"},
+                  "B": {"normalized_finish": "POWDER COATED BLACK"}}
+    ok(W._canonical_finish_signature(["A"], _word_only, {}, "powder_coating")
+       != W._canonical_finish_signature(["B"], _word_only, {}, "powder_coating"),
+       "two named colours are two setups even when no code is printed")
+
+    _fam = {"L": {"normalized_finish": "LACQUERED"}}
+    ok(W._canonical_finish_signature(["L"], _fam, {}, "wet_spray")
+       != W._canonical_finish_signature(["A"], _two, {}, "powder_coating"),
+       "and a different finish family is a different department entirely")
+
+    # THE FAMILY COMES FROM THE SHARED MODULE, not a fourth private table.
+    import inspect
+    ok("finish_families" in inspect.getsource(W._canonical_finish_signature),
+       "the finish family is read from finish_rules, which already owns that question")
+
+    # AND THE WRITER GROUPS BY IT. Nothing can execute the row loop in a fixture, so the
+    # powder branch is read: a key that falls back to the decision id gives every coated
+    # object its own booth setup again, which is the defect this whole function prevents.
+    import ast
+    _fn = [n for n in ast.walk(ast.parse(inspect.getsource(W)))
+           if isinstance(n, ast.FunctionDef)
+           and "canonical-finish-setup" in ast.unparse(n)]
+    ok(_fn, "the powder branch still keys on a finish setup")
+    _branch = ast.unparse(_fn[0])
+    ok("_canonical_finish_signature(" in _branch,
+       "and builds that key from the shared signature, not from a decision id")
+    _call = _branch[_branch.find("_canonical_finish_signature("):]
+    ok("operation" in _call[:_call.find(")") + 1],
+       "passing the operation, or a part with no stated finish forks its own setup")
+
+
 def test_the_canonical_graph_is_an_authority_not_an_after_the_fact_report():
     """THE COMPILER WAS RIGHT AND TOO LATE. It ran after estimate_part, so on 11350 it could
     state that 11350-01-101 is an assembly while the workbook had already charged it as a
