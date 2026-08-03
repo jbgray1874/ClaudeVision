@@ -9416,5 +9416,67 @@ def test_a_suffix_join_needs_the_base_part_to_exist():
        "a mirror the drawing does not list separately merges into the base part")
 
 
+def test_a_dxf_binds_to_the_drawings_bom_line_before_a_part_is_invented():
+    """THE CAUSE, not the repair.
+
+    A DXF matching no BOM line is promoted to a NEW part. That is right for a flat whose
+    part has no PDF detail page — it would otherwise be lost — and wrong for a flat whose
+    part IS on the drawing, under the code the drawing uses. On 11350 "11350-01-01M.DXF"
+    found no "11350-01-01M" and minted a second bar, so a five-item BOM became seven nodes
+    with the hierarchy on one copy and the measured blank on the other.
+
+    The compiler alias could only merge that after the fact, and merging is not the same as
+    never splitting: the merge has to guess which copy owns the description and the
+    quantity, and it only works because a second rule tells it. Resolving identity here
+    means the phantom is never created."""
+    from drawing_job_merge import _lookup_part, _normalize_part_key
+
+    _bom = {_normalize_part_key(_pn): {"part_number": _pn}
+            for _pn in ("11350-01-01", "11350-01-02", "11350-01-02 MIR")}
+
+    for _file_code, _expected in (("11350-01-01M", "11350-01-01"),
+                                  ("11350-01-02M", "11350-01-02"),
+                                  ("Mirror11350-01-02M", "11350-01-02 MIR")):
+        _hit = _lookup_part(_bom, _file_code)
+        ok(_hit, f"{_file_code} must bind to a BOM line, not mint a part")
+        eq(_hit["part_number"], _expected,
+           f"{_file_code} belongs to the drawing's own code")
+
+    # THE LEGITIMATE ORPHAN MUST STILL BE MINTED. A flat whose part appears on no BOM line
+    # is the case this promotion exists for; losing it would trade one silent defect for a
+    # worse one — a part that exists in the folder and nowhere in the estimate.
+    eq(_lookup_part(_bom, "11350-01-09M"), None,
+       "a flat with no matching BOM line still becomes its own part")
+
+    # AND THE CONVENTIONS LIVE IN ONE PLACE. Two private copies either side of the problem
+    # is how one of them goes stale — the merge prevents the phantom, the compiler can only
+    # repair it, and they must agree about what a mirrored or suffixed code means.
+    import inspect
+    import drawing_job_merge, route_compiler
+    for _mod in (drawing_job_merge, route_compiler):
+        ok("part_code_conventions" in inspect.getsource(_mod),
+           f"{_mod.__name__} must read the shared conventions")
+
+
+def test_the_shared_code_conventions_offer_never_assert():
+    """A candidate is offered, not asserted — every caller confirms the target exists first.
+    Inventing a join costs a part its own identity; declining one costs a merge an estimator
+    can see and undo."""
+    from part_code_conventions import alias_targets, base_code, is_mirror_code
+
+    eq(alias_targets("11350-01-01M"), ["11350-01-01"], "a material suffix yields its base")
+    eq(alias_targets("11350-01-01"), [],
+       "a code needing no translation offers nothing at all")
+    # The mirrored line is preferred over the base, and the base is the LAST resort.
+    _t = alias_targets("Mirror11350-01-02M")
+    eq(_t[0], "11350-01-02 MIR", "a mirror prefers the drawing's mirrored line")
+    eq(_t[-1], "11350-01-02", "and only falls back to the base part")
+    ok(is_mirror_code("Mirror7712-04-03A") and not is_mirror_code("MIRRORLIKE-01"),
+       "the mirror marker does not fire inside an unrelated word")
+    # A trailing letter that is not a material code, on a part that does not end in a
+    # digit, is not a suffix — "-GA" must survive.
+    eq(base_code("11350-01-GA")[0], "11350-01-GA", "an assembly code is not a suffixed part")
+
+
 if __name__ == "__main__":
     sys.exit(main())

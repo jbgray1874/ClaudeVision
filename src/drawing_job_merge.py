@@ -693,6 +693,26 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
                     return parts_by_key[ga_key]
     except Exception:
         pass
+    # THE DRAWING'S BOM OWNS IDENTITY, AND IS CONSULTED BEFORE A PART IS INVENTED.
+    #
+    # A DXF that matches no BOM line is promoted to a NEW part by the caller. That is right
+    # for a flat whose part has no PDF detail page — it would otherwise be lost — and wrong
+    # for a flat whose part IS on the drawing under the code the drawing uses. On 11350
+    # "11350-01-01M.DXF" found no "11350-01-01M" and minted a second bar, so a five-item BOM
+    # became seven nodes with the hierarchy on one copy and the measured blank on the other.
+    #
+    # The trailing-segment fallback below cannot bridge it: "01M" does not end with "01".
+    # Resolved here, upstream, where it PREVENTS the phantom — the compiler's alias could
+    # only merge one after the fact, and merging is not the same as never splitting.
+    try:
+        from part_code_conventions import alias_targets
+
+        for _cand in alias_targets(part_number):
+            _cand_key = _normalize_part_key(_cand)
+            if _cand_key and _cand_key in parts_by_key:
+                return parts_by_key[_cand_key]
+    except Exception:
+        pass
     suffix = key.split("-")[-1]
     for candidate_key, part in parts_by_key.items():
         if candidate_key.endswith(suffix) or candidate_key.replace("-", "") == key.replace("-", ""):

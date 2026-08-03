@@ -274,17 +274,6 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
     )
 
 
-# SDI appends a MATERIAL letter to the modelled/cut code that the drawing's own BOM omits:
-# -xxM mild steel, -xxA acrylic, -xxT MDF (the same convention json_normaliser infers
-# material from). So the GA lists "11350-01-01" and the model and DXF are "11350-01-01M".
-_MODEL_MATERIAL_SUFFIX = re.compile(r"^(.*\d)([TMA])$")
-
-# SolidWorks writes a mirrored derived part as "Mirror<code>", while the drawing's BOM
-# writes the mirrored line as "<code> MIR" / "<code> MIRROR".
-_MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\dA-Z])", re.IGNORECASE)
-_MIRROR_SUFFIX = re.compile(r"[\s_-]*MIR(?:ROR)?$", re.IGNORECASE)
-
-
 def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
     """Join the codes the FILES use to the codes the DRAWING's BOM uses.
 
@@ -307,24 +296,15 @@ def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
     safe direction, because inventing a join costs a part its own identity while declining
     one only costs a merge the estimator can see.
     """
+    from part_code_conventions import alias_targets
+
     known = {str(i).strip().upper() for i in identities if str(i).strip()}
     aliases: Dict[str, str] = {}
     for identity in sorted(known):
-        _mirror = bool(_MIRROR_PREFIX.search(identity))
-        _base = _MIRROR_PREFIX.sub("", identity).strip() if _mirror else identity
-        _m = _MODEL_MATERIAL_SUFFIX.match(_base)
-        if _m:
-            _base = _m.group(1)
-        if _base == identity or not _base:
-            continue
-        # A mirrored file prefers the drawing's own mirrored line before the base part;
-        # collapsing "Mirror11350-01-02M" onto "11350-01-02" would make the left arm carry
-        # the right arm's geometry and lose a BOM line.
-        _targets = ([f"{_base} MIR", f"{_base} MIRROR", f"{_base}MIR", _base]
-                    if _mirror else [_base])
-        for _t in _targets:
-            if _t in known and _t != identity:
-                aliases[identity] = _t
+        for _t in alias_targets(identity):
+            _key = _t.strip().upper()
+            if _key in known and _key != identity:
+                aliases[identity] = _key
                 break
     return aliases
 
