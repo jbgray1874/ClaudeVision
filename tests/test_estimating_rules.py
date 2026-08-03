@@ -6070,6 +6070,57 @@ def test_a_part_described_as_another_part_with_components_is_an_assembly():
     ok(any("ASSEMBLY FROM THE DESCRIPTION" in str(f) for f in (_101.get("review_flags") or [])),
        "and the estimator is told why, since this removes labour from the sheet")
 
+    # ── THE CODE THE GRAPH WILL KNOW THE CHILD BY ───────────────────────────────────
+    # A drawing leaves the code cell blank for standard hardware, so this recorded "-" as
+    # 101's child. clean_part_number drops that, the edge vanishes, and BI-PEMSTUD — which
+    # the compiler synthesises from the same description moments later — arrives with no
+    # parent. Two names for one row, and the hierarchy fell between them.
+    _uncoded = [
+        {"part_number": "11350-01-01", "description": "TICKET STRIP BAR",
+         "geometry_source": "dxf_flat_pattern",
+         "normalized_geometry": {"blank_length_mm": 758.0, "blank_width_mm": 97.71}},
+        {"part_number": "11350-01-101", "description": "TICKET STRIP BAR WITH PEM STUDS"},
+        {"part_number": "-", "description": "M4X8 PEM STUD", "quantity": 4}]
+    _stamp_assembly_parents(_uncoded)
+    eq(_uncoded[1].get("assembly_children"), ["11350-01-01", "BI-PEMSTUD"],
+       "an uncoded hardware child is recorded by the code the compiler will synthesise")
+
+    # REPAIR, NOT JUST DISCOVER. The hardware rows arrive after this rule first runs, so a
+    # first pass can record a placeholder — and "already a parent" then skipped forever,
+    # leaving the broken edge in place. This is what left BI-PEMSTUD disconnected even after
+    # the pass was moved to the pre-cost boundary.
+    _stale = list(_uncoded)
+    # Carrying the flag it was given the first time, so the repair pass is exercised on a
+    # part that has already said this — which is the only path that reaches the guard.
+    _stale[1] = dict(_stale[1], assembly_children=["11350-01-01", "-"],
+                     is_assembly_parent=True,
+                     review_flags=["assembly_parent_rolled_up_to_children",
+                                   "ASSEMBLY FROM THE DESCRIPTION: ..."])
+    _stale[2] = dict(_stale[2], part_number="BI-PEMSTUD")
+    _stamp_assembly_parents(_stale)
+    eq(_stale[1].get("assembly_children"), ["11350-01-01", "BI-PEMSTUD"],
+       "a parent whose recorded children cannot be resolved is re-derived")
+    eq(len([f for f in (_stale[1].get("review_flags") or [])
+            if "ASSEMBLY FROM THE DESCRIPTION" in str(f)]), 1,
+       "and repairing it does not say so a second time")
+    # ...and a parent whose children are all real is left alone, flag and all.
+    _settled = [dict(_uncoded[0]), dict(_uncoded[1]), {"part_number": "BI-PEMSTUD",
+                                                       "description": "M4X8 PEM STUD"}]
+    _stamp_assembly_parents(_settled); _stamp_assembly_parents(_settled)
+    eq(len([f for f in (_settled[1].get("review_flags") or [])
+            if "ASSEMBLY FROM THE DESCRIPTION" in str(f)]), 1,
+       "and a repair pass does not say it twice")
+
+    # A COMPONENT WHOSE IDENTITY NOBODY CAN DERIVE IS NOT AN EDGE. Recording an empty child
+    # is how the graph gets a parent pointing at nothing.
+    _underivable = [
+        {"part_number": "9000-01", "description": "BASE PLATE"},
+        {"part_number": "9000-01-101", "description": "BASE PLATE WITH GROMMETS"},
+        {"part_number": "-", "description": "RUBBER GROMMET"}]
+    _stamp_assembly_parents(_underivable)
+    eq(_underivable[1].get("assembly_children"), None,
+       "no derivable code for the component means no hierarchy claim at all")
+
     # A FEATURE IS NOT A COMPONENT — and this is the failure that would delete real work.
     # "PANEL WITH CUTOUTS" reads identically to a machine. What separates them is that
     # nobody buys a cut-out, so it is not a line on the BOM.

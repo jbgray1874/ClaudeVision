@@ -1080,8 +1080,34 @@ def _stamp_described_assemblies(parts: List[Dict[str, Any]]) -> None:
         if _k:
             by_desc.setdefault(_k, p)
 
+    from part_identity import is_placeholder_identity, synthesise_bought_in_code
+
+    def _child_identity(record: Dict[str, Any]) -> str:
+        """The code the GRAPH will know this child by, not the cell the drawing printed.
+
+        A drawing leaves the code blank for standard hardware, so this recorded "-" as
+        11350-01-101's child. clean_part_number drops that, the edge vanishes, and
+        BI-PEMSTUD — which the compiler synthesises from the same description moments later
+        — arrives with no parent. Two names for one row, and the hierarchy fell between
+        them. Same shared rule as the compiler, so both derive the same code.
+        """
+        _pn = record.get("part_number")
+        if is_placeholder_identity(_pn):
+            return synthesise_bought_in_code(record.get("description"), _pn) or ""
+        return str(_pn or "")
+
     for part in records:
-        if part.get("is_assembly_parent") or "dxf" in str(part.get("geometry_source") or "").lower():
+        # REPAIR, NOT JUST DISCOVER. The hardware rows arrive after this rule first runs, so
+        # the first pass records a placeholder and the second used to skip — "already a
+        # parent" — leaving the broken edge in place forever. A parent whose children cannot
+        # be resolved is re-derived; one whose children are all real is left alone.
+        _prior = part.get("assembly_children")
+        _needs_repair = isinstance(_prior, list) and any(
+            not _child_identity({"part_number": k}) or is_placeholder_identity(k)
+            for k in _prior)
+        if part.get("is_assembly_parent") and not _needs_repair:
+            continue
+        if "dxf" in str(part.get("geometry_source") or "").lower():
             continue
         if (part.get("normalized_geometry") or {}).get("blank_length_mm"):
             continue
@@ -1111,12 +1137,16 @@ def _stamp_described_assemblies(parts: List[Dict[str, Any]]) -> None:
         if not _components:
             continue
 
+        _child_ids = [_child_identity(_base)] + [_child_identity(c) for c in _components]
+        if not all(_child_ids):
+            continue          # a component whose identity nobody can derive is not an edge
         part["is_assembly_parent"] = True
-        part["assembly_children"] = [_base.get("part_number")] + \
-                                    [c.get("part_number") for c in _components]
+        part["assembly_children"] = _child_ids
         flags = part.setdefault("review_flags", [])
         if "assembly_parent_rolled_up_to_children" not in flags:
             flags.append("assembly_parent_rolled_up_to_children")
+        if any("ASSEMBLY FROM THE DESCRIPTION" in str(f) for f in flags):
+            continue          # said once; a repair pass does not say it again
         flags.append(
             f"ASSEMBLY FROM THE DESCRIPTION: '{part.get('description')}' names "
             f"{_base.get('part_number')} plus "
