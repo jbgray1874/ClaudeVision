@@ -88,12 +88,24 @@ def is_flat_part_dxf(path: Path) -> bool:
     return is_dxf_path(path) and not is_ignored_ga_dxf(path) and bool(part_number_from_dxf_path(path))
 
 
+# The range a sheet gauge can credibly be. Anything outside it in a filename is a
+# dimension, a product name or a part code — not the material thickness.
+SHEET_GAUGE_MIN_MM = 0.3
+SHEET_GAUGE_MAX_MM = 25.0
+
+
 def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
     if _parse_filename is not None:
         try:
             parsed = _parse_filename(path)
             if parsed.get("thickness_mm") is not None:
-                return float(parsed["thickness_mm"])
+                # BOUNDED HERE TOO. The shared parser runs first, so bounding only the
+                # fallback below left the defect fully intact: "Left Arm 200mm_flat.dxf"
+                # still came back as a 200mm gauge. A guard on the second reader is no
+                # guard at all when the first one answers.
+                _pv = float(parsed["thickness_mm"])
+                if SHEET_GAUGE_MIN_MM <= _pv <= SHEET_GAUGE_MAX_MM:
+                    return _pv
         except Exception:
             pass
     stem = path.stem
@@ -104,9 +116,22 @@ def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
     # (e.g. "_1_5mm" -> "1.5mm"). The lookbehind stops the old rule mangling a part
     # number like "...-01_1mm" into "01.1mm" -> 1.1; that must read as 1.0.
     stem_norm = re.sub(r"(?<![\d.])(\d)_(\d+\s*mm)", r"\1.\2", stem_norm, flags=re.IGNORECASE)
-    match = re.search(r"(\d+(?:\.\d+)?)\s*mm", stem_norm, flags=re.IGNORECASE)
-    if match:
-        return float(match.group(1))
+    # A GAUGE, NOT THE FIRST NUMBER FOLLOWED BY "mm".
+    #
+    # This took the first <n>mm token in the stem with no plausibility bound, so
+    # "Boots Comms Bar - Left Arm 200mm_flat.dxf" returned 200.0 — a 200mm-thick mild steel
+    # arm — because the PRODUCT LENGTH is in the filename. Same class as the 1310-02 STUD,
+    # where a bar's diameter was read as a sheet thickness: a number with a unit is not
+    # automatically the number this function is looking for.
+    #
+    # Every token is considered and the first PLAUSIBLE one wins, so
+    # "Left Arm 200mm_1mm MS" resolves to 1.0 rather than to the length that happens to come
+    # first. Nothing plausible means no reading — the DXF geometry and the drawing still
+    # carry a thickness, and a wrong gauge is far worse than an absent one.
+    for _m in re.finditer(r"(\d+(?:\.\d+)?)\s*mm", stem_norm, flags=re.IGNORECASE):
+        _v = float(_m.group(1))
+        if SHEET_GAUGE_MIN_MM <= _v <= SHEET_GAUGE_MAX_MM:
+            return _v
     return None
 
 

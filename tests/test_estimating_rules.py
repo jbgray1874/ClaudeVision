@@ -9177,5 +9177,55 @@ def test_the_quote_names_the_drawing_and_the_unit_not_the_folder():
        "the drawing's own hierarchy beats the folder every time")
 
 
+# ── job 11350 (Boots Comms Bar) — a length in the filename is not a gauge ────────────
+def test_a_product_dimension_in_a_dxf_filename_is_not_the_sheet_gauge():
+    """"Boots Comms Bar - Left Arm 200mm_flat.dxf" returned a thickness of 200.0 — a
+    200mm-thick mild steel arm — because the filename carries the PRODUCT LENGTH and the
+    parser took the first <n>mm token with no plausibility bound.
+
+    Same class as the 1310-02 STUD, where a bar's diameter was read as a sheet thickness: a
+    number with a unit attached is not automatically the number being looked for. A wrong
+    gauge is far worse than an absent one — the DXF geometry and the drawing both still
+    carry a thickness, and nothing else can catch a plausible-looking 200."""
+    from pathlib import Path
+    from drawing_job_merge import (thickness_mm_from_dxf_filename as _thk,
+                                   SHEET_GAUGE_MIN_MM, SHEET_GAUGE_MAX_MM)
+
+    eq(_thk(Path("Boots Comms Bar - Left Arm 200mm_flat.dxf")), None,
+       "a 200mm product length is not a gauge, and no reading beats a wrong one")
+    eq(_thk(Path("11350-01-01M_1MM MS.DXF")), 1.0, "a real gauge still reads")
+
+    # THE FIRST PLAUSIBLE TOKEN WINS, not the first token. Both numbers are in the name and
+    # the length comes first.
+    eq(_thk(Path("Left Arm 200mm_1mm MS.dxf")), 1.0,
+       "a length before the gauge must not shadow it")
+    eq(_thk(Path("Comms Bar 758mm_1mm MS.dxf")), 1.0, "nor a 758mm bar length")
+
+    # The decimal conventions this parser already handles must keep working.
+    eq(_thk(Path("PART_1,2mm.dxf")), 1.2, "European comma decimal")
+    eq(_thk(Path("PART_1_5mm.dxf")), 1.5, "underscore decimal")
+    eq(_thk(Path("panel 18mm MDF.dxf")), 18.0, "18mm board is a real gauge")
+    ok(SHEET_GAUGE_MIN_MM < 1.0 < SHEET_GAUGE_MAX_MM, "the bounds admit ordinary sheet")
+
+
+def test_solidworks_mirror_naming_is_recognised():
+    """SolidWorks names a mirrored part "Mirror<partnumber>" with nothing between the two,
+    so the trailing \\b in the pattern never matched: "Mirror11350-01-02M" is one unbroken
+    run of word characters. Job 11350 ships exactly that file."""
+    import re as _re
+    import config as _cfg
+
+    for _name in ("Mirror11350-01-02M", "Mirror-11350-01",
+                  "MIRROR 11350-01-02M", "11350-01-02M MIRRORED"):
+        ok(_re.search(_cfg.MIRROR_PATTERN, _name, _re.IGNORECASE),
+           f"{_name} is a mirrored part")
+
+    # AND IT MUST NOT FIRE INSIDE AN UNRELATED WORD. A lookahead of [\\w-] matched
+    # "MIRRORLIKE"; only a digit or a separator can follow the marker.
+    for _name in ("MIRRORLIKE-01", "MIRRORED_FINISH_PANEL".replace("MIRRORED", "MIRRORLIKE")):
+        ok(not _re.search(_cfg.MIRROR_PATTERN, _name, _re.IGNORECASE),
+           f"{_name} is not a mirrored part")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -135,7 +135,10 @@ DRILL_PATTERN = r"\bDRILL(?:ED|ING)?\b"
 PUNCH_PATTERN = r"\bPUNCH(?:ED|ING)?\b"
 DEBURR_PATTERN = r"\bDEBURR\b"
 BREAK_EDGE_PATTERN = r"\bBREAK\s+SHARP\s+EDGES?\b"
-MIRROR_PATTERN = r"\bMIRROR(?:ED)?\b"
+# SolidWorks names a mirrored part "Mirror<partnumber>" with nothing between the two, so a
+# trailing \b never matches: "Mirror11350-01-02M" is one unbroken run of word characters.
+# The leading boundary is kept, so this still will not fire inside an unrelated word.
+MIRROR_PATTERN = r"\bMIRROR(?:ED)?\b|\bMIRROR(?=[\d-])"
 LENGTH_BY_WIDTH_PATTERN = r"\b(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*(?:mm)?\b"
 SLOT_SIZE_PATTERN = r"\b(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*(?:MM|mm)\s+SLOT\b"
 EDGE_DISTANCE_PATTERN = r"\b(\d+(?:\.\d+)?)\s*(?:MM|mm)\s+EDGE\b"
