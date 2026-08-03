@@ -2291,6 +2291,38 @@ def _finalize_scan_summary(
     # any part that already has a blank, and refuses a base whose own flat was inherited. A
     # second pass over parts it has already filled changes nothing. The earlier call stays
     # because augment_summary_with_dxf is also the standalone DXF-merge entry point.
+    # ── THE SAME SEAM, FOR THE MODELS ─────────────────────────────────────────────────
+    #
+    # apply_native_to_pre_estimate runs at line ~1979. The LLM full extract creates parts at
+    # ~2116. On 11350 that is 137 lines between the models being applied and
+    # "11350-01-02 MIR" existing — and the pack contains Mirror11350-01-02M.SLDPRT, so the
+    # right arm has its OWN model, at rank 90, better evidence than the inherited flat. It
+    # reached costing with thickness 0 and fallback throughput because the connector had
+    # already run before the part was born.
+    #
+    # ONLY THE PARTS THAT MISSED IT. 27 of the connector's 28 review-flag appends are
+    # unguarded, so re-running it over parts it has already enriched would duplicate every
+    # QA message on the job. Restricted to records with no solidworks_native marker, this
+    # adds evidence and repeats nothing.
+    try:
+        from source_connectors.solidworks import apply_native_to_pre_estimate as _apply_native
+        # The accepted extract is still bound in this function — _sw_job is set in the
+        # block above and only cleared when the extract was refused. Read it from there
+        # rather than stashing the object on the summary, which is written to JSON.
+        _sw_job_late = locals().get("_sw_job")
+        _missed = [p for p in summary["manufacturing_writeup"]["parts"]
+                   if isinstance(p, dict) and not p.get("solidworks_native")]
+        if _sw_job_late is not None and getattr(_sw_job_late, "found", False) and _missed:
+            _lc = _apply_native(_missed, _sw_job_late)
+            _got = [p.get("part_number") for p in _missed if p.get("solidworks_native")]
+            if _got:
+                print(f"   [solidworks] applied to {len(_got)} part(s) that did not exist "
+                      f"when the models were first read: {', '.join(str(g) for g in _got)}",
+                      flush=True)
+    except Exception as _sw_late_err:
+        print(f"   [solidworks] late application skipped: "
+              f"{type(_sw_late_err).__name__}: {_sw_late_err}", flush=True)
+
     # ── THE SAME SEAM, FOR THE HIERARCHY THE DESCRIPTION STATES ───────────────────────
     #
     # "<A> WITH <B>" needs BOTH halves to be lines on this BOM, and on 11350 the PEM stud is

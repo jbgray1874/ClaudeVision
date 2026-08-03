@@ -5515,6 +5515,27 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
     eq(_match_native({"part_number": "11350-01-01"}, _be, _bt, _bl), "11350-01-01",
        "the exact document wins over anything derived by convention")
 
+    # AND THE MODELS MUST BE APPLIED WHERE THE PARTS EXIST — the third instance of one seam.
+    #
+    # apply_native_to_pre_estimate runs at ~1979; the LLM full extract creates parts at
+    # ~2116. 11350's pack contains Mirror11350-01-02M.SLDPRT, so the right arm has its OWN
+    # model at rank 90 — better evidence than an inherited flat — and it still reached
+    # costing with thickness 0 and fallback throughput, because the connector had already
+    # run before the part was born.
+    from pathlib import Path
+    _fs = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    # The CALL, not the message beside it — a neutered call leaves the message intact.
+    _late = _fs.find("_apply_native(_missed")
+    _llm = _fs.find("apply_full_job_to_pre_estimate(_pre_estimate_parts")
+    _cost = _fs.find('estimate_document(summary["manufacturing_writeup"]["parts"]')
+    ok(_llm > 0 and _late > _llm, "the models are re-applied AFTER the extract creates parts")
+    ok(0 < _late < _cost, "and before costing")
+    # ONLY THE PARTS THAT MISSED IT. 27 of the connector's 28 review-flag appends are
+    # unguarded, so a blanket second pass would duplicate every QA message on the job.
+    ok("not p.get(\"solidworks_native\")" in _fs,
+       "restricted to records the first pass never reached, or every flag is doubled")
+
     # ONE AUTHORITY. The convention is read from the shared module, not restated here.
     import inspect
     import source_connectors.solidworks as _S
