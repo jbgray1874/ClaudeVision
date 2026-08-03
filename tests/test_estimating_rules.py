@@ -5689,6 +5689,68 @@ def test_a_flat_for_another_drawing_is_not_a_part_of_this_one():
        "and reports the refusal rather than dropping it silently")
 
 
+def test_nothing_non_metal_goes_through_the_powder_oven():
+    """Powder coating cures at 180-200 C. Melamine faced chipboard delaminates, MDF swells
+    and off-gasses, acrylic softens. This is not a preference — it is what the oven does.
+
+    It matters because a GA states ONE finish for a whole product and the compiler
+    propagates it. 12422-24 is a 28mm MFC panel carrying three powder-coated steel
+    brackets, and nothing stopped the panel taking a P.Coat event off the assembly's finish
+    note: a laminate decor reads as no finish family at all, so no contradiction fired.
+    Board is finished cold — laminate, foil, veneer, lacquer, paint — and none of those is
+    this operation."""
+    from stock_form_rules import impossibility_reason as _why, is_impossible_operation as _no
+
+    for _mat in ("MELAMINE FACED CHIPBOARD", "MFC", "MDF", "PLYWOOD", "CHIPBOARD",
+                 "TIMBER", "OAK PLYWOOD", "ACRYLIC", "HIPS"):
+        ok(_no("powder_coating", "sheet", _mat), f"{_mat} cannot be powder coated")
+    ok("oven" in (_why("powder_coating", "sheet", "MFC") or ""),
+       "and the decision carries the physical reason, not a bare refusal")
+
+    # METAL IS UNTOUCHED, which is the whole job this operation exists for.
+    for _mat in ("MILD STEEL", "ZINTEC", "ALUMINIUM", "STAINLESS STEEL"):
+        ok(not _no("powder_coating", "sheet", _mat), f"{_mat} still powder coats")
+
+    # AND ONLY THIS OPERATION. A board is still cut, routed and edged.
+    for _op in ("laser_cutting", "routing", "edge_banding", "assembly", "hardware_insertion"):
+        ok(not _no(_op, "sheet", "MFC"), f"{_op} is still possible on board")
+    # The rules that were already here still hold.
+    ok(_no("punch", "sheet", "ACRYLIC"), "a punch press still shatters acrylic")
+    ok(not _no("folding", "sheet", "MILD STEEL"), "and steel still folds")
+
+    # 12422-24 END TO END: an MFC panel and a steel bracket under one GA powder note.
+    from route_compiler import compile_job_route
+    _parts = [
+        {"part_number": "12422-24-01J", "description": "JOINERY PANEL", "quantity": 1,
+         "normalized_material": "MELAMINE FACED CHIPBOARD",
+         "normalized_finish": "EGGER U604 ST40 REED GREEN",
+         "material_estimate": {"stock_form": "sheet"}},
+        {"part_number": "12422-24-02M", "description": "TOP BRACKET", "quantity": 1,
+         "normalized_material": "MILD STEEL",
+         "normalized_finish": "POWDER COAT SEMI-GLOSS RAL9003 SIGNAL WHITE",
+         "material_estimate": {"stock_form": "sheet"}}]
+    _d = {x["target_id"]: x for x in compile_job_route(_parts, {
+        "top_assembly": {"part_number": "12422-24-GA"},
+        "assemblies": [{"part_number": "12422-24-GA", "children": [
+            {"part_number": p["part_number"], "qty": 1} for p in _parts]}],
+        "routes": [{"operation": "powder_coating", "part_numbers": [p["part_number"]],
+                    "scope": "part"} for p in _parts]})["decisions"]
+        if x["operation"] == "powder_coating"}
+    eq(_d["12422-24-02M"]["status"], "required", "the steel bracket is powder coated")
+    eq(_d["12422-24-01J"]["status"], "not_applicable",
+       "the MFC panel is not, even though the assembly's note says the product is")
+    ok("oven" in str(_d["12422-24-01J"].get("reason")),
+       "and it says why — a laminate decor resolves to no finish family, so nothing else "
+       "would have contradicted it")
+
+    # THE STATED FINISH IS ASKED FIRST, because its reason is the one an estimator can act
+    # on: "the drawing says LACQUERED" sends them to the drawing, "the oven would destroy
+    # it" does not. The physical rule catches the panel whose finish nobody read.
+    from finish_rules import finish_contradiction
+    ok("LACQUER" in (finish_contradiction("powder_coating", "LACQUERED") or "").upper(),
+       "a stated finish still gives the specific reason")
+
+
 def test_a_board_is_not_a_gauge():
     """The plausibility bound on a filename thickness exists to stop a product LENGTH being
     read as a gauge — "Left Arm 200mm_flat.dxf" came back as a 200mm steel arm. 25mm is

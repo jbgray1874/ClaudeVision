@@ -1590,8 +1590,17 @@ def compile_job_route(
                    or (record.get("material_estimate") or {}).get("stock_form") or "")
         material = str(
             record.get("normalized_material") or record.get("material") or "")
-        reason = impossibility_reason(template.operation, stock_form, material)
-        if not reason:
+        # THE STATED FINISH IS ASKED FIRST, because its reason is the more useful one.
+        #
+        # Both rules can rule out powder on a timber panel: the drawing says LACQUERED, and
+        # separately the oven would destroy it. An estimator reading "the drawing says
+        # LACQUERED" can check the drawing; "board cannot go through the oven" is true but
+        # tells them nothing they can act on. So the specific evidence speaks when there is
+        # any, and the physical rule is what catches the panel whose finish nobody read —
+        # which is 12422-24, where an Egger laminate decor resolves to no finish family at
+        # all and nothing contradicted the assembly's powder note.
+        reason = None
+        if True:
             # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES.
             #
             # The other half of the gates the cutover switched off. These packs carry a
@@ -1601,6 +1610,8 @@ def compile_job_route(
             # Fires only where the part's own finish is stated and unambiguous.
             reason = finish_contradiction(
                 template.operation, stated_finish(record))
+        if not reason:
+            reason = impossibility_reason(template.operation, stock_form, material)
         if not reason:
             continue
         add_claim(event_id, make_claim(

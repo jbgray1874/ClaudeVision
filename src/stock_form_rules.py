@@ -60,8 +60,29 @@ IMPOSSIBLE_OPS_BY_STOCK_FORM: Dict[str, Set[str]] = {
 }
 
 # Acrylic is laser- or CNC-cut, never punched — a punch press shatters it.
+#
+# AND NOTHING NON-METAL GOES THROUGH THE POWDER OVEN. Powder coating cures at 180-200 C:
+# melamine faced chipboard delaminates, MDF swells and off-gasses, acrylic softens and
+# distorts. This is not a preference, it is what the oven does.
+#
+# It matters because a GA states ONE finish for a whole product and the compiler propagates
+# it. 12422-24 is a 28mm MFC panel with three powder-coated steel brackets on it, and
+# nothing else stopped the panel taking a P.Coat event off the assembly's finish note.
+# Board finishes are laminate, foil, veneer, lacquer and paint — all of which are applied
+# cold and none of which are this operation.
+_NON_METAL_COATING_OPS = {"powder_coating", "powder_coat", "powder", "p_coat", "pcoat"}
 IMPOSSIBLE_OPS_BY_MATERIAL: Dict[str, Set[str]] = {
-    "acrylic": {"punch", "punching"},
+    "acrylic": {"punch", "punching"} | _NON_METAL_COATING_OPS,
+    "perspex": _NON_METAL_COATING_OPS,
+    "mdf": _NON_METAL_COATING_OPS,
+    "mfc": _NON_METAL_COATING_OPS,
+    "melamine": _NON_METAL_COATING_OPS,
+    "chipboard": _NON_METAL_COATING_OPS,
+    "plywood": _NON_METAL_COATING_OPS,
+    "timber": _NON_METAL_COATING_OPS,
+    "wood": _NON_METAL_COATING_OPS,
+    "hips": _NON_METAL_COATING_OPS,
+    "foamex": _NON_METAL_COATING_OPS,
 }
 
 
@@ -83,6 +104,11 @@ def impossibility_reason(operation: str, stock_form: str = "",
     mat = str(material or "").strip().lower()
     for mat_key, impossible in IMPOSSIBLE_OPS_BY_MATERIAL.items():
         if mat_key in mat and key in impossible:
+            if key in _NON_METAL_COATING_OPS:
+                return (f"{key} cures at 180-200 C and {mat_key} cannot go through the oven "
+                        f"— board and plastic are finished cold (laminate, foil, veneer, "
+                        f"lacquer, paint). A finish stated once for a whole product does "
+                        f"not make its non-metal parts powder-coatable.")
             return f"{key} is not physically possible on {mat_key}"
     return None
 
