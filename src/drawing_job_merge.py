@@ -1031,6 +1031,99 @@ def _stamp_assembly_parents(parts: List[Dict[str, Any]]) -> None:
             flags = p.setdefault("review_flags", [])
             if "assembly_parent_rolled_up_to_children" not in flags:
                 flags.append("assembly_parent_rolled_up_to_children")
+    _stamp_described_assemblies(parts)
+
+
+_WITH_SPLIT = re.compile(r"\s+WITH\s+", re.IGNORECASE)
+_AND_SPLIT = re.compile(r"\s*(?:,|\s\+\s|\bAND\b)\s*", re.IGNORECASE)
+
+
+def _desc_key(text: Any) -> str:
+    """A description reduced to comparable words. Punctuation and spacing vary between the
+    BOM table and the title block; the words do not."""
+    return " ".join(re.sub(r"[^A-Z0-9 ]+", " ", str(text or "").upper()).split())
+
+
+def _singular(text: str) -> str:
+    """"PEM STUDS" -> "PEM STUD". The BOM names one of a thing; the parent names several."""
+    return re.sub(r"S$", "", text) if text.endswith("S") and not text.endswith("SS") else text
+
+
+def _stamp_described_assemblies(parts: List[Dict[str, Any]]) -> None:
+    """"<A> WITH <B>" is A with B fitted — an assembly — when A and B are BOTH on this BOM.
+
+    JOB 11350 CHARGED ONE BLANK TWICE. "11350-01-101 TICKET STRIP BAR WITH PEM STUDS" was
+    routed as a fabricated leaf: its own Laser row, its own Fold row, its own material and
+    its own share of powder — on top of "11350-01-01 TICKET STRIP BAR", which is the same
+    physical bar and already carries all of it. It has no DXF, no model and no blank, so its
+    2.5mm gauge came from an LLM inference and both operations priced at default throughput.
+
+    The numbering rule above cannot see it: -101 is not a prefix-parent of -01, and it has
+    no numbered children at all. The hierarchy simply is not in the part numbers on this
+    pack — but it IS on the drawing, written the way drawings write it.
+
+    THE EVIDENCE IS THAT BOTH HALVES ARE LINES ON THIS BOM. "BAR WITH PEM STUDS" claims
+    nothing on its own: "PANEL WITH CUTOUTS" is a panel, not an assembly, and reading it as
+    one would delete real fabrication. So the claim requires the base description to match
+    another line EXACTLY, and every named component to be a line here too. A cut-out is not
+    a BOM line and never will be; a PEM stud is, because somebody has to buy it.
+
+    Refused where the part has a flat of its own — a part somebody exported a blank for is a
+    part somebody cuts, whatever its description says. Same guard as the numbering rule, and
+    the same direction of safety: a missed assembly costs a visible double-count an estimator
+    can strike out, a wrongly claimed one silently deletes work the job actually does.
+    """
+    records = [p for p in parts if isinstance(p, dict)]
+    by_desc: Dict[str, Dict[str, Any]] = {}
+    for p in records:
+        _k = _desc_key(p.get("description"))
+        if _k:
+            by_desc.setdefault(_k, p)
+
+    for part in records:
+        if part.get("is_assembly_parent") or "dxf" in str(part.get("geometry_source") or "").lower():
+            continue
+        if (part.get("normalized_geometry") or {}).get("blank_length_mm"):
+            continue
+        _pieces = _WITH_SPLIT.split(_desc_key(part.get("description")), maxsplit=1)
+        if len(_pieces) != 2:
+            continue
+        _base_desc, _rest = _pieces[0].strip(), _pieces[1].strip()
+        _base = by_desc.get(_base_desc)
+        if _base is None or _base is part:
+            continue
+
+        # EVERY named component must be a line on this BOM, or the phrase is describing a
+        # feature rather than listing parts.
+        _components: List[Dict[str, Any]] = []
+        _names = [n.strip() for n in _AND_SPLIT.split(_rest) if len(n.strip()) >= 3]
+        if not _names:
+            continue
+        for _name in _names:
+            _want = _singular(_name)
+            _hit = next((p for k, p in by_desc.items()
+                         if p is not part and p is not _base
+                         and (k == _want or k.endswith(" " + _want))), None)
+            if _hit is None:
+                _components = []
+                break
+            _components.append(_hit)
+        if not _components:
+            continue
+
+        part["is_assembly_parent"] = True
+        part["assembly_children"] = [_base.get("part_number")] + \
+                                    [c.get("part_number") for c in _components]
+        flags = part.setdefault("review_flags", [])
+        if "assembly_parent_rolled_up_to_children" not in flags:
+            flags.append("assembly_parent_rolled_up_to_children")
+        flags.append(
+            f"ASSEMBLY FROM THE DESCRIPTION: '{part.get('description')}' names "
+            f"{_base.get('part_number')} plus "
+            f"{', '.join(str(c.get('part_number')) for c in _components)}, and every one of "
+            f"them is a line on this BOM — so this is those parts fitted together, not a "
+            f"second blank. Its material and fabrication labour belong to them; only "
+            f"assembly work belongs here.")
 
 
 def _num(value: Any) -> Optional[float]:

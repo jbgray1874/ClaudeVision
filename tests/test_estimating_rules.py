@@ -5409,6 +5409,114 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_a_part_described_as_another_part_with_components_is_an_assembly():
+    """JOB 11350 CHARGED ONE BLANK TWICE. "11350-01-101 TICKET STRIP BAR WITH PEM STUDS" was
+    routed as a fabricated leaf — its own Laser row, its own Fold row, its own material, its
+    own share of powder — on top of "11350-01-01 TICKET STRIP BAR", which is the same
+    physical bar and already carries all of it. With no DXF, no model and no blank, its
+    2.5mm gauge came from an LLM inference and both operations priced at default throughput.
+
+    The numbering rule cannot see it: -101 is not a prefix-parent of -01 and has no numbered
+    children. The hierarchy is not in the part numbers on this pack. It IS on the drawing,
+    written the way drawings write it.
+
+    THE EVIDENCE IS THAT BOTH HALVES ARE LINES ON THIS BOM — that is what makes it a parts
+    list rather than a sentence about a feature."""
+    from drawing_job_merge import _stamp_assembly_parents
+
+    def _job():
+        return [
+            {"part_number": "11350-01-01", "description": "TICKET STRIP BAR",
+             "geometry_source": "dxf_flat_pattern",
+             "normalized_geometry": {"blank_length_mm": 758.0, "blank_width_mm": 97.71}},
+            {"part_number": "11350-01-101", "description": "TICKET STRIP BAR WITH PEM STUDS"},
+            {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD"},
+            {"part_number": "BI-NUT", "description": "M4 WING NUT"},
+        ]
+
+    _parts = _job()
+    _stamp_assembly_parents(_parts)
+    _101 = _parts[1]
+    ok(_101.get("is_assembly_parent"),
+       "the bar WITH studs is the bar plus the studs, not a second bar to cut")
+    eq(_101.get("assembly_children"), ["11350-01-01", "BI-PEMSTUD"],
+       "and it names what it is made of, both of them lines on this same BOM")
+    eq(_parts[0].get("is_assembly_parent"), None, "the bar itself is still a part to cut")
+    ok(any("ASSEMBLY FROM THE DESCRIPTION" in str(f) for f in (_101.get("review_flags") or [])),
+       "and the estimator is told why, since this removes labour from the sheet")
+
+    # A FEATURE IS NOT A COMPONENT — and this is the failure that would delete real work.
+    # "PANEL WITH CUTOUTS" reads identically to a machine. What separates them is that
+    # nobody buys a cut-out, so it is not a line on the BOM.
+    _feat = [{"part_number": "P-8", "description": "SIDE PANEL"},
+             {"part_number": "P-9", "description": "SIDE PANEL WITH CUTOUTS"}]
+    _stamp_assembly_parents(_feat)
+    eq(_feat[1].get("is_assembly_parent"), None,
+       "a panel with cut-outs is a panel — the cut-outs are not a BOM line")
+
+    # THE COMPONENT MUST BE WHAT THE LINE IS, NOT A WORD INSIDE IT. A BOM line called
+    # "PEM STUD TEMPLATE PLATE" mentions pem studs; it is not one. Matching the name
+    # anywhere in a description finds it and promotes a real fabricated part to a parent on
+    # the strength of a shared word.
+    _mention = [
+        {"part_number": "11350-01-01", "description": "TICKET STRIP BAR",
+         "geometry_source": "dxf_flat_pattern",
+         "normalized_geometry": {"blank_length_mm": 758.0, "blank_width_mm": 97.71}},
+        {"part_number": "11350-01-101", "description": "TICKET STRIP BAR WITH PEM STUDS"},
+        {"part_number": "11350-01-07", "description": "PEM STUD TEMPLATE PLATE"},
+    ]
+    _stamp_assembly_parents(_mention)
+    eq(_mention[1].get("is_assembly_parent"), None,
+       "a line that merely mentions the component is not the component")
+
+    # NOR IS A PART WHOSE BASE IS NOT HERE. "WITH" alone claims nothing.
+    _lone = [{"part_number": "X-1", "description": "MOUNTING PLATE WITH RIVETS"},
+             {"part_number": "BI-RIVET", "description": "4MM RIVET"}]
+    _stamp_assembly_parents(_lone)
+    eq(_lone[0].get("is_assembly_parent"), None,
+       "the base description must be a line on this BOM too, not just the component")
+
+    # A PART WITH ITS OWN FLAT IS A PART SOMEBODY CUTS, whatever its description says. Same
+    # guard as the numbering rule — a wrongly claimed assembly silently deletes fabrication.
+    _own = _job()
+    _own[1]["geometry_source"] = "dxf_flat_pattern"
+    _own[1]["normalized_geometry"] = {"blank_length_mm": 758.0, "blank_width_mm": 97.71}
+    _stamp_assembly_parents(_own)
+    eq(_own[1].get("is_assembly_parent"), None,
+       "an exported blank outranks a description every time")
+    # AND A BLANK THAT DID NOT COME FROM A DXF COUNTS JUST THE SAME. A model's flat pattern
+    # and a mirrored one are measurements too; testing only `geometry_source` contains "dxf"
+    # would let those parts be promoted to parents and their fabrication deleted.
+    _modelled = _job()
+    _modelled[1]["geometry_source"] = "solidworks_flat_pattern"
+    _modelled[1]["normalized_geometry"] = {"blank_length_mm": 758.0, "blank_width_mm": 97.71}
+    _stamp_assembly_parents(_modelled)
+    eq(_modelled[1].get("is_assembly_parent"), None,
+       "a modelled blank is a blank — the guard is the geometry, not the word 'dxf'")
+
+    # EVERY component must be present, not just one — otherwise a half-matched phrase
+    # promotes a real part to a parent and its fabrication vanishes.
+    _partial = _job()
+    _partial[1]["description"] = "TICKET STRIP BAR WITH PEM STUDS AND SPACERS"
+    _stamp_assembly_parents(_partial)
+    eq(_partial[1].get("is_assembly_parent"), None,
+       "an unlisted component means the phrase is not a parts list")
+    # ...and with the spacer on the BOM it resolves.
+    _full = _job() + [{"part_number": "BI-SPACER", "description": "6MM NYLON SPACER"}]
+    _full[1]["description"] = "TICKET STRIP BAR WITH PEM STUDS AND SPACERS"
+    _stamp_assembly_parents(_full)
+    eq(_full[1].get("assembly_children"), ["11350-01-01", "BI-PEMSTUD", "BI-SPACER"],
+       "every named component is found and recorded")
+
+    # The numbering rule it sits beside is untouched.
+    _num = [{"part_number": "10897-01-04", "description": "TANK"},
+            {"part_number": "10897-01-04-01", "description": "TANK SIDE"},
+            {"part_number": "10897-01-04-02", "description": "TANK END"}]
+    _stamp_assembly_parents(_num)
+    ok(_num[0].get("is_assembly_parent"),
+       "a prefix-parent of two or more children is still an assembly by its number alone")
+
+
 def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     """JOB 11350'S RIGHT ARM WAS PRICED BY AN LLM AT 97% OF THE MATERIAL TOTAL WHILE ITS OWN
     GEOMETRY SAT TWO ROWS ABOVE IT.
