@@ -9707,5 +9707,64 @@ def test_a_caption_beside_the_total_is_not_the_total():
        "a formula is a value; only prose is skipped")
 
 
+def test_the_input_checklist_never_lands_inside_a_calculated_block():
+    """The checklist anchored at CELL_MAP["labour"]["last_row"] + 6. That row number is the
+    range wb_populate WRITES labour into — not the physical extent of the estimators' labour
+    table, which runs on well past it.
+
+    So on 11350 the block landed INSIDE the table and wrote "BOM row 12" into a Set Up
+    (Mins) cell. Text in a numeric cell propagates: Total Hours to #VALUE!, then Total
+    Labour Cost, then Total Unit Cost Price, then Sell Price. An entire estimate failed to
+    calculate because of a note about a BOM row — and the note was mine, added two commits
+    earlier to make the sheet safer."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify where this block lands")
+        return
+    import wb_populate as W
+
+    _wb = Workbook(); _ws = _wb.active
+    # THE TEMPLATE'S ACTUAL SHAPE, and the detail that matters: the totals sit just after
+    # the range wb_populate WRITES labour into (96-167), while the physical labour table
+    # runs on well past them. Anchoring at "write range + 6" therefore lands inside the
+    # table. A fixture that puts the totals below the whole table cannot reproduce this —
+    # and the first version of this test did exactly that, so the mutation passed.
+    for _r in range(96, 240):
+        _ws.cell(row=_r, column=11, value=0)      # Set Up (Mins), numeric
+    _ws["I170"] = "Total Unit Cost Price"; _ws["M170"] = None
+    _ws["I176"] = "Sell Price"; _ws["M176"] = None
+
+    _inputs = [{"kind": "material_unpriced", "part": "11350-01-01",
+                "where": "BOM row 12", "what": "MATERIAL UNPRICED"},
+               {"kind": "placeholder_unpriced", "part": "PACKAGING",
+                "where": "BOM row 16", "what": "NOT YET PRICED"}]
+    W._write_estimator_inputs(_ws, _inputs, [])
+
+    _corrupt = [(_r, _ws.cell(row=_r, column=11).value) for _r in range(96, 240)
+                if not isinstance(_ws.cell(row=_r, column=11).value, (int, float))]
+    eq(_corrupt, [],
+       f"no calculated cell may receive prose — that is a #VALUE! sheet, got {_corrupt}")
+
+    # It must still be written, clear of everything the template calculates.
+    _below = " ".join(str(_c.value or "") for _r in range(240, 300) for _c in _ws[_r])
+    ok("OUTSTANDING ESTIMATOR INPUTS (2)" in _below,
+       "and the checklist still appears, below the totals")
+    ok("11350-01-01" in _below and "PACKAGING" in _below, "with every input named")
+
+    # NO ANCHOR, NO GUESS. Without a totals label there is nowhere provably safe, and the
+    # banner beside Unit Cost already carries the count. A guessed row is what broke it.
+    _wb2 = Workbook(); _ws2 = _wb2.active
+    for _r in range(96, 400):
+        _ws2.cell(row=_r, column=11, value=0)
+    _flags = []
+    W._write_estimator_inputs(_ws2, _inputs, _flags)
+    _corrupt2 = [_r for _r in range(96, 240)
+                 if not isinstance(_ws2.cell(row=_r, column=11).value, (int, float))]
+    eq(_corrupt2, [], "with no totals label found, nothing is written into the sheet")
+    ok(any("could not be located" in _f for _f in _flags),
+       f"and the run says why the checklist is missing, got {_flags}")
+
+
 if __name__ == "__main__":
     sys.exit(main())

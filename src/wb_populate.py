@@ -1500,7 +1500,36 @@ def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) 
                 _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
 
         # ── the checklist ──────────────────────────────────────────────────────
-        _start = max(_last_row + 3, int(CELL_MAP["labour"]["last_row"]) + 6)
+        # ANCHORED BELOW THE TOTALS, AND NOWHERE ELSE.
+        #
+        # This used CELL_MAP["labour"]["last_row"] + 6 as a floor. That row number is the
+        # range wb_populate WRITES labour into, not the physical extent of the estimators'
+        # labour table, which runs on well past it. So the checklist landed INSIDE the
+        # table and put "BOM row 12" into a Set Up (Mins) cell — and text in a numeric cell
+        # propagates: Total Hours to #VALUE!, then Total Labour Cost, then Unit Cost, then
+        # Sell Price. The whole sheet failed to calculate because of a note about a BOM row.
+        #
+        # The totals labels are the only anchor that is genuinely BELOW everything the
+        # template computes. Without one, the block is not placed at all: the banner beside
+        # Unit Cost still carries the count, and no guess is worth a #VALUE! sheet.
+        if not _last_row:
+            _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding, but the totals block could "
+                  f"not be located, so the checklist was not placed. They are listed in "
+                  f"these flags and the count appears beside Unit Cost.", flags)
+            return
+        _start = _last_row + 3
+
+        # AND ONLY INTO EMPTY ROWS. A template revision could put something below the
+        # totals; overwriting it is how this broke in the first place.
+        _need = len(inputs) + 1
+        while any(ws.cell(row=_start + _i, column=_c).value not in (None, "")
+                  for _i in range(_need) for _c in (2, 3, 9, 10, 11, 12, 13)):
+            _start += _need + 1
+            if _start > _last_row + 400:
+                _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding, but no clear block of "
+                      f"rows was found below the totals to list them in. The count still "
+                      f"appears beside Unit Cost.", flags)
+                return
         _c1 = _writable_cell(ws, _start, 3)
         if _c1 is None:
             _flag("estimator-input checklist could not be placed — the rows below the "
