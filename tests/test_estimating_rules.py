@@ -6633,6 +6633,53 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     eq(_pr.get("estimated_pierce_count_source"), "mirror_of_measured",
        "with the source recorded, so the next pass can weigh itself against it")
 
+    # ── A BLANK IS NOT EVERYTHING ────────────────────────────────────────────────────
+    # The rule returned as soon as the mirror had a blank of its own — and a mirror can have
+    # its blank and still be missing the cut length, hole count and bend data, which is
+    # exactly what the laser and fold rates read. 11350's right arm sat in Sheet Steel at
+    # the correct 258.35 x 84.8 with its laser calculator's hole and internal-cut cells
+    # EMPTY, so it cut at 368/hr against the left arm's 287: a 28% rate difference on two
+    # parts that are the same flat.
+    _has_blank = {"part_number": "11350-01-02 MIR", "normalized_geometry": {
+        "bounding_box_flat_mm": {"length": 258.35, "width": 84.8, "height": 2.0},
+        "geometry_source": "mirror_of_measured"}}
+    apply_mirror_geometry([_left(), _has_blank])
+    _hr = _has_blank.get("geometry_rollup") or {}
+    eq(_hr.get("cut_length_mm"), 743.99,
+       "a mirror that already has its blank still gets the cut length it lacks")
+    eq(_hr.get("estimated_pierce_count"), 2, "and the pierce count its laser rate reads")
+
+    # AND THE SAME CONFLATION ONE LEVEL DOWN: a mirror whose geometry record is COMPLETE
+    # but whose rollup is empty. "Nothing to fill in normalized_geometry" is not "nothing to
+    # do at all", and bailing there is what left the hole and internal-cut cells empty.
+    _geom_done = {"part_number": "11350-01-02 MIR",
+                  "normalized_geometry": dict(_left()["normalized_geometry"])}
+    apply_mirror_geometry([_left(), _geom_done])
+    eq((_geom_done.get("geometry_rollup") or {}).get("cut_length_mm"), 743.99,
+       "a complete geometry record does not stop the rollup arriving")
+
+    # ONLY A DISAGREEING BLANK STOPS THE REST. If the two hands really are different sizes,
+    # the other hand's cut length is not this one's either.
+    _differs = {"part_number": "11350-01-02 MIR", "geometry_source": "dxf_flat_pattern",
+                "normalized_geometry": {
+                    "bounding_box_flat_mm": {"length": 262.0, "width": 84.8, "height": 2.0},
+                    "geometry_source": "dxf_flat_pattern"}}
+    apply_mirror_geometry([_left(), _differs])
+    eq(_differs.get("geometry_rollup"), None,
+       "a hand measuring differently inherits nothing — not the blank and not the rollup")
+    ok(any("HANDED PAIR DISAGREES" in str(f) for f in (_differs.get("review_flags") or [])),
+       "and the disagreement is still put in front of the estimator")
+
+    # AND A MIRROR THAT GENUINELY HAS EVERYTHING IS A NO-OP, not a repeated flag.
+    # Same spelling as the base carries, so there is genuinely nothing left to fill — a
+    # record written in a DIFFERENT spelling of the same fact still gets gap-filled, which
+    # is the resolver doing its job rather than a no-op.
+    _complete = {"part_number": "11350-01-02 MIR",
+                 "normalized_geometry": dict(_left()["normalized_geometry"]),
+                 "geometry_rollup": dict(_left()["geometry_rollup"])}
+    eq(apply_mirror_geometry([_left(), _complete]), [],
+       "nothing missing means nothing done, and nothing said")
+
     # AND ITS OWN MEASUREMENT STILL WINS. 75 loses to a DXF of this hand at 80.
     _own_roll = {"part_number": "11350-01-02 MIR",
                  "geometry_rollup": {"estimated_pierce_count": 4,

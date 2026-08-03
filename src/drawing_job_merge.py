@@ -1314,10 +1314,22 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # blanks differ is either deliberate or a stale derived part, and only a person can
         # tell which. Equal blanks are a safe assumption while the link holds and a silent
         # error once it does not. Nothing is overwritten either way: both were measured.
+        # A BLANK IS NOT EVERYTHING. This returned as soon as the mirror had a blank of its
+        # own — and a mirror can have its blank and still be missing the cut length, the
+        # hole count and the bend data, which is exactly what the laser and fold rates read.
+        # 11350's right arm sat in Sheet Steel at the correct 258.35 x 84.8 with its laser
+        # calculator's hole and internal-cut cells EMPTY, so it cut at 368/hr against the
+        # left arm's 287 — a 28% rate difference on two parts that are the same flat.
+        #
+        # Each thing is now asked for separately. Only a DISAGREEING blank stops the rest:
+        # if the two hands really are different sizes, the other hand's cut length is not
+        # this one's either.
         _ng = part.get("normalized_geometry") or {}
         _ml, _mw = flat_blank_mm(part)
+        _blank_conflict = bool(_ml and _mw
+                               and (abs(_ml - _bl) > 0.5 or abs(_mw - _bw) > 0.5))
         if _ml and _mw:
-            if abs(_ml - _bl) > 0.5 or abs(_mw - _bw) > 0.5:
+            if _blank_conflict:
                 part.setdefault("review_flags", []).append(
                     f"HANDED PAIR DISAGREES: this part measures {_ml:g} x {_mw:g}mm and "
                     f"{base.get('part_number')}, which it mirrors, measures {_bl:g} x "
@@ -1329,7 +1341,7 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                                "mirrored_from": base.get("part_number"),
                                "fields": [], "disagreement_mm": [round(_ml - _bl, 2),
                                                                   round(_mw - _bw, 2)]})
-            continue
+                continue
 
         # EVERY KEY THE BASE CARRIES, not a fixed six. A list of field names is a list of
         # the spellings whoever wrote it happened to know, and this record has three.
@@ -1342,15 +1354,18 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 import copy as _c
                 _ng[_f] = _c.deepcopy(_v)
                 _got.append(_f)
-        if not _got:
-            continue
-        _ng["geometry_source"] = "mirror_of_measured"
-        # The confidence of the flat it came from, never higher — and never invented where
-        # the base carried none.
-        if base_ng.get("geometry_confidence") is not None:
-            _ng["geometry_confidence"] = base_ng["geometry_confidence"]
-        _ng["mirrored_from"] = base.get("part_number")
-        part["normalized_geometry"] = _ng
+        # NOT "nothing to fill in the geometry record, so nothing to do at all". That is
+        # the same conflation one level down: a mirror whose normalized_geometry is complete
+        # can still be missing its rollup, and bailing here is what left 11350's right arm
+        # with empty hole and internal-cut cells beside a correct blank.
+        if _got:
+            _ng["geometry_source"] = "mirror_of_measured"
+            # The confidence of the flat it came from, never higher — and never invented
+            # where the base carried none.
+            if base_ng.get("geometry_confidence") is not None:
+                _ng["geometry_confidence"] = base_ng["geometry_confidence"]
+            _ng["mirrored_from"] = base.get("part_number")
+            part["normalized_geometry"] = _ng
         # THROUGH THE RESOLVER, NOT AROUND IT. These are written under a COMPUTED key, so
         # the field name is not visible at the write — which is exactly the shape that let
         # the override rules overwrite material in silence. Submitting them instead means a
@@ -1388,6 +1403,8 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 _apply_field(part, _field, base[_key], "mirror_of_measured",
                              note=f"mirrored from {base.get('part_number')}")
 
+        if not _got:
+            continue            # blank AND rollup already complete — genuinely nothing to do
         part.setdefault("review_flags", []).append(
             f"GEOMETRY MIRRORED from {base.get('part_number')}: no flat was exported for "
             f"this hand, so its blank, cut length and bend count are the measured ones of "
