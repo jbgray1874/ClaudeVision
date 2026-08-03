@@ -95,6 +95,33 @@ def is_flat_part_dxf(path: Path) -> bool:
 _DRAWING_TEXT_ENTITIES = 8
 
 
+def dxf_declares_bend_layer(path: Path) -> Optional[bool]:
+    """Does this DXF's layer table contain a bend layer AT ALL? None when unreadable.
+
+    THE DIFFERENCE BETWEEN A MEASURED ZERO AND NO MEASUREMENT. The bend reader returns an
+    empty list both when a bend layer exists and is empty, and when the export carries no
+    bend layer whatsoever. Those are opposite facts and the caller was treating them the
+    same: on job 11350 the left arm's flat is a cut-only export with no bend layer, so
+    "0 bend lines" ruled the fold off a part the drawing plainly shows formed.
+
+    An explicit zero is a value; an absent layer is silence. Only the first can rule work
+    out — which is the rule this codebase already applies everywhere else."""
+    try:
+        import ezdxf
+        doc = ezdxf.readfile(str(path))
+    except Exception:
+        return None
+    try:
+        from dxf_reader import BEND_LAYERS as _BL
+        _wanted = {str(n).upper() for n in _BL}
+    except Exception:
+        _wanted = {"BENDLINES", "BEND", "BEND_LINES"}
+    try:
+        return bool({str(layer.dxf.name).upper() for layer in doc.layers} & _wanted)
+    except Exception:
+        return None
+
+
 def drawing_export_reason(path: Path) -> Optional[str]:
     """Why this DXF is a DRAWING of a part rather than the part's flat pattern — or None.
 
@@ -562,7 +589,17 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         _bcx = part.get("bend_count_dxf")
         _ebl = _gr.get("estimated_bend_line_count")
         _resolved_bends = int((_bcx if _bcx is not None else (_ebl if _ebl is not None else 0)) or 0)
-        if part.get("flat_pattern_detected") and _resolved_bends == 0:
+        # A MEASURED ZERO, NOT AN ABSENT LAYER. See dxf_declares_bend_layer: a cut-only
+        # export carries no bend layer, and reading its silence as "does not fold" ruled the
+        # fold off 11350's left arm — a part the drawing shows formed. Where the layer is
+        # missing the question is left OPEN, so the drawing's own reading still decides.
+        _declares_bends = dxf_declares_bend_layer(dxf_path)
+        if part.get("flat_pattern_detected") and _resolved_bends == 0 and not _declares_bends:
+            part.setdefault("review_flags", []).append(
+                f"DXF {dxf_path.name} carries no bend layer, so it cannot say whether this "
+                f"part folds. Folding left as the drawing states it — confirm.")
+        if (part.get("flat_pattern_detected") and _resolved_bends == 0
+                and _declares_bends):
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:

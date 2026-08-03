@@ -299,12 +299,35 @@ def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
     from part_code_conventions import alias_targets
 
     known = {str(i).strip().upper() for i in identities if str(i).strip()}
+
+    # SPACING IS A TYPING ARTEFACT, NOT IDENTITY.
+    #
+    # Job 11350 carried BOTH "11350-01-02 MIR" and "11350-01-02MIR" — the GA's spelling and
+    # the workbook's — as two separate nodes. One held the geometry and the other took an
+    # AI market price of GBP 79.04, which was 82% of the material total on a part we have a
+    # measured flat for. Matching on the exact string cannot see that they are one part.
+    #
+    # The squashed form indexes them together; the LONGEST spelling wins as the canonical
+    # one, because "11350-01-02 MIR" is what the drawing prints and a code the estimator
+    # cannot find on the GA is worse than one with an extra space.
+    def _squash(value: str) -> str:
+        return re.sub(r"\s+", "", value)
+
+    _by_squash: Dict[str, str] = {}
+    for _i in sorted(known, key=lambda v: (-len(v), v)):
+        _by_squash.setdefault(_squash(_i), _i)
+
     aliases: Dict[str, str] = {}
     for identity in sorted(known):
+        # Same part, two spellings: bind the shorter onto the drawing's own.
+        _canon = _by_squash.get(_squash(identity))
+        if _canon and _canon != identity:
+            aliases[identity] = _canon
+            continue
         for _t in alias_targets(identity):
-            _key = _t.strip().upper()
-            if _key in known and _key != identity:
-                aliases[identity] = _key
+            _hit = _by_squash.get(_squash(_t.strip().upper()))
+            if _hit and _hit != identity:
+                aliases[identity] = _hit
                 break
     return aliases
 

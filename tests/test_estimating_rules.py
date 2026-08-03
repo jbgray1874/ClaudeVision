@@ -9478,5 +9478,143 @@ def test_the_shared_code_conventions_offer_never_assert():
     eq(base_code("11350-01-GA")[0], "11350-01-GA", "an assembly code is not a suffixed part")
 
 
+# ── job 11350, first full run — three defects it exposed ─────────────────────────────
+def test_two_spellings_of_one_code_are_one_part():
+    """11350 carried BOTH "11350-01-02 MIR" (the GA's spelling) and "11350-01-02MIR" (the
+    workbook's) as separate nodes. One held the geometry; the other took an AI market price
+    of GBP 79.04 — 82% of the material total, on a part we have a measured flat for — and
+    tripped price_not_reproducible.
+
+    Spacing is a typing artefact, not identity."""
+    from route_compiler import build_part_graph
+
+    _parts = [
+        {"part_number": "11350-01-02", "description": "Left arm 200mm", "quantity": 1},
+        {"part_number": "11350-01-02 MIR", "description": "Right arm 200mm", "quantity": 1},
+        {"part_number": "11350-01-02MIR", "description": "RIGHT ARM 200MM", "quantity": 1,
+         "unit_cost_gbp": 79.04},
+        {"part_number": "Mirror11350-01-02M", "description": "Right arm (model)",
+         "quantity": 1, "normalized_material": "MILD_STEEL"},
+    ]
+    _nodes = {n.part_number: n for n in build_part_graph(_parts, {})["nodes"]}
+    eq(sorted(_nodes), ["11350-01-02", "11350-01-02 MIR"],
+       "the right arm is one node, not two")
+    eq(sorted(_nodes["11350-01-02 MIR"].evidence.get("raw_aliases") or []),
+       ["11350-01-02MIR", "MIRROR11350-01-02M"],
+       "both the workbook spelling and the model code fold into it")
+
+    # THE DRAWING'S SPELLING WINS. A code an estimator cannot find on the GA is worse than
+    # one carrying an extra space.
+    ok("11350-01-02 MIR" in _nodes, "the canonical code is the one the drawing prints")
+
+    # AND THE LEFT ARM IS UNTOUCHED — the mirror must not collapse onto it.
+    eq(_nodes["11350-01-02"].evidence.get("raw_aliases"), [],
+       "the left arm keeps its own identity")
+
+
+def test_a_dxf_with_no_bend_layer_cannot_rule_out_folding():
+    """The left arm's fold was ruled out because the flat "measured 0 bend lines". It is a
+    cut-only export with no bend layer at all — the reader returns an empty list both when a
+    bend layer exists and is empty, and when the export carries none.
+
+    Those are opposite facts. An explicit zero is a value; an absent layer is silence, and
+    only the first can rule work out. The drawing plainly shows the arms formed."""
+    try:
+        import ezdxf
+    except ImportError:
+        _fail("ezdxf is required to verify DXF layer inspection")
+        return
+    import tempfile
+    from pathlib import Path
+    from drawing_job_merge import dxf_declares_bend_layer
+
+    _d = Path(tempfile.mkdtemp())
+
+    # Cut-only export: outline, no bend layer in the table at all.
+    _doc = ezdxf.new(); _doc.modelspace().add_lwpolyline(
+        [(0, 0), (258, 0), (258, 85), (0, 85)], close=True)
+    _cut_only = _d / "Left Arm 200mm_flat.dxf"; _doc.saveas(_cut_only)
+
+    # A flat that DOES declare a bend layer, but carries no lines on it — a measured zero.
+    _doc2 = ezdxf.new(); _doc2.layers.add("BENDLINES")
+    _doc2.modelspace().add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+    _declared = _d / "flat_with_empty_bendlayer.dxf"; _doc2.saveas(_declared)
+
+    eq(dxf_declares_bend_layer(_cut_only), False,
+       "a cut-only export declares no bend layer, so it cannot speak to folding")
+    eq(dxf_declares_bend_layer(_declared), True,
+       "a flat that declares the layer CAN report a measured zero")
+
+    # DRIVE THE CALLER. The probe returning the right answer proves nothing about whether
+    # the rule-out consults it — and a mutation reverting the gate left this fixture green
+    # until it did.
+    from drawing_job_merge import apply_dxf_geometry_to_part
+
+    _arm = {"part_number": "11350-01-02", "operations": ["laser_cutting", "folding"],
+            "textual_operations": ["folding"]}
+    apply_dxf_geometry_to_part(_arm, _cut_only)
+    ok("folding" in (_arm.get("operations") or []),
+       "a cut-only flat must not remove a fold the drawing states")
+    ok("folding" not in (_arm.get("operations_ruled_out") or {}),
+       "and must not record a ruling it has no evidence for")
+    ok(any("no bend layer" in str(_f) for _f in (_arm.get("review_flags") or [])),
+       "it says instead that it cannot tell")
+
+    # A DECLARED, EMPTY BEND LAYER IS A MEASURED ZERO and still rules the fold out.
+    _flat = {"part_number": "X", "operations": ["laser_cutting", "folding"],
+             "textual_operations": ["folding"]}
+    apply_dxf_geometry_to_part(_flat, _declared)
+    ok("folding" not in (_flat.get("operations") or []),
+       "a flat that declares the layer and shows none does not fold")
+    ok("folding" in (_flat.get("operations_ruled_out") or {}),
+       "and the ruling is recorded, not merely applied")
+
+
+def test_the_estimator_input_block_writes_through_merged_cells():
+    """openpyxl exposes every cell of a merged range but only the top-left accepts a value.
+    On 11350 that raised "'MergedCell' object attribute 'value' is read-only" and killed the
+    whole block after its heading — so the sheet carried a PROVISIONAL banner pointing at a
+    checklist that was not there, and the outstanding inputs existed only in console flags
+    nobody opens."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify what the Estimate tab receives")
+        return
+    import wb_populate as W
+
+    _wb = Workbook(); _ws = _wb.active
+    _ws["I200"] = "Total Unit Cost Price"; _ws["L200"] = 95.97
+    _ws["I206"] = "Sell Price"; _ws["L206"] = 95.97
+    # THE MERGE MUST START LEFT OF THE COLUMN WRITTEN TO. Merging from column 3 makes C209
+    # the ANCHOR, which openpyxl happily accepts — so a fixture built that way stays green
+    # against the very crash it is meant to catch. The template's bands start at column B,
+    # making C a read-only continuation, which is what actually failed.
+    for _r in (209, 210, 211, 212):
+        _ws.merge_cells(start_row=_r, start_column=2, end_row=_r, end_column=9)
+
+    _inputs = [{"kind": "material_unpriced", "part": "11350-01-01",
+                "where": "BOM row 11", "what": "MATERIAL UNPRICED"},
+               {"kind": "placeholder_unpriced", "part": "PACKAGING",
+                "where": "BOM row 16", "what": "NOT YET PRICED"},
+               {"kind": "margin_unset", "part": "MARGIN", "where": "L204",
+                "what": "MARGIN NOT SET"}]
+    _flags = []
+    W._write_estimator_inputs(_ws, _inputs, _flags)
+
+    # Read the ROWS, not a fixed column: a merged band anchors at its own top-left, so the
+    # text legitimately lands in column B rather than C. What matters is that it reaches the
+    # sheet at all — which is precisely what the crash prevented.
+    _below = " ".join(str(_c.value or "") for _r in range(205, 220)
+                      for _c in _ws[_r])
+    ok("OUTSTANDING ESTIMATOR INPUTS (3)" in _below, "the heading is written")
+    for _pn in ("11350-01-01", "PACKAGING", "MARGIN"):
+        ok(_pn in _below, f"and every outstanding input reaches the sheet, missing {_pn}")
+    eq((_ws["L200"].value, _ws["L206"].value), (95.97, 95.97),
+       "and no total was overwritten reaching them")
+    ok(not any("could not be written" in _f for _f in _flags),
+       f"the block must not report itself as merely unlucky, got {_flags}")
+
+
 if __name__ == "__main__":
     sys.exit(main())

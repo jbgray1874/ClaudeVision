@@ -1372,6 +1372,32 @@ C_ALERT_FILL = "FFC7CE"     # red — "this is not a price yet"
 C_ALERT_TEXT = "9C0006"
 
 
+def _writable_cell(ws, row: int, col: int):
+    """The cell to write at (row, col), or None when it is a MERGED CONTINUATION.
+
+    openpyxl exposes every cell of a merged range, but only the TOP-LEFT one accepts a
+    value — the rest raise "'MergedCell' object attribute 'value' is read-only". On 11350
+    that killed the whole estimator-input block after the heading: the run reported the
+    outstanding inputs only in its flags, and the sheet an estimator opens carried a
+    PROVISIONAL banner pointing at a checklist that was not there.
+
+    A merged range is a layout decision in the estimators' own template, so it moves as the
+    template changes and cannot be hardcoded around. Asked here, once, at the only place
+    this module writes free-form rows."""
+    try:
+        _c = ws.cell(row=row, column=col)
+        if _c.__class__.__name__ == "MergedCell":
+            # Write to the anchor of whichever range covers this cell.
+            for _rng in getattr(ws, "merged_cells", []).ranges:
+                if (_rng.min_row <= row <= _rng.max_row
+                        and _rng.min_col <= col <= _rng.max_col):
+                    return ws.cell(row=_rng.min_row, column=_rng.min_col)
+            return None
+        return _c
+    except Exception:
+        return None
+
+
 def _mark_input_cell(ws, row: int, col: int) -> None:
     """Colour a cell as something a person must fill in.
 
@@ -1453,29 +1479,38 @@ def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) 
                 elif _seen_value:
                     _col = _c + _step
                     break
-            _target = ws.cell(row=_r, column=_col)
-            if _target.value in (None, ""):
+            _target = _writable_cell(ws, _r, _col)
+            if _target is not None and _target.value in (None, ""):
                 _target.value = _banner
                 _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
                 _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
 
         # ── the checklist ──────────────────────────────────────────────────────
         _start = max(_last_row + 3, int(CELL_MAP["labour"]["last_row"]) + 6)
-        _c1 = ws.cell(row=_start, column=3)
+        _c1 = _writable_cell(ws, _start, 3)
+        if _c1 is None:
+            _flag("estimator-input checklist could not be placed — the rows below the "
+                  "totals are merged in this template. The banner beside Unit Cost and "
+                  "Sell Price still names the count.", flags)
+            return
         _c1.value = f"OUTSTANDING ESTIMATOR INPUTS ({len(inputs)}) — this sheet is NOT a price until these are filled"
         _c1.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
         _c1.fill = PatternFill("solid", fgColor="1F3864")
         _r = _start + 1
         for _i, _item in enumerate(inputs, 1):
-            _lbl = ws.cell(row=_r, column=3)
+            _lbl = _writable_cell(ws, _r, 3)
+            if _lbl is None:
+                _r += 1
+                continue
             _lbl.value = (f"{_i}.  {_item.get('part') or _item.get('where') or ''}"
                           f"{'  —  ' if _item.get('part') or _item.get('where') else ''}"
                           f"{_item.get('what') or ''}")
             _lbl.font = Font(name="Arial", size=10, color=C_ALERT_TEXT)
             _lbl.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
-            _where = ws.cell(row=_r, column=11)
-            _where.value = _item.get("where") or ""
-            _where.font = Font(name="Arial", size=9, italic=True)
+            _where = _writable_cell(ws, _r, 11)
+            if _where is not None:
+                _where.value = _item.get("where") or ""
+                _where.font = Font(name="Arial", size=9, italic=True)
             _r += 1
         _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding — listed on the Estimate tab "
               f"from row {_start}, with each input cell shaded. Unit Cost and Sell Price "
