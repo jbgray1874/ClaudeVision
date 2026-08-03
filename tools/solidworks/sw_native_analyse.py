@@ -146,6 +146,21 @@ class BomLine:
     file_path: str = ""
     source: str = ""  # assembly_tree | drawing_bom | part_props
     custom_props: Dict[str, str] = field(default_factory=dict)
+    # WHOSE CHILD IS THIS. GetComponents(False) returns every component at every level and
+    # the BOM aggregates them by document identity, so the tree arrives FLATTENED: the
+    # engine learns that 12422-24's assembly contains 05M and never learns that 05M hangs
+    # off 102. Everything downstream that has to decide who owns an operation — which
+    # assembly a powder event belongs to, which parent carries a child's material — is then
+    # reconstructing a hierarchy that the model already knew.
+    #
+    # Empty means a DIRECT child of the assembly being analysed. Additive: the aggregated
+    # `bom` list is unchanged, so no existing reader moves.
+    parent_part_number: str = ""
+    # 1 part, 2 assembly, 3 drawing — swDocumentTypes_e, as the analyser already reports for
+    # the documents it opens. An assembly node must never take material of its own, and
+    # knowing that from the model beats inferring it from the word "ASSEMBLY" in a
+    # description.
+    doc_type: Optional[int] = None
 
 
 @dataclass
@@ -1329,6 +1344,11 @@ def assembly_bom(doc) -> List[BomLine]:
     interface-returning so the component is wrapped IComponent2 and its model IModelDoc2
     (else the title falls back to the instance name '...-3' and material/path are lost)."""
     counts: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    # (parent, child, config) -> instance count, and the child's document type. Kept beside
+    # the aggregated BOM rather than replacing it, so the flat list every current reader
+    # consumes is byte-identical and only the hierarchy is new.
+    _edges: Dict[Tuple[str, str, str], float] = {}
+    _edge_meta: Dict[Tuple[str, str, str], Optional[int]] = {}
     # GetComponents is on IAssemblyDoc and is arg-taking, so it works on the raw late-bound
     # doc (that is how the top-level version worked). False = ALL levels (full flattened
     # tree); fall back to True (top level) if a build rejects False.
@@ -1406,6 +1426,33 @@ def assembly_bom(doc) -> List[BomLine]:
                 path = _safe_str(_get0(model, "GetPathName"))
                 props = get_custom_properties(model)
                 material = _prop(props, "Material", "Material Description", "Material Spec", "Grade")
+            # WHOSE CHILD IS THIS. IComponent2.GetParent returns the owning COMPONENT, or
+            # nothing for a direct child of the assembly being analysed. Read through the
+            # same wrap-and-clean path as the component itself so a sub-assembly's identity
+            # matches the one it is given when IT is the child of something else — an edge
+            # whose two ends spell the node differently is not an edge.
+            parent_pn = ""
+            try:
+                _par = _get0(c, "GetParent")
+                if _par is not None:
+                    _par = _wrap(_par, "IComponent2")
+                    _pm = None
+                    try:
+                        _pm = _par.GetModelDoc2()
+                    except Exception:
+                        _pm = _get0(_par, "GetModelDoc2")
+                    _pt = _safe_str(_get0(_wrap(_pm, "IModelDoc2"), "GetTitle")) if _pm else ""
+                    parent_pn = (os.path.splitext(_pt)[0].strip() if _pt
+                                 else _clean_pn(_safe_str(_get0(_par, "Name2")).split("/")[-1]))
+            except Exception:
+                parent_pn = ""
+            _dtype = None
+            if model is not None:
+                try:
+                    _dtype = int(_get0(model, "GetType"))
+                except Exception:
+                    _dtype = None
+
             key = (title, config)
             if key not in counts:
                 counts[key] = {
@@ -1416,8 +1463,17 @@ def assembly_bom(doc) -> List[BomLine]:
                     "material": material,
                     "file_path": path,
                     "custom_props": props,
+                    "parent_part_number": parent_pn,
+                    "doc_type": _dtype,
                 }
             counts[key]["qty"] += 1.0
+            # ONE INSTANCE PER EDGE, counted where it hangs. The aggregated line above keeps
+            # the flattened total every existing reader expects; this is what the hierarchy
+            # is actually built from, and an assembly used twice under different parents has
+            # two edges rather than one line with a doubled quantity and no owner.
+            _edges.setdefault((parent_pn, title, config), 0.0)
+            _edges[(parent_pn, title, config)] += 1.0
+            _edge_meta[(parent_pn, title, config)] = _dtype
         except Exception:
             continue
     lines = []
@@ -1432,10 +1488,28 @@ def assembly_bom(doc) -> List[BomLine]:
                 file_path=v["file_path"],
                 source="assembly_tree",
                 custom_props=v["custom_props"],
+                parent_part_number=v.get("parent_part_number") or "",
+                doc_type=v.get("doc_type"),
             )
         )
     lines.sort(key=lambda x: x.part_number.lower())
+    _ASSEMBLY_EDGES[id(doc)] = [
+        {"parent": p, "child": ch, "config": cfg, "qty": q,
+         "child_doc_type": _edge_meta.get((p, ch, cfg))}
+        for (p, ch, cfg), q in sorted(_edges.items())
+    ]
     return lines
+
+
+# assembly_bom's signature is fixed by its callers, so the edges it discovers are handed
+# over here rather than returned. Keyed on the document object so two assemblies analysed in
+# one session cannot collect each other's tree.
+_ASSEMBLY_EDGES: Dict[int, List[Dict[str, Any]]] = {}
+
+
+def assembly_edges(doc) -> List[Dict[str, Any]]:
+    """The parent->child edges found by the last assembly_bom(doc) for this document."""
+    return _ASSEMBLY_EDGES.get(id(doc), [])
 
 
 def _collect_from_table(t, lines: List[BomLine]) -> None:
@@ -1610,6 +1684,14 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
     try:
         if doctype == SW_ASM:
             result["bom"] = [asdict(b) for b in assembly_bom(doc)]
+            # THE TREE, BESIDE THE FLATTENED LIST. Every SLDASM reports its own edges, so
+            # 101's and 102's children are known even though the GA's BOM lists them all at
+            # one level. This is what lets an operation be owned by the assembly it actually
+            # belongs to instead of by whichever node the flattening happened to leave it
+            # nearest.
+            result["assembly_edges"] = assembly_edges(doc)
+            result["assembly_part_number"] = (
+                os.path.splitext(result.get("title") or "")[0].strip())
         elif doctype == SW_DRW:
             result["bom"] = [asdict(b) for b in drawing_bom_tables(doc)]
         elif doctype == SW_PART:

@@ -142,6 +142,22 @@ class NativeJob:
     assembly_pns: List[str] = field(default_factory=list)          # every .SLDASM in the pack
     meta: Dict[str, Any] = field(default_factory=dict)
     found: bool = False
+    # parent -> [(child, qty)] from every SLDASM in the pack, not just the flattened top BOM.
+    # THE MODEL ALREADY KNOWS WHO OWNS WHAT. Reading only the top assembly's full-depth
+    # component list tells the engine that 05M is somewhere in the job and never that it
+    # hangs off 102 — so every question of ownership downstream (which assembly a powder
+    # event belongs to, which parent carries a child's material, whether a node is connected
+    # at all) is reconstructed from descriptions and part-code shape when the answer was in
+    # the file.
+    hierarchy: Dict[str, List[Tuple[str, float]]] = field(default_factory=dict)
+
+    def parent_of(self, part_number: str) -> str:
+        """The assembly this part hangs off, or "" when the model does not say."""
+        child = _clean_pn(part_number)
+        for parent, kids in self.hierarchy.items():
+            if any(_clean_pn(k) == child for k, _ in kids):
+                return parent
+        return ""
 
     def material_for(self, part_number: str) -> str:
         p = self.part_signals.get(_clean_pn(part_number))
@@ -153,6 +169,7 @@ class NativeJob:
             "meta": self.meta,
             "bom": [vars(r) for r in self.bom],
             "part_signals": {k: vars(v) for k, v in self.part_signals.items()},
+            "hierarchy": {k: [list(t) for t in v] for k, v in self.hierarchy.items()},
         }
 
 
@@ -319,6 +336,46 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
         if int(r.get("doctype") or SW_PART) == SW_ASM and _clean_pn(r.get("title") or "")
     }
     job.assembly_pns = sorted(asm_titles)
+
+    # ── THE TREE, FROM EVERY ASSEMBLY, NOT JUST THE TOP ONE ───────────────────────
+    # Each SLDASM record reports its own parent->child edges. An edge with no parent named
+    # is a DIRECT child of the assembly that record describes, which is the case that
+    # matters most: it is what says 05M hangs off 102 rather than off the GA.
+    #
+    # Edges are read from every assembly record, so a sub-assembly used in two places has
+    # both its owners. Nothing here decides anything — it records what the models say, and
+    # the canonical compiler arbitrates.
+    # THE SAME EDGE IS REPORTED TWICE AND IT IS STILL ONE EDGE. The GA's component list is
+    # FULL-DEPTH, so it reports 102 -> 05M; 102's own record reports it too. Adding them
+    # gives 05M a quantity of four where the job builds two, and a quantity nobody can trace
+    # is worse than one that is merely wrong. Counted within a record, then merged ACROSS
+    # records by taking the larger — a deeper record can see instances a shallower one
+    # cannot, and neither can see instances that are not there.
+    _seen_edges: Dict[Tuple[str, str], float] = {}
+    for r in records:
+        if int(r.get("doctype") or SW_PART) != SW_ASM:
+            continue
+        _own = _clean_pn(r.get("assembly_part_number") or r.get("title") or "")
+        _this_record: Dict[Tuple[str, str], float] = {}
+        for _e in (r.get("assembly_edges") or []):
+            if not isinstance(_e, dict):
+                continue
+            _child = _clean_pn(_e.get("child") or "")
+            if not _child:
+                continue
+            _parent = _clean_pn(_e.get("parent") or "") or _own
+            if not _parent or _parent == _child:
+                continue
+            _q = _num(_e.get("qty"))
+            _this_record[(_parent, _child)] = (_this_record.get((_parent, _child), 0.0)
+                                               + (float(_q) if _q and _q > 0 else 1.0))
+        for _k, _v in _this_record.items():
+            _seen_edges[_k] = max(_seen_edges.get(_k, 0.0), _v)
+    for (_parent, _child), _q in sorted(_seen_edges.items()):
+        job.hierarchy.setdefault(_parent, []).append((_child, _q))
+    if job.hierarchy:
+        job.meta["hierarchy_edges"] = sum(len(v) for v in job.hierarchy.values())
+        job.meta["hierarchy_parents"] = sorted(job.hierarchy)
 
     # BOM = the top assembly's full-depth component list, quantities already rolled up.
     top = _pick_top_assembly(records)

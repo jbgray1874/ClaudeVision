@@ -4659,6 +4659,91 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_the_model_already_knows_who_owns_what():
+    """THE TREE ARRIVED FLATTENED AND EVERY OWNERSHIP QUESTION WAS THEN GUESSWORK.
+
+    The analyser reads the top assembly's FULL-DEPTH component list and aggregates it by
+    document identity, so the engine learns that 12422-24 contains 05M and never that 05M
+    hangs off 102. Every downstream question of ownership — which assembly a powder event
+    belongs to, which parent carries a child's material, whether a BOM node is connected at
+    all — was then reconstructed from descriptions and part-code shape, when the answer was
+    in the file the whole time. 12422-24 has carried a bom_node_disconnected blocker through
+    every run.
+
+    Each SLDASM now reports its own parent->child edges and the connector merges them."""
+    from source_connectors.solidworks import normalize_native_extract
+
+    def _asm(pn, edges, bom=()):
+        return {"title": pn, "doctype": 2, "assembly_part_number": pn,
+                "bom": [{"part_number": p, "qty": q} for p, q in bom],
+                "assembly_edges": edges}
+
+    # 12422-24's real shape: GA holds 101 and 102; 101 holds the panel and the top bracket;
+    # 102 holds two foot plates. An edge with no parent named is a DIRECT child of the
+    # assembly whose record carries it — the case that matters most, because it is what says
+    # 05M hangs off 102 rather than off the GA.
+    _recs = [
+        _asm("12422-24-GA",
+             [{"parent": "", "child": "12422-24-101", "qty": 1, "child_doc_type": 2},
+              {"parent": "", "child": "12422-24-102", "qty": 1, "child_doc_type": 2},
+              {"parent": "12422-24-101", "child": "12422-24-01J", "qty": 1},
+              {"parent": "12422-24-101", "child": "12422-24-02M", "qty": 1},
+              {"parent": "12422-24-102", "child": "12422-24-05M", "qty": 2}],
+             bom=[("12422-24-101", 1), ("12422-24-102", 1), ("12422-24-01J", 1),
+                  ("12422-24-02M", 1), ("12422-24-05M", 2)]),
+        _asm("12422-24-101",
+             [{"parent": "", "child": "12422-24-01J", "qty": 1},
+              {"parent": "", "child": "12422-24-02M", "qty": 1}],
+             bom=[("12422-24-01J", 1), ("12422-24-02M", 1)]),
+        _asm("12422-24-102",
+             [{"parent": "", "child": "12422-24-05M", "qty": 2}],
+             bom=[("12422-24-05M", 2)]),
+    ]
+    _job = normalize_native_extract(_recs)
+
+    eq(_job.parent_of("12422-24-05M"), "12422-24-102",
+       "the foot plate hangs off the sub-assembly the model puts it in")
+    eq(_job.parent_of("12422-24-01J"), "12422-24-101", "and the panel off its own")
+    eq(_job.parent_of("12422-24-101"), "12422-24-GA",
+       "and a sub-assembly is itself a child, so the chain reaches the top")
+    eq(_job.parent_of("12422-24-GA"), "",
+       "the top assembly hangs off nothing, and is not invented a parent")
+
+    # THE SAME EDGE REPORTED TWICE IS STILL ONE EDGE. The GA's list is full-depth, so it
+    # reports 102 -> 05M; 102's own record reports it too. Summing across records gave the
+    # foot plate a quantity of FOUR where the job builds two — caught by this assertion
+    # before it shipped, and a quantity nobody can trace is worse than one merely wrong.
+    eq(dict(_job.hierarchy["12422-24-102"])["12422-24-05M"], 2.0,
+       "two foot plates, not four — an edge seen twice is not two edges")
+    eq(sorted(k for k, _ in _job.hierarchy["12422-24-101"]),
+       ["12422-24-01J", "12422-24-02M"], "and 101 holds exactly its two children")
+
+    # A PACK WITH NO NATIVE EDGES LEARNS NOTHING AND CLAIMS NOTHING. Every job before this
+    # one has no assembly_edges in its extract, so the absence must be silent rather than an
+    # empty hierarchy that reads as "this job has no structure".
+    eq(normalize_native_extract([{"title": "X", "doctype": 1, "bom": []}]).hierarchy, {},
+       "no edges means no claim, not a claim of no children")
+
+    # AND THE FLAT BOM IS UNCHANGED. The edges are additive; every existing reader of the
+    # top assembly's component list must see exactly what it saw before.
+    eq(sorted(r.part_number for r in _job.bom),
+       ["12422-24-01J", "12422-24-02M", "12422-24-05M", "12422-24-101", "12422-24-102"],
+       "the flattened BOM every current reader consumes is untouched")
+
+    # THE ANALYSER MUST ACTUALLY EMIT THEM. A consumer for evidence nobody produces is the
+    # "built is not wired" failure, one process boundary further out than usual — and this
+    # side cannot be exercised here at all, because it needs SolidWorks.
+    from pathlib import Path as _P
+    _an = (_P(__file__).resolve().parents[1] / "tools" / "solidworks"
+           / "sw_native_analyse.py").read_text(encoding="utf-8")
+    ok('result["assembly_edges"] = assembly_edges(doc)' in _an,
+       "the analyser publishes the edges for every assembly it opens")
+    ok('_get0(c, "GetParent")' in _an,
+       "read from IComponent2.GetParent, which is the model's own answer")
+    ok('result["assembly_part_number"]' in _an,
+       "and names the assembly they belong to, so a parentless edge has an owner")
+
+
 def test_a_measured_cut_length_arbitrates_rather_than_queues():
     """12422-24-02M's laser calculator was handed 7832mm of internal cut against a true
     figure near 364mm, and only the throughput floor stopped it reaching the price — so the
