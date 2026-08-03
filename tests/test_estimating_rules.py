@@ -6421,10 +6421,23 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     eq(mirror_base("Mirror11350-01-02M"), "11350-01-02M", "the files' spelling")
     eq(mirror_base("11350-01-02 MIR"), "11350-01-02", "the drawing's spelling")
     eq(mirror_base("11350-01-02-MIRRORED"), "11350-01-02", "and the long form")
+    # AND THE SPELLING THE PIPELINE ACTUALLY HOLDS. normalize_part_code collapses
+    # "11350-01-02 MIR" to "11350-01-02MIR", so a rule that requires a separator recognises
+    # the code the drawing prints and not the one every downstream reader has. That is why
+    # 11350's right arm still reached costing with no blank after this rule was fixed twice:
+    # it was correct, and was being handed a spelling it did not accept.
+    from part_identity import normalize_part_code
+    eq(mirror_base(normalize_part_code("11350-01-02 MIR")), "11350-01-02",
+       "the normalised code is still recognised as a mirror")
+    eq(mirror_base("11350-01-02MIR"), "11350-01-02", "with no separator at all")
     eq(mirror_base("11350-01-02"), "", "a part that mirrors nothing says so")
     # A CODE THAT MERELY ENDS IN THOSE LETTERS IS NOT A MIRROR. "MIR" needs a separator
     # before it, or a real code is silently cut in half.
     eq(mirror_base("BRACKET-MIRAGE"), "", "a longer word is not the marker")
+    # A DIGIT IS WHAT MAKES THE SEPARATORLESS FORM SAFE. Without it, any code ending in
+    # those three characters would be cut in half.
+    eq(mirror_base("SOUVENIR"), "", "a word ending in the letters is not a mirrored part")
+    eq(mirror_base("BRACKETMIR"), "", "nor is a code with no digit before the marker")
     eq(mirror_base("MIRRORLIKE-01"), "", "and neither is a code that begins with one")
 
     # A MIRROR WITH ITS OWN SLDPRT: the model must still beat this, both ways round.

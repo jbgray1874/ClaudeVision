@@ -46,7 +46,17 @@ _MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\d-])", re.IGNORECASE)
 # The DRAWING's spelling of the same fact: "11350-01-02 MIR", "1449-03-MIRROR". A separator
 # is required before the marker so a code that merely ends in those letters is untouched,
 # and the marker must end the code — "…-MIRROR-02" is a code, not a marker.
-_MIRROR_SUFFIX = re.compile(r"[\s_-]+MIR(?:ROR(?:ED)?|ORED|OR)?$", re.IGNORECASE)
+# THE SEPARATOR SURVIVES THE DRAWING AND NOT THE PIPELINE. normalize_part_code collapses
+# "11350-01-02 MIR" to "11350-01-02MIR" — so a rule that requires a separator recognises the
+# code the drawing prints and not the one every downstream reader holds. On 11350 that is
+# why the right arm still reached costing with no blank after the mirror rule was fixed
+# twice: the rule was correct and was being handed a spelling it did not accept.
+#
+# So the marker is accepted with a separator, or directly after a DIGIT. The digit is what
+# keeps it safe: a code ending in letters is left whole, so "BRACKET-MIRAGE" and any part
+# whose name merely ends in those characters are untouched.
+_MIRROR_SUFFIX = re.compile(r"(?:[\s_-]+|(?<=\d))MIR(?:ROR(?:ED)?|ORED|OR)?$",
+                            re.IGNORECASE)
 
 
 def is_mirror_code(identity: str) -> bool:
