@@ -1250,9 +1250,27 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not (_bl and _bw):
             continue
         # ITS OWN MEASUREMENT WINS OUTRIGHT. A mirror with its own export needs nothing.
+        #
+        # AND IF IT DISAGREES, SAY SO. SolidWorks lets the link to the seed be BROKEN, after
+        # which the opposite hand can be edited independently — so two measured hands whose
+        # blanks differ is either deliberate or a stale derived part, and only a person can
+        # tell which. Equal blanks are a safe assumption while the link holds and a silent
+        # error once it does not. Nothing is overwritten either way: both were measured.
         _ng = part.get("normalized_geometry") or {}
         _ml, _mw = flat_blank_mm(part)
         if _ml and _mw:
+            if abs(_ml - _bl) > 0.5 or abs(_mw - _bw) > 0.5:
+                part.setdefault("review_flags", []).append(
+                    f"HANDED PAIR DISAGREES: this part measures {_ml:g} x {_mw:g}mm and "
+                    f"{base.get('part_number')}, which it mirrors, measures {_bl:g} x "
+                    f"{_bw:g}mm. A true opposite hand develops the same flat — so either the "
+                    f"link to the seed was broken and this hand edited, or one of the two "
+                    f"exports is stale. Both figures are measured and neither has been "
+                    f"changed; the estimator decides.")
+                filled.append({"part_number": part.get("part_number"),
+                               "mirrored_from": base.get("part_number"),
+                               "fields": [], "disagreement_mm": [round(_ml - _bl, 2),
+                                                                  round(_mw - _bw, 2)]})
             continue
 
         # EVERY KEY THE BASE CARRIES, not a fixed six. A list of field names is a list of

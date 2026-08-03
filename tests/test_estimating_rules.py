@@ -6217,6 +6217,108 @@ def test_a_part_described_as_another_part_with_components_is_an_assembly():
        "a prefix-parent of two or more children is still an assembly by its number alone")
 
 
+def test_the_pipeline_builds_the_record_these_rules_read():
+    """EVERY DEFECT THIS BRANCH FOUND LAST WAS THE SAME SHAPE, AND FIXTURES CANNOT SEE IT.
+
+    Three in a row: the mirror rule read blank_length_mm while the pipeline writes
+    bounding_box_flat_mm; the description pass recorded "-" while the compiler synthesises
+    BI-PEMSTUD; three passes ran before the parts they describe existed. Each one had
+    fixtures, each set passed, and each fixture SUPPLIED THE SHAPE IT WAS LOOKING FOR. A
+    hand-written dict cannot disagree with the rule that reads it — that is what makes it
+    useless here, and it is why all three were found by replaying a saved job instead.
+
+    So this fixture builds its record the way the RUN builds it: through
+    document_builder._build_normalized_geometry. If that function's output shape moves, the
+    rules that read it fail here rather than on a job.
+
+    It also replays any real saved job in tests/fixtures/jobs/*.json, which is the strongest
+    version of the same check — drop an output/json file there and this asserts the
+    structural properties against evidence nobody wrote for a test.
+    """
+    from document_builder import _build_normalized_geometry, flat_blank_mm
+    from drawing_job_merge import _stamp_assembly_parents, apply_mirror_geometry
+    from route_compiler import compile_job_route
+
+    # BUILT, NOT WRITTEN. Formed dims + a measured-flat marker is what a DXF-backed part
+    # carries; the shape of what comes back is the pipeline's business, not this test's.
+    _left = {"part_number": "11350-01-02", "description": "LEFT ARM 200MM",
+             "overall_length_mm": 258.35, "overall_width_mm": 84.8,
+             "normalized_thickness_mm": 2.0, "normalized_material": "MILD STEEL",
+             "flat_pattern_detected": True, "geometry_source": "dxf_flat_pattern",
+             "manufacturing_features": {"bend_count": 2, "geometry_reliability": 1.0}}
+    _left["normalized_geometry"] = _build_normalized_geometry(_left)
+    _left["normalized_geometry"]["geometry_source"] = "dxf_flat_pattern"
+
+    # THE RULES MUST READ WHAT THAT PRODUCED. This is the assertion the mirror rule failed.
+    eq(flat_blank_mm(_left), (258.35, 84.8),
+       "the shared resolver reads the geometry the pipeline actually builds")
+
+    _parts = [_left,
+              {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM 200MM"},
+              {"part_number": "11350-01-01", "description": "TICKET STRIP BAR"},
+              {"part_number": "11350-01-101",
+               "description": "TICKET STRIP BAR WITH PEM STUDS"},
+              {"part_number": "-", "description": "M4X8 PEM STUD", "quantity": 4}]
+    _stamp_assembly_parents(_parts)
+    ok(apply_mirror_geometry(_parts),
+       "and the mirror rule fires on it — the defect that reached a live job")
+    _mir = next(p for p in _parts if p["part_number"] == "11350-01-02 MIR")
+    eq(flat_blank_mm(_mir), (258.35, 84.8), "the right arm ends up with a resolvable blank")
+
+    _by = {p["part_number"]: p for p in _parts}
+    eq(_by["11350-01-101"].get("assembly_children"), ["11350-01-01", "BI-PEMSTUD"],
+       "and the hardware child is named as the compiler will know it")
+
+    _graph = compile_job_route(_parts, {
+        "assemblies": [{"part_number": "11350-01", "children": [
+            {"part_number": "11350-01-101", "qty": 1},
+            {"part_number": "11350-01-02", "qty": 1},
+            {"part_number": "11350-01-02 MIR", "qty": 1}]}],
+        "bom": [
+            {"part_number": "11350-01-01", "description": "TICKET STRIP BAR", "qty": 1,
+             "type": "fabricated"},
+            {"part_number": "11350-01-02", "description": "LEFT ARM 200MM", "qty": 1,
+             "type": "fabricated"},
+            {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM 200MM", "qty": 1,
+             "type": "fabricated"},
+            {"part_number": "-", "description": "M4X8 PEM STUD", "qty": 4,
+             "is_bought_in": True}]})
+    eq([i.get("part_number") for i in (_graph.get("issues") or [])
+        if i.get("code") == "bom_node_disconnected"], [],
+       "so nothing is left without a parent")
+
+    # ── THE REAL THING, WHEN ONE IS PRESENT ─────────────────────────────────────────
+    import json
+    from pathlib import Path
+    _jobs = sorted((Path(__file__).resolve().parent / "fixtures" / "jobs").glob("*.json")) \
+        if (Path(__file__).resolve().parent / "fixtures" / "jobs").is_dir() else []
+    for _job_path in _jobs:
+        _doc = json.loads(_job_path.read_text(encoding="utf-8"))
+        _real = [p for p in ((_doc.get("manufacturing_writeup") or {}).get("parts") or [])
+                 if isinstance(p, dict)]
+        ok(_real, f"{_job_path.name} carries parts to replay")
+        _stamp_assembly_parents(_real)
+        apply_mirror_geometry(_real)
+        _rg = compile_job_route(_real, _doc.get("llm_full_extract") or {})
+        _orphans = [i.get("part_number") for i in (_rg.get("issues") or [])
+                    if i.get("code") == "bom_node_disconnected"]
+        eq(_orphans, [], f"{_job_path.name}: every node has an owner, got {_orphans}")
+        # A handed pair on a real job must not reach costing with one blank between them.
+        for _p in _real:
+            from part_code_conventions import mirror_base
+            _base_pn = mirror_base(str(_p.get("part_number") or ""))
+            if not _base_pn:
+                continue
+            _base = next((q for q in _real
+                          if str(q.get("part_number") or "").strip().upper()
+                          == _base_pn.strip().upper()), None)
+            if _base is None or not all(flat_blank_mm(_base)):
+                continue
+            ok(all(flat_blank_mm(_p)),
+               f"{_job_path.name}: {_p.get('part_number')} mirrors a measured part and "
+               f"must not arrive at costing with no blank")
+
+
 def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     """JOB 11350'S RIGHT ARM WAS PRICED BY AN LLM AT 97% OF THE MATERIAL TOTAL WHILE ITS OWN
     GEOMETRY SAT TWO ROWS ABOVE IT.
@@ -6280,6 +6382,19 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
        "a mirror with its own flat is not overwritten by its base's")
     eq(_own["normalized_geometry"]["geometry_source"], "dxf_flat_pattern",
        "and keeps its own provenance")
+    # AND IF THE TWO HANDS DISAGREE, SAY SO. SolidWorks lets the link to the seed be BROKEN,
+    # after which the opposite hand can be edited independently — so two measured hands whose
+    # blanks differ is either deliberate or a stale derived part, and only a person can tell
+    # which. Equal blanks are a safe assumption while the link holds, and a silent error once
+    # it does not. Nothing is overwritten either way: both were measured.
+    ok(any("HANDED PAIR DISAGREES" in str(f) for f in (_own.get("review_flags") or [])),
+       "a 0.65mm difference between two measured hands is put in front of the estimator")
+    _agree = {"part_number": "11350-01-02 MIR", "geometry_source": "dxf_flat_pattern",
+              "normalized_geometry": {"blank_length_mm": 258.35, "blank_width_mm": 84.8,
+                                      "geometry_source": "dxf_flat_pattern"}}
+    apply_mirror_geometry([_left(), _agree])
+    ok(not any("HANDED PAIR DISAGREES" in str(f) for f in (_agree.get("review_flags") or [])),
+       "and two hands that agree raise nothing — a flag on every handed pair is noise")
 
     # 2. AN UNMEASURED BASE IS NOT A SOURCE. Inheriting from an inferred blank would launder
     #    a guess into geometry at rank 75 — the move every source rule here exists to stop.
