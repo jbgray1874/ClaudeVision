@@ -800,6 +800,40 @@ def _numeric_part_prefix(part_number: str) -> str:
     return m.group(1) if m else ""
 
 
+def _dxf_code_is_in_this_job(dxf_code: str, parts_by_key: Dict[str, Dict[str, Any]]) -> bool:
+    """Could this DXF's code belong under the assembly this job's parts sit under?
+
+    Only refuses when the job is UNAMBIGUOUSLY single-branch. Where the existing parts share
+    a real assembly prefix ("11350-01") a code outside it is another drawing's; where they
+    share only the job number, or nothing, this cannot tell and says yes — a missed detail
+    part must still be promoted, and that is the commoner case by far.
+    """
+    _code = _normalize_part_key(dxf_code)
+    if not _code:
+        return True
+    _keys = [k for k in parts_by_key if k and re.match(r"^\d", k)]
+    if len(_keys) < 2:
+        return True
+    _segs = [k.split("-") for k in _keys]
+    _common: List[str] = []
+    for _i in range(min(len(x) for x in _segs)):
+        _tok = _segs[0][_i]
+        if all(x[_i] == _tok for x in _segs):
+            _common.append(_tok)
+        else:
+            break
+    # WHATEVER THE PARTS ACTUALLY SHARE IS THE SCOPE, however much that is.
+    #
+    # The first version special-cased a one-segment prefix — "the job number alone proves
+    # nothing" — and a mutation showed that wrong: across BRANCHES it proves nothing, but
+    # across JOBS it proves plenty. A folder whose parts span 11350-01 and 11350-02 cannot
+    # tell whether 11350-03 belongs, and must promote it; it can tell perfectly well that
+    # 12120-01-01 does not.
+    if not _common:
+        return True
+    return _code.startswith("-".join(_common))
+
+
 def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str) -> str:
     """Best-effort description from pooled BOM rows sharing the numeric family prefix."""
     pn_key = _normalize_part_key(part_number)
@@ -1405,6 +1439,23 @@ def augment_summary_with_dxf(
             continue
 
         part = _lookup_part(parts_by_key, pn)
+        if not part and not _dxf_code_is_in_this_job(pn, parts_by_key):
+            # A FLAT FOR ANOTHER DRAWING IS NOT A PART OF THIS ONE.
+            #
+            # 11350's folder holds "11350-03-BOOTS COMMS BAR 200MM BLACK_RevB.DXF" — the
+            # BLACK variant, a different GA. It parses a code, matches nothing, and was
+            # minted as a new part: the black bar's geometry costed onto the white job,
+            # under a code that normalises to "11350-03" and reads entirely plausible.
+            #
+            # Minting an orphan is right for a detail the BOM missed. It is wrong for a flat
+            # that belongs to a sibling drawing, and the difference is visible: this job's
+            # parts sit under one assembly and this code does not. Refused and reported —
+            # declining costs a measurement somebody can see, minting costs a phantom
+            # nobody would.
+            report["unmatched_dxf"].append({
+                "path": str(path), "part_number": pn,
+                "reason": "code_belongs_to_another_assembly_in_this_job_number"})
+            continue
         if not part:
             part = _create_orphan_dxf_part(summary, pn, path)
             parts.append(part)

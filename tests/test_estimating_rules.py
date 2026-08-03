@@ -5589,6 +5589,47 @@ def test_an_unread_colour_is_not_a_second_colour():
        "the grouping pass runs the merge before the groups are handed on")
 
 
+def test_a_flat_for_another_drawing_is_not_a_part_of_this_one():
+    """11350's folder holds "11350-03-BOOTS COMMS BAR 200MM BLACK_RevB.DXF" — the BLACK
+    variant, a different GA sharing the job number. It parses a code, matches no part, and
+    was MINTED as a new one: the black bar's geometry costed onto the white job, under a
+    code that normalises to "11350-03" and reads entirely plausible on the sheet.
+
+    Minting an orphan is right for a detail the BOM missed — that is the commoner case and
+    it must keep working. It is wrong for a flat belonging to a sibling drawing, and the
+    difference is visible: this job's parts sit under one assembly and this code does not."""
+    from drawing_job_merge import _dxf_code_is_in_this_job as _in_job
+
+    _job = {"11350-01": {}, "11350-01-01": {}, "11350-01-02": {}}
+    ok(_in_job("11350-01-07", _job),
+       "a detail the BOM missed, under this job's assembly, is still promoted")
+    ok(_in_job("11350-01-01M", _job), "and so is the model spelling of one that exists")
+    ok(not _in_job("11350-03-BOOTS", _job),
+       "the BLACK variant's flat is another drawing's and mints nothing")
+    ok(not _in_job("12120-01-01", _job), "nor does another job's entirely")
+
+    # IT ONLY REFUSES WHERE THE JOB IS UNAMBIGUOUSLY SINGLE-BRANCH. A job legitimately
+    # spanning two assemblies shares only its number, which everything in the folder shares,
+    # so this cannot tell — and the safe answer is to promote.
+    ok(_in_job("11350-03-BOOTS", {"11350-01-01": {}, "11350-02-01": {}}),
+       "two branches means the common prefix is the job number, which proves nothing")
+    ok(_in_job("11350-03-BOOTS", {"11350-01-01": {}}),
+       "and one part is not a branch to defend")
+    # BUT THE JOB NUMBER STILL PROVES SOMETHING ACROSS JOBS. Two branches cannot tell
+    # whether a third belongs; they can tell perfectly well that another job does not.
+    ok(not _in_job("12120-01-01", {"11350-01-01": {}, "11350-02-01": {}}),
+       "a different job number is refused even when this job spans two assemblies")
+
+    # WIRED. The promotion path must ask, or the phantom is minted exactly as before.
+    import inspect
+    import drawing_job_merge as D
+    _src = inspect.getsource(D.augment_summary_with_dxf)
+    ok("_dxf_code_is_in_this_job" in _src,
+       "the orphan-promotion path checks the code belongs to this drawing")
+    ok("code_belongs_to_another_assembly" in _src,
+       "and reports the refusal rather than dropping it silently")
+
+
 def test_a_board_is_not_a_gauge():
     """The plausibility bound on a filename thickness exists to stop a product LENGTH being
     read as a gauge — "Left Arm 200mm_flat.dxf" came back as a 200mm steel arm. 25mm is
