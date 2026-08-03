@@ -5589,6 +5589,41 @@ def test_an_unread_colour_is_not_a_second_colour():
        "the grouping pass runs the merge before the groups are handed on")
 
 
+def test_a_board_is_not_a_gauge():
+    """The plausibility bound on a filename thickness exists to stop a product LENGTH being
+    read as a gauge — "Left Arm 200mm_flat.dxf" came back as a 200mm steel arm. 25mm is
+    generous for sheet metal and simply wrong for board: 12422-24's panel is 28mm MFC, and
+    shop-fitting board runs 18/22/25/28/30 and beyond.
+
+    So the panel's thickness was silently refused, on the biggest material item of the job.
+    The bound now depends on what the material IS — the same guard, told what it is
+    guarding."""
+    from pathlib import Path
+    from drawing_job_merge import (thickness_mm_from_dxf_filename as _thk,
+                                   material_from_dxf_filename as _mat)
+
+    eq(_thk(Path("12422-24-01J_28MM_MFC_RevA.DXF")), 28.0,
+       "a 28mm board panel is a board panel, not an implausible gauge")
+    eq(_mat(Path("12422-24-01J_28MM_MFC_RevA.DXF")), "MELAMINE FACED CHIPBOARD",
+       "MFC is the commonest shop-fitting board and the abbreviation everybody writes")
+
+    # THE STEEL BOUND IS UNCHANGED, which is the whole reason the bound exists.
+    eq(_thk(Path("Boots Comms Bar - Left Arm 200mm_1mm MS.dxf")), 1.0,
+       "a product length in a STEEL filename is still refused")
+    eq(_thk(Path("12422-24-03M_1.2MM_MS_RevA.DXF")), 1.2, "and a real gauge still reads")
+    eq(_thk(Path("12422-24-05M_3MM_MS_RevA.DXF")), 3.0, "at any plausible steel thickness")
+
+    # AND THE BOARD BOUND IS A BOUND, not an absence of one. A 200mm panel is a length.
+    eq(_thk(Path("Panel 200MM MFC.dxf")), None,
+       "a product length in a BOARD filename is refused too — wider is not unbounded")
+
+    # THE CLASSIFIER KNOWS IT TOO, or the panel reaches the wrong cost stream.
+    from wb_populate import _is_board, _is_timber
+    ok(_is_board("MFC") and _is_timber("MFC"),
+       "MFC routes to the board stream and the joinery department")
+    ok(not _is_board("MILD STEEL"), "and steel is untouched by any of it")
+
+
 def test_the_word_assembly_is_not_evidence_that_something_carries_the_cost():
     """A part's material was excluded on the strength of ASSEMBL appearing in its
     description, and the run printed "carried by children" without checking any child

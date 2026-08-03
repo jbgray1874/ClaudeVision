@@ -172,6 +172,21 @@ def drawing_export_reason(path: Path) -> Optional[str]:
 # dimension, a product name or a part code — not the material thickness.
 SHEET_GAUGE_MIN_MM = 0.3
 SHEET_GAUGE_MAX_MM = 25.0
+# A BOARD IS NOT A GAUGE. The bound above exists to stop a product LENGTH being read as a
+# thickness — "Left Arm 200mm_flat.dxf" came back as a 200mm steel gauge. 25mm is generous
+# for sheet metal and wrong for board: 12422-24's MFC panel is 28mm, and shop-fitting board
+# runs 18/22/25/28/30 and beyond, so the panel's thickness was silently refused.
+#
+# The bound now depends on what the material IS. Same guard, told what it is guarding.
+BOARD_GAUGE_MAX_MM = 75.0
+
+
+def _gauge_bounds(path: Path) -> Tuple[float, float]:
+    """(min, max) plausible thickness for whatever this filename says it is cut from."""
+    _mat = material_from_dxf_filename(path) or ""
+    from wb_populate import _is_board
+    return (SHEET_GAUGE_MIN_MM,
+            BOARD_GAUGE_MAX_MM if _is_board(_mat) else SHEET_GAUGE_MAX_MM)
 
 
 def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
@@ -184,7 +199,8 @@ def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
                 # still came back as a 200mm gauge. A guard on the second reader is no
                 # guard at all when the first one answers.
                 _pv = float(parsed["thickness_mm"])
-                if SHEET_GAUGE_MIN_MM <= _pv <= SHEET_GAUGE_MAX_MM:
+                _lo, _hi = _gauge_bounds(path)
+                if _lo <= _pv <= _hi:
                     return _pv
         except Exception:
             pass
@@ -208,9 +224,10 @@ def thickness_mm_from_dxf_filename(path: Path) -> Optional[float]:
     # "Left Arm 200mm_1mm MS" resolves to 1.0 rather than to the length that happens to come
     # first. Nothing plausible means no reading — the DXF geometry and the drawing still
     # carry a thickness, and a wrong gauge is far worse than an absent one.
+    _lo, _hi = _gauge_bounds(path)
     for _m in re.finditer(r"(\d+(?:\.\d+)?)\s*mm", stem_norm, flags=re.IGNORECASE):
         _v = float(_m.group(1))
-        if SHEET_GAUGE_MIN_MM <= _v <= SHEET_GAUGE_MAX_MM:
+        if _lo <= _v <= _hi:
             return _v
     return None
 
@@ -230,6 +247,13 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
     (r"POLYCARB|\bPC\b", "POLYCARBONATE"),
     (r"\bCARD\b|GREYBOARD|GREY\s*BOARD", "CARD"),
     (r"\bMDF\b", "MDF"),
+    # MFC is Melamine Faced Chipboard and is the commonest shop-fitting board there is —
+    # 12422-24's panel is 28mm of it. The spelled-out name was recognised and the trade
+    # abbreviation everybody actually writes was not, so the panel came through with no
+    # material at all. Resolved to the full name so every downstream board and timber test
+    # keeps working off one spelling.
+    (r"\bMFC\b|MELAMINE\s*FACED", "MELAMINE FACED CHIPBOARD"),
+    (r"\bCHIPBOARD\b", "CHIPBOARD"),
     (r"PLYWOOD|\bPLY\b", "PLYWOOD"),
     (r"STAINLESS|\bSS\b|\b304\b|\b316\b", "STAINLESS STEEL"),
     (r"ALUMINI?UM|\bALUM?\b", "ALUMINIUM"),

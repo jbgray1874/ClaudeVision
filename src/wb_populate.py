@@ -825,13 +825,16 @@ def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, A
 def _is_board(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD",
+                                "MELAMINE", "MFC",
                                 # timber families — a glued-and-pinned timber crate is NOT sheet metal
                                 "TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
                                 "SPRUCE", "BEECH", "BIRCH"))
 
 
 _TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
-                  "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB")
+                  "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB",
+                  # MFC — melamine faced chipboard, the commonest shop-fitting board.
+                  "MELAMINE", "MFC")
 
 
 def _is_timber(mat: str) -> bool:
