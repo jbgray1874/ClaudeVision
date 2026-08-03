@@ -4514,6 +4514,68 @@ def test_free_text_from_a_model_still_lands_on_a_department():
        "and can be reported rather than swallowed")
 
 
+def test_a_board_job_is_written_in_words_this_table_can_pay():
+    """THE ALIAS TABLE WAS ALL METAL. LASM had eight spellings; the words a shop-fitting
+    job is actually written in had none.
+
+    "panel saw", "edging", "lipping", "laminating", "lacquer" — the ordinary names for the
+    work on a board product — resolved to nothing, and an operation that resolves to
+    nothing is written to the sheet under its own name, LOOKUPs to zero, and reads exactly
+    like work nobody identified. It is flagged, so it is not silent; the price is still
+    wrong and still low.
+
+    12422-24 is an MFC end cap routed almost entirely through departments that had one
+    alias each. Every code below is already in the rate table — nothing new is invented,
+    the shop's own words are simply understood."""
+    from department_codes import code_for
+    from wb_populate import _map_operation
+
+    for _text, _code in (
+            ("panel_saw", "SAW"), ("beam saw", "SAW"), ("crosscut", "SAW"),
+            ("cnc_router", "CNCJ"), ("routering", "CNCJ"), ("nesting", "CNCJ"),
+            ("edging", "EDGE"), ("edgebanding", "EDGE"), ("lipping", "EDGE"),
+            ("laminating", "GLUE"), ("veneering", "GLUE"),
+            ("lacquering", "SPRY"), ("varnishing", "SPRY"), ("oiling", "SPRY"),
+            ("waxing", "SPRY"), ("painting", "SPRY"),
+            ("dowelling", "DRIL"), ("boring", "DRIL"),
+            ("morticing", "MC J"), ("planing", "MC J"),
+            ("joinery assembly", "BENC"), ("pack joinery", "PACJ")):
+        eq(code_for(_text), _code, f"a board route saying '{_text}' costs against {_code}")
+
+    # AND IT REACHES A TITLE. A code the workbook never sees is not a price.
+    eq(_map_operation("panel_saw", True), "Saw", "resolving to a code is not enough")
+    eq(_map_operation("edging", True), "Edge Banding", "the sheet needs the title")
+
+    # WHAT MUST STAY LOUD. Each of these could belong to two departments — pressing is a
+    # press brake or a laminate press, cut to size is a panel saw or a guillotine — and a
+    # near-miss department that still produces a cost is worse than a None an estimator can
+    # see. This is the same reasoning that keeps "finishing" out of the table, and the
+    # fixture is here so a later pass cannot quietly "complete" the vocabulary.
+    for _ambiguous in ("machining", "trimming", "pressing", "cutting", "cut to size",
+                       "finishing"):
+        eq(code_for(_ambiguous), None,
+           f"'{_ambiguous}' names two departments and must not silently pick one")
+
+    # AND THE WORDS THAT NAME A MATERIAL AT LEAST AS OFTEN AS AN OPERATION. On a board job
+    # "laminate", "veneer" and "stain" are things before they are verbs, which is why only
+    # their -ing forms resolve.
+    for _noun in ("laminate", "veneer", "stain", "wax"):
+        eq(code_for(_noun), None, f"'{_noun}' is a material here as readily as an operation")
+
+    # "route" is this codebase's own word for the manufacturing route, so it is not a CNC
+    # alias however plausible it looks beside "routing".
+    eq(code_for("route"), None, "the word this engine uses for a route is not a department")
+
+    # NOTHING ABOVE INVENTED A DEPARTMENT. Every code claimed here is one the rate table
+    # already carries — the check that made this table worth having in the first place.
+    from department_codes import DEPARTMENT_CODES, CODE_TITLES
+    for _text in ("panel_saw", "edging", "laminating", "lacquering", "morticing",
+                  "joinery assembly", "pack joinery"):
+        _c = code_for(_text)
+        ok(_c in DEPARTMENT_CODES and _c in CODE_TITLES,
+           f"{_text} -> {_c}, which must be a real rate-table row")
+
+
 def test_the_prompt_asks_for_the_vocabulary_that_pays():
     """The prompts were asking for free text, so the model had no way to answer costably."""
     import llm_full_extract as lfe

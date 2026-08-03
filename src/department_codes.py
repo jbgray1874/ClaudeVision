@@ -207,6 +207,52 @@ _alias("MANM", "manual labour (metal)", "manual labour", "manual handling")
 _alias("MANA", "manual labour (acrylic)")
 _alias("SALV", "salvagnini", "panel bender", "panel bending")
 
+# ── THE JOINERY HALF OF THE SHOP, WHICH THIS TABLE BARELY SPOKE ─────────────────────
+#
+# Everything above is metal. LASM has eight spellings and SAW had six, but the words a
+# board job is actually written in -- panel saw, edging, lipping, laminating, lacquer --
+# resolved to nothing, and an operation that resolves to nothing is written to the sheet
+# under its own name, LOOKUPs to zero, and reads exactly like work nobody identified. It is
+# flagged, but the price is still wrong and still low.
+#
+# 12422-24 is an MFC end cap: a shop-fitting board job routed almost entirely through
+# departments that had one alias each. These are the machine and process names the trade
+# uses, mapped onto codes the rate table already carries.
+#
+# WHAT IS DELIBERATELY ABSENT, and why. "machining", "trimming", "pressing", "cutting" and
+# "cut to size" are NOT here. Each could belong to two departments -- pressing is a press
+# brake or a laminate press, cut to size is a panel saw or a guillotine -- and this module's
+# whole position is that a near-miss department which still produces a cost is worse than a
+# loud None. The same reasoning that keeps "finishing" out keeps these out.
+_alias("SAW", "panel saw", "beam saw", "dimension saw", "wall saw", "vertical panel saw",
+       "cross cut", "crosscut", "rip", "ripping", "saw cutting")
+_alias("CNCJ", "cnc router", "cnc routing", "router", "routering", "cnc nest", "nesting",
+       "cnc nesting", "nested cutting")
+# Not bare "route": this codebase uses that word for the manufacturing route itself.
+_alias("EDGE", "edging", "edgebanding", "edge band", "edge bander", "lipping",
+       "apply lipping", "applying lipping", "solid lipping", "abs edging", "pvc edging")
+# Laminating and veneering are glue-and-press operations and GLUE is the department that
+# pays for them. Bare "laminate" and bare "veneer" are left out: on a board job those words
+# name the MATERIAL at least as often as the operation.
+_alias("GLUE", "laminating", "lamination", "veneering", "laying up", "lay up",
+       "bonding laminate")
+# The wet finishing line. Powder has its own entries above, so nothing here is ambiguous
+# with the oven. Bare "stain" and bare "wax" are left out -- both name a thing as readily
+# as an operation -- while their -ing forms only ever name the work.
+_alias("SPRY", "lacquer", "lacquering", "varnish", "varnishing", "staining", "stain finish",
+       "oiling", "oil finish", "waxing", "wax polish", "paint", "painting")
+_alias("DRIL", "dowelling", "dowel drilling", "boring", "line boring", "hinge boring",
+       "system holes")
+_alias("MC J", "morticing", "mortising", "tenoning", "spindle moulding", "planing",
+       "thicknessing")
+# BENC is "Bench Work Joinery" -- the joinery bench, which is why metal deburring was moved
+# off it above. Assembly and fitting of a board product is what it is actually for. Only
+# spellings that NAME the material qualify: bare "assembly" is already PACM and must stay
+# there, since most of this shop's assemblies are steel.
+_alias("BENC", "joinery bench", "bench fitting", "joinery assembly", "assembly joinery",
+       "assemble joinery", "joinery fitting", "cabinet assembly", "carcass assembly")
+_alias("PACJ", "pack joinery", "joinery packing", "joinery pack")
+
 # A code is always its own alias, so a model told to answer in codes is understood.
 for _c in DEPARTMENT_CODES:
     OPERATION_ALIASES.setdefault(_norm(_c), _c)
