@@ -2279,6 +2279,28 @@ def _finalize_scan_summary(
     # it is made from. A graph that describes what pricing already did cannot correct it.
     #
     # Failure-isolated: a compile error leaves the run exactly as it was before this existed.
+    # ── THE MIRRORED FLAT, AT THE POINT EVERY PART EXISTS ─────────────────────────────
+    #
+    # apply_mirror_geometry also runs inside augment_summary_with_dxf, and on 11350 it found
+    # nothing to do: "11350-01-02 MIR" is created by the LLM full extract five hundred lines
+    # LATER. The rule was right, the fixtures were right, and it ran before the part it was
+    # written for existed — so the right arm reached costing with no blank, no material and
+    # no measured throughput, and the sheet under-read.
+    #
+    # Running it here as well is safe by construction, not by luck: it gap-fills only, skips
+    # any part that already has a blank, and refuses a base whose own flat was inherited. A
+    # second pass over parts it has already filled changes nothing. The earlier call stays
+    # because augment_summary_with_dxf is also the standalone DXF-merge entry point.
+    try:
+        from drawing_job_merge import apply_mirror_geometry
+        _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
+        if _mirrored:
+            print("   [mirror] " + "; ".join(
+                f"{m.get('part_number')} inherits the measured flat of {m.get('mirrored_from')}"
+                for m in _mirrored), flush=True)
+    except Exception as _mirror_err:
+        print(f"   [mirror] skipped: {type(_mirror_err).__name__}: {_mirror_err}", flush=True)
+
     try:
         from route_compiler import apply_canonical_evidence_to_parts
         _canon_pre = apply_canonical_evidence_to_parts(

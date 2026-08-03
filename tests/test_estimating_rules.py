@@ -6146,12 +6146,37 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     eq(_b3["normalized_geometry"]["geometry_source"], "dxf_flat_pattern",
        "the measured part keeps its own provenance")
 
-    # WIRED, NOT MERELY BUILT. The job-level pass must call it, or a handed pair still
-    # arrives at costing with one blank between them.
-    import inspect
+    # RUNNING IT TWICE CHANGES NOTHING. It has to run at two points — see below — so this
+    # is a property, not a convenience: gap-fill only, skip a part that already has a blank,
+    # refuse a base whose own flat was inherited.
+    _b4, _m4 = _left(), {"part_number": "11350-01-02 MIR"}
+    eq(len(apply_mirror_geometry([_b4, _m4])), 1, "the first pass fills it")
+    eq(apply_mirror_geometry([_b4, _m4]), [], "the second finds nothing left to do")
+    eq((_m4.get("normalized_geometry") or {}).get("blank_length_mm"), 258.35,
+       "and the figures it filled are untouched")
+
+    # WIRED, NOT MERELY BUILT — AND WIRED WHERE THE PART EXISTS.
+    #
+    # This ran only inside augment_summary_with_dxf, and on 11350 it found nothing to do:
+    # "11350-01-02 MIR" is created by the LLM full extract five hundred lines later. The
+    # rule was right, these fixtures were right, and it ran before the part it was written
+    # for existed — so the right arm reached costing with no blank, no material and no
+    # measured throughput, and the sheet under-read by the whole of it.
+    import ast, inspect
     import drawing_job_merge as D
     ok("apply_mirror_geometry" in inspect.getsource(D.augment_summary_with_dxf),
        "the DXF augmentation pass runs it once every flat has been bound")
+
+    from pathlib import Path
+    _fs_src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    _mirror_at = _fs_src.find("apply_mirror_geometry(summary[")
+    _llm_at = _fs_src.find("apply_full_job_to_pre_estimate(_pre_estimate_parts")
+    _cost_at = _fs_src.find('estimate_document(summary["manufacturing_writeup"]["parts"]')
+    ok(_llm_at > 0 and _mirror_at > _llm_at,
+       "it runs AFTER the LLM extract, which is what creates a mirrored BOM line")
+    ok(0 < _mirror_at < _cost_at,
+       "and BEFORE costing, or the blank arrives too late to become material")
 
 
 def test_a_chained_operation_inherits_the_scope_of_what_spawned_it():
