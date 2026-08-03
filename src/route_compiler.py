@@ -40,6 +40,15 @@ LEAF_ONLY_OPERATIONS = frozenset({
 # Older cached extracts predate the scope field. For these operations, several participants
 # under one common assembly describe one job event, not one event per participant. The
 # inference is retained as an issue so a new extract with explicit scope can supersede it.
+# Operations that ARE the act of joining — naming one is naming how the sub-assembly comes
+# into existence, which a generic "assembly" event would then charge for a second time.
+#
+# HARDWARE INSERTION ONLY, deliberately. Welding is already handled by the weld-parent rule
+# further down, and adding it here made a SECOND authority for the same question — which
+# promptly broke the case that rule exists to protect: a welded TOP assembly still has to be
+# packed. One rule per question; this one covers the case 11350 actually showed.
+SPECIFIC_JOINING_OPERATIONS = frozenset({"hardware_insertion"})
+
 ASSEMBLY_EVENT_OPERATIONS = frozenset({
     "welding", "dress_welds", "powder_coating", "assembly", "handling",
     "hardware_insertion",
@@ -1610,6 +1619,52 @@ def compile_job_route(
         for event_id, claims in claims_by_event.items()
         if claims
     ]
+
+    # ── A GENERIC ASSEMBLE DOES NOT REPEAT THE JOINING WE ALREADY NAMED ────────────────
+    #
+    # 11350 charged 11350-01-101 twice: a hardware_insertion that presses the PEM studs into
+    # the bar, and a generic assembly on the same node. The insertion IS how that
+    # sub-assembly comes into existence — its children are the bar and the studs and nothing
+    # else — so the second row pays to make it a second time.
+    #
+    # NARROW BY CONSTRUCTION. This only fires when every child of the target is already
+    # accounted for by the specific joining operation or is the part being joined TO. An
+    # assembly with any other child still needs its generic event, because something has to
+    # put that child on. Ruled out, never deleted: the decision keeps its id and carries the
+    # reason, so the estimator can see the judgement and reverse it.
+    _specific_by_target: Dict[str, List[OperationDecision]] = {}
+    for _d in decisions:
+        if _d.status == REQUIRED and _d.operation in SPECIFIC_JOINING_OPERATIONS:
+            _specific_by_target.setdefault(_d.target_id, []).append(_d)
+    for _d in decisions:
+        if _d.status != REQUIRED or _d.operation != "assembly":
+            continue
+        # NEVER THE TOP ASSEMBLY. It is the thing that ships, and it is packed however it
+        # was joined — 2085-GA owned its weld, lost its assembly event, and the sheet
+        # carried no Assemble/pack row for a bracket somebody still has to box.
+        if _d.target_id == graph.get("top_assembly"):
+            continue
+        _specific = _specific_by_target.get(_d.target_id) or []
+        if not _specific:
+            continue
+        _kids = set(graph["children"].get(_d.target_id) or {})
+        if not _kids:
+            continue
+        _covered: Set[str] = set()
+        for _s in _specific:
+            _covered |= {str(p) for p in (_s.participants or [])}
+        _remaining = _kids - _covered
+        # What is left must be the thing being joined TO — one part, already a participant.
+        if len(_remaining) > 1:
+            continue
+        _d.status = NOT_APPLICABLE
+        _d.reason = (
+            f"{', '.join(sorted({s.operation for s in _specific}))} on {_d.target_id} is how "
+            f"this sub-assembly is made: its children are "
+            f"{', '.join(sorted(_kids))} and that operation already covers them. A generic "
+            f"assemble here would charge for building it twice.")
+        _d.field_provenance["status"] = "specific_joining_covers_this_assembly"
+
     for decision in decisions:
         if (
             decision.status == REQUIRED

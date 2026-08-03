@@ -5545,6 +5545,142 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_an_unread_colour_is_not_a_second_colour():
+    """11350 is ONE white job and paid for two booth hangs.
+
+    The bar, the left arm and the sub-assembly print their finish; the right arm's record
+    prints none — so its setup signature came out COLOUR-UNREAD while theirs carried the
+    colour, and one colour bought two setups. A part whose colour nobody read is not
+    evidence of a different colour; it is absence, and absence joins the colour this
+    operation is already set up for."""
+    from wb_populate import _merge_unread_colour_into_the_known_one as _merge
+
+    _one = {("canonical-finish-setup", "P.Coat", "powder|RAL 9003+WHITE"):
+            {"qty": 2, "bh": 1.0, "parts": ["A", "B"], "decision_ids": ["d1", "d2"]},
+            ("canonical-finish-setup", "P.Coat", "powder|COLOUR-UNREAD"):
+            {"qty": 1, "bh": 0.5, "parts": ["MIR"], "decision_ids": ["d3"]}}
+    _merge(_one)
+    eq(len(_one), 1, "one colour is one booth setup")
+    _g = list(_one.values())[0]
+    eq(_g["qty"], 3, "carrying every coated object")
+    eq(_g["decision_ids"], ["d1", "d2", "d3"],
+       "and every decision — nothing is deleted, they are hung together")
+    eq(_g["bh"], 1.5, "with the work of all of them")
+
+    # AMBIGUITY KEEPS ITS OWN SETUP. Two known colours and an unknown is genuinely
+    # undecidable, and assigning it to whichever was seen first is a guess about paint.
+    _two = {("canonical-finish-setup", "P.Coat", "powder|RAL 9003"): {"qty": 1},
+            ("canonical-finish-setup", "P.Coat", "powder|RAL 9005"): {"qty": 1},
+            ("canonical-finish-setup", "P.Coat", "powder|COLOUR-UNREAD"): {"qty": 1}}
+    _merge(_two)
+    eq(len(_two), 3, "two known colours and an unknown stay three setups")
+
+    # AND NEVER ACROSS FAMILIES. Lacquer is a different department, not a paler shade.
+    _fam = {("canonical-finish-setup", "P.Coat", "powder|RAL 9003"): {"qty": 1},
+            ("canonical-finish-setup", "P.Coat", "wet_spray|COLOUR-UNREAD"): {"qty": 1}}
+    _merge(_fam)
+    eq(len(_fam), 2, "an unread colour joins its own finish family or nothing")
+
+    # AND THE WRITER CALLS IT. Nothing can execute the row loop in a fixture, so the call is
+    # read — a merge nobody runs leaves the second booth setup on the sheet.
+    import inspect
+    import wb_populate as W
+    ok("_merge_unread_colour_into_the_known_one" in inspect.getsource(W.canonical_labour_groups),
+       "the grouping pass runs the merge before the groups are handed on")
+
+
+def test_a_generic_assemble_does_not_repeat_the_joining_we_named():
+    """11350 charged 11350-01-101 twice — a hardware_insertion pressing the PEM studs into
+    the bar, and a generic assembly on the same node. The insertion IS how that sub-assembly
+    comes into existence: its children are the bar and the studs and nothing else. The
+    second row pays to make it a second time."""
+    from route_compiler import compile_job_route
+
+    def _job(routes):
+        return compile_job_route(
+            [{"part_number": "11350-01-101", "description": "BAR WITH PEM STUDS",
+              "assembly_children": ["11350-01-01", "BI-PEMSTUD"], "is_assembly_parent": True},
+             {"part_number": "11350-01-01", "description": "TICKET STRIP BAR"},
+             {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "quantity": 4}],
+            {"assemblies": [{"part_number": "11350-01",
+                             "children": [{"part_number": "11350-01-101", "qty": 1}]}],
+             "bom": [{"part_number": "11350-01-101", "description": "BAR WITH PEM STUDS",
+                      "qty": 1, "type": "fabricated"},
+                     {"part_number": "11350-01-01", "description": "TICKET STRIP BAR",
+                      "qty": 1, "type": "fabricated"},
+                     {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "qty": 4,
+                      "is_bought_in": True}],
+             "routes": routes})
+
+    _d = {(x["operation"], x["target_id"]): x for x in _job([
+        {"operation": "hardware_insertion", "part_numbers": ["11350-01-101", "BI-PEMSTUD"],
+         "scope": "assembly", "target_id": "11350-01-101"},
+        {"operation": "assembly", "part_numbers": ["11350-01-101", "11350-01-01"],
+         "scope": "assembly", "target_id": "11350-01-101"},
+        {"operation": "assembly", "part_numbers": ["11350-01", "11350-01-101"],
+         "scope": "assembly", "target_id": "11350-01"}])["decisions"]}
+    eq(_d[("hardware_insertion", "11350-01-101")]["status"], "required",
+       "the insertion is the joining operation and stands")
+    eq(_d[("assembly", "11350-01-101")]["status"], "not_applicable",
+       "the generic assemble on the same node does not charge for it again")
+    ok("charge for building it twice" in str(_d[("assembly", "11350-01-101")].get("reason")),
+       "and says why, so an estimator can reverse the judgement")
+    eq(_d[("assembly", "11350-01")]["status"], "required",
+       "while the FINAL pack at the top is untouched")
+
+    # THE TOP ASSEMBLY IS PACKED HOWEVER IT WAS JOINED. It is the thing that ships, and
+    # 2085-GA already proved this once: it owned its weld, lost its assembly event, and the
+    # sheet carried no Assemble/pack row for a bracket somebody still has to box.
+    _top = compile_job_route(
+        [{"part_number": "9100-01", "description": "PANEL ASSEMBLY"},
+         {"part_number": "9100-01-01", "description": "PANEL"},
+         {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "quantity": 4}],
+        {"top_assembly": {"part_number": "9100-01"},
+         "assemblies": [{"part_number": "9100-01", "children": [
+             {"part_number": "9100-01-01", "qty": 1},
+             {"part_number": "BI-PEMSTUD", "qty": 4}]}],
+         "bom": [{"part_number": "9100-01-01", "qty": 1, "type": "fabricated"},
+                 {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "qty": 4,
+                  "is_bought_in": True}],
+         "routes": [
+             {"operation": "hardware_insertion", "part_numbers": ["9100-01", "BI-PEMSTUD"],
+              "scope": "assembly", "target_id": "9100-01"},
+             {"operation": "assembly", "part_numbers": ["9100-01", "9100-01-01"],
+              "scope": "assembly", "target_id": "9100-01"}]})["decisions"]
+    eq([x["status"] for x in _top
+        if x["operation"] == "assembly" and x["target_id"] == "9100-01"], ["required"],
+       "the TOP assembly keeps its pack even when insertion is all that joined it")
+
+    # NARROW BY CONSTRUCTION. An assembly with a child the specific operation does not touch
+    # still needs its generic event — something has to put that child on.
+    _more = compile_job_route(
+        [{"part_number": "9000-01-101", "description": "PLATE WITH STUDS"},
+         {"part_number": "9000-01-01"}, {"part_number": "9000-01-05"},
+         {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "quantity": 4}],
+        {"top_assembly": {"part_number": "9000-01"},
+         "assemblies": [
+             {"part_number": "9000-01",
+              "children": [{"part_number": "9000-01-101", "qty": 1}]},
+             {"part_number": "9000-01-101", "children": [
+                 {"part_number": "9000-01-01", "qty": 1},
+                 {"part_number": "BI-PEMSTUD", "qty": 4},
+                 {"part_number": "9000-01-05", "qty": 1}]}],
+         "bom": [{"part_number": "9000-01-101", "qty": 1, "type": "fabricated"},
+                 {"part_number": "9000-01-01", "qty": 1, "type": "fabricated"},
+                 {"part_number": "9000-01-05", "qty": 1, "type": "fabricated"},
+                 {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "qty": 4,
+                  "is_bought_in": True}],
+         "routes": [
+             {"operation": "hardware_insertion", "part_numbers": ["9000-01-101", "BI-PEMSTUD"],
+              "scope": "assembly", "target_id": "9000-01-101"},
+             {"operation": "assembly", "part_numbers": ["9000-01-101", "9000-01-05"],
+              "scope": "assembly", "target_id": "9000-01-101"}]})["decisions"]
+    _asm = [x for x in _more if x["operation"] == "assembly"
+            and x["target_id"] == "9000-01-101"]
+    eq([x["status"] for x in _asm], ["required"],
+       "a child the insertion never touches still needs somebody to fit it")
+
+
 def test_one_colour_is_one_booth_setup():
     """A SETUP CHANGES WHEN THE COLOUR CHANGES, and nothing else here does.
 

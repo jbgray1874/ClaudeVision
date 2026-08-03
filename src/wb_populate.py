@@ -1421,6 +1421,8 @@ def canonical_labour_groups(
                 group["holes"] += int(_safe(
                     geometry.get("estimated_hole_count"), 0) or 0) * int(qty)
 
+    _merge_unread_colour_into_the_known_one(groups)
+
     for group in groups.values():
         group["decision_ids"] = sorted(set(group.get("decision_ids") or []))
         group["decision_id"] = (
@@ -1428,6 +1430,39 @@ def canonical_labour_groups(
             if len(group["decision_ids"]) == 1 else None
         )
     return groups
+
+
+def _merge_unread_colour_into_the_known_one(groups: Dict[Any, Dict[str, Any]]) -> None:
+    """An UNREAD colour is not a second colour, and must not buy a second booth setup.
+
+    11350 is one white job. The bar, the left arm and the sub-assembly print their finish;
+    the right arm's record prints none — so its setup signature came out COLOUR-UNREAD while
+    theirs carried the colour, and the job paid for two hangs of one colour.
+
+    A part whose colour nobody read is not evidence of a different colour. It is absence,
+    and it joins the colour this operation is already set up for — when there is EXACTLY ONE
+    to join. Two known colours and an unknown is genuinely ambiguous, and the ambiguous case
+    keeps its own setup rather than being assigned to whichever was seen first.
+    """
+    by_op: Dict[Any, List[Any]] = {}
+    for key in groups:
+        if isinstance(key, tuple) and key and key[0] == "canonical-finish-setup":
+            by_op.setdefault((key[1], str(key[2]).split("|")[0]), []).append(key)
+    for (_wb_op, _family), keys in by_op.items():
+        if len(keys) < 2:
+            continue
+        _known = [k for k in keys if "COLOUR-UNREAD" not in str(k[2])]
+        _unread = [k for k in keys if "COLOUR-UNREAD" in str(k[2])]
+        if len(_known) != 1 or not _unread:
+            continue
+        _into = groups[_known[0]]
+        for _k in _unread:
+            _from = groups.pop(_k)
+            _into["qty"] = (_into.get("qty") or 0) + (_from.get("qty") or 0)
+            _into["bh"] = (_into.get("bh") or 0.0) + (_from.get("bh") or 0.0)
+            for _f in ("parts", "targets", "engine_ops", "decision_ids"):
+                _into[_f] = list(dict.fromkeys(
+                    list(_into.get(_f) or []) + list(_from.get(_f) or [])))
 
 
 def _is_tube(pe: Dict[str, Any]) -> bool:
