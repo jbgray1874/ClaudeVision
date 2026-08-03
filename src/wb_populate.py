@@ -1422,6 +1422,16 @@ def canonical_labour_groups(
                 float(order_qty) * insert_count
                 * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
             )
+            # THE RATE, STATED RATHER THAN LEFT TO CANCEL. This branch builds its batch
+            # figure from the REAL order quantity, so the quantity divides out again
+            # downstream and the derived rate is already invariant — 60/hr per insertion at
+            # 20 off, 180 off and 1000 off alike. But the general warning cannot see that it
+            # cancels, so it fired on the one operation that was right, and a warning that
+            # is wrong on a correct case is how the ones that matter stop being read.
+            group["run_hours_per_unit"] = (
+                (group.get("run_hours_per_unit") or 0.0)
+                + insert_count * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
+            )
             group["work_units"] = insert_count
             continue
 

@@ -5603,6 +5603,35 @@ def test_a_throughput_cannot_depend_on_how_many_were_ordered():
     ok(len(set(_old)) == 4 and max(_old) / min(_old) > 40,
        f"where the batch derivation spanned {min(_old)}-{max(_old)}/hr for one operation")
 
+    # AND THE WARNING MUST NOT FIRE ON AN OPERATION THAT IS ALREADY RIGHT.
+    #
+    # hardware_insertion builds its batch figure from the REAL order quantity, so the
+    # quantity divides out again downstream and its rate was invariant all along. The
+    # general warning cannot see that it cancels, so it fired on the one operation that was
+    # correct — and a warning that is wrong on a correct case is how the ones that matter
+    # stop being read.
+    def _insertion(order_qty, studs):
+        _g = W.canonical_labour_groups(
+            {"estimate_summary": {"canonical_route_shadow": {
+                "nodes": [{"part_number": "BI-PEMSTUD", "kind": "bought_in",
+                           "qty_per_unit": studs}],
+                "decisions": [{"decision_id": "d1", "operation": "hardware_insertion",
+                               "status": "required", "target_id": "A1",
+                               "participants": ["BI-PEMSTUD"], "scope": "assembly",
+                               "qty_per_unit": 1}]}}},
+            [{"part_number": "A1", "quantity": 1, "labour_estimate": {}},
+             {"part_number": "BI-PEMSTUD", "quantity": studs, "labour_estimate": {}}],
+            order_qty)
+        return next(v for v in _g.values()
+                    if "hardware_insertion" in (v.get("engine_ops") or []))
+
+    _rates = {round(1.0 / _insertion(_oq, 4)["run_hours_per_unit"], 4)
+              for _oq in (20, 180, 1000)}
+    eq(len(_rates), 1, f"the insertion rate is invariant across order sizes, got {_rates}")
+    eq(_insertion(20, 4)["work_units"], 4.0,
+       "and four studs are four insertion work units, not one")
+    eq(_insertion(20, 1)["work_units"], 1.0, "while one stud is one")
+
 
 def test_an_unread_colour_is_not_a_second_colour():
     """11350 is ONE white job and paid for two booth hangs.
