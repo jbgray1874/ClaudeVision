@@ -1926,25 +1926,42 @@ def _finalize_scan_summary(
                 from source_connectors.solidworks import extract_is_for_this_job
                 _sw_id = extract_is_for_this_job(_pre_estimate_parts, _sw_job)
                 if not _sw_id.get("belongs"):
-                    print(f"   [solidworks] REFUSED this extract — it is not for this job. "
-                          f"It describes {_sw_id.get('candidates')} part(s) under top "
-                          f"assembly '{_sw_id.get('top_assembly') or '?'}' and matches NONE "
-                          f"of this job's {_sw_id.get('job_parts')} part(s).\n"
+                    # WHICH FAILURE IS THIS? Both look like zero matches, and for a whole
+                    # session job 11350 reported "different job" while suffering "our matcher
+                    # does not know this convention". Say which, and print the codes on both
+                    # sides, so the next convention gap is one look rather than a week.
+                    _ours = _sw_id.get("shares_job_number")
+                    _why = ("THIS IS THIS JOB'S OWN EXTRACT and we could not match it — the "
+                            "codes share a job number. That is a naming convention this "
+                            "connector does not know, NOT a foreign pack."
+                            if _ours else
+                            "The codes share no job number with this one, so it describes a "
+                            "different job. Point SDI_SW_EXTRACT_JSON at this job's extract, "
+                            "or unset it.")
+                    print(f"   [solidworks] REFUSED this extract. It describes "
+                          f"{_sw_id.get('candidates')} part(s) under top assembly "
+                          f"'{_sw_id.get('top_assembly') or '?'}' and matches NONE of this "
+                          f"job's {_sw_id.get('job_parts')} part(s).\n"
+                          f"                {_why}\n"
+                          f"                extract codes: "
+                          f"{', '.join(_sw_id.get('extract_codes') or []) or '(none)'}\n"
+                          f"                job codes:     "
+                          f"{', '.join(_sw_id.get('job_codes') or []) or '(none)'}\n"
                           f"                extract: {_sw_job.meta.get('extract_path')}\n"
-                          f"                Nothing from it has been applied, and its "
-                          f"warnings are ITS job's, not this one's. Point "
-                          f"SDI_SW_EXTRACT_JSON at this job's extract, or unset it.",
-                          flush=True)
+                          f"                Nothing from it has been applied — this job is "
+                          f"costed from drawings alone.", flush=True)
                     summary["solidworks_native"] = {
                         "source": "solidworks_api",
                         "found": False,
                         "refused_wrong_job": True,
+                        "refused_own_job": bool(_ours),
                         "extract_path": _sw_job.meta.get("extract_path"),
                         "extract_top_assembly": _sw_id.get("top_assembly"),
                         "extract_part_count": _sw_id.get("candidates"),
                         "job_part_count": _sw_id.get("job_parts"),
-                        "reason": ("the extract matches none of this job's parts, so it "
-                                   "describes a different job"),
+                        "extract_codes": _sw_id.get("extract_codes"),
+                        "job_codes": _sw_id.get("job_codes"),
+                        "reason": _why,
                     }
                     _sw_job = None
             if _sw_job and _sw_job.found:

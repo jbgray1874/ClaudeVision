@@ -695,6 +695,31 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             f"but were not read: {sw.get('reason') or 'no extract was generated'}. The job has "
             f"been costed from the drawings alone while the models were available.",
             reason=sw.get("reason"), analyser_error=sw.get("analyser_error")))
+    if sw.get("refused_wrong_job"):
+        # A DISCARDED MODEL PACK CHANGES EVERY NUMBER ON THE SHEET, AND SAID SO ONLY IN A
+        # CONSOLE LINE. Job 11350's own extract was refused because the connector did not
+        # know the material-suffix convention; the run continued on drawings alone, the
+        # right arm lost its geometry, and an AI market estimate became 97% of the material
+        # total. Nothing in the invariants, the reports or the sheet mentioned that the best
+        # evidence in the building had been thrown away.
+        #
+        # REFUSING OUR OWN EXTRACT IS A DIFFERENT SEVERITY FROM REFUSING A FOREIGN ONE. The
+        # second is this guard working and a pointer to fix; the first is a defect in our
+        # matching, and it is silent, and it is expensive.
+        _own = sw.get("refused_own_job")
+        out.append(_violation(
+            "native_extract_refused", BLOCKING if _own else WARNING,
+            (f"The SolidWorks extract was REFUSED and nothing from it was applied — this job "
+             f"is costed from drawings alone. "
+             + (f"Its codes share a job number with this job's, so it IS this job's extract "
+                f"and the connector could not match it: a naming convention it does not know."
+                if _own else
+                f"Its codes share no job number with this job's, so it describes a different "
+                f"job — the pointer is wrong, and this job's own models were never read.")),
+            extract_path=sw.get("extract_path"),
+            extract_top_assembly=sw.get("extract_top_assembly"),
+            extract_codes=sw.get("extract_codes"),
+            job_codes=sw.get("job_codes")))
     if sw.get("changed_during_extraction"):
         out.append(_violation(
             "native_models_changed_during_extraction", BLOCKING,

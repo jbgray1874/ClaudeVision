@@ -5330,6 +5330,109 @@ def test_a_model_file_named_code_plus_description_still_matches():
        "the genuine extract is recognised as this job's once its parts can be matched")
 
 
+def test_refusing_our_own_extract_is_a_different_failure_from_refusing_a_foreign_one():
+    """TWO FAILURES LOOKED IDENTICAL, AND ONLY ONE OF THEM IS THE GUARD WORKING.
+
+    "This extract is a different job's" and "this extract is ours and our matcher does not
+    know its naming convention" both produce zero matches. For a whole session job 11350
+    reported the first while suffering the second, and the evidence that separates them was
+    in the data the entire time: 11350-01-GA and 11350-01-01 share a job number; 12120-01-GA
+    and 2085-02 do not.
+
+    Worse, the refusal was a console line. The models were discarded, the right arm lost its
+    geometry, an AI market estimate became 97% of the material total — and nothing in the
+    invariants, the reports or the sheet said the best evidence in the building had been
+    thrown away."""
+    from source_connectors.solidworks import (extract_is_for_this_job, NativeJob, NativePart)
+
+    _job_parts = [{"part_number": "11350-01"}, {"part_number": "11350-01-01"},
+                  {"part_number": "11350-01-02"}]
+    _ours = NativeJob(found=True, meta={"top_assembly": "11350-01-GA"},
+                      part_signals={"11350-01-07X": NativePart(part_number="11350-01-07X")})
+    _foreign = NativeJob(found=True, meta={"top_assembly": "12120-01-GA"},
+                         part_signals={"12120-01-01M": NativePart(part_number="12120-01-01M")})
+
+    _o, _f = extract_is_for_this_job(_job_parts, _ours), extract_is_for_this_job(_job_parts, _foreign)
+    eq(_o["belongs"], False, "an extract we cannot match is still refused — the evidence "
+                             "reports, it does not relax the guard")
+    eq(_f["belongs"], False, "and so is a foreign one")
+    ok(_o["shares_job_number"], "but ours is recognisable as OURS by its job number")
+    ok(not _f["shares_job_number"], "and a different job's is not")
+
+    # THE CODES ON BOTH SIDES TRAVEL WITH THE VERDICT, so the next convention gap is one
+    # look rather than a week of runs.
+    ok("11350-01-07X" in _o["extract_codes"] and "11350-01-01" in _o["job_codes"],
+       "the refusal carries what it compared")
+
+    # A CATALOGUE CODE IS NOT A JOB NUMBER. "DBR60" and "BI-NUT" name bought-ins; reading a
+    # job number out of them would make every pack look like kin to every other.
+    _bought = extract_is_for_this_job(
+        [{"part_number": "DBR60"}, {"part_number": "BI-NUT"}],
+        NativeJob(found=True, meta={"top_assembly": "DBR-ASSY"},
+                  part_signals={"DBR61": NativePart(part_number="DBR61")}))
+    ok(not _bought["shares_job_number"],
+       "codes that do not start with digits claim kinship with nothing")
+    # Nor does a two-digit stub — "01-A" must not be kin to every job beginning 01.
+    _stub = extract_is_for_this_job(
+        [{"part_number": "01-A"}], NativeJob(found=True, meta={"top_assembly": "01-GA"},
+                                             part_signals={"01-B": NativePart(part_number="01-B")}))
+    ok(not _stub["shares_job_number"], "and neither does a two-digit stub")
+
+    # AND IT REACHES THE INVARIANTS, because a console line is not somewhere anyone looks.
+    from invariants import check_native_evidence_is_current as _native_checks
+    def _codes(summary):
+        return {v.get("code") if isinstance(v, dict) else getattr(v, "code", "")
+                for v in (_native_checks(summary) or [])}
+
+    _own_run = {"solidworks_native": {"found": False, "refused_wrong_job": True,
+                                      "refused_own_job": True,
+                                      "extract_top_assembly": "11350-01-GA"}}
+    ok("native_extract_refused" in _codes(_own_run),
+       "refusing this job's own extract is raised, not merely printed")
+    _sev = [v for v in _native_checks(_own_run)
+            if (v.get("code") if isinstance(v, dict) else getattr(v, "code", ""))
+            == "native_extract_refused"][0]
+    _sev_val = str(_sev.get("severity") if isinstance(_sev, dict)
+                   else getattr(_sev, "severity", "")).lower()
+    ok("block" in _sev_val,
+       f"and BLOCKING, because it is a defect in our matching and it is silent, got {_sev_val}")
+
+    # A FOREIGN extract refused is the guard WORKING — reported, but not the same severity.
+    _foreign_run = {"solidworks_native": {"found": False, "refused_wrong_job": True,
+                                          "refused_own_job": False,
+                                          "extract_top_assembly": "12120-01-GA"}}
+    ok("native_extract_refused" in _codes(_foreign_run),
+       "a foreign extract is reported too — this job's models were still never read")
+    _fsev = [v for v in _native_checks(_foreign_run)
+             if (v.get("code") if isinstance(v, dict) else getattr(v, "code", ""))
+             == "native_extract_refused"][0]
+    ok("block" not in str(_fsev.get("severity") if isinstance(_fsev, dict)
+                          else getattr(_fsev, "severity", "")).lower(),
+       "but not blocking — that one is a pointer to fix, not a defect in us")
+
+    # A JOB WITH NO MODELS RAISES NOTHING. Silence about something that is not there.
+    ok("native_extract_refused" not in _codes({}), "no models, nothing to report")
+
+    # AND THE RUN CARRIES THE DISTINCTION ACROSS. Nothing can execute this branch in a
+    # fixture — it needs a job folder and an extract on disk — so the wiring is read: the
+    # value the verdict computes must be the value the summary records, with no second
+    # opinion in between. A constant there is exactly how the distinction is lost.
+    import ast, inspect
+    _fs = ast.parse(inspect.getsource(__import__("file_scan")))
+    _bound = [t.id for n in ast.walk(_fs) if isinstance(n, ast.Assign)
+              for t in n.targets if isinstance(t, ast.Name)
+              and "shares_job_number" in ast.unparse(n.value)]
+    eq(len(_bound), 1, "the run reads shares_job_number from the verdict exactly once")
+    _recorded = [ast.unparse(d.values[i])
+                 for d in ast.walk(_fs) if isinstance(d, ast.Dict)
+                 for i, k in enumerate(d.keys)
+                 if isinstance(k, ast.Constant) and k.value == "refused_own_job"]
+    eq(len(_recorded), 1, "and records it on the summary exactly once")
+    ok(_bound[0] in _recorded[0],
+       f"from that same value — {_recorded[0]} must derive from {_bound[0]}, or the "
+       f"invariant is deciding severity from a constant")
+
+
 def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
     """Job 11350 REFUSED ITS OWN EXTRACT. Two parts under top assembly '11350-01-GA' matched
     none of the job's seven, so the entire model pack — flat blanks, gauges, applied

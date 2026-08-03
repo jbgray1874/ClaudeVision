@@ -29,7 +29,7 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from source_precedence import apply_field as _apply_field
 
@@ -927,6 +927,24 @@ def _native_match_index(job: NativeJob):
     return exact, tail, lead
 
 
+_JOB_NUMBER = re.compile(r"^\s*(\d{3,})")
+
+
+def _job_numbers(codes: Iterable[Any]) -> Set[str]:
+    """The leading job numbers in a set of codes — "11350-01-GA" -> "11350".
+
+    Three digits minimum, so a part called "01-A" contributes nothing rather than claiming
+    kinship with every job starting 01. A code that does not start with digits (DBR60,
+    BI-NUT) names a catalogue item, not a job, and is silently ignored.
+    """
+    out: Set[str] = set()
+    for code in codes or []:
+        m = _JOB_NUMBER.match(str(code or ""))
+        if m:
+            out.add(m.group(1))
+    return out
+
+
 def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, Any]:
     """Does this extract actually describe the job in front of us?
 
@@ -947,19 +965,44 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict
     renumbered, but an extract that describes THIS job matches at least one of its parts.
     Zero matches against a non-empty extract means the two are unrelated.
 
-    Returns {"belongs": bool, "matched": int, "candidates": int, "top_assembly": str}.
+    TWO FAILURES LOOK IDENTICAL HERE, AND ONLY ONE OF THEM IS THIS GUARD WORKING.
+
+    "This extract is a different job's" and "this extract is ours and our matcher does not
+    know its naming convention" both produce zero matches, and for a whole session job 11350
+    reported the first while suffering the second. The evidence that separates them was in
+    the data the entire time: 11350-01-GA and 11350-01-01 share a job number; 12120-01-GA
+    and 2085-02 do not.
+
+    That evidence is REPORTED, not acted on. It must not relax the guard — SDI numbers
+    sequentially and a shared prefix is exactly how two jobs collide — but a refusal that
+    cannot say which failure it is costs days, and the best evidence in the building gets
+    thrown away quietly while the sheet still prints a total.
+
+    Returns {"belongs", "matched", "candidates", "job_parts", "top_assembly",
+             "shares_job_number", "extract_codes", "job_codes"}.
     """
     exact, tail, lead = _native_match_index(job)
     matched = 0
     for part in parts or []:
         if isinstance(part, dict) and _match_native(part, exact, tail, lead):
             matched += 1
+
+    _extract_codes = sorted({str(pn) for pn in job.part_signals}
+                            | {str(a) for a in job.assembly_pns})
+    _job_codes = sorted({str(p.get("part_number") or "") for p in (parts or [])
+                         if isinstance(p, dict) and p.get("part_number")})
+    _top = str((job.meta or {}).get("top_assembly") or "")
     return {
         "belongs": bool(matched) or not job.part_signals,
         "matched": matched,
         "candidates": len(job.part_signals),
         "job_parts": len([p for p in (parts or []) if isinstance(p, dict)]),
-        "top_assembly": str((job.meta or {}).get("top_assembly") or ""),
+        "top_assembly": _top,
+        "shares_job_number": bool(
+            _job_numbers(_extract_codes + ([_top] if _top else []))
+            & _job_numbers(_job_codes)),
+        "extract_codes": _extract_codes[:12],
+        "job_codes": _job_codes[:12],
     }
 
 
