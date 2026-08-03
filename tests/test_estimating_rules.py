@@ -4553,17 +4553,24 @@ def test_a_material_stops_where_the_drawing_s_standing_notes_begin():
     eq(_extract_material_candidates("MATERIAL: SEE INDIVIDUAL DRAWINGS"), [],
        "a GA's cross-reference is still not a material")
 
-    # THE FACED-BOARD FAMILY RESOLVES TO ONE CODE, whichever way the drawing spells it —
-    # otherwise the same board prices two ways depending on which sheet named it.
-    for _spelling in ("MFC", "MELAMINE FACED CHIPBOARD", "MELAMINE FACED MDF",
-                      "PRE-LAM MDF", "MFMDF"):
+    # ONE CODE PER SPELLING OF THE SAME BOARD — otherwise the same panel prices two ways
+    # depending on which sheet named it.
+    for _spelling in ("MFC", "MELAMINE FACED CHIPBOARD", "MELAMINE FACED"):
         eq(_read(f"MATERIAL: 16mm {_spelling}"), ["MFC"],
-           f"'{_spelling}' is the same board as every other spelling of it")
+           f"'{_spelling}' is melamine-faced chipboard however it is written")
+
+    # BUT THE FACING IS NOT THE SUBSTRATE. MFC is melamine-faced CHIPBOARD and MFMDF is
+    # melamine-faced MDF: same facing, different sheets, different prices, and they machine
+    # differently — chipboard blows out on a routed edge where MDF does not. Collapsing them
+    # would price one at the other's rate the moment a sheet rate exists for either.
+    for _spelling in ("MFMDF", "MELAMINE FACED MDF", "PRE-LAM MDF"):
+        eq(_read(f"MATERIAL: 16mm {_spelling}"), ["MFMDF"],
+           f"'{_spelling}' is faced MDF, which is not faced chipboard")
 
     # ORDER IS PART OF THE RULE. Alternation is first-match and the lexicon is
     # longest-key-first, so a faced spelling must never collapse to the plain board inside
     # it. This is the assertion that fails if someone appends rather than inserts.
-    eq(_read("MATERIAL: MELAMINE FACED MDF"), ["MFC"],
+    ok(_read("MATERIAL: MELAMINE FACED MDF") != ["MDF"],
        "faced MDF is faced board, not MDF — the faced spellings come first")
 
     # AND IT IS AN IDENTITY, NOT A PRICE. config's per-kg lookup falls back to the MILD
@@ -4575,6 +4582,123 @@ def test_a_material_stops_where_the_drawing_s_standing_notes_begin():
            f"{_absent} must not carry an invented per-kg rate")
         ok(_absent not in config.MATERIAL_DENSITY_KG_PER_M3,
            f"{_absent} must not carry a density that would route it to the per-kg path")
+
+
+def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
+    """drawing_job_merge widened its filename bound to 75mm for board, correctly, because
+    12422-24's MFC end cap is 28mm and shop-fitting board runs 18/22/25/28/30 and beyond.
+    estimator kept a hard 25.0 in THREE readers, so a "28MM_MFC" filename was accepted by
+    the module that reads it and thrown away by the module that costs it — and the panel
+    kept whatever weaker figure the drawing text had given it.
+
+    The same shape as the MFC vocabulary itself: a rule stated in the module that first
+    needed it, and a second module quietly disagreeing. The ceiling lives in config now and
+    both read it."""
+    from estimator import _safe_thickness_mm
+    import config
+    import drawing_job_merge
+
+    eq(drawing_job_merge.BOARD_GAUGE_MAX_MM, config.MAX_BOARD_THICKNESS_MM,
+       "one ceiling, read by both modules — not two that can drift apart")
+    ok(config.MAX_BOARD_THICKNESS_MM > config.MAX_SHEET_THICKNESS_MM,
+       "board is thicker than sheet metal, which is the entire point of the distinction")
+
+    # ALL THREE READERS. The filename, the already-normalised value and the candidate list
+    # each carried their own copy of the bound, so fixing one left the part's thickness
+    # depending on which reader happened to answer first.
+    for _part, _why in (
+            ({"normalized_material": "MFC",
+              "dxf_source_file": "12422-24-01J_28MM_MFC.dxf"}, "from the DXF filename"),
+            ({"normalized_material": "MFC", "thicknesses_mm": [28.0]},
+             "from the candidate list"),
+            ({"normalized_material": "MFC", "normalized_thickness_mm": 28.0},
+             "from an already-normalised value")):
+        eq(_safe_thickness_mm(_part), 28.0, f"a 28mm board survives {_why}")
+
+    # MELAMINE-FACED BOARD IS BOARD. The token list is what decides the ceiling, so a
+    # substrate missing from it is measured against the sheet-metal bound instead — which is
+    # how the panel's thickness came to be refused in the first place.
+    for _mat in ("MFC", "MFMDF", "MELAMINE FACED CHIPBOARD", "CHIPBOARD", "PRE LAM MDF"):
+        eq(_safe_thickness_mm({"normalized_material": _mat, "thicknesses_mm": [28.0]}),
+           28.0, f"{_mat} is board and takes the board ceiling")
+
+    # AND SHEET METAL KEEPS ITS OWN. The bound exists to stop a product LENGTH being read as
+    # a thickness — "Left Arm 200mm_flat.dxf" came back as a 200mm steel gauge — so widening
+    # it for board must not widen it for steel.
+    eq(_safe_thickness_mm({"normalized_material": "MILD STEEL", "thicknesses_mm": [28.0]}),
+       None, "28mm is not a sheet-steel gauge and is still refused")
+    eq(_safe_thickness_mm({"normalized_material": "MILD STEEL", "thicknesses_mm": [3.0]}),
+       3.0, "while a real steel gauge is untouched")
+    eq(_safe_thickness_mm({"normalized_material": "MFC", "thicknesses_mm": [200.0]}),
+       None, "and 200mm is a dimension misparse on a board too — the guard still guards")
+
+
+def test_solidworks_saying_it_has_no_material_is_not_a_material():
+    """A MELAMINE PANEL COSTED AS SHEET STEEL, FOR GBP 367.38 ON A JOB WORTH GBP 5.92 OF
+    MATERIAL.
+
+    A SolidWorks model with no material assigned reports the literal string
+    "Material <not specified>". That is the API spelling out that the field is EMPTY — it is
+    silence in words — and the connector recorded it as a material observation at
+    solidworks_api, rank 90, the strongest source in this engine short of an estimator's own
+    confirmation. So on every part whose model had no material assigned it displaced the
+    material the drawing had read correctly.
+
+    Four of 12422-24's six models carry none. The end cap's stated MFC became
+    "Material <not specified>"; _is_board cannot recognise that as board; and a
+    1434 x 748 melamine-faced panel dropped into the Sheet Steel block and costed at steel
+    density. Unit price went GBP 53.16 -> GBP 450.86. The route was right and the geometry
+    was right — the price was wrong by two orders of magnitude because a placeholder
+    outranked a measurement.
+
+    This is the same rule the rest of the codebase already holds for numbers: absence is
+    silence, and silence must not be recorded as a value. It had simply never been applied
+    to a string that SPELLS the absence out."""
+    from source_connectors.solidworks import _norm_sw_material, sw_material_is_placeholder
+    from source_precedence import apply_field, source_of
+
+    for _p in ("Material <not specified>", "<not specified>", "Not Specified",
+               "NONE", "Default", "", "   "):
+        ok(sw_material_is_placeholder(_p), f"{_p!r} is SolidWorks reporting no material")
+        eq(_norm_sw_material(_p), "", f"{_p!r} must normalise to nothing, not to itself")
+
+    # A REAL MATERIAL IS UNTOUCHED. The guard must not cost the connector the materials it
+    # genuinely reads — 12422-24-05M's "Mild Steel [CR4]" is the one model on that job that
+    # carries one, and it is the reason the guard cannot simply refuse everything odd.
+    for _m, _fam in (("Mild Steel [CR4]", "MILD_STEEL"), ("AISI 304", "STAINLESS_STEEL"),
+                     ("6082-T6", "ALUMINIUM"), ("Melamine Faced Chipboard", "MFC"),
+                     ("Melamine Faced MDF", "MFMDF")):
+        eq(_norm_sw_material(_m), _fam, f"{_m!r} is a real material and still resolves")
+
+    # AND THE DRAWING'S ANSWER SURVIVES. Through the resolver, which is where the damage was
+    # done: rank 90 beats the drawing's 70, so the only thing that can save the panel is the
+    # placeholder never being offered as a value in the first place.
+    _panel = {"part_number": "12422-24-01J"}
+    apply_field(_panel, "normalized_material", "MFC", "drawing_deterministic")
+    _offered = _norm_sw_material("Material <not specified>")
+    eq(apply_field(_panel, "normalized_material", _offered, "solidworks_api"), False,
+       "an empty normalisation is not a write, whatever rank offers it")
+    eq(_panel.get("normalized_material"), "MFC",
+       "the panel keeps the material the drawing stated")
+    eq(source_of(_panel, "normalized_material"), "drawing_deterministic",
+       "and keeps its provenance, so nothing downstream thinks a model confirmed it")
+
+    # THE BOARD STAYS BOARD, which is the whole reason this mattered: _is_board decides
+    # whether the panel is costed in Sheet Steel or Other Sheet Material.
+    from wb_populate import _is_board
+    ok(_is_board(str(_panel.get("normalized_material"))),
+       "a melamine panel is board — it must never reach the Sheet Steel block")
+    ok(not _is_board("Material <not specified>"),
+       "and this is precisely what the placeholder could not be recognised as")
+
+    # BOTH ENTRANCES. The apply pass read nat.material RAW while the augment pass went
+    # through the normaliser, so refusing the placeholder in one place left the other open.
+    # A guard on the second reader is no guard at all when the first one answers.
+    from pathlib import Path as _Path
+    _sw_src = (_Path(__file__).resolve().parents[1] / "src" / "source_connectors"
+               / "solidworks.py").read_text(encoding="utf-8")
+    ok('_apply_field(p, "normalized_material", nat.material' not in _sw_src,
+       "no call site may apply a native material without normalising it first")
 
 
 def test_a_board_job_is_written_in_words_this_table_can_pay():

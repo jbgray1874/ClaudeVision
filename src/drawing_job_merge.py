@@ -178,7 +178,11 @@ SHEET_GAUGE_MAX_MM = 25.0
 # runs 18/22/25/28/30 and beyond, so the panel's thickness was silently refused.
 #
 # The bound now depends on what the material IS. Same guard, told what it is guarding.
-BOARD_GAUGE_MAX_MM = 75.0
+#
+# ONE HOME. This was defined here and estimator kept its own hard 25.0, so a filename this
+# module accepted as a 28mm board was discarded by the module that costs it. The ceiling is
+# config's; this name is kept so existing readers still resolve.
+from config import MAX_BOARD_THICKNESS_MM as BOARD_GAUGE_MAX_MM  # noqa: E402
 
 
 def _gauge_bounds(path: Path) -> Tuple[float, float]:

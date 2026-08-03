@@ -1161,12 +1161,30 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
     _SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
     _SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
                             "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
-    if any(t in _mat_thk_u for t in _SHEET_BOARD_TOKENS):
+    # MELAMINE-FACED BOARD IS BOARD. The token list is what decides the floor AND the
+    # ceiling below, so a substrate missing from it is silently treated as sheet metal —
+    # which is how 12422-24's MFC panel came to be measured against a 25mm gauge bound.
+    _SHEET_BOARD_TOKENS = _SHEET_BOARD_TOKENS + ("MFC", "MELAMINE", "MFMDF", "PRE LAM",
+                                                 "PRELAM")
+    _is_board_thk = any(t in _mat_thk_u for t in _SHEET_BOARD_TOKENS)
+    _is_timber_thk = any(t in _mat_thk_u for t in _SOLID_TIMBER_TOKENS)
+    if _is_board_thk:
         _min_t = float(getattr(config, "MIN_BOARD_THICKNESS_MM", 3.0))
-    elif any(t in _mat_thk_u for t in _SOLID_TIMBER_TOKENS):
+    elif _is_timber_thk:
         _min_t = float(getattr(config, "MIN_SOLID_TIMBER_THICKNESS_MM", 6.0))
     else:
         _min_t = 0.0
+
+    # AND THE CEILING DEPENDS ON THE SAME QUESTION. A hard 25.0 is generous for sheet metal
+    # and wrong for board: shop-fitting board runs 18/22/25/28/30 and beyond. drawing_job_merge
+    # already widened its filename bound for board, so a "28MM_MFC" DXF name was read there
+    # and thrown away here — the panel kept whatever weaker figure the drawing text gave it.
+    # Both modules now read config.MAX_BOARD_THICKNESS_MM.
+    _max_t_for_part = float(getattr(
+        config,
+        "MAX_BOARD_THICKNESS_MM" if (_is_board_thk or _is_timber_thk)
+        else "MAX_SHEET_THICKNESS_MM",
+        75.0 if (_is_board_thk or _is_timber_thk) else 25.0))
 
     def _ok(v: Optional[float]) -> bool:
         if v is None or v <= 0:
@@ -1184,20 +1202,20 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
         _tm = re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn, re.IGNORECASE)
         if _tm:
             _tv = _safe_float(_tm.group(1))
-            if _tv and 0.3 <= _tv <= 25.0 and _ok(_tv):
+            if _tv and 0.3 <= _tv <= _max_t_for_part and _ok(_tv):
                 return _tv
 
     # Already-normalised thickness — skip tolerance-table noise when DXF exists
     raw = part.get("normalized_thickness_mm")
     if raw:
         v = _safe_float(raw)
-        _max_t = float(getattr(config, "MAX_SHEET_THICKNESS_MM", 25.0))
+        _max_t = _max_t_for_part
         if v and 0.4 <= v <= _max_t and not (1900 <= v <= 2100) and _ok(v):
             if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE or not _dfn:
                 return v
 
     # thicknesses_mm list with tolerance-table stripping
-    _max_t = float(getattr(config, "MAX_SHEET_THICKNESS_MM", 25.0))
+    _max_t = _max_t_for_part
     candidates = [_safe_float(x) for x in part.get("thicknesses_mm", [])]
     # A6: reject implausible sheet thickness (e.g. a 500mm dimension misparsed as gauge)
     candidates = [v for v in candidates

@@ -635,6 +635,15 @@ _SW_MATERIAL_FAMILIES = (
     ("ABS",             ("ABS ",)),
     ("NYLON",           ("NYLON", "PA6", "PA 6")),
     ("POLYCARBONATE",   ("POLYCARB", "LEXAN")),
+    # FACED BOARD, AND THE SUBSTRATE IT IS FACED ONTO. MFC is melamine-faced CHIPBOARD,
+    # MFMDF is melamine-faced MDF — different sheets at different prices. Ordered so the
+    # substrate-bearing spellings are tested before the bare ones and all of them before
+    # plain MDF, which would otherwise claim every faced board through the fallback
+    # normaliser. This is the third module whose material vocabulary was missing the
+    # commonest shop-fitting board; the connector must not depend on another one for it.
+    ("MFMDF",           ("MELAMINE FACED MDF", "MFMDF", "PRE-LAM MDF", "PRELAM MDF")),
+    ("MFC",             ("MELAMINE FACED CHIPBOARD", "MELAMINE FACED", "MELAMINE", "MFC")),
+    ("CHIPBOARD",       ("CHIPBOARD",)),
     ("MDF",             ("MDF",)),
     ("PLYWOOD",         ("PLYWOOD", "PLY WOOD")),
     ("TIMBER",          ("OAK", "PINE", "BEECH", "BIRCH", "BALSA", "MAPLE", "TEAK",
@@ -642,9 +651,36 @@ _SW_MATERIAL_FAMILIES = (
 )
 
 
+# SOLIDWORKS SAYS "I HAVE NONE" IN WORDS, AND WORDS ARE NOT EVIDENCE.
+#
+# A model with no material assigned reports the literal string "Material <not specified>".
+# That is the API's way of saying the field is EMPTY — it is silence, spelled out — and it
+# was being recorded as a material observation at rank 90, the strongest source in this
+# engine short of an estimator's own confirmation. So it displaced the drawing's correctly
+# read material on every part whose model had none assigned.
+#
+# 12422-24 is what that costs. Four of its six models carry no material, so the end cap's
+# stated MFC was replaced by "Material <not specified>", _is_board could not recognise that
+# as board, and a 1434 x 748 melamine-faced panel was costed in the Sheet Steel block at
+# steel density: GBP 367.38 of a GBP 373.72 material total, on a job whose real material
+# total was GBP 5.92. The route was right, the geometry was right, and the price was wrong
+# by two orders of magnitude because a placeholder outranked a measurement.
+#
+# Matched on the shape rather than the exact sentence: SolidWorks brackets its placeholders
+# in angle brackets, and a real material never contains them.
+_SW_MATERIAL_PLACEHOLDER_RE = re.compile(
+    r"<[^>]*>|\bNOT\s+SPECIFIED\b|\bNONE\b|\bDEFAULT\b|\bUNSPECIFIED\b", re.IGNORECASE)
+
+
+def sw_material_is_placeholder(raw: Any) -> bool:
+    """True when SolidWorks is reporting the ABSENCE of a material, not a material."""
+    text = str(raw or "").strip()
+    return not text or bool(_SW_MATERIAL_PLACEHOLDER_RE.search(text))
+
+
 def _norm_sw_material(raw: str) -> str:
     u = str(raw or "").upper().strip()
-    if not u:
+    if not u or sw_material_is_placeholder(u):
         return ""
     for family, tokens in _SW_MATERIAL_FAMILIES:
         if any(t in u for t in tokens):
@@ -1518,11 +1554,15 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
         if not pn:
             continue
         nat = job.part_signals.get(pn)
-        # Material: native wins where the engine has nothing solid.
-        if nat and nat.material and not str(p.get("normalized_material") or "").strip():
-            if _apply_field(p, "normalized_material", nat.material, SOURCE_NAME):
+        # Material: native wins where the engine has nothing solid — and THROUGH the same
+        # normaliser as every other native material, which is where the placeholder is
+        # refused. This path read nat.material raw, so a second entrance existed for the
+        # exact string the other one rejects.
+        _nat_mat = _norm_sw_material(nat.material) if nat else ""
+        if _nat_mat and not str(p.get("normalized_material") or "").strip():
+            if _apply_field(p, "normalized_material", _nat_mat, SOURCE_NAME):
                 p.setdefault("review_flags", []).append(
-                    f"Material '{nat.material}' from SolidWorks model")
+                    f"Material '{_nat_mat}' from SolidWorks model")
                 out["material_set"] += 1
         # Quantity: native BOM roll-up corrects fastener/bought-in counts.
         q = qty_by_pn.get(pn)

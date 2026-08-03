@@ -118,6 +118,9 @@ PROJECT_TITLE_PATTERN = r"PROJECT\s*TITLE\s*[:\-]?\s*(.+)"
 MATERIAL_PATTERN = (
     r"\b(MILD\s+STEEL|STAINLESS\s+STEEL|ALUMINIUM|ALUMINUM|ALU|ZINTEC"
     r"|GALVANISED\s+STEEL|GALVANIZED\s+STEEL"
+    # MFC is melamine-faced CHIPBOARD and MFMDF is melamine-faced MDF — the facing is not
+    # the substrate, and they are different sheets at different prices. Both spellings are
+    # matched here; json_normaliser keeps them as separate codes.
     r"|MELAMINE\s+FACED\s+CHIPBOARD|MELAMINE\s+FACED\s+MDF|MELAMINE\s+FACED"
     # The faced spellings must SWALLOW the board word that follows them, not sit beside it:
     # "PRE-LAM MDF" matching PRE-LAM and MDF separately reports two materials for one panel.
@@ -1207,6 +1210,18 @@ SCRAP_PERCENTAGE = 0.04
 
 # A6: any "thickness" above this (mm) is treated as a dimension misparse and rejected.
 MAX_SHEET_THICKNESS_MM = 25.0
+# A BOARD IS NOT A GAUGE, AND THE CEILING HAS TO KNOW WHICH IT IS LOOKING AT.
+#
+# The bound above exists to stop a product LENGTH being read as a thickness — "Left Arm
+# 200mm_flat.dxf" came back as a 200mm steel gauge. 25mm is generous for sheet metal and
+# simply wrong for board: shop-fitting board runs 18/22/25/28/30 and beyond, and 12422-24's
+# MFC end cap panel is 28mm.
+#
+# The ceiling lives here, not in the module that first needed it. drawing_job_merge widened
+# its own filename bound for board and estimator kept a hard 25.0 in three places, so a
+# genuine "28MM_MFC" filename was read by one module and thrown away by the next — the same
+# shape as the MFC vocabulary being in four modules and missing from the authoritative one.
+MAX_BOARD_THICKNESS_MM = 75.0
 # Thinnest stock we will accept as a real thickness on a joinery part. Below this the value
 # is tolerance-table text, not a gauge (0.5mm "TIMBER" reached the Horti Crate sheet this
 # way). Metal is unaffected — 0.5mm sheet steel is ordinary stock.

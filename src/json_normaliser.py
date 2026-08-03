@@ -64,13 +64,21 @@ MATERIAL_NORMALISATION = {
     # it does not know, so inventing an entry would cost a chipboard panel at steel's rate.
     # It stays in the board path and stays honestly unpriced until an estimator sets the
     # sheet rate — which is the same thing the sheet already asks for.
+    # THE FACING IS NOT THE SUBSTRATE. MFC is melamine-faced CHIPBOARD; MFMDF is
+    # melamine-faced MDF. They are bought as different sheets at different prices and they
+    # machine differently — chipboard blows out on a routed edge where MDF does not — so
+    # collapsing them onto one code would price one board at the other's rate the moment a
+    # sheet rate exists for either. Same facing, two materials.
     "MELAMINE FACED CHIPBOARD": "MFC",
-    "MELAMINE FACED MDF": "MFC",
-    "MELAMINE FACED": "MFC",
+    "MELAMINE FACED MDF": "MFMDF",
+    "MELAMINE FACED": "MFC",       # bare, no substrate named — MFC is what the trade means
+    "PRE LAMINATED MDF": "MFMDF",
+    "PRE LAM MDF": "MFMDF",
+    "PRELAM MDF": "MFMDF",
     "PRE LAMINATED": "MFC",
     "PRE LAM": "MFC",
     "PRELAM": "MFC",
-    "MFMDF": "MFC",
+    "MFMDF": "MFMDF",
     "MFC": "MFC",
     "CHIPBOARD": "CHIPBOARD",
     "HDPE": "HDPE_PLASTIC",
