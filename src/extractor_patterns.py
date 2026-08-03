@@ -605,8 +605,12 @@ def _extract_material_candidates(text: str) -> List[str]:
     )
     out: List[str] = []
     for value in values:
-        # a cramped title block can run the labelled field straight into the legend text
-        v = _strip_material_boilerplate(normalize_text(value)).strip(" :;-,.")
+        # a cramped title block can run the labelled field straight into the legend text,
+        # and straight into the sheet's standing notes — "16mm MFC DO NOT SCALE" is one
+        # value to the reader and two facts to a person. Truncate at the note, then blank
+        # the legend phrases; what is left is the callout.
+        v = _strip_material_boilerplate(
+            _truncate_at_drawing_note(normalize_text(value))).strip(" :;-,.")
         if not v:
             continue
         keyword_hits = _findall_unique(MATERIAL_PATTERN, v, flags=re.IGNORECASE)
@@ -721,6 +725,41 @@ _MATERIAL_BOILERPLATE_RE = re.compile(
     r"|\bFOR\s+CHROME[,\s]+ZINC\s+PLATE\b",
     re.IGNORECASE,
 )
+
+# WHERE THE MATERIAL FIELD ENDS AND THE DRAWING'S STANDING NOTES BEGIN.
+#
+# A cramped title block runs the labelled value straight into the sheet's boilerplate, and
+# the labelled-value reader has no other signal for where to stop. On 12422-24 the end cap's
+# "MATERIAL: 16mm MFC" ran into "DO NOT SCALE" and, because the keyword list did not know
+# MFC, the whole run reached the sheet as the material "MFC DO NOT" — in the BOM
+# description, in the labour block, and in the group key that decides which parts share a
+# setup.
+#
+# These are the phrases every engineering drawing carries and no material ever contains, so
+# the value is TRUNCATED at the first one rather than blanked: what precedes it is the
+# genuine callout and must survive. config.JUNK_PART_TOKENS is the same idea applied to part
+# numbers; a phrase that disqualifies a part number cannot be part of a material either.
+_MATERIAL_NOTE_START_RE = re.compile(
+    r"\b(?:DO\s+NOT(?:\s+SCALE)?"
+    r"|ALL\s+DIMENSIONS?"
+    r"|UNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED)"
+    r"|REMOVE\s+(?:ALL\s+)?BURRS?"
+    r"|TOLERANCES?\b"
+    r"|THIS\s+DRAWING"
+    r"|PROPERTY\s+OF"
+    r"|CONFIDENTIAL"
+    r"|REF(?:ERENCE)?\s+ONLY"
+    r"|THIRD\s+ANGLE"
+    r"|SCALE\s*[:=]"
+    r"|BREAK\s+SHARP\s+EDGES?)\b",
+    re.IGNORECASE,
+)
+
+
+def _truncate_at_drawing_note(text: str) -> str:
+    """The part of a labelled value that precedes the sheet's standing notes."""
+    match = _MATERIAL_NOTE_START_RE.search(text or "")
+    return (text or "")[:match.start()] if match else (text or "")
 
 
 def _strip_material_boilerplate(text: str) -> str:

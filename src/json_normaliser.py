@@ -52,6 +52,27 @@ MATERIAL_NORMALISATION = {
     "OAK": "TIMBER",
     "MR MDF": "MDF",
     "MRMDF": "MDF",
+    # FACED SHEET BOARD — melamine-faced chipboard and its spellings. The commonest
+    # shop-fitting board there is, and this lexicon did not have it: on 12422-24 the end
+    # cap panel's stated "16mm MFC" resolved to nothing here, so the title-block reader's
+    # unknown-callout branch took the raw string and the drawing's boilerplate with it, and
+    # the material reached the sheet as "MFC DO NOT".
+    #
+    # Longest-key-first matching is what keeps the faced spellings ahead of plain MDF, so
+    # "MELAMINE FACED MDF" is faced board and not MDF. Deliberately NOT given a density or
+    # a price-per-kg: config's per-kg lookup falls back to the MILD STEEL rate for anything
+    # it does not know, so inventing an entry would cost a chipboard panel at steel's rate.
+    # It stays in the board path and stays honestly unpriced until an estimator sets the
+    # sheet rate — which is the same thing the sheet already asks for.
+    "MELAMINE FACED CHIPBOARD": "MFC",
+    "MELAMINE FACED MDF": "MFC",
+    "MELAMINE FACED": "MFC",
+    "PRE LAMINATED": "MFC",
+    "PRE LAM": "MFC",
+    "PRELAM": "MFC",
+    "MFMDF": "MFC",
+    "MFC": "MFC",
+    "CHIPBOARD": "CHIPBOARD",
     "HDPE": "HDPE_PLASTIC",
     "HIGH IMPACT ACRYLIC": "ACRYLIC",
     "ACRYLIC": "ACRYLIC",

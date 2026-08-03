@@ -4514,6 +4514,69 @@ def test_free_text_from_a_model_still_lands_on_a_department():
        "and can be reported rather than swallowed")
 
 
+def test_a_material_stops_where_the_drawing_s_standing_notes_begin():
+    """12422-24's END CAP JOINERY PANEL reached the sheet as "16mm MFC DO NOT" — in the BOM
+    description, in four labour rows, and in the group key that decides which parts share a
+    setup.
+
+    Two gaps, one behind the other. config.MATERIAL_PATTERN did not know MFC, though
+    drawing_job_merge's DXF tokens, wb_populate._is_board, _TIMBER_TOKENS and the
+    json_normaliser lexicon all did — the title-block reader, which is the AUTHORITATIVE
+    material source, was the one place the commonest shop-fitting board was missing. So the
+    labelled value fell to the reader's short-unknown-callout branch. And that branch had no
+    idea where a material ends: a cramped title block runs "MATERIAL: 16mm MFC" straight
+    into "DO NOT SCALE", which is one value to the reader and two facts to a person.
+
+    Fixing only the first would leave the second waiting for the next material nobody has
+    listed yet, so both are fixed and both are pinned here."""
+    from extractor_patterns import _extract_material_candidates
+    from json_normaliser import normalise_material
+
+    def _read(text):
+        return [normalise_material(v) for v in _extract_material_candidates(text)]
+
+    eq(_read("MATERIAL: 16mm MFC DO NOT SCALE"), ["MFC"],
+       "the panel's own material, without the sheet's standing note attached to it")
+
+    # THE TRUNCATION IS GENERAL, not a rule about MFC. A material the keyword list DOES
+    # know was never at risk; the next one it does not know is, and that is the case this
+    # guards. "MARINE PLY" is the codebase's own example of a legitimate unknown callout.
+    eq(_extract_material_candidates("MATERIAL: MARINE PLY DO NOT SCALE"), ["MARINE PLY"],
+       "an unknown callout keeps its own words and loses the drawing's")
+    for _note in ("DO NOT SCALE", "ALL DIMENSIONS IN MM", "UNLESS OTHERWISE STATED",
+                  "REMOVE ALL BURRS", "THIS DRAWING IS CONFIDENTIAL", "TOLERANCES +/- 0.5"):
+        eq(_read(f"MATERIAL: 18mm MDF {_note}"), ["MDF"],
+           f"'{_note}' is boilerplate on every drawing and is not part of any material")
+
+    # AND NOTHING THAT WAS READING CORRECTLY MOVES.
+    eq(_read("MATERIAL: 1.5mm MILD STEEL"), ["MILD_STEEL"], "a plain steel callout is untouched")
+    eq(_extract_material_candidates("MATERIAL: SEE INDIVIDUAL DRAWINGS"), [],
+       "a GA's cross-reference is still not a material")
+
+    # THE FACED-BOARD FAMILY RESOLVES TO ONE CODE, whichever way the drawing spells it —
+    # otherwise the same board prices two ways depending on which sheet named it.
+    for _spelling in ("MFC", "MELAMINE FACED CHIPBOARD", "MELAMINE FACED MDF",
+                      "PRE-LAM MDF", "MFMDF"):
+        eq(_read(f"MATERIAL: 16mm {_spelling}"), ["MFC"],
+           f"'{_spelling}' is the same board as every other spelling of it")
+
+    # ORDER IS PART OF THE RULE. Alternation is first-match and the lexicon is
+    # longest-key-first, so a faced spelling must never collapse to the plain board inside
+    # it. This is the assertion that fails if someone appends rather than inserts.
+    eq(_read("MATERIAL: MELAMINE FACED MDF"), ["MFC"],
+       "faced MDF is faced board, not MDF — the faced spellings come first")
+
+    # AND IT IS AN IDENTITY, NOT A PRICE. config's per-kg lookup falls back to the MILD
+    # STEEL rate for a material it does not know, so giving faced board a density and no
+    # rate would cost a chipboard panel at steel's. It stays unpriced and visible.
+    import config
+    for _absent in ("MFC", "CHIPBOARD"):
+        ok(_absent not in config.MATERIAL_PRICE_GBP_PER_KG,
+           f"{_absent} must not carry an invented per-kg rate")
+        ok(_absent not in config.MATERIAL_DENSITY_KG_PER_M3,
+           f"{_absent} must not carry a density that would route it to the per-kg path")
+
+
 def test_a_board_job_is_written_in_words_this_table_can_pay():
     """THE ALIAS TABLE WAS ALL METAL. LASM had eight spellings; the words a shop-fitting
     job is actually written in had none.

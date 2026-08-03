@@ -103,7 +103,28 @@ MODIFIED_BY_PATTERN = r"MODIFIED\s*BY\s*[:\-]?\s*([A-Z0-9.\-_ ]+)"
 CLIENT_PATTERN = r"CLIENT\s*[:\-]?\s*([A-Z0-9.\-_ ]+)"
 PROJECT_TITLE_PATTERN = r"PROJECT\s*TITLE\s*[:\-]?\s*(.+)"
 
-MATERIAL_PATTERN = r"\b(MILD\s+STEEL|STAINLESS\s+STEEL|ALUMINIUM|ALUMINUM|ALU|ZINTEC|GALVANISED\s+STEEL|GALVANIZED\s+STEEL|TIMBER|WOOD|MDF|PLYWOOD|SOFTWOOD|HIGH\s+IMPACT\s+ACRYLIC|ACRYLIC|PERSPEX|POLYCARBONATE)\b"
+# THE FACED-BOARD FAMILY MUST BE IN HERE, AND ORDER IS PART OF THE RULE.
+#
+# Alternation is first-match, so the multi-word spellings come before the single words they
+# contain: "MELAMINE FACED CHIPBOARD" before "CHIPBOARD", and every faced spelling before
+# plain MDF so "MELAMINE FACED MDF" resolves as faced board rather than as MDF.
+#
+# WHY IT MATTERS THAT THIS LIST IS THE ONE THAT WAS SHORT. drawing_job_merge's DXF tokens,
+# wb_populate._is_board, _TIMBER_TOKENS and json_normaliser's lexicon all know MFC. The
+# title-block reader — the AUTHORITATIVE material source, the labelled "MATERIAL:" callout —
+# did not, so on 12422-24 it fell through to its short-unknown-callout branch and took the
+# drawing's own boilerplate with it: the end cap's material reached the sheet, the group
+# keys and the labour block as "MFC DO NOT".
+MATERIAL_PATTERN = (
+    r"\b(MILD\s+STEEL|STAINLESS\s+STEEL|ALUMINIUM|ALUMINUM|ALU|ZINTEC"
+    r"|GALVANISED\s+STEEL|GALVANIZED\s+STEEL"
+    r"|MELAMINE\s+FACED\s+CHIPBOARD|MELAMINE\s+FACED\s+MDF|MELAMINE\s+FACED"
+    # The faced spellings must SWALLOW the board word that follows them, not sit beside it:
+    # "PRE-LAM MDF" matching PRE-LAM and MDF separately reports two materials for one panel.
+    r"|PRE[\s-]?LAM(?:INATED?)?(?:\s+(?:MDF|CHIPBOARD|BOARD))?|MFMDF|MFC|CHIPBOARD"
+    r"|TIMBER|WOOD|MDF|PLYWOOD|SOFTWOOD"
+    r"|HIGH\s+IMPACT\s+ACRYLIC|ACRYLIC|PERSPEX|POLYCARBONATE)\b"
+)
 FINISH_PATTERN = r"(?:SURFACE\s+FINISH|FINISH)\s*[:\-]?\s*([A-Z0-9\s\-\[\]/,]+)"
 COLOUR_PATTERN = r"(?:COLOUR|COLOR)\s*[:\-]?\s*([A-Z0-9\s\-,\[\]/]+)"
 WEIGHT_PATTERN = r"WEIGHT\s*[:\-]?\s*([0-9.]+\s*(?:KG|kg|g|G))"
