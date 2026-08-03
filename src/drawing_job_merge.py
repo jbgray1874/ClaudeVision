@@ -1305,11 +1305,23 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # THE CUT LENGTH, THE PIERCES AND THE HOLES. Without these the laser row falls back
         # to a default throughput, which is how this part got a default rate on both its
         # laser and its fold row even after its blank was known.
+        #
+        # FIELD BY FIELD, THROUGH THE RESOLVER — not a wholesale copy, and not a gap-fill.
+        # Copying only when the mirror had NO rollup meant a mirror carrying ONE inferred
+        # value kept it and inherited nothing: an estimated_pierce_count of 1 survived while
+        # the base's measured cut length never arrived, and the laser row stayed on a
+        # default rate. Gap-filling instead would keep that inference over a measurement.
+        # Submitting each value at mirror_of_measured (75) lets it beat an inference (20)
+        # and still lose to this part's own DXF (80) or model (90) — which is the whole
+        # point of having ranks.
         _base_roll = base.get("geometry_rollup")
-        if isinstance(_base_roll, dict) and not isinstance(part.get("geometry_rollup"), dict):
-            import copy as _copy
-            part["geometry_rollup"] = _copy.deepcopy(_base_roll)
-            _got.append("geometry_rollup")
+        if isinstance(_base_roll, dict):
+            for _rk, _rv in _base_roll.items():
+                if _is_blank(_rv):
+                    continue
+                if _apply_field(part, f"geometry_rollup.{_rk}", _rv, "mirror_of_measured",
+                                note=f"mirrored from {base.get('part_number')}"):
+                    _got.append(f"geometry_rollup.{_rk}")
         # Thickness and material go through the resolver so a printed title block or a model
         # still outranks them, and so the disagreement is recorded if one does.
         for _field, _key in (("normalized_thickness_mm", "normalized_thickness_mm"),

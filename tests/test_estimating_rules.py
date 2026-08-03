@@ -6491,6 +6491,31 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     eq(_mir.get("bend_count_dxf"), 2, "and the bends, so its Fold row is not a default rate")
     eq((_mir.get("geometry_rollup") or {}).get("cut_length_mm"), 743.99,
        "and the cut length, so its Laser row reads the template calculator")
+
+    # ── THE ROLLUP FIELD BY FIELD, THROUGH THE RESOLVER ─────────────────────────────
+    # Copying the rollup only when the mirror had NONE meant a mirror carrying ONE inferred
+    # value kept it and inherited nothing else: an estimated_pierce_count of 1 survived while
+    # the base's measured cut length never arrived, and the laser row stayed on a default
+    # rate. Gap-filling instead would keep that inference over a measurement.
+    _partial = {"part_number": "11350-01-02 MIR",
+                "geometry_rollup": {"estimated_pierce_count": 1,
+                                    "estimated_pierce_count_source": "inference"}}
+    apply_mirror_geometry([_left(), _partial])
+    _pr = _partial.get("geometry_rollup") or {}
+    eq(_pr.get("cut_length_mm"), 743.99,
+       "a partial rollup no longer blocks the measured cut length")
+    eq(_pr.get("estimated_pierce_count"), 2,
+       "and a measurement mirrored at rank 75 beats an inference at 20")
+    eq(_pr.get("estimated_pierce_count_source"), "mirror_of_measured",
+       "with the source recorded, so the next pass can weigh itself against it")
+
+    # AND ITS OWN MEASUREMENT STILL WINS. 75 loses to a DXF of this hand at 80.
+    _own_roll = {"part_number": "11350-01-02 MIR",
+                 "geometry_rollup": {"estimated_pierce_count": 4,
+                                     "estimated_pierce_count_source": "dxf"}}
+    apply_mirror_geometry([_left(), _own_roll])
+    eq((_own_roll.get("geometry_rollup") or {}).get("estimated_pierce_count"), 4,
+       "a pierce count measured on THIS hand is not displaced by the other hand's")
     eq(_ng.get("geometry_source"), "mirror_of_measured",
        "stamped as what it is — a measurement of the other hand, not a measurement of this "
        "one and not a guess")
