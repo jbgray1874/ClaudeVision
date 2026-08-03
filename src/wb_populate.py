@@ -798,6 +798,30 @@ def _is_sheet_metal(mat: str) -> bool:
     return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
 
 
+def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, Any]],
+                             summary: Dict[str, Any]) -> bool:
+    """Is there anything in this job that a rollup could roll up INTO?
+
+    Canonical hierarchy first — it is the authority and it knows edges no numbering scheme
+    expresses. Then the numbering convention, for a job whose graph never compiled.
+    """
+    _pn = str(part_number or "").strip().upper()
+    if not _pn:
+        return False
+    _payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+                or summary.get("canonical_route_shadow") or {})
+    for _node in (_payload.get("nodes") or []):
+        if not isinstance(_node, dict):
+            continue
+        if str(_node.get("part_number") or "").strip().upper() == _pn:
+            if _node.get("children"):
+                return True
+    _prefix = _pn + "-"
+    return any(
+        str(p.get("part_number") or "").strip().upper().startswith(_prefix)
+        for p in (part_estimates or []) if isinstance(p, dict))
+
+
 def _is_board(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD",
@@ -2086,12 +2110,31 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   "(material belongs to leaf children)")
         elif "weldment_parent_material_suppressed" in rflags:
             weldment_parts.append(pe)
-        elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
+        elif (name_is_assembly and stock_form not in STEEL_STOCK_FORMS
+              and "bought_in" not in roles and _has_children_to_carry_it(pn, pes, summary)):
             # assembly rollup (e.g. 1453-GA-C kick plate ASSEMBLY, 1455-C-101 weldment):
             # exclude from material to avoid double-counting its children.
             excluded.append(pe)
             print(f"   [wb_populate] excluded assembly rollup: {pn} "
                   f"(£{ext_total} carried by children)")
+        elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
+            # THE WORD "ASSEMBLY" IS NOT EVIDENCE THAT SOMETHING ELSE CARRIES THE COST.
+            #
+            # This branch excluded a part's material on the strength of ASSEMBL appearing in
+            # its description, and printed "carried by children" without ever checking that
+            # any child exists. On a sheet-metal job that is usually right — 11350-01-101 is
+            # a bar and some studs, both priced. On a JOINERY job it is how the biggest
+            # number on the sheet disappears: "12422-24-101 JOINERY ASSEMBLY" is a
+            # 750 x 1447.5 x 31 panel whose siblings are metal brackets, not its children,
+            # so nothing downstream carries it and the line reads GBP 0.00 like every other
+            # deliberate cross-reference.
+            #
+            # No children, no rollup. It is costed as what it is, and the estimator is told
+            # the word was read and disregarded.
+            _flag(f"{pn}: described as an ASSEMBLY but nothing in this job is its child, so "
+                  f"its material is NOT rolled up — there is nothing to roll it up INTO. "
+                  f"Costed as a part in its own right. If it really is a rollup, its "
+                  f"children are missing from the BOM.", flags)
         # 2b. Stated-weight part with NO nesting geometry (e.g. a timber panel costed by its
         #     printed weight × £/kg). The area-based steel/board blocks can't display it — they
         #     read L×W and would show £0. Write it as a DIRECT-priced BOM line (the same proven

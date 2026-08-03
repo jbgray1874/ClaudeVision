@@ -5589,6 +5589,54 @@ def test_an_unread_colour_is_not_a_second_colour():
        "the grouping pass runs the merge before the groups are handed on")
 
 
+def test_the_word_assembly_is_not_evidence_that_something_carries_the_cost():
+    """A part's material was excluded on the strength of ASSEMBL appearing in its
+    description, and the run printed "carried by children" without checking any child
+    exists.
+
+    On a sheet-metal job that is usually right: 11350-01-101 is a bar and some studs, both
+    priced. On a JOINERY job it is how the biggest number on the sheet disappears —
+    "12422-24-101 JOINERY ASSEMBLY" is a 750 x 1447.5 x 31 panel whose siblings are metal
+    brackets, not its children. Nothing downstream carries it, and the line reads GBP 0.00
+    exactly like every deliberate cross-reference, which is the shape of error nobody spots.
+    """
+    from wb_populate import _has_children_to_carry_it as _carried
+
+    # THE JOINERY CASE. -02M, -03M, -04M are siblings of -101, not children of it.
+    _siblings = [{"part_number": "12422-24-101"}, {"part_number": "12422-24-02M"},
+                 {"part_number": "12422-24-03M"}, {"part_number": "12422-24-04M"}]
+    eq(_carried("12422-24-101", _siblings, {}), False,
+       "a part whose only relatives are siblings has nothing to roll up into")
+
+    # THE NUMBERING CONVENTION still speaks where the graph did not compile.
+    eq(_carried("12422-24-101", _siblings + [{"part_number": "12422-24-101-01"}], {}), True,
+       "a numbered child is a child")
+    # ...and a sibling that merely SHARES a prefix is not one: "12422-24-1010" is its own
+    # part, not "12422-24-101" plus something.
+    eq(_carried("12422-24-101", [{"part_number": "12422-24-1010"}], {}), False,
+       "a longer code is not automatically a child — the separator is what makes it one")
+
+    # CANONICAL HIERARCHY FIRST. It knows edges no numbering scheme expresses, which is the
+    # whole reason 11350-01-101 could be rolled up at all.
+    _graph = {"estimate_summary": {"canonical_route_shadow": {"nodes": [
+        {"part_number": "11350-01-101", "children": [{"part_number": "11350-01-01"}]}]}}}
+    eq(_carried("11350-01-101", [], _graph), True,
+       "the graph is the authority and it says this one has children")
+    _childless = {"estimate_summary": {"canonical_route_shadow": {"nodes": [
+        {"part_number": "12422-24-101", "children": []}]}}}
+    eq(_carried("12422-24-101", _siblings, _childless), False,
+       "and a node the graph says is childless is not rolled up either")
+
+    # WIRED. The classifier must ask before excluding, or the word alone still decides.
+    import inspect
+    import wb_populate as W
+    _src = inspect.getsource(W.populate_workbook)
+    ok("_has_children_to_carry_it" in _src,
+       "the assembly-rollup branch checks there is something to carry the cost")
+    ok("nothing in this job is its child" in _src,
+       "and says so on the sheet when it declines to roll up")
+
+
 def test_a_generic_assemble_does_not_repeat_the_joining_we_named():
     """11350 charged 11350-01-101 twice — a hardware_insertion pressing the PEM studs into
     the bar, and a generic assembly on the same node. The insertion IS how that sub-assembly
