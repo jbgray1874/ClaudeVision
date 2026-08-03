@@ -1307,10 +1307,29 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 # real blank but no cut length would be costed as if it took no cutting at
                 # all — under-costing, which is the direction that loses money.
                 gr = part.setdefault("geometry_rollup", {})
-                if isinstance(gr, dict) and not _num(gr.get("estimated_cut_length_mm")):
+                # A MEASUREMENT ARBITRATES; IT DOES NOT QUEUE.
+                #
+                # This wrote the model's cut length only when the rollup was EMPTY — a
+                # gap-fill, where every other native datum in this module goes through the
+                # resolver and wins on rank. So whatever reached the record first kept the
+                # field, however weak it was, and the strongest source in the engine was
+                # refused without a comparison ever being made.
+                #
+                # 12422-24-02M is what that costs. It has no DXF, so its outline came from
+                # the GA's vector paths: 8215.26mm. Its cut list says 746.91mm, measured
+                # (outer 485.32 + inner 261.59). The sheet's laser calculator was handed an
+                # internal-cut distance of 7832mm against a true figure near 364mm, and only
+                # the throughput floor stopped it reaching the price — so the part cut at a
+                # DEFAULT rate instead of its real one, and the 20x error was invisible.
+                if isinstance(gr, dict):
                     if nat.cut_length_mm and nat.cut_length_mm > 0:
-                        gr["estimated_cut_length_mm"] = float(nat.cut_length_mm)
-                    else:
+                        _apply_field(part, "geometry_rollup.estimated_cut_length_mm",
+                                     float(nat.cut_length_mm), SOURCE_NAME,
+                                     note=(f"cut length {nat.cut_length_mm:,.2f}mm from the "
+                                           f"SolidWorks cut list — measured on the model"))
+                        gr.pop("estimated_cut_length_is_floor", None)
+                        gr.pop("cut_length_basis", None)
+                    elif not _num(gr.get("estimated_cut_length_mm")):
                         # Rectangular-outline FLOOR, not an estimate of the real outline.
                         # Any closed profile enclosing an L x W blank has a perimeter of at
                         # least 2(L+W), so this cannot overstate the cut. It ignores hole

@@ -4659,6 +4659,56 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_a_measured_cut_length_arbitrates_rather_than_queues():
+    """12422-24-02M's laser calculator was handed 7832mm of internal cut against a true
+    figure near 364mm, and only the throughput floor stopped it reaching the price — so the
+    part cut at a DEFAULT rate and a 20x error stayed invisible.
+
+    The connector wrote the model's cut length only when the rollup was EMPTY. A gap-fill,
+    where every other native datum in that module goes through the resolver and wins on
+    rank. So whatever reached the record first kept the field however weak it was, and the
+    strongest source in the engine — an actual cut-list measurement at rank 90 — was refused
+    without a comparison ever being made.
+
+    02M has no DXF, so its outline came from the GA's vector paths at 8215.26mm. Its cut
+    list says 746.91mm: outer 485.32 plus inner 261.59, measured on the model."""
+    from source_precedence import source_of, value_of
+
+    from pathlib import Path as _P
+    _sw_src = (_P(__file__).resolve().parents[1] / "src" / "source_connectors"
+               / "solidworks.py").read_text(encoding="utf-8")
+    ok('if isinstance(gr, dict) and not _num(gr.get("estimated_cut_length_mm")):'
+       not in _sw_src,
+       "the model's cut length must not be gated on the field being empty")
+    ok('_apply_field(part, "geometry_rollup.estimated_cut_length_mm"' in _sw_src,
+       "it goes through the resolver, like every other native datum in this module")
+
+    # THE ARBITRATION ITSELF, through the same resolver the connector now calls. A PDF-
+    # derived outline is inference; a cut list is a measurement; rank is how this codebase
+    # says which one survives.
+    from source_precedence import apply_field
+    _part = {"part_number": "12422-24-02M"}
+    apply_field(_part, "geometry_rollup.estimated_cut_length_mm", 8215.26,
+                "geometry_inference")
+    ok(apply_field(_part, "geometry_rollup.estimated_cut_length_mm", 746.91,
+                   "solidworks_api"),
+       "the cut list displaces a vector-path outline")
+    eq(value_of(_part, "geometry_rollup.estimated_cut_length_mm"), 746.91,
+       "and the measured figure is what the laser row reads")
+    eq(source_of(_part, "geometry_rollup.estimated_cut_length_mm"), "solidworks_api",
+       "carrying the name of where it came from")
+
+    # AND A DXF OF THE PART ITSELF STILL WINS OVER THE PERIMETER FLOOR. The floor is not a
+    # measurement — it is 2(L+W), which no real outline can be shorter than — so it must
+    # stay a gap-fill and must never be submitted at the model's rank.
+    ok("cut_length_basis" in _sw_src and "solidworks_blank_perimeter_floor" in _sw_src,
+       "the floor is still labelled as a floor")
+    _floor_at = _sw_src.find("solidworks_blank_perimeter_floor")
+    _guard_at = _sw_src.find('elif not _num(gr.get("estimated_cut_length_mm")):')
+    ok(0 < _guard_at < _floor_at,
+       "and still reached only when nothing at all is recorded")
+
+
 def test_an_unknown_material_is_not_assumed_to_be_steel():
     """estimate_material defaulted the density of ANY material it did not recognise to
     7850 kg/m3 — mild steel. That is a defensible guess for an unlisted ALLOY and a 10x
