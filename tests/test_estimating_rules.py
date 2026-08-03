@@ -6029,6 +6029,30 @@ def test_a_part_described_as_another_part_with_components_is_an_assembly():
     eq(_full[1].get("assembly_children"), ["11350-01-01", "BI-PEMSTUD", "BI-SPACER"],
        "every named component is found and recorded")
 
+    # RUNNING IT TWICE CHANGES NOTHING, because it has to run at two points — see below.
+    _twice = _job()
+    _stamp_assembly_parents(_twice); _stamp_assembly_parents(_twice)
+    eq(_twice[1].get("assembly_children"), ["11350-01-01", "BI-PEMSTUD"],
+       "a second pass re-states the same children")
+    eq(len([f for f in (_twice[1].get("review_flags") or [])
+            if "ASSEMBLY FROM THE DESCRIPTION" in str(f)]), 1,
+       "and does not say so twice")
+
+    # WIRED WHERE THE PARTS EXIST. "<A> WITH <B>" needs BOTH halves to be lines on this BOM,
+    # and the PEM stud is created by the LLM extract — after the DXF pass where this rule
+    # ran. So 101's children were never recorded, and 11350-01-01, BI-NUT and BI-PEMSTUD
+    # reached the compiler with no parent: two bom_node_disconnected blockers on a job whose
+    # hierarchy we can read perfectly well.
+    from pathlib import Path
+    _fs = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    _stamp_at = _fs.find("_stamp_assembly_parents(summary[")
+    _llm_at = _fs.find("apply_full_job_to_pre_estimate(_pre_estimate_parts")
+    _cost_at = _fs.find('estimate_document(summary["manufacturing_writeup"]["parts"]')
+    ok(_llm_at > 0 and _stamp_at > _llm_at,
+       "the description hierarchy is stamped AFTER the extract creates the hardware rows")
+    ok(0 < _stamp_at < _cost_at, "and before costing")
+
     # The numbering rule it sits beside is untouched.
     _num = [{"part_number": "10897-01-04", "description": "TANK"},
             {"part_number": "10897-01-04-01", "description": "TANK SIDE"},

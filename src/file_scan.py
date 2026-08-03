@@ -2291,6 +2291,23 @@ def _finalize_scan_summary(
     # any part that already has a blank, and refuses a base whose own flat was inherited. A
     # second pass over parts it has already filled changes nothing. The earlier call stays
     # because augment_summary_with_dxf is also the standalone DXF-merge entry point.
+    # ── THE SAME SEAM, FOR THE HIERARCHY THE DESCRIPTION STATES ───────────────────────
+    #
+    # "<A> WITH <B>" needs BOTH halves to be lines on this BOM, and on 11350 the PEM stud is
+    # created by the LLM extract and the dual-path reader — after the DXF pass where the rule
+    # ran. So 11350-01-101's children were never recorded, and 11350-01-01, BI-NUT and
+    # BI-PEMSTUD arrived at the compiler with no parent: two bom_node_disconnected blockers
+    # on a job whose hierarchy we can read perfectly well.
+    #
+    # Same idempotency as the mirror pass: a part already marked an assembly parent is
+    # skipped, and the flag is appended once.
+    try:
+        from drawing_job_merge import _stamp_assembly_parents
+        _stamp_assembly_parents(summary["manufacturing_writeup"]["parts"])
+    except Exception as _asm_err:
+        print(f"   [hierarchy] description pass skipped: "
+              f"{type(_asm_err).__name__}: {_asm_err}", flush=True)
+
     try:
         from drawing_job_merge import apply_mirror_geometry
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
