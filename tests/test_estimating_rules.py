@@ -7038,6 +7038,103 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
        "and BEFORE costing, or the blank arrives too late to become material")
 
 
+def test_mirrored_evidence_survives_the_step_that_costs_it():
+    """THE MIRROR RULE WAS RIGHT AND THE SHEET STILL READ NOTHING, THREE RUNS RUNNING.
+
+    Every fixture above proves apply_mirror_geometry fills the mirrored hand's record. A
+    read-only probe against the SAVED job then showed both raw pools carrying 743.99mm of
+    cut and 2 holes on 11350-01-02 MIR — and estimate_summary.part_estimates carrying
+    neither. The evidence was correct, complete, and one hop short of the only pool the
+    workbook reads.
+
+    estimator.estimate_part builds the costed record as a new dict of named fields. It
+    copied normalized_geometry and not geometry_rollup, so `pe["geometry_rollup"]` — which
+    the Sheet Steel block names as its primary source, by name, in its own comment — was
+    None on every part of every job. The left hand survived it because its OWN
+    normalized_geometry carries hole_count and cut_length_mm; the mirrored hand's are 0 and
+    None, because those are built from its own features and it has none. So the right arm
+    laser-cut at 368/hr against its own mirror image's 287.
+
+    This test is the chain, not a link in it: mirror the part, cost it, and ask the costed
+    record what the sheet will ask it. Testing the mirror pass alone is what let three
+    identical runs go by."""
+    from drawing_job_merge import apply_mirror_geometry
+    from estimator import estimate_part
+    from wb_populate import costed_geometry_value
+
+    def _left():
+        return {"part_number": "11350-01-02", "flat_pattern_detected": True,
+                "normalized_thickness_mm": 2.0, "normalized_material": "MILD STEEL",
+                "overall_length_mm": 258.35, "overall_width_mm": 84.8, "bend_count_dxf": 2,
+                "quantity": 1, "textual_operations": ["laser_cutting", "folding"],
+                "geometry_rollup": {"estimated_cut_length_mm": 743.99,
+                                    "estimated_hole_count": 2,
+                                    "estimated_pierce_count": 2},
+                "normalized_geometry": {
+                    "blank_length_mm": 258.35, "blank_width_mm": 84.8,
+                    "cut_length_mm": 743.99, "hole_count": 2,
+                    "geometry_source": "dxf_flat_pattern", "geometry_confidence": 1.0}}
+
+    # The mirrored hand as the job actually presents it: a BOM line and nothing else.
+    _base = _left()
+    _mir = {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM", "quantity": 1,
+            "textual_operations": ["laser_cutting", "folding"]}
+    apply_mirror_geometry([_base, _mir])
+    eq((_mir.get("geometry_rollup") or {}).get("estimated_cut_length_mm"), 743.99,
+       "precondition: the mirror pass fills the raw record (every fixture above)")
+
+    _pe = estimate_part(_mir) or {}
+    ok(_pe.get("geometry_rollup"),
+       "the costed record must carry the rollup — it is the only pool the sheet reads")
+    eq(costed_geometry_value(_pe, "cut_length_mm", "estimated_cut_length_mm"), 743.99,
+       "so the laser calculator's internal-cut distance is derivable, not blank")
+    eq(costed_geometry_value(_pe, "hole_count", "estimated_hole_count"), 2,
+       "and its hole count is the measured one, not the mirrored hand's defaulted 0")
+
+    # AND THE LEFT HAND'S NUMBER MUST NOT MOVE. Making the rollup travel is what the mirror
+    # needs; letting it WIN is a different change with a price attached. On a part below
+    # full geometry confidence the two records hold different lengths for the same edge —
+    # feature_synthesis multiplies the rollup's by the confidence on its way into
+    # normalized_geometry — so choosing the rollup would re-cut every steel part in every
+    # job at a distance nobody asked to change.
+    _weighted = {"normalized_geometry": {"cut_length_mm": 520.0, "hole_count": 3},
+                 "geometry_rollup": {"estimated_cut_length_mm": 743.99,
+                                     "estimated_hole_count": 9}}
+    eq(costed_geometry_value(_weighted, "cut_length_mm", "estimated_cut_length_mm"), 520.0,
+       "a part whose own geometry record answers keeps the number the sheet reads today")
+    eq(costed_geometry_value(_weighted, "hole_count", "estimated_hole_count"), 3,
+       "in both fields, or the change is a repricing wearing a bug fix's clothes")
+
+    # A ZERO IS SILENCE, AND ONLY BECAUSE OF WHERE IT COMES FROM. document_builder writes
+    # hole_count=features.get("hole_count", 0), so an unread part and a genuinely hole-free
+    # one arrive identical — and the caller already treats that 0 as unread by leaving the
+    # cell blank rather than claiming no holes.
+    _zeroed = {"normalized_geometry": {"cut_length_mm": 0.0, "hole_count": 0},
+               "geometry_rollup": {"estimated_cut_length_mm": 743.99,
+                                   "estimated_hole_count": 2}}
+    eq(costed_geometry_value(_zeroed, "cut_length_mm", "estimated_cut_length_mm"), 743.99,
+       "a defaulted zero does not outrank a measurement")
+    eq(costed_geometry_value(_zeroed, "hole_count", "estimated_hole_count"), 2,
+       "which is the exact shape the mirrored hand arrives in")
+
+    # AND NOTHING IS INVENTED WHERE NEITHER RECORD SPEAKS.
+    eq(costed_geometry_value({}, "cut_length_mm", "estimated_cut_length_mm"), None,
+       "no geometry means no number, not a zero the sheet would read as measured")
+
+    # THE CALLER MUST ACTUALLY USE IT. A resolver a fixture exercises and the workbook does
+    # not is the failure this whole test exists to answer, one level up.
+    from pathlib import Path as _Path
+    _wb_src = (_Path(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
+        encoding="utf-8")
+    eq(_wb_src.count('costed_geometry_value(pe, "hole_count", "estimated_hole_count")'), 1,
+       "the Sheet Steel block reads the hole count through the resolver")
+    ok('costed_geometry_value(\n            pe, "cut_length_mm", "estimated_cut_length_mm")'
+       in _wb_src,
+       "and the cut length through it too")
+    ok('pe.get("geometry_rollup") or pe.get("normalized_geometry")' not in _wb_src,
+       "and the whole-dict pick that made the rollup unreachable is gone")
+
+
 def test_a_chained_operation_inherits_the_scope_of_what_spawned_it():
     """estimator.py adds dress_welds automatically wherever it finds welding, so that row
     has no route line of its own and therefore no scope of its own.

@@ -822,6 +822,48 @@ def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, A
         for p in (part_estimates or []) if isinstance(p, dict))
 
 
+def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
+    """A geometry datum off a COSTED part record, from whichever of its two geometry
+    records has one — normalized_geometry first, geometry_rollup second.
+
+    THE COSTED RECORD HAS TWO GEOMETRY RECORDS AND THEY ARE NOT THE SAME RECORD.
+    normalized_geometry holds the DERIVED, confidence-weighted view (`hole_count`,
+    `cut_length_mm`); geometry_rollup holds the MEASURED one (`estimated_hole_count`,
+    `estimated_cut_length_mm`). feature_synthesis multiplies the rollup's cut length by the
+    geometry confidence on its way into normalized_geometry, so on any part below full
+    confidence the two are different numbers describing the same edge.
+
+    WHY ORDER MATTERS MORE THAN IT LOOKS. The Sheet Steel block used to read
+    `pe["geometry_rollup"] or pe["normalized_geometry"]` — one whole dict, chosen by
+    truthiness — and estimator.estimate_part did not copy the rollup onto the costed
+    record at all, so the first branch was None on every part of every job and the second
+    answered every time. Making the rollup travel with the estimate, which is what a
+    mirrored part needs, would therefore have moved every steel part in every job onto the
+    unweighted cut length and changed its internal-cut distance and its laser throughput.
+    That is a pricing decision and not this function's to make, so the field the sheet
+    already reads still wins and the rollup answers only where it is SILENT.
+
+    A ZERO IS SILENCE HERE, AND ONLY HERE. document_builder writes
+    `hole_count=features.get("hole_count", 0)` and resolves `cut_length_mm` through an `or`
+    chain that can run out of candidates, so an unread part and a genuinely featureless one
+    arrive as the same 0 — and the caller already treats that 0 as unread by leaving the
+    cell blank rather than claiming no holes. Nothing reaches this block that is not being
+    profile-cut, so a zero cut length is never a measurement either. 11350's mirrored right
+    hand is what this cost: its own normalized_geometry had hole_count 0 and no cut length,
+    while the rollup the mirror pass filled from the measured left hand held 2 holes and
+    743.99mm — so the sheet cut it at 368/hr against its own mirror image's 287.
+    """
+    for _src in (pe.get("normalized_geometry") or {}, pe.get("geometry_rollup") or {}):
+        for _n in names:
+            _v = _src.get(_n)
+            if _v is None:
+                continue
+            if isinstance(_v, (int, float)) and not isinstance(_v, bool) and _v <= 0:
+                continue
+            return _v
+    return None
+
+
 def _is_board(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD",
@@ -2705,14 +2747,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # Laser-calc inputs S (No of holes) and T (Internal Cutting Distance).
         # Drawing-derived; feeds the sheet's laser calculator display. Honest gaps:
         # blank (not 0) when not read, so a genuine no-hole part is not a false claim.
-        # Canonical geometry lives in pe["geometry_rollup"] (NOT "geometry").
-        _geom = pe.get("geometry_rollup") or pe.get("normalized_geometry") or {}
-        _holes = _geom.get("estimated_hole_count")
-        if _holes is None:
-            _holes = _geom.get("hole_count")
+        # Both geometry records, asked in order — see costed_geometry_value.
+        _holes = costed_geometry_value(pe, "hole_count", "estimated_hole_count")
         if isinstance(_holes, (int, float)) and int(_holes) > 0:
             ws.cell(row=row, column=s["col_holes"], value=int(_holes))
-        _cutlen = _safe(_geom.get("estimated_cut_length_mm") or _geom.get("cut_length_mm"))
+        _cutlen = _safe(costed_geometry_value(
+            pe, "cut_length_mm", "estimated_cut_length_mm"))
         if length and width and _cutlen:
             _internal = round(max(0.0, float(_cutlen) - 2.0 * (float(length) + float(width))), 1)
             ws.cell(row=row, column=s["col_internal_cut"], value=_internal)

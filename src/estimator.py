@@ -3557,6 +3557,23 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "process_estimate": process,
         "labour_estimate": labour,
         "normalized_geometry": part.get("normalized_geometry", {}),
+        # THE ROLLUP TRAVELS WITH THE MONEY, TOO.
+        #
+        # normalized_geometry was copied here and geometry_rollup was not, so every reader
+        # that asks the costed record for `geometry_rollup` — and wb_populate's laser
+        # calculator is one, by name, in its own comment — got None on every part of every
+        # job and silently fell through to whatever it had listed as its rescue.
+        #
+        # The two records are not the same record. normalized_geometry carries the
+        # DERIVED, confidence-weighted view (`hole_count`, `cut_length_mm`); the rollup
+        # carries the MEASURED one (`estimated_hole_count`, `estimated_cut_length_mm`).
+        # Where the derived view is silent the measured one was simply unreachable.
+        #
+        # 11350's right hand is what this cost. The mirror pass filled its rollup from the
+        # measured left hand — 743.99mm of cut, 2 holes, confirmed present on the raw
+        # record — and none of it reached the sheet, because the only pool the sheet reads
+        # is this dict. The part laser-cut at 368/hr against its own mirror image's 287.
+        "geometry_rollup": part.get("geometry_rollup") or {},
         # The model's plate verdict travels with the costed record. It was set on the raw
         # part and never copied here, so the record that carries the folding MONEY had no
         # idea the part was flat, and nothing downstream could compare the two.
