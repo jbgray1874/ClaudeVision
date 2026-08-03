@@ -145,13 +145,27 @@ def _find_wb_sell_price_ref(wb) -> Optional[str]:
                     row_idx = cell.row
                     # Look rightward up to 8 columns for the value cell; take the furthest
                     # populated/known money column. Template value column is M (13).
+                    # A VALUE IS A NUMBER OR A FORMULA — NEVER PROSE.
+                    #
+                    # This took the first non-empty cell to the right. An Excel formula reads
+                    # as None through openpyxl, so the real value cell looks empty and the
+                    # walk continues — and once the estimator-input banner was added to the
+                    # right of the totals, it became the first populated cell on that row.
+                    # The report then pointed its SELL PRICE at a sentence, and the audit
+                    # tabs displayed a malformed number instead of the price.
+                    #
+                    # Text on this row is a caption, not a figure, so it is skipped and the
+                    # column-M fallback below does its job as intended.
                     target_col = None
                     for c in range(label_col + 1, label_col + 9):
                         cc = ws.cell(row=row_idx, column=c)
-                        # A formula or a number here = the value cell.
-                        if cc.value not in (None, ""):
-                            target_col = c
-                            break
+                        _v = cc.value
+                        if _v is None or _v == "":
+                            continue
+                        if isinstance(_v, str) and not _v.lstrip().startswith("="):
+                            continue          # a caption, not the value
+                        target_col = c
+                        break
                     # If nothing populated found (value is a not-yet-calculated formula that
                     # openpyxl read as 0/None), fall back to column M on the label's row.
                     if target_col is None:

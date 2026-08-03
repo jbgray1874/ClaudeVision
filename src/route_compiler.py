@@ -81,7 +81,22 @@ DEFAULT_OPERATION_SEQUENCE = {
 
 
 def clean_part_number(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip()).upper()
+    """The canonical spelling of a part number, or "" when the code names no part.
+
+    A drawing prints "-" where it has no code to print. That is a statement of absence, not
+    an identity, and treating it as one gave job 11350 a part numbered "-" that absorbed the
+    M4 wing nut and then appeared in the hierarchy and as a participant in the assembly
+    route. Returning "" here drops it at every caller at once, because every caller already
+    skips a blank identity."""
+    text = re.sub(r"\s+", " ", str(value or "").strip()).upper()
+    try:
+        from part_identity import is_placeholder_identity
+
+        if is_placeholder_identity(text):
+            return ""
+    except Exception:
+        pass
+    return text
 
 
 def clean_operation(value: Any) -> str:

@@ -9616,5 +9616,96 @@ def test_the_estimator_input_block_writes_through_merged_cells():
        f"the block must not report itself as merely unlucky, got {_flags}")
 
 
+def test_a_placeholder_is_not_a_part_number():
+    """A drawing prints "-" where it has no code to print. On 11350 that became a canonical
+    part which ABSORBED the M4 wing nut — "BI-NUT -> -" — so the identity that survived was
+    the one naming nothing, and it then appeared in the hierarchy and as a participant in
+    the assembly route.
+
+    A synthesised code is imperfect; a placeholder is not a code at all."""
+    from part_identity import is_placeholder_identity
+    from route_compiler import build_part_graph
+
+    for _code in ("-", "--", "N/A", "TBC", "NONE", "?", "", "   ", "..."):
+        ok(is_placeholder_identity(_code), f"{_code!r} names no part")
+    for _code in ("BI-NUT", "11350-01-01", "-01", "DBR60", "M4"):
+        ok(not is_placeholder_identity(_code), f"{_code!r} IS a part number")
+
+    _parts = [
+        {"part_number": "11350-01-01", "description": "Bar", "quantity": 1},
+        {"part_number": "-", "description": "M4 WING NUT", "quantity": 4,
+         "page_roles": ["bought_in"]},
+        {"part_number": "BI-NUT", "description": "M4 WING NUT", "quantity": 4,
+         "page_roles": ["bought_in"]},
+    ]
+    _nodes = [n.part_number for n in build_part_graph(_parts, {})["nodes"]]
+    ok("-" not in _nodes, f"no node may be numbered '-', got {_nodes}")
+    ok("BI-NUT" in _nodes,
+       "and the recogniser's code survives as the wing nut's identity")
+
+    # AND THE WORKBOOK GUARD IS EXERCISED TOO, not merely present. The compiler now drops
+    # "-" before wb_populate sees it, so that second guard only fires on a job JSON SAVED
+    # BEFORE this fix — which is every 11350 run to date. An untested guard is the thing
+    # that keeps biting this project, so it is driven directly.
+    import wb_populate as W
+    _summary = {"estimate_summary": {"canonical_route_shadow": {"mode": "cutover", "nodes": [
+        {"part_number": "-", "kind": "bought_in", "qty_per_unit": 4.0,
+         "description": "M4 WING NUT", "evidence": {}},
+        {"part_number": "11350-01-01", "kind": "leaf", "qty_per_unit": 1.0,
+         "description": "Bar", "evidence": {}},
+    ], "decisions": []}}}
+    _pes = [{"part_number": "BI-NUT", "description": "M4 WING NUT", "quantity": 4,
+             "page_roles": ["bought_in"]},
+            {"part_number": "11350-01-01", "description": "Bar", "quantity": 1}]
+    _out = {p["part_number"] for p in
+            W.canonicalise_part_estimates_for_workbook(_summary, _pes)}
+    ok("BI-NUT" in _out,
+       f"the wing nut keeps a usable code rather than being absorbed into '-', got {_out}")
+
+    # THE RULE LIVES IN part_identity, which already owns identity. Nine separate join
+    # sites is the defect; a tenth module would have been the same mistake again.
+    import inspect
+    import part_identity
+    ok("is_placeholder_identity" in inspect.getsource(part_identity),
+       "the shared identity module owns this rule")
+
+
+def test_a_caption_beside_the_total_is_not_the_total():
+    """_find_wb_sell_price_ref took the first NON-EMPTY cell to the right of the "Sell
+    Price" label. An Excel formula reads as None through openpyxl, so the real value cell
+    looks empty and the walk continues — and once the estimator-input banner was written to
+    the right of the totals, IT became the first populated cell on that row.
+
+    The audit tabs then pointed their SELL PRICE at a sentence and displayed a malformed
+    number instead of the price. A regression introduced by a fix two commits earlier, and
+    only visible on a sheet where the totals are live formulas."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        _fail("openpyxl is required to verify the sell-price reference")
+        return
+    from job_decision_report import _find_wb_sell_price_ref
+
+    _wb = Workbook(); _ws = _wb.active; _ws.title = "Estimate"
+    _ws["I206"] = "Sell Price"
+    _ws["M206"] = None          # a live formula — openpyxl reads it as None
+    _ws["N206"] = ("PROVISIONAL — 6 ESTIMATOR INPUTS REQUIRED "
+                   "(see OUTSTANDING ESTIMATOR INPUTS below)")
+    eq(_find_wb_sell_price_ref(_wb), "='Estimate'!M206",
+       "the reference must fall back to the value column, not point at the caption")
+
+    # A REAL VALUE STILL WINS, wherever it sits — the fix must not turn into "always M".
+    _wb2 = Workbook(); _ws2 = _wb2.active; _ws2.title = "Estimate"
+    _ws2["I143"] = "Sell Price"; _ws2["K143"] = 95.97
+    eq(_find_wb_sell_price_ref(_wb2), "='Estimate'!K143",
+       "a numeric value to the right is still the value cell")
+
+    # And so does a formula string, which is what the template actually carries.
+    _wb3 = Workbook(); _ws3 = _wb3.active; _ws3.title = "Estimate"
+    _ws3["I143"] = "Sell Price"; _ws3["L143"] = "=M105*1.0"
+    eq(_find_wb_sell_price_ref(_wb3), "='Estimate'!L143",
+       "a formula is a value; only prose is skipped")
+
+
 if __name__ == "__main__":
     sys.exit(main())

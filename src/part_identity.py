@@ -90,6 +90,24 @@ def normalize_part_code(raw: Any) -> str:
     return s
 
 
+# Codes a drawing prints where it has no code to print. They are not identities, and a
+# BOM line carrying one must never become the canonical target another line merges INTO:
+# on job 11350 the M4 wing nut was absorbed into a part numbered "-", which then appeared
+# in the hierarchy and in the assembly route as a participant.
+_PLACEHOLDER_CODES = frozenset({
+    "", "-", "--", "---", ".", "N/A", "NA", "TBC", "TBA", "NONE", "?", "X", "XX",
+})
+
+
+def is_placeholder_identity(part_number: Any) -> bool:
+    """True when a code says 'no code', rather than naming a part."""
+    text = str(part_number or "").strip().upper()
+    if text in _PLACEHOLDER_CODES:
+        return True
+    # A code made only of separators is the same statement in another form.
+    return bool(text) and not re.search(r"[A-Z0-9]", text)
+
+
 def dxf_alias_target(part_number: str) -> Optional[str]:
     key = normalize_part_code(part_number)
     return DXF_TO_BOM_ALIASES.get(key)

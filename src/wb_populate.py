@@ -884,6 +884,19 @@ def canonicalise_part_estimates_for_workbook(
     def _desc_key(_t: Any) -> str:
         return re.sub(r"[^A-Z0-9]+", " ", str(_t or "").upper()).strip()
 
+    def _usable_identity(_pn: Any) -> bool:
+        """A merge TARGET has to be a part number somebody can look up.
+
+        "BI-NUT -> -" on job 11350: the recogniser-minted wing nut was absorbed into a
+        canonical line numbered "-", so the identity that survived was the one naming
+        nothing. A synthesised code is imperfect; a placeholder is not a code at all."""
+        try:
+            from part_identity import is_placeholder_identity
+
+            return not is_placeholder_identity(_pn)
+        except Exception:
+            return bool(str(_pn or "").strip())
+
     # ONE CANDIDATE, OR NONE. Keeping the first node with a given description made the
     # merge target depend on dict order: two canonical bought-ins sharing a description
     # would absorb the synthesised line into whichever happened to be seen first, and the
@@ -903,7 +916,8 @@ def canonicalise_part_estimates_for_workbook(
         _dk = _desc_key(_node.get("description"))
         if _dk:
             _desc_hits.setdefault(_dk, []).append(_ident)
-    _canonical_by_desc = {_dk: _ids[0] for _dk, _ids in _desc_hits.items() if len(_ids) == 1}
+    _canonical_by_desc = {_dk: _ids[0] for _dk, _ids in _desc_hits.items()
+                          if len(_ids) == 1 and _usable_identity(_ids[0])}
     _ambiguous = {_dk for _dk, _ids in _desc_hits.items() if len(_ids) > 1}
     _synth_merged: List[str] = []
     for _est in part_estimates or []:
