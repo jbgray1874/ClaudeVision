@@ -9227,5 +9227,86 @@ def test_solidworks_mirror_naming_is_recognised():
            f"{_name} is not a mirrored part")
 
 
+# ── job 11350 — a drawing of a part is not the part's flat pattern ───────────────────
+def test_a_drawing_export_is_not_measured_as_a_flat_pattern():
+    """Job 11350 shipped five DXFs. Three are drawing exports carrying title blocks,
+    dimensions and hundreds of annotation entities — under filenames indistinguishable from
+    the two real flats.
+
+    is_flat_part_dxf accepts anything that is a .dxf, is not named as a GA, and has a part
+    number in its name, and a SolidWorks drawing export satisfies all three. What that costs
+    if it is missed: the title-block border and every dimension line get measured as cut
+    path, so the part comes back with a bounding box the size of an A3 sheet, a cut length
+    several times the real one, and a hole count that includes the arrowheads — and every
+    one of those numbers looks like a measurement, because it was measured."""
+    try:
+        import ezdxf
+    except ImportError:
+        _fail("ezdxf is required to verify DXF content classification; the pipeline "
+              "depends on it, so its absence is a broken environment, not a green run")
+        return
+    import tempfile
+    from pathlib import Path
+    from drawing_job_merge import drawing_export_reason, apply_dxf_geometry_to_part
+
+    _d = Path(tempfile.mkdtemp())
+
+    # A real flat pattern: outline and a bend line, no annotation.
+    _doc = ezdxf.new(); _msp = _doc.modelspace()
+    _msp.add_lwpolyline([(0, 0), (758, 0), (758, 60), (0, 60)], close=True)
+    _msp.add_line((0, 20), (758, 20), dxfattribs={"layer": "BENDLINES"})
+    _flat = _d / "11350-01-01M_1MM MS.dxf"; _doc.saveas(_flat)
+
+    # A flat carrying a couple of etch labels. MUST NOT be rejected — over-rejecting costs
+    # geometry we really had, and this is the shape that would cause it.
+    _doc2 = ezdxf.new(); _msp2 = _doc2.modelspace()
+    _msp2.add_lwpolyline([(0, 0), (200, 0), (200, 60), (0, 60)], close=True)
+    for _i, _t in enumerate(("ETCH A", "ETCH B")):
+        _msp2.add_text(_t).set_placement((10, 10 * _i + 5))
+    _etched = _d / "11350-01-02M_1MM MS.dxf"; _doc2.saveas(_etched)
+
+    # A drawing export: a dimension and a title block.
+    _doc3 = ezdxf.new(); _msp3 = _doc3.modelspace()
+    _msp3.add_lwpolyline([(0, 0), (200, 0), (200, 60), (0, 60)], close=True)
+    _msp3.add_lwpolyline([(-50, -50), (450, -50), (450, 300), (-50, 300)], close=True)
+    _msp3.add_linear_dim(base=(0, -20), p1=(0, 0), p2=(200, 0)).render()
+    for _i, _t in enumerate(("BOOTS COMMS BAR", "REV B", "SCALE 1:2", "MILD STEEL",
+                             "DRAWN JG", "11350-01-02", "SHEET 1 OF 1", "DO NOT SCALE",
+                             "RAL 9003")):
+        _msp3.add_text(_t).set_placement((10, 10 * _i))
+    _drawing = _d / "Mirror11350-01-02M_1MM MS.dxf"; _doc3.saveas(_drawing)
+
+    eq(drawing_export_reason(_flat), None, "a real flat pattern is accepted")
+    eq(drawing_export_reason(_etched), None,
+       "and so is a flat carrying an etch label or two")
+    ok(drawing_export_reason(_drawing),
+       "a DXF carrying dimensions is a drawing of the part, not the part")
+    ok("dimension" in (drawing_export_reason(_drawing) or "").lower(),
+       "and the reason names what gave it away")
+
+    # THE FILENAME GATE STILL PASSES IT — which is exactly why the content test exists.
+    from drawing_job_merge import is_flat_part_dxf
+    ok(is_flat_part_dxf(_drawing),
+       "the cheap filename gate cannot tell the difference; that is the point")
+
+    # REFUSED WHERE GEOMETRY IS APPLIED, and recorded rather than silently skipped: a DXF
+    # that exists and was rejected is a different fact from no DXF at all.
+    _part = {"part_number": "11350-01-02M"}
+    apply_dxf_geometry_to_part(_part, _drawing)
+    ok(not _part.get("geometry_rollup"),
+       "no geometry may be taken from a drawing export")
+    eq([r["file"] for r in (_part.get("rejected_dxf_files") or [])],
+       ["Mirror11350-01-02M_1MM MS.dxf"], "the rejection is recorded against the part")
+    ok(any("rejected" in str(f) for f in (_part.get("review_flags") or [])),
+       "and raised as a review flag — the estimator must know a flat is missing")
+
+    # AND A REAL FLAT STILL YIELDS ITS GEOMETRY. Without this the fixture would pass
+    # against a version that rejected everything.
+    _part2 = {"part_number": "11350-01-01M"}
+    apply_dxf_geometry_to_part(_part2, _flat)
+    ok((_part2.get("geometry_rollup") or {}).get("estimated_bend_line_count"),
+       "the real flat is still measured, bend line and all")
+
+
 if __name__ == "__main__":
     sys.exit(main())

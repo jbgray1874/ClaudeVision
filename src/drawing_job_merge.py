@@ -85,7 +85,60 @@ def is_ignored_ga_dxf(path: Path) -> bool:
 
 
 def is_flat_part_dxf(path: Path) -> bool:
+    """CHEAP, FILENAME-ONLY gate used during discovery. Content is checked separately by
+    drawing_export_reason() at the point geometry is actually applied — see there for why a
+    name alone cannot tell a flat pattern from a drawing of one."""
     return is_dxf_path(path) and not is_ignored_ga_dxf(path) and bool(part_number_from_dxf_path(path))
+
+
+# A flat pattern may carry an etch label or two. A DRAWING carries a title block.
+_DRAWING_TEXT_ENTITIES = 8
+
+
+def drawing_export_reason(path: Path) -> Optional[str]:
+    """Why this DXF is a DRAWING of a part rather than the part's flat pattern — or None.
+
+    THE FILENAME CANNOT TELL YOU. is_flat_part_dxf accepts anything that is a .dxf, is not
+    named as a GA, and has a part number in its name — and a drawing exported straight out
+    of SolidWorks satisfies all three. Job 11350 shipped five DXFs of which three are
+    drawing exports carrying title blocks, dimensions and hundreds of annotation entities,
+    under names indistinguishable from the two real flats.
+
+    What that costs if it is missed: the title-block border and every dimension line get
+    measured as cut path. The part comes back with a bounding box the size of an A3 sheet,
+    a cut length several times the real one, and a hole count that includes the arrowheads
+    — and every one of those numbers looks like a measurement, because it was measured.
+
+    DIMENSION entities are decisive: a flat pattern has none, ever. A large body of
+    TEXT/MTEXT is the second signal, thresholded so a flat with a couple of etch labels is
+    not rejected. Deliberately conservative in that direction — wrongly rejecting a real
+    flat costs geometry we could have had, which the run already reports; wrongly accepting
+    a drawing puts fiction on the sheet.
+    """
+    try:
+        import ezdxf
+    except Exception:
+        return None          # cannot read it — say nothing rather than guess
+    try:
+        doc = ezdxf.readfile(str(path))
+        msp = doc.modelspace()
+    except Exception:
+        return None
+    _dims = 0
+    _texts = 0
+    for _e in msp:
+        _t = _e.dxftype()
+        if _t == "DIMENSION":
+            _dims += 1
+        elif _t in ("TEXT", "MTEXT"):
+            _texts += 1
+    if _dims:
+        return (f"{_dims} dimension entit{'y' if _dims == 1 else 'ies'} — this is a drawing "
+                f"of the part, not its flat pattern")
+    if _texts >= _DRAWING_TEXT_ENTITIES:
+        return (f"{_texts} text entities (title block / notes) — this is a drawing of the "
+                f"part, not its flat pattern")
+    return None
 
 
 # The range a sheet gauge can credibly be. Anything outside it in a filename is a
@@ -249,6 +302,21 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
       2. build_geometry_summary_for_dxf — bbox extents, geometry rollup
          (fallback when flat-pattern detection fails)
     """
+    # A DRAWING IS NOT A FLAT PATTERN, AND MEASURING ONE PRODUCES A MEASUREMENT.
+    #
+    # Refused here rather than at discovery, because this is the single point where DXF
+    # geometry lands on a part — a guard anywhere else leaves the other callers open.
+    # Recorded on the part, never silently skipped: a DXF that exists and was rejected is a
+    # different fact from no DXF at all, and the estimator needs to know a flat is missing.
+    _export_reason = drawing_export_reason(dxf_path)
+    if _export_reason:
+        part.setdefault("rejected_dxf_files", []).append(
+            {"file": dxf_path.name, "reason": _export_reason})
+        part.setdefault("review_flags", []).append(
+            f"DXF {dxf_path.name} rejected: {_export_reason}. No flat pattern for this "
+            f"part — geometry is from the drawing only.")
+        return part
+
     geometry, raw, reliability = build_geometry_summary_for_dxf(dxf_path)
     part["geometry_rollup"] = _empty_geometry_rollup()
     _rollup_geometry(part["geometry_rollup"], geometry)
