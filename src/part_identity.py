@@ -11,6 +11,11 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+__all__ = [
+    "normalize_part_code", "is_placeholder_identity", "dxf_alias_target",
+    "resolve_estimate_code", "synthesise_bought_in_code",
+]
+
 # DXF filename / legacy drawing numbers -> BOM detail part
 DXF_TO_BOM_ALIASES: Dict[str, str] = {
     "1148": "1448-02",
@@ -106,6 +111,51 @@ def is_placeholder_identity(part_number: Any) -> bool:
         return True
     # A code made only of separators is the same statement in another form.
     return bool(text) and not re.search(r"[A-Z0-9]", text)
+
+
+# A drawing often leaves the part-number cell blank for standard hardware. Those rows still
+# need a stable identity BEFORE the canonical graph is built; minting it later in file_scan
+# is why 11350's wing nuts and PEM studs were visible in the workbook and absent from the
+# hierarchy and the route compiler — two BOM authorities, one of which the estimator sees.
+# One shared mapping keeps every ingestion path from inventing a different code for the same
+# words. Generic hardware vocabulary, not a job-number exception.
+_BOUGHT_IN_CODE_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    (r"SELF[\s-]?CLINCH.*NUT|CLINCH.*NUT", "BI-SELFCLINCHNUT"),
+    (r"KNURLED.*KNOB", "BI-KNURLEDKNOB"),
+    (r"KNURLED.*NUT", "BI-KNURLEDNUT"),
+    (r"THREADED.*PEM.*STUD|PEM.*STUD", "BI-PEMSTUD"),
+    (r"KEYHOLE.*PEM", "BI-KEYHOLEPEM"),
+    (r"MUSHROOM.*THUMB|THUMB.*SCREW", "BI-THUMBSCREW"),
+    (r"BUTTON.*HEAD.*SCREW", "BI-BUTTONSCREW"),
+    (r"DOME.*RIVET|POP.*RIVET|RIVET", "BI-RIVET"),
+    (r"WING.*NUT", "BI-NUT"),
+    (r"NUT", "BI-NUT"),
+    (r"SCREW", "BI-SCREW"),
+    (r"WASHER", "BI-WASHER"),
+    (r"BOLT", "BI-BOLT"),
+)
+
+
+def synthesise_bought_in_code(description: Any, fallback: Any = "") -> str:
+    """A stable code for an uncoded bought-in row, or "" when the words name nothing.
+
+    A real drawing or catalogue code always wins. A placeholder ("-", "TBC") is not an
+    identity, so a description-based BI-* code stands in — and because it is derived from
+    the words alone, every path that reads the same row derives the same code.
+    """
+    fallback_text = str(fallback or "").strip()
+    if fallback_text and not is_placeholder_identity(fallback_text):
+        fallback_upper = fallback_text.upper()
+        # A code with no digits and a generic word in it is a category, not a part.
+        vague = {"STD PART", "FIXING", "FIXINGTBC", "STDPART"}
+        if fallback_upper not in vague and re.search(r"\d", fallback_upper):
+            return fallback_text
+
+    description_upper = " ".join(str(description or "").upper().split())
+    for pattern, code in _BOUGHT_IN_CODE_PATTERNS:
+        if re.search(pattern, description_upper):
+            return code
+    return ""
 
 
 def dxf_alias_target(part_number: str) -> Optional[str]:

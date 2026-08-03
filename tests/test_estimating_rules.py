@@ -5409,6 +5409,360 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_the_canonical_graph_is_an_authority_not_an_after_the_fact_report():
+    """THE COMPILER WAS RIGHT AND TOO LATE. It ran after estimate_part, so on 11350 it could
+    state that 11350-01-101 is an assembly while the workbook had already charged it as a
+    2.5mm fabricated leaf — its own laser, its own fold, its own material, on top of the bar
+    it is made from. A graph that only describes what pricing already did is a report.
+
+    Two more things were missing at that boundary: the uncoded hardware rows, whose codes
+    were minted later by the dual-path reader, and the alias map, which was built and then
+    not applied to the hierarchy edges."""
+    from route_compiler import apply_canonical_evidence_to_parts, build_part_graph
+
+    def _job():
+        return [
+            # drawing_job_merge has already decided this from the description; the compiler
+            # CONSUMES that decision rather than making it a second time.
+            {"part_number": "11350-01-101", "description": "TICKET STRIP BAR WITH PEM STUDS",
+             "quantity": 1, "assembly_children": ["11350-01-01", "BI-PEMSTUD"],
+             "is_assembly_parent": True},
+            {"part_number": "11350-01-01", "description": "TICKET STRIP BAR", "quantity": 1},
+            {"part_number": "11350-01-02", "description": "LEFT ARM 200MM", "quantity": 1},
+            {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM 200MM", "quantity": 1},
+            # The top assembly, carrying NO prior marking — so anything true of it here can
+            # only have come from the canonical graph being applied.
+            {"part_number": "11350-01", "description": "COMMS BAR ASSEMBLY", "quantity": 1},
+        ]
+
+    _extract = {
+        "assemblies": [{"part_number": "11350-01", "children": [
+            {"part_number": "11350-01-101", "qty": 1},
+            {"part_number": "11350-01-02", "qty": 1},
+            {"part_number": "11350-01-02 MIR", "qty": 1},
+            {"part_number": "DBR60", "qty": 1},
+            {"part_number": "-", "qty": 4}]}],
+        "bom": [
+            {"part_number": "11350-01-101", "description": "TICKET STRIP BAR WITH PEM STUDS",
+             "qty": 1, "type": "fabricated"},
+            {"part_number": "11350-01-01", "description": "TICKET STRIP BAR", "qty": 1,
+             "type": "fabricated"},
+            {"part_number": "DBR60", "description": "TICKET STRIP", "qty": 1,
+             "is_bought_in": True},
+            {"part_number": "-", "description": "M4 WING NUT", "qty": 4, "is_bought_in": True},
+            {"part_number": "-", "description": "M4X8 PEM STUD", "qty": 4,
+             "is_bought_in": True}],
+    }
+
+    _nodes = {n.part_number: n for n in build_part_graph(_job(), _extract)["nodes"]}
+    eq(_nodes["11350-01-101"].kind, "assembly", "101 is an assembly, not a flat to cut")
+    eq({e.part_number: e.qty for e in _nodes["11350-01-101"].children},
+       {"11350-01-01": 1.0, "BI-PEMSTUD": 4.0},
+       "owning the bar and its studs — the hierarchy the extract never emitted")
+    ok("BI-NUT" in _nodes and "BI-PEMSTUD" in _nodes,
+       "the uncoded hardware is in the graph BEFORE rendering, not minted downstream")
+    eq(_nodes["BI-NUT"].kind, "bought_in", "and keeps its make/buy class")
+    ok("BI-NUT" in {e.part_number for e in _nodes["11350-01"].children},
+       "and the GA's uncoded '- x4' edge resolves to the wing nut — the studs are already "
+       "owned by 101, so only one candidate remains")
+
+    # AN UNCODED *FABRICATED* ROW GETS NO INVENTED CODE. Minting one would create a part
+    # nobody can make, and the description rule only speaks for hardware.
+    # The description deliberately CONTAINS a hardware word — "NUT PLATE" would resolve to
+    # BI-NUT if the bought-in guard were dropped, and the job would gain a part nobody can
+    # make while the real plate lost its identity.
+    _fab = build_part_graph([], {"bom": [
+        {"part_number": "-", "description": "NUT PLATE 3MM", "qty": 1, "type": "fabricated"}]})
+    eq([n.part_number for n in _fab["nodes"]], [],
+       "a blank code on a FABRICATED row stays blank — the rule speaks only for hardware")
+
+    # (5) AMBIGUITY IS REFUSED. Two unparented bought-ins of the same quantity give the
+    # uncoded edge two candidates, and a wrong parent is worse than a missing one.
+    _amb = build_part_graph([], {
+        "assemblies": [{"part_number": "9000-01", "children": [{"part_number": "-", "qty": 4}]}],
+        "bom": [{"part_number": "-", "description": "M4 WING NUT", "qty": 4,
+                 "is_bought_in": True},
+                {"part_number": "-", "description": "M4 WASHER", "qty": 4,
+                 "is_bought_in": True}]})
+    _amb_nodes = {n.part_number: n for n in _amb["nodes"]}
+    eq([e.part_number for e in _amb_nodes["9000-01"].children], [],
+       "an uncoded edge with two candidates binds to neither")
+    ok("BI-NUT" in _amb_nodes and "BI-WASHER" in _amb_nodes,
+       "though both parts are still in the graph, unparented and visible")
+
+    # (2) THE ALIAS MAP MUST REACH THE HIERARCHY. It was built and then not applied here, so
+    # an edge naming the FILE's code pointed at a node the rest of the graph knows by the
+    # DRAWING's code — a parent for one spelling and an orphan for the other.
+    _aliased = build_part_graph([], {
+        "assemblies": [{"part_number": "11350-01", "children": [
+            {"part_number": "11350-01-01M", "qty": 1}]}],
+        "bom": [{"part_number": "11350-01-01", "description": "TICKET STRIP BAR", "qty": 1,
+                 "type": "fabricated"},
+                {"part_number": "11350-01-01M", "description": "TICKET STRIP BAR", "qty": 1,
+                 "type": "fabricated"}]})
+    _al_nodes = {n.part_number: n for n in _aliased["nodes"]}
+    eq([e.part_number for e in _al_nodes["11350-01"].children], ["11350-01-01"],
+       "the edge resolves through the alias to the drawing's code, not to a second node")
+    ok("11350-01-01M" not in _al_nodes, "and the file's spelling is not a part of its own")
+
+    # THE PARENT SIDE TOO. An assembly named by the file's code must not become a second
+    # parent alongside the drawing's — that is one hierarchy split into two, each holding
+    # half the job.
+    _ap = build_part_graph([], {
+        "assemblies": [{"part_number": "11350-01M", "children": [
+            {"part_number": "11350-01-01", "qty": 1}]}],
+        "bom": [{"part_number": "11350-01", "description": "COMMS BAR ASSEMBLY", "qty": 1},
+                {"part_number": "11350-01-01", "description": "TICKET STRIP BAR", "qty": 1,
+                 "type": "fabricated"}]})
+    _ap_nodes = {n.part_number: n for n in _ap["nodes"]}
+    ok("11350-01M" not in _ap_nodes, "the file's spelling of the PARENT is not a second node")
+    eq([e.part_number for e in _ap_nodes["11350-01"].children], ["11350-01-01"],
+       "and the drawing's assembly owns the child")
+
+    # THE EXTRACT OWNS A HIERARCHY IT STATED. The description rule fills a gap; it does not
+    # get to re-parent something the drawing already expressed, or a pack whose GA is right
+    # and whose wording is loose would be rebuilt from the wording.
+    _stated = build_part_graph(
+        [{"part_number": "9000-01-101", "description": "BAR WITH PEM STUDS",
+          "assembly_children": ["9000-01-01", "BI-PEMSTUD"]}],
+        {"assemblies": [{"part_number": "9000-01-101", "children": [
+            {"part_number": "9000-01-07", "qty": 2}]}],
+         "bom": [{"part_number": "9000-01-07", "description": "SPACER", "qty": 2,
+                  "type": "fabricated"},
+                 {"part_number": "9000-01-01", "description": "BAR", "qty": 1,
+                  "type": "fabricated"},
+                 {"part_number": "-", "description": "M4X8 PEM STUD", "qty": 4,
+                  "is_bought_in": True}]})
+    _st_nodes = {n.part_number: n for n in _stated["nodes"]}
+    eq([e.part_number for e in _st_nodes["9000-01-101"].children], ["9000-01-07"],
+       "the hierarchy the extract stated is the one that stands")
+
+    # THE CLASSIFICATION REACHES THE PRE-COST RECORD, which is the whole point.
+    _parts = _job()
+    apply_canonical_evidence_to_parts(_parts, _extract)
+    _by = {p["part_number"]: p for p in _parts}
+    ok(_by["11350-01-101"].get("is_assembly_parent"),
+       "101 is marked an assembly parent before estimate_document runs")
+    ok(_by["11350-01"].get("is_assembly_parent") and _by["11350-01"].get("is_sub_assembly"),
+       "and so is a parent nothing had marked before — the write is what makes it true")
+    ok(any("assembly parent" in str(f) for f in (_by["11350-01"].get("review_flags") or [])),
+       "with the reason on the record, since this moves material off the line")
+    eq(_by["11350-01-101"].get("canonical_kind"), "assembly", "with its canonical kind on it")
+    eq(_by["11350-01-01"].get("canonical_kind"), "leaf",
+       "and a real fabricated leaf is untouched")
+
+    # WIRED AT BOTH BOUNDARIES, or it is a function nobody calls.
+    import inspect
+    import file_scan as F
+    _src = inspect.getsource(F)
+    _apply_at = _src.find("apply_canonical_evidence_to_parts")
+    _cost_at = _src.find('estimate_document(summary["manufacturing_writeup"]["parts"]')
+    ok(0 < _apply_at < _cost_at,
+       "the graph is applied BEFORE estimate_document — after it, it is a report")
+    ok(_src.find("refresh_canonical_route_after_reconciliation") > _cost_at,
+       "and refreshed after the late readers add rows")
+
+
+def test_one_hardware_vocabulary_serves_every_reader():
+    """A drawing leaves the code cell blank for standard hardware. Two readers minted a code
+    for those rows from private copies of the same table, and the copies ran at different
+    times — so 11350's wing nuts and PEM studs were in the workbook and the reports, and
+    absent from the canonical BOM. Two BOM authorities, and the one an estimator reads was
+    the one the hierarchy had never seen."""
+    from part_identity import synthesise_bought_in_code as _code
+
+    eq(_code("M4 WING NUT", "-"), "BI-NUT", "an uncoded fastener gets a stable code")
+    eq(_code("M4X8 PEM STUD", "-"), "BI-PEMSTUD", "and the same words always give the same one")
+    eq(_code("SELF-CLINCH NUT", "TBC"), "BI-SELFCLINCHNUT",
+       "more specific hardware wins over the generic word inside it")
+    # A REAL CODE ALWAYS WINS — the rule only speaks where the drawing printed nothing.
+    eq(_code("M4 WING NUT", "DBR60"), "DBR60", "a printed code is not replaced")
+    eq(_code("BRACKET PLATE", "-"), "",
+       "and words that name no hardware yield no code at all, rather than a wrong one")
+    eq(_code("FIXING", "STD PART"), "",
+       "a category is not a part number and does not become one")
+
+    # ONE TABLE, ONE MODULE. A private copy is how two readers come to disagree — which is
+    # the defect, not the symptom.
+    from pathlib import Path
+    _src = Path(__file__).resolve().parents[1] / "src"
+    # is_file(): one path in src/ ends in ".py" and is a DIRECTORY.
+    _holders = sorted(
+        p.name for p in _src.rglob("*.py")
+        if p.is_file() and not p.name.startswith("_")
+        and "BI-SELFCLINCHNUT" in p.read_text(encoding="utf-8", errors="ignore"))
+    eq(_holders, ["part_identity.py"],
+       "the hardware vocabulary lives in exactly one module")
+
+    # AND THE LATE READER CONSULTS IT rather than carrying its own.
+    # EVERY reader, not the one this fixture happens to name. There were THREE copies of
+    # this table in file_scan and the one-module check above only finds the ones that still
+    # spell the codes out; a reader that quietly stops consulting the shared rule spells
+    # nothing out at all. So each _clean_code is read directly.
+    import ast
+    from pathlib import Path
+    _fs = ast.parse((Path(__file__).resolve().parents[1] / "src" / "file_scan.py")
+                    .read_text(encoding="utf-8"))
+    _readers = [n for n in ast.walk(_fs)
+                if isinstance(n, ast.FunctionDef) and n.name == "_clean_code"]
+    ok(_readers, "the bought-in code readers are still called _clean_code")
+    _private = [n.lineno for n in _readers
+                if "synthesise_bought_in_code" not in ast.unparse(n)]
+    eq(_private, [],
+       "every reader that mints a hardware code consults the shared rule — a private copy "
+       "is how two of them came to run at different times and disagree")
+
+
+def test_a_late_bought_in_reaches_the_canonical_graph():
+    """The dual-path table reader adds bought-ins AFTER the route was compiled, which is how
+    11350's wing nuts and PEM studs reached the Estimate tab and the reports while the
+    canonical BOM had never heard of them. Two BOM authorities, and the one an estimator
+    reads was the one outside the graph."""
+    from route_compiler import refresh_canonical_route_after_reconciliation
+
+    _summary = {
+        "manufacturing_writeup": {"parts": [
+            {"part_number": "11350-01-01", "description": "BAR", "quantity": 1}]},
+        "llm_full_extract": {"bom": [
+            {"part_number": "11350-01-01", "description": "BAR", "qty": 1,
+             "type": "fabricated"}]},
+        "estimate_summary": {"part_estimates": [
+            {"part_number": "11350-01-01", "description": "BAR", "quantity": 1,
+             "labour_estimate": {"costs_gbp": {}}},
+            {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "quantity": 4,
+             "page_roles": ["bought_in"], "labour_estimate": {"costs_gbp": {}}}]},
+    }
+    _payload = refresh_canonical_route_after_reconciliation(_summary)
+    _nodes = {n["part_number"]: n for n in _payload["nodes"]}
+    ok("BI-PEMSTUD" in _nodes, "a late table-reader item reaches the canonical graph")
+    eq(_nodes["BI-PEMSTUD"]["kind"], "bought_in", "and keeps its make/buy class")
+    ok(_summary["estimate_summary"]["canonical_route_shadow"] is _payload,
+       "and the refreshed graph replaces the stale one on the summary")
+
+
+def test_joining_two_names_must_also_arbitrate_their_evidence():
+    """JOINING TWO NAMES IS ONLY HALF THE JOB. The old merge scored "has unit_cost_gbp" as
+    merit, so the moment 11350's right arm was correctly recognised as one part under two
+    names, the alias carrying a £76.04 AI market estimate beat the record carrying a measured
+    flat. The identity fix made the pricing worse, because the tiebreak rewarded exactly the
+    record that should have lost."""
+    import wb_populate as W
+
+    _summary = {"estimate_summary": {"canonical_route_shadow": {
+        "nodes": [{"part_number": "11350-01-02 MIR", "kind": "leaf", "qty_per_unit": 1,
+                   "description": "RIGHT ARM 200MM",
+                   "evidence": {"raw_aliases": ["11350-01-02MIR"]}}],
+        "decisions": []}}}
+    _measured = {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM 200MM",
+                 "material_estimate": {"unit_material_cost_gbp": 0.48,
+                                       "geometry_source": "dxf_flat_pattern"},
+                 "geometry_source": "dxf_flat_pattern"}
+    _ai_alias = {"part_number": "11350-01-02MIR", "description": "RIGHT ARM 200MM",
+                 "unit_cost_gbp": 76.04, "unit_total_cost_gbp": 76.04,
+                 "price_source": {"source_name": "xAI Grok LLM", "source_class": "ai_estimate",
+                                 "applied": True, "affects_total": True},
+                 # Both records carry geometry_source, with different values — otherwise
+                 # gap-fill supplies the winner's field either way and a merge that simply
+                 # keeps whatever it saw first passes.
+                 "geometry_source": "inference", "source": "inference"}
+
+    _out = W.canonicalise_part_estimates_for_workbook(_summary, [_measured, dict(_ai_alias)])
+    eq(len(_out), 1, "the two spellings still collapse to one canonical part")
+    eq(W._bom_line_price(_out[0]), 0.48,
+       "and the measured material wins — the AI whole-part figure is not merged in")
+
+    # ORDER MUST NOT DECIDE IT. The same two records the other way round give the same answer
+    # — and the check is on a field the price guard does NOT also protect, or a merge that
+    # simply keeps whatever it saw first would pass on the strength of a downstream rule.
+    eq(_out[0].get("geometry_source"), "dxf_flat_pattern",
+       "the measured record is the one that survives the merge")
+    _flipped = W.canonicalise_part_estimates_for_workbook(
+        _summary, [dict(_ai_alias), dict(_measured)])
+    eq(_flipped[0].get("geometry_source"), "dxf_flat_pattern",
+       "whichever alias the engine happened to emit first")
+    eq(W._bom_line_price(_flipped[0]), 0.48, "and the price follows the evidence, not the order")
+
+    # THE GENERATED FIGURE DOES NOT COME ALONG FOR THE RIDE. Gap-filling is how the loser
+    # contributes, and a price is exactly what a fabricated part must not be gap-filled with:
+    # left on the record it reaches the whole-part chain, the reports and the invariants.
+    for _f in ("unit_cost_gbp", "unit_total_cost_gbp", "price_source"):
+        eq(_out[0].get(_f), None,
+           f"the AI alias's {_f} is not merged onto a fabricated part")
+
+    # AND WHEN THE GUESS IS WRITTEN WHERE A MATERIAL PRICE LIVES, so that "does it have a
+    # price" can no longer separate them, the SOURCE still does. This is the realistic shape:
+    # the market estimate lands in material_estimate like any other rate, and only its
+    # provenance says what it is.
+    _ai_material = {
+        "part_number": "11350-01-02MIR", "description": "RIGHT ARM 200MM",
+        "geometry_source": "inference", "source": "inference",
+        "material_estimate": {
+            "unit_material_cost_gbp": 76.04,
+            "price_source": {"source_name": "xAI Grok LLM", "source_class": "ai_estimate",
+                             "applied": True, "affects_total": True}}}
+    _both_priced = W.canonicalise_part_estimates_for_workbook(
+        _summary, [dict(_ai_material), dict(_measured)])
+    eq(W._bom_line_price(_both_priced[0]), 0.48,
+       "the measured rate wins on provenance when both records carry a material price")
+    eq(_both_priced[0].get("geometry_source"), "dxf_flat_pattern",
+       "and the measured record is the one that survived")
+
+    # AND WHEN THE EVIDENCE IS EQUAL, PROVENANCE IS WHAT IS LEFT. Both aliases measured,
+    # both carrying a material rate — the only thing separating them is that one figure was
+    # generated and the other looked up. Ranking evidence alone cannot see that.
+    _measured_ai_price = {
+        "part_number": "11350-01-02MIR", "description": "RIGHT ARM 200MM",
+        "geometry_source": "dxf_flat_pattern",
+        "material_estimate": {
+            "unit_material_cost_gbp": 76.04, "geometry_source": "dxf_flat_pattern",
+            "price_source": {"source_name": "xAI Grok LLM", "source_class": "ai_estimate",
+                             "applied": True, "affects_total": True}}}
+    _tie = W.canonicalise_part_estimates_for_workbook(
+        _summary, [dict(_measured_ai_price), dict(_measured)])
+    eq(W._bom_line_price(_tie[0]), 0.48,
+       "on equal evidence the looked-up figure beats the generated one")
+
+    # A FABRICATED LEAF WITH ONLY A GENERATED PRICE IS VISIBLY UNPRICED, not quietly costed.
+    _only_ai = W.canonicalise_part_estimates_for_workbook(_summary, [dict(_ai_alias)])[0]
+    eq(W._bom_line_price(_only_ai), None,
+       "a whole-part guess is not this part's material, and a blank says so")
+
+    # AND A BOUGHT-IN IS UNAFFECTED — its price IS the thing being merged, and stripping it
+    # would empty the price column for everything the job actually buys.
+    _bi_summary = {"estimate_summary": {"canonical_route_shadow": {
+        "nodes": [{"part_number": "DBR60", "kind": "bought_in", "qty_per_unit": 1,
+                   "evidence": {"raw_aliases": ["DBR-60"]}}], "decisions": []}}}
+    _bi = W.canonicalise_part_estimates_for_workbook(_bi_summary, [
+        {"part_number": "DBR60", "description": "TICKET STRIP"},
+        {"part_number": "DBR-60", "unit_cost_gbp": 4.20,
+         "material_estimate": {"price_source": {"source_name": "bought_in price book"}}}])
+    eq(W._bom_line_price(_bi[0]), 4.20, "a catalogue price still prices a bought-in")
+
+    # AND CHOOSES BETWEEN TWO PRICES BY SOURCE, not by order. Stripping the make/buy branch
+    # of its scoring would let a generated figure price the thing we actually buy.
+    _bi2 = W.canonicalise_part_estimates_for_workbook(_bi_summary, [
+        {"part_number": "DBR-60", "unit_cost_gbp": 99.0, "source": "inference",
+         "price_source": {"source_name": "xAI Grok LLM", "source_class": "ai_estimate",
+                                 "applied": True, "affects_total": True}},
+        {"part_number": "DBR60", "unit_cost_gbp": 4.20,
+         "material_estimate": {"price_source": {"source_name": "bought_in price book"}}}])
+    eq(W._bom_line_price(_bi2[0]), 4.20,
+       "the catalogue figure beats the generated one on a bought-in too")
+
+    # THE LOSER GAP-FILLS. Identity reconciliation must not throw evidence away.
+    _merged = W.merge_canonical_estimate_records(
+        dict(_measured), {"supplier": "SDI", "description": "RIGHT ARM 200MM",
+                          "review_flags": ["seen"]}, "leaf")
+    eq(_merged.get("supplier"), "SDI", "a field only the loser had survives the merge")
+    eq(W._bom_line_price(_merged), 0.48, "without disturbing the winner's price")
+
+    # AN ASSEMBLY HAS NO MATERIAL LINE OF ITS OWN — its material is its children's, and M92
+    # already sums them. This is the door 101's phantom material came through.
+    eq(W._bom_line_price({"part_number": "11350-01-101", "_canonical_kind": "assembly",
+                          "unit_cost_gbp": 12.0}), None,
+       "an assembly parent contributes no BOM material, whatever is on its record")
+
+
 def test_the_revision_that_was_read_reaches_the_sheet():
     """Job 11350's run printed "[revision] 11350-01 revision -> B" and the sheet's Rev box
     was blank. An estimator cannot tell which issue of the drawing was priced, and a sheet
@@ -10174,16 +10528,20 @@ def test_an_ai_market_estimate_is_an_estimator_input_not_a_price():
     _xref = W.bom_line_pricing(
         {"part_number": "11350-01-01", "_bom_cross_reference": True,
          "description": "TICKET STRIP BAR — costed in Sheet Steel below"}, False, None)
-    ok(_xref["costed_elsewhere"],
+    eq(_xref["status"], "costed_in_material_block",
        "a cross-reference row is costed elsewhere, not unpriced")
     eq(_xref["note"], None, "and asks the estimator for nothing")
+    # AN ASSEMBLY HAS NOTHING TO PRICE EITHER — its material is its children's.
+    eq(W.bom_line_pricing({"part_number": "11350-01-101", "_canonical_kind": "assembly"},
+                          False, None)["status"], "not_applicable",
+       "an assembly is not a missing price")
 
     _real = W.bom_line_pricing({"part_number": "DBR60"}, False, 4.20)
     eq(_real["withheld_gbp"], None, "a catalogue price is not touched")
     eq(_real["note"], None, "and produces no checklist line")
-    eq(_real["costed_elsewhere"], False,
+    eq(_real["status"], "unpriced",
        "and an ordinary line is NOT excused from the checklist — that exemption belongs to "
-       "the cross-reference rows alone, or every real gap disappears from the list")
+       "the cross-reference rows and assemblies alone, or every real gap disappears")
     ok("_price_explicitly_withheld" not in _real["part"],
        "nor is the record it was given mutated")
 

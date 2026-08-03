@@ -364,8 +364,20 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
     if _pe.get("_price_explicitly_withheld"):
         return None
     _me = _pe.get("material_estimate") or {}
-    _p = _safe(_pe.get("unit_cost_gbp") or _pe.get("unit_material_cost_gbp")
-               or _me.get("unit_material_cost_gbp"))
+    # WHAT THE PART IS DECIDES WHICH FIELDS CAN PRICE IT.
+    #
+    # An assembly has no material line of its own — its material is its children's, and
+    # M92 already sums them. A fabricated LEAF is priced from its material estimate or from
+    # the Sheet Steel block, never from a whole-part figure: that chain is how one alias's
+    # AI market estimate became the right arm's "material" at 97% of the job.
+    _canonical_kind = str(_pe.get("_canonical_kind") or "").strip().lower()
+    if _canonical_kind == "assembly":
+        return None
+    if _canonical_kind == "leaf":
+        _p = _safe(_me.get("unit_material_cost_gbp") or _me.get("cost_per_part_gbp"))
+    else:
+        _p = _safe(_pe.get("unit_cost_gbp") or _pe.get("unit_material_cost_gbp")
+                   or _me.get("unit_material_cost_gbp"))
     if _p is None:
         # THE BOM PRICE COLUMN IS A MATERIAL COLUMN.
         #
@@ -387,7 +399,7 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
         _q = int(_safe(_pe.get("quantity"), 1) or 1)
         if _ext_mat is not None and _q > 0:
             _p = round(_ext_mat / _q, 4)
-        else:
+        elif _canonical_kind != "leaf":
             # "HAS NO LABOUR" IS NOT THE SAME CONDITION AS "IS A BOUGHT-IN".
             #
             # The first version kept the whole-total fallback only for a part with no labour
@@ -440,20 +452,21 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
     """
     from estimator_inputs import (indicative_price_to_withhold as _withhold,
                                   indicative_price_note as _note_for,
-                                  is_costed_elsewhere as _elsewhere)
-    # A DELIBERATE ZERO IS NOT A GAP. The cross-reference rows exist so an estimator can see
-    # the fabricated parts in the bill of materials; they are priced at zero precisely so
-    # the material total is not doubled. Two of job 11350's six outstanding inputs asked for
-    # rates on parts the Sheet Steel block had already costed from measured blanks.
-    _elsewhere_flag = _elsewhere(part)
-    guess = None if _elsewhere_flag else _withhold(part, is_indicative, price_gbp)
+                                  canonical_pricing_status, UNPRICED)
+    # A DELIBERATE BLANK IS NOT A GAP. A cross-reference row is costed in the Sheet Steel
+    # block; an assembly has no material line of its own. Two of job 11350's six outstanding
+    # inputs asked for rates on parts the sheet had already costed from measured blanks.
+    # Asked with NO price, so the answer is the row's CATEGORY rather than a verdict on a
+    # figure: a cross-reference, an assembly, or an ordinary row whose price stands or does
+    # not. Conflating the two says an AI-priced line is "priced" and needs nothing.
+    _status = canonical_pricing_status(part, None)
+    guess = _withhold(part, is_indicative, price_gbp) if _status == UNPRICED else None
     if not guess:
-        return {"part": part, "withheld_gbp": None, "note": None,
-                "costed_elsewhere": _elsewhere_flag}
+        return {"part": part, "withheld_gbp": None, "note": None, "status": _status}
     part = dict(part)
     part["_price_explicitly_withheld"] = True
     part["_ai_indicative_gbp"] = guess
-    return {"part": part, "withheld_gbp": guess, "costed_elsewhere": False,
+    return {"part": part, "withheld_gbp": guess, "status": _status,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
@@ -897,6 +910,87 @@ def canonical_part_kinds(summary: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
+_MERGE_PRICE_FIELDS = frozenset({
+    "unit_cost_gbp", "unit_material_cost_gbp", "unit_total_cost_gbp",
+    "extended_material_cost_gbp", "extended_total_cost_gbp", "price_source",
+    "price_provenance", "system_cost",
+})
+
+
+def merge_canonical_estimate_records(existing: Dict[str, Any], incoming: Dict[str, Any],
+                                     canonical_kind: str) -> Dict[str, Any]:
+    """Merge two names for one part by EVIDENCE, never by whichever carries more money.
+
+    JOINING TWO NAMES IS ONLY HALF THE JOB; THE OTHER HALF IS ARBITRATING WHAT IS ATTACHED
+    TO THEM. The old score counted "has unit_cost_gbp" as merit, so the moment 11350's right
+    arm was correctly recognised as one part under two names, the alias carrying a £76.04 AI
+    market estimate beat the record carrying a measured flat. The identity fix made the
+    pricing worse, because the tiebreak rewarded exactly the record that should have lost.
+
+    So the make/buy classification decides first: a canonical LEAF or ASSEMBLY is something
+    we fabricate, and a generated whole-part price is not evidence about it at all. Then
+    source rank, which is the codebase's existing answer to "which of these two is better
+    known". Only then does the presence of a price matter, and only for a bought-in, where a
+    price genuinely is the thing being merged.
+
+    The loser is not discarded — it gap-fills every field the winner lacks, so a measurement
+    on one alias and a supplier on the other both survive. What it may NOT do is bring its
+    prices to a fabricated part: that is the door the £76.04 came through.
+    """
+    from source_precedence import rank as _source_rank
+
+    def _strength(record: Dict[str, Any]) -> int:
+        material = record.get("material_estimate") or {}
+        material = material if isinstance(material, dict) else {}
+        _price_src = material.get("price_source")
+        return max((_source_rank(s) for s in (
+            record.get("geometry_source"), record.get("material_source"),
+            record.get("thickness_source"), record.get("source"),
+            material.get("geometry_source"), material.get("material_source"),
+            (_price_src or {}).get("source_class") if isinstance(_price_src, dict) else None,
+        )), default=0)
+
+    def _score(record: Dict[str, Any]):
+        _origin, is_ai = _price_origin(record)
+        if canonical_kind in {"leaf", "assembly"}:
+            return (0 if is_ai else 1, _strength(record), int(bool(record.get("material_estimate"))))
+        return (int(_bom_line_price(record) is not None), 0 if is_ai else 1, _strength(record))
+
+    winner, loser = (existing, incoming)
+    if _score(incoming) > _score(existing):
+        winner, loser = incoming, existing
+    merged = dict(winner)
+    # NOT "unless it looks like an AI price" — unless it is a WHOLE-PART PRICE AT ALL.
+    # Gating on AI-ness was the first version, and it leaked: _price_origin reads the
+    # material estimate's price_source, so an alias carrying the same figure at the top
+    # level was not recognised and gap-filled £76.04 straight onto the measured record.
+    # For something we FABRICATE the material comes from its material estimate or from the
+    # Sheet Steel block; a whole-part figure from the other spelling is never evidence about
+    # it, whoever produced it.
+    _fabricated = canonical_kind in {"leaf", "assembly"}
+    for key, value in loser.items():
+        if value in (None, "", [], {}):
+            continue
+        if _fabricated and key in _MERGE_PRICE_FIELDS:
+            continue
+        if key == "material_estimate" and isinstance(value, dict):
+            if _fabricated and _price_origin(loser)[1]:
+                continue
+            target = dict(merged.get(key) or {})
+            for nested_key, nested_value in value.items():
+                if (nested_value not in (None, "", [], {})
+                        and target.get(nested_key) in (None, "", [], {})):
+                    target[nested_key] = nested_value
+            merged[key] = target
+        elif key in {"review_flags", "reliability_flags"}:
+            merged[key] = list(dict.fromkeys(list(merged.get(key) or []) + list(value or [])))
+        elif merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+    if canonical_kind:
+        merged["_canonical_kind"] = canonical_kind
+    return merged
+
+
 def canonicalise_part_estimates_for_workbook(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -991,6 +1085,9 @@ def canonicalise_part_estimates_for_workbook(
             continue
         item = dict(estimate)
         node = nodes.get(identity) or {}
+        _canonical_kind = str(node.get("kind") or "").strip().lower()
+        if _canonical_kind:
+            item["_canonical_kind"] = _canonical_kind
         if identity != source_id:
             item["_canonical_source_part_number"] = source_id
             item["part_number"] = identity
@@ -1002,15 +1099,8 @@ def canonicalise_part_estimates_for_workbook(
             normalised[identity] = item
             order.append(identity)
         else:
-            # Prefer the record that actually carries a price/material estimate; aliases
-            # exist to reconcile identity, never to discard the costed evidence.
-            old = normalised[identity]
-            old_score = sum(bool(old.get(key)) for key in (
-                "unit_cost_gbp", "unit_total_cost_gbp", "material_estimate"))
-            new_score = sum(bool(item.get(key)) for key in (
-                "unit_cost_gbp", "unit_total_cost_gbp", "material_estimate"))
-            if new_score > old_score:
-                normalised[identity] = item
+            normalised[identity] = merge_canonical_estimate_records(
+                normalised[identity], item, _canonical_kind)
 
     if _synth_merged:
         print(f"   [wb_populate] canonical identity absorbed {len(_synth_merged)} "
@@ -2188,6 +2278,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 "quantity": int(_safe(_xp.get("quantity"), 1) or 1),
                 "unit_cost_gbp": 0.0,
                 "_bom_cross_reference": True,
+                "_canonical_kind": _xp.get("_canonical_kind") or "leaf",
             })
     if _xref_rows:
         bom_parts = _xref_rows + list(bom_parts)
@@ -2341,7 +2432,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=b["col_price"],    value=price if price is not None else None)
         ws.cell(row=row, column=b["col_qty"],      value=qty)
         ws.cell(row=row, column=b["col_scrap"],    value=0.04)  # 4% default; WB applies
-        if price is None and not _line["costed_elsewhere"]:
+        # A line the material block covers, or an assembly, is not a gap somebody fills.
+        from estimator_inputs import UNPRICED as _GAP
+        if price is None and _line["status"] == _GAP:
             _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
             # A BLANK THAT LOOKS LIKE A ZERO IS WORSE THAN AN ERROR.
             #

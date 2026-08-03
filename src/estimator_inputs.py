@@ -33,7 +33,7 @@ __all__ = [
     "section_summary",
     "material_input_note",
     "input_note_for_line",
-    "is_costed_elsewhere",
+    "canonical_pricing_status",
     "indicative_price_to_withhold",
     "indicative_price_note",
     "banner_text",
@@ -43,6 +43,13 @@ MATERIAL_UNPRICED = "material_unpriced"
 PLACEHOLDER_UNPRICED = "placeholder_unpriced"
 ASSUMPTION_UNCONFIRMED = "assumption_unconfirmed"
 MARGIN_UNSET = "margin_unset"
+
+# The four things a price column can mean. "Blank" is three of them, and telling them apart
+# is the whole difference between a checklist somebody works and one they stop reading.
+PRICED = "priced"
+COSTED_IN_MATERIAL_BLOCK = "costed_in_material_block"
+NOT_APPLICABLE = "not_applicable"
+UNPRICED = "unpriced"
 
 
 def _num(value: Any) -> Optional[float]:
@@ -132,8 +139,8 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
     return {"kind": MATERIAL_UNPRICED, "note": material_input_note(part)}
 
 
-def is_costed_elsewhere(part: Mapping[str, Any]) -> bool:
-    """True when this line's £0 is DELIBERATE because another block carries the cost.
+def canonical_pricing_status(part: Mapping[str, Any], price: Any) -> str:
+    """What a BOM row's price column actually MEANS, once the canonical kind is known.
 
     A CHECKLIST IS ONLY WORKED IF EVERY LINE ON IT IS REAL. Job 11350 listed six outstanding
     inputs and two of them were "enter a unit rate" for 11350-01-01 and 11350-01-02 — parts
@@ -142,10 +149,23 @@ def is_costed_elsewhere(part: Mapping[str, Any]) -> bool:
     bill of materials; they are priced at zero precisely so the material total is not
     doubled. Asking someone to price them is asking for the double-count back.
 
-    Two lines of noise in six is enough to make a person stop reading the list, and the
-    lines that were real — packaging, delivery, the fixings — are the ones that get lost.
+    Two lines of noise in six is enough to make a person stop reading the list, and the ones
+    that were real — packaging, delivery, the fixings — are exactly what gets lost.
+
+    An ASSEMBLY has no material line of its own either: its material is its children's. It
+    is not unpriced, it has nothing to price.
+
+    Everything else with no positive figure IS a real outstanding input, and the narrowness
+    matters as much as the rule: excuse one row too many and the list stops being a list.
     """
-    return bool(isinstance(part, Mapping) and part.get("_bom_cross_reference"))
+    if not isinstance(part, Mapping):
+        return UNPRICED
+    if part.get("_bom_cross_reference"):
+        return COSTED_IN_MATERIAL_BLOCK
+    if str(part.get("_canonical_kind") or "").strip().lower() == "assembly":
+        return NOT_APPLICABLE
+    numeric = _num(price)
+    return PRICED if numeric is not None and numeric > 0 else UNPRICED
 
 
 def indicative_price_to_withhold(part: Mapping[str, Any], is_indicative: bool,

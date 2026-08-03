@@ -250,13 +250,32 @@ def _raw_parts(parts: Sequence[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any
 
 
 def _extract_part_records(llm_extract: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Canonical BOM identities and classifications read by the full-job extract."""
+    """Canonical BOM identities and classifications read by the full-job extract.
+
+    A DRAWING LEAVES THE CODE CELL BLANK FOR STANDARD HARDWARE, and a blank is not an
+    identity — so those rows were dropped here and minted much later, in the dual-path
+    reader, AFTER the graph was compiled. That is why 11350's wing nuts and PEM studs sat in
+    the workbook and in the reports but not in the canonical BOM: two BOM authorities, and
+    the one the estimator reads was the one the hierarchy had never seen.
+
+    The identity is derived from the DESCRIPTION, by the same shared rule the later reader
+    uses, so both derive the same code and the hardware enters the graph at the front.
+    """
+    from part_identity import is_placeholder_identity, synthesise_bought_in_code
+
     result: Dict[str, Dict[str, Any]] = {}
     for pool_name in ("bom", "parts"):
         for item in llm_extract.get(pool_name) or []:
             if not isinstance(item, Mapping):
                 continue
-            identity = clean_part_number(item.get("part_number"))
+            raw_identity = item.get("part_number")
+            identity = clean_part_number(raw_identity)
+            # ONLY FOR A ROW THE EXTRACT ITSELF CALLS BOUGHT-IN. Minting a code from the
+            # words of an uncoded FABRICATED row would invent a part nobody can make.
+            _is_placeholder = is_placeholder_identity(raw_identity)
+            if _is_placeholder and _bought_in_record(item):
+                identity = clean_part_number(
+                    synthesise_bought_in_code(item.get("description"), raw_identity))
             if not identity:
                 continue
             record = result.setdefault(identity, {})
@@ -267,6 +286,11 @@ def _extract_part_records(llm_extract: Mapping[str, Any]) -> Dict[str, Dict[str,
                 record["quantity"] = item.get("qty")
             if item.get("is_bought_in"):
                 record["is_bought_in"] = True
+            if _is_placeholder:
+                # Kept so the estimator can see the code was derived, not printed.
+                record["is_bought_in"] = True
+                record["identity_source"] = "description_bought_in"
+                record["raw_placeholder_identity"] = str(raw_identity or "")
     return result
 
 
@@ -390,9 +414,36 @@ def build_part_graph(
     # The drawing's BOM is the naming authority; the files carry the same parts under the
     # modelled code. Applied after the BI-* reconciliation and only where the target already
     # exists, so it can merge a duplicate but never invent an identity.
+    # THE HIERARCHY'S OWN CODES ARE IDENTITIES TOO. Only BOM and part codes were offered
+    # here, so an assembly named by the file's spelling ("11350-01M") was never aliased and
+    # became a SECOND parent beside the drawing's — one hierarchy split in two, each holding
+    # half the job.
+    _hierarchy_codes: Set[str] = set()
+    for _asm in (llm_extract.get("assemblies") or []):
+        if not isinstance(_asm, Mapping):
+            continue
+        _hierarchy_codes.add(clean_part_number(_asm.get("part_number")))
+        for _e in (_asm.get("children") or []):
+            if isinstance(_e, Mapping):
+                _hierarchy_codes.add(clean_part_number(_e.get("part_number")))
+    _hierarchy_codes.discard("")
     for _src, _dst in _drawing_code_aliases(
-            set(raw_original) | set(extracted)).items():
+            set(raw_original) | set(extracted) | _hierarchy_codes).items():
         aliases.setdefault(_src, _dst)
+    # THE SAME COLLAPSE, ON THE OTHER SIDE. The alias map was applied to the part records
+    # and not to the extract's own BOM rows, so a duplicate spelling that appears ONLY in
+    # the extract survived as a node of its own — a leaf with no parent and no geometry,
+    # which is the seven-nodes-from-five-lines symptom seen from the other direction.
+    _extracted: Dict[str, Dict[str, Any]] = {}
+    for identity, record in extracted.items():
+        canonical_identity = aliases.get(identity, identity)
+        _target = _extracted.setdefault(canonical_identity, {})
+        for _k, _v in record.items():
+            if _v not in (None, "", [], {}) and _target.get(_k) in (None, "", [], {}):
+                _target[_k] = _v
+        _target["part_number"] = canonical_identity
+    extracted = _extracted
+
     raw: Dict[str, Mapping[str, Any]] = {}
     for identity, record in raw_original.items():
         canonical_identity = aliases.get(identity, identity)
@@ -431,10 +482,86 @@ def build_part_graph(
     children: Dict[str, Dict[str, float]] = {}
     parents: Dict[str, Set[str]] = {}
 
+    def _placeholder_edge_target(edge: Mapping[str, Any]) -> str:
+        """An uncoded assembly child, resolved only when exactly one row can be meant.
+
+        The GA lists "- x4" under the top assembly and the BOM table names it "M4 WING NUT".
+        The description resolves it by the shared rule; where the edge carries no usable
+        description, a UNIQUE bought-in of the same quantity is accepted and nothing else.
+        Two candidates means no edge — a wrong parent is worse than a missing one.
+        """
+        raw_code = edge.get("part_number")
+        from part_identity import is_placeholder_identity, synthesise_bought_in_code
+        if not is_placeholder_identity(raw_code):
+            return ""
+        direct = clean_part_number(
+            synthesise_bought_in_code(edge.get("description"), raw_code))
+        if direct and direct in extracted:
+            return direct
+        edge_qty = number(edge.get("qty"), 1.0) or 1.0
+        matches = [
+            identity for identity, record in extracted.items()
+            if _bought_in_record(record)
+            and identity not in parents
+            and abs((number(record.get("quantity") or record.get("qty"), 1.0) or 1.0)
+                    - edge_qty) < 1e-9
+        ]
+        return matches[0] if len(matches) == 1 else ""
+
+    # ── HIERARCHY THE DRAWING STATED IN WORDS ────────────────────────────────────────
+    # "TICKET STRIP BAR WITH PEM STUDS" is a sub-assembly whose edge the extract never
+    # emitted. drawing_job_merge already decides that, from evidence the extract cannot see
+    # (both halves being lines on this BOM), and writes the children onto the part record.
+    # This CONSUMES that decision rather than making it a second time: one rule, one place,
+    # and a compiler that cannot drift from the merge.
+    #
+    # BEFORE the extract's own edges, and that ordering is load-bearing. A component this
+    # sub-assembly owns is then already parented, so it cannot also be claimed as a loose
+    # top-level edge — which is what leaves the GA's uncoded "- x4" with exactly one
+    # candidate instead of two.
+    _stated_parents = {
+        aliases.get(clean_part_number(_a.get("part_number")),
+                    clean_part_number(_a.get("part_number")))
+        for _a in (llm_extract.get("assemblies") or [])
+        if isinstance(_a, Mapping) and (_a.get("children") or [])
+    }
+    for part in parts or []:
+        if not isinstance(part, Mapping):
+            continue
+        _kids = part.get("assembly_children")
+        if not isinstance(_kids, list) or not _kids:
+            continue
+        _pid = clean_part_number(part.get("part_number"))
+        _pid = aliases.get(_pid, _pid)
+        # An extract that STATES this parent's children owns it; the description rule only
+        # fills a hierarchy nobody expressed.
+        if not _pid or _pid in _stated_parents:
+            continue
+        _edges: Dict[str, float] = {}
+        for _kid in _kids:
+            _cid = clean_part_number(_kid)
+            _cid = aliases.get(_cid, _cid)
+            if not _cid or _cid == _pid:
+                continue
+            _edges[_cid] = number((extracted.get(_cid) or raw.get(_cid) or {}).get("quantity"),
+                                  1.0) or 1.0
+        if not _edges:
+            continue
+        children[_pid] = _edges
+        for _cid in _edges:
+            parents.setdefault(_cid, set()).add(_pid)
+        records.setdefault(_pid, {})["is_sub_assembly"] = True
+        records[_pid]["hierarchy_source"] = "drawing_description_rule"
+
     for assembly in llm_extract.get("assemblies") or []:
         if not isinstance(assembly, Mapping):
             continue
+        # ALIASED, LIKE EVERY OTHER IDENTITY. The alias map was built and then not applied
+        # here, so a hierarchy edge naming the FILE's code ("11350-01-01M") pointed at a node
+        # the rest of the graph knows by the DRAWING's code — a parent for one spelling and
+        # an orphan for the other.
         parent_id = clean_part_number(assembly.get("part_number"))
+        parent_id = aliases.get(parent_id, parent_id)
         if not parent_id:
             continue
         children.setdefault(parent_id, {})
@@ -442,6 +569,9 @@ def build_part_graph(
             if not isinstance(edge, Mapping):
                 continue
             child_id = clean_part_number(edge.get("part_number"))
+            child_id = aliases.get(child_id, child_id)
+            if not child_id:
+                child_id = _placeholder_edge_target(edge)
             if not child_id:
                 continue
             qty = number(edge.get("qty"), 1.0) or 1.0
@@ -450,6 +580,7 @@ def build_part_graph(
 
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
+    top_id = aliases.get(top_id, top_id)
     if not top_id:
         roots = sorted(set(children) - set(parents))
         if len(roots) == 1:
@@ -546,6 +677,87 @@ def build_part_graph(
         "quantities": quantities,
         "top_assembly": top_id,
     }
+
+
+def apply_canonical_evidence_to_parts(
+    parts: Sequence[Dict[str, Any]],
+    llm_extract: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Make the canonical graph authoritative BEFORE costing, not after it.
+
+    THE COMPILER WAS RIGHT AND TOO LATE. It ran after estimate_part, so on 11350 it could
+    state that 11350-01-101 is an assembly while the workbook had already charged it as a
+    2.5mm fabricated leaf — its own laser, its own fold, its own material, on top of the bar
+    it is made from. A graph that only describes what pricing already did is a report, not
+    an authority.
+
+    Same for make/buy: a row the graph calls bought_in but the estimator classified from
+    geometry takes a fabrication route it should never have had.
+
+    So the classification is written onto the pre-cost records, where it still changes the
+    answer. Deliberately NARROW — kind and hierarchy only. Geometry is not touched here:
+    the mirrored-flat rule lives in drawing_job_merge with the DXF binding it depends on,
+    and a second copy in this module is how the two would come to disagree.
+
+    Returns the compiled graph so the caller can record what it found.
+    """
+    graph = build_part_graph(parts, llm_extract)
+    nodes = {node.part_number: node for node in graph["nodes"]}
+    aliases = graph.get("aliases") or {}
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        source_id = clean_part_number(part.get("part_number") or part.get("item_number"))
+        identity = aliases.get(source_id, source_id)
+        node = nodes.get(identity) if identity else None
+        if node is None:
+            continue
+        part["canonical_part_number"] = identity
+        part["canonical_kind"] = node.kind
+        if node.kind == "assembly":
+            part["is_sub_assembly"] = True
+            part["is_assembly_parent"] = True
+            _flags = part.setdefault("review_flags", [])
+            _msg = ("canonical hierarchy classifies this record as an assembly parent; its "
+                    "material and leaf-only fabrication belong to its children")
+            if _msg not in _flags:
+                _flags.append(_msg)
+        elif node.kind == "bought_in":
+            roles = list(part.get("page_roles") or [])
+            if "bought_in" not in {str(role).strip().lower() for role in roles}:
+                roles.append("bought_in")
+            part["page_roles"] = roles
+    return graph
+
+
+def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Recompile once the late readers have finished adding rows.
+
+    THE OTHER TIMING BOUNDARY. The dual-path table reader adds bought-ins AFTER
+    estimate_document has compiled the route — which is how 11350's wing nuts and PEM studs
+    reached the Estimate tab and the reports while the canonical BOM had never heard of
+    them. Two BOM authorities, and the one an estimator reads was the one outside the graph.
+
+    Recompiling from the FINAL population closes it: the workbook can no longer show a line
+    the hierarchy does not know exists.
+    """
+    estimate_summary = summary.get("estimate_summary") or {}
+    final_estimates = estimate_summary.get("part_estimates") or []
+    raw_parts = list((summary.get("manufacturing_writeup") or {}).get("parts") or [])
+    raw_ids = {
+        clean_part_number(item.get("part_number") or item.get("item_number"))
+        for item in raw_parts if isinstance(item, Mapping)
+    }
+    population = raw_parts + [
+        item for item in final_estimates
+        if isinstance(item, Mapping)
+        and clean_part_number(item.get("part_number") or item.get("item_number")) not in raw_ids
+    ]
+    compiled = compile_job_route(population, summary.get("llm_full_extract") or {})
+    payload = project_priced_route(compiled, final_estimates)
+    estimate_summary["canonical_route_shadow"] = payload
+    summary["estimate_summary"] = estimate_summary
+    return payload
 
 
 def _ancestor_distances(identity: str, parents: Mapping[str, Set[str]]) -> Dict[str, int]:
@@ -1586,4 +1798,6 @@ __all__ = [
     "PartNode", "OperationClaim", "OperationDecision",
     "build_part_graph", "make_claim", "arbitrate_event",
     "compile_job_route", "project_priced_route",
+    "apply_canonical_evidence_to_parts",
+    "refresh_canonical_route_after_reconciliation",
 ]

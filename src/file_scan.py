@@ -144,27 +144,11 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         return str(_p.get("part_number") or "").strip().upper()
 
     def _clean_code(_desc, _fallback):
-        _dU = (_desc or "").upper()
-        _fb = (_fallback or "").upper().strip()
-        _VAGUE = ("STD PART", "FIXING", "FIXINGTBC", "TBC", "STDPART", "")
-        if _fb not in _VAGUE and _re_recon.search(r"\d", _fb):
-            return _fallback
-        _MAP = [
-            (r"SELF[\s-]?CLINCH.*NUT|CLINCH.*NUT", "BI-SELFCLINCHNUT"),
-            (r"KNURLED.*KNOB", "BI-KNURLEDKNOB"),
-            (r"KNURLED.*NUT", "BI-KNURLEDNUT"),
-            (r"THREADED.*PEM.*STUD|PEM.*STUD", "BI-PEMSTUD"),
-            (r"KEYHOLE.*PEM", "BI-KEYHOLEPEM"),
-            (r"MUSHROOM.*THUMB|THUMB.*SCREW", "BI-THUMBSCREW"),
-            (r"BUTTON.*HEAD.*SCREW", "BI-BUTTONSCREW"),
-            (r"DOME.*RIVET|POP.*RIVET|RIVET", "BI-RIVET"),
-            (r"NUT", "BI-NUT"), (r"SCREW", "BI-SCREW"),
-            (r"WASHER", "BI-WASHER"), (r"BOLT", "BI-BOLT"),
-        ]
-        for _pat, _code in _MAP:
-            if _re_recon.search(_pat, _dU):
-                return _code
-        return _fallback or "BI-FIXING"
+        # ONE MAPPING, NOT A COPY PER READER. This table also has to run before the canonical
+        # graph is built — that is how the wing nuts and PEM studs came to be in the workbook
+        # and absent from the hierarchy — so it lives in part_identity and both paths call it.
+        from part_identity import synthesise_bought_in_code
+        return synthesise_bought_in_code(_desc, _fallback) or _fallback or "BI-FIXING"
 
     _added = _updated = 0
     for _r in rows:
@@ -1488,27 +1472,12 @@ def _finalize_scan_summary(
                         return str(_p.get("part_number") or "").strip().upper()
 
                     def _clean_code(_desc, _fallback):
-                        _dU = (_desc or "").upper()
-                        _fb = (_fallback or "").upper().strip()
-                        _VAGUE = ("STD PART", "FIXING", "FIXINGTBC", "TBC", "STDPART", "")
-                        if _fb not in _VAGUE and _re_recon.search(r"\d", _fb):
-                            return _fallback
-                        _MAP = [
-                            (r"SELF[\s-]?CLINCH.*NUT|CLINCH.*NUT", "BI-SELFCLINCHNUT"),
-                            (r"KNURLED.*KNOB", "BI-KNURLEDKNOB"),
-                            (r"KNURLED.*NUT", "BI-KNURLEDNUT"),
-                            (r"THREADED.*PEM.*STUD|PEM.*STUD", "BI-PEMSTUD"),
-                            (r"KEYHOLE.*PEM", "BI-KEYHOLEPEM"),
-                            (r"MUSHROOM.*THUMB|THUMB.*SCREW", "BI-THUMBSCREW"),
-                            (r"BUTTON.*HEAD.*SCREW", "BI-BUTTONSCREW"),
-                            (r"DOME.*RIVET|POP.*RIVET|RIVET", "BI-RIVET"),
-                            (r"NUT", "BI-NUT"), (r"SCREW", "BI-SCREW"),
-                            (r"WASHER", "BI-WASHER"), (r"BOLT", "BI-BOLT"),
-                        ]
-                        for _pat, _code in _MAP:
-                            if _re_recon.search(_pat, _dU):
-                                return _code
-                        return _fallback or "BI-FIXING"
+                        # THE THIRD COPY OF THIS TABLE, and the reason the rule is now in one
+                        # module: three readers minting hardware codes from three private
+                        # copies, at three different points in the run.
+                        from part_identity import synthesise_bought_in_code
+                        return (synthesise_bought_in_code(_desc, _fallback)
+                                or _fallback or "BI-FIXING")
 
                     _added = _updated = 0
                     for _r in _dp["rows"]:
@@ -2274,6 +2243,29 @@ def _finalize_scan_summary(
     except Exception as _bte:
         print(f"   [bom_tree] skipped: {_bte}", flush=True)
 
+    # ── THE CANONICAL GRAPH IS AN AUTHORITY, NOT AN AFTER-THE-FACT REPORT ──────────────
+    #
+    # The compiler ran only after estimate_part. At that point it could state that
+    # 11350-01-101 is an assembly and that a row is bought-in — and the workbook had already
+    # charged 101 as a 2.5mm fabricated leaf, with its own laser and fold, on top of the bar
+    # it is made from. A graph that describes what pricing already did cannot correct it.
+    #
+    # Failure-isolated: a compile error leaves the run exactly as it was before this existed.
+    try:
+        from route_compiler import apply_canonical_evidence_to_parts
+        _canon_pre = apply_canonical_evidence_to_parts(
+            summary["manufacturing_writeup"]["parts"],
+            summary.get("llm_full_extract") or {})
+        summary["canonical_part_graph_pre_cost"] = {
+            "nodes": len(_canon_pre.get("nodes") or []),
+            "issues": list(_canon_pre.get("issues") or []),
+        }
+        print(f"   [canonical-part-graph] applied before costing: "
+              f"{len(_canon_pre.get('nodes') or [])} node(s)", flush=True)
+    except Exception as _canon_pre_err:
+        print(f"   [canonical-part-graph] pre-cost application skipped: "
+              f"{type(_canon_pre_err).__name__}: {_canon_pre_err}", flush=True)
+
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
@@ -2311,6 +2303,20 @@ def _finalize_scan_summary(
             print("   [dual-path recon:diag] _dp is NOT DEFINED at reconcile point (dual-path reader did not run this path)", flush=True)
         except Exception as _dpr2_err:
             print(f"   [dual-path recon:diag] reconcile errored: {type(_dpr2_err).__name__}: {_dpr2_err}", flush=True)
+
+    # ── THE OTHER TIMING BOUNDARY ─────────────────────────────────────────────────────
+    # The dual-path table reader adds bought-ins AFTER the route was compiled, which is how
+    # 11350's wing nuts and PEM studs reached the Estimate tab and the reports while the
+    # canonical BOM had never heard of them. Two BOM authorities, and the one an estimator
+    # reads was the one outside the graph. Recompile from the final population.
+    try:
+        from route_compiler import refresh_canonical_route_after_reconciliation
+        _canon_final = refresh_canonical_route_after_reconciliation(summary)
+        print(f"   [canonical-part-graph] refreshed after BOM reconciliation: "
+              f"{len(_canon_final.get('nodes') or [])} node(s)", flush=True)
+    except Exception as _canon_refresh_err:
+        print(f"   [canonical-part-graph] post-reconcile refresh failed: "
+              f"{type(_canon_refresh_err).__name__}: {_canon_refresh_err}", flush=True)
 
     try:
         import bay_rollup
