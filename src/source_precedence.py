@@ -110,6 +110,19 @@ SOURCE_RANK: Dict[str, int] = {
     "solidworks_flat_pattern": 90,
     "dxf": 80,
     "dxf_flat_pattern": 80,
+    # A MIRROR OF A MEASUREMENT IS STILL A MEASUREMENT — of the other hand.
+    #
+    # Job 11350's right arm had no DXF of its own, so it had no blank, so it fell through
+    # to a web lookup, so it fell through to an LLM market estimate: GBP 79.04 one run,
+    # GBP 86.04 the next, 97% of the whole material total. Its left hand was measured at
+    # 258.35 x 84.8 x 2.0 the entire time. A mirrored derivation has the SAME flat pattern
+    # as the part it mirrors — same blank, same cut length, same holes, same bends — and
+    # that is geometry, not a guess.
+    #
+    # Ranked just BELOW the flat it came from, and for one reason: it rests on the naming
+    # convention holding as well as on the measurement. It must never displace a DXF or a
+    # model of the mirror ITSELF, and it beats every inferred and generated source.
+    "mirror_of_measured": 75,
     "drawing_deterministic": 70,
     "title_block": 70,
     "bom_tree": 60,

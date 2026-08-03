@@ -5409,6 +5409,122 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
+    """JOB 11350'S RIGHT ARM WAS PRICED BY AN LLM AT 97% OF THE MATERIAL TOTAL WHILE ITS OWN
+    GEOMETRY SAT TWO ROWS ABOVE IT.
+
+    One flat was exported for the handed pair — "11350-01-02_2MM MS_flat.dxf" — so the left
+    arm was measured at 258.35 x 84.8 x 2.0 and "11350-01-02 MIR" had nothing. No blank
+    means no material to cost, so the engine went looking for a price: catalogue, then web,
+    then (with the search provider returning HTTP 429) a market estimate that came back
+    GBP 79.04 on one run and GBP 86.04 on the next. With no cut length or pierce count its
+    laser and fold rows also fell back to default throughput.
+
+    A mirrored derivation IS the same flat. That is what mirroring means, and it is why one
+    DXF gets exported for a handed pair in the first place."""
+    from drawing_job_merge import apply_mirror_geometry
+
+    def _left():
+        return {"part_number": "11350-01-02", "flat_pattern_detected": True,
+                "normalized_thickness_mm": 2.0, "normalized_material": "MILD STEEL",
+                "overall_length_mm": 258.35, "overall_width_mm": 84.8, "bend_count_dxf": 2,
+                "geometry_rollup": {"estimated_pierce_count": 2, "cut_length_mm": 743.99},
+                "normalized_geometry": {
+                    "blank_length_mm": 258.35, "blank_width_mm": 84.8,
+                    "blank_area_mm2": 21908.0, "perimeter_mm": 686.3, "weight_g": 344.0,
+                    "geometry_source": "dxf_flat_pattern", "geometry_confidence": 1.0}}
+
+    _base, _mir = _left(), {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM"}
+    _rep = apply_mirror_geometry([_base, _mir])
+
+    _ng = _mir.get("normalized_geometry") or {}
+    eq(_ng.get("blank_length_mm"), 258.35, "the right arm gets the left arm's measured blank")
+    eq(_ng.get("blank_width_mm"), 84.8, "in both dimensions")
+    eq(_mir.get("normalized_thickness_mm"), 2.0, "and the gauge it is cut from")
+    eq(_mir.get("normalized_material"), "MILD STEEL", "and the material")
+    eq(_mir.get("bend_count_dxf"), 2, "and the bends, so its Fold row is not a default rate")
+    eq((_mir.get("geometry_rollup") or {}).get("cut_length_mm"), 743.99,
+       "and the cut length, so its Laser row reads the template calculator")
+    eq(_ng.get("geometry_source"), "mirror_of_measured",
+       "stamped as what it is — a measurement of the other hand, not a measurement of this "
+       "one and not a guess")
+    eq(_ng.get("mirrored_from"), "11350-01-02", "with the part it came from named on it")
+    ok(any("MIRRORED from 11350-01-02" in str(f) for f in (_mir.get("review_flags") or [])),
+       "and the estimator is told, because two hands that are not identical make this wrong")
+    eq(len(_rep), 1, "and the run reports what it filled")
+
+    # RANKED BELOW THE FLAT IT CAME FROM, AND ABOVE EVERYTHING GENERATED.
+    from source_precedence import rank
+    ok(rank("dxf_flat_pattern") > rank("mirror_of_measured") > rank("llm_full_extract")
+       and rank("mirror_of_measured") > rank("inference"),
+       "a mirror of a measurement outranks every generated source and loses to the "
+       "measurement itself")
+    ok(rank("solidworks_api") > rank("mirror_of_measured"),
+       "and to a model of this hand")
+
+    # ── THE FOUR WAYS THIS GOES WRONG ────────────────────────────────────────────────
+    # 1. ITS OWN EXPORT WINS OUTRIGHT. A mirror somebody did export keeps its own figures.
+    _own = {"part_number": "11350-01-02 MIR", "flat_pattern_detected": True,
+            "normalized_geometry": {"blank_length_mm": 259.0, "blank_width_mm": 85.0,
+                                    "geometry_source": "dxf_flat_pattern"}}
+    apply_mirror_geometry([_left(), _own])
+    eq(_own["normalized_geometry"]["blank_length_mm"], 259.0,
+       "a mirror with its own flat is not overwritten by its base's")
+    eq(_own["normalized_geometry"]["geometry_source"], "dxf_flat_pattern",
+       "and keeps its own provenance")
+
+    # 2. AN UNMEASURED BASE IS NOT A SOURCE. Inheriting from an inferred blank would launder
+    #    a guess into geometry at rank 75 — the move every source rule here exists to stop.
+    _guessed = {"part_number": "11350-01-02", "normalized_geometry": {
+        "blank_length_mm": 250.0, "blank_width_mm": 80.0, "geometry_source": "inference"}}
+    _m2 = {"part_number": "11350-01-02 MIR"}
+    eq(apply_mirror_geometry([_guessed, _m2]), [],
+       "a base with no measured flat gives its mirror nothing")
+    ok("normalized_geometry" not in _m2, "and leaves the record untouched")
+
+    # 3. A MIRROR OF A MIRROR DOES NOT CHAIN, so two hands cannot trade an empty record.
+    _a = {"part_number": "PART-01", "flat_pattern_detected": True,
+          "normalized_geometry": {"blank_length_mm": 10.0, "blank_width_mm": 5.0,
+                                  "geometry_source": "mirror_of_measured"}}
+    eq(apply_mirror_geometry([_a, {"part_number": "PART-01 MIR"}]), [],
+       "an inherited flat is not itself inheritable")
+
+    # 4. A PART THAT MIRRORS NOTHING IN THIS JOB IS LEFT ALONE — no base, no invention.
+    _orphan = {"part_number": "9999-01 MIR"}
+    eq(apply_mirror_geometry([_orphan]), [], "a mirror whose base is not here gets nothing")
+
+    # BOTH SPELLINGS, ONE RULE. SolidWorks writes "Mirror<code>"; the GA writes "<code> MIR".
+    from part_code_conventions import mirror_base
+    eq(mirror_base("Mirror11350-01-02M"), "11350-01-02M", "the files' spelling")
+    eq(mirror_base("11350-01-02 MIR"), "11350-01-02", "the drawing's spelling")
+    eq(mirror_base("11350-01-02-MIRRORED"), "11350-01-02", "and the long form")
+    eq(mirror_base("11350-01-02"), "", "a part that mirrors nothing says so")
+    # A CODE THAT MERELY ENDS IN THOSE LETTERS IS NOT A MIRROR. "MIR" needs a separator
+    # before it, or a real code is silently cut in half.
+    eq(mirror_base("BRACKET-MIRAGE"), "", "a longer word is not the marker")
+    eq(mirror_base("MIRRORLIKE-01"), "", "and neither is a code that begins with one")
+
+    # A MIRROR WITH ITS OWN SLDPRT: the model must still beat this, both ways round.
+    _sw = {"part_number": "11350-01-02 MIR", "normalized_thickness_mm": 2.5,
+           "thickness_source": "solidworks_api"}
+    apply_mirror_geometry([_left(), _sw])
+    eq(_sw["normalized_thickness_mm"], 2.5,
+       "a modelled gauge is not displaced by a mirrored one")
+
+    # AND THE BASE IS NEVER MUTATED — the geometry flows one way.
+    _b3, _m3 = _left(), {"part_number": "11350-01-02 MIR"}
+    apply_mirror_geometry([_b3, _m3])
+    eq(_b3["normalized_geometry"]["geometry_source"], "dxf_flat_pattern",
+       "the measured part keeps its own provenance")
+
+    # WIRED, NOT MERELY BUILT. The job-level pass must call it, or a handed pair still
+    # arrives at costing with one blank between them.
+    import inspect
+    import drawing_job_merge as D
+    ok("apply_mirror_geometry" in inspect.getsource(D.augment_summary_with_dxf),
+       "the DXF augmentation pass runs it once every flat has been bound")
+
+
 def test_a_chained_operation_inherits_the_scope_of_what_spawned_it():
     """estimator.py adds dress_welds automatically wherever it finds welding, so that row
     has no route line of its own and therefore no scope of its own.

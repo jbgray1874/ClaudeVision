@@ -1033,6 +1033,140 @@ def _stamp_assembly_parents(parts: List[Dict[str, Any]]) -> None:
                 flags.append("assembly_parent_rolled_up_to_children")
 
 
+def _num(value: Any) -> Optional[float]:
+    """A positive finite number, or None. A zero blank is not a blank."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and abs(f) != float("inf") and f > 0 else None
+
+
+def _is_blank(value: Any) -> bool:
+    """No-data. An explicit 0 and an explicit False are VALUES, not absence — a measured
+    zero bend count is the whole basis of the fold rule-out, and overwriting it here would
+    give a flat part its mirror's folds."""
+    return value is None or (isinstance(value, (str, list, tuple, dict)) and not value)
+
+
+_MIRROR_GEOMETRY_FIELDS = ["blank_length_mm", "blank_width_mm", "blank_area_mm2",
+                           "perimeter_mm", "weight_kg", "weight_g"]
+_MIRROR_TOP_FIELDS = ["overall_length_mm", "overall_width_mm", "blank_length_mm",
+                      "blank_width_mm", "dxf_weight_g", "dxf_weight_kg", "bend_count_dxf",
+                      "flange_lengths_mm", "bend_positions_mm", "symmetric_flanges",
+                      "fold_count_textual", "flat_pattern_detected"]
+
+
+def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give a mirrored part the flat pattern of the part it mirrors.
+
+    JOB 11350'S RIGHT ARM WAS PRICED BY AN LLM AT 97% OF THE MATERIAL TOTAL WHILE ITS OWN
+    GEOMETRY SAT TWO ROWS ABOVE IT. Only "11350-01-02_2MM MS_flat.dxf" was exported, so the
+    left arm had a measured 258.35 x 84.8 x 2.0 blank and "11350-01-02 MIR" had nothing.
+    With no blank there is no material to cost, so the engine went looking for a price:
+    catalogue, then web, then — with the search provider exhausted — a market estimate that
+    came back GBP 79.04 on one run and GBP 86.04 on the next. It also had no cut length and
+    no hole count, so its laser and fold rows fell back to default throughput.
+
+    A MIRRORED DERIVATION IS THE SAME FLAT. Same blank, same perimeter, same pierces, same
+    bend count, same gauge, same material — that is what mirroring means, and it is why one
+    DXF is exported for a handed pair in the first place. This is geometry we hold, not a
+    figure we generate, and it is ranked accordingly: mirror_of_measured (75), below the
+    flat it was copied from and below a model or DXF of the mirror ITSELF, above everything
+    inferred or generated.
+
+    THE DIRECTION OF SAFETY. Gap-fill only — a mirror that HAS its own export keeps every
+    figure of its own, and a field the base never had stays missing rather than becoming a
+    zero. Nothing is inherited from a base that was itself inherited or inferred: the base
+    must carry a real measurement, or this would propagate a guess and dress it as geometry.
+
+    Returns one record per part filled, for the report. Both naming conventions are handled
+    by part_code_conventions, so a pack that spells it "Mirror<code>" and a pack that spells
+    it "<code> MIR" behave identically.
+    """
+    from part_code_conventions import mirror_base
+
+    filled: List[Dict[str, Any]] = []
+    if not isinstance(parts, list):
+        return filled
+    by_key = {_normalize_part_key(str(p.get("part_number") or "")): p
+              for p in parts if isinstance(p, dict)}
+
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        base_pn = mirror_base(str(part.get("part_number") or ""))
+        if not base_pn:
+            continue
+        base = by_key.get(_normalize_part_key(base_pn))
+        if base is None or base is part:
+            continue
+
+        # THE BASE MUST HAVE BEEN MEASURED. Inheriting from a part whose own blank was
+        # inferred would launder an inference into geometry at rank 75 — the exact move
+        # every source rule in this codebase exists to prevent. A base that itself inherited
+        # is refused for the same reason, and that also stops two mirrors of each other from
+        # trading an empty record back and forth.
+        base_ng = base.get("normalized_geometry") or {}
+        _base_src = str(base_ng.get("geometry_source") or "")
+        if not base.get("flat_pattern_detected") or _base_src.startswith("mirror"):
+            continue
+        if not (_num(base_ng.get("blank_length_mm")) and _num(base_ng.get("blank_width_mm"))):
+            continue
+        # ITS OWN MEASUREMENT WINS OUTRIGHT. A mirror with its own export needs nothing.
+        _ng = part.get("normalized_geometry") or {}
+        if _num(_ng.get("blank_length_mm")) and _num(_ng.get("blank_width_mm")):
+            continue
+
+        _got: List[str] = []
+        for _f in _MIRROR_GEOMETRY_FIELDS:
+            if _is_blank(_ng.get(_f)) and not _is_blank(base_ng.get(_f)):
+                _ng[_f] = base_ng[_f]
+                _got.append(_f)
+        if not _got:
+            continue
+        _ng["geometry_source"] = "mirror_of_measured"
+        # The confidence of the flat it came from, never higher — and never invented where
+        # the base carried none.
+        if base_ng.get("geometry_confidence") is not None:
+            _ng["geometry_confidence"] = base_ng["geometry_confidence"]
+        _ng["mirrored_from"] = base.get("part_number")
+        part["normalized_geometry"] = _ng
+        # THROUGH THE RESOLVER, NOT AROUND IT. These are written under a COMPUTED key, so
+        # the field name is not visible at the write — which is exactly the shape that let
+        # the override rules overwrite material in silence. Submitting them instead means a
+        # stronger source is defended whatever the list grows to contain, and every figure
+        # arrives carrying the name of where it came from.
+        for _f in _MIRROR_TOP_FIELDS:
+            if _is_blank(part.get(_f)) and not _is_blank(base.get(_f)):
+                _apply_field(part, _f, base[_f], "mirror_of_measured",
+                             note=f"mirrored from {base.get('part_number')}")
+        # THE CUT LENGTH, THE PIERCES AND THE HOLES. Without these the laser row falls back
+        # to a default throughput, which is how this part got a default rate on both its
+        # laser and its fold row even after its blank was known.
+        _base_roll = base.get("geometry_rollup")
+        if isinstance(_base_roll, dict) and not isinstance(part.get("geometry_rollup"), dict):
+            import copy as _copy
+            part["geometry_rollup"] = _copy.deepcopy(_base_roll)
+            _got.append("geometry_rollup")
+        # Thickness and material go through the resolver so a printed title block or a model
+        # still outranks them, and so the disagreement is recorded if one does.
+        for _field, _key in (("normalized_thickness_mm", "normalized_thickness_mm"),
+                             ("normalized_material", "normalized_material")):
+            if not _is_blank(base.get(_key)):
+                _apply_field(part, _field, base[_key], "mirror_of_measured",
+                             note=f"mirrored from {base.get('part_number')}")
+
+        part.setdefault("review_flags", []).append(
+            f"GEOMETRY MIRRORED from {base.get('part_number')}: no flat was exported for "
+            f"this hand, so its blank, cut length and bend count are the measured ones of "
+            f"the part it mirrors. A mirrored derivation is the same flat — but if these "
+            f"two hands are NOT identical, this part is wrong and needs its own DXF.")
+        filled.append({"part_number": part.get("part_number"),
+                       "mirrored_from": base.get("part_number"), "fields": _got})
+    return filled
+
+
 def augment_summary_with_dxf(
     summary: Dict[str, Any],
     dxf_paths: Sequence[Path],
@@ -1174,6 +1308,10 @@ def augment_summary_with_dxf(
 
     summary["dxf_augmentation"] = report
     summary["geometry_source_policy"] = "dxf_wins_geometry_pdf_wins_bom"
+
+    # A mirrored part has its own hand's flat only when somebody exported one. Where nobody
+    # did, its other hand was measured and is sitting in this same list.
+    report["mirror_inherited"] = apply_mirror_geometry(parts)
 
     # Flag sub-assembly parents (e.g. TANK 04 over 04-01/04-02) so estimation
     # suppresses their material + phantom fab labour. Must run before re-estimate.

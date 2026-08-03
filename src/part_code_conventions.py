@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-__all__ = ["base_code", "alias_targets", "is_mirror_code"]
+__all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base"]
 
 # A trailing material letter, and only after a digit — so "11350-01-01M" yields
 # "11350-01-01" while a code that simply ends in a letter ("...-GA") is left alone.
@@ -43,9 +43,36 @@ _MATERIAL_SUFFIX = re.compile(r"^(.*\d)([TMA])$", re.IGNORECASE)
 _MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\d-])", re.IGNORECASE)
 
 
+# The DRAWING's spelling of the same fact: "11350-01-02 MIR", "1449-03-MIRROR". A separator
+# is required before the marker so a code that merely ends in those letters is untouched,
+# and the marker must end the code — "…-MIRROR-02" is a code, not a marker.
+_MIRROR_SUFFIX = re.compile(r"[\s_-]+MIR(?:ROR(?:ED)?|ORED|OR)?$", re.IGNORECASE)
+
+
 def is_mirror_code(identity: str) -> bool:
     """True when the code names a mirrored derivation of another part."""
-    return bool(_MIRROR_PREFIX.search(str(identity or "").strip()))
+    text = str(identity or "").strip()
+    return bool(_MIRROR_PREFIX.search(text)) or bool(_MIRROR_SUFFIX.search(text))
+
+
+def mirror_base(identity: str) -> str:
+    """The code this one mirrors, in EITHER convention, or "" when it mirrors nothing.
+
+    THE FILES SAY IT ONE WAY AND THE DRAWING SAYS IT THE OTHER. SolidWorks writes a
+    mirrored derived part as "Mirror<code>"; the GA writes the mirrored line as
+    "<code> MIR". `alias_targets` translates the first into the second — this answers the
+    question both spellings share: which part is this the other hand of?
+
+    Deliberately does NOT strip a material suffix. "11350-01-02 MIR" mirrors the drawing's
+    "11350-01-02"; reducing it further would be a second convention applied on top of a
+    guess, and each of those is a chance to name a part that is not there.
+    """
+    text = str(identity or "").strip()
+    if _MIRROR_PREFIX.search(text):
+        return _MIRROR_PREFIX.sub("", text).strip()
+    if _MIRROR_SUFFIX.search(text):
+        return _MIRROR_SUFFIX.sub("", text).strip()
+    return ""
 
 
 def base_code(identity: str) -> Tuple[str, bool]:
