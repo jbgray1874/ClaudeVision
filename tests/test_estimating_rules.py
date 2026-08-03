@@ -9308,5 +9308,113 @@ def test_a_drawing_export_is_not_measured_as_a_flat_pattern():
        "the real flat is still measured, bend line and all")
 
 
+# ── job 11350 — the files and the drawing must name the same part ────────────────────
+def _11350_parts_and_extract():
+    _parts = [
+        {"part_number": "11350-01-101", "description": "Ticket strip bar with PEM studs",
+         "quantity": 1},
+        {"part_number": "11350-01-01", "description": "Ticket strip bar", "quantity": 1},
+        {"part_number": "11350-01-02", "description": "Left arm 200mm", "quantity": 1},
+        {"part_number": "11350-01-02 MIR", "description": "Right arm 200mm", "quantity": 1},
+        # What the FILES call the same two parts.
+        {"part_number": "11350-01-01M", "description": "Ticket strip bar (model)",
+         "quantity": 1, "normalized_material": "MILD_STEEL",
+         "normalized_thickness_mm": 1.0, "blank_length_mm": 758.0,
+         "blank_width_mm": 97.71},
+        {"part_number": "Mirror11350-01-02M", "description": "Right arm (model)",
+         "quantity": 1, "normalized_material": "MILD_STEEL"},
+    ]
+    _extract = {
+        "top_assembly": {"part_number": "11350-01"},
+        "assemblies": [
+            {"part_number": "11350-01", "children": [
+                {"part_number": "11350-01-101", "qty": 1},
+                {"part_number": "11350-01-02", "qty": 1},
+                {"part_number": "11350-01-02 MIR", "qty": 1}]},
+            {"part_number": "11350-01-101", "children": [
+                {"part_number": "11350-01-01", "qty": 1}]}]}
+    return _parts, _extract
+
+
+def test_a_model_code_and_its_drawing_code_are_one_part():
+    """SDI appends a MATERIAL letter to the modelled code that the drawing's BOM omits
+    (-xxM steel, -xxA acrylic, -xxT MDF), and SolidWorks writes a mirrored derived part as
+    "Mirror<code>" where the drawing writes "<code> MIR".
+
+    Unjoined, 11350's five-item BOM compiled to SEVEN nodes: the bar and the right arm each
+    appeared twice — once with the drawing's quantity and hierarchy, once with the measured
+    geometry — and neither copy had both. The measured node had no parent at all, so the
+    only real blank dimensions on the job sat on a disconnected leaf."""
+    from route_compiler import build_part_graph
+
+    _parts, _extract = _11350_parts_and_extract()
+    _g = build_part_graph(_parts, _extract)
+    _nodes = {n.part_number: n for n in _g["nodes"]}
+
+    eq(sorted(_nodes), ["11350-01", "11350-01-01", "11350-01-02", "11350-01-02 MIR",
+                        "11350-01-101"],
+       "five BOM items compile to five nodes, under the drawing's own codes")
+    eq(_nodes["11350-01-01"].evidence.get("raw_aliases"), ["11350-01-01M"],
+       "the modelled code is recorded as an alias, not lost")
+
+    # THE MIRROR GOES TO THE DRAWING'S MIRROR LINE, not to the base part. Collapsing it onto
+    # "11350-01-02" would give the left arm the right arm's geometry and lose a BOM line.
+    eq(_nodes["11350-01-02 MIR"].evidence.get("raw_aliases"), ["MIRROR11350-01-02M"],
+       "the mirrored model joins the mirrored BOM line")
+    eq(_nodes["11350-01-02"].evidence.get("raw_aliases"), [],
+       "and not the left arm")
+
+    eq([i for i in _g["issues"] if i.get("code") == "bom_node_disconnected"], [],
+       "no part is left hanging outside the hierarchy")
+    eq(_nodes["11350-01-01"].parents, ["11350-01-101"],
+       "and the bar sits under its sub-assembly, as the GA says")
+
+
+def test_joining_two_names_keeps_the_measurement():
+    """The join is worthless if it discards the reason for making it. The records were
+    merged with setdefault — first seen wins — and the GA BOM line comes first, carrying the
+    hierarchy and the quantity and NO geometry. The model record holds the only measured
+    blank on the job, and joining the identities threw it away: a correct BOM whose measured
+    part had no dimensions, which is worse than the duplicate it replaced."""
+    from route_compiler import build_part_graph
+
+    _parts, _extract = _11350_parts_and_extract()
+    for _label, _order in (("BOM first", _parts), ("model first", list(reversed(_parts)))):
+        _r = build_part_graph(_order, _extract)["records"]["11350-01-01"]
+        eq((_r.get("blank_length_mm"), _r.get("blank_width_mm"),
+            _r.get("normalized_thickness_mm")), (758.0, 97.71, 1.0),
+           f"{_label}: the measured blank must survive the join")
+        eq(len(build_part_graph(_order, _extract)["nodes"]), 5,
+           f"{_label}: and the node count must not depend on input order")
+
+    # GAP-FILL, NEVER OVERWRITE. The record already in hand keeps what it has — the same
+    # precedence discipline apply_field enforces — so a description the drawing states is
+    # not replaced by the model's.
+    _r2 = build_part_graph(_parts, _extract)["records"]["11350-01-01"]
+    eq(_r2.get("description"), "Ticket strip bar",
+       "the drawing's own description wins; the model only fills gaps")
+
+
+def test_a_suffix_join_needs_the_base_part_to_exist():
+    """An alias is only created where the TARGET ALREADY EXISTS. A code that merely looks
+    suffixed, but whose base is not on this job, keeps its own identity — inventing a join
+    costs a part its identity, while declining one only costs a merge the estimator sees."""
+    from route_compiler import build_part_graph
+
+    _lone = [{"part_number": "9999-01-07M", "description": "Lone bracket", "quantity": 1}]
+    _nodes = {n.part_number for n in build_part_graph(_lone, {})["nodes"]}
+    eq(_nodes, {"9999-01-07M"},
+       "with no 9999-01-07 on the job, the modelled code stands as itself")
+
+    # And a mirror with no drawing line of its own falls back to the base part rather than
+    # being orphaned.
+    _mir = [{"part_number": "9999-01-07", "description": "Bracket", "quantity": 1},
+            {"part_number": "Mirror9999-01-07", "description": "Bracket mirrored",
+             "quantity": 1}]
+    _n2 = {n.part_number: n for n in build_part_graph(_mir, {})["nodes"]}
+    eq(sorted(_n2), ["9999-01-07"],
+       "a mirror the drawing does not list separately merges into the base part")
+
+
 if __name__ == "__main__":
     sys.exit(main())

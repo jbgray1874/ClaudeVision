@@ -274,6 +274,61 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
     )
 
 
+# SDI appends a MATERIAL letter to the modelled/cut code that the drawing's own BOM omits:
+# -xxM mild steel, -xxA acrylic, -xxT MDF (the same convention json_normaliser infers
+# material from). So the GA lists "11350-01-01" and the model and DXF are "11350-01-01M".
+_MODEL_MATERIAL_SUFFIX = re.compile(r"^(.*\d)([TMA])$")
+
+# SolidWorks writes a mirrored derived part as "Mirror<code>", while the drawing's BOM
+# writes the mirrored line as "<code> MIR" / "<code> MIRROR".
+_MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\dA-Z])", re.IGNORECASE)
+_MIRROR_SUFFIX = re.compile(r"[\s_-]*MIR(?:ROR)?$", re.IGNORECASE)
+
+
+def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
+    """Join the codes the FILES use to the codes the DRAWING's BOM uses.
+
+    THE SAME PART UNDER TWO NAMES IS TWO PARTS, and that is the expensive failure. On 11350
+    the GA BOM lists "11350-01-01" and "11350-01-02 MIR"; the model and DXF are
+    "11350-01-01M" and "Mirror11350-01-02M". Unjoined, a five-item BOM compiles to seven
+    nodes: the bar and the right arm each appear twice, once with the drawing's quantity and
+    hierarchy and once with the measured geometry — and neither copy has both. The measured
+    node has no parent at all, so it is a disconnected leaf carrying the only real blank
+    dimensions on the job.
+
+    Two conventions, and only two:
+
+      MATERIAL SUFFIX   "<code><T|M|A>" is the drawing's "<code>" cut in that material.
+      MIRROR            "Mirror<code>" is the drawing's "<code> MIR" line, or "<code>"
+                        where the drawing does not list the mirror separately.
+
+    An alias is only created when the TARGET ALREADY EXISTS as an identity. A code that
+    merely looks suffixed but whose base is not on this job stays exactly as it is — the
+    safe direction, because inventing a join costs a part its own identity while declining
+    one only costs a merge the estimator can see.
+    """
+    known = {str(i).strip().upper() for i in identities if str(i).strip()}
+    aliases: Dict[str, str] = {}
+    for identity in sorted(known):
+        _mirror = bool(_MIRROR_PREFIX.search(identity))
+        _base = _MIRROR_PREFIX.sub("", identity).strip() if _mirror else identity
+        _m = _MODEL_MATERIAL_SUFFIX.match(_base)
+        if _m:
+            _base = _m.group(1)
+        if _base == identity or not _base:
+            continue
+        # A mirrored file prefers the drawing's own mirrored line before the base part;
+        # collapsing "Mirror11350-01-02M" onto "11350-01-02" would make the left arm carry
+        # the right arm's geometry and lose a BOM line.
+        _targets = ([f"{_base} MIR", f"{_base} MIRROR", f"{_base}MIR", _base]
+                    if _mirror else [_base])
+        for _t in _targets:
+            if _t in known and _t != identity:
+                aliases[identity] = _t
+                break
+    return aliases
+
+
 def _raw_identity_aliases(
     raw: Mapping[str, Mapping[str, Any]],
     extracted: Mapping[str, Mapping[str, Any]],
@@ -314,12 +369,39 @@ def build_part_graph(
     raw_original = _raw_parts(parts)
     extracted = _extract_part_records(llm_extract)
     aliases = _raw_identity_aliases(raw_original, extracted)
+    # The drawing's BOM is the naming authority; the files carry the same parts under the
+    # modelled code. Applied after the BI-* reconciliation and only where the target already
+    # exists, so it can merge a duplicate but never invent an identity.
+    for _src, _dst in _drawing_code_aliases(
+            set(raw_original) | set(extracted)).items():
+        aliases.setdefault(_src, _dst)
     raw: Dict[str, Mapping[str, Any]] = {}
     for identity, record in raw_original.items():
         canonical_identity = aliases.get(identity, identity)
         canonical_record = dict(record)
         canonical_record["part_number"] = canonical_identity
-        raw.setdefault(canonical_identity, canonical_record)
+        _existing = raw.get(canonical_identity)
+        if _existing is None:
+            raw[canonical_identity] = canonical_record
+            continue
+        # MERGING TWO NAMES FOR ONE PART MUST NOT THROW AWAY THE MEASUREMENT.
+        #
+        # setdefault kept whichever record was seen first, and on 11350 that is the GA BOM
+        # line "11350-01-01" — the one carrying the hierarchy and the quantity and NO
+        # geometry. The model record "11350-01-01M" holds the only measured blank on the
+        # job, and joining the two identities discarded it: a correct BOM whose measured
+        # part had no dimensions, which is worse than the duplicate it replaced.
+        #
+        # Gap-fill, never overwrite. The record already in hand keeps every value it has —
+        # the same precedence discipline apply_field enforces elsewhere — and the second
+        # record supplies only what the first is missing.
+        _merged = dict(_existing)
+        for _k, _v in canonical_record.items():
+            if _k == "part_number":
+                continue
+            if _v not in (None, "", [], {}) and _merged.get(_k) in (None, "", [], {}):
+                _merged[_k] = _v
+        raw[canonical_identity] = _merged
     records: Dict[str, Dict[str, Any]] = {
         identity: dict(record) for identity, record in extracted.items()
     }
