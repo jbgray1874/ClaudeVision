@@ -186,6 +186,11 @@ def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Op
     prod = re.sub(r"^\d+\s*-\s*", "", job_stem or "").strip()
     first = prod.split()[0] if prod else ""
     _looks_like_code = bool(re.match(r"^\d+[-]?[A-Za-z]{0,3}[-]?$", first)) or bool(re.match(r"^\d", first))
+    # NOR IS A CAD PACKAGE A CUSTOMER. The folder "2085 - SolidWorks" word-grabbed to
+    # "SolidWorks" and printed it as the customer's name on their own quotation. Same root
+    # cause as the headline: a folder name carries whatever the person who made it typed.
+    if first and _STEM_NOISE.fullmatch(first):
+        return "Customer"
     if first and not _looks_like_code:
         return first
     # (3) Neutral — never emit a drawing-number fragment as the customer.
@@ -426,18 +431,85 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
             + (f'<span class="prov-d">{_detail}</span>' if _detail else "") + '</div>')
 
 
+_STEM_NOISE = re.compile(
+    r"\b(solidworks|combined|merged|final|copy|drawings?|pack|scan|pdf|dxf|dwg|rev\[?[a-z0-9]*\]?)\b",
+    re.IGNORECASE)
+
+
+def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
+    """(drawing number, revision, unit description) for the quotation header.
+
+    Every one of these is stated on the drawing, and the extract already transcribes the
+    title block. Reading them beats parsing a folder name, which carries whatever the
+    person who made the folder happened to type — "SolidWorks", "combined.pdf", a revision
+    tag — none of which is the product.
+    """
+    _di = (summary.get("llm_full_extract") or {}).get("drawing_info") or {}
+    if not _di and isinstance(summary.get("estimate_summary"), dict):
+        _di = (summary["estimate_summary"].get("llm_full_extract") or {}).get("drawing_info") or {}
+
+    _number = str(_di.get("drawing_number") or "").strip()
+    _rev_raw = str(_di.get("revision") or "").strip()
+    _title = str(_di.get("title") or "").strip()
+    _project = str(_di.get("project") or "").strip()
+
+    # The canonical top assembly is the next best statement of what the unit IS: it is the
+    # thing every other part hangs off, and it carries the draughtsman's own description.
+    if not _number or not _title:
+        _payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+                    or summary.get("canonical_route_shadow") or {})
+        _top = str(_payload.get("top_assembly") or "")
+        for _node in (_payload.get("nodes") or []):
+            if not isinstance(_node, dict):
+                continue
+            if _top and str(_node.get("part_number") or "") == _top:
+                _number = _number or str(_node.get("part_number") or "")
+                _title = _title or str(_node.get("description") or "")
+                break
+
+    # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields
+    # no description at all rather than a misleading one — "SolidWorks" is not a product.
+    if not _number:
+        _m = re.match(r"\s*([0-9][0-9A-Za-z_\-]*)", stem)
+        _number = _m.group(1).strip(" -_") if _m else stem
+    if not _title:
+        _cleaned = re.sub(r"\.(pdf|dxf|dwg|xlsx?)$", "", stem, flags=re.IGNORECASE)
+        _cleaned = re.sub(r"^\s*[0-9][0-9A-Za-z_\-]*\s*[-_]\s*", "", _cleaned)
+        _cleaned = _STEM_NOISE.sub(" ", _cleaned)
+        _cleaned = re.sub(r"[_\-]+", " ", _cleaned)
+        _cleaned = re.sub(r"\s{2,}", " ", _cleaned).strip(" -_")
+        _title = _cleaned if len(_cleaned) > 2 else ""
+
+    _rev = ""
+    if _rev_raw:
+        _rev = _rev_raw if _rev_raw.lower().startswith("rev") else f"Rev {_rev_raw.upper()}"
+    else:
+        _pdf_title = str(_get(summary, "pdf_metadata", "/Title", default="")
+                         or _get(summary, "drawing_metadata", "pdf_metadata", "/Title",
+                                 default=""))
+        _m2 = re.search(r"_rev\[?([A-Za-z0-9]+)\]?", _pdf_title or stem, re.IGNORECASE)
+        _rev = ("Rev " + _m2.group(1).upper()) if _m2 else ""
+
+    return _number, _rev, (_title or _project or _number)
+
+
 def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
                      manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> str:
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
     stem = str(stem)
 
-    job_number = stem.split("-")[0].strip() if "-" in stem else stem
-    product = re.sub(r"^\d+\s*-\s*", "", stem).strip() or stem
-
-    title = str(_get(summary, "pdf_metadata", "/Title", default="")
-                or _get(summary, "drawing_metadata", "pdf_metadata", "/Title", default=""))
-    m = re.search(r"_rev([A-Za-z0-9]+)", title)
-    rev = ("Rev " + m.group(1).upper()) if m else ""
+    # THE UNIT IS NOT THE FOLDER NAME.
+    #
+    # product was the job stem with a leading job number stripped off. For the folder
+    # "2085 - SolidWorks" that leaves "SolidWorks", so the customer's quotation was headed
+    # "Quotation — SolidWorks". For a combined PDF it leaves the whole filename,
+    # "...-GA2_REV[E]-combined.pdf", which is worse in the other direction. Neither names
+    # the thing being quoted.
+    #
+    # The drawing states both facts in its own title block, and the extract already
+    # transcribes them: drawing_number and title. Use those, and fall back through the
+    # canonical top assembly before ever reaching the folder name.
+    job_number, rev, product = _drawing_identity(summary, stem)
 
     es = summary.get("estimate_summary", {}) or {}
     qty = _get(es, "estimate_workbook_inputs", "assumed_job_quantity") or 0
@@ -466,7 +538,21 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # regardless — a gate nothing consumes is a log line, not a gate. Suppressing the quote
     # is not the answer either (an estimator still needs the working); the answer is that a
     # price we cannot stand behind must not LOOK like one we can.
-    _inv_banner = _invariant_banner(summary)
+    # THE INVARIANT BANNER IS NOT CUSTOMER-FACING, AND IS NO LONGER RENDERED HERE.
+    #
+    # It was written in engineering language and carried the engine's own reasoning onto a
+    # document that leaves the building: "2 consistency check(s) FAILED", "the credibility
+    # gate has judged the measured coverage too low", "5 SolidWorks model file(s) ... were
+    # not read. Run tools/solidworks/sw_native_analyse.py". None of that is a customer's
+    # business, and naming an internal script on a quotation is worse than saying nothing.
+    #
+    # The warning itself is NOT lost, and that is the condition for removing it. The
+    # internal job report still leads with "This estimate is PROVISIONAL and must not be
+    # released as a firm price" and renders the full invariants section, and the price on
+    # this page is labelled INDICATIVE in all three places it appears — so nothing here
+    # reads as a firm quotation. The estimator is warned; the customer is not shown the
+    # workings.
+    _inv_banner = ""  # retained for the fixture that asserts it stays empty
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
     logo_markup = _load_logo_markup(customer)
@@ -488,19 +574,31 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         <div class="unit-cap">General arrangement · {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}</div>
       </div>"""
 
-    meta_bits = f"Job <b>{_esc(job_number)}</b>"
+    # DRAWING NUMBER FIRST. It is the reference the customer and the shop both quote back,
+    # and on the previous layout it appeared only as "Job <n>" beneath a headline naming
+    # the folder. Revision belongs next to it — a quotation against the wrong revision is
+    # the expensive kind of mistake.
+    meta_bits = f"Drawing <b>{_esc(job_number)}</b>"
     if rev:
         meta_bits += f" &nbsp;·&nbsp; {_esc(rev)}"
     if qty:
         meta_bits += f" &nbsp;·&nbsp; {_num(qty)} units"
     meta_bits += f" &nbsp;·&nbsp; {_esc(today)}"
 
+    # When the drawing states no title we fall back to its number, and repeating it either
+    # side of a dash reads as a fault rather than a shortage of information.
+    _lead_open = (
+        f"Manufactured to drawing {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}. "
+        if str(product).strip() == str(job_number).strip() else
+        f"{_esc(product)} — manufactured to drawing {_esc(job_number)}"
+        f"{(' ' + _esc(rev)) if rev else ''}. ")
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{_esc(product)} — Quotation {_esc(job_number)}</title>
+<title>Quotation {_esc(job_number)} — {_esc(product)}</title>
 <style>
   :root {{ --sdi-yellow:#F5D947; --sdi-ink:#282928; --ink:#1f2321; --muted:#6b6f6c;
            --line:#e6e7e4; --bg:#ffffff; --soft:#fbfbf8; }}
@@ -570,12 +668,11 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
       <div class="cust">{cust_header}</div>
     </div>
     <div class="band">
-      <h1>Quotation — {_esc(product)}</h1>
+      <h1>{_esc(product)}</h1>
       <div class="meta">{meta_bits}</div>
     </div>
-{_inv_banner}
     <div class="body">
-      <p class="lead">{_esc(product)} — manufactured to drawing. {_esc(material)}{(', ' + _esc(finish.lower())) if finish and finish!='As drawing' else ''}.</p>
+      <p class="lead">{_lead_open}{_esc(material)}{(', ' + _esc(finish.lower())) if finish and finish!='As drawing' else ''}.</p>
       <div class="grid">
         <div class="spec">
           <h3>Specification</h3>

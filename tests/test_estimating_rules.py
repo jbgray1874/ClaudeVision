@@ -2196,19 +2196,42 @@ def test_a_failing_check_names_the_records_it_objected_to():
     ok("count=5" in h, "scalar detail is carried through too")
 
 
-def test_the_rendered_quote_actually_carries_the_banner():
-    """Testing _invariant_banner proves the banner builds, not that the quote uses it.
-    Blanking the call site passed every other test in this file — the same gap that let a
-    reverted apply_field call site go unnoticed. Assert on the rendered document."""
+def test_the_customer_quote_carries_no_engineering_diagnostics():
+    """The invariant banner was written for an estimator and rendered onto a document that
+    leaves the building: "2 consistency check(s) FAILED", "the credibility gate has judged
+    the measured coverage too low", "5 SolidWorks model file(s) ... were not read. Run
+    tools/solidworks/sw_native_analyse.py". Naming an internal script on a customer's
+    quotation is worse than saying nothing.
+
+    THE WARNING IS NOT LOST, and that is the condition for removing it: the INTERNAL job
+    report still leads with it and renders the full invariants section, and the price on
+    the quote stays labelled indicative — so nothing on the page reads as firm."""
     from client_quote_html import build_quote_html
-    failing = {"estimate_summary": {}, "invariants": {"may_quote_firm": False, "violations": [
-        {"severity": "blocking", "message": "material rows do not sum to the total"}]}}
-    html = build_quote_html(failing, job_stem="TEST-01")
-    ok("PROVISIONAL" in html, "the rendered quote must carry the provisional banner")
-    ok("firm price" in html, "and must say in words that it is not a firm price")
-    clean = {"estimate_summary": {}, "invariants": {"may_quote_firm": True, "violations": []}}
-    ok("PROVISIONAL" not in build_quote_html(clean, job_stem="TEST-02"),
-       "a job that passes must not be marked provisional")
+
+    _failing = {"estimate_summary": {}, "invariants": {"may_quote_firm": False,
+                "violations": [
+        {"severity": "blocking", "message":
+         "5 SolidWorks model file(s) are in this job folder but were not read: run "
+         "tools/solidworks/sw_native_analyse.py on a machine with SolidWorks."},
+        {"severity": "blocking", "message":
+         "The credibility gate has judged the measured coverage too low to stand behind."}]}}
+    _html = build_quote_html(_failing, job_stem="2085 - SolidWorks")
+
+    for _leak in ("consistency check", "credibility gate", "sw_native_analyse",
+                  "SolidWorks model file", "invariant"):
+        ok(_leak not in _html,
+           f"the customer document must not carry {_leak!r}")
+
+    # THE PRICE MUST STILL NOT READ AS FIRM. Without this the fixture would pass against a
+    # version that simply presented an unverified number as a quotation.
+    ok("indicative" in _html.lower(),
+       "the price must still be labelled indicative on an unverified job")
+
+    # AND THE ESTIMATOR MUST STILL BE TOLD, on the internal document.
+    from job_report_html import _invariants_section
+    _internal = _invariants_section(_failing)
+    ok("sw_native_analyse" in _internal or "SolidWorks model file" in _internal,
+       "the internal report keeps the detail the quote no longer carries")
 
 
 def test_same_area_is_not_the_same_blank():
@@ -5934,7 +5957,6 @@ def test_every_field_we_ask_the_model_for_has_a_reader():
     # NOT because nobody has looked. Anything that affects a price does not belong here.
     _ACKNOWLEDGED = {
         "drawn_by":          "who drew it — provenance for the report, never a cost input",
-        "project":           "project name — reported, not costed",
         "item_no":           "the BOM table's own line number; parts join on part_number",
         "tolerance_linear":  "tolerance is not yet a cost driver; would gate inspection time",
         "tolerance_angular": "as above",
@@ -9087,6 +9109,59 @@ def test_there_is_exactly_one_confidence_authority():
            f"{_name} must not call the retired scalar")
     ok("mat_conf" not in inspect.getsource(estimation_report),
        "AI Provenance must not keep its own material score")
+
+
+def test_the_quote_names_the_drawing_and_the_unit_not_the_folder():
+    """The headline was the job stem with a leading number stripped off. For the folder
+    "2085 - SolidWorks" that leaves "SolidWorks", so a customer's quotation was headed
+    "Quotation — SolidWorks". For a combined pack it leaves the whole filename,
+    "...-GA2_REV[E]-combined.pdf". Neither names the thing being quoted, and the drawing
+    number appeared only as "Job <n>" in small text beneath.
+
+    The drawing states both facts in its own title block and the extract already
+    transcribes them."""
+    import re as _re
+    from client_quote_html import build_quote_html, _drawing_identity
+
+    def _render(stem, extract):
+        return build_quote_html(
+            {"estimate_summary": {}, "invariants": {"may_quote_firm": True, "violations": []},
+             "llm_full_extract": extract}, job_stem=stem)
+
+    # 1. Title block present — it wins over everything.
+    _h = _render("2085 - SolidWorks",
+                 {"drawing_info": {"drawing_number": "2085", "title": "BRACKET ASSEMBLY"}})
+    eq(_re.search(r"<h1>(.*?)</h1>", _h, _re.S).group(1).strip(), "BRACKET ASSEMBLY",
+       "the headline names the unit")
+    ok("Drawing <b>2085</b>" in _h, "and the drawing number is stated as a drawing number")
+    ok("SolidWorks" not in _h, "the folder's own name is not a product")
+
+    # 2. A combined pack: the number and revision come out of the filename soup.
+    _n, _rev, _desc = _drawing_identity(
+        {"llm_full_extract": {"drawing_info": {
+            "drawing_number": "11772-01-09", "revision": "E", "title": "WIDE ARCH"}}},
+        "0357299_2 WIDE ARCH_11772-01-09-GA2_REV[E]-combined.pdf")
+    eq((_n, _rev, _desc), ("11772-01-09", "Rev E", "WIDE ARCH"),
+       "a combined-pack filename must not reach the customer")
+
+    # 3. NOTHING STATED — fall back to the number, never to noise. "SolidWorks",
+    # "combined" and "REV[E]" are folder debris, and inventing a product name from them is
+    # worse than admitting we only know the drawing number.
+    _n2, _r2, _d2 = _drawing_identity({}, "2085 - SolidWorks")
+    eq(_n2, "2085", "the drawing number still comes through")
+    eq(_d2, "2085", "and the description falls back to it rather than to 'SolidWorks'")
+    _h2 = _render("2085 - SolidWorks", {})
+    ok("Manufactured to drawing 2085." in _h2,
+       "and the lead does not repeat the number either side of a dash")
+
+    # 4. The canonical top assembly is consulted before the folder name.
+    _n3, _r3, _d3 = _drawing_identity(
+        {"estimate_summary": {"canonical_route_shadow": {
+            "top_assembly": "11772-GA",
+            "nodes": [{"part_number": "11772-GA", "description": "Wide arch bay"}]}}},
+        "somefolder - combined.pdf")
+    eq((_n3, _d3), ("11772-GA", "Wide arch bay"),
+       "the drawing's own hierarchy beats the folder every time")
 
 
 if __name__ == "__main__":
