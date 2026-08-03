@@ -1439,6 +1439,12 @@ def canonical_labour_groups(
             hours = _safe(normalised_hours.get(operation))
             if hours and hours > 0:
                 group["bh"] += hours
+            # The quantity-free rate, where the estimator recorded one.
+            _rhpu = (estimates[representative_id].get("labour_estimate") or {}).get(
+                "run_hours_per_unit") or {}
+            _rh = _safe({str(k).strip().lower(): v for k, v in _rhpu.items()}.get(operation))
+            if _rh and _rh > 0:
+                group["run_hours_per_unit"] = (group.get("run_hours_per_unit") or 0.0) + _rh
 
             geometry = estimates[representative_id].get("normalized_geometry") or {}
             if operation == "folding":
@@ -3593,9 +3599,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
         else:
             bh = g["bh"]
-            if bh and bh > 0:
+            # THE RATE FIRST, THE BATCH ONLY AS A FALLBACK.
+            #
+            # batch_hours carries a one-off setup and the quantity it was built for, so a
+            # rate derived from it moves when the order moves — 11350's fold read 65.85/hr
+            # at 180 off and 7.32/hr at 20, which is the same number scaled by 20/180. The
+            # run time per piece has no quantity in it and is what a throughput means.
+            _rhpu = _safe(g.get("run_hours_per_unit"))
+            if _rhpu and _rhpu > 0:
+                _derived = float(_qty) / _rhpu
+            elif bh and bh > 0:
                 _total_pieces = order_qty * _qty
                 _derived = _total_pieces / bh
+                _flag(f"throughput for '{wb_op}' derived from BATCH hours, which carry the "
+                      f"quantity they were built for — this rate moves with the order size "
+                      f"and should not. The estimator recorded no per-piece run time for "
+                      f"this operation.", flags)
+            if (_rhpu and _rhpu > 0) or (bh and bh > 0):
                 throughput = _derived
                 if default_tp:
                     _ceiling = default_tp * _THROUGHPUT_CEILING_MULTIPLIER

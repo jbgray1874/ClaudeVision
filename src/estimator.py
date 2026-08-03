@@ -2976,6 +2976,7 @@ def estimate_labour_costs(process: Dict[str, Any], job_quantity: int = 1, materi
     setup_amortised: Dict[str, float] = {}
     run_costs: Dict[str, float] = {}
     batch_hours: Dict[str, float] = {}
+    run_hours_per_unit: Dict[str, float] = {}
     rate_sources: Dict[str, Any] = {}
     missing_rate_operations: List[str] = []
 
@@ -3037,6 +3038,17 @@ def estimate_labour_costs(process: Dict[str, Any], job_quantity: int = 1, materi
         run_costs[op] = round(run_cost_unit, 4)
         setup_amortised[op] = round(setup_cost_unit, 4)
         batch_hours[op] = round(j_batch_hours, 4)
+        # A THROUGHPUT IS PIECES PER HOUR AND CANNOT DEPEND ON HOW MANY WERE ORDERED.
+        #
+        # batch_hours mixes run time with a one-off setup, so anything derived from it
+        # inherits the quantity it was built for. wb_populate divided this job's piece count
+        # by it and got a rate that scaled with the order: 11350's fold read 65.85/hr at 180
+        # off and 7.32/hr at 20 — exactly 65.85 x 20/180, because the batch figure had been
+        # built at 180 either way. The floor caught a 9x error; at 90 off it would have been
+        # 2x and passed silently.
+        #
+        # The run time per piece is the rate, and it has no quantity in it at all.
+        run_hours_per_unit[op] = round(run_hours_unit, 6)
         rate_sources[op] = _build_price_source_metadata(
             external_rate.get("result", {}),
             fallback_source=f"config_default_labour_rate:{op}",
@@ -3049,6 +3061,7 @@ def estimate_labour_costs(process: Dict[str, Any], job_quantity: int = 1, materi
         "run_costs_gbp": run_costs,
         "setup_amortised_gbp": setup_amortised,
         "batch_hours": batch_hours,
+        "run_hours_per_unit": run_hours_per_unit,
         "total_labour_cost_gbp": round(sum(breakdown.values()), 2),
         "rate_sources": rate_sources,
         "missing_rate_operations": missing_rate_operations,

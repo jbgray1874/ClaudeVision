@@ -5545,6 +5545,65 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_a_throughput_cannot_depend_on_how_many_were_ordered():
+    """11350's fold read 65.85/hr at 180 off and 7.32/hr at 20 — exactly 65.85 x 20/180. A
+    press brake does not slow down ninefold because somebody ordered fewer.
+
+    batch_hours mixes run time with a ONE-OFF setup and carries the quantity it was built
+    for. wb_populate divided this job's piece count by it, so the rate scaled with the
+    order. The floor caught a 9x error and called it OVER-charging; at 90 off the same
+    defect is 2x, sits inside the floor, and passes silently onto the sheet.
+
+    The run time per piece has no quantity in it, and that is what a throughput means."""
+    from estimator import estimate_labour_costs
+    import inspect
+
+    # THE ESTIMATOR RECORDS THE QUANTITY-FREE RATE. batch_hours stays — the workbook's J63
+    # reference needs it — but it is no longer the only thing on offer.
+    _src = inspect.getsource(estimate_labour_costs) if callable(
+        getattr(__import__("estimator"), "estimate_labour_costs", None)) else ""
+    import estimator as _E
+    _mod = inspect.getsource(_E)
+    ok("run_hours_per_unit[op] = round(run_hours_unit, 6)" in _mod,
+       "the per-piece run time is stamped beside the batch figure")
+    ok('"run_hours_per_unit": run_hours_per_unit,' in _mod,
+       "and published on the labour estimate")
+
+    # THE WORKBOOK PREFERS IT, and says so when it has to fall back.
+    import wb_populate as W
+    # DRIVEN, not read: the grouping pass must actually carry it onto the group, or the
+    # sheet falls back to the batch figure with nothing saying so.
+    _g = W.canonical_labour_groups(
+        {"estimate_summary": {"canonical_route_shadow": {"nodes": [], "decisions": [
+            {"decision_id": "d1", "operation": "folding", "status": "required",
+             "target_id": "P1", "participants": ["P1"], "scope": "part",
+             "qty_per_unit": 1}]}}},
+        [{"part_number": "P1", "quantity": 1,
+          "material_estimate": {"stock_form": "sheet", "material": "MILD STEEL",
+                                "blank_length_mm": 100, "blank_width_mm": 50},
+          "normalized_thickness_mm": 2.0,
+          "labour_estimate": {"batch_hours": {"folding": 2.734},
+                              "run_hours_per_unit": {"folding": 0.0124}}}], 180)
+    _carried = [v.get("run_hours_per_unit") for v in _g.values()
+                if "folding" in (v.get("engine_ops") or [])]
+    eq(_carried, [0.0124],
+       f"the grouping pass carries the per-piece rate onto the group, got {_carried}")
+    _sheet = inspect.getsource(W)
+    ok("_derived = float(_qty) / _rhpu" in _sheet,
+       "and the throughput is derived from it, with no order quantity in the arithmetic")
+    ok("this rate moves with the order size" in _sheet,
+       "while the batch fallback says on the sheet that it is quantity-dependent")
+
+    # THE ARITHMETIC ITSELF, at four order sizes. One operation, one rate.
+    _rhpu = 0.0124                       # ~44.7 s/piece, 11350's fold
+    _bh = _rhpu * 180 + 0.5              # batch figure built at 180, unchanged by the order
+    _old = [round(_oq * 1 / _bh, 2) for _oq in (20, 90, 180, 1000)]
+    _new = [round(1 / _rhpu, 2) for _oq in (20, 90, 180, 1000)]
+    eq(len(set(_new)), 1, f"the rate is the same at every order size, got {_new}")
+    ok(len(set(_old)) == 4 and max(_old) / min(_old) > 40,
+       f"where the batch derivation spanned {min(_old)}-{max(_old)}/hr for one operation")
+
+
 def test_an_unread_colour_is_not_a_second_colour():
     """11350 is ONE white job and paid for two booth hangs.
 
