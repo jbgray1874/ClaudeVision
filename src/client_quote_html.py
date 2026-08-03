@@ -431,8 +431,12 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
             + (f'<span class="prov-d">{_detail}</span>' if _detail else "") + '</div>')
 
 
+# Words that describe the FILE rather than the product. The revision alternative
+# deliberately has no trailing word boundary: it ends on "]" in "REV[E]", and "]" followed
+# by a space is two non-word characters, so \b never matches there.
 _STEM_NOISE = re.compile(
-    r"\b(solidworks|combined|merged|final|copy|drawings?|pack|scan|pdf|dxf|dwg|rev\[?[a-z0-9]*\]?)\b",
+    r"\b(?:solidworks|combined|merged|final|copy|drawings?|pack|scan|pdf|dxf|dwg)\b"
+    r"|\brev\[?[a-z0-9]*\]?",
     re.IGNORECASE)
 
 
@@ -470,13 +474,27 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields
     # no description at all rather than a misleading one — "SolidWorks" is not a product.
     if not _number:
-        _m = re.match(r"\s*([0-9][0-9A-Za-z_\-]*)", stem)
+        # A JOB NUMBER IS DIGITS, NOT ANY RUN OF ALPHANUMERICS.
+        #
+        # [0-9A-Za-z_-]* is greedy and every character of "11350-BootsLadderRackCommsBar"
+        # is in it, so the whole folder name came out as the drawing number. Bounded to
+        # leading digits, an optional single letter, and further all-digit groups — which
+        # keeps "11772-01-09" and "0357299_2" whole while stopping at the first word.
+        _m = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", stem)
         _number = _m.group(1).strip(" -_") if _m else stem
     if not _title:
         _cleaned = re.sub(r"\.(pdf|dxf|dwg|xlsx?)$", "", stem, flags=re.IGNORECASE)
-        _cleaned = re.sub(r"^\s*[0-9][0-9A-Za-z_\-]*\s*[-_]\s*", "", _cleaned)
-        _cleaned = _STEM_NOISE.sub(" ", _cleaned)
+        _cleaned = re.sub(r"^\s*\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*\s*[-_]?\s*", "", _cleaned)
+        # ORDER MATTERS HERE, and it is not the obvious one.
+        #
+        # Separators become spaces FIRST, so "GA2_REV[E]" exposes its own word boundary.
+        # The noise filter runs BEFORE the camel-case split, because splitting turns
+        # "SolidWorks" into "Solid Works" and the filter would then match neither half.
         _cleaned = re.sub(r"[_\-]+", " ", _cleaned)
+        _cleaned = _STEM_NOISE.sub(" ", _cleaned)
+        # Folder names are written without spaces far more often than not, and
+        # "BootsLadderRackCommsBar" is not something to put in front of a customer.
+        _cleaned = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", _cleaned)
         _cleaned = re.sub(r"\s{2,}", " ", _cleaned).strip(" -_")
         _title = _cleaned if len(_cleaned) > 2 else ""
 

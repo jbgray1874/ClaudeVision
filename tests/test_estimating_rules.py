@@ -9147,6 +9147,19 @@ def test_the_quote_names_the_drawing_and_the_unit_not_the_folder():
     # 3. NOTHING STATED — fall back to the number, never to noise. "SolidWorks",
     # "combined" and "REV[E]" are folder debris, and inventing a product name from them is
     # worse than admitting we only know the drawing number.
+    # A JOB NUMBER IS DIGITS, NOT ANY RUN OF ALPHANUMERICS. [0-9A-Za-z_-]* is greedy and
+    # every character of a spaceless folder name is in it, so "11350-BootsLadderRackCommsBar"
+    # came out whole as the drawing number — the first live job to be run through this.
+    _n4, _r4, _d4 = _drawing_identity({}, "11350-BootsLadderRackCommsBar")
+    eq(_n4, "11350", "the number stops at the first word")
+    eq(_d4, "Boots Ladder Rack Comms Bar",
+       "and a spaceless folder name is made readable rather than shipped as typed")
+    # Multi-part numbers must still survive whole.
+    eq(_drawing_identity({}, "11772-01-09 GA2")[0], "11772-01-09",
+       "an all-digit continuation is part of the number")
+    eq(_drawing_identity({}, "4471B-WideArch")[0], "4471B",
+       "and so is a single letter suffix")
+
     _n2, _r2, _d2 = _drawing_identity({}, "2085 - SolidWorks")
     eq(_n2, "2085", "the drawing number still comes through")
     eq(_d2, "2085", "and the description falls back to it rather than to 'SolidWorks'")
