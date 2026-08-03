@@ -33,6 +33,8 @@ __all__ = [
     "section_summary",
     "material_input_note",
     "input_note_for_line",
+    "indicative_price_to_withhold",
+    "indicative_price_note",
     "banner_text",
 ]
 
@@ -127,6 +129,37 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
         return {"kind": PLACEHOLDER_UNPRICED,
                 "note": "NOT YET PRICED: enter the per-unit figure for this line"}
     return {"kind": MATERIAL_UNPRICED, "note": material_input_note(part)}
+
+
+def indicative_price_to_withhold(part: Mapping[str, Any], is_indicative: bool,
+                                 price_gbp: Any) -> Optional[float]:
+    """The AI figure to KEEP OFF the price column, or None when the line prices normally.
+
+    A guess that changes every run is not a price. Job 11350's right arm came back at
+    £79.04 on one run and £86.04 on the next — 82% then 95% of the entire material total,
+    on a part with a measured flat we could have costed as sheet steel. The invariant
+    refused to call the job firm, but the Estimate tab still showed a total built on it,
+    and nothing on that tab distinguishes the number from a catalogue rate.
+
+    This matters MORE as search degrades: with a programmatic provider exhausted or
+    unconfigured, the lookup falls straight through to the LLM, so every missing price
+    becomes a figure like this rather than an obvious gap.
+
+    The number is returned, not discarded — it belongs on the line as a hint, where it
+    informs without being summed.
+    """
+    if not is_indicative:
+        return None
+    if isinstance(part, Mapping) and part.get("_price_explicitly_withheld"):
+        return None          # already an estimator input; nothing to move
+    value = _num(price_gbp)
+    return value if value and value > 0 else None
+
+
+def indicative_price_note(price_gbp: float) -> str:
+    """The line's description once its AI figure has been moved out of the price column."""
+    return (f"NOT PRICED — an AI market estimate suggested £{price_gbp:,.2f}, which changes "
+            f"every run and is NOT a quote. Enter a catalogue or supplier rate.")
 
 
 def banner_text(inputs: List[Mapping[str, Any]]) -> str:

@@ -414,6 +414,42 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
                 _p = round(_material, 4) if _material > 0.01 else None
     return _p
 
+
+def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
+                     price_gbp: Any) -> Dict[str, Any]:
+    """The ONE decision behind a BOM line's Price column and its description.
+
+    A GUESS THAT CHANGES EVERY RUN IS NOT A PRICE. Job 11350's right arm came back at
+    GBP 79.04 on one run and GBP 86.04 on the next — 82% and then 95% of the whole material
+    total, on a part with a measured flat we could have costed as sheet steel. The invariant
+    correctly refused to call the job firm, but the Estimate tab still showed a total built
+    on it, and nothing on that tab distinguishes the figure from a catalogue rate.
+
+    This matters MORE as search degrades: with a programmatic provider exhausted or
+    unconfigured the lookup falls straight through to the LLM, so EVERY missing price
+    becomes a figure like this one rather than an obvious gap.
+
+    The number is not thrown away — it moves into the description as a hint, where it
+    informs without being summed, and the line becomes the estimator input it always was.
+
+    WHY THIS IS A FUNCTION AND NOT FOUR LINES IN THE ROW LOOP. Nothing can call
+    populate_workbook in a fixture — it needs the network template — so a decision made
+    inside that loop is a decision no test can drive. Four times this session a fix passed
+    its fixture while the caller went on doing the old thing. The loop keeps only the call;
+    everything that could be wrong is here, where it can be driven directly.
+    """
+    from estimator_inputs import (indicative_price_to_withhold as _withhold,
+                                  indicative_price_note as _note_for)
+    guess = _withhold(part, is_indicative, price_gbp)
+    if not guess:
+        return {"part": part, "withheld_gbp": None, "note": None}
+    part = dict(part)
+    part["_price_explicitly_withheld"] = True
+    part["_ai_indicative_gbp"] = guess
+    return {"part": part, "withheld_gbp": guess,
+            "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
+
+
 def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
     """part number -> the operations on its RAW record.
 
@@ -2191,6 +2227,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # Honour the marker and short-circuit. Whatever stale numbers survive elsewhere on
         # the record, unpriced means unpriced.
+        # An AI market estimate is not a price — bom_line_pricing says why, and says it
+        # somewhere a fixture can reach. The row loop keeps only the call.
+        _line = bom_line_pricing(pe, _indicative, _bom_line_price(pe))
+        pe = _line["part"]
+
         if pe.get("_price_explicitly_withheld"):
             _cat_rate = _safe(pe.get("_catalogue_rate_gbp"))
             _is_consumable_line = bool(pe.get("_consumable_qty_unknown")) or \
@@ -2213,10 +2254,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"(config.POWDER_KG_PER_M2). Estimator to check.", flags)
             else:
                 price = None
-                _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: price WITHHELD by the "
-                      f"engine (quantity not on the drawing and cannot be guessed). Row is on "
-                      f"the sheet with its code and supplier — ESTIMATOR TO PRICE. Not an "
-                      f"error.", flags)
+                # Two different reasons reach this branch and an estimator needs to know
+                # which: a quantity nobody could read, or a figure nobody could reproduce.
+                if _line["withheld_gbp"]:
+                    _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: an AI market "
+                          f"estimate of £{_line['withheld_gbp']:,.2f} is KEPT OFF the price "
+                          f"column — it changes every run and is not a quote. The figure is "
+                          f"on the line as a hint. ESTIMATOR TO PRICE.", flags)
+                else:
+                    _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: price WITHHELD by the "
+                          f"engine (quantity not on the drawing and cannot be guessed). Row is on "
+                          f"the sheet with its code and supplier — ESTIMATOR TO PRICE. Not an "
+                          f"error.", flags)
         else:
             # ONE price chain, not two. This was a hand-copy of _bom_line_price with the
             # same whole-total fallback, so fixing the helper alone would have left the
@@ -2238,7 +2287,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # missing and what would fill it, and the cell an estimator types into is
             # coloured as an input rather than left looking like a result.
             from estimator_inputs import input_note_for_line as _input_note
-            _note = _input_note(pe)
+            _note = _line["note"] or _input_note(pe)
             _inputs.append({
                 "kind": _note["kind"], "part": pe.get("part_number") or "",
                 "where": f"BOM row {row}", "what": _note["note"], "row": row,

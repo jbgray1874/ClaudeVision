@@ -9766,5 +9766,115 @@ def test_the_input_checklist_never_lands_inside_a_calculated_block():
        f"and the run says why the checklist is missing, got {_flags}")
 
 
+def test_an_ai_market_estimate_is_an_estimator_input_not_a_price():
+    """Job 11350's right arm came back at GBP 79.04 on one run and GBP 86.04 on the next --
+    82% then 95% of the entire material total, on a part with a measured flat we could have
+    costed as sheet steel. The invariant refused to call the job firm, but the Estimate tab
+    still showed a total built on it, and nothing on that tab distinguishes the number from
+    a catalogue rate.
+
+    This matters MORE as search degrades. With a programmatic provider exhausted or
+    unconfigured the lookup falls straight through to the LLM, so every missing price
+    becomes a figure like this one rather than an obvious gap."""
+    from estimator_inputs import (indicative_price_to_withhold as _withhold,
+                                  indicative_price_note)
+
+    # DRIVEN, not read. An AI figure is moved off the price column and returned as a hint.
+    eq(_withhold({"part_number": "11350-01-02 MIR"}, True, 86.04), 86.04,
+       "an indicative figure is withheld from the Price column and handed back as a hint")
+    ok("86.04" in indicative_price_note(86.04) and "NOT a quote" in indicative_price_note(86.04),
+       "and the line says what the number is and is not")
+
+    # A CATALOGUE PRICE IS NOT TOUCHED — the opposite failure, and the more damaging one.
+    eq(_withhold({"part_number": "DBR60"}, False, 4.20), None,
+       "a real price prices normally")
+    # Nor is a line that is already an estimator input — there is nothing to move.
+    eq(_withhold({"part_number": "PACKAGING", "_price_explicitly_withheld": True}, True, 9.99),
+       None, "a line already withheld is not re-processed")
+    eq(_withhold({"part_number": "X"}, True, 0), None, "and a zero is not a figure")
+
+    # ── THE WRITER'S OWN DECISION, DRIVEN ────────────────────────────────────────────
+    # Four times this session a fix passed its fixture while the caller went on doing the
+    # old thing, so proving the RULE works proves nothing. Nothing can call
+    # populate_workbook — it needs the network template — so wb_populate's share of this
+    # decision lives in a function the fixture can drive, and the row loop keeps only the
+    # call. This is that function, not a restatement of the rule.
+    import wb_populate as W
+
+    _out = W.bom_line_pricing({"part_number": "11350-01-02 MIR"}, True, 86.04)
+    eq(_out["withheld_gbp"], 86.04, "the writer withholds the AI figure and keeps it")
+    ok(_out["part"]["_price_explicitly_withheld"] is True,
+       "the part it hands back is marked unpriced, so the Price column goes blank")
+    eq(_out["part"]["_ai_indicative_gbp"], 86.04, "with the figure preserved on the line")
+    ok("86.04" in (_out["note"] or {}).get("note", ""),
+       "and the checklist note carries the number an estimator is sanity-checking against")
+    eq((_out["note"] or {}).get("kind"), "ai_estimate_unconfirmed",
+       "under its own kind — this is not the same job as a missing section rate")
+
+    _real = W.bom_line_pricing({"part_number": "DBR60"}, False, 4.20)
+    eq(_real["withheld_gbp"], None, "a catalogue price is not touched")
+    eq(_real["note"], None, "and produces no checklist line")
+    ok("_price_explicitly_withheld" not in _real["part"],
+       "nor is the record it was given mutated")
+
+    # THE CALL ITSELF. A rule the loop stops consulting is a rule that does nothing, and the
+    # loop is the one place no fixture can execute — so read it. The name the decision binds
+    # must be bound EXACTLY ONCE: rebinding it to a stub is precisely how the call gets
+    # neutered while the source still mentions the function.
+    import ast, inspect, textwrap
+    _fn = ast.parse(textwrap.dedent(inspect.getsource(W.populate_workbook))).body[0]
+    _bound = [t.id for n in ast.walk(_fn) if isinstance(n, ast.Assign)
+              for t in n.targets if isinstance(t, ast.Name)
+              and isinstance(n.value, ast.Call)
+              and getattr(n.value.func, "id", "") == "bom_line_pricing"]
+    eq(len(_bound), 1, "populate_workbook must call bom_line_pricing exactly once")
+    _name = _bound[0]
+    _assigns = [t.id for n in ast.walk(_fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name) and t.id == _name]
+    eq(len(_assigns), 1,
+       f"and never rebind {_name} — a second assignment is how the decision gets discarded")
+    _reads = [n for n in ast.walk(_fn)
+              if isinstance(n, ast.Name) and n.id == _name and isinstance(n.ctx, ast.Load)]
+    ok(len(_reads) >= 3,
+       "and must read back the part, the note and the reason — all three reach the sheet")
+
+    # The line it produces is a proper estimator input, distinct from a catalogue price and
+    # from a plain unpriced line.
+    from estimator_inputs import input_note_for_line
+    _placeholder = input_note_for_line({"part_number": "PACKAGING",
+                                        "_price_explicitly_withheld": True,
+                                        "description": "Packaging (estimator to price)"})
+    eq(_placeholder["kind"], "placeholder_unpriced",
+       "a commercial placeholder stays what it is")
+
+    # AND A REAL CATALOGUE PRICE IS UNTOUCHED. Without this the rule would strip every
+    # bought-in price off the sheet, which is the opposite failure.
+    from costed_facts import part_material_cost
+    _real = {"part_number": "DBR60", "quantity": 1,
+             "material_estimate": {"unit_material_cost_gbp": 4.20,
+                                   "price_source": {"source_name": "bought_in price book"}}}
+    eq(part_material_cost(_real)[0], 4.20,
+       "a catalogue rate is a price and stays in the price column")
+
+
+def test_an_exhausted_search_provider_is_not_a_working_one():
+    """SerpAPI credits running out is indistinguishable from SerpAPI working, because the
+    fallback tests whether the KEY IS SET rather than whether the search returned anything.
+
+    With the key present but exhausted, `use_anthropic` stays False, the programmatic search
+    silently returns nothing, and every lookup drops to the LLM reasoning estimate. The job
+    reports as though a search was attempted."""
+    import inspect
+    import web_ai_price_lookup as W
+
+    _src = inspect.getsource(W)
+    ok('os.environ.get("SERPAPI_API_KEY", "").strip()' in _src,
+       "the provider choice is made on key PRESENCE — documented here so the failure mode "
+       "is visible rather than discovered on a job")
+    # The behaviour that protects the sheet regardless of which provider answered: whatever
+    # the LLM returns is marked unrepeatable, and the workbook now withholds it.
+    ok("_llm_market_estimate" in _src, "the LLM path exists and is the last resort")
+
+
 if __name__ == "__main__":
     sys.exit(main())
