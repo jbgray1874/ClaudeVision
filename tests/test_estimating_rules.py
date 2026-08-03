@@ -5330,6 +5330,85 @@ def test_a_model_file_named_code_plus_description_still_matches():
        "the genuine extract is recognised as this job's once its parts can be matched")
 
 
+def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
+    """Job 11350 REFUSED ITS OWN EXTRACT. Two parts under top assembly '11350-01-GA' matched
+    none of the job's seven, so the entire model pack — flat blanks, gauges, applied
+    material, BOM depth — was discarded, and the right arm ended up priced by an AI market
+    estimate at 97% of the whole material total.
+
+    Nothing was wrong with the extract. The models carry the material suffix SDI's files
+    have always carried: "11350-01-01M" IS the drawing's "11350-01-01" cut in steel. The
+    exact tier compares literal codes, the tail tier compares trailing segments and the lead
+    tier needs a " - " description boundary, so all three miss it.
+
+    This is the SAME convention module drawing_job_merge and route_compiler already read.
+    One authority, three consumers — a private fourth copy here is how one of them goes
+    stale while the other two are fixed.
+    """
+    from source_connectors.solidworks import (_native_match_index, _match_native,
+                                              extract_is_for_this_job, NativeJob, NativePart)
+
+    # 11350 as it actually is: the drawing's BOM codes on the left, the model files' on the
+    # right. Before this, `matched` was 0 and the extract was thrown away as a foreign job's.
+    _job = NativeJob(found=True, meta={"top_assembly": "11350-01-GA"}, part_signals={
+        "11350-01-01M": NativePart(part_number="11350-01-01M", bbox_mm=[758.0, 97.71, 1.0]),
+        "11350-01-02M": NativePart(part_number="11350-01-02M", bbox_mm=[258.35, 84.8, 2.0])})
+    _e, _t, _l = _native_match_index(_job)
+
+    eq(_match_native({"part_number": "11350-01-01"}, _e, _t, _l), "11350-01-01M",
+       "the drawing's bar finds the model cut in steel")
+    eq(_match_native({"part_number": "11350-01-02"}, _e, _t, _l), "11350-01-02M",
+       "and so does the left arm")
+    _id = extract_is_for_this_job(
+        [{"part_number": "11350-01"}, {"part_number": "11350-01-01"},
+         {"part_number": "11350-01-02"}, {"part_number": "11350-01-101"}], _job)
+    ok(_id["belongs"] and _id["matched"] == 2,
+       f"and the job stops refusing its own extract, got {_id}")
+
+    # A TRAILING LETTER THAT IS NOT A MATERIAL SUFFIX MUST NOT BE STRIPPED. "1450-GA" is a
+    # real SDI code; reducing it to "1450" would hand an assembly's model to a part.
+    _ga = NativeJob(found=True, part_signals={"1450-GA": NativePart(part_number="1450-GA")})
+    _ge, _gt, _gl = _native_match_index(_ga)
+    eq(_match_native({"part_number": "1450"}, _ge, _gt, _gl), None,
+       "a letter that follows a separator is part of the code, not a material suffix")
+
+    # A MIRRORED MODEL DOES NOT CLAIM THE DRAWING'S BASE LINE. `alias_targets` offers the
+    # bare base as a last resort for packs that do not list the mirror — but here that means
+    # the RIGHT arm's model landing on the LEFT arm's row, which is the one failure every
+    # other tier in this index exists to refuse.
+    _mir = NativeJob(found=True, part_signals={
+        "Mirror11350-01-02M": NativePart(part_number="Mirror11350-01-02M")})
+    _me, _mt, _ml = _native_match_index(_mir)
+    eq(_match_native({"part_number": "11350-01-02"}, _me, _mt, _ml), None,
+       "the base part does NOT get the mirror's geometry")
+    eq(_match_native({"part_number": "11350-01-02 MIR"}, _me, _mt, _ml), "Mirror11350-01-02M",
+       "but the drawing's own mirrored line finds it")
+
+    # AMBIGUITY REFUSED, exactly as the tail and lead tiers refuse it.
+    _amb = NativeJob(found=True, part_signals={
+        "11350-01-01M": NativePart(part_number="11350-01-01M"),
+        "11350-01-01A": NativePart(part_number="11350-01-01A")})
+    _ae, _at, _al = _native_match_index(_amb)
+    eq(_match_native({"part_number": "11350-01-01"}, _ae, _at, _al), None,
+       "two models reducing to one drawing line are dropped, not guessed between")
+
+    # AND A LITERAL CODE STILL WINS. An alias must never shadow a document that IS the code.
+    _both = NativeJob(found=True, part_signals={
+        "11350-01-01": NativePart(part_number="11350-01-01"),
+        "11350-01-01M": NativePart(part_number="11350-01-01M")})
+    _be, _bt, _bl = _native_match_index(_both)
+    eq(_match_native({"part_number": "11350-01-01"}, _be, _bt, _bl), "11350-01-01",
+       "the exact document wins over anything derived by convention")
+
+    # ONE AUTHORITY. The convention is read from the shared module, not restated here.
+    import inspect
+    import source_connectors.solidworks as _S
+    _src = inspect.getsource(_S._native_match_index)
+    ok("part_code_conventions" in _src,
+       "the native index reads the shared convention module — a private copy is how one "
+       "consumer goes stale while the others are fixed")
+
+
 def test_a_chained_operation_inherits_the_scope_of_what_spawned_it():
     """estimator.py adds dress_welds automatically wherever it finds welding, so that row
     has no route line of its own and therefore no scope of its own.

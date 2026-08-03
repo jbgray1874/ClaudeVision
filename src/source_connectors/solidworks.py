@@ -889,6 +889,41 @@ def _native_match_index(job: NativeJob):
     # in `exact`, and `k not in exact` excludes it.
     lead = {k: v[0] for k, v in _lead_hits.items()
             if len(set(v)) == 1 and k not in exact and k not in tail}
+
+    # ── THE CODE THE FILES USE IS NOT THE CODE THE DRAWING USES ──────────────────────
+    #
+    # Job 11350 refused its OWN extract: two parts under top assembly '11350-01-GA' matched
+    # none of the job's seven, so the whole model pack was discarded and the right arm ended
+    # up priced by an AI market estimate at 97% of the material total. The models carry the
+    # material suffix SDI's files have always carried — "11350-01-01M" is the drawing's
+    # "11350-01-01" cut in steel — and neither the exact, tail nor lead tier knows that.
+    #
+    # `part_code_conventions` already encodes the two conventions, and drawing_job_merge and
+    # route_compiler already read it. A private fourth copy here is how one of them goes
+    # stale, so this is the same module, and a convention learned once is now honoured
+    # everywhere a file code has to meet a BOM code.
+    #
+    # THE MIRROR'S BARE BASE IS DELIBERATELY NOT INDEXED. `alias_targets` offers it as a
+    # last resort for packs whose drawing does not list the mirror separately — but on the
+    # index side that means letting a MIRRORED model claim the drawing's base line, which is
+    # putting one part's geometry on another: exactly what every other tier here refuses.
+    # The mirror's own spellings ("<base> MIR", "<base> MIRROR", ...) are indexed and are
+    # what a drawing that lists it will match.
+    from part_code_conventions import alias_targets, is_mirror_code
+    _alias_hits: Dict[str, List[str]] = {}
+    for _pn in list(job.part_signals) + [r.part_number for r in job.bom] + list(job.assembly_pns):
+        _cands = alias_targets(_pn)
+        if is_mirror_code(_pn) and len(_cands) > 1:
+            _cands = _cands[:-1]
+        for _c in _cands:
+            _k = _pn_key(_c)
+            if _k and _k not in exact:
+                _alias_hits.setdefault(_k, []).append(_pn)
+    # Ambiguity refused as everywhere else: two models whose codes reduce to one drawing
+    # line are not resolved by luck of ordering, they are dropped.
+    for _k, _v in _alias_hits.items():
+        if len(set(_v)) == 1:
+            exact[_k] = _v[0]
     return exact, tail, lead
 
 
