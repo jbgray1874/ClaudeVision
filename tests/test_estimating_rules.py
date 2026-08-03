@@ -4555,9 +4555,22 @@ def test_a_material_stops_where_the_drawing_s_standing_notes_begin():
 
     # ONE CODE PER SPELLING OF THE SAME BOARD — otherwise the same panel prices two ways
     # depending on which sheet named it.
-    for _spelling in ("MFC", "MELAMINE FACED CHIPBOARD", "MELAMINE FACED"):
+    for _spelling in ("MFC", "MELAMINE FACED CHIPBOARD"):
         eq(_read(f"MATERIAL: 16mm {_spelling}"), ["MFC"],
            f"'{_spelling}' is melamine-faced chipboard however it is written")
+
+    # AND A SPELLING THAT NAMES NO SUBSTRATE RESOLVES TO NOTHING. "MELAMINE FACED" and
+    # "PRE-LAM" say what was DONE to the sheet, not what the sheet IS, and the two
+    # candidates are bought at different prices. Picking MFC because it is the commoner of
+    # the two is a guess wearing a fact's clothes — the same reasoning that keeps
+    # "finishing" out of the department table. Unresolved reaches the estimator as a gap;
+    # resolved wrongly reaches them as somebody else's board.
+    from source_connectors.solidworks import _norm_sw_material as _sw_mat
+    for _bare in ("MELAMINE FACED", "PRE LAM", "PRE-LAM", "PRE LAMINATED"):
+        eq(normalise_material(_bare), None,
+           f"'{_bare}' names a facing, not a substrate — it must not pick one")
+        ok(_sw_mat(_bare) not in ("MFC", "MFMDF"),
+           f"and the SolidWorks connector must not pick one either for '{_bare}'")
 
     # BUT THE FACING IS NOT THE SUBSTRATE. MFC is melamine-faced CHIPBOARD and MFMDF is
     # melamine-faced MDF: same facing, different sheets, different prices, and they machine
@@ -4631,6 +4644,66 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        3.0, "while a real steel gauge is untouched")
     eq(_safe_thickness_mm({"normalized_material": "MFC", "thicknesses_mm": [200.0]}),
        None, "and 200mm is a dimension misparse on a board too — the guard still guards")
+
+    # ONE DEFINITION OF "IS THIS BOARD", IN config. Four modules carried their own answer
+    # and the faced family was missing from three of them at different times, each gap
+    # costing something different: a refused gauge, a panel measured against the metal
+    # bound, a chipboard sheet resolving to MDF. The reader must not hold a private copy.
+    ok(set(config.FACED_BOARD_TOKENS) and set(config.SHEET_BOARD_TOKENS)
+       and set(config.SOLID_TIMBER_TOKENS),
+       "the board families are defined centrally")
+    from pathlib import Path as _P
+    _est_src = (_P(__file__).resolve().parents[1] / "src" / "estimator.py").read_text(
+        encoding="utf-8")
+    ok('_SHEET_BOARD_TOKENS = ("MDF"' not in _est_src,
+       "estimator reads the shared definition rather than restating it")
+
+
+def test_an_unknown_material_is_not_assumed_to_be_steel():
+    """estimate_material defaulted the density of ANY material it did not recognise to
+    7850 kg/m3 — mild steel. That is a defensible guess for an unlisted ALLOY and a 10x
+    error on board.
+
+    Faced board is deliberately absent from the density table: config's per-kg lookup would
+    otherwise cost a chipboard panel at steel's rate. Today it survives only because it has
+    no £/kg entry either, so the cost falls out as None. That is one config edit away from a
+    1434 x 748 melamine panel being massed as a steel plate — the same failure that has
+    already put GBP 367 on this job once, arriving by a different door.
+
+    A board with no density recorded is now not costed at all, and says so."""
+    from estimator import estimate_material
+    import config
+
+    ok("MFC" not in config.MATERIAL_DENSITY_KG_PER_M3,
+       "precondition: faced board has no density, deliberately")
+
+    def _part(pn, mat, thk, length, width):
+        return {"part_number": pn, "normalized_material": mat, "quantity": 1,
+                "normalized_thickness_mm": thk, "flat_pattern_detected": True,
+                "normalized_geometry": {
+                    "blank_length_mm": length, "blank_width_mm": width,
+                    "bounding_box_flat_mm": {"length": length, "width": width,
+                                             "height": thk},
+                    "geometry_source": "dxf_flat_pattern"}}
+
+    _panel = _part("12422-24-01J", "MFC", 28.0, 1434.0, 748.0)
+    _res = estimate_material(_panel) or {}
+    eq(_res.get("cost_method"), "no_price",
+       "an unmassable board is not costed, rather than costed as steel")
+    eq(_res.get("unit_material_mass_kg"), None,
+       "and carries no mass, because none could honestly be computed")
+    ok(any("not defaulted to steel" in str(f) for f in (_panel.get("review_flags") or [])),
+       "and the estimator is told why, so the gap is fillable rather than invisible")
+
+    # AN UNLISTED METAL KEEPS THE STEEL DEFAULT. The guess is defensible there — an unlisted
+    # alloy really is about that dense — so the refusal must be about BOARD and not about
+    # anything the density table happens not to list. Both parts end at no_price here,
+    # because neither material has a £/kg rate either; what separates them is whether the
+    # engine silently assumed a density, and only one of them is told it could not.
+    _plate = _part("X-01", "CORTEN", 3.0, 200.0, 100.0)
+    estimate_material(_plate)
+    eq([f for f in (_plate.get("review_flags") or []) if "not defaulted to steel" in str(f)],
+       [], "an unlisted metal is still massed at the steel default, and says nothing")
 
 
 def test_solidworks_saying_it_has_no_material_is_not_a_material():

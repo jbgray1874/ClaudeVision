@@ -641,8 +641,11 @@ _SW_MATERIAL_FAMILIES = (
     # plain MDF, which would otherwise claim every faced board through the fallback
     # normaliser. This is the third module whose material vocabulary was missing the
     # commonest shop-fitting board; the connector must not depend on another one for it.
+    # Only the spellings that NAME their substrate. Bare "melamine faced" says what was done
+    # to the sheet, not what the sheet is, and the two candidates are bought at different
+    # prices — so it stays unresolved here exactly as it does in the lexicon.
     ("MFMDF",           ("MELAMINE FACED MDF", "MFMDF", "PRE-LAM MDF", "PRELAM MDF")),
-    ("MFC",             ("MELAMINE FACED CHIPBOARD", "MELAMINE FACED", "MELAMINE", "MFC")),
+    ("MFC",             ("MELAMINE FACED CHIPBOARD", "PRE-LAM CHIPBOARD", "MFC")),
     ("CHIPBOARD",       ("CHIPBOARD",)),
     ("MDF",             ("MDF",)),
     ("PLYWOOD",         ("PLYWOOD", "PLY WOOD")),

@@ -1222,6 +1222,22 @@ MAX_SHEET_THICKNESS_MM = 25.0
 # genuine "28MM_MFC" filename was read by one module and thrown away by the next — the same
 # shape as the MFC vocabulary being in four modules and missing from the authoritative one.
 MAX_BOARD_THICKNESS_MM = 75.0
+
+# THE BOARD FAMILIES, IN ONE PLACE.
+#
+# Four modules carried their own answer to "is this board?" — wb_populate._is_board,
+# _TIMBER_TOKENS, estimator's thickness tokens and the SolidWorks connector's family table —
+# and the faced-board family was missing from three of them at different times. Each gap cost
+# a different thing: a refused 28mm gauge, a melamine panel measured against a sheet-metal
+# bound, and a chipboard sheet resolving to MDF.
+#
+# SHEET board and SOLID timber are separate because their thickness FLOORS differ (3mm MDF is
+# a stocked item; a 3mm pine panel is not), and both are separate from the faced family
+# because the facing changes the price and the machining, not the substrate.
+FACED_BOARD_TOKENS = ("MFC", "MFMDF", "MELAMINE", "PRE LAM", "PRELAM", "PRE-LAM")
+SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
+SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
+                       "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
 # Thinnest stock we will accept as a real thickness on a joinery part. Below this the value
 # is tolerance-table text, not a gauge (0.5mm "TIMBER" reached the Horti Crate sheet this
 # way). Metal is unaffected — 0.5mm sheet steel is ordinary stock.

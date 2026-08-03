@@ -1158,14 +1158,15 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
     # through or reject real thin board. Sheet goods are checked first so a veneered or
     # ply-faced product ("OAK VENEER MDF", "BIRCH PLY") takes the board floor, not the
     # timber one — it is a board, whatever species is on its face.
-    _SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
-    _SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
-                            "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
+    # ONE DEFINITION, IN config. This list lived here and three other modules had their own,
+    # and the faced family was missing from most of them at one time or another.
+    _SHEET_BOARD_TOKENS = tuple(getattr(config, "SHEET_BOARD_TOKENS", ()))
+    _SOLID_TIMBER_TOKENS = tuple(getattr(config, "SOLID_TIMBER_TOKENS", ()))
     # MELAMINE-FACED BOARD IS BOARD. The token list is what decides the floor AND the
     # ceiling below, so a substrate missing from it is silently treated as sheet metal —
     # which is how 12422-24's MFC panel came to be measured against a 25mm gauge bound.
-    _SHEET_BOARD_TOKENS = _SHEET_BOARD_TOKENS + ("MFC", "MELAMINE", "MFMDF", "PRE LAM",
-                                                 "PRELAM")
+    _SHEET_BOARD_TOKENS = _SHEET_BOARD_TOKENS + tuple(
+        getattr(config, "FACED_BOARD_TOKENS", ()))
     _is_board_thk = any(t in _mat_thk_u for t in _SHEET_BOARD_TOKENS)
     _is_timber_thk = any(t in _mat_thk_u for t in _SOLID_TIMBER_TOKENS)
     if _is_board_thk:
@@ -2209,7 +2210,32 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
 
     area_m2 = (blank_length * blank_width) / 1_000_000.0
     thickness_m = thickness / 1000.0
-    density = MATERIAL_DENSITY_KG_PER_M3.get(material) or MATERIAL_DENSITY_KG_PER_M3.get((material or "").upper(), 7850.0)
+    # AN UNKNOWN MATERIAL IS NOT STEEL. This defaulted every material it did not recognise
+    # to 7850 kg/m3 — mild steel — which is a reasonable guess for an unlisted METAL and a
+    # 10x error on board. Faced board is deliberately not in the density table (see
+    # json_normaliser: giving it one without a rate would cost a chipboard panel at steel's
+    # per-kg rate), and today it survives only because it has no £/kg entry either. That is
+    # one config edit away from a 1434 x 748 panel being massed as a steel plate.
+    #
+    # A board with no density recorded now returns None, which lands in the `no_price`
+    # branch below and reaches the sheet as a visible unpriced line. Metals keep the steel
+    # default: an unlisted alloy really is about that dense, and the guess is defensible.
+    density = (MATERIAL_DENSITY_KG_PER_M3.get(material)
+               or MATERIAL_DENSITY_KG_PER_M3.get((material or "").upper()))
+    if density is None:
+        _mat_u = str(material or "").upper().replace("_", " ")
+        _is_board_mat = any(
+            _t in _mat_u
+            for _t in (tuple(getattr(config, "FACED_BOARD_TOKENS", ()))
+                       + tuple(getattr(config, "SHEET_BOARD_TOKENS", ()))
+                       + tuple(getattr(config, "SOLID_TIMBER_TOKENS", ()))))
+        if _is_board_mat:
+            part.setdefault("review_flags", []).append(
+                f"{material}: no density recorded, so its material cannot be massed and is "
+                f"NOT costed. Board is deliberately not defaulted to steel's 7850 kg/m3 — "
+                f"that would be a 10x error. Set a sheet rate or a density for this board.")
+        else:
+            density = 7850.0
     fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material)
     applied_price_per_kg = external_price.get("applied_price_per_kg")
     price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg

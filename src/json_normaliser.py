@@ -69,15 +69,19 @@ MATERIAL_NORMALISATION = {
     # machine differently — chipboard blows out on a routed edge where MDF does not — so
     # collapsing them onto one code would price one board at the other's rate the moment a
     # sheet rate exists for either. Same facing, two materials.
+    # ONLY THE SPELLINGS THAT NAME THEIR SUBSTRATE. "MELAMINE FACED" and "PRE-LAM" on their
+    # own say what was done to the sheet and not what the sheet IS, and the two candidates
+    # are bought at different prices. Resolving them to MFC because it is the commoner of
+    # the two is a guess wearing a fact's clothes — the same reasoning that keeps
+    # "finishing" out of the department table. Unresolved, the part reaches the estimator
+    # as a visible gap; resolved wrongly, it reaches them as somebody else's board.
     "MELAMINE FACED CHIPBOARD": "MFC",
     "MELAMINE FACED MDF": "MFMDF",
-    "MELAMINE FACED": "MFC",       # bare, no substrate named — MFC is what the trade means
+    "PRE LAMINATED CHIPBOARD": "MFC",
+    "PRE LAM CHIPBOARD": "MFC",
     "PRE LAMINATED MDF": "MFMDF",
     "PRE LAM MDF": "MFMDF",
     "PRELAM MDF": "MFMDF",
-    "PRE LAMINATED": "MFC",
-    "PRE LAM": "MFC",
-    "PRELAM": "MFC",
     "MFMDF": "MFMDF",
     "MFC": "MFC",
     "CHIPBOARD": "CHIPBOARD",
