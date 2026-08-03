@@ -1117,12 +1117,24 @@ def test_source_and_confidence_move_together():
 
 def test_automatic_com_execution_is_opt_in():
     """SAFETY, not caution. The analyser calls Dispatch("SldWorks.Application"), which
-    ATTACHES to a SolidWorks already running on the machine. SolidWorks does not open a
-    document twice, so OpenDoc6 on a file a designer has open returns THEIR document — and
-    the analyser then closes every title it touched, taking unsaved work with it.
+    ATTACHES to a SolidWorks already running on the machine.
 
-    Making acquisition automatic was right. Making it the default on any machine that runs
-    an estimate was not. It is enabled only where SolidWorks belongs to this process."""
+    THIS DOCSTRING USED TO SAY THE ANALYSER CLOSES EVERY TITLE IT TOUCHED, TAKING UNSAVED
+    WORK WITH IT. That stopped being true when it learned ownership — it asks what is
+    already open before opening anything, records those as borrowed, and closes only what it
+    opened (test_the_analyser_never_closes_a_document_it_did_not_open holds that). A stale
+    hazard note is not harmless: this one was read as current and produced advice telling
+    somebody not to run a tool that is now safe to run. A comment describing a fixed defect
+    in the present tense is a defect of its own.
+
+    What remains is real and different: a borrowed document is read in the state the
+    designer has it in, unsaved changes included, so the extract can describe a model that
+    is not what is on disk — and the freshness fingerprint compares against disk, so it
+    cannot see that.
+
+    The RULE is unchanged and the reason is now the honest one: attaching to somebody's
+    session mid-estimate is a decision for whoever owns the machine, not for a costing run.
+    Enabled only where SolidWorks belongs to this process."""
     import ast
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(encoding="utf-8")

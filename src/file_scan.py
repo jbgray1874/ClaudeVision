@@ -1882,16 +1882,27 @@ def _finalize_scan_summary(
             _sw_folder = job_folder or (Path(pdf_path).parent if pdf_path else None)
             # OPT-IN, NOT DEFAULT — and the reason is other people's work, not caution.
             # The analyser calls Dispatch("SldWorks.Application"), which ATTACHES to a
-            # SolidWorks already running on this machine. SolidWorks does not open a document
-            # twice: OpenDoc6 on a file a designer already has open returns THEIR document,
-            # and the analyser then closes every title it touched. On a designer's
-            # workstation that closes their work, unsaved changes included.
+            # SolidWorks already running on this machine.
             #
-            # Making acquisition automatic was right; making it automatic HERE was not.
-            # Enable it only where SolidWorks belongs to this process — a dedicated worker or
-            # batch box — by setting SDI_SW_RUN_ANALYSER=1. Everywhere else the pipeline
-            # consumes an extract someone else produced, exactly as before, and says so
-            # loudly when models are present and no extract is.
+            # THE DESTRUCTIVE HALF OF THIS IS FIXED, AND THIS COMMENT USED TO SAY OTHERWISE.
+            # It described the analyser closing every title it touched, which stopped being
+            # true when sw_native_analyse learned ownership: it asks what is already open
+            # BEFORE opening anything, records those as borrowed, and close_all() closes only
+            # the documents this process opened. A stale hazard note is not harmless — this
+            # one was read as current and produced a warning telling somebody not to run a
+            # tool that is now safe to run.
+            #
+            # WHAT REMAINS IS REAL AND DIFFERENT. A borrowed document is read in the state
+            # the designer has it in, which may include unsaved changes — so the extract can
+            # describe a model that is not what is on disk, and the freshness fingerprint
+            # cannot see that. Save open work before extracting.
+            #
+            # Still opt-in HERE, because attaching to somebody's session mid-estimate is a
+            # decision that belongs to whoever owns the machine, not to a costing run. Enable
+            # it where SolidWorks belongs to this process — a dedicated worker or batch box —
+            # with SDI_SW_RUN_ANALYSER=1. Everywhere else the pipeline consumes an extract
+            # someone else produced, and says so loudly when models are present and no
+            # extract is.
             _sw_run = os.getenv("SDI_SW_RUN_ANALYSER", "").strip().lower() \
                 in {"1", "true", "yes", "on"}
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
