@@ -439,14 +439,21 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
     everything that could be wrong is here, where it can be driven directly.
     """
     from estimator_inputs import (indicative_price_to_withhold as _withhold,
-                                  indicative_price_note as _note_for)
-    guess = _withhold(part, is_indicative, price_gbp)
+                                  indicative_price_note as _note_for,
+                                  is_costed_elsewhere as _elsewhere)
+    # A DELIBERATE ZERO IS NOT A GAP. The cross-reference rows exist so an estimator can see
+    # the fabricated parts in the bill of materials; they are priced at zero precisely so
+    # the material total is not doubled. Two of job 11350's six outstanding inputs asked for
+    # rates on parts the Sheet Steel block had already costed from measured blanks.
+    _elsewhere_flag = _elsewhere(part)
+    guess = None if _elsewhere_flag else _withhold(part, is_indicative, price_gbp)
     if not guess:
-        return {"part": part, "withheld_gbp": None, "note": None}
+        return {"part": part, "withheld_gbp": None, "note": None,
+                "costed_elsewhere": _elsewhere_flag}
     part = dict(part)
     part["_price_explicitly_withheld"] = True
     part["_ai_indicative_gbp"] = guess
-    return {"part": part, "withheld_gbp": guess,
+    return {"part": part, "withheld_gbp": guess, "costed_elsewhere": False,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
@@ -2278,7 +2285,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=b["col_price"],    value=price if price is not None else None)
         ws.cell(row=row, column=b["col_qty"],      value=qty)
         ws.cell(row=row, column=b["col_scrap"],    value=0.04)  # 4% default; WB applies
-        if price is None:
+        if price is None and not _line["costed_elsewhere"]:
             _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
             # A BLANK THAT LOOKS LIKE A ZERO IS WORSE THAN AN ERROR.
             #

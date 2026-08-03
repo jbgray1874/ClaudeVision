@@ -10114,9 +10114,24 @@ def test_an_ai_market_estimate_is_an_estimator_input_not_a_price():
     eq((_out["note"] or {}).get("kind"), "ai_estimate_unconfirmed",
        "under its own kind — this is not the same job as a missing section rate")
 
+    # A DELIBERATE ZERO IS NOT A GAP, AND THE CHECKLIST IS ONLY WORKED IF EVERY LINE ON IT
+    # IS REAL. Two of job 11350's six outstanding inputs asked for a unit rate on
+    # 11350-01-01 and 11350-01-02 — parts the Sheet Steel block had already costed at £0.77
+    # and £0.48 from measured blanks, on the same sheet. Those rows are priced at zero so
+    # the material total is not doubled; pricing them is asking for the double-count back.
+    _xref = W.bom_line_pricing(
+        {"part_number": "11350-01-01", "_bom_cross_reference": True,
+         "description": "TICKET STRIP BAR — costed in Sheet Steel below"}, False, None)
+    ok(_xref["costed_elsewhere"],
+       "a cross-reference row is costed elsewhere, not unpriced")
+    eq(_xref["note"], None, "and asks the estimator for nothing")
+
     _real = W.bom_line_pricing({"part_number": "DBR60"}, False, 4.20)
     eq(_real["withheld_gbp"], None, "a catalogue price is not touched")
     eq(_real["note"], None, "and produces no checklist line")
+    eq(_real["costed_elsewhere"], False,
+       "and an ordinary line is NOT excused from the checklist — that exemption belongs to "
+       "the cross-reference rows alone, or every real gap disappears from the list")
     ok("_price_explicitly_withheld" not in _real["part"],
        "nor is the record it was given mutated")
 
@@ -10136,10 +10151,18 @@ def test_an_ai_market_estimate_is_an_estimator_input_not_a_price():
                 for t in n.targets if isinstance(t, ast.Name) and t.id == _name]
     eq(len(_assigns), 1,
        f"and never rebind {_name} — a second assignment is how the decision gets discarded")
-    _reads = [n for n in ast.walk(_fn)
-              if isinstance(n, ast.Name) and n.id == _name and isinstance(n.ctx, ast.Load)]
-    ok(len(_reads) >= 3,
-       "and must read back the part, the note and the reason — all three reach the sheet")
+    # EVERY KEY THE DECISION RETURNS MUST BE READ. "at least N reads" is not a test — it
+    # passes while any one of them is quietly dropped, and a decision the writer computes
+    # and never reads is a decision that does nothing. Derived from the returned dict, so a
+    # key added to bom_line_pricing and forgotten at the call site fails here.
+    _read_keys = {n.slice.value for n in ast.walk(_fn)
+                  if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Load)
+                  and isinstance(n.value, ast.Name) and n.value.id == _name
+                  and isinstance(n.slice, ast.Constant)}
+    _returned = set(W.bom_line_pricing({"part_number": "X"}, False, 1.0))
+    eq(sorted(_returned - _read_keys), [],
+       f"populate_workbook must read every key {_name} carries — one it ignores is a "
+       f"decision that changes nothing on the sheet")
 
     # The line it produces is a proper estimator input, distinct from a catalogue price and
     # from a plain unpriced line.

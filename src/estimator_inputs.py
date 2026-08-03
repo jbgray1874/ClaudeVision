@@ -33,6 +33,7 @@ __all__ = [
     "section_summary",
     "material_input_note",
     "input_note_for_line",
+    "is_costed_elsewhere",
     "indicative_price_to_withhold",
     "indicative_price_note",
     "banner_text",
@@ -129,6 +130,22 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
         return {"kind": PLACEHOLDER_UNPRICED,
                 "note": "NOT YET PRICED: enter the per-unit figure for this line"}
     return {"kind": MATERIAL_UNPRICED, "note": material_input_note(part)}
+
+
+def is_costed_elsewhere(part: Mapping[str, Any]) -> bool:
+    """True when this line's £0 is DELIBERATE because another block carries the cost.
+
+    A CHECKLIST IS ONLY WORKED IF EVERY LINE ON IT IS REAL. Job 11350 listed six outstanding
+    inputs and two of them were "enter a unit rate" for 11350-01-01 and 11350-01-02 — parts
+    the Sheet Steel block had already costed at £0.77 and £0.48, on the same sheet, from
+    measured blanks. Those rows exist so an estimator can SEE the fabricated parts in the
+    bill of materials; they are priced at zero precisely so the material total is not
+    doubled. Asking someone to price them is asking for the double-count back.
+
+    Two lines of noise in six is enough to make a person stop reading the list, and the
+    lines that were real — packaging, delivery, the fixings — are the ones that get lost.
+    """
+    return bool(isinstance(part, Mapping) and part.get("_bom_cross_reference"))
 
 
 def indicative_price_to_withhold(part: Mapping[str, Any], is_indicative: bool,
