@@ -5632,6 +5632,21 @@ def test_a_throughput_cannot_depend_on_how_many_were_ordered():
        "and four studs are four insertion work units, not one")
     eq(_insertion(20, 1)["work_units"], 1.0, "while one stud is one")
 
+    # THE RATE COLUMN IS PRODUCTS PER HOUR, NOT INSERTIONS PER HOUR, and the difference is
+    # a 4x charge. Reading 60/hr as "one insertion at 60 seconds" instead of "four at 15"
+    # produced a report that this job was understated by GBP 1.56/unit; acting on it would
+    # have charged the studs four times. work_units and invariance were both asserted and
+    # neither pins the units, so the number itself is asserted here.
+    from config import MANM_INSERT_SECONDS_EACH as _SEC
+    eq(_SEC, 15.0, "the per-insertion time the rates below are computed from")
+    eq(round(1.0 / _insertion(20, 4)["run_hours_per_unit"], 1), 60.0,
+       "four studs at 15s is 60 seconds of insertion per product — 60 products an hour")
+    eq(round(1.0 / _insertion(20, 1)["run_hours_per_unit"], 1), 240.0,
+       "and one stud is 240, which is what makes the column products and not insertions")
+    # The sheet's own figure, end to end: 20 off + a 15-minute setup.
+    eq(round(20 / (1.0 / _insertion(20, 4)["run_hours_per_unit"]) + 0.25, 3), 0.583,
+       "matching the 0.58 hours on the workbook")
+
 
 def test_an_unread_colour_is_not_a_second_colour():
     """11350 is ONE white job and paid for two booth hangs.
