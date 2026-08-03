@@ -822,6 +822,33 @@ def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, A
         for p in (part_estimates or []) if isinstance(p, dict))
 
 
+# FIELDS WHOSE ZERO IS A DEFAULT AND NOT A MEASUREMENT — named one at a time, with the
+# line of code that defaults each one, because "zero means unread" is a claim about a
+# specific writer and never a property of geometry in general.
+#
+#   hole_count / estimated_hole_count   document_builder writes
+#                                       `features.get("hole_count", 0)`, so a part nobody
+#                                       measured and a part with no holes arrive identical.
+#                                       The Sheet Steel block already treats that 0 as
+#                                       unread, leaving the cell blank rather than claiming
+#                                       no holes.
+#   cut_length_mm / estimated_...       resolved through an `or` chain whose last candidate
+#                                       can itself be 0. Nothing reaches the profile-cutting
+#                                       calculator that is not being cut, so a zero-length
+#                                       outline is never something a measurement said.
+#
+# EVERYTHING ELSE KEEPS THE CODEBASE'S RULE: an explicit zero is a value and outranks a
+# weaker source. bend counts are the reason this is a list and not a policy — a measured
+# zero bend count is the entire basis of the fold rule-out, and treating it as silence here
+# would hand a flat part its mirror's folds, which is the exact defect _is_blank's docstring
+# in drawing_job_merge exists to prevent. Nothing may be added below without naming the
+# writer that defaults it.
+_ZERO_IS_UNREAD_GEOMETRY_FIELDS = frozenset({
+    "hole_count", "estimated_hole_count",
+    "cut_length_mm", "estimated_cut_length_mm",
+})
+
+
 def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     """A geometry datum off a COSTED part record, from whichever of its two geometry
     records has one — normalized_geometry first, geometry_rollup second.
@@ -843,22 +870,26 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     That is a pricing decision and not this function's to make, so the field the sheet
     already reads still wins and the rollup answers only where it is SILENT.
 
-    A ZERO IS SILENCE HERE, AND ONLY HERE. document_builder writes
-    `hole_count=features.get("hole_count", 0)` and resolves `cut_length_mm` through an `or`
-    chain that can run out of candidates, so an unread part and a genuinely featureless one
-    arrive as the same 0 — and the caller already treats that 0 as unread by leaving the
-    cell blank rather than claiming no holes. Nothing reaches this block that is not being
-    profile-cut, so a zero cut length is never a measurement either. 11350's mirrored right
-    hand is what this cost: its own normalized_geometry had hole_count 0 and no cut length,
-    while the rollup the mirror pass filled from the measured left hand held 2 holes and
-    743.99mm — so the sheet cut it at 368/hr against its own mirror image's 287.
+    A ZERO IS SILENCE FOR THE FIELDS IN _ZERO_IS_UNREAD_GEOMETRY_FIELDS AND NO OTHERS.
+    That is a claim about the specific line of code that writes each one, not about
+    geometry, and the list names the writer for every entry. 11350's mirrored right hand is
+    what the hole count cost: its own normalized_geometry had hole_count 0 and no cut
+    length, while the rollup the mirror pass filled from the measured left hand held 2 holes
+    and 743.99mm — so the sheet cut it at 368/hr against its own mirror image's 287.
+
+    For every other field an explicit zero is a VALUE and is returned, because that is what
+    it is everywhere else in this codebase: a measured zero bend count is the whole basis of
+    the fold rule-out. Scoping the rule to this function rather than to these fields would
+    have made the next caller's flat part inherit its mirror's folds.
     """
     for _src in (pe.get("normalized_geometry") or {}, pe.get("geometry_rollup") or {}):
         for _n in names:
             _v = _src.get(_n)
             if _v is None:
                 continue
-            if isinstance(_v, (int, float)) and not isinstance(_v, bool) and _v <= 0:
+            if (_n in _ZERO_IS_UNREAD_GEOMETRY_FIELDS
+                    and isinstance(_v, (int, float)) and not isinstance(_v, bool)
+                    and _v <= 0):
                 continue
             return _v
     return None

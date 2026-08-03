@@ -7246,6 +7246,27 @@ def test_mirrored_evidence_survives_the_step_that_costs_it():
     eq(costed_geometry_value({}, "cut_length_mm", "estimated_cut_length_mm"), None,
        "no geometry means no number, not a zero the sheet would read as measured")
 
+    # ── AND ZERO IS SILENCE FOR THESE TWO FIELDS ONLY ───────────────────────────────
+    # "A zero means unread" is a claim about the specific line of code that writes each
+    # field, never a property of geometry, so it belongs to the FIELD LIST and not to the
+    # resolver. Scoped to the function it would have been inherited by every later caller —
+    # and a measured zero bend count is the entire basis of the fold rule-out, so the first
+    # caller to ask this for bends would have handed a flat part its mirror's folds. That is
+    # the defect _is_blank's docstring in drawing_job_merge exists to prevent, reintroduced
+    # one module along.
+    from wb_populate import _ZERO_IS_UNREAD_GEOMETRY_FIELDS
+    _flat = {"normalized_geometry": {"bend_count": 0, "estimated_bend_line_count": 0,
+                                     "pierce_count": 0},
+             "geometry_rollup": {"bend_count": 4, "estimated_bend_line_count": 4,
+                                 "pierce_count": 7}}
+    eq(costed_geometry_value(_flat, "bend_count", "estimated_bend_line_count"), 0,
+       "a measured zero bend count is a VALUE — a flat part does not inherit folds")
+    eq(costed_geometry_value(_flat, "pierce_count"), 0,
+       "and the same for any field nobody has shown to be defaulted to zero")
+    eq(sorted(_ZERO_IS_UNREAD_GEOMETRY_FIELDS),
+       ["cut_length_mm", "estimated_cut_length_mm", "estimated_hole_count", "hole_count"],
+       "the exemption covers exactly the fields whose defaulting writer is named, no more")
+
     # THE CALLER MUST ACTUALLY USE IT. A resolver a fixture exercises and the workbook does
     # not is the failure this whole test exists to answer, one level up.
     from pathlib import Path as _Path
