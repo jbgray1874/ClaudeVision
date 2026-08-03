@@ -1489,6 +1489,53 @@ def _find_label_cell(ws, *needles: str):
     return None
 
 
+def write_revision_header(ws, summary: Dict[str, Any], job_folder_name: str) -> bool:
+    """Put the drawing revision in the template's own Rev box. True when it was written.
+
+    THE REVISION IS READ AND THEN DROPPED ON THE FLOOR. Job 11350's run printed
+    "[revision] 11350-01 revision -> B" and the sheet's Rev box was blank, so an estimator
+    cannot tell which issue of the drawing was priced — and a sheet that outlives a revision
+    is a sheet nobody can trust.
+
+    Found by LABEL, never by address: the header block is the estimators' own layout and it
+    moves. AN EXACT LABEL, not a substring — "rev" sits inside plenty of words a header can
+    carry, and writing beside the wrong one is the same class of mistake that put a BOM row
+    number into a labour Set Up cell and voided the sheet.
+
+    Only into an EMPTY cell, so nothing anyone put on the template is ever displaced.
+
+    The revision comes from the ONE resolver that already answers "what drawing is this" —
+    title block, then canonical top assembly, then the folder name. A tenth place working a
+    job's identity out for itself is how the nine already here came to disagree.
+    """
+    try:
+        from client_quote_html import _drawing_identity
+        _rev = str((_drawing_identity(summary, job_folder_name) or ("", "", ""))[1] or "").strip()
+    except Exception:
+        _rev = ""
+    # The resolver returns the QUOTE's display string, "Rev B", because a quote header has
+    # no label of its own. This template prints the label itself, so the box takes the
+    # revision alone — otherwise the sheet reads "Rev  Rev B".
+    _rev = re.sub(r"^REV(?:ISION)?[\s.:]*", "", _rev, flags=re.IGNORECASE).strip()
+    if not _rev:
+        return False
+    try:
+        for _row in ws.iter_rows():
+            for _c in _row:
+                if not isinstance(_c.value, str):
+                    continue
+                if _c.value.strip().rstrip(":").lower() not in {"rev", "revision"}:
+                    continue
+                _cell = _writable_cell(ws, _c.row, _c.column + 1)
+                if _cell is not None and _cell.value in (None, ""):
+                    _cell.value = _rev
+                    return True
+                return False
+    except Exception:
+        pass
+    return False
+
+
 def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
     """Put the outstanding inputs where the estimator is already looking.
 
@@ -1810,6 +1857,15 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     ws[hdr["customer"]]   = summary.get("customer") or summary.get("client") or job_folder_name
     ws[hdr["drawing_no"]] = re.match(r"\s*(\d+)", job_folder_name).group(1) if re.match(r"\s*(\d+)", job_folder_name) else job_folder_name
     ws[hdr["order_qty"]]  = order_qty
+
+    # THE REVISION IS READ AND THEN DROPPED ON THE FLOOR. 11350's run printed
+    # "[revision] 11350-01 revision -> B" and the sheet's Rev box was blank — so an estimator
+    # cannot tell which issue of the drawing was priced, and a sheet that outlives a revision
+    # is a sheet nobody can trust. The engine already knows; only the header did not.
+    #
+    # Found by LABEL, never by address: the template's header block is the estimators' own
+    # layout. Written only into an EMPTY cell, so nothing on the template is ever displaced.
+    write_revision_header(ws, summary, job_folder_name)
 
     # ── Classify parts into blocks — from the FULL part audit ──────────────
     # Rules, in order, based on the engine's own fields (confirmed by _classify_audit):

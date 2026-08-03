@@ -5409,6 +5409,58 @@ def test_the_code_the_files_use_finds_the_code_the_drawing_uses():
        "consumer goes stale while the others are fixed")
 
 
+def test_the_revision_that_was_read_reaches_the_sheet():
+    """Job 11350's run printed "[revision] 11350-01 revision -> B" and the sheet's Rev box
+    was blank. An estimator cannot tell which issue of the drawing was priced, and a sheet
+    that outlives a revision is a sheet nobody can trust. The engine knew the whole time."""
+    from openpyxl import Workbook
+    from wb_populate import write_revision_header
+
+    def _job(rev):
+        """A summary the shared drawing-identity resolver can actually read."""
+        return {"llm_full_extract": {"drawing_info": {"drawing_number": "11350-01",
+                                                      "revision": rev, "title": "COMMS BAR"}}}
+
+    _wb = Workbook(); _ws = _wb.active
+    _ws.cell(row=3, column=2, value="Rev")
+    ok(write_revision_header(_ws, _job("B"), "11350-BootsLadderRackCommsBar"),
+       "the revision the run read reaches the sheet")
+    eq(_ws.cell(row=3, column=3).value, "B", "into the cell beside the template's own label")
+
+    # AN EXACT LABEL, NOT A SUBSTRING. "rev" sits inside plenty of words a header carries,
+    # and writing beside the wrong one is how a BOM row number ended up in a labour Set Up
+    # cell and voided the whole sheet.
+    _wb2 = Workbook(); _ws2 = _wb2.active
+    _ws2.cell(row=1, column=1, value="Reviewed By")
+    _ws2.cell(row=1, column=2, value="Tim")
+    _ws2.cell(row=4, column=1, value="Rev")
+    write_revision_header(_ws2, _job("C"), "11350")
+    eq(_ws2.cell(row=1, column=2).value, "Tim", "a word that merely contains 'rev' is skipped")
+    eq(_ws2.cell(row=4, column=2).value, "C", "and the real label is the one written beside")
+
+    # ONLY INTO AN EMPTY CELL — nothing on the estimators' template is displaced.
+    _wb3 = Workbook(); _ws3 = _wb3.active
+    _ws3.cell(row=2, column=1, value="Revision")
+    _ws3.cell(row=2, column=2, value="A")
+    eq(write_revision_header(_ws3, _job("B"), "11350"), False,
+       "an occupied Rev box is left alone")
+    eq(_ws3.cell(row=2, column=2).value, "A", "with what was already there intact")
+
+    # NO REVISION, NO WRITE. A blank is not a value to stamp.
+    _wb4 = Workbook(); _ws4 = _wb4.active
+    _ws4.cell(row=1, column=1, value="Rev")
+    eq(write_revision_header(_ws4, _job(""), "11350"), False,
+       "nothing read means nothing written")
+    eq(_ws4.cell(row=1, column=2).value, None, "and the box stays empty rather than blanked")
+
+    # WIRED, NOT MERELY BUILT — and reading the revision from the ONE resolver that already
+    # answers "what drawing is this", rather than a tenth place working it out for itself.
+    import inspect
+    import wb_populate as W
+    _src = inspect.getsource(W.populate_workbook)
+    ok("write_revision_header" in _src, "the workbook writer calls it")
+
+
 def test_a_part_described_as_another_part_with_components_is_an_assembly():
     """JOB 11350 CHARGED ONE BLANK TWICE. "11350-01-101 TICKET STRIP BAR WITH PEM STUDS" was
     routed as a fabricated leaf — its own Laser row, its own Fold row, its own material, its
