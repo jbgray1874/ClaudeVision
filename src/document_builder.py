@@ -648,6 +648,49 @@ def _synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
     return _synthesize_manufacturing_features_impl(part)
 
 
+def flat_blank_mm(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    """The DEVELOPED blank on a part record, whichever of the three shapes it is in.
+
+    ONE RECORD, THREE SPELLINGS, AND A RULE THAT ONLY KNEW ONE OF THEM. This module builds
+    normalized_geometry with bounding_box_flat_mm {length, width, height} and
+    developed_length_mm/developed_width_mm; apply_dxf_geometry_to_part writes
+    blank_length_mm/blank_width_mm; geometry_inference writes the latter too. Every reader
+    has to resolve all three, and the mirror rule resolved only the last — so it found
+    nothing on a real record and the right arm reached costing with no blank, while a
+    fixture that invented the shape it was looking for passed.
+
+    NEVER overall_length_mm/overall_width_mm. On a folded part those carry the FORMED
+    bounding box, not the blank (12120-01-01M: 126.39x82.2 formed, 132.39x88.2 developed).
+    Falling back to them reports a blank on a part that has none, which is worse than
+    finding nothing.
+    """
+    ng = part.get("normalized_geometry") if isinstance(part, dict) else None
+    ng = ng if isinstance(ng, dict) else {}
+
+    def _n(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f and abs(f) != float("inf") and f > 0 else None
+
+    l, w = _n(ng.get("blank_length_mm")), _n(ng.get("blank_width_mm"))
+    if l and w:
+        return l, w
+    l, w = _n((part or {}).get("blank_length_mm")), _n((part or {}).get("blank_width_mm"))
+    if l and w:
+        return l, w
+    box = ng.get("bounding_box_flat_mm")
+    if isinstance(box, dict):
+        l, w = _n(box.get("length")), _n(box.get("width"))
+        if l and w:
+            return l, w
+    l, w = _n(ng.get("developed_length_mm")), _n(ng.get("developed_width_mm"))
+    if l and w:
+        return l, w
+    return None, None
+
+
 def _interpret_part(part: Dict[str, Any]) -> Dict[str, Any]:
     operations = part.get("textual_operations", [])
     geometry_confidence = part["geometry_rollup"].get("confidence", {}).get("geometry_reliability", 0.0) if isinstance(part["geometry_rollup"].get("confidence"), dict) else 0.0

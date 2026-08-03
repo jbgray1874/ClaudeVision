@@ -1201,20 +1201,40 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # is refused for the same reason, and that also stops two mirrors of each other from
         # trading an empty record back and forth.
         base_ng = base.get("normalized_geometry") or {}
-        _base_src = str(base_ng.get("geometry_source") or "")
-        if not base.get("flat_pattern_detected") or _base_src.startswith("mirror"):
+        _base_src = str(base_ng.get("geometry_source")
+                        or base.get("geometry_source") or "")
+        # THE BASE MUST HAVE BEEN MEASURED, and rank is how this codebase says so. Testing
+        # a flag meant swapping in the shared blank resolver quietly admitted an INFERRED
+        # blank as a source — laundering a guess into geometry at rank 75, which is the one
+        # thing this rule must never do. At or above dxf (80) is measured; that also
+        # excludes mirror_of_measured (75), so an inherited flat is still not inheritable.
+        from source_precedence import rank as _rank
+        if _rank(_base_src) < _rank("dxf"):
             continue
-        if not (_num(base_ng.get("blank_length_mm")) and _num(base_ng.get("blank_width_mm"))):
+        # THROUGH THE SHARED RESOLVER, NOT ONE SPELLING OF IT. document_builder writes the
+        # flat as bounding_box_flat_mm/developed_*, apply_dxf_geometry_to_part writes
+        # blank_length_mm. Reading only the last found nothing on a real record — while a
+        # fixture that invented that shape passed.
+        from document_builder import flat_blank_mm
+        _bl, _bw = flat_blank_mm(base)
+        if not (_bl and _bw):
             continue
         # ITS OWN MEASUREMENT WINS OUTRIGHT. A mirror with its own export needs nothing.
         _ng = part.get("normalized_geometry") or {}
-        if _num(_ng.get("blank_length_mm")) and _num(_ng.get("blank_width_mm")):
+        _ml, _mw = flat_blank_mm(part)
+        if _ml and _mw:
             continue
 
+        # EVERY KEY THE BASE CARRIES, not a fixed six. A list of field names is a list of
+        # the spellings whoever wrote it happened to know, and this record has three.
+        # Provenance keys are set explicitly below and must not be copied.
         _got: List[str] = []
-        for _f in _MIRROR_GEOMETRY_FIELDS:
-            if _is_blank(_ng.get(_f)) and not _is_blank(base_ng.get(_f)):
-                _ng[_f] = base_ng[_f]
+        for _f, _v in base_ng.items():
+            if _f in {"geometry_source", "geometry_confidence", "mirrored_from"}:
+                continue
+            if _is_blank(_ng.get(_f)) and not _is_blank(_v):
+                import copy as _c
+                _ng[_f] = _c.deepcopy(_v)
                 _got.append(_f)
         if not _got:
             continue

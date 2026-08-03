@@ -715,22 +715,12 @@ def _dxf_blank_mm(part: Dict[str, Any]):
     126.39x82.2 formed, developed blank 132.39x88.2). Comparing a flat against a folded box
     would report a false 'agreement' on exactly the parts where it matters most."""
     ng = part.get("normalized_geometry") or {}
-    if not isinstance(ng, dict):
-        return None, None
-    l = _num(ng.get("blank_length_mm")) or _num(part.get("blank_length_mm"))
-    w = _num(ng.get("blank_width_mm")) or _num(part.get("blank_width_mm"))
-    if l and w:
-        return l, w
-    box = ng.get("bounding_box_flat_mm")
-    if isinstance(box, dict):
-        l, w = _num(box.get("length")), _num(box.get("width"))
-        if l and w:
-            return l, w
-    l = _num(ng.get("developed_length_mm"))
-    w = _num(ng.get("developed_width_mm"))
-    if l and w:
-        return l, w
-    return None, None
+    # ONE RESOLVER. This function knew all three spellings and the mirror rule knew one, so
+    # the mirror rule found nothing on a real record while its fixtures passed. Both now ask
+    # the same question of the same module — a second copy is how one goes stale while the
+    # other is fixed.
+    from document_builder import flat_blank_mm
+    return flat_blank_mm(part)
 
 
 def _dxf_backed(part: Dict[str, Any]) -> bool:

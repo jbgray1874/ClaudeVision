@@ -6274,6 +6274,61 @@ def test_a_mirrored_part_is_the_same_flat_as_the_part_it_mirrors():
     eq(_b3["normalized_geometry"]["geometry_source"], "dxf_flat_pattern",
        "the measured part keeps its own provenance")
 
+    # ── THE SHAPE THE RUN ACTUALLY PRODUCES ─────────────────────────────────────────
+    # The fixtures above hand the rule normalized_geometry.blank_length_mm. document_builder
+    # does not write that: it writes bounding_box_flat_mm {length,width,height} and
+    # developed_length_mm/developed_width_mm. So the rule read one spelling of three, found
+    # nothing on a real record, and the right arm reached costing with no blank — while
+    # every fixture passed, because each one invented the shape it was looking for.
+    from document_builder import flat_blank_mm
+    eq(flat_blank_mm({"normalized_geometry": {"blank_length_mm": 258.35,
+                                              "blank_width_mm": 84.8}}), (258.35, 84.8),
+       "the DXF pass's spelling")
+    eq(flat_blank_mm({"normalized_geometry": {"bounding_box_flat_mm": {
+        "length": 258.35, "width": 84.8, "height": 2.0}}}), (258.35, 84.8),
+       "and document_builder's")
+    eq(flat_blank_mm({"normalized_geometry": {"developed_length_mm": 258.35,
+                                              "developed_width_mm": 84.8}}), (258.35, 84.8),
+       "and the developed pair")
+    # NEVER THE FORMED BOX. On a folded part that is not the blank, and reporting one is
+    # worse than finding none.
+    eq(flat_blank_mm({"overall_length_mm": 126.39, "overall_width_mm": 82.2}), (None, None),
+       "a formed bounding box is not a blank")
+
+    # ONE RESOLVER, NOT TWO. The native connector knew all three spellings and this rule
+    # knew one — which is exactly how the rule found nothing on a real record while its
+    # fixtures passed. A second copy is how one goes stale while the other is fixed.
+    import inspect
+    import source_connectors.solidworks as _S
+    ok("flat_blank_mm" in inspect.getsource(_S._dxf_blank_mm),
+       "the native connector asks the same question of the same module")
+
+    _real_base = {
+        "part_number": "11350-01-02", "normalized_thickness_mm": 2.0,
+        "normalized_material": "MILD STEEL",
+        "geometry_rollup": {"cut_length_mm": 743.99, "estimated_pierce_count": 2},
+        "normalized_geometry": {
+            "stock_form": "sheet", "profile_type": "folded",
+            "bounding_box_flat_mm": {"length": 258.35, "width": 84.8, "height": 2.0},
+            "developed_length_mm": 258.35, "developed_width_mm": 84.8,
+            "geometry_source": "dxf_flat_pattern", "geometry_confidence": 1.0}}
+    _real_mir = {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM 200MM"}
+    eq(len(apply_mirror_geometry([_real_base, _real_mir])), 1,
+       "the rule fires on the record shape the pipeline actually builds")
+    eq(flat_blank_mm(_real_mir), (258.35, 84.8),
+       "and the right arm has a resolvable blank afterwards")
+    eq((_real_mir.get("geometry_rollup") or {}).get("cut_length_mm"), 743.99,
+       "with the cut length that keeps its laser row off a default rate")
+    # A record shape nobody has written yet must still travel: every key of the base's
+    # geometry is offered, not a fixed list of the spellings one author knew.
+    _future = dict(_real_base)
+    _future["normalized_geometry"] = dict(_real_base["normalized_geometry"],
+                                          some_future_measure_mm=17.5)
+    _fm = {"part_number": "11350-01-02 MIR"}
+    apply_mirror_geometry([_future, _fm])
+    eq((_fm.get("normalized_geometry") or {}).get("some_future_measure_mm"), 17.5,
+       "a field added to the geometry record travels without editing this rule")
+
     # RUNNING IT TWICE CHANGES NOTHING. It has to run at two points — see below — so this
     # is a property, not a convenience: gap-fill only, skip a part that already has a blank,
     # refuse a base whose own flat was inherited.
