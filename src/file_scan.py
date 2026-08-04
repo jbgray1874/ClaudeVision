@@ -2386,6 +2386,19 @@ def _finalize_scan_summary(
                 print(f"   [solidworks] applied to {len(_got)} part(s) that did not exist "
                       f"when the models were first read: {', '.join(str(g) for g in _got)}",
                       flush=True)
+        # THE MODEL'S OWN TREE, ONTO THE WHOLE POPULATION. Stamped separately from the
+        # geometry apply above because that one deliberately skips parts already carrying
+        # native evidence — and an assembly's CHILDREN are exactly the fact a part can be
+        # missing while every other native datum on it is present. Runs before the canonical
+        # graph is compiled, so a node arrives with its parent rather than being repaired
+        # after it is already flagged disconnected.
+        if _sw_job_late is not None and getattr(_sw_job_late, "found", False):
+            from source_connectors.solidworks import apply_native_hierarchy_to_parts
+            _hier = apply_native_hierarchy_to_parts(
+                summary["manufacturing_writeup"]["parts"], _sw_job_late)
+            for _h in _hier:
+                print(f"   [hierarchy] {_h['part_number']} holds "
+                      f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
     except Exception as _sw_late_err:
         print(f"   [solidworks] late application skipped: "
               f"{type(_sw_late_err).__name__}: {_sw_late_err}", flush=True)

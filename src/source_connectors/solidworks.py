@@ -1092,6 +1092,56 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict
     }
 
 
+def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
+                                    job: NativeJob) -> List[Dict[str, Any]]:
+    """Stamp the model's parent->child edges onto the parts, as assembly_children.
+
+    THE EDGES WERE READ AND NOTHING CONSUMED THEM. NativeJob.hierarchy has carried every
+    SLDASM's own tree since the analyser began reporting it, and the route compiler builds
+    its graph from `part["assembly_children"]` — two halves of one fact with no wire
+    between them. Built, and not wired, for the fourth time on this branch.
+
+    WHY THIS CLEARS DISCONNECTED NODES. build_part_graph flags any node that is not the top
+    assembly and has NO parents. The LLM's assemblies loop ADDS edges rather than replacing
+    them, so native edges can only ever give a node a parent it did not have — this cannot
+    take one away, and cannot silently move a part from one owner to another.
+
+    A part is stamped only where the model actually names children for it. Nothing is
+    invented for an assembly the extract did not open.
+    """
+    stamped: List[Dict[str, Any]] = []
+    if not parts or not getattr(job, "hierarchy", None):
+        return stamped
+    by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
+               for p in parts if isinstance(p, dict) and p.get("part_number")}
+    for parent, kids in (job.hierarchy or {}).items():
+        target = by_code.get(_clean_pn(str(parent)).upper())
+        if target is None:
+            continue
+        existing = [str(c) for c in (target.get("assembly_children") or [])
+                    if str(c).strip()]
+        seen = {c.upper() for c in existing}
+        added = []
+        for child, _qty in kids:
+            code = _clean_pn(str(child))
+            if not code or code.upper() in seen or code.upper() == _clean_pn(str(parent)).upper():
+                continue
+            existing.append(code)
+            seen.add(code.upper())
+            added.append(code)
+        if not added:
+            continue
+        # precedence: direct-write ok — a hierarchy EDGE LIST, not an arbitrated datum; the
+        # graph unions edges from every source and this only ever adds ones the model read.
+        target["assembly_children"] = existing
+        target["is_sub_assembly"] = True
+        target.setdefault("review_flags", []).append(
+            f"hierarchy from the SolidWorks model: {', '.join(added)} "
+            f"{'is' if len(added) == 1 else 'are'} held by {target.get('part_number')}")
+        stamped.append({"part_number": target.get("part_number"), "children": added})
+    return stamped
+
+
 def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, int]:
     """Fold the SolidWorks native extract into the PRE-ESTIMATE part records — i.e. BEFORE
     costing — so the engine's existing paths fire with modelled truth instead of inferred

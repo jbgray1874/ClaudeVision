@@ -4810,6 +4810,72 @@ def test_one_item_read_twice_is_one_bom_line():
     eq(len(_diff), 2, "different descriptions are different parts")
 
 
+def test_native_hierarchy_gives_a_node_its_parent():
+    """THE EDGES WERE READ AND NOTHING CONSUMED THEM.
+
+    NativeJob.hierarchy has carried every SLDASM's own parent->child tree since the analyser
+    began reporting it, and build_part_graph builds its graph from
+    part["assembly_children"]. Two halves of one fact with no wire between them — built,
+    and not wired, for the fourth time on this branch. 12422-24 has carried
+    bom_node_disconnected as a BLOCKING invariant through every run while the model on disk
+    said exactly who owns what.
+
+    build_part_graph flags any node that is not the top assembly and has no parents. The
+    LLM's assemblies loop ADDS edges rather than replacing them, so native edges can only
+    give a node a parent it did not have: this cannot take one away, and cannot silently
+    move a part from one owner to another."""
+    from source_connectors.solidworks import (normalize_native_extract,
+                                              apply_native_hierarchy_to_parts)
+    from route_compiler import build_part_graph
+
+    _recs = [{"title": "12422-24-GA", "doctype": 2,
+              "assembly_part_number": "12422-24-GA",
+              "bom": [{"part_number": p, "qty": q} for p, q in
+                      (("12422-24-101", 1), ("12422-24-102", 1),
+                       ("12422-24-01J", 1), ("12422-24-05M", 2))],
+              "assembly_edges": [
+                  {"parent": "", "child": "12422-24-101", "qty": 1, "child_doc_type": 2},
+                  {"parent": "", "child": "12422-24-102", "qty": 1, "child_doc_type": 2},
+                  {"parent": "12422-24-101", "child": "12422-24-01J", "qty": 1},
+                  {"parent": "12422-24-102", "child": "12422-24-05M", "qty": 2}]}]
+    _job = normalize_native_extract(_recs)
+    _parts = [{"part_number": c, "description": c, "quantity": 1} for c in
+              ("12422-24-GA", "12422-24-101", "12422-24-102",
+               "12422-24-01J", "12422-24-05M")]
+    _extract = {"top_assembly": {"part_number": "12422-24-GA"}}
+
+    _before = {i["part_number"]
+               for i in build_part_graph(_parts, _extract)["issues"]}
+    eq(sorted(_before),
+       ["12422-24-01J", "12422-24-05M", "12422-24-101", "12422-24-102"],
+       "precondition: with no hierarchy every leaf is disconnected")
+
+    _stamped = apply_native_hierarchy_to_parts(_parts, _job)
+    eq(len(_stamped), 3, "the GA and both sub-assemblies are given their children")
+
+    _graph = build_part_graph(_parts, _extract)
+    eq([i["part_number"] for i in _graph["issues"]], [],
+       "and no node is left without a parent")
+    ok("12422-24-102" in (_graph["parents"].get("12422-24-05M") or set()),
+       "the foot plate hangs off the sub-assembly the MODEL puts it in, not the GA")
+
+    # NOTHING IS INVENTED FOR AN ASSEMBLY THE EXTRACT NEVER OPENED, and a job with no
+    # native hierarchy at all — every job before this one — is untouched.
+    from source_connectors.solidworks import NativeJob
+    _none = [dict(p) for p in _parts]
+    eq(apply_native_hierarchy_to_parts(_none, NativeJob()), [],
+       "no hierarchy means no claim")
+
+    # IT ADDS, IT NEVER REPLACES. A part that already names children keeps them.
+    _own = [{"part_number": "12422-24-101", "description": "SUB",
+             "assembly_children": ["SOMETHING-ELSE"], "quantity": 1}]
+    apply_native_hierarchy_to_parts(_own, _job)
+    ok("SOMETHING-ELSE" in _own[0]["assembly_children"],
+       "an edge the engine already had survives")
+    ok("12422-24-01J" in _own[0]["assembly_children"],
+       "and the model's edge is added beside it")
+
+
 def test_the_merge_runs_on_the_population_the_sheet_renders():
     """THE FIRST ATTEMPT AT THIS WAS CORRECT AND INVISIBLE.
 
