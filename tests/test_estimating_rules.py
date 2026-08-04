@@ -13403,3 +13403,61 @@ def test_a_successful_extract_says_so_in_the_same_word_a_refusal_uses():
        "an accepted extract records that it was found, beside the fields it filled")
     eq(_fs.count('"found": False'), 3,
        "and every refusal path still says so too — the field answers in all states")
+
+
+def test_an_operation_charged_on_a_parent_and_its_child_is_surfaced():
+    """COATED AS A PART, AND AGAIN AS THE ASSEMBLY THAT CONTAINS ONLY IT.
+
+    12422-24 charges P.Coat on 12422-24-102 inside a group of four AND on 05M on its own
+    row. The SolidWorks tree says 102 holds 05M and nothing else. Either the shop coats
+    parts and then the assembly — two real events — or that is the same metal through the
+    oven twice, and the two rulings are about GBP 10 and about GBP 1.12 per unit apart.
+
+    Nothing said so on the sheet or in either HTML report. The tree that makes it visible
+    only started applying today; until an operation's participants could be tested against
+    the hierarchy, a parent sitting beside its own child looked like four separate parts.
+
+    A WARNING, not a blocker: coating before and after assembly is a real process and the
+    engine cannot know which the shop does. The estimator rules — but only if they are told."""
+    from invariants import check_an_operation_is_not_charged_on_a_parent_and_its_child as _chk
+
+    _job = {"solidworks_native": {"hierarchy": {
+                "12422-24-102": [["12422-24-05M", 1.0]],
+                "12422-24-GA": [["12422-24-102", 1.0]]}},
+            "canonical_route_shadow": {"decisions": [
+                {"decision_id": "d1", "operation": "P.Coat", "participants": [
+                    "12422-24-02M", "12422-24-03M", "12422-24-04M",
+                    "12422-24-102", "12422-24-05M"]},
+                {"decision_id": "d2", "operation": "Fold",
+                 "participants": ["12422-24-02M"]}]}}
+    _v = _chk(_job)
+    eq(len(_v), 1, "the overlapping operation is reported once")
+    eq(_v[0]["severity"], "warning",
+       "as a warning — coating before and after assembly is a real process")
+    ok("12422-24-102" in _v[0]["message"] and "12422-24-05M" in _v[0]["message"],
+       f"naming both the assembly and the child: {_v[0]['message']}")
+    eq(_v[0]["detail"]["operation"], "P.Coat", "and which operation it was")
+
+    # A GRANDCHILD COUNTS. Depth is not the question; ownership is.
+    _deep = {"solidworks_native": {"hierarchy": {"GA": [["SUB", 1.0]], "SUB": [["LEAF", 1.0]]}},
+             "canonical_route_shadow": {"decisions": [
+                 {"operation": "P.Coat", "participants": ["GA", "LEAF"]}]}}
+    ok(_chk(_deep), "an operation on an assembly and its grandchild is still one item twice")
+
+    # SIBLINGS ARE NOT A CONFLICT. Four parts coated together is the ordinary case and must
+    # stay silent, or the warning becomes noise on every job.
+    _sibs = {"solidworks_native": {"hierarchy": {"GA": [["A", 1.0], ["B", 1.0]]}},
+             "canonical_route_shadow": {"decisions": [
+                 {"operation": "P.Coat", "participants": ["A", "B"]}]}}
+    eq(_chk(_sibs), [], "parts sharing a parent are not parent and child")
+
+    # NO TREE, NO OPINION. A job with no hierarchy read cannot be tested this way and must
+    # not invent a finding from the absence.
+    eq(_chk({"canonical_route_shadow": {"decisions": [
+        {"operation": "P.Coat", "participants": ["A", "B"]}]}}), [],
+       "with no hierarchy, the check says nothing rather than guessing")
+
+    # AND IT IS REGISTERED, or it protects nothing.
+    from invariants import CHECKS
+    ok(any(c.__name__ == "check_an_operation_is_not_charged_on_a_parent_and_its_child"
+           for c in CHECKS), "the check actually runs as part of check_job")

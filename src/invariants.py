@@ -1364,6 +1364,82 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def check_an_operation_is_not_charged_on_a_parent_and_its_child(
+        summary: Any) -> List[Dict[str, Any]]:
+    """POWDER COATED AS A PART, AND AGAIN AS THE ASSEMBLY THAT CONTAINS ONLY IT.
+
+    12422-24 charges P.Coat on 12422-24-102 inside a group of four, and again on 05M on its
+    own row. The SolidWorks tree says 102 holds 05M and nothing else. Either the shop coats
+    the parts and then the assembly — two real events — or one of those rows is the same
+    metal through the oven twice.
+
+    NOT A VERDICT. Coating before and after assembly is a real process, and this check has
+    no way to know which the shop does. It is a WARNING because the answer is the estimator's
+    and the cost of it being wrong is not small: on this job, ruling one way removes about
+    GBP 10 per unit and the other about GBP 1.12.
+
+    It exists because nothing said so. The tree that makes this visible only started
+    applying today, and until an operation's participants could be tested against the
+    hierarchy, a parent and its own child sitting in one route looked like four parts.
+    """
+    if not isinstance(summary, dict):
+        return []
+    # THE TREE, FROM WHEREVER IT WAS READ. The native extract stamps its own; the parts carry
+    # whatever every hierarchy source agreed on. Unioned, because this asks only "is one of
+    # these the ancestor of another", which no single source has to answer alone.
+    children: Dict[str, set] = {}
+    _sw = (summary.get("solidworks_native") or {}).get("hierarchy") or {}
+    for parent, kids in _sw.items():
+        for kid in (kids or []):
+            code = kid[0] if isinstance(kid, (list, tuple)) and kid else kid
+            if str(code or "").strip():
+                children.setdefault(str(parent).upper(), set()).add(str(code).upper())
+    for part in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
+        if not isinstance(part, dict):
+            continue
+        for kid in (part.get("assembly_children") or []):
+            if str(kid or "").strip():
+                children.setdefault(
+                    str(part.get("part_number") or "").upper(), set()).add(str(kid).upper())
+    if not children:
+        return []
+
+    def _descendants(code: str, seen: Optional[set] = None) -> set:
+        seen = seen if seen is not None else set()
+        out: set = set()
+        for kid in children.get(code, set()):
+            if kid in seen:
+                continue
+            seen.add(kid)
+            out.add(kid)
+            out |= _descendants(kid, seen)
+        return out
+
+    shadow = _node(summary, "canonical_route_shadow")
+    out: List[Dict[str, Any]] = []
+    for decision in (shadow.get("decisions") or []):
+        if not isinstance(decision, dict):
+            continue
+        parts_in = {str(p).upper() for p in (decision.get("participants") or []) if p}
+        if len(parts_in) < 2:
+            continue
+        for candidate in sorted(parts_in):
+            overlap = sorted(_descendants(candidate) & (parts_in - {candidate}))
+            if not overlap:
+                continue
+            out.append(_violation(
+                "operation_charged_on_a_parent_and_its_child", WARNING,
+                f"{decision.get('operation') or 'An operation'} is charged on "
+                f"{candidate} and separately on {', '.join(overlap)}, which the job "
+                f"hierarchy says {candidate} contains. Either the shop does this before AND "
+                f"after assembly — two real events — or the same item is being charged "
+                f"twice. An estimator must rule; the engine cannot.",
+                operation=decision.get("operation"),
+                assembly=candidate, descendants=overlap,
+                decision_id=decision.get("decision_id")))
+    return out
+
+
 def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict[str, Any]]:
     """THE HEADER SAID 10 AND THE MATHS SAID 180.
 
@@ -1496,6 +1572,7 @@ CHECKS = (
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
     check_the_quantity_costed_is_the_quantity_ordered,
+    check_an_operation_is_not_charged_on_a_parent_and_its_child,
 )
 
 
