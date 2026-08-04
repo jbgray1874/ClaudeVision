@@ -7612,6 +7612,8 @@ def test_mirrored_evidence_survives_the_step_that_costs_it():
     # feature_synthesis multiplies the rollup's by the confidence on its way into
     # normalized_geometry — so choosing the rollup would re-cut every steel part in every
     # job at a distance nobody asked to change.
+    #
+    # NEITHER RECORD NAMES A SOURCE HERE, which is the case that caution was aimed at.
     _weighted = {"normalized_geometry": {"cut_length_mm": 520.0, "hole_count": 3},
                  "geometry_rollup": {"estimated_cut_length_mm": 743.99,
                                      "estimated_hole_count": 9}}
@@ -7619,6 +7621,42 @@ def test_mirrored_evidence_survives_the_step_that_costs_it():
        "a part whose own geometry record answers keeps the number the sheet reads today")
     eq(costed_geometry_value(_weighted, "hole_count", "estimated_hole_count"), 3,
        "in both fields, or the change is a repricing wearing a bug fix's clothes")
+
+    # ── BUT POSITION IS NOT EVIDENCE ────────────────────────────────────────────────
+    # Asking normalized_geometry first was the right caution and the wrong mechanism. On
+    # 12422-24-02M the rollup held 746.91mm stamped `solidworks_api` — rank 90, measured on
+    # the model's cut list — and normalized_geometry held 8215.26mm, the GA's vector paths,
+    # with NO recorded source, which this codebase ranks 0. The measurement lost to the
+    # guess because the guess was asked first, and the laser calculator was handed 7832mm of
+    # internal cut against a true 364mm. A read-only probe of the saved job is what proved
+    # the connector had done its job and this reader was undoing it.
+    _02m = {"normalized_geometry": {"cut_length_mm": 8215.26, "hole_count": 0,
+                                    "blank_length_mm": 100.96, "blank_width_mm": 90.49},
+            "geometry_rollup": {"estimated_cut_length_mm": 746.91,
+                                "estimated_cut_length_mm_source": "solidworks_api",
+                                "estimated_hole_count": 0, "estimated_pierce_count": 8}}
+    eq(costed_geometry_value(_02m, "cut_length_mm", "estimated_cut_length_mm"), 746.91,
+       "a datum that can name a stronger source displaces one that cannot")
+    eq(round(746.91 - 2 * (100.96 + 90.49), 1), 364.0,
+       "which is 364mm of internal cut, not 7832mm")
+
+    # EQUAL RANK STILL RESOLVES POSITIONALLY. Two sources of equal standing disagreeing is
+    # not a reason to prefer the later one — that is the rule source_precedence already
+    # holds, and the caution above survives intact wherever it was actually aimed.
+    _tie = {"normalized_geometry": {"cut_length_mm": 520.0,
+                                    "cut_length_mm_source": "dxf"},
+            "geometry_rollup": {"estimated_cut_length_mm": 743.99,
+                                "estimated_cut_length_mm_source": "dxf"}}
+    eq(costed_geometry_value(_tie, "cut_length_mm", "estimated_cut_length_mm"), 520.0,
+       "equal rank keeps normalized_geometry, exactly as before")
+
+    # AND A WEAKER NAMED SOURCE DOES NOT WIN EITHER. Only STRONGER displaces.
+    _weaker = {"normalized_geometry": {"cut_length_mm": 520.0,
+                                       "cut_length_mm_source": "dxf"},
+               "geometry_rollup": {"estimated_cut_length_mm": 743.99,
+                                   "estimated_cut_length_mm_source": "geometry_inference"}}
+    eq(costed_geometry_value(_weaker, "cut_length_mm", "estimated_cut_length_mm"), 520.0,
+       "an inference does not displace a measured DXF just by sitting in the other record")
 
     # A ZERO IS SILENCE, AND ONLY BECAUSE OF WHERE IT COMES FROM. document_builder writes
     # hole_count=features.get("hole_count", 0), so an unread part and a genuinely hole-free

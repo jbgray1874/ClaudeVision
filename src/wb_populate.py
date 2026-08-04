@@ -918,7 +918,15 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     the fold rule-out. Scoping the rule to this function rather than to these fields would
     have made the next caller's flat part inherit its mirror's folds.
     """
-    for _src in (pe.get("normalized_geometry") or {}, pe.get("geometry_rollup") or {}):
+    from source_precedence import rank as _rank
+
+    _SOURCE_KEY = {"normalized_material": "material_source",
+                   "quantity": "quantity_source",
+                   "normalized_thickness_mm": "thickness_source"}
+
+    _candidates = []          # (position, rank, value) — position 0 is normalized_geometry
+    for _pos, _src in enumerate((pe.get("normalized_geometry") or {},
+                                 pe.get("geometry_rollup") or {})):
         for _n in names:
             _v = _src.get(_n)
             if _v is None:
@@ -927,8 +935,28 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
                     and isinstance(_v, (int, float)) and not isinstance(_v, bool)
                     and _v <= 0):
                 continue
-            return _v
-    return None
+            _s = _src.get(_SOURCE_KEY.get(_n, f"{_n}_source"))
+            _candidates.append((_pos, _rank(_s), _v))
+            break             # first named spelling this record answers with
+    if not _candidates:
+        return None
+    # RANK FIRST, POSITION ONLY TO BREAK A TIE.
+    #
+    # This asked normalized_geometry first and the rollup only where it was silent — chosen
+    # to avoid moving every steel part onto the unweighted cut length, which was the right
+    # caution and the wrong mechanism. Position is not evidence. On 12422-24-02M the rollup
+    # held 746.91mm stamped `solidworks_api` (rank 90, measured on the model's cut list) and
+    # normalized_geometry held 8215.26mm — the GA's vector paths — with NO recorded source
+    # at all, which this codebase ranks 0. The measurement lost to the guess because the
+    # guess was asked first, and the laser calculator was handed 7832mm of internal cut
+    # against a true 364mm.
+    #
+    # Ranking restores the original caution exactly where it was aimed: two unsourced
+    # values, or two of equal rank, still resolve to normalized_geometry, so nothing whose
+    # provenance nobody recorded moves. Only a datum that can NAME a stronger source
+    # displaces one that cannot.
+    _candidates.sort(key=lambda c: (-c[1], c[0]))
+    return _candidates[0][2]
 
 
 def _is_board(mat: str) -> bool:
