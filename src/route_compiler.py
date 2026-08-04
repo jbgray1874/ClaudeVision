@@ -668,11 +668,30 @@ def build_part_graph(
                 and not node.parents
                 and node.part_number not in {"PACKAGING", "DELIVERY", "POWDER"}
             ):
+                # WHY IT HAS NO PARENT IS A DIFFERENT QUESTION FROM WHICH NODE IT IS, and it
+                # decides the fix. A node present in the raw records but absent from the
+                # extract is usually a phantom — a truncated code, or a word from a drawing
+                # read as a part — and the repair is to stop creating it. A node present in
+                # BOTH is a real part nobody claimed, and the repair is an ownership edge.
+                # The node already carries that evidence; only the issue did not.
                 graph_issues.append({
                     "code": "bom_node_disconnected",
                     "part_number": node.part_number,
                     "kind": node.kind,
                     "description": node.description,
+                    "in_raw_records": bool(node.evidence.get("raw_record_present")),
+                    "in_extract": bool(node.evidence.get("extract_record_present")),
+                    "aliases": list(node.evidence.get("raw_aliases") or []),
+                    "qty_per_unit": node.qty_per_unit,
+                    # The fuller codes this one is a prefix of. A code that is a stem of
+                    # another code on the same job is the signature of a truncated read, and
+                    # naming the candidates turns "why is this here" into one glance.
+                    "longer_codes_sharing_this_stem": sorted(
+                        other.part_number for other in nodes
+                        if other.part_number != node.part_number
+                        and len(other.part_number) > len(node.part_number)
+                        and other.part_number.upper().startswith(node.part_number.upper())
+                    ),
                 })
 
     return {

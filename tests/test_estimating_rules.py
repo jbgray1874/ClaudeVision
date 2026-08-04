@@ -4883,13 +4883,74 @@ def test_a_blocker_names_the_part_it_is_blocking_on():
     ok("3.5x12mm WOOD SCREW" in _msg,
        "and its description, because a code alone is not recognisable on a drawing")
     ok(_v[0]["severity"] == "blocking", "still blocking — naming it does not excuse it")
-    ok("parent" in _msg.lower(),
-       "and it says what would resolve it, not only that something is wrong")
+
+    # AND WHICH FIX IT NEEDS. Three causes wear the same symptom and need opposite repairs.
+    def _msg_for(**issue_kw):
+        _s = {"canonical_route_shadow": {"mode": "cutover", "decisions": [], "issues": [
+                  dict({"code": "bom_node_disconnected", "part_number": "X"}, **issue_kw)]},
+              "workbook_labour": {"mode": "canonical", "rows": []}}
+        return [v for v in check_canonical_route_shadow(_s)
+                if v["code"] == "canonical_route_bom_node_disconnected"][0]["message"]
+
+    # A STEM OF A LONGER CODE IS A TRUNCATED READ, not a part missing an owner. Giving it a
+    # parent would make a phantom permanent, so the message must not suggest that.
+    _trunc = _msg_for(part_number="79814P", in_raw_records=True, in_extract=True,
+                      longer_codes_sharing_this_stem=["79814P613"])
+    ok("79814P613" in _trunc, f"the fuller code is named: {_trunc}")
+    ok("TRUNCATED" in _trunc, "and identified as truncation")
+    ok("not to give it a parent" in _trunc,
+       "and the message steers AWAY from the repair that would make the phantom permanent")
+
+    # RAW BUT NOT IN THE EXTRACT — invented downstream of the drawing read.
+    _phantom = _msg_for(in_raw_records=True, in_extract=False)
+    ok("NOT in the extract" in _phantom, f"the missing side is named: {_phantom}")
+
+    # IN BOTH — a real part nobody claimed. This is the only case an edge fixes.
+    _orphan = _msg_for(in_raw_records=True, in_extract=True)
+    ok("ownership edge" in _orphan, f"and here an edge IS the fix: {_orphan}")
+    ok("TRUNCATED" not in _orphan, "without also calling a real part a truncation")
 
     # THE IDENTITY IS STILL IN THE DETAIL. The message became readable; nothing that reads
     # the structured record lost a field.
     eq(_v[0]["detail"]["issue"]["part_number"], "SCREW",
        "the structured detail is unchanged for anything parsing it")
+
+    # THROUGH THE COMPILER, NOT AROUND IT. The checks above hand the invariant a
+    # hand-written issue, which tests the sentence and NOT the thing that fills it. Emptying
+    # the compiler's stem detector left every one of them passing — a mutation that survives
+    # proves the test was aimed at the wrong side of the seam.
+    from route_compiler import build_part_graph
+
+    _graph = build_part_graph(
+        [{"part_number": "12422-24-GA", "assembly_children": ["12422-24-02M"]},
+         {"part_number": "12422-24-02M", "description": "TOP BRACKET", "quantity": 1},
+         {"part_number": "79814P613", "description": "3.5 x 16mm Pan Head Wood Screw",
+          "quantity": 4},
+         {"part_number": "79814P", "description": "3.5 x 16mm Pan Head Wood Screw",
+          "quantity": 4}],
+        {"top_assembly": {"part_number": "12422-24-GA"},
+         "assemblies": [{"part_number": "12422-24-GA",
+                         "children": [{"part_number": "12422-24-02M", "qty": 1},
+                                      {"part_number": "79814P613", "qty": 4}]}]})
+    _dis = [i for i in _graph["issues"] if i["code"] == "bom_node_disconnected"]
+    eq([i["part_number"] for i in _dis], ["79814P"],
+       "the truncated stem is the node with no owner; the full code has one")
+    eq(_dis[0]["longer_codes_sharing_this_stem"], ["79814P613"],
+       "and the compiler names the fuller code it is a prefix of")
+    ok(_dis[0]["in_raw_records"],
+       "carrying whether each source saw it, which is what separates a phantom from an orphan")
+
+    # THE FULL CODE IS NOT ITS OWN STEM, and a genuinely standalone code claims nothing.
+    _graph2 = build_part_graph(
+        [{"part_number": "GA", "assembly_children": ["A1"]},
+         {"part_number": "A1", "quantity": 1},
+         {"part_number": "LOOSE", "description": "unclaimed but real", "quantity": 1}],
+        {"top_assembly": {"part_number": "GA"},
+         "assemblies": [{"part_number": "GA", "children": [{"part_number": "A1", "qty": 1}]}]})
+    _d2 = [i for i in _graph2["issues"] if i["code"] == "bom_node_disconnected"]
+    eq([i["part_number"] for i in _d2], ["LOOSE"], "a real orphan is still reported")
+    eq(_d2[0]["longer_codes_sharing_this_stem"], [],
+       "and is not mislabelled a truncation when nothing shares its stem")
 
     # A NODE THE COMPILER COULD NOT NAME still reports, rather than producing a sentence
     # with a hole in it.

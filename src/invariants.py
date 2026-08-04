@@ -1268,12 +1268,29 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
             _bits = [str(issue.get(k)) for k in ("part_number", "kind", "description")
                      if str(issue.get(k) or "").strip()]
             _who = " / ".join(_bits) if _bits else "an unnamed node"
+            # AND WHICH FIX IT NEEDS. A stem of a longer code on the same job is a truncated
+            # read, not a part — the repair is to stop creating it, and pointing at the
+            # fuller code says so without anyone opening the JSON. A node the extract never
+            # saw is a phantom from somewhere else. A node both sources carry is a real part
+            # nobody claimed, which is the only case an ownership edge fixes.
+            _stems = [str(s) for s in (issue.get("longer_codes_sharing_this_stem") or [])]
+            if _stems:
+                _why = (f" It is a prefix of {', '.join(_stems)} on this same job, which is "
+                        f"the signature of a TRUNCATED code rather than a real part — the "
+                        f"fix is to stop creating it, not to give it a parent.")
+            elif issue.get("in_raw_records") and not issue.get("in_extract"):
+                _why = (" It appears in the raw part records and NOT in the extract, so it "
+                        "was invented downstream of the drawing read — check what created "
+                        "it before giving it an owner.")
+            elif issue.get("in_extract"):
+                _why = (" Both the raw records and the extract carry it, so it is a real "
+                        "part that no assembly claimed. It needs an ownership edge.")
+            else:
+                _why = ""
             out.append(_violation(
                 f"canonical_route_{issue.get('code')}", BLOCKING,
                 f"Canonical BOM/route compilation found {issue.get('code')} on "
-                f"{_who} — it has no defensible owner in the job hierarchy. Give it a "
-                f"parent (an assembly that holds it), or establish why it is not a child "
-                f"of anything.",
+                f"{_who} — it has no defensible owner in the job hierarchy.{_why}",
                 issue=issue))
 
     required_ids = {
