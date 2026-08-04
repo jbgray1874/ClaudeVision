@@ -2458,6 +2458,27 @@ def _finalize_scan_summary(
         print(f"   [canonical-part-graph] pre-cost application skipped: "
               f"{type(_canon_pre_err).__name__}: {_canon_pre_err}", flush=True)
 
+    # AND AGAIN, AT THE LAST BOUNDARY BEFORE COSTING.
+    #
+    # The merge above protects the canonical graph, and something between there and here
+    # re-creates the phantoms: the renderer's own [bom-rows] line showed SCREW, STD PART,
+    # 79814P and FIXING back in the costed population after they had been removed from the
+    # parts. A pass materialises the drawing's raw BOM lines as parts, and it runs later.
+    #
+    # Rather than a third guess at which pass, the same rule runs once more at the point
+    # nothing can add a part after it. It is idempotent — a stem with no fuller code beside
+    # it is left alone — so the second call is free on a job the first one already settled,
+    # and part_identity remains the single authority both calls ask.
+    try:
+        from drawing_job_merge import merge_truncated_part_codes as _merge_late
+        _late = _merge_late(summary["manufacturing_writeup"]["parts"])
+        for _m in _late:
+            print(f"   [bom] '{_m['part_number']}' merged into '{_m['merged_into']}' "
+                  f"(re-created after the first pass; qty {_m['quantity']:g})", flush=True)
+    except Exception as _lm_err:
+        print(f"   [bom] late truncated-code merge skipped: "
+              f"{type(_lm_err).__name__}: {_lm_err}", flush=True)
+
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
