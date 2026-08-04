@@ -1221,6 +1221,33 @@ DEFAULT_JOB_QUANTITY = int(float(os.getenv("ESTIMATE_DEFAULT_JOB_QUANTITY", "180
 # Global scrap factor as a fraction (4% = 0.04). Used with nesting / anchor policies.
 SCRAP_PERCENTAGE = 0.04
 
+# ── FACED BOARD IS BOUGHT BY THE SHEET, NOT BY THE KILO ──────────────────────────────
+#
+# Every price below is one SDI has actually PAID, read out of the historical corpus built
+# from the estimators' own workbooks. Nothing here is a web price or a list price: a list
+# price repeats perfectly and commits nobody, and a consumer price for a pre-cut B&Q strip
+# is not what this shop buys.
+#
+# WHAT THE CORPUS SHOWS (src/corpus.jsonl, cost_per_sheet_gbp on MFC046 rows):
+#   MFC046 = "Egger H3131 ST12 Natural Davos Oak FSC MFC 2800x2070x19mm sheet"
+#     18/19mm   GBP 55.00 (2025, 11641-02 Half Shelf), 58.55 (2024, Mannequin Plinth),
+#               61.64 (2024 and 2025, 11141-04 Tiered Riser)   -> median 58.55
+#     36mm      GBP 84.54 (2024, 11416-GA Low Level Basket)
+#
+# Two observed thicknesses of the same board, eighteen months apart, from priced jobs.
+# Thickness in between is INTERPOLATED between them — an estimator's own arithmetic on the
+# shop's own purchases — and outside them is refused rather than extrapolated, because
+# nothing in the history says what a 50mm board costs.
+#
+# These are indicative and dated, not firm. The price_not_firm invariant already says so on
+# every sheet, and it should keep saying so until Tim confirms the current rate.
+BOARD_SHEET_PRICE_GBP = {
+    # material -> {thickness_mm: GBP per full sheet}
+    "MFC":       {18.0: 58.55, 36.0: 84.54},
+    "MFMDF":     {18.0: 58.55, 36.0: 84.54},   # same substrate family until priced separately
+    "CHIPBOARD": {18.0: 58.55, 36.0: 84.54},
+}
+
 # A6: any "thickness" above this (mm) is treated as a dimension misparse and rejected.
 MAX_SHEET_THICKNESS_MM = 25.0
 # A BOARD IS NOT A GAUGE, AND THE CEILING HAS TO KNOW WHICH IT IS LOOKING AT.

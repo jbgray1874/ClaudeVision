@@ -1501,6 +1501,38 @@ def _powder_coated_area_m2(
     return total, detail
 
 
+def _board_sheet_rate(material: Optional[str], thickness: Optional[float]):
+    """(GBP per full sheet, how it was arrived at) for a faced board, or (None, "").
+
+    INTERPOLATED BETWEEN PURCHASES, NEVER EXTRAPOLATED BEYOND THEM. config records the
+    thicknesses SDI has actually bought — 18mm and 36mm of the same Egger board, from priced
+    jobs eighteen months apart. A thickness between them is the estimator's own arithmetic on
+    the shop's own numbers. A thickness OUTSIDE them is not: nothing in the history says what
+    a 50mm board costs, and a straight-line guess past the last real point is the kind of
+    number that looks derived and is invented. Those stay unpriced and visible.
+    """
+    table = (getattr(config, "BOARD_SHEET_PRICE_GBP", {}) or {}).get(
+        str(material or "").upper().replace(" ", "_"))
+    if not isinstance(table, dict) or not table:
+        table = (getattr(config, "BOARD_SHEET_PRICE_GBP", {}) or {}).get(
+            str(material or "").upper())
+    thk = _safe_float(thickness)
+    if not isinstance(table, dict) or not table or not thk or thk <= 0:
+        return None, ""
+    points = sorted((float(t), float(p)) for t, p in table.items())
+    for _t, _p in points:
+        if abs(_t - thk) < 0.51:
+            return _p, f"observed at {_t:g}mm"
+    lo = [pt for pt in points if pt[0] < thk]
+    hi = [pt for pt in points if pt[0] > thk]
+    if not lo or not hi:
+        return None, ""
+    (t0, p0), (t1, p1) = lo[-1], hi[0]
+    rate = p0 + (p1 - p0) * (thk - t0) / (t1 - t0)
+    return round(rate, 2), (f"interpolated for {thk:g}mm between SDI's own {t0:g}mm "
+                            f"(£{p0:.2f}) and {t1:g}mm (£{p1:.2f})")
+
+
 def _powder_consumable_estimate(
     part: Dict[str, Any],
     blank_length: Optional[float],
@@ -2206,6 +2238,44 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 applied=False,
                 applied_basis=None,
             ),
+        }
+
+    # ── FACED BOARD: PRICED BY THE SHEET, THE WAY IT IS BOUGHT ──────────────────────
+    # A board is bought as a sheet and cut down; the £/kg path prices it as if it were sold
+    # by mass, which is not the transaction. The manual estimates all do sheet-price ÷
+    # parts-per-sheet × scrap, and the corpus rows carry cost_per_sheet_gbp for exactly that
+    # reason. This runs BEFORE the mass path so a board with a known sheet rate never falls
+    # through to per-kg — and a board WITHOUT one still falls through and stays unpriced.
+    _board_rate, _board_note = _board_sheet_rate(material, thickness)
+    if _board_rate and blank_length and blank_width:
+        _b_sheet = select_sheet_size(material, blank_length, blank_width)
+        _b_pps = max(1, int(_b_sheet.get("parts_per_sheet") or 1))
+        _b_scrap = 1.0 + float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
+        _b_unit = (_board_rate / _b_pps) * _b_scrap
+        part.setdefault("review_flags", []).append(
+            f"{material} sheet price {_board_note} £{_board_rate:.2f}/sheet ÷ {_b_pps} "
+            f"parts per {_b_sheet.get('candidate_sheet_size_mm')} sheet × {_b_scrap:.2f} "
+            f"scrap = £{_b_unit:.2f}/part. INDICATIVE, from SDI's own purchase history — "
+            f"confirm the current rate before quoting.")
+        return {
+            "material": material, "thickness_mm": thickness,
+            "blank_length_mm": blank_length, "blank_width_mm": blank_width,
+            "blank_area_m2": round((blank_length * blank_width) / 1_000_000.0, 4),
+            "unit_material_mass_kg": None,
+            "unit_material_cost_gbp": round(_b_unit, 2),
+            "cost_per_part_gbp": round(_b_unit, 2),
+            "extended_sheet_material_cost_gbp": round(_b_unit * quantity, 2),
+            "powder_consumable": None,
+            "extended_material_cost_gbp": round(_b_unit * quantity, 2),
+            "stock_estimate": _b_sheet,
+            "cost_method": "board_sheet_yield",
+            "part_confidence_overall": _part_confidence_overall(part),
+            "part_geometry_reliability": _part_geometry_reliability(part),
+            "reliability_flags": ["board_sheet_priced", "indicative_price"],
+            "note": f"Faced board, sheet-nested: {_board_note}",
+            "price_source": _build_price_source_metadata(
+                {}, fallback_source="sdi_history_board_sheet_price",
+                applied=True, applied_basis="GBP_per_sheet_nested"),
         }
 
     area_m2 = (blank_length * blank_width) / 1_000_000.0

@@ -4659,6 +4659,67 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_a_board_is_priced_from_what_the_shop_has_actually_paid():
+    """12422-24's material total was GBP 1.75 with a 1434 x 748 x 28 MFC panel at zero —
+    about 5% of what the job really costs in material.
+
+    The price was not missing. It was in the building. The historical corpus, built from the
+    estimators' own priced workbooks, carries cost_per_sheet_gbp on 27 real MFC purchases,
+    and description_normaliser already names the code: MFC046 = "Egger H3131 ST12 Natural
+    Davos Oak FSC MFC 2800x2070x19mm sheet". Two thicknesses of that same board appear at
+    known prices, eighteen months apart, from jobs that were quoted and won.
+
+    A web search returns a B&Q pre-cut strip and a list price that commits nobody. This is
+    what the shop paid.
+
+    INTERPOLATED BETWEEN PURCHASES, NEVER EXTRAPOLATED BEYOND THEM. Between two real points
+    is an estimator's own arithmetic on the shop's own numbers. Past the last real point is a
+    guess that looks derived, so it is refused and the line stays visibly unpriced."""
+    from estimator import _board_sheet_rate, estimate_material
+    import config
+
+    eq(_board_sheet_rate("MFC", 18.0)[0], 58.55, "an observed thickness is used as observed")
+    eq(_board_sheet_rate("MFC", 36.0)[0], 84.54, "at both ends of the range")
+
+    _rate, _how = _board_sheet_rate("MFC", 28.0)
+    eq(_rate, 72.99, "28mm sits between the two and is interpolated between them")
+    ok("interpolated" in _how and "18" in _how and "36" in _how,
+       "and says which two purchases it came from, so an estimator can check the arithmetic")
+
+    # BEYOND THE HISTORY, NOTHING. Nothing SDI has bought says what a 50mm board costs, and
+    # a straight line past the last real point is invention wearing derivation's clothes.
+    eq(_board_sheet_rate("MFC", 50.0)[0], None, "a thickness above every purchase is refused")
+    eq(_board_sheet_rate("MFC", 12.0)[0], None, "and below every purchase too")
+    eq(_board_sheet_rate("MILD STEEL", 2.0)[0], None, "steel is not a board and has no sheet rate")
+
+    # THE PANEL, END TO END. Sheet price / parts per sheet / scrap — the manual estimate's
+    # own method, not a per-kg conversion of a transaction that never happens by the kilo.
+    _panel = {"part_number": "12422-24-01J", "normalized_material": "MFC", "quantity": 1,
+              "normalized_thickness_mm": 28.0, "flat_pattern_detected": True,
+              "normalized_geometry": {
+                  "blank_length_mm": 1434.0, "blank_width_mm": 748.0,
+                  "bounding_box_flat_mm": {"length": 1434.0, "width": 748.0, "height": 28.0},
+                  "geometry_source": "dxf_flat_pattern"}}
+    _res = estimate_material(_panel) or {}
+    eq(_res.get("cost_method"), "board_sheet_yield", "board is costed as a sheet, not a mass")
+    eq(_res.get("unit_material_mass_kg"), None, "and carries no mass it never had")
+    ok(37.0 < float(_res.get("unit_material_cost_gbp") or 0) < 39.0,
+       f"the panel is about GBP 38, not zero (got {_res.get('unit_material_cost_gbp')})")
+
+    # IT IS INDICATIVE AND SAYS SO. A price from history is reproducible; reproducible is not
+    # firm, and the sheet must keep saying that until an estimator confirms the rate.
+    ok("indicative_price" in (_res.get("reliability_flags") or []),
+       "the record carries the indicative marker the price_not_firm check reads")
+    ok(any("confirm the current rate" in str(f) for f in (_panel.get("review_flags") or [])),
+       "and the estimator is told to confirm it")
+
+    # NO PER-KG RATE WAS INVENTED ALONGSIDE IT. The sheet path is how board is bought; a
+    # per-kg entry would let the mass path price it at a number nobody pays.
+    for _m in ("MFC", "MFMDF", "CHIPBOARD"):
+        ok(_m not in config.MATERIAL_PRICE_GBP_PER_KG,
+           f"{_m} is priced by the sheet only")
+
+
 def test_faced_board_is_not_nested_on_a_steel_sheet():
     """12422-24's material total is GBP 1.75 and its largest single item is a
     1434 x 748 x 28 MFC panel priced at zero. The zero is honest — no sheet rate is
@@ -4907,6 +4968,11 @@ def test_an_unknown_material_is_not_assumed_to_be_steel():
 
     ok("MFC" not in config.MATERIAL_DENSITY_KG_PER_M3,
        "precondition: faced board has no density, deliberately")
+    # 28mm MFC is now priced by the sheet from SDI's own history, so the unmassable case
+    # must be tested on a board OUTSIDE the observed thickness range — 50mm, which nothing
+    # in the purchase history brackets. Same rule, a case that still exercises it.
+    ok(50.0 > max(float(t) for t in config.BOARD_SHEET_PRICE_GBP["MFC"]),
+       "precondition: 50mm is beyond every board thickness SDI has bought")
 
     def _part(pn, mat, thk, length, width):
         return {"part_number": pn, "normalized_material": mat, "quantity": 1,
@@ -4917,7 +4983,7 @@ def test_an_unknown_material_is_not_assumed_to_be_steel():
                                              "height": thk},
                     "geometry_source": "dxf_flat_pattern"}}
 
-    _panel = _part("12422-24-01J", "MFC", 28.0, 1434.0, 748.0)
+    _panel = _part("12422-24-01J", "MFC", 50.0, 1434.0, 748.0)
     _res = estimate_material(_panel) or {}
     eq(_res.get("cost_method"), "no_price",
        "an unmassable board is not costed, rather than costed as steel")
