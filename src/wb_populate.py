@@ -849,6 +849,42 @@ _ZERO_IS_UNREAD_GEOMETRY_FIELDS = frozenset({
 })
 
 
+_ACRYLIC_NEVER_POWDERED = {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA",
+                           "POLYCARBONATE"}
+
+
+def part_cannot_be_powder_coated(pe: Dict[str, Any]) -> bool:
+    """Is this part physically incapable of going through the powder oven?
+
+    THE SHARED PHYSICAL RULE, NOT A PRIVATE LIST. stock_form_rules already answers this —
+    it is what stops a P.Coat OPERATION being routed onto a board part — and the coated-area
+    sum that produces the POWDER BOM line carried its own four-plastic set instead. So the
+    operation was correctly refused and the MATERIAL was billed anyway: the two halves of
+    one fact, disagreeing.
+
+    12422-24 is what that costs. The MFC end cap is 1.434 x 0.748, doubled for two faces =
+    2.1453 m2 of the 2.2538 m2 on the powder line. 95% of the powder on that sheet is a
+    melamine-faced panel that is laminated and edged and never sees a booth. The template's
+    own Powder Qty Calculator reads only the Sheet Steel block and totals 0.0131 kg; the BOM
+    line books 0.45075 kg. One sheet, one quantity, two numbers, 34x apart — and the one
+    that reaches the price is the wrong one.
+
+    Steel is unaffected: the rule returns False for every metal, so no existing job moves.
+    """
+    mat = str(pe.get("normalized_material")
+              or (pe.get("material_estimate") or {}).get("material") or ""
+              ).upper().replace("_", " ")
+    if mat in _ACRYLIC_NEVER_POWDERED or bool(pe.get("acrylic_no_powder")):
+        return True
+    try:
+        from stock_form_rules import is_impossible_operation as _impossible
+        return bool(_impossible(
+            "powder_coating",
+            str((pe.get("material_estimate") or {}).get("stock_form") or ""), mat))
+    except Exception:
+        return False
+
+
 def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     """A geometry datum off a COSTED part record, from whichever of its two geometry
     records has one — normalized_geometry first, geometry_rollup second.
@@ -2310,11 +2346,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # diamond polished, NEVER powder coated. An acrylic part is a sheet form, so without this
     # guard its area was summed into the coated total and a phantom POWDER BOM row was written
     # (12439). Exclude acrylic/plastic from the coated-area sum. Steel parts are unaffected.
-    _ACR_NO_POWDER = {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA", "POLYCARBONATE"}
-    def _is_acrylic_pw(_p):
-        _m = str(_p.get("normalized_material")
-                 or (_p.get("material_estimate") or {}).get("material") or "").upper().replace("_", " ")
-        return _m in _ACR_NO_POWDER or bool(_p.get("acrylic_no_powder"))
+    _is_acrylic_pw = part_cannot_be_powder_coated
     for _sp in _all_pes_pw:
         _sme = _sp.get("material_estimate") or {}
         if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: it is coated steel routed by weight, must not drop from the powder sum (aligns with STEEL_STOCK_FORMS routing filter). Powder basis stays GROSS L x W; this only keeps steel parts in the sum when a valid blank area flips them onto the weight path.

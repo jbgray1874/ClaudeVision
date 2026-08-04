@@ -4659,6 +4659,64 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_a_part_that_cannot_be_powdered_contributes_no_powder():
+    """THE OPERATION WAS REFUSED AND THE MATERIAL WAS BILLED ANYWAY.
+
+    stock_form_rules knows a melamine panel cannot go through the oven — it is what keeps
+    P.Coat off 12422-24's end cap, and it works. The coated-area sum that produces the POWDER
+    BOM line carried its OWN list of four plastics instead, so it never asked. Two halves of
+    one fact, disagreeing.
+
+    The panel is 1.434 x 0.748, doubled for two faces: 2.1453 m2 of the 2.2538 m2 on that
+    line. Add the four steel blanks at 0.0788 m2 and the sum is accounted for. 95% of the
+    powder on the sheet is a laminated, edge-banded board that never sees a booth. The
+    template's own Powder Qty Calculator reads only the Sheet Steel block and totals
+    0.0131 kg; the BOM line books 0.45075 kg. One sheet, one quantity, 34x apart — and the
+    number that reaches the price is the wrong one."""
+    from wb_populate import part_cannot_be_powder_coated
+    from stock_form_rules import is_impossible_operation
+
+    def _pe(mat, stock_form="sheet"):
+        return {"normalized_material": mat,
+                "material_estimate": {"stock_form": stock_form}}
+
+    for _mat in ("MFC", "MFMDF", "MELAMINE FACED CHIPBOARD", "CHIPBOARD", "MDF",
+                 "PLYWOOD", "TIMBER", "ACRYLIC", "PERSPEX"):
+        ok(part_cannot_be_powder_coated(_pe(_mat)),
+           f"{_mat} cannot be powder coated, so it contributes no coated area")
+
+    # STEEL IS UNAFFECTED. Every existing job is steel; if any of these flipped, every
+    # powder line in the archive would move.
+    for _mat in ("MILD STEEL", "MILD_STEEL", "STAINLESS STEEL", "ZINTEC",
+                 "GALVANISED STEEL", "ALUMINIUM"):
+        ok(not part_cannot_be_powder_coated(_pe(_mat)),
+           f"{_mat} is coatable and must still contribute its area")
+
+    # IT IS THE SAME RULE THE ROUTE USES, not a copy that can drift. A part the compiler
+    # refuses to route powder onto must not be billed powder, and the only way to guarantee
+    # that is for both to ask one question.
+    for _mat in ("MFC", "MDF", "TIMBER", "ACRYLIC"):
+        eq(part_cannot_be_powder_coated(_pe(_mat)),
+           bool(is_impossible_operation("powder_coating", "sheet", _mat)),
+           f"the area sum and the route agree about {_mat}")
+
+    # AND THE ARITHMETIC THIS COST. Both faces of the panel, which is what the sum doubles.
+    _panel_m2 = round(1.434 * 0.748 * 2, 4)
+    eq(_panel_m2, 2.1453, "the panel's two faces are 2.1453 m2")
+    ok(abs((_panel_m2 + 0.0788) - 2.2538) < 0.04,
+       "panel plus the four steel blanks accounts for the 2.2538 m2 that was booked")
+
+    # THE CALLER MUST USE IT. A predicate the sum does not consult is the whole defect
+    # restated one layer up.
+    from pathlib import Path as _P
+    _wb = (_P(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
+        encoding="utf-8")
+    ok("_is_acrylic_pw = part_cannot_be_powder_coated" in _wb,
+       "the coated-area sum and the per-piece floor both go through the shared rule")
+    ok('_ACR_NO_POWDER = {"ACRYLIC"' not in _wb,
+       "and the private four-plastic list that could not see board is gone")
+
+
 def test_the_model_already_knows_who_owns_what():
     """THE TREE ARRIVED FLATTENED AND EVERY OWNERSHIP QUESTION WAS THEN GUESSWORK.
 
