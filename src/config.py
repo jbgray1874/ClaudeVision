@@ -258,6 +258,19 @@ STANDARD_SHEET_SIZES_MM = {
     # Timber-based sheet materials — standard UK board sizes
     "MDF": [(2440, 1220), (3050, 1525)],
     "MDF_BOARD": [(2440, 1220), (3050, 1525)],
+    # FACED BOARD IS NOT NESTED ON A STEEL SHEET. Without an entry here, MFC fell through to
+    # the sheet-metal default of 2500x1250 and yielded ONE panel per sheet; MDF, which has
+    # board sizes, gets two of the same panel out of a 3050x1525. So the moment a sheet rate
+    # is entered, 12422-24's end cap would be charged a whole sheet instead of half of one.
+    #
+    # These are STOCK SIZES, not prices: what the trade actually stocks, which is a physical
+    # fact about the material and not a commercial number this engine may invent. 2800x2070
+    # is the standard faced-board oversize sheet (Egger and equivalents); 2440x1220 is the
+    # common trade size. Both are offered so the nester picks whichever yields more, exactly
+    # as it does for MDF and ply. CONFIRM with the estimators which SDI actually buys.
+    "MFC": [(2800, 2070), (2440, 1220)],
+    "MFMDF": [(2800, 2070), (2440, 1220)],
+    "CHIPBOARD": [(2800, 2070), (2440, 1220)],
     "VENEERED MDF": [(2440, 1220), (3050, 1525)],
     "OAK_VENEER_MDF": [(2440, 1220), (3050, 1525)],
     "PLYWOOD": [(2440, 1220), (3050, 1525)],

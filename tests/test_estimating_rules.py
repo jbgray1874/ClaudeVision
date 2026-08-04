@@ -4659,6 +4659,44 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_faced_board_is_not_nested_on_a_steel_sheet():
+    """12422-24's material total is GBP 1.75 and its largest single item is a
+    1434 x 748 x 28 MFC panel priced at zero. The zero is honest — no sheet rate is
+    configured and inventing one would be a commercial guess. What sits BEHIND it is not.
+
+    MFC had no entry in STANDARD_SHEET_SIZES_MM, so it fell through to the sheet-metal
+    default of 2500x1250 and nested ONE panel per sheet. MDF, which does have board sizes,
+    gets TWO of the same panel out of a 3050x1525. So the moment an estimator enters a rate,
+    that panel would be charged a whole sheet instead of half of one — the error arriving
+    the instant the visible gap is closed, and looking like the estimator's own number.
+
+    Stock sizes are a physical fact about what the trade stocks, not a price, which is why
+    they can be supplied here when a rate cannot."""
+    from estimator import select_sheet_size
+    import config
+
+    for _mat in ("MFC", "MFMDF", "CHIPBOARD"):
+        _r = select_sheet_size(_mat, 1434.0, 748.0)
+        eq(_r.get("parts_per_sheet"), 2,
+           f"two {_mat} panels come off one board sheet, not one")
+        ok(list(_r.get("candidate_sheet_size_mm") or []) != [2500, 1250],
+           f"{_mat} must not be nested on the sheet-metal default")
+
+    # STEEL IS UNTOUCHED. The metal default is the metal default.
+    eq(list(select_sheet_size("MILD_STEEL", 1434.0, 748.0).get(
+        "candidate_sheet_size_mm") or []), [2500, 1250],
+       "sheet steel still nests on the steel sheet")
+
+    # AND THIS IS A SIZE, NOT A PRICE. A sheet rate is a commercial number and stays an
+    # estimator input; supplying one here would be exactly the guess the board families were
+    # deliberately left unpriced to avoid.
+    for _mat in ("MFC", "MFMDF", "CHIPBOARD"):
+        ok(_mat in config.STANDARD_SHEET_SIZES_MM,
+           f"{_mat} has a stock size")
+        ok(_mat not in config.MATERIAL_PRICE_GBP_PER_KG,
+           f"and still no invented rate for {_mat}")
+
+
 def test_a_part_that_cannot_be_powdered_contributes_no_powder():
     """THE OPERATION WAS REFUSED AND THE MATERIAL WAS BILLED ANYWAY.
 
