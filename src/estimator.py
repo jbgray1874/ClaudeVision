@@ -2262,6 +2262,16 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "blank_length_mm": blank_length, "blank_width_mm": blank_width,
             "blank_area_m2": round((blank_length * blank_width) / 1_000_000.0, 4),
             "unit_material_mass_kg": None,
+            # THE WORKBOOK'S OTHER SHEET BLOCK NEEDS THE SHEET PRICE, NOT ONLY THE PART
+            # PRICE. Its template formula is Cost Per Part = (cost_per_sheet / parts_per_sheet)
+            # x (1+scrap) x qty, so a blank cost-per-sheet computes to zero however well the
+            # part cost was derived. wb_populate reads `sheet_price_gbp`, or reconstructs it
+            # from a TOP-LEVEL `parts_per_sheet` — and this record published neither, so the
+            # engine held the panel at GBP 37.95 while the sheet showed GBP 0 and the
+            # material total stayed at GBP 1.75. Built, and not wired.
+            "sheet_price_gbp": round(_board_rate, 2),
+            "parts_per_sheet": _b_pps,
+            "scrap_pct": round(_b_scrap - 1.0, 4),
             "unit_material_cost_gbp": round(_b_unit, 2),
             "cost_per_part_gbp": round(_b_unit, 2),
             "extended_sheet_material_cost_gbp": round(_b_unit * quantity, 2),

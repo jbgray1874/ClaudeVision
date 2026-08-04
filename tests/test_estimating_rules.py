@@ -4857,6 +4857,24 @@ def test_a_board_is_priced_from_what_the_shop_has_actually_paid():
     ok(37.0 < float(_res.get("unit_material_cost_gbp") or 0) < 39.0,
        f"the panel is about GBP 38, not zero (got {_res.get('unit_material_cost_gbp')})")
 
+    # AND THE KEYS THE WORKBOOK ACTUALLY READS. The Other Sheet block computes
+    # Cost Per Part = (cost_per_sheet / parts_per_sheet) x (1+scrap), so a blank
+    # cost-per-sheet is GBP 0 however well the part cost was derived. It reads
+    # `sheet_price_gbp`, or reconstructs from a TOP-LEVEL `parts_per_sheet` — and this
+    # record published neither, so the engine held the panel at GBP 37.95 while the sheet
+    # showed zero and the material total stayed at GBP 1.75. Built, and not wired.
+    eq(_res.get("sheet_price_gbp"), 72.99, "the sheet price the template divides")
+    eq(_res.get("parts_per_sheet"), 2, "and the yield it divides by")
+    _sp, _pps, _sc = (_res["sheet_price_gbp"], _res["parts_per_sheet"],
+                      _res.get("scrap_pct") or 0.04)
+    ok(abs((_sp / _pps) * (1 + _sc) - float(_res["cost_per_part_gbp"])) < 0.01,
+       "and the template's own arithmetic reproduces the part cost from them")
+    from pathlib import Path as _P2
+    _wb_src = (_P2(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
+        encoding="utf-8")
+    ok('me.get("sheet_price_gbp")' in _wb_src,
+       "which is the key the Other Sheet block reads")
+
     # IT IS INDICATIVE AND SAYS SO. A price from history is reproducible; reproducible is not
     # firm, and the sheet must keep saying that until an estimator confirms the rate.
     ok("indicative_price" in (_res.get("reliability_flags") or []),
