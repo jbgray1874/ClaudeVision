@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -207,6 +208,22 @@ def _apply_web_ai_pricing_fallback_from_args(args: argparse.Namespace) -> None:
 def main() -> None:
     args = parse_args()
     ensure_directories()
+
+    # THE ORDER QUANTITY HAS TO ARRIVE BEFORE THE COSTING, NOT AFTER IT.
+    #
+    # --order-qty was stamped onto the summary once scan_file had already returned, and by
+    # then estimate_document had costed every part with `assumed_job_quantity`, which
+    # file_scan defaults to DEFAULT_JOB_QUANTITY when the enquiry does not state one. Setup
+    # is amortised as (rate/60 x setup_mins) / qty, so a 10-off job was priced with its
+    # setup spread over 180 units and then labelled "10" on the header — the flag whose own
+    # help text says it "drives batch economics" reached everything except the economics.
+    #
+    # Published as an environment variable rather than threaded through a parameter because
+    # three scan entry points share one finalizer, and because the intranet integration
+    # calls file_scan directly without going through this CLI at all. One place decides the
+    # quantity; everything downstream reads what it decided.
+    if getattr(args, "order_qty", None):
+        os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
 
     if args.merge_dxf_into:
         json_path = Path(args.merge_dxf_into)
@@ -524,14 +541,18 @@ def main() -> None:
         except Exception:
             pass
 
-        # Explicit order quantity (--order-qty) wins: each tender product prices at its demand
-        # qty. Set before the job-level cost additions below, which read summary["quantity"].
+        # Explicit order quantity (--order-qty), onto the fields the JOB-LEVEL additions read.
+        #
+        # The costing itself has already happened at this quantity — SDI_ORDER_QTY is set
+        # before the scan and file_scan decides the number once, before estimate_document.
+        # What remains here is stamping the same value on the estimate_summary node that
+        # wb_populate reads for the order-qty cell, and on summary["quantity"] which the
+        # assembly-labour calc below reads. It agrees with the costing rather than replacing
+        # it; check_the_quantity_costed_is_the_quantity_ordered blocks the job if it ever
+        # does not, so this can no longer paper over a batch the parts were not priced for.
         if getattr(args, "order_qty", None):
             try:
                 _oq = int(args.order_qty)
-                # Set EVERY field the downstream reads: the assembly-labour calc reads
-                # summary["quantity"]; wb_populate writes the WB order-qty cell (D6) from
-                # assumed_job_quantity (default 180). Set all so the demand qty is authoritative.
                 summary["quantity"] = _oq
                 summary["assumed_job_quantity"] = _oq
                 _esd = summary.get("estimate_summary")

@@ -2264,8 +2264,43 @@ def _finalize_scan_summary(
         print(f"   [inference] skipped: {_e}", flush=True)
 
     _debug("start estimate_document")
-    if not summary.get("quantity") and not summary.get("assumed_job_quantity"):
+    # ── THE QUANTITY THE JOB IS COSTED AT, DECIDED ONCE, HERE ────────────────────────
+    #
+    # estimate_document amortises setup as (rate/60 x setup_mins) / qty and reads that qty
+    # from this field. A requested quantity that arrives after this line is a label on a
+    # price computed for a different batch: at 10 off against a 180 default, the setup
+    # component of every operation comes out 18x light and nothing on the sheet says so.
+    #
+    # An explicit request beats an inferred quantity as well as the default. It is the one
+    # fact about a job the customer states directly, and no reading of the drawings
+    # outranks being told. Which of the three supplied it is recorded, because "10" from
+    # the enquiry and "10" from a default are the same number and not the same evidence.
+    _req_qty_raw = os.getenv("SDI_ORDER_QTY", "").strip()
+    _req_qty = None
+    if _req_qty_raw:
+        try:
+            _req_qty = max(1, int(float(_req_qty_raw)))
+        except (TypeError, ValueError):
+            print(f"   [order-qty] IGNORED — SDI_ORDER_QTY={_req_qty_raw!r} is not a number. "
+                  f"Costing at the quantity the drawings imply instead.", flush=True)
+    if _req_qty:
+        # precedence: direct-write ok — this is the JOB HEADER, not a part record. The
+        # arbitrated `quantity` the resolver protects is a per-part figure read off a BOM
+        # against competing readings of the same drawing; how many units the customer
+        # ordered has no competing sources to rank, and being told outranks any reading.
+        summary["quantity"] = _req_qty  # precedence: direct-write ok — job header, see above
+        summary["assumed_job_quantity"] = _req_qty
+        summary["order_quantity_source"] = "requested"
+    elif not summary.get("quantity") and not summary.get("assumed_job_quantity"):
         summary["assumed_job_quantity"] = getattr(config, "DEFAULT_JOB_QUANTITY", 180)
+        summary["order_quantity_source"] = "default"
+    else:
+        summary["order_quantity_source"] = "inferred"
+    # A GATE NOBODY ASKS REPORTS NOTHING, and every labour figure below hangs off this
+    # number. It is stated on every run, whichever way it was arrived at.
+    print(f"   [order-qty] costing this job at "
+          f"{summary.get('quantity') or summary.get('assumed_job_quantity')} off "
+          f"({summary['order_quantity_source']})", flush=True)
 
     # FINAL phantom-duplicate sweep — runs AFTER inference and any late description
     # merges, immediately before costing. The earlier pre-estimate passes can miss

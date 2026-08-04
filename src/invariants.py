@@ -1324,6 +1324,98 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict[str, Any]]:
+    """THE HEADER SAID 10 AND THE MATHS SAID 180.
+
+    --order-qty was applied to the summary AFTER the scan returned, and by then every part
+    had been costed. Setup is amortised as (rate/60 x setup_mins) / qty, so the setup
+    component of every operation was spread over the default batch and then presented under
+    a ten-off heading. Nothing was wrong on the face of the estimate: the quantity shown
+    was the quantity asked for, and it was not the quantity used.
+
+    A price that was computed for a different batch than the one it is labelled with is a
+    wrong price, not a caveat — and it is invisible unless someone compares the two numbers.
+    labour_estimate.job_quantity_used is what the amortisation ACTUALLY divided by, recorded
+    by the calculation itself rather than by anything that describes it afterwards.
+
+    Parts with no labour at all (bought-in lines) carry no such number and are not evidence
+    either way; they are excluded rather than counted as agreeing. A part that DID charge
+    labour and does not say what batch it charged it over is a different matter — that is
+    the check being unable to run, and it fails closed.
+    """
+    if not isinstance(summary, dict):
+        return []
+    header = (summary.get("quantity")
+              or summary.get("assumed_job_quantity")
+              or (summary.get("estimate_summary") or {}).get("assumed_job_quantity"))
+    try:
+        header = int(header) if header is not None else None
+    except (TypeError, ValueError):
+        header = None
+
+    rows = ((summary.get("estimate_summary") or {}).get("part_estimates")
+            or summary.get("part_estimates") or [])
+    used: Dict[int, List[str]] = {}
+    silent: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lab = row.get("labour_estimate") or {}
+        # ONLY A ROW THAT CHARGED LABOUR HAS AN OPINION ABOUT THE BATCH. A bought-in line
+        # is bought at a price, not made over a run, and demanding an amortisation quantity
+        # from it would turn every hardware row into an unverified job.
+        charged = (_num(lab.get("total_labour_cost_gbp")) or _num(lab.get("unit_labour_cost_gbp"))
+                   or _num(lab.get("extended_labour_cost_gbp")) or 0.0)
+        if not charged and not (lab.get("costs_gbp") or {}):
+            continue
+        qty_used = lab.get("job_quantity_used")
+        if qty_used is None:
+            silent.append(str(row.get("part_number") or "?"))
+            continue
+        try:
+            qty_used = int(qty_used)
+        except (TypeError, ValueError):
+            silent.append(str(row.get("part_number") or "?"))
+            continue
+        used.setdefault(qty_used, []).append(str(row.get("part_number") or "?"))
+
+    if silent:
+        return _unevaluated(
+            "quantity_costed",
+            f"{len(silent)} part(s) charged labour without recording the quantity their "
+            f"setup was amortised over, so the batch the price was computed for cannot be "
+            f"compared with the batch it is presented as.",
+            parts=silent[:12])
+    if not used:
+        return []
+    if header is None:
+        return _unevaluated(
+            "quantity_costed",
+            f"The parts were costed at {sorted(used)} off but the job states no quantity, "
+            "so there is nothing to check the costing against.")
+
+    out: List[Dict[str, Any]] = []
+    wrong = {q: pns for q, pns in used.items() if q != header}
+    if wrong:
+        out.append(_violation(
+            "quantity_costed_is_not_quantity_ordered", BLOCKING,
+            f"The job is presented as {header} off, but "
+            f"{sum(len(v) for v in wrong.values())} part(s) were costed with setup "
+            f"amortised over {sorted(wrong)} off. Every labour figure on those lines is "
+            f"for a different batch than the one being quoted.",
+            header_quantity=header,
+            costed_quantities={str(q): v[:12] for q, v in sorted(wrong.items())}))
+    # MORE THAN ONE BATCH INSIDE ONE JOB is wrong even where one of them matches the
+    # header — the lines cannot be added together as a per-unit price.
+    if len(used) > 1:
+        out.append(_violation(
+            "quantity_costed_is_not_uniform", BLOCKING,
+            f"Different parts of this job were costed over different batch quantities "
+            f"({sorted(used)}), so their per-unit labour cannot be summed.",
+            costed_quantities={str(q): v[:12] for q, v in sorted(used.items())}))
+    return out
+
+
 CHECKS = (
     check_schemas,
     check_workbook_adapters_read_everything,
@@ -1344,6 +1436,7 @@ CHECKS = (
     check_prices_are_firm,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
+    check_the_quantity_costed_is_the_quantity_ordered,
 )
 
 

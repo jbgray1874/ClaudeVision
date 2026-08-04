@@ -4928,6 +4928,85 @@ def test_the_models_name_the_owner_twice_and_one_reader_is_enough():
        "and the BOM reader is not credited with an edge it did not supply")
 
 
+def test_the_batch_a_price_was_computed_for_is_the_batch_it_is_labelled_with():
+    """TIM ASKED FOR TEN OFF AND WOULD HAVE BEEN QUOTED A HUNDRED AND EIGHTY.
+
+    --order-qty was stamped onto the summary AFTER scan_file returned, and by then
+    estimate_document had already costed every part using `assumed_job_quantity` — which
+    file_scan defaults to DEFAULT_JOB_QUANTITY when the enquiry does not state one. Setup is
+    amortised as (rate/60 x setup_mins) / qty, so at ten off against a one-eighty default
+    the setup component of every operation came out eighteen times light, under a header
+    that correctly read "10". The flag whose own help text says it "drives batch economics"
+    reached the label and not the economics.
+
+    Nothing about that estimate looks wrong. The quantity shown IS the quantity asked for.
+    Only comparing it against what the amortisation actually divided by finds it."""
+    from estimator import estimate_labour_costs
+
+    # THE ARITHMETIC THE DEFECT HID. Same part, two batches: run time per unit is identical
+    # and setup per unit is not, which is the entire reason the quantity has to be right
+    # before costing rather than after it.
+    _proc = {"setup_times_min": {"folding": 18.0}, "run_times_min_per_unit": {"folding": 1.0}}
+    _ten = estimate_labour_costs(_proc, job_quantity=10)
+    _big = estimate_labour_costs(_proc, job_quantity=180)
+    eq(_ten["job_quantity_used"], 10, "the calculation records the batch it used")
+    eq(_big["job_quantity_used"], 180, "and it is not the same batch")
+    ok(_ten["costs_gbp"]["folding"] > _big["costs_gbp"]["folding"],
+       "a short run costs MORE per unit, because one setup is shared by fewer pieces")
+
+    # THE INVARIANT THAT FINDS IT WITHOUT READING ANY CODE.
+    from invariants import check_the_quantity_costed_is_the_quantity_ordered as _chk
+
+    _mismatched = {"quantity": 10, "estimate_summary": {"part_estimates": [
+        {"part_number": "01J", "labour_estimate": {"job_quantity_used": 180, "total_labour_cost_gbp": 4.0}}]}}
+    _v = _chk(_mismatched)
+    ok(any(x["code"] == "quantity_costed_is_not_quantity_ordered" for x in _v),
+       "a job labelled 10 and costed at 180 is blocked")
+    ok(all(x["severity"] == "blocking" for x in _v),
+       "and blocked, not noted — the price is wrong, not merely uncertain")
+
+    _agreeing = {"quantity": 10, "estimate_summary": {"part_estimates": [
+        {"part_number": "01J", "labour_estimate": {"job_quantity_used": 10, "total_labour_cost_gbp": 4.0}},
+        {"part_number": "02M", "labour_estimate": {"job_quantity_used": 10, "total_labour_cost_gbp": 4.0}}]}}
+    eq(_chk(_agreeing), [], "a job costed at the quantity it states passes")
+
+    # TWO BATCHES INSIDE ONE JOB is wrong even where one of them matches the header: those
+    # per-unit figures are not addable.
+    _split = {"quantity": 10, "estimate_summary": {"part_estimates": [
+        {"part_number": "01J", "labour_estimate": {"job_quantity_used": 10, "total_labour_cost_gbp": 4.0}},
+        {"part_number": "02M", "labour_estimate": {"job_quantity_used": 180, "total_labour_cost_gbp": 4.0}}]}}
+    ok(any(x["code"] == "quantity_costed_is_not_uniform" for x in _chk(_split)),
+       "mixed batches within one job are blocked on their own account")
+
+    # A BOUGHT-IN LINE HAS NO LABOUR AND SO NO OPINION. It must not be counted as agreeing.
+    _bought = {"quantity": 10, "estimate_summary": {"part_estimates": [
+        {"part_number": "FIXING433", "labour_estimate": {}},
+        {"part_number": "01J", "labour_estimate": {"job_quantity_used": 10, "total_labour_cost_gbp": 4.0}}]}}
+    eq(_chk(_bought), [], "a part with no amortisation is not evidence either way")
+
+    # NOTHING RECORDED THE BATCH AT ALL -> unverified, never a pass.
+    _silent = {"quantity": 10, "estimate_summary": {"part_estimates": [
+        {"part_number": "01J", "labour_estimate": {"total_labour_cost_gbp": 4.0}}]}}
+    ok(any(x["severity"] == "unverified" for x in _chk(_silent)),
+       "no recorded batch verifies nothing, and does not read as clear")
+
+    # AND THE REQUEST REACHES THE COSTING. file_scan decides the quantity at the single
+    # point before estimate_document; main publishes the request before the scan runs.
+    from pathlib import Path as _P7
+    _root = _P7(__file__).resolve().parents[1] / "src"
+    _fs = (_root / "file_scan.py").read_text(encoding="utf-8")
+    _mn = (_root / "main.py").read_text(encoding="utf-8")
+    _qpos = _fs.index('_req_qty_raw = os.getenv("SDI_ORDER_QTY"')
+    ok(_qpos < _fs.index("summary[\"estimate_summary\"] = estimate_document("),
+       "the requested quantity is read BEFORE the parts are costed, not after")
+    ok('os.environ["SDI_ORDER_QTY"]' in _mn,
+       "and --order-qty publishes it where the scan will see it")
+    ok(_mn.index('os.environ["SDI_ORDER_QTY"]') < _mn.index("summary, output_paths = scan_file("),
+       "before the scan starts, not once it has returned")
+    ok('"order_quantity_source"' in _fs,
+       "and the job records whether that quantity was requested, inferred or defaulted")
+
+
 def test_what_a_part_is_for_survives_costing():
     """TWO ADJUSTABLE FEET, CORRECTLY IDENTIFIED AND CORRECTLY CODED, DROPPED OFF THE SHEET.
 
