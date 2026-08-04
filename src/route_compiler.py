@@ -391,9 +391,23 @@ def _quantities_do_not_disagree(a: Optional[float], b: Optional[float]) -> bool:
 
 
 def _prefix_related(a: str, b: str) -> bool:
-    """One code is the other with characters missing off the end."""
+    """One code is the other with characters missing off the end — a TRUNCATION.
+
+    A SEPARATOR MEANS HIERARCHY, NOT TRUNCATION. "12422-24" is a prefix of "12422-24-01"
+    and they are a parent and its child, not one code read twice; collapsing them would
+    fold an assembly into one of its own parts. part_identity.stem_duplicate_target has
+    guarded this since it was written and this path did not port the guard — the same rule,
+    stated twice, drifted the moment there were two copies of it.
+
+    Also requires four characters, so "M4" cannot swallow "M4X8".
+    """
     _a, _b = a.upper(), b.upper()
-    return _a != _b and (_a.startswith(_b) or _b.startswith(_a))
+    if _a == _b:
+        return False
+    _short, _long = (_a, _b) if len(_a) < len(_b) else (_b, _a)
+    if len(_short) < 4 or not _long.startswith(_short):
+        return False
+    return _long[len(_short)].isalnum()
 
 
 def _raw_identity_aliases(

@@ -4942,6 +4942,22 @@ def test_one_part_spelled_two_ways_across_two_sources_is_one_node():
                              _ext, claimed={"79814P"}), {},
        "and a different description is a different part")
 
+    # A SEPARATOR MEANS HIERARCHY, NOT TRUNCATION. "12422-24" is a prefix of "12422-24-01"
+    # and they are a parent and its child; collapsing them would fold an assembly into one
+    # of its own parts. part_identity has guarded this since it was written and this path
+    # did not port the guard — the same rule stated twice drifted the moment there were two
+    # copies of it.
+    from route_compiler import _prefix_related
+    ok(_prefix_related("79814P", "79814P613"), "a truncation is prefix-related")
+    ok(not _prefix_related("12422-24", "12422-24-01"),
+       "a parent and its child are NOT — the continuation is a separator")
+    ok(not _prefix_related("11350-01", "11350-01-02"), "and that holds across jobs")
+    ok(not _prefix_related("M4", "M4X8"), "a two-character code cannot swallow a longer one")
+    _sep = {"description": "END CAP", "quantity": 1}
+    eq(_raw_identity_aliases({"12422-24": dict(_sep)}, {"12422-24-01": dict(_sep)},
+                             claimed={"12422-24-01"}), {},
+       "so an identical description does not collapse an assembly into its own child")
+
     # A MEASURED PART IS NOT A SPELLING. Geometry means something read a drawing.
     eq(_raw_identity_aliases(
         {"79814P613": {"description": _SCREW, "quantity": 4,
