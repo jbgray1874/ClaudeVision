@@ -2407,6 +2407,19 @@ def _finalize_scan_summary(
         print(f"   [hierarchy] description pass skipped: "
               f"{type(_asm_err).__name__}: {_asm_err}", flush=True)
 
+    # ONE ITEM READ TWICE IS ONE PART, and it must stop being two BEFORE the canonical
+    # graph is compiled — a phantom that becomes a node has to be repaired afterwards,
+    # which is how a truncated stem reached the sheet as its own unpriceable line.
+    try:
+        from drawing_job_merge import merge_truncated_part_codes
+        _bom_merged = merge_truncated_part_codes(summary["manufacturing_writeup"]["parts"])
+        for _m in _bom_merged:
+            print(f"   [bom] '{_m['part_number']}' merged into '{_m['merged_into']}' "
+                  f"(same description, truncated code, qty {_m['quantity']:g})", flush=True)
+    except Exception as _bm_err:
+        print(f"   [bom] truncated-code merge skipped: "
+              f"{type(_bm_err).__name__}: {_bm_err}", flush=True)
+
     try:
         from drawing_job_merge import apply_mirror_geometry
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])

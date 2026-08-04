@@ -4810,6 +4810,68 @@ def test_one_item_read_twice_is_one_bom_line():
     eq(len(_diff), 2, "different descriptions are different parts")
 
 
+def test_the_merge_runs_on_the_population_the_sheet_renders():
+    """THE FIRST ATTEMPT AT THIS WAS CORRECT AND INVISIBLE.
+
+    The truncated-code merge was wired into the pooled PDF BOM — 7 rows on 12422-24. The
+    workbook renders 15, built from part_estimates, so "79814P  3.5 x 16mm Pan Head Wood
+    Screw" stayed on the sheet beside "79814P613": the same four screws, and a stem no
+    supplier holds a code for. The rule was right and the pool was wrong, which is the
+    third time on this branch that a pass has run somewhere the data it was aimed at does
+    not live.
+
+    It now runs on the parts population, beside the mirror pass and BEFORE the canonical
+    graph is compiled — so the phantom never becomes a node rather than being repaired
+    after it already is."""
+    from drawing_job_merge import merge_truncated_part_codes
+
+    _parts = [
+        {"part_number": "79814P613", "description": "3.5 x 16mm Pan Head Wood Screw",
+         "quantity": 4},
+        {"part_number": "79814P", "description": "3.5 x 16mm Pan Head Wood Screw",
+         "quantity": 4},
+        {"part_number": "FIXING433", "description": "M6 x 12mm Flange Button head",
+         "quantity": 6},
+        {"part_number": "FIXING51", "description": "Flanged Nutsert", "quantity": 2},
+        {"part_number": "FIXING", "description": "Threaded Insert Headed", "quantity": 4},
+        {"part_number": "VITAL PARTS: LOW068", "description": "Adjustable Foot",
+         "quantity": 2},
+    ]
+    _merged = merge_truncated_part_codes(_parts)
+    _codes = [p["part_number"] for p in _parts]
+
+    eq(len(_merged), 1, "one merge, on the one genuine duplicate")
+    ok("79814P" not in _codes, "the truncated stem is gone from the population")
+    eq(next(p for p in _parts if p["part_number"] == "79814P613")["quantity"], 4,
+       "four screws, the larger of two readings of one cell — not eight")
+    ok("LOW068" in _codes, "and the labelled cell reaches the lookup as its code")
+    ok("FIXING" in _codes, "while the ambiguous stem is left for an estimator")
+
+    # A MEASURED PART IS NOT A TEXT ARTEFACT. A truncation is something the extractor did to
+    # a string; a blank means something read a drawing. Merging away a part that carries
+    # geometry would delete a measurement to tidy a code.
+    _measured = [
+        {"part_number": "ABCD12", "description": "PANEL", "quantity": 1},
+        {"part_number": "ABCD", "description": "PANEL", "quantity": 1,
+         "normalized_geometry": {"blank_length_mm": 1434.0, "blank_width_mm": 748.0}},
+    ]
+    eq(merge_truncated_part_codes(_measured), [],
+       "a part with a measured blank is never merged away")
+    eq(len(_measured), 2, "and stays in the population")
+
+    # IT RUNS BEFORE THE CANONICAL GRAPH. Repairing a phantom after it is already a node is
+    # what the hierarchy blockers on this job are made of.
+    from pathlib import Path as _P3
+    _fs = (_P3(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    _merge_at = _fs.find("merge_truncated_part_codes(summary[")
+    _canon_at = _fs.find("apply_canonical_evidence_to_parts(\n")
+    if _canon_at < 0:
+        _canon_at = _fs.find("apply_canonical_evidence_to_parts(")
+    ok(0 < _merge_at < _canon_at,
+       "the merge runs before the canonical graph is compiled")
+
+
 def test_a_board_is_priced_from_what_the_shop_has_actually_paid():
     """12422-24's material total was GBP 1.75 with a 1434 x 748 x 28 MFC panel at zero —
     about 5% of what the job really costs in material.

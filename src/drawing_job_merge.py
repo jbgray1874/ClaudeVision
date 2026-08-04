@@ -1419,6 +1419,81 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return filled
 
 
+def merge_truncated_part_codes(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One item extracted twice is one PART, not two — on the population the sheet renders.
+
+    THE FIRST ATTEMPT AT THIS RAN ON THE WRONG POOL. It was wired into the pooled PDF BOM,
+    which is 7 rows on 12422-24; the workbook renders 15, built from part_estimates, so the
+    merge was correct and invisible. "79814P  3.5 x 16mm Pan Head Wood Screw" stayed on the
+    sheet beside "79814P613", the same four screws, and the stem could never be priced
+    because it is not a code any supplier holds.
+
+    Running here — beside the mirror pass, BEFORE the canonical graph is compiled — means
+    the phantom never becomes a node, rather than being repaired after it already is.
+
+    The guards are part_identity's and are not restated: descriptions must agree, a
+    separator means hierarchy rather than truncation, and a stem matching more than one
+    fuller code is left alone for an estimator. A part carrying real geometry is never
+    merged away, whatever its code looks like — a truncation is a text artefact, and a
+    measured blank means something read a drawing.
+    """
+    from part_identity import (normalize_part_code, strip_code_label,
+                               stem_duplicate_target)
+
+    merged: List[Dict[str, Any]] = []
+    if not isinstance(parts, list) or len(parts) < 2:
+        return merged
+
+    for part in parts:
+        if isinstance(part, dict):
+            _raw = str(part.get("part_number") or "")
+            _clean = strip_code_label(_raw)
+            if _clean and _clean != _raw.strip():
+                _apply_field(part, "part_number", _clean, "drawing_deterministic",
+                             note=(f"BOM code '{_raw}' carried a label; read as '{_clean}' "
+                                   f"so it can be looked up"))
+
+    _codes = [str(p.get("part_number") or "") for p in parts if isinstance(p, dict)]
+    _by = {normalize_part_code(c): p for c, p in zip(_codes, parts) if isinstance(p, dict)}
+    _drop: List[int] = []
+
+    def _desc(p):
+        return " ".join(str(p.get("description") or "").upper().split())
+
+    for _i, part in enumerate(parts):
+        if not isinstance(part, dict):
+            continue
+        code = str(part.get("part_number") or "")
+        target = stem_duplicate_target(code, [c for c in _codes if c != code])
+        keeper = _by.get(target) if target else None
+        if keeper is None or keeper is part:
+            continue
+        if not _desc(part) or _desc(part) != _desc(keeper):
+            continue
+        # A MEASURED PART IS NOT A TEXT ARTEFACT. A truncation is something the extractor
+        # did to a string; a blank means something read a drawing. Never merge away a part
+        # that carries geometry, however much its code looks like a stem.
+        from document_builder import flat_blank_mm
+        _bl, _bw = flat_blank_mm(part)
+        if _bl and _bw:
+            continue
+        _q_stem = _num(part.get("quantity")) or 0.0
+        _q_keep = _num(keeper.get("quantity")) or 0.0
+        if _q_stem > _q_keep:
+            _apply_field(keeper, "quantity", _q_stem, "drawing_deterministic")
+        keeper.setdefault("review_flags", []).append(
+            f"'{code}' merged into '{target}': same description, and '{code}' is a "
+            f"truncation of it. One item read twice — the quantity is the larger of the "
+            f"two ({_q_keep:g} and {_q_stem:g}), not their sum.")
+        merged.append({"part_number": code, "merged_into": target,
+                       "quantity": max(_q_stem, _q_keep)})
+        _drop.append(_i)
+
+    for _i in sorted(_drop, reverse=True):
+        parts.pop(_i)
+    return merged
+
+
 def augment_summary_with_dxf(
     summary: Dict[str, Any],
     dxf_paths: Sequence[Path],
