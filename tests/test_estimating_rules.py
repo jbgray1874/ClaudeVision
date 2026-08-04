@@ -4853,6 +4853,91 @@ def test_the_hierarchy_pass_says_why_it_did_nothing():
     ok("no assembly documents" in _fs, "and does not call an absent tree a fault")
 
 
+def test_one_part_spelled_two_ways_across_two_sources_is_one_node():
+    """THE MERGE WAS RIGHT AND WIRED TO A SHAPE PRODUCTION NEVER PRODUCES.
+
+    The saved job settles it:
+
+        manufacturing_writeup.parts: 79814P613 only
+        hierarchy claims:            79814P
+        merge result:                []
+        remaining:                   79814P613
+
+    The two codes are never in the same list. merge_truncated_part_codes pairs a stem with a
+    fuller code WITHIN one pool, and neither pool ever held both — so it returned nothing on
+    every run while the sheet carried both rows and the graph reported the unclaimed one as
+    disconnected. A unit test that puts both records in one list demonstrates the helper and
+    reproduces nothing.
+
+    The resolution belongs where the two sources meet, and it is an ALIAS, not a deletion:
+    both identities become one node and every field either record carried is merged, so the
+    removed spelling does not take its supplier, price and provenance with it."""
+    from route_compiler import build_part_graph, _raw_identity_aliases
+
+    _SCREW = "3.5 x 16mm Pan Head Wood Screw"
+
+    def _production_shape():
+        """Raw records carry 79814P613; only the extract knows 79814P, as a GA child."""
+        return build_part_graph(
+            [{"part_number": "12422-24-GA"},
+             {"part_number": "12422-24-02M", "quantity": 1},
+             {"part_number": "79814P613", "description": _SCREW, "quantity": 4,
+              "supplier": "Elite Sourcing Solutions Ltd"}],
+            {"top_assembly": {"part_number": "12422-24-GA"},
+             "parts": [{"part_number": "79814P", "description": _SCREW, "quantity": 4},
+                       {"part_number": "12422-24-02M", "quantity": 1}],
+             "assemblies": [{"part_number": "12422-24-GA", "children": [
+                 {"part_number": "12422-24-02M", "qty": 1},
+                 {"part_number": "79814P", "qty": 4}]}]})
+
+    _g = _production_shape()
+    _screws = [n for n in _g["nodes"] if "79814P" in n.part_number]
+    eq(len(_screws), 1, "one screw node, not two spellings of it")
+    eq(_screws[0].part_number, "79814P", "under the spelling the GA claims")
+    eq(_screws[0].qty_per_unit, 4.0, "four screws, not eight")
+    eq(_screws[0].parents, ["12422-24-GA"], "owned by the GA")
+    eq([i["part_number"] for i in _g["issues"]
+        if i["code"] == "bom_node_disconnected"], [],
+       "and nothing is left disconnected — this is the blocker on 12422-24")
+
+    # THE ALIAS IS NOT A DELETION. Whichever spelling loses, what it knew survives on the
+    # node that remains: a row removed with its supplier on it is evidence thrown away.
+    ok("79814P613" in (_screws[0].evidence.get("raw_aliases") or []),
+       "the other spelling is recorded as an alias of the surviving node")
+
+    # THE DECISION TABLE, at the seam itself.
+    _raw = {"79814P613": {"description": _SCREW, "quantity": 4, "supplier": "Elite"}}
+    _ext = {"79814P": {"description": _SCREW, "quantity": 4}}
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"79814P"}), {"79814P613": "79814P"},
+       "the claimed spelling wins, whichever source it came from")
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"79814P613"}), {"79814P": "79814P613"},
+       "and it wins in the other direction too — this is not about which pool")
+
+    # BOTH CLAIMED, OR NEITHER, IS NOT A PREFERENCE. Choosing by length here would delete a
+    # row nobody decided against; two visible rows an estimator can see are safer.
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"79814P", "79814P613"}), {},
+       "two claims say nothing about which spelling is better")
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"SOMETHING-ELSE"}), {},
+       "and neither claimed says nothing either")
+
+    # DESCRIPTION AND QUANTITY TOGETHER ARE WHAT MAKE THIS SAFE. A real family of codes
+    # sharing a prefix describes different parts or different counts.
+    eq(_raw_identity_aliases({"79814P613": {"description": _SCREW, "quantity": 8}},
+                             _ext, claimed={"79814P"}), {},
+       "a different count is a different line, however similar the code")
+    eq(_raw_identity_aliases({"79814P613": {"description": "M6 WASHER", "quantity": 4}},
+                             _ext, claimed={"79814P"}), {},
+       "and a different description is a different part")
+
+    # A MEASURED PART IS NOT A SPELLING. Geometry means something read a drawing.
+    eq(_raw_identity_aliases(
+        {"79814P613": {"description": _SCREW, "quantity": 4,
+                       "normalized_geometry": {"blank_length_mm": 100.0,
+                                               "blank_width_mm": 50.0}}},
+        _ext, claimed={"79814P"}), {},
+       "a record carrying a measured blank is never folded into another code")
+
+
 def test_the_spelling_the_hierarchy_claims_is_the_spelling_that_survives():
     """THE MERGE WOULD HAVE FIRED CORRECTLY AND LEFT THE BLOCKER STANDING.
 

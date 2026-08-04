@@ -380,11 +380,39 @@ def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
     return aliases
 
 
+def _same_description(a: Any, b: Any) -> bool:
+    return (" ".join(str(a or "").upper().split())
+            == " ".join(str(b or "").upper().split()) != "")
+
+
+def _prefix_related(a: str, b: str) -> bool:
+    """One code is the other with characters missing off the end."""
+    _a, _b = a.upper(), b.upper()
+    return _a != _b and (_a.startswith(_b) or _b.startswith(_a))
+
+
 def _raw_identity_aliases(
     raw: Mapping[str, Mapping[str, Any]],
     extracted: Mapping[str, Mapping[str, Any]],
+    claimed: Any = (),
 ) -> Dict[str, str]:
-    """Reconcile generated BI-* identities with the explicit BOM code they came from."""
+    """Reconcile generated BI-* identities with the explicit BOM code they came from.
+
+    AND THE SAME PART SPELLED TWO WAYS ACROSS TWO SOURCES. 12422-24 put "79814P613" in the
+    part records and "79814P" in the extract, as a child of the GA — the same four screws,
+    the same description, never in the same list. The single-list truncation merge could not
+    pair them because neither pool ever held both, so it returned nothing on every run while
+    the sheet carried both lines and the graph reported the unclaimed one as disconnected.
+
+    This is where the two sources meet, and where a pair like that has to be resolved: by
+    ALIASING, so both identities become one node and every field either record carried is
+    merged rather than one row being deleted with its supplier, price and provenance on it.
+
+    The surviving spelling is the one the job hierarchy CLAIMS. Where both are claimed or
+    neither is, nothing has said which is better, and both stay visible for an estimator
+    rather than one being chosen by length — a coin toss that deletes evidence is worse
+    than two rows somebody can see.
+    """
     extracted_bought_in = {
         identity: record for identity, record in extracted.items()
         if _bought_in_record(record)
@@ -408,6 +436,41 @@ def _raw_identity_aliases(
             matches.append(candidate)
         if len(matches) == 1:
             aliases[identity] = matches[0]
+
+    # ── ONE PART, TWO SPELLINGS, TWO SOURCES ──────────────────────────────────────────
+    # Prefix-related codes carrying the SAME description and the SAME quantity are one item
+    # read twice. Description and quantity together are what make this safe: 79814P vs
+    # 79814P613 both read "3.5 x 16mm Pan Head Wood Screw" qty 4, while a genuine family of
+    # codes sharing a prefix describes different parts or different counts.
+    _claimed = {str(c).upper() for c in (claimed or ())}
+    for identity, record in raw.items():
+        if identity in extracted or identity in aliases:
+            continue
+        # A MEASURED PART IS NOT A SPELLING. Geometry means something read a drawing, and
+        # no amount of code similarity may fold that away.
+        _ng = record.get("normalized_geometry") or {}
+        if number(_ng.get("blank_length_mm"), 0.0) and number(_ng.get("blank_width_mm"), 0.0):
+            continue
+        _qty = number(record.get("quantity"), None)
+        _cands = [
+            candidate for candidate, candidate_record in extracted.items()
+            if _prefix_related(identity, candidate)
+            and _same_description(record.get("description"),
+                                  candidate_record.get("description"))
+            and number(candidate_record.get("quantity"), None) == _qty
+        ]
+        if len(_cands) != 1:
+            continue
+        _target = _cands[0]
+        # THE CLAIMED SPELLING SURVIVES. Both claimed or neither claimed is not a
+        # preference, and choosing anyway would delete a row nobody decided against.
+        if _claimed:
+            if _target.upper() in _claimed and identity.upper() not in _claimed:
+                aliases[identity] = _target
+            elif identity.upper() in _claimed and _target.upper() not in _claimed:
+                aliases[_target] = identity
+        else:
+            aliases[identity] = _target
     return aliases
 
 
@@ -419,7 +482,20 @@ def build_part_graph(
     llm_extract = llm_extract or {}
     raw_original = _raw_parts(parts)
     extracted = _extract_part_records(llm_extract)
-    aliases = _raw_identity_aliases(raw_original, extracted)
+    # The codes some assembly names as a child, read BEFORE aliasing so the alias pass can
+    # prefer the spelling the hierarchy actually references over the one it has never named.
+    _claimed_codes = {
+        clean_part_number(_e.get("part_number") if isinstance(_e, Mapping) else _e)
+        for _a in (llm_extract.get("assemblies") or []) if isinstance(_a, Mapping)
+        for _e in (_a.get("children") or [])
+    }
+    _claimed_codes |= {
+        clean_part_number(_k)
+        for _p in (parts or []) if isinstance(_p, Mapping)
+        for _k in (_p.get("assembly_children") or [])
+    }
+    _claimed_codes.discard("")
+    aliases = _raw_identity_aliases(raw_original, extracted, claimed=_claimed_codes)
     # The drawing's BOM is the naming authority; the files carry the same parts under the
     # modelled code. Applied after the BI-* reconciliation and only where the target already
     # exists, so it can merge a duplicate but never invent an identity.
