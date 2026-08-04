@@ -321,6 +321,73 @@ def _bom_row_merge_preferred(
     return False
 
 
+def _merge_truncated_bom_codes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One screw extracted twice is one BOM line, not two unpriceable ones.
+
+    12422-24's pooled BOM carried "79814P613  3.5 x 16mm Pan Head Wood Screw" qty 4 AND
+    "79814P  3.5 x 16mm Pan Head Wood Screw" qty 4 — the same four screws, read twice, once
+    with the code truncated. The stem is not a code, so UDEF has no row for it and that line
+    could never be priced whatever we asked; and the quantity sat on the sheet twice for an
+    estimator to spot and merge by hand.
+
+    The merge is refused unless the DESCRIPTIONS agree as well as the codes. Two codes that
+    share a prefix and describe different parts are two parts, and a prefix alone is a weak
+    enough signal that it must not act on its own. Quantity is taken as the LARGER of the
+    two rather than the sum: these are two readings of one line, not two lines.
+
+    A labelled cell — "VITAL PARTS: LOW068" — has its label stripped here too, so the code
+    that reaches UDEF is the one the supplier would recognise.
+    """
+    from part_identity import normalize_part_code, strip_code_label, stem_duplicate_target
+
+    if not rows:
+        return rows
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        _raw = row.get("part_number") or row.get("part_code") or ""
+        _clean = strip_code_label(_raw)
+        if _clean and _clean != str(_raw).strip():
+            row["part_number"] = _clean
+            row.setdefault("review_flags", []).append(
+                f"BOM code '{_raw}' carried a label; read as '{_clean}' so it can be looked up")
+
+    def _desc(r):
+        return " ".join(str(r.get("description") or "").upper().split())
+
+    _codes = [str(r.get("part_number") or "") for r in rows if isinstance(r, dict)]
+    _by_code = {normalize_part_code(c): r for c, r in zip(_codes, rows)}
+    out: List[Dict[str, Any]] = []
+    for row, code in zip(rows, _codes):
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        target = stem_duplicate_target(code, [c for c in _codes if c != code])
+        keeper = _by_code.get(target) if target else None
+        if keeper is None or not _desc(row) or _desc(row) != _desc(keeper):
+            out.append(row)
+            continue
+        try:
+            _q_stem = float(row.get("quantity") or row.get("qty") or 0)
+            _q_keep = float(keeper.get("quantity") or keeper.get("qty") or 0)
+        except (TypeError, ValueError):
+            out.append(row)
+            continue
+        if _q_stem > _q_keep:
+            # A raw BOM ROW at extraction time, before any part record exists for the
+            # resolver to arbitrate on. Not a new observation: two readings of ONE printed
+            # cell, and the larger is the one that read the whole line rather than a
+            # truncation of it. No source is displaced.
+            keeper["quantity"] = _q_stem   # precedence: direct-write ok — reconciles two readings of one raw BOM cell
+        keeper.setdefault("review_flags", []).append(
+            f"BOM line '{code}' merged into '{target}': same description, and '{code}' is a "
+            f"truncation of it. One item read twice — the quantity is the larger of the two "
+            f"({_q_keep:g} and {_q_stem:g}), not their sum.")
+        print(f"   [bom] merged truncated code '{code}' into '{target}' "
+              f"(same description, qty {max(_q_stem, _q_keep):g})")
+    return out
+
+
 def merge_job_pdf_summaries(
     partials: Sequence[Tuple[Path, Dict[str, Any]]],
     job_folder: Path,
@@ -432,7 +499,7 @@ def merge_job_pdf_summaries(
         "dimensions_mm": sorted(dimensions, key=lambda v: float(v) if re.match(r"^\d", str(v)) else 0),
     }
     merged_doc = dict(merged.get("document_analysis") or {})
-    merged_doc["bom_rows"] = list(bom_by_key.values())
+    merged_doc["bom_rows"] = _merge_truncated_bom_codes(list(bom_by_key.values()))
     merged["document_analysis"] = merged_doc
 
     primary_gs = primary_summary.get("geometry_summary") or {}

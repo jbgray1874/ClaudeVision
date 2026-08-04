@@ -104,6 +104,64 @@ _PLACEHOLDER_CODES = frozenset({
 })
 
 
+# A drawing labels a BOM cell as often as it fills one: "VITAL PARTS: LOW068" is a label
+# and a code, and the label travelled with it all the way to UDEF, which was asked for a
+# part called "VITAL PARTS: LOW068" and had nothing. The code is on the right of the colon.
+_CODE_LABEL_PREFIX = re.compile(
+    r"^\s*(?:VITAL\s+PARTS?|STD\s+PARTS?|STANDARD\s+PARTS?|BOUGHT[\s-]?IN|PART\s*(?:NO|CODE)?"
+    r"|ITEM|SUPPLIER|FIXINGS?|HARDWARE)\s*[:\-]\s*(?=\S)",
+    re.IGNORECASE)
+
+
+def strip_code_label(raw: Any) -> str:
+    """The code a labelled BOM cell actually names.
+
+    "VITAL PARTS: LOW068" -> "LOW068". Only a KNOWN label is stripped and only when
+    something follows it, so a code that merely contains a colon is untouched and a cell
+    holding nothing but a label stays exactly as it was rather than becoming empty.
+    """
+    text = str(raw or "").strip()
+    stripped = _CODE_LABEL_PREFIX.sub("", text).strip()
+    return stripped or text
+
+
+def stem_duplicate_target(code: Any, others: Any) -> str:
+    """The fuller code this one is a truncated stem of, or "" when it stands alone.
+
+    ONE SCREW, TWO LINES, BOTH UNPRICEABLE. 12422-24's BOM carried "79814P613  3.5 x 16mm
+    Pan Head Wood Screw" qty 4 AND "79814P  3.5 x 16mm Pan Head Wood Screw" qty 4 — the same
+    four screws, extracted twice, once with the code truncated. The stem is not a code, so
+    UDEF has no row for it and the line can never be priced; meanwhile the quantity is
+    double-counted across two rows an estimator has to notice and merge by hand.
+
+    A code that is a strict PREFIX of another code on the same BOM is a truncation of it.
+    Required: the stem must be at least four characters (so "M4" does not swallow "M4X8"),
+    and the character the longer code continues with must be alphanumeric — "FIXING" is a
+    stem of "FIXING433", while "11350-01" is NOT a stem of "11350-01-02", because the
+    continuation there is a separator and that is a real parent/child relationship, not a
+    truncation.
+
+    AMBIGUITY IS NOT RESOLVED, IT IS REPORTED. 12422-24 also carries a bare "FIXING", and
+    both "FIXING433" and "FIXING51" are on the same BOM. Merging it into either is wrong
+    half the time and invisible once done, so a stem with more than one candidate returns ""
+    and stays its own visible, unpriced line for an estimator to resolve. Declining a merge
+    costs a row somebody can see; inventing one costs a part its identity.
+    """
+    stem = normalize_part_code(strip_code_label(code))
+    if len(stem) < 4:
+        return ""
+    matches = []
+    for other in (others or []):
+        full = normalize_part_code(strip_code_label(other))
+        if len(full) <= len(stem) or not full.startswith(stem):
+            continue
+        if not full[len(stem)].isalnum():
+            continue          # a separator means hierarchy, not truncation
+        if full not in matches:
+            matches.append(full)
+    return matches[0] if len(matches) == 1 else ""
+
+
 def is_placeholder_identity(part_number: Any) -> bool:
     """True when a code says 'no code', rather than naming a part."""
     text = str(part_number or "").strip().upper()

@@ -4659,6 +4659,84 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_one_item_read_twice_is_one_bom_line():
+    """SEVEN BLANK PRICE CELLS ON 12422-24, AND UDEF WAS NEVER THE PROBLEM.
+
+    UDEF is configured, enabled and working: it priced FIXING433 and FIXING51 at GBP 0.05
+    from Elite Sourcing Solutions Ltd on the same sheet. What it could not price were codes
+    that do not exist —
+
+      79814P613  "3.5 x 16mm Pan Head Wood Screw"  qty 4
+      79814P     "3.5 x 16mm Pan Head Wood Screw"  qty 4     <- the same four screws
+
+    one printed line, extracted twice, once truncated. The stem is not a code, so no lookup
+    of any kind could ever have priced it, and the quantity sat on the sheet twice for an
+    estimator to notice by hand. A pricing symptom with an extraction cause.
+
+    And "VITAL PARTS: LOW068" is a label and a code: UDEF was asked for a part called
+    "VITAL PARTS: LOW068" and had nothing to say."""
+    from file_scan import _merge_truncated_bom_codes
+    from part_identity import strip_code_label, stem_duplicate_target
+
+    _rows = [
+        {"part_number": "79814P613", "description": "3.5 x 16mm Pan Head Wood Screw",
+         "quantity": 4},
+        {"part_number": "79814P", "description": "3.5 x 16mm Pan Head Wood Screw",
+         "quantity": 4},
+        {"part_number": "FIXING433", "description": "M6 x 12mm Flange Button head",
+         "quantity": 6},
+        {"part_number": "FIXING51", "description": "Flanged Nutsert", "quantity": 2},
+        {"part_number": "FIXING", "description": "Threaded Insert Headed", "quantity": 4},
+        {"part_number": "VITAL PARTS: LOW068", "description": "Adjustable Foot",
+         "quantity": 2},
+    ]
+    _out = _merge_truncated_bom_codes([dict(r) for r in _rows])
+    _by = {r["part_number"]: r for r in _out}
+
+    eq(len(_out), 5, "the duplicated screw collapses to one line")
+    ok("79814P" not in _by, "the truncated stem is gone")
+    eq(_by["79814P613"]["quantity"], 4,
+       "and the quantity is FOUR screws — the larger of two readings of one cell, not eight")
+
+    # THE LABEL IS NOT PART OF THE CODE. LOW068 is a real SDI code behind a drawing's own
+    # heading, and it was being handed to UDEF with the heading attached.
+    ok("LOW068" in _by, "a labelled cell reaches the lookup as the code it names")
+    eq(strip_code_label("VITAL PARTS: LOW068"), "LOW068", "which is what the supplier knows")
+    eq(strip_code_label("LOW068"), "LOW068", "and an unlabelled code is untouched")
+    eq(strip_code_label("VITAL PARTS:"), "VITAL PARTS:",
+       "a cell holding nothing but a label does not become empty")
+
+    # AMBIGUITY IS REPORTED, NOT RESOLVED. "FIXING" is a stem of BOTH FIXING433 and FIXING51.
+    # Merging into either is wrong half the time and invisible once done, so it stays its own
+    # visible unpriced line. Declining a merge costs a row somebody can see; inventing one
+    # costs a part its identity.
+    ok("FIXING" in _by, "an ambiguous stem is left alone for an estimator to resolve")
+    eq(stem_duplicate_target("FIXING", ["FIXING433", "FIXING51"]), "",
+       "two candidates means no merge")
+    eq(stem_duplicate_target("FIXING", ["FIXING433"]), "FIXING433",
+       "one candidate means merge")
+
+    # A SEPARATOR IS HIERARCHY, NOT TRUNCATION. This is the assertion that stops the rule
+    # eating the part numbering system: 11350-01 is the PARENT of 11350-01-02, and merging
+    # them would destroy the BOM tree on every job in the archive.
+    eq(stem_duplicate_target("11350-01", ["11350-01-02", "11350-01-101"]), "",
+       "a parent code is not a truncation of its child")
+    _tree = _merge_truncated_bom_codes([
+        {"part_number": "11350-01", "description": "ASSY", "quantity": 1},
+        {"part_number": "11350-01-02", "description": "ASSY", "quantity": 1}])
+    eq(len(_tree), 2, "even with identical descriptions, hierarchy survives")
+
+    # AND A SHORT CODE SWALLOWS NOTHING. "M4" must not absorb "M4X8".
+    eq(stem_duplicate_target("M4", ["M4X8"]), "", "a two-character stem is not evidence")
+
+    # DESCRIPTIONS MUST AGREE. A shared prefix alone is too weak to act on: two codes that
+    # describe different parts are two parts, whatever their codes share.
+    _diff = _merge_truncated_bom_codes([
+        {"part_number": "ABCD", "description": "BRACKET", "quantity": 1},
+        {"part_number": "ABCD12", "description": "SPACER", "quantity": 1}])
+    eq(len(_diff), 2, "different descriptions are different parts")
+
+
 def test_a_board_is_priced_from_what_the_shop_has_actually_paid():
     """12422-24's material total was GBP 1.75 with a 1434 x 748 x 28 MFC panel at zero —
     about 5% of what the job really costs in material.
