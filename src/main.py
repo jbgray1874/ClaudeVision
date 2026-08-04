@@ -429,7 +429,37 @@ def main() -> None:
     if getattr(args, "job", None):
         _job_root = Path(args.job)
         if not _job_root.is_dir():
-            print(f"--job expects a job FOLDER; {_job_root} is not a directory.")
+            # "NOT A DIRECTORY" NAMES THE SYMPTOM AND NOT THE CAUSE, and the causes need
+            # different actions: a file passed where a folder belongs, a renamed folder, or
+            # a network drive that is not mapped in this shell. Walking up to the deepest
+            # ancestor that DOES exist says exactly where the path stops being true, which
+            # is the one fact that distinguishes them — and it costs a few stat calls.
+            if _job_root.is_file():
+                print(f"--job expects a job FOLDER, and {_job_root} is a file. "
+                      f"Use --pdf for a single drawing, or pass its parent folder.")
+                return
+            # `.` is where a RELATIVE path bottoms out, and it is not evidence about the
+            # path — listing the working directory for a job on an unmapped drive is noise
+            # dressed as a diagnosis.
+            _deepest = next((a for a in [_job_root, *_job_root.parents]
+                             if a != Path(".") and a.exists()), None)
+            print(f"--job cannot read {_job_root} — no such folder.")
+            if _deepest is None:
+                print(f"   Nothing on this path exists, not even its drive. If "
+                      f"{_job_root.anchor or 'the drive'} is a mapped network drive, it may "
+                      f"not be mapped in this shell.")
+            else:
+                print(f"   The path exists as far as: {_deepest}")
+                try:
+                    _kids = sorted(p.name for p in _deepest.iterdir() if p.is_dir())
+                except OSError as _e_ls:
+                    _kids, _e = [], _e_ls
+                    print(f"   ...and could not be listed ({_e}).")
+                if _kids:
+                    _want = _job_root.name.lower()[:8]
+                    _near = [k for k in _kids if k.lower()[:8] == _want] or _kids
+                    print(f"   Folders in it ({len(_kids)}): "
+                          f"{', '.join(_near[:10])}{' ...' if len(_near) > 10 else ''}")
             return
         if args.pdf or args.drawing:
             print("--job scans a whole folder as one job; --pdf/--drawing scans a single "

@@ -5014,9 +5014,16 @@ def test_the_batch_a_price_was_computed_for_is_the_batch_it_is_labelled_with():
     _jpos = _mn.index('if getattr(args, "job", None):')
     ok(_jpos < _mn.index("drawing_arg = args.pdf or args.drawing"),
        "and it is normalised before anything reads the scan mode it sets")
-    for _needed in ("args.folder_as_job = True", "args.no_folder_as_job = False",
-                    "is not a directory"):
-        ok(_needed in _mn, f"--job sets/checks: {_needed}")
+    for _needed in ("args.folder_as_job = True", "args.no_folder_as_job = False"):
+        ok(_needed in _mn, f"--job sets: {_needed}")
+
+    # AN UNREADABLE PATH NAMES ITS CAUSE. "Not a directory" is a symptom shared by a file
+    # passed where a folder belongs, a renamed folder, and a network drive not mapped in
+    # this shell — and those need three different actions. The deepest ancestor that DOES
+    # exist is what separates them.
+    for _needed in ("is a file", "The path exists as far as:",
+                    "not even its drive", "mapped network drive"):
+        ok(_needed in _mn, f"--job explains an unreadable path: {_needed}")
 
 
 def test_what_a_part_is_for_survives_costing():
