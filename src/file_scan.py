@@ -321,6 +321,41 @@ def _bom_row_merge_preferred(
     return False
 
 
+def _codes_claimed_by_the_hierarchy(summary: Dict[str, Any]) -> List[str]:
+    """Every code some assembly names as a child, from all three hierarchy sources.
+
+    WHICH OF TWO SPELLINGS OF ONE PART TO KEEP is decided by length unless something says
+    otherwise, and this is what says otherwise. 12422-24 carried "79814P" as a child of the
+    GA and "79814P613" as a child of nothing — the same four screws, and the length rule
+    would have kept the one the drawing does not reference, leaving the disconnected node it
+    was supposed to remove.
+
+    Read from the parts themselves (assembly_children, written by the SolidWorks pass and
+    the description rule) and from the whole-job extract's assemblies. Every source is
+    unioned rather than ranked: this asks only "did ANY reading of this job claim this
+    code", which is a weaker question than whose tree is right, and the weaker question is
+    the one that has an answer here.
+    """
+    claimed: List[str] = []
+    for part in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
+        if not isinstance(part, dict):
+            continue
+        for kid in (part.get("assembly_children") or []):
+            if str(kid or "").strip():
+                claimed.append(str(kid))
+    for holder in (summary.get("llm_full_extract"), summary.get("llm_extract")):
+        if not isinstance(holder, dict):
+            continue
+        for assembly in (holder.get("assemblies") or []):
+            if not isinstance(assembly, dict):
+                continue
+            for edge in (assembly.get("children") or []):
+                code = edge.get("part_number") if isinstance(edge, dict) else edge
+                if str(code or "").strip():
+                    claimed.append(str(code))
+    return claimed
+
+
 def _merge_truncated_bom_codes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One screw extracted twice is one BOM line, not two unpriceable ones.
 
@@ -2533,10 +2568,13 @@ def _finalize_scan_summary(
     # which is how a truncated stem reached the sheet as its own unpriceable line.
     try:
         from drawing_job_merge import merge_truncated_part_codes
-        _bom_merged = merge_truncated_part_codes(summary["manufacturing_writeup"]["parts"])
+        _bom_merged = merge_truncated_part_codes(
+            summary["manufacturing_writeup"]["parts"],
+            claimed_codes=_codes_claimed_by_the_hierarchy(summary))
         for _m in _bom_merged:
             print(f"   [bom] '{_m['part_number']}' merged into '{_m['merged_into']}' "
-                  f"(same description, truncated code, qty {_m['quantity']:g})", flush=True)
+                  f"({_m.get('reason') or 'truncated code'}; qty {_m['quantity']:g})",
+                  flush=True)
     except Exception as _bm_err:
         print(f"   [bom] truncated-code merge skipped: "
               f"{type(_bm_err).__name__}: {_bm_err}", flush=True)
@@ -2579,7 +2617,8 @@ def _finalize_scan_summary(
     # and part_identity remains the single authority both calls ask.
     try:
         from drawing_job_merge import merge_truncated_part_codes as _merge_late
-        _late = _merge_late(summary["manufacturing_writeup"]["parts"])
+        _late = _merge_late(summary["manufacturing_writeup"]["parts"],
+                            claimed_codes=_codes_claimed_by_the_hierarchy(summary))
         for _m in _late:
             print(f"   [bom] '{_m['part_number']}' merged into '{_m['merged_into']}' "
                   f"(re-created after the first pass; qty {_m['quantity']:g})", flush=True)

@@ -1419,7 +1419,8 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return filled
 
 
-def merge_truncated_part_codes(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def merge_truncated_part_codes(parts: List[Dict[str, Any]],
+                               claimed_codes: Optional[Any] = None) -> List[Dict[str, Any]]:
     """One item extracted twice is one PART, not two — on the population the sheet renders.
 
     THE FIRST ATTEMPT AT THIS RAN ON THE WRONG POOL. It was wired into the pooled PDF BOM,
@@ -1436,6 +1437,21 @@ def merge_truncated_part_codes(parts: List[Dict[str, Any]]) -> List[Dict[str, An
     fuller code is left alone for an estimator. A part carrying real geometry is never
     merged away, whatever its code looks like — a truncation is a text artefact, and a
     measured blank means something read a drawing.
+
+    WHICH SPELLING SURVIVES IS EVIDENCE, NOT LENGTH. Keeping the longer code assumes the
+    short one is the damaged read. That is the usual case, and it is still only a guess
+    about a string. 12422-24 is the counter-example: the job's own hierarchy claims
+    "79814P" as a child of the GA, while "79814P613" appears in no assembly at all and was
+    reported as a disconnected node. Dropping the claimed code to keep the unclaimed one
+    would have removed the part the drawing references and left the orphan in its place —
+    this merge firing correctly would STILL have left the blocker standing.
+
+    So when exactly one of the two codes is CLAIMED by the job hierarchy, that one is kept,
+    whatever its length. A parent is something a drawing states; length is something a
+    string happens to have. Position is not evidence on this branch, and neither is size.
+
+    `claimed_codes` is any iterable of codes named as a child by some assembly. Omitted, the
+    length rule stands unchanged — this only ever adds a reason to prefer one over the other.
     """
     from part_identity import (normalize_part_code, strip_code_label,
                                stem_duplicate_target)
@@ -1460,6 +1476,9 @@ def merge_truncated_part_codes(parts: List[Dict[str, Any]]) -> List[Dict[str, An
     def _desc(p):
         return " ".join(str(p.get("description") or "").upper().split())
 
+    _claimed = {normalize_part_code(strip_code_label(c)) for c in (claimed_codes or [])}
+    _claimed.discard("")
+
     for _i, part in enumerate(parts):
         if not isinstance(part, dict):
             continue
@@ -1470,6 +1489,22 @@ def merge_truncated_part_codes(parts: List[Dict[str, Any]]) -> List[Dict[str, An
             continue
         if not _desc(part) or _desc(part) != _desc(keeper):
             continue
+        # THE CLAIMED SPELLING WINS. Exactly one of the pair named as somebody's child is
+        # the one the drawing's hierarchy actually references; the other is the redundant
+        # read, whichever is longer. Both claimed or neither claimed leaves the length rule
+        # in charge, because then nothing has been said to prefer one.
+        _stem_key, _full_key = normalize_part_code(code), normalize_part_code(target)
+        _reason = "it is a truncation of it"
+        if _claimed and (_stem_key in _claimed) != (_full_key in _claimed):
+            if _stem_key in _claimed:
+                # Swap the roles: the SHORT code is the one the job hierarchy claims.
+                part, keeper = keeper, part
+                code, target = target, code
+                _reason = ("the job hierarchy names the shorter code as a child and names "
+                           "this one nowhere, so this is the redundant read")
+            else:
+                _reason = ("it is a truncation of it, and the job hierarchy names the "
+                           "fuller code as a child while naming this one nowhere")
         # A MEASURED PART IS NOT A TEXT ARTEFACT. A truncation is something the extractor
         # did to a string; a blank means something read a drawing. Never merge away a part
         # that carries geometry, however much its code looks like a stem.
@@ -1482,14 +1517,19 @@ def merge_truncated_part_codes(parts: List[Dict[str, Any]]) -> List[Dict[str, An
         if _q_stem > _q_keep:
             _apply_field(keeper, "quantity", _q_stem, "drawing_deterministic")
         keeper.setdefault("review_flags", []).append(
-            f"'{code}' merged into '{target}': same description, and '{code}' is a "
-            f"truncation of it. One item read twice — the quantity is the larger of the "
-            f"two ({_q_keep:g} and {_q_stem:g}), not their sum.")
+            f"'{code}' merged into '{target}': same description, and {_reason}. "
+            f"One item read twice — the quantity is the larger of the two "
+            f"({_q_keep:g} and {_q_stem:g}), not their sum.")
         merged.append({"part_number": code, "merged_into": target,
-                       "quantity": max(_q_stem, _q_keep)})
-        _drop.append(_i)
+                       "quantity": max(_q_stem, _q_keep), "reason": _reason})
+        # THE INDEX OF THE RECORD ACTUALLY BEING REMOVED, not of the one this iteration
+        # started on. Where the hierarchy swapped the roles, `part` is no longer the record
+        # at _i, and dropping _i would delete the code we just decided to keep.
+        _drop.append(next((_j for _j, _p in enumerate(parts) if _p is part), _i))
 
-    for _i in sorted(_drop, reverse=True):
+    # DEDUPED, because popping one index twice removes a record nobody decided to remove.
+    # Two stems resolving to one keeper is rare and the loss would be silent.
+    for _i in sorted(set(_drop), reverse=True):
         parts.pop(_i)
     return merged
 

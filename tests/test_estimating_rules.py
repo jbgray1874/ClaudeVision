@@ -4853,6 +4853,74 @@ def test_the_hierarchy_pass_says_why_it_did_nothing():
     ok("no assembly documents" in _fs, "and does not call an absent tree a fault")
 
 
+def test_the_spelling_the_hierarchy_claims_is_the_spelling_that_survives():
+    """THE MERGE WOULD HAVE FIRED CORRECTLY AND LEFT THE BLOCKER STANDING.
+
+    Keeping the longer code assumes the short one is the damaged read. Usually true, and
+    still only a guess about a string. 12422-24 named the blocker at last and it was
+    "79814P613" — raw-only, in no assembly, a disconnected node — while "79814P" sits in the
+    graph as a child of the GA. The length rule would have dropped the code the drawing
+    references and kept the orphan, so the one blocking violation on this job would have
+    survived a merge that did exactly what it was written to do.
+
+    A parent is something a drawing states. Length is something a string happens to have.
+    Position was not evidence twice on this branch; size is not evidence either."""
+    from drawing_job_merge import merge_truncated_part_codes
+
+    def _job():
+        return [{"part_number": "79814P613", "description": "3.5 x 16mm Pan Head Wood Screw",
+                 "quantity": 4},
+                {"part_number": "79814P", "description": "3.5 x 16mm Pan Head Wood Screw",
+                 "quantity": 4}]
+
+    # THE JOB'S OWN CASE. The GA claims the SHORT code; the long one is claimed by nothing.
+    _parts = _job()
+    _merged = merge_truncated_part_codes(_parts, claimed_codes=["79814P"])
+    eq([p["part_number"] for p in _parts], ["79814P"],
+       "the claimed spelling survives even though it is shorter")
+    eq(_merged[0]["merged_into"], "79814P",
+       "and the unclaimed one is what got merged away")
+    eq(_parts[0]["quantity"], 4,
+       "four screws, not eight — one item read twice is not two items")
+
+    # THE ORDINARY CASE IS UNCHANGED. Nothing claimed, so length still decides.
+    _parts = _job()
+    merge_truncated_part_codes(_parts)
+    eq([p["part_number"] for p in _parts], ["79814P613"],
+       "with no hierarchy to consult, the fuller code is still kept")
+
+    # CLAIMED THE OTHER WAY round, and the length rule and the evidence agree.
+    _parts = _job()
+    merge_truncated_part_codes(_parts, claimed_codes=["79814P613"])
+    eq([p["part_number"] for p in _parts], ["79814P613"], "the claimed fuller code is kept")
+
+    # BOTH CLAIMED SAYS NOTHING about which is the better spelling, so the length rule
+    # stands rather than the swap firing on a coin toss.
+    _parts = _job()
+    merge_truncated_part_codes(_parts, claimed_codes=["79814P", "79814P613"])
+    eq([p["part_number"] for p in _parts], ["79814P613"],
+       "two claims are not a preference")
+
+    # THE RECORD REMOVED IS THE ONE DECIDED AGAINST. A swap moves the loser away from the
+    # index the iteration started on, and popping that index would delete the keeper.
+    _parts = [{"part_number": "KEEP-ME", "description": "unrelated", "quantity": 1},
+              {"part_number": "79814P613", "description": "SCREW", "quantity": 4},
+              {"part_number": "79814P", "description": "SCREW", "quantity": 4},
+              {"part_number": "ALSO-KEEP", "description": "unrelated too", "quantity": 1}]
+    merge_truncated_part_codes(_parts, claimed_codes=["79814P"])
+    eq(sorted(p["part_number"] for p in _parts), ["79814P", "ALSO-KEEP", "KEEP-ME"],
+       "exactly one record leaves, and it is the unclaimed spelling")
+
+    # A MEASURED PART IS STILL NEVER MERGED AWAY, whatever the hierarchy claims. Geometry
+    # outranks both rules: a blank means something read a drawing.
+    _parts = [{"part_number": "79814P613", "description": "SCREW", "quantity": 4,
+               "normalized_geometry": {"blank_length_mm": 100.0, "blank_width_mm": 50.0}},
+              {"part_number": "79814P", "description": "SCREW", "quantity": 4}]
+    merge_truncated_part_codes(_parts, claimed_codes=["79814P"])
+    eq(sorted(p["part_number"] for p in _parts), ["79814P", "79814P613"],
+       "a record carrying a measured blank survives even when the hierarchy prefers the other")
+
+
 def test_a_blocker_names_the_part_it_is_blocking_on():
     """FIVE RUNS OF ONE JOB, THE SAME BLOCKER, AND NEVER THE NAME OF WHAT CAUSED IT.
 
@@ -5345,7 +5413,10 @@ def test_the_merge_runs_on_the_population_the_sheet_renders():
     from pathlib import Path as _P3
     _fs = (_P3(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
         encoding="utf-8")
-    _merge_at = _fs.find("merge_truncated_part_codes(summary[")
+    # Keyed on the ASSIGNMENT, not on the argument list: the call gained a claimed_codes
+    # argument and wrapped, and a probe that matches on argument text reports "the merge
+    # moved" when all that changed was where the line broke.
+    _merge_at = _fs.find("_bom_merged = merge_truncated_part_codes(")
     _canon_at = _fs.find("apply_canonical_evidence_to_parts(\n")
     if _canon_at < 0:
         _canon_at = _fs.find("apply_canonical_evidence_to_parts(")
