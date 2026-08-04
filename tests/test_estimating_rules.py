@@ -13421,14 +13421,19 @@ def test_an_operation_charged_on_a_parent_and_its_child_is_surfaced():
     engine cannot know which the shop does. The estimator rules — but only if they are told."""
     from invariants import check_an_operation_is_not_charged_on_a_parent_and_its_child as _chk
 
+    # THE JOB'S ACTUAL SHAPE: P.Coat is TWO rows — 102 grouped with three brackets, and 05M
+    # on its own. The first version of this check tested participants WITHIN one decision,
+    # so the parent and its child never appeared in the same list and it reported nothing on
+    # the job it was written for. An operation is the set of all its rows.
     _job = {"solidworks_native": {"hierarchy": {
                 "12422-24-102": [["12422-24-05M", 1.0]],
                 "12422-24-GA": [["12422-24-102", 1.0]]}},
             "canonical_route_shadow": {"decisions": [
                 {"decision_id": "d1", "operation": "P.Coat", "participants": [
-                    "12422-24-02M", "12422-24-03M", "12422-24-04M",
-                    "12422-24-102", "12422-24-05M"]},
-                {"decision_id": "d2", "operation": "Fold",
+                    "12422-24-02M", "12422-24-03M", "12422-24-04M", "12422-24-102"]},
+                {"decision_id": "d2", "operation": "P.Coat",
+                 "participants": ["12422-24-05M"]},
+                {"decision_id": "d3", "operation": "Fold",
                  "participants": ["12422-24-02M"]}]}}
     _v = _chk(_job)
     eq(len(_v), 1, "the overlapping operation is reported once")
@@ -13620,3 +13625,27 @@ def test_two_records_of_different_kinds_are_not_two_spellings_of_one_part():
        "children make a record an assembly even with no canonical_kind yet")
     eq(_record_kind({"is_bought_in": True}), "bought_in", "and an explicit flag is read")
     eq(_record_kind({}), "", "a record stating nothing states nothing")
+
+
+def test_two_rows_of_one_operation_are_still_one_operation():
+    """DIFFERENT OPERATIONS DO NOT OVERLAP, AND ONE OPERATION SPLIT IN TWO STILL DOES.
+
+    The workbook prices P.Coat as two rows. Folding an assembly and welding its child are
+    two different processes and never a duplication; coating an assembly on one row and its
+    child on another is the same process charged twice."""
+    from invariants import check_an_operation_is_not_charged_on_a_parent_and_its_child as _chk
+
+    _tree = {"solidworks_native": {"hierarchy": {"SUB": [["LEAF", 1.0]]}}}
+
+    eq(_chk(dict(_tree, **{"canonical_route_shadow": {"decisions": [
+        {"operation": "Fold", "participants": ["SUB"]},
+        {"operation": "Weld", "participants": ["LEAF"]}]}})), [],
+       "an ancestor and a descendant in DIFFERENT operations are not a duplication")
+
+    _same = _chk(dict(_tree, **{"canonical_route_shadow": {"decisions": [
+        {"decision_id": "a", "operation": "P.Coat", "participants": ["SUB"]},
+        {"decision_id": "b", "operation": "P.Coat", "participants": ["LEAF"]}]}}))
+    eq(len(_same), 1, "the same operation on two rows is one operation")
+    eq(_same[0]["detail"]["operation"], "P.Coat", "reported against the operation")
+    ok("a" in _same[0]["detail"]["decision_id"] and "b" in _same[0]["detail"]["decision_id"],
+       "naming both rows, so an estimator can find them")

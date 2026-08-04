@@ -1415,18 +1415,39 @@ def check_an_operation_is_not_charged_on_a_parent_and_its_child(
             out |= _descendants(kid, seen)
         return out
 
+    # ACROSS EVERY ROW OF ONE OPERATION, NOT WITHIN A SINGLE ROW.
+    #
+    # The first version of this tested participants inside one decision, and 12422-24 is
+    # precisely the case it therefore missed: P.Coat is TWO rows — 102 grouped with three
+    # brackets, and 05M on its own — so the parent and its child never appeared in the same
+    # list. The check reported nothing on the job it was written for.
+    #
+    # The question is "is this operation charged on an item and on something that item
+    # contains", and an operation is the set of all its rows. Grouped by operation name,
+    # which is what the workbook prices by.
     shadow = _node(summary, "canonical_route_shadow")
-    out: List[Dict[str, Any]] = []
+    by_operation: Dict[str, Dict[str, Any]] = {}
     for decision in (shadow.get("decisions") or []):
         if not isinstance(decision, dict):
             continue
-        parts_in = {str(p).upper() for p in (decision.get("participants") or []) if p}
+        op = str(decision.get("operation") or "").strip()
+        if not op:
+            continue
+        bucket = by_operation.setdefault(op, {"parts": set(), "ids": []})
+        bucket["parts"] |= {str(p).upper() for p in (decision.get("participants") or []) if p}
+        if decision.get("decision_id"):
+            bucket["ids"].append(str(decision.get("decision_id")))
+
+    out: List[Dict[str, Any]] = []
+    for op, bucket in sorted(by_operation.items()):
+        parts_in = bucket["parts"]
         if len(parts_in) < 2:
             continue
         for candidate in sorted(parts_in):
             overlap = sorted(_descendants(candidate) & (parts_in - {candidate}))
             if not overlap:
                 continue
+            decision = {"operation": op, "decision_id": ", ".join(bucket["ids"][:6])}
             out.append(_violation(
                 # UNVERIFIED, NOT A WARNING. Pricing both is a decision the engine cannot
                 # defend, and a warning lets it be quoted firm anyway. Unverified says the
