@@ -1259,10 +1259,21 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
             "assembly_scope_without_target", "bom_node_disconnected",
             "bom_leaf_without_estimate",
         }:
+            # NAME THE THING. The compiler records which part it means; this message did not
+            # render it, so a blocking failure read as "something in this job has no owner"
+            # and the only way to learn WHICH was to open the JSON. A blocker nobody can act
+            # on from what it says costs a run every time it fires — and it has fired on
+            # every run of this job. The identity is in the same dict the detail already
+            # carried; it simply never reached the sentence.
+            _bits = [str(issue.get(k)) for k in ("part_number", "kind", "description")
+                     if str(issue.get(k) or "").strip()]
+            _who = " / ".join(_bits) if _bits else "an unnamed node"
             out.append(_violation(
                 f"canonical_route_{issue.get('code')}", BLOCKING,
-                f"Canonical BOM/route compilation found {issue.get('code')}; "
-                "the event or component has no defensible owner in the job hierarchy.",
+                f"Canonical BOM/route compilation found {issue.get('code')} on "
+                f"{_who} — it has no defensible owner in the job hierarchy. Give it a "
+                f"parent (an assembly that holds it), or establish why it is not a child "
+                f"of anything.",
                 issue=issue))
 
     required_ids = {

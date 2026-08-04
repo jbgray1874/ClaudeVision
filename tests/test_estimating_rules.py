@@ -4853,6 +4853,55 @@ def test_the_hierarchy_pass_says_why_it_did_nothing():
     ok("no assembly documents" in _fs, "and does not call an absent tree a fault")
 
 
+def test_a_blocker_names_the_part_it_is_blocking_on():
+    """FIVE RUNS OF ONE JOB, THE SAME BLOCKER, AND NEVER THE NAME OF WHAT CAUSED IT.
+
+    The compiler records which node has no owner — part_number, kind and description are all
+    on the issue it raises. The invariant put that dict in `detail` and wrote a sentence that
+    named only the CODE, so the console said "the event or component has no defensible owner"
+    and the only way to learn which component was to open the saved JSON.
+
+    A blocking check exists to stop work. One that cannot say what to fix stops the same work
+    repeatedly, which is worse than not blocking at all: it costs a run each time and teaches
+    the reader to route around it."""
+    from invariants import check_canonical_route_shadow
+
+    _summary = {
+        "canonical_route_shadow": {
+            "mode": "cutover",
+            "issues": [{"code": "bom_node_disconnected", "part_number": "SCREW",
+                        "kind": "bought_in", "description": "3.5x12mm WOOD SCREW"}],
+            "decisions": [],
+        },
+        "workbook_labour": {"mode": "canonical", "rows": []},
+    }
+    _v = [x for x in check_canonical_route_shadow(_summary)
+          if x["code"] == "canonical_route_bom_node_disconnected"]
+    eq(len(_v), 1, "the disconnected node is reported")
+    _msg = _v[0]["message"]
+    ok("SCREW" in _msg, f"and the message names the part: {_msg}")
+    ok("3.5x12mm WOOD SCREW" in _msg,
+       "and its description, because a code alone is not recognisable on a drawing")
+    ok(_v[0]["severity"] == "blocking", "still blocking — naming it does not excuse it")
+    ok("parent" in _msg.lower(),
+       "and it says what would resolve it, not only that something is wrong")
+
+    # THE IDENTITY IS STILL IN THE DETAIL. The message became readable; nothing that reads
+    # the structured record lost a field.
+    eq(_v[0]["detail"]["issue"]["part_number"], "SCREW",
+       "the structured detail is unchanged for anything parsing it")
+
+    # A NODE THE COMPILER COULD NOT NAME still reports, rather than producing a sentence
+    # with a hole in it.
+    _bare = {"canonical_route_shadow": {"mode": "cutover", "decisions": [],
+                                        "issues": [{"code": "bom_node_disconnected"}]},
+             "workbook_labour": {"mode": "canonical", "rows": []}}
+    _vb = [x for x in check_canonical_route_shadow(_bare)
+           if x["code"] == "canonical_route_bom_node_disconnected"]
+    ok(_vb and "unnamed node" in _vb[0]["message"],
+       "an issue carrying no identity says so plainly")
+
+
 def test_the_hierarchy_pass_reports_even_when_there_is_no_extract():
     """SILENCE AGAIN, ONE LEVEL UP. The three-state message above sat INSIDE
     `if the extract was accepted`, so the four ways to have no extract at all — the flag
