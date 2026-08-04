@@ -4925,6 +4925,19 @@ def test_one_part_spelled_two_ways_across_two_sources_is_one_node():
     eq(_raw_identity_aliases({"79814P613": {"description": _SCREW, "quantity": 8}},
                              _ext, claimed={"79814P"}), {},
        "a different count is a different line, however similar the code")
+
+    # ABSENCE IS SILENCE, NOT DISAGREEMENT. An extract record only carries a quantity when
+    # the BOM item stated one. Requiring equality made the guard strictest exactly where it
+    # knew least, and would have declined this match on any pack whose extract omits qty.
+    eq(_raw_identity_aliases(_raw, {"79814P": {"description": _SCREW}},
+                             claimed={"79814P"}), {"79814P613": "79814P"},
+       "a quantity nobody stated objects to nothing")
+    eq(_raw_identity_aliases({"79814P613": {"description": _SCREW}},
+                             _ext, claimed={"79814P"}), {"79814P613": "79814P"},
+       "and that holds whichever side is silent")
+    eq(_raw_identity_aliases(_raw, {"79814P": {"description": _SCREW, "quantity": 8}},
+                             claimed={"79814P"}), {},
+       "while two STATED and different counts still block")
     eq(_raw_identity_aliases({"79814P613": {"description": "M6 WASHER", "quantity": 4}},
                              _ext, claimed={"79814P"}), {},
        "and a different description is a different part")

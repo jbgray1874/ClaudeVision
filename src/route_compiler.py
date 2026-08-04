@@ -385,6 +385,11 @@ def _same_description(a: Any, b: Any) -> bool:
             == " ".join(str(b or "").upper().split()) != "")
 
 
+def _quantities_do_not_disagree(a: Optional[float], b: Optional[float]) -> bool:
+    """True unless BOTH are stated and they differ. A figure nobody gave is not a conflict."""
+    return a is None or b is None or a == b
+
+
 def _prefix_related(a: str, b: str) -> bool:
     """One code is the other with characters missing off the end."""
     _a, _b = a.upper(), b.upper()
@@ -451,13 +456,20 @@ def _raw_identity_aliases(
         _ng = record.get("normalized_geometry") or {}
         if number(_ng.get("blank_length_mm"), 0.0) and number(_ng.get("blank_width_mm"), 0.0):
             continue
+        # ABSENCE IS SILENCE, NOT DISAGREEMENT. An extract record only carries a quantity
+        # when the BOM item it came from stated one, so requiring the two to be EQUAL means
+        # a missing figure silently declines the match — the guard would then be strictest
+        # exactly where it knows least. A quantity that is stated and different is a real
+        # objection and blocks; a quantity nobody stated objects to nothing, and description
+        # agreement plus a prefix relation still has to hold.
         _qty = number(record.get("quantity"), None)
         _cands = [
             candidate for candidate, candidate_record in extracted.items()
             if _prefix_related(identity, candidate)
             and _same_description(record.get("description"),
                                   candidate_record.get("description"))
-            and number(candidate_record.get("quantity"), None) == _qty
+            and _quantities_do_not_disagree(
+                _qty, number(candidate_record.get("quantity"), None))
         ]
         if len(_cands) != 1:
             continue
