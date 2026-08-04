@@ -1274,7 +1274,19 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
             # saw is a phantom from somewhere else. A node both sources carry is a real part
             # nobody claimed, which is the only case an ownership edge fixes.
             _stems = [str(s) for s in (issue.get("longer_codes_sharing_this_stem") or [])]
-            if _stems:
+            _stated = str(issue.get("stated_parent_part_number") or "")
+            if _stated and issue.get("stated_parent_is_a_known_node"):
+                # NOT A MISSING FACT, AN UNREAD ONE. The record names its owner and the
+                # graph did not join on it. That is a wiring fault in the compiler, not a
+                # gap in the drawing, and it is the only case where the repair is upstream
+                # of the hierarchy rather than in it.
+                _why = (f" Its own record already states parent {_stated}, which IS a node "
+                        f"in this job — the owner was read from the drawing and the graph "
+                        f"did not join on it. Fix the join, not the hierarchy.")
+            elif _stated:
+                _why = (f" Its record states parent {_stated}, which is not a node in this "
+                        f"job — the owner was read under a code the graph does not know.")
+            elif _stems:
                 _why = (f" It is a prefix of {', '.join(_stems)} on this same job, which is "
                         f"the signature of a TRUNCATED code rather than a real part — the "
                         f"fix is to stop creating it, not to give it a parent.")

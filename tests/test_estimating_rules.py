@@ -4952,6 +4952,54 @@ def test_a_blocker_names_the_part_it_is_blocking_on():
     eq(_d2[0]["longer_codes_sharing_this_stem"], [],
        "and is not mislabelled a truncation when nothing shares its stem")
 
+    # A STATED OWNER THE GRAPH DID NOT JOIN ON is a wiring fault, not a missing drawing
+    # fact, and it is the only case whose repair is upstream of the hierarchy. Carried as
+    # what the RECORD says — the compiler must not quietly adopt it as a parent, or the
+    # graph would be believing a field it has just failed to join on.
+    _graph3 = build_part_graph(
+        [{"part_number": "12422-24-GA", "assembly_children": ["12422-24-02M"]},
+         {"part_number": "12422-24-02M", "quantity": 1},
+         {"part_number": "LOW068", "description": "M8 LOW PROFILE ADJUSTABLE FOOT",
+          "quantity": 2, "parent_part_number": "12422-24-GA",
+          "page_roles": ["assembly", "bought_in"], "source": "bom_tree"}],
+        {"top_assembly": {"part_number": "12422-24-GA"},
+         "assemblies": [{"part_number": "12422-24-GA",
+                         "children": [{"part_number": "12422-24-02M", "qty": 1}]}]})
+    _d3 = [i for i in _graph3["issues"] if i["code"] == "bom_node_disconnected"]
+    eq([i["part_number"] for i in _d3], ["LOW068"],
+       "a stated parent does NOT silently connect the node — it is still reported")
+    eq(_d3[0]["stated_parent_part_number"], "12422-24-GA",
+       "and the owner its record names is carried")
+    ok(_d3[0]["stated_parent_is_a_known_node"],
+       "flagged as a node this job actually has, which is what makes it a join fault")
+    eq(_d3[0]["page_roles"], ["assembly", "bought_in"],
+       "with the roles that say what kind of thing it is")
+    _m3 = [v for v in check_canonical_route_shadow(
+               {"canonical_route_shadow": {"mode": "cutover", "decisions": [],
+                                           "issues": [_d3[0]]},
+                "workbook_labour": {"mode": "canonical", "rows": []}})
+           if v["code"] == "canonical_route_bom_node_disconnected"][0]["message"]
+    ok("Fix the join" in _m3, f"and the message sends the fix upstream: {_m3}")
+
+    # A NOTE-ONLY ITEM STAYS DISCONNECTED. Sharing a job number, a page or a description
+    # with the job is not evidence of an owner, and inventing one is how a line of prose
+    # becomes a priced BOM row on every future job.
+    _graph4 = build_part_graph(
+        [{"part_number": "12422-24-GA", "assembly_children": ["12422-24-02M"]},
+         {"part_number": "12422-24-02M", "quantity": 1},
+         {"part_number": "12422-24-99X", "description": "mentioned in a note only",
+          "quantity": 1}],
+        {"top_assembly": {"part_number": "12422-24-GA"},
+         "assemblies": [{"part_number": "12422-24-GA",
+                         "children": [{"part_number": "12422-24-02M", "qty": 1}]}]})
+    _d4 = [i for i in _graph4["issues"] if i["code"] == "bom_node_disconnected"]
+    eq([i["part_number"] for i in _d4], ["12422-24-99X"],
+       "a note-only item sharing the job code is NOT adopted by the GA")
+    eq(_d4[0]["stated_parent_part_number"], "",
+       "it states no owner, and the compiler invents none")
+    eq(_d4[0]["longer_codes_sharing_this_stem"], [],
+       "and a shared JOB prefix is not a part-code stem — the two must not be confused")
+
     # A NODE THE COMPILER COULD NOT NAME still reports, rather than producing a sentence
     # with a hole in it.
     _bare = {"canonical_route_shadow": {"mode": "cutover", "decisions": [],

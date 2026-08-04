@@ -674,6 +674,15 @@ def build_part_graph(
                 # read as a part — and the repair is to stop creating it. A node present in
                 # BOTH is a real part nobody claimed, and the repair is an ownership edge.
                 # The node already carries that evidence; only the issue did not.
+                _rec = records.get(node.part_number) or {}
+                # A PARENT THE RECORD ALREADY STATES, which the graph did not use, is the
+                # most actionable thing this issue can carry: it is not a missing fact, it
+                # is an unread one. Reported as what the record SAYS, never as a parent —
+                # attaching it here would be the graph believing a field it just failed to
+                # join on. Deliberately no candidate is derived from a shared job-code stem:
+                # that a component belongs to this job is not evidence of which assembly
+                # owns it, and guessing an owner is how a note-only item becomes a BOM line.
+                _stated = clean_part_number(_rec.get("parent_part_number") or "")
                 graph_issues.append({
                     "code": "bom_node_disconnected",
                     "part_number": node.part_number,
@@ -683,6 +692,13 @@ def build_part_graph(
                     "in_extract": bool(node.evidence.get("extract_record_present")),
                     "aliases": list(node.evidence.get("raw_aliases") or []),
                     "qty_per_unit": node.qty_per_unit,
+                    "stated_parent_part_number": _stated,
+                    "stated_parent_is_a_known_node": bool(_stated and _stated in identities),
+                    "page_roles": [str(r) for r in (_rec.get("page_roles")
+                                                    or _rec.get("roles") or [])],
+                    "record_source": str(_rec.get("source")
+                                         or _rec.get("bom_source") or ""),
+                    "source_page": _rec.get("source_page"),
                     # The fuller codes this one is a prefix of. A code that is a stem of
                     # another code on the same job is the signature of a truncated read, and
                     # naming the candidates turns "why is this here" into one glance.

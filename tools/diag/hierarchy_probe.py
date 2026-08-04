@@ -1,15 +1,23 @@
 """Is the assembly tree in the extract, and does it name this job's parts? Reads only.
 
+EITHER FILE WORKS, and which one you have decides which question gets answered:
+
+    python tools/diag/hierarchy_probe.py <job.json>
+        What the run DECIDED. Reads the verdict the pass stamped onto the job — the tree it
+        built, the edge count, which reader supplied each edge, the reason when it applied
+        nothing, and which nodes the invariants still call disconnected. No extract needed
+        and nothing to re-run: the answer is already in the file the estimate wrote.
+
     python tools/diag/hierarchy_probe.py <_sw_native_extract.json> [job.json]
+        What the models CARRY. Per assembly record: its title, BOM line count, parent/child
+        EDGE count, and how many of its BOM lines name a parent. Then the connector's own
+        parser over the same file, so the tree shown is the tree the estimate would get.
+        Given a job JSON as well, it says which of those parent codes exist among the job's
+        parts — the difference between "the models describe no tree" and "the models
+        describe a tree about codes this job does not use".
 
-Prints, per assembly record in the extract: its title, how many BOM lines it reports, how
-many parent/child EDGES it carries, and how many of its BOM lines name a parent. Then runs
-the connector's own parser over the file and shows the tree it builds — so the answer comes
-from the code the estimate uses, not from an eyeball on JSON.
-
-Given a saved job JSON as well, it also says which of those parent codes exist among the
-job's parts, which is the difference between "the models describe no tree" and "the models
-describe a tree about codes this job does not use".
+The file type is detected, not declared. Someone diagnosing a problem should not have to
+know the answer in order to ask the question.
 
 WHY THIS EXISTS. The hierarchy pass printed nothing for several runs, and nothing is the
 one output that names no cause: an absent extract, a refused extract, an extract with no
