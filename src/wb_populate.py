@@ -2592,6 +2592,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
               f"row — no lines dropped.", flags)
 
     row = b["first_row"]
+    # WHAT IS ACTUALLY ABOUT TO BE WRITTEN, AND FROM WHERE. The sheet has shown codes that
+    # are in none of the three saved pools -- SCREW where part_estimates holds BI-SCREW --
+    # and reading the workbook has twice sent a fix at the wrong population. One line naming
+    # the rows at the moment they are written ends that argument permanently.
+    print(f"   [bom-rows] writing {len(bom_parts)} line(s): "
+          f"{', '.join(str(_p.get('part_number') or '?') for _p in bom_parts)}", flush=True)
+
     for pe in bom_parts:
         if row > b["last_row"]:
             break
