@@ -390,6 +390,31 @@ def _quantities_do_not_disagree(a: Optional[float], b: Optional[float]) -> bool:
     return a is None or b is None or a == b
 
 
+def _record_kind(record: Mapping[str, Any]) -> str:
+    """assembly / bought_in / leaf, from whatever the record already states. '' = unstated."""
+    kind = str(record.get("canonical_kind") or "").lower().strip()
+    if kind in ("assembly", "bought_in", "leaf"):
+        return kind
+    if record.get("is_sub_assembly") or record.get("is_assembly_parent") \
+            or (record.get("assembly_children") or []):
+        return "assembly"
+    if _bought_in_record(record) or record.get("is_bought_in") is True:
+        return "bought_in"
+    return ""
+
+
+def _kinds_are_compatible(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """Two records of DIFFERENT stated kinds are not two spellings of one part.
+
+    A bought-in fastener and a fabricated leaf are different things however alike their
+    codes look, and an assembly is never a spelling of anything it might contain. Where a
+    kind is unstated the test abstains — absence is silence here as everywhere else, and
+    the description, quantity and hierarchy tests still have to pass.
+    """
+    _a, _b = _record_kind(a), _record_kind(b)
+    return not (_a and _b) or _a == _b
+
+
 def _prefix_related(a: str, b: str) -> bool:
     """One code is the other with characters missing off the end — a TRUNCATION.
 
@@ -484,6 +509,7 @@ def _raw_identity_aliases(
                                   candidate_record.get("description"))
             and _quantities_do_not_disagree(
                 _qty, number(candidate_record.get("quantity"), None))
+            and _kinds_are_compatible(record, candidate_record)
         ]
         if len(_cands) != 1:
             continue

@@ -1428,7 +1428,12 @@ def check_an_operation_is_not_charged_on_a_parent_and_its_child(
             if not overlap:
                 continue
             out.append(_violation(
-                "operation_charged_on_a_parent_and_its_child", WARNING,
+                # UNVERIFIED, NOT A WARNING. Pricing both is a decision the engine cannot
+                # defend, and a warning lets it be quoted firm anyway. Unverified says the
+                # check could not settle it — the figures stand, the quote does not.
+                # Not BLOCKING: staged finishing is a real process, and refusing to price a
+                # job that legitimately coats twice would be a wrong answer of its own.
+                "operation_charged_on_a_parent_and_its_child", UNVERIFIED,
                 f"{decision.get('operation') or 'An operation'} is charged on "
                 f"{candidate} and separately on {', '.join(overlap)}, which the job "
                 f"hierarchy says {candidate} contains. Either the shop does this before AND "

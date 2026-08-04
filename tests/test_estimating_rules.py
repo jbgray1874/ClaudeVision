@@ -13432,8 +13432,12 @@ def test_an_operation_charged_on_a_parent_and_its_child_is_surfaced():
                  "participants": ["12422-24-02M"]}]}}
     _v = _chk(_job)
     eq(len(_v), 1, "the overlapping operation is reported once")
-    eq(_v[0]["severity"], "warning",
-       "as a warning — coating before and after assembly is a real process")
+    eq(_v[0]["severity"], "unverified",
+       "UNVERIFIED, not a warning: pricing both is a decision the engine cannot defend, "
+       "and a warning would let the job be quoted firm anyway")
+    ok(_v[0]["severity"] != "blocking",
+       "and not blocking either — staged finishing is real, and refusing to price a job "
+       "that legitimately coats twice would be a wrong answer of its own")
     ok("12422-24-102" in _v[0]["message"] and "12422-24-05M" in _v[0]["message"],
        f"naming both the assembly and the child: {_v[0]['message']}")
     eq(_v[0]["detail"]["operation"], "P.Coat", "and which operation it was")
@@ -13572,3 +13576,47 @@ def test_no_hierarchy_is_not_a_licence_to_guess_an_identity():
     # THE POSITIVE CASE IS UNCHANGED — this narrows the guess, it does not disable the fix.
     eq(_raw_identity_aliases(_raw, _ext, claimed={"79814P"}), {"79814P613": "79814P"},
        "a hierarchy naming exactly one spelling still resolves it")
+
+
+def test_two_records_of_different_kinds_are_not_two_spellings_of_one_part():
+    """A BOUGHT-IN FASTENER AND A FABRICATED LEAF ARE DIFFERENT THINGS.
+
+    The cross-source alias matched on code shape, description and quantity. None of those
+    can tell a supplier's screw from a laser-cut part that happens to share a code stem and
+    a description — and an assembly is never a spelling of something it contains.
+
+    Where a kind is unstated the test abstains: absence is silence here as everywhere else,
+    and the description, quantity, separator and hierarchy tests still all have to pass."""
+    from route_compiler import _raw_identity_aliases, _kinds_are_compatible
+
+    _S = "3.5 x 16mm Pan Head Wood Screw"
+    _mk = lambda **k: dict({"description": _S, "quantity": 4}, **k)
+
+    eq(_raw_identity_aliases({"79814P613": _mk(canonical_kind="bought_in")},
+                             {"79814P": _mk(canonical_kind="bought_in")},
+                             claimed={"79814P"}), {"79814P613": "79814P"},
+       "two bought-in records still resolve")
+    eq(_raw_identity_aliases({"79814P613": _mk(canonical_kind="bought_in")},
+                             {"79814P": _mk(canonical_kind="leaf")},
+                             claimed={"79814P"}), {},
+       "a bought-in and a fabricated leaf never merge, however alike the codes")
+    eq(_raw_identity_aliases({"79814P613": _mk(canonical_kind="leaf")},
+                             {"79814P": _mk(assembly_children=["X"])},
+                             claimed={"79814P"}), {},
+       "and an assembly is not a spelling of anything")
+
+    # UNSTATED KIND ABSTAINS rather than blocking every job whose records predate the
+    # canonical pass.
+    eq(_raw_identity_aliases({"79814P613": _mk()},
+                             {"79814P": _mk(canonical_kind="bought_in")},
+                             claimed={"79814P"}), {"79814P613": "79814P"},
+       "one side unstated is not a disagreement")
+    ok(_kinds_are_compatible({}, {}), "and neither is both sides unstated")
+
+    # KIND IS READ FROM WHATEVER THE RECORD STATES, not only the canonical field — records
+    # reaching this before the compiler has run still carry assembly and bought-in signals.
+    from route_compiler import _record_kind
+    eq(_record_kind({"assembly_children": ["A"]}), "assembly",
+       "children make a record an assembly even with no canonical_kind yet")
+    eq(_record_kind({"is_bought_in": True}), "bought_in", "and an explicit flag is read")
+    eq(_record_kind({}), "", "a record stating nothing states nothing")
