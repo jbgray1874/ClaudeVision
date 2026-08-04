@@ -1435,6 +1435,25 @@ def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict
             "so there is nothing to check the costing against.")
 
     out: List[Dict[str, Any]] = []
+    # THE NUMBER THE DOCUMENTS RENDER. The client quote takes its "Order quantity" from
+    # estimate_workbook_inputs, which carried the WORKBOOK DEFAULT — so a job costed at 10
+    # went out saying "180 off" beside the ten-off price. The quantity being right in the
+    # calculation is not the same as it being right on the page a customer reads, and this
+    # is the only check that looks at the page.
+    _rendered = ((summary.get("estimate_summary") or {}).get("estimate_workbook_inputs")
+                 or {}).get("assumed_job_quantity")
+    try:
+        _rendered = int(_rendered) if _rendered is not None else None
+    except (TypeError, ValueError):
+        _rendered = None
+    if _rendered is not None and header is not None and _rendered != header:
+        out.append(_violation(
+            "quantity_rendered_is_not_quantity_costed", BLOCKING,
+            f"The client quote and workbook inputs state {_rendered} off while the job was "
+            f"costed at {header} off. The price is for one batch and the document names "
+            f"another — do not issue it.",
+            rendered_quantity=_rendered, costed_quantity=header))
+
     wrong = {q: pns for q, pns in used.items() if q != header}
     if wrong:
         out.append(_violation(

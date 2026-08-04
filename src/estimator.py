@@ -4440,8 +4440,16 @@ def _merge_sheet_into_estimate_workbook_inputs(out_doc: Dict[str, Any], summary:
         ewb["sheet_scan"] = scan
         if not scan.get("ok"):
             return
-        if scan.get("assumed_job_quantity") is not None:
+        # A DISCOVERED SHEET IS NOT AUTHORITY ON THIS RUN'S ORDER QUANTITY. The other values
+        # here are shop constants — wire and steel per tonne, scrap — and a real sheet is a
+        # better source for them than a config default. How many units THIS order is for is
+        # not a constant: it is the number the customer stated and the number every part's
+        # setup was amortised over. A manual estimate found for comparison, quite possibly
+        # for a different batch, must not silently restate it.
+        if (scan.get("assumed_job_quantity") is not None
+                and ewb.get("assumed_job_quantity_source") != "job"):
             ewb["assumed_job_quantity"] = scan["assumed_job_quantity"]
+            ewb["assumed_job_quantity_source"] = "discovered_sheet"
         if scan.get("wire_cost_per_tonne_gbp") is not None:
             ewb["wire_cost_per_tonne_gbp"] = scan["wire_cost_per_tonne_gbp"]
         if scan.get("sheet_steel_cost_per_tonne_gbp") is not None:
@@ -5120,9 +5128,24 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         },
     }
     wb_defaults = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
+    # THE QUANTITY THIS JOB WAS COSTED AT, NOT THE TEMPLATE'S DEFAULT.
+    #
+    # The client quote reads its "Order quantity" from this field. It carried the WORKBOOK
+    # DEFAULT — 180 — so a job costed at 10 was quoted as "180 off" at the ten-off price:
+    # a document that is wrong in the one number a customer checks first, beside a price
+    # that is right. The Estimate sheet said 10 on the same run, from the same JSON.
+    #
+    # A default is what to assume when the job says nothing. This job says 10, and it says
+    # it in the field every part's setup amortisation divided by.
+    _job_qty = (summary or {}).get("quantity") or (summary or {}).get("assumed_job_quantity")
+    try:
+        _job_qty = int(_job_qty) if _job_qty else None
+    except (TypeError, ValueError):
+        _job_qty = None
     out_doc["estimate_workbook_inputs"] = {
         "estimate_policy_version": getattr(config, "ESTIMATE_POLICY_VERSION", ""),
-        "assumed_job_quantity": wb_defaults.get("default_job_quantity"),
+        "assumed_job_quantity": _job_qty or wb_defaults.get("default_job_quantity"),
+        "assumed_job_quantity_source": "job" if _job_qty else "workbook_default",
         "scrap_pct": wb_defaults.get("scrap_pct"),
         "wire_cost_per_tonne_gbp": wb_defaults.get("wire_cost_per_tonne_gbp"),
         "sheet_steel_cost_per_tonne_gbp": wb_defaults.get("sheet_steel_cost_per_tonne_gbp"),

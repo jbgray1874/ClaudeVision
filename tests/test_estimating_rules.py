@@ -5216,6 +5216,69 @@ def test_the_batch_a_price_was_computed_for_is_the_batch_it_is_labelled_with():
     ok(any(x["severity"] == "unverified" for x in _chk(_silent)),
        "no recorded batch verifies nothing, and does not read as clear")
 
+    # THE NUMBER ON THE PAGE A CUSTOMER READS. The quote takes its order quantity from
+    # estimate_workbook_inputs, which carried the WORKBOOK DEFAULT — so the 10-off run went
+    # out saying "180 off" beside the correct ten-off price. Right in the calculation is not
+    # the same as right on the document, and nothing was checking the document.
+    _quote_wrong = {"quantity": 10, "estimate_summary": {
+        "estimate_workbook_inputs": {"assumed_job_quantity": 180},
+        "part_estimates": [{"part_number": "01J", "labour_estimate": {
+            "job_quantity_used": 10, "total_labour_cost_gbp": 4.0}}]}}
+    _vq = _chk(_quote_wrong)
+    ok(any(x["code"] == "quantity_rendered_is_not_quantity_costed" for x in _vq),
+       "a document naming a different batch than the price was computed for is blocked")
+    ok(all(x["severity"] == "blocking" for x in _vq),
+       "and blocked — this is the one number a customer checks first")
+
+    _quote_right = {"quantity": 10, "estimate_summary": {
+        "estimate_workbook_inputs": {"assumed_job_quantity": 10},
+        "part_estimates": [{"part_number": "01J", "labour_estimate": {
+            "job_quantity_used": 10, "total_labour_cost_gbp": 4.0}}]}}
+    eq(_chk(_quote_right), [], "and agreeing documents pass")
+
+    # THE SOURCE OF THAT NUMBER, through the real builder. A workbook default is what to
+    # assume when the job says nothing; a job that states its quantity is not assuming.
+    from estimator import estimate_document
+    _p = [{"part_number": "01J", "description": "PANEL", "quantity": 1}]
+    _ewb = (estimate_document(list(_p), summary={"quantity": 10})
+            .get("estimate_workbook_inputs") or {})
+    eq(_ewb.get("assumed_job_quantity"), 10,
+       "the quote's order quantity is the job's, not the workbook template's")
+    eq(_ewb.get("assumed_job_quantity_source"), "job",
+       "and it records that the job stated it, so a default is never mistaken for a fact")
+
+    _ewb_default = (estimate_document(list(_p), summary={})
+                    .get("estimate_workbook_inputs") or {})
+    ok(_ewb_default.get("assumed_job_quantity_source") == "workbook_default",
+       "a job stating no quantity still falls back, and says that it fell back")
+
+    # A DISCOVERED MANUAL SHEET IS NOT AUTHORITY ON THIS RUN'S BATCH. The other values it
+    # supplies are shop constants; how many units this order is for is not one.
+    import estimate_sheet_discovery as _esd
+    from estimator import _merge_sheet_into_estimate_workbook_inputs as _merge_sheet
+    from pathlib import Path as _P8
+    _real = _esd.read_estimate_workbook_inputs
+    _esd.read_estimate_workbook_inputs = lambda _p2: {
+        "ok": True, "assumed_job_quantity": 180, "wire_cost_per_tonne_gbp": 1600.0}
+    try:
+        _here = str(_P8(__file__).resolve())
+        _doc = {"estimate_workbook_inputs": {"assumed_job_quantity": 10,
+                                             "assumed_job_quantity_source": "job"}}
+        _merge_sheet(_doc, {"estimate_workbook_path": _here})
+        eq(_doc["estimate_workbook_inputs"]["assumed_job_quantity"], 10,
+           "a discovered sheet saying 180 cannot restate a job costed at 10")
+        eq(_doc["estimate_workbook_inputs"].get("wire_cost_per_tonne_gbp"), 1600.0,
+           "while the shop constants it DOES know about still come through")
+
+        # WHERE THE JOB STATED NOTHING, the sheet is the better source and still wins.
+        _doc2 = {"estimate_workbook_inputs": {"assumed_job_quantity": 180,
+                                              "assumed_job_quantity_source": "workbook_default"}}
+        _merge_sheet(_doc2, {"estimate_workbook_path": _here})
+        eq(_doc2["estimate_workbook_inputs"].get("assumed_job_quantity_source"),
+           "discovered_sheet", "a real sheet still beats a config default")
+    finally:
+        _esd.read_estimate_workbook_inputs = _real
+
     # AND THE REQUEST REACHES THE COSTING. file_scan decides the quantity at the single
     # point before estimate_document; main publishes the request before the scan runs.
     from pathlib import Path as _P7
