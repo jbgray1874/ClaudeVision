@@ -2399,6 +2399,30 @@ def _finalize_scan_summary(
             for _h in _hier:
                 print(f"   [hierarchy] {_h['part_number']} holds "
                       f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
+            # A GATE NOBODY ASKS REPORTS NOTHING, and this one has to answer to an estimator
+            # running the engine unattended. Saying nothing when the models carried no tree
+            # is indistinguishable from saying nothing because the tree was already known —
+            # and the difference decides whether the extract needs regenerating or the
+            # assemblies genuinely have no structure to read.
+            if not _hier:
+                _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
+                _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])
+                if _edges:
+                    _msg = (f"the extract carries {_edges} parent/child edge(s) but none named "
+                            f"a part in this job — the codes in the models and the codes on "
+                            f"the drawing may not match")
+                elif _asms:
+                    _msg = (f"{_asms} assembly document(s) were read and NONE reported "
+                            f"parent/child edges. The extract predates the analyser change, "
+                            f"or this SolidWorks build returns no component parents. "
+                            f"Re-run tools/solidworks/sw_native_analyse.py, then this job")
+                else:
+                    _msg = ("the extract contains no assembly documents, so the models "
+                            "describe no hierarchy to apply")
+                print(f"   [hierarchy] NOT APPLIED — {_msg}", flush=True)
+                summary.setdefault("review_flags", []).append(
+                    f"SolidWorks hierarchy not applied: {_msg}. Any part left without a "
+                    f"parent is reported separately as a disconnected BOM node.")
     except Exception as _sw_late_err:
         print(f"   [solidworks] late application skipped: "
               f"{type(_sw_late_err).__name__}: {_sw_late_err}", flush=True)

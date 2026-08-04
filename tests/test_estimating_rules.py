@@ -4810,6 +4810,49 @@ def test_one_item_read_twice_is_one_bom_line():
     eq(len(_diff), 2, "different descriptions are different parts")
 
 
+def test_the_hierarchy_pass_says_why_it_did_nothing():
+    """AN ESTIMATOR WILL RUN THIS UNATTENDED, AND SILENCE IS THE WORST ANSWER.
+
+    "No [hierarchy] line" has been indistinguishable between three different situations
+    all day: the extract predating the analyser change, this SolidWorks build returning no
+    component parents, and the models simply containing no assemblies. Each needs a
+    different response — regenerate the extract, resolve edges from the reporting assembly,
+    or accept there is no tree — and none of them announced itself.
+
+    A gate nobody asks reports nothing. This one now answers."""
+    from source_connectors.solidworks import (NativeJob, normalize_native_extract,
+                                              apply_native_hierarchy_to_parts)
+
+    # 1. ASSEMBLIES READ, NO EDGES — the extract predates the analyser change.
+    _stale = normalize_native_extract(
+        [{"title": "GA", "doctype": 2, "bom": [{"part_number": "X", "qty": 1}]}])
+    eq(_stale.hierarchy, {}, "no edges means no hierarchy")
+    ok(_stale.assembly_pns, "but the assemblies were read, which is the distinguishing fact")
+
+    # 2. EDGES PRESENT, NAMING PARTS THIS JOB DOES NOT HAVE — a code mismatch between the
+    # models and the drawing, not a missing tree.
+    _foreign = normalize_native_extract(
+        [{"title": "GA", "doctype": 2, "assembly_part_number": "GA", "bom": [],
+          "assembly_edges": [{"parent": "GA", "child": "OTHER-01", "qty": 1}]}])
+    ok(_foreign.hierarchy, "the edges exist")
+    eq(apply_native_hierarchy_to_parts([{"part_number": "MINE-01"}], _foreign), [],
+       "and stamp nothing, because they name no part in this job")
+
+    # 3. NO ASSEMBLIES AT ALL — nothing to read, and that is not a fault.
+    eq(normalize_native_extract([{"title": "P", "doctype": 1, "bom": []}]).assembly_pns, [],
+       "a parts-only extract describes no hierarchy")
+
+    # THE CALLER MUST DISTINGUISH THEM. Three states, three different actions for whoever is
+    # running the engine — and they will not be the person who wrote it.
+    from pathlib import Path as _P5
+    _fs = (_P5(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    ok("[hierarchy] NOT APPLIED" in _fs, "the pass reports when it did nothing")
+    ok("Re-run tools/solidworks/sw_native_analyse.py" in _fs,
+       "and names the action for the case that needs one")
+    ok("no assembly documents" in _fs, "and does not call an absent tree a fault")
+
+
 def test_what_a_part_is_for_survives_costing():
     """TWO ADJUSTABLE FEET, CORRECTLY IDENTIFIED AND CORRECTLY CODED, DROPPED OFF THE SHEET.
 
