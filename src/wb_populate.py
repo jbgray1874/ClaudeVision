@@ -112,7 +112,20 @@ _ORIGIN_LABELS = {
     "catalogue": "",          # a real catalogue row needs no warning; its supplier name stands
     "config": "",
     "unpriced": "NO PRICE FOUND - estimator to price",
+    # A DESCRIPTION MATCH AGAINST OLD QUOTES IS NOT A CATALOGUE ROW. It is the best price
+    # available and it is a resemblance, not an account: the line it matched may be a pack
+    # where this is one piece, or a different item sharing words. 12422-24 priced a
+    # 3.5x16mm wood screw at GBP 1.06 this way, beside an M6 flange button head at GBP 0.05
+    # from a real supplier, and the two rendered identically.
+    "historical_quote_material_line": "Historical quote match - verify",
+    "historical_quote": "Historical quote match - verify",
 }
+
+# ONLY THESE RENDER SILENTLY. Blank in the supplier column reads as "firm" — it is what a
+# real catalogue row looks like — so a class that reaches this table without an entry must
+# never inherit that silence by falling through. Naming the class is worse-looking and
+# better: an estimator can ask what it means, and cannot mistake it for an account price.
+_SILENT_ORIGIN_CLASSES = {"catalogue", "config"}
 
 
 def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
@@ -144,7 +157,11 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
         return f"{_llm_engine_name(best)} - INDICATIVE", True
     label = _ORIGIN_LABELS.get(cls)
     if label is None:
-        label = str(best.get("source_name") or "")
+        # An unrecognised class is not a silent one. Prefer the source's own name where it
+        # has one; otherwise say what the class was, so the cell is never blank by accident.
+        label = str(best.get("source_name") or "").strip() or f"{cls} - verify"
+    if not label and cls not in _SILENT_ORIGIN_CLASSES:
+        label = f"{cls or 'unknown source'} - verify"
     return label, False
 
 try:

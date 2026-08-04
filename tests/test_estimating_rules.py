@@ -13348,3 +13348,37 @@ def test_an_exhausted_search_provider_is_not_a_working_one():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_a_price_with_no_supplier_does_not_read_as_a_catalogue_row():
+    """GBP 1.06 FOR A WOOD SCREW, BESIDE GBP 0.05 FROM A REAL SUPPLIER, RENDERED THE SAME.
+
+    12422-24 priced 79814P from a fuzzy description match against old quote lines. The
+    supplier column came out BLANK — because _ORIGIN_LABELS had no entry for that class and
+    the fall-through produced an empty string, which is exactly what a genuine catalogue row
+    looks like. So a resemblance to something somebody once quoted was displayed as an
+    account price, next to an M6 flange button head at GBP 0.05 from Elite Sourcing.
+
+    Blank means firm in this column. Only classes explicitly declared silent may use it."""
+    import wb_populate as W
+
+    eq(W._ORIGIN_LABELS.get("catalogue"), "",
+       "a real catalogue row still needs no warning")
+    ok("catalogue" in W._SILENT_ORIGIN_CLASSES and "config" in W._SILENT_ORIGIN_CLASSES,
+       "and the classes allowed to be silent are named, not inferred")
+
+    for _cls in ("historical_quote_material_line", "historical_quote"):
+        _label = W._ORIGIN_LABELS.get(_cls)
+        ok(_label, f"{_cls} is labelled rather than blank")
+        ok("verify" in _label.lower(),
+           "and says it needs checking — it is a resemblance, not an account")
+        ok(_cls not in W._SILENT_ORIGIN_CLASSES, f"{_cls} may not render silently")
+
+    # AN UNRECOGNISED CLASS MUST NOT INHERIT SILENCE. The next price source somebody adds
+    # would otherwise render as firm on every sheet until someone noticed.
+    from pathlib import Path as _P9
+    _src = (_P9(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
+        encoding="utf-8")
+    ok("_SILENT_ORIGIN_CLASSES" in _src, "the silent set exists")
+    ok("if not label and cls not in _SILENT_ORIGIN_CLASSES:" in _src,
+       "and an unlabelled, non-silent class is given a visible label rather than blank")
