@@ -5006,6 +5006,18 @@ def test_the_batch_a_price_was_computed_for_is_the_batch_it_is_labelled_with():
     ok('"order_quantity_source"' in _fs,
        "and the job records whether that quantity was requested, inferred or defaulted")
 
+    # A DRAWING PACK IS A JOB, AND SAYING SO TOOK TWO FLAGS. --search-root without
+    # --folder-as-job is not an error: it scans each PDF as its own job and produces several
+    # partial estimates instead of one pooled one, with nothing on screen to say the pack was
+    # never assembled. --job sets both and cannot be half-specified.
+    ok('"--job"' in _mn, "one flag expresses scanning a folder as a single job")
+    _jpos = _mn.index('if getattr(args, "job", None):')
+    ok(_jpos < _mn.index("drawing_arg = args.pdf or args.drawing"),
+       "and it is normalised before anything reads the scan mode it sets")
+    for _needed in ("args.folder_as_job = True", "args.no_folder_as_job = False",
+                    "is not a directory"):
+        ok(_needed in _mn, f"--job sets/checks: {_needed}")
+
 
 def test_what_a_part_is_for_survives_costing():
     """TWO ADJUSTABLE FEET, CORRECTLY IDENTIFIED AND CORRECTLY CODED, DROPPED OFF THE SHEET.

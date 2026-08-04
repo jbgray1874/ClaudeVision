@@ -67,6 +67,13 @@ def parse_args() -> argparse.Namespace:
             "(omit --pdf for DXF-only). Same role as --attach-dxf but accepts multiple paths in one flag."
         ),
     )
+    parser.add_argument(
+        "--job", type=str, default=None, metavar="FOLDER",
+        help="Scan ONE job folder as a single pooled job: every drawing in it contributes to "
+             "one BOM, one route and one estimate. Equivalent to --search-root FOLDER "
+             "--folder-as-job, and preferred over that pair because omitting either half "
+             "silently produces a different estimate rather than an error.",
+    )
     parser.add_argument("--search-root", type=str, default=str(DRAWINGS_DIR), help="Folder to search for drawings.")
     parser.add_argument("--drawing-pattern", type=str, default="*", help="Glob pattern for drawings (e.g. *.pdf, *.dxf).")
     parser.add_argument(
@@ -412,6 +419,25 @@ def main() -> None:
         print(f"Estimate parity JSON: {out_json}")
         print(f"Parity rows: {len(rows)}")
         return
+
+    # ── ONE FLAG FOR THE THING PEOPLE ACTUALLY RUN ───────────────────────────────────
+    # A drawing pack is a job. Expressing that took --search-root AND --folder-as-job, and
+    # supplying only the first is not an error: it scans each PDF as its own job, producing
+    # several partial estimates instead of one pooled one, with nothing on screen to say the
+    # pack was never assembled. A wrong answer that looks like an answer, from a flag left
+    # out. --job cannot be half-specified.
+    if getattr(args, "job", None):
+        _job_root = Path(args.job)
+        if not _job_root.is_dir():
+            print(f"--job expects a job FOLDER; {_job_root} is not a directory.")
+            return
+        if args.pdf or args.drawing:
+            print("--job scans a whole folder as one job; --pdf/--drawing scans a single "
+                  "file. Pass one or the other, not both.")
+            return
+        args.search_root = str(_job_root)
+        args.folder_as_job = True
+        args.no_folder_as_job = False
 
     drawing_arg = args.pdf or args.drawing
     dxf_from_cli = [Path(d) for d in (args.dxf or [])] + [Path(p) for p in (args.attach_dxf or [])]
