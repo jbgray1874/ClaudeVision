@@ -55,6 +55,19 @@ def _is_bought_in(part: Dict) -> bool:
     Detected by: normalized_material BOUGHT_IN, a 'bought_in' page role, the layer-2
     recogniser source, or the BI-/FIXING/VINYL code families.
     """
+    # THE CANONICAL GRAPH ALREADY DECIDED THIS, and asking it beats re-deriving it. The
+    # compiler classifies every node as assembly / bought_in / leaf and writes that back
+    # onto the part as canonical_kind; this function was inferring the same fact from
+    # materials, roles and code families, and disagreeing. 12422-24's 79814P is a wood screw
+    # the graph calls bought_in, and this report gave it MFC and a 16mm fabrication
+    # thickness because none of the heuristics below recognise a supplier's own part number.
+    _kind = str(part.get("canonical_kind") or "").lower()
+    if _kind == "bought_in":
+        return True
+    if _kind in ("assembly", "leaf"):
+        return False
+    if part.get("is_bought_in") is True:
+        return True
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     if mat == "BOUGHT_IN":
         return True
@@ -252,6 +265,44 @@ def _thk_source_explanation(part: Dict) -> str:
     # Bought-in components have no fabrication thickness — don't imply one.
     if _is_bought_in(part):
         return "— bought-in component (no fabrication thickness)"
+
+    # THE THICKNESS THE JOB WAS COSTED AT, BEFORE ANY RE-DERIVATION.
+    #
+    # This function read `thicknesses_mm` — every thickness-looking number found on the
+    # drawing — and took the first. On 12422-24 that reported 01J as 16mm while the sheet
+    # costed a 28mm MFC panel, and 02M as 16mm against 1.5mm steel. The report was not
+    # describing the estimate; it was performing its own extraction and publishing the
+    # result beside the estimate's numbers as though they agreed.
+    #
+    # normalized_thickness_mm is the arbitrated datum, written through the resolver with a
+    # recorded source. Asking it is what makes this a REPORT of the costing rather than a
+    # second opinion about the drawing. The derivation below is kept for records that have
+    # no arbitrated value — it is a fallback now, not the first answer.
+    _costed = part.get("normalized_thickness_mm")
+    try:
+        _costed = float(_costed) if _costed not in (None, "") else None
+    except (TypeError, ValueError):
+        _costed = None
+    if _costed and _costed > 0:
+        _src = ""
+        try:
+            from source_precedence import source_of
+            _src = str(source_of(part, "normalized_thickness_mm") or "")
+        except Exception:
+            _src = ""
+        _pretty = {
+            "solidworks_api": "the SolidWorks model",
+            "solidworks_flat_pattern": "the SolidWorks flat pattern",
+            "dxf": "the DXF", "dxf_flat_pattern": "the DXF flat pattern",
+            "drawing_deterministic": "the drawing", "title_block": "the title block",
+            "bom_tree": "the BOM", "estimator_confirmed": "an estimator",
+            "knowledge_base": "the knowledge base",
+        }.get(_src, _src)
+        _mark = "✅" if _src and _src not in ("llm_extract", "inference",
+                                             "geometry_inference", "") else "⚡"
+        return (f"{_mark} {_costed:g}mm — the thickness this job was COSTED at"
+                + (f", from {_pretty}" if _pretty else " (source not recorded)"))
+
     import re
     dxf  = str(part.get("dxf_source_file") or "")
     geo  = str(part.get("geometry_source") or "")

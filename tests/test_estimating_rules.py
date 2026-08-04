@@ -13461,3 +13461,81 @@ def test_an_operation_charged_on_a_parent_and_its_child_is_surfaced():
     from invariants import CHECKS
     ok(any(c.__name__ == "check_an_operation_is_not_charged_on_a_parent_and_its_child"
            for c in CHECKS), "the check actually runs as part of check_job")
+
+
+def test_a_report_states_the_thickness_the_job_was_costed_at():
+    """THE REPORT WAS NOT DESCRIBING THE ESTIMATE. IT WAS RE-EXTRACTING THE DRAWING.
+
+    _thk_source_explanation read `thicknesses_mm` — every thickness-looking number found on
+    the drawing — and took the first. On 12422-24 it reported 01J as 16mm while the sheet
+    costed a 28mm MFC panel, and 02M as 16mm against 1.5mm steel. Two answers to one
+    question, published side by side as though they agreed.
+
+    normalized_thickness_mm is the arbitrated datum, written through the resolver with a
+    recorded source. Asking it is what makes this a REPORT of the costing rather than a
+    second opinion about the drawing."""
+    from job_decision_report import _thk_source_explanation as _thk
+
+    _panel = _thk({"part_number": "01J", "normalized_thickness_mm": 28.0,
+                   "thickness_source": "drawing_deterministic",
+                   "thicknesses_mm": [16.0, 28.0]})
+    ok("28mm" in _panel, f"the costed thickness, not the first one on the drawing: {_panel}")
+    ok("16" not in _panel, "and the value it used to report is gone")
+    ok("COSTED" in _panel, "stated as what the job was costed at")
+    ok("drawing" in _panel, "with the source that won arbitration named")
+
+    _steel = _thk({"part_number": "02M", "normalized_thickness_mm": 1.5,
+                   "thickness_source": "solidworks_api", "thicknesses_mm": [16.0, 1.5]})
+    ok("1.5mm" in _steel and "SolidWorks" in _steel,
+       f"and a modelled thickness says so: {_steel}")
+
+    # EVIDENCE QUALITY IS NOT HIDDEN. A measured source and an inferred one must not read
+    # identically just because both are now sourced from the costed record.
+    _guess = _thk({"part_number": "Y", "normalized_thickness_mm": 3.0,
+                   "thickness_source": "llm_extract"})
+    ok(_guess.startswith("⚡"), f"an inferred thickness is marked differently: {_guess}")
+    ok(_steel.startswith("✅"), "a modelled one is not")
+
+    # NO ARBITRATED VALUE, NO INVENTION. Records that never reached the resolver still get
+    # the old derivation rather than a blank or a fabricated figure.
+    _fallback = _thk({"part_number": "X", "thicknesses_mm": [2.5],
+                      "geometry_source": "dxf"})
+    ok("2.5mm" in _fallback, f"the fallback still answers: {_fallback}")
+
+    # A BOUGHT-IN PART STILL HAS NO FABRICATION THICKNESS, whatever else is on the record —
+    # this is what put MFC and 16mm on a wood screw.
+    ok("bought-in" in _thk({"part_number": "79814P", "is_bought_in": True,
+                            "normalized_thickness_mm": 16.0}),
+       "a bought-in component is not given a fabrication thickness")
+
+
+def test_the_canonical_graph_decides_what_a_part_is_not_the_report():
+    """A WOOD SCREW DESCRIBED AS MFC, 16MM.
+
+    The canonical compiler classifies every node — assembly / bought_in / leaf — and writes
+    it back onto the part as canonical_kind. The Decision Report inferred the same fact
+    again from materials, page roles and code-family patterns, and disagreed: 12422-24's
+    79814P is a supplier's part number that matches none of those heuristics, so a bought-in
+    fastener was given a fabrication material and a fabrication thickness.
+
+    Two classifiers for one question. The one that priced the job wins."""
+    from job_decision_report import _is_bought_in, _thk_source_explanation
+
+    ok(_is_bought_in({"part_number": "79814P", "canonical_kind": "bought_in"}),
+       "the graph's classification is believed")
+    ok("bought-in" in _thk_source_explanation(
+        {"part_number": "79814P", "canonical_kind": "bought_in",
+         "normalized_thickness_mm": 16.0}),
+       "so a fastener is not given a fabrication thickness, even carrying one")
+
+    # AND IT OVERRIDES THE HEURISTICS IN BOTH DIRECTIONS. A code that merely LOOKS like a
+    # bought-in family is a fabricated leaf if the graph says so.
+    ok(not _is_bought_in({"part_number": "FIXING433", "canonical_kind": "leaf"}),
+       "a code family pattern does not outvote the compiler")
+
+    # WHERE THE GRAPH SAID NOTHING, the existing signals still answer — this adds an
+    # authority, it does not remove the fallbacks.
+    ok(_is_bought_in({"part_number": "X", "normalized_material": "BOUGHT_IN"}),
+       "material still classifies a record the graph never reached")
+    ok(_is_bought_in({"part_number": "X", "is_bought_in": True}),
+       "and so does an explicit flag")
