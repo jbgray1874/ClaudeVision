@@ -26,6 +26,58 @@ if len(sys.argv) < 2:
 SW_ASM = 2
 extract_path = Path(sys.argv[1])
 doc = json.loads(extract_path.read_text(encoding="utf-8"))
+
+# ── A SAVED JOB ALREADY CARRIES THE ANSWER ───────────────────────────────────────────
+# The pass stamps its verdict onto the job — the tree it built, the edge count, which
+# reader supplied each edge, and, when it applied nothing, the reason. So the ordinary
+# question ("why was there no hierarchy on this run?") is answerable from the file the run
+# already wrote, with no extract to locate and nothing to re-run. Handed a job JSON, this
+# reads that record instead of parsing an extract.
+if isinstance(doc, dict) and ("manufacturing_writeup" in doc or "estimate_summary" in doc):
+    print(f"job: {extract_path.name}\n")
+    _sw = doc.get("solidworks_native") or {}
+    if not _sw:
+        print("solidworks_native: ABSENT — no extract was applied to this job at all.")
+    else:
+        print(f"solidworks_native.found       {_sw.get('found')}")
+        print(f"  extract_path                {_sw.get('extract_path')}")
+        print(f"  refused_wrong_job           {_sw.get('refused_wrong_job')}")
+        print(f"  hierarchy_edges             {_sw.get('hierarchy_edges')}")
+        print(f"  hierarchy_sources           {_sw.get('hierarchy_sources')}")
+        for _p, _kids in sorted((_sw.get("hierarchy") or {}).items()):
+            print(f"      {_p!r} holds {', '.join(f'{c} x{q:g}' for c, q in _kids)}")
+        _applied = _sw.get("hierarchy_applied")
+        if _applied is not None:
+            print(f"  stamped onto {len(_applied)} part(s)")
+            for _a in _applied:
+                print(f"      {_a['part_number']} <- {', '.join(_a['children'])}")
+
+    # THE REASON, IN THE ESTIMATOR'S OWN RECORD. Written to review_flags rather than only to
+    # a console, because an unattended run leaves no console behind.
+    _flags = [f for f in (doc.get("review_flags") or [])
+              if "hierarchy" in str(f).lower()]
+    print("\nreview flags mentioning hierarchy:")
+    for _f in _flags or ["    (none — the pass either applied a tree or did not run)"]:
+        print(f"    {_f}")
+
+    # AND WHAT IS STILL DISCONNECTED, which is the symptom the tree exists to cure.
+    _viol = [v for v in ((doc.get("invariants") or {}).get("violations") or [])
+             if "disconnected" in str(v.get("code", "")).lower()]
+    if _viol:
+        print("\nstill disconnected:")
+        for _v in _viol:
+            print(f"    [{_v.get('severity')}] {_v.get('code')}: {_v.get('message')}")
+            _d = _v.get("detail") or {}
+            if _d:
+                print(f"        detail: {json.dumps(_d)[:600]}")
+
+    _parts = (doc.get("manufacturing_writeup") or {}).get("parts") or []
+    _kids = [(p.get("part_number"), p.get("assembly_children"))
+             for p in _parts if isinstance(p, dict) and p.get("assembly_children")]
+    print(f"\nparts carrying assembly_children: {len(_kids)} of {len(_parts)}")
+    for _pn, _cs in _kids:
+        print(f"    {_pn} -> {', '.join(str(c) for c in _cs)}")
+    raise SystemExit(0)
 records = doc.get("records") if isinstance(doc, dict) else doc
 if not isinstance(records, list):
     records = (doc.get("results") or doc.get("files") or []) if isinstance(doc, dict) else []
