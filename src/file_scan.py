@@ -1936,6 +1936,16 @@ def _finalize_scan_summary(
     #   SDI_APPLY_SOLIDWORKS=1   force on (and say so loudly if the extract is missing)
     #   SDI_SW_EXTRACT_JSON=...  read the extract from an explicit path
     _sw_flag = os.getenv("SDI_APPLY_SOLIDWORKS", "").strip().lower()
+    # BOUND BEFORE THE BRANCH, so every later reader gets a value rather than a name that
+    # may or may not exist. The hierarchy pass 400 lines below fished this name out of the
+    # frame's locals precisely because it could be unbound — and an unbound name and a
+    # refused extract both arrived there as None, which made "the pass printed nothing"
+    # unanswerable.
+    # _sw_why records which of the several ways to have no extract actually happened.
+    _sw_job = None
+    _sw_why = "not attempted"
+    if _sw_flag in {"0", "false", "no", "off"}:
+        _sw_why = "SDI_APPLY_SOLIDWORKS is off"
     if _sw_flag not in {"0", "false", "no", "off"}:
         try:
             from source_connectors.solidworks import (
@@ -1975,6 +1985,14 @@ def _finalize_scan_summary(
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
                                              run=_sw_run) \
                 if (_sw_folder or _sw_json) else None
+            if not (_sw_folder or _sw_json):
+                _sw_why = ("no job folder and no SDI_SW_EXTRACT_JSON — nowhere to look for "
+                           "an extract")
+            elif _sw_job is None or not getattr(_sw_job, "found", False):
+                _sw_why = (f"no readable _sw_native_extract.json under {_sw_folder} "
+                           f"(run tools/solidworks/sw_native_analyse.py on the model folder)")
+            else:
+                _sw_why = ""
             if _sw_job is not None and _sw_job.meta.get("native_present_but_unread"):
                 summary["solidworks_native"] = {
                     "source": "solidworks_api",
@@ -2042,6 +2060,7 @@ def _finalize_scan_summary(
                         "reason": _why,
                     }
                     _sw_job = None
+                    _sw_why = f"extract refused as belonging to another job: {_why}"
             if _sw_job and _sw_job.found:
                 _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
@@ -2103,6 +2122,7 @@ def _finalize_scan_summary(
                       "(run tools/solidworks/sw_native_analyse.py on the model folder)", flush=True)
         except Exception as _e_sw:
             print(f"   [solidworks] skipped ({_e_sw})", flush=True)
+            _sw_why = f"the connector raised {type(_e_sw).__name__}: {_e_sw}"
 
     # ── Whole-document LLM extract — DRIVE the estimate from a chat-session-style read ──
     # Gated (SDI_LLM_FULL_EXTRACT). Reasons over the ENTIRE pack in one call (hierarchy + tube
@@ -2373,10 +2393,11 @@ def _finalize_scan_summary(
     # adds evidence and repeats nothing.
     try:
         from source_connectors.solidworks import apply_native_to_pre_estimate as _apply_native
-        # The accepted extract is still bound in this function — _sw_job is set in the
-        # block above and only cleared when the extract was refused. Read it from there
-        # rather than stashing the object on the summary, which is written to JSON.
-        _sw_job_late = locals().get("_sw_job")
+        # The accepted extract is still bound in this function — _sw_job is initialised
+        # before the branch above and only cleared when the extract was refused. Read it
+        # directly rather than through locals(), which cannot tell an unbound name from a
+        # refused extract and so turned every failure mode into the same silent None.
+        _sw_job_late = _sw_job
         _missed = [p for p in summary["manufacturing_writeup"]["parts"]
                    if isinstance(p, dict) and not p.get("solidworks_native")]
         if _sw_job_late is not None and getattr(_sw_job_late, "found", False) and _missed:
@@ -2392,37 +2413,65 @@ def _finalize_scan_summary(
         # missing while every other native datum on it is present. Runs before the canonical
         # graph is compiled, so a node arrives with its parent rather than being repaired
         # after it is already flagged disconnected.
-        if _sw_job_late is not None and getattr(_sw_job_late, "found", False):
+        #
+        # A GATE NOBODY ASKS REPORTS NOTHING — and the last version of this reported nothing
+        # for the one state it was written to explain. The three-state message below sat
+        # INSIDE `if the extract was accepted`, so an absent, refused or unread extract
+        # produced no [hierarchy] line at all, which is indistinguishable from the pass not
+        # existing. Every path now prints exactly one line, and the reason travels onto the
+        # summary as well as the console, because an estimator running this unattended from
+        # the intranet never sees a console at all.
+        _hier: List[Dict[str, Any]] = []
+        _msg = ""
+        if _sw_job_late is None or not getattr(_sw_job_late, "found", False):
+            _msg = f"no SolidWorks extract was applied to this job — {_sw_why or 'reason not recorded'}"
+        else:
             from source_connectors.solidworks import apply_native_hierarchy_to_parts
             _hier = apply_native_hierarchy_to_parts(
                 summary["manufacturing_writeup"]["parts"], _sw_job_late)
             for _h in _hier:
                 print(f"   [hierarchy] {_h['part_number']} holds "
                       f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
-            # A GATE NOBODY ASKS REPORTS NOTHING, and this one has to answer to an estimator
-            # running the engine unattended. Saying nothing when the models carried no tree
-            # is indistinguishable from saying nothing because the tree was already known —
-            # and the difference decides whether the extract needs regenerating or the
-            # assemblies genuinely have no structure to read.
+            _sw_meta = getattr(_sw_job_late, "meta", {}) or {}
+            _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
+            _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])
+            _asm_recs = int(_sw_meta.get("hierarchy_assembly_records") or 0)
             if not _hier:
-                _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
-                _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])
                 if _edges:
                     _msg = (f"the extract carries {_edges} parent/child edge(s) but none named "
                             f"a part in this job — the codes in the models and the codes on "
-                            f"the drawing may not match")
-                elif _asms:
-                    _msg = (f"{_asms} assembly document(s) were read and NONE reported "
-                            f"parent/child edges. The extract predates the analyser change, "
-                            f"or this SolidWorks build returns no component parents. "
+                            f"the drawing may not match. Model parents: "
+                            f"{', '.join(_sw_meta.get('hierarchy_parents') or []) or '(none)'}")
+                elif _asms or _asm_recs:
+                    _msg = (f"{_asms or _asm_recs} assembly document(s) were read and NONE "
+                            f"reported parent/child edges or BOM-line parents. The extract "
+                            f"predates the analyser change, or this SolidWorks build returns "
+                            f"no component parents. "
                             f"Re-run tools/solidworks/sw_native_analyse.py, then this job")
                 else:
                     _msg = ("the extract contains no assembly documents, so the models "
                             "describe no hierarchy to apply")
-                print(f"   [hierarchy] NOT APPLIED — {_msg}", flush=True)
-                summary.setdefault("review_flags", []).append(
-                    f"SolidWorks hierarchy not applied: {_msg}. Any part left without a "
-                    f"parent is reported separately as a disconnected BOM node.")
+            # THE TREE ITSELF, ON THE SUMMARY. The console line answers "did it fire"; this
+            # answers "what did it say" from the saved job JSON alone, which is the only
+            # record an unattended run leaves behind.
+            _sw_block = summary.get("solidworks_native")
+            if isinstance(_sw_block, dict):
+                _sw_block["hierarchy"] = {
+                    str(_p): [[str(_c), float(_q)] for _c, _q in _kids]
+                    for _p, _kids in (getattr(_sw_job_late, "hierarchy", {}) or {}).items()}
+                _sw_block["hierarchy_edges"] = _edges
+                _sw_block["hierarchy_sources"] = _sw_meta.get("hierarchy_sources") or {}
+                _sw_block["hierarchy_applied"] = [
+                    {"part_number": _h["part_number"], "children": list(_h["children"])}
+                    for _h in _hier]
+        if _msg:
+            print(f"   [hierarchy] NOT APPLIED — {_msg}", flush=True)
+            summary.setdefault("review_flags", []).append(
+                f"SolidWorks hierarchy not applied: {_msg}. Any part left without a "
+                f"parent is reported separately as a disconnected BOM node.")
+        else:
+            print(f"   [hierarchy] applied to {len(_hier)} assembly node(s) from the "
+                  f"SolidWorks models", flush=True)
     except Exception as _sw_late_err:
         print(f"   [solidworks] late application skipped: "
               f"{type(_sw_late_err).__name__}: {_sw_late_err}", flush=True)

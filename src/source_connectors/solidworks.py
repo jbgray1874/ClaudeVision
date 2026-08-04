@@ -351,7 +351,18 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
     # is worse than one that is merely wrong. Counted within a record, then merged ACROSS
     # records by taking the larger — a deeper record can see instances a shallower one
     # cannot, and neither can see instances that are not there.
+    #
+    # TWO READERS FOR ONE FACT, because one reader is one silent failure away from none.
+    # assembly_bom writes the owner twice — as `assembly_edges` on the record, and as
+    # `parent_part_number` on every BOM line it emits. The edge list is the better source
+    # (it carries per-instance quantity and survives aggregation), but it is keyed on the
+    # document object inside the analyser and is absent entirely from any extract taken
+    # before that key existed. The BOM line's own parent is carried in the same JSON the
+    # engine already consumes for geometry, so an extract that has one and not the other
+    # still yields a tree. Whichever supplied an edge is recorded, so "no hierarchy" can
+    # never again mean "we looked in one place".
     _seen_edges: Dict[Tuple[str, str], float] = {}
+    _sources: Dict[str, int] = {}
     for r in records:
         if int(r.get("doctype") or SW_PART) != SW_ASM:
             continue
@@ -369,13 +380,42 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
             _q = _num(_e.get("qty"))
             _this_record[(_parent, _child)] = (_this_record.get((_parent, _child), 0.0)
                                                + (float(_q) if _q and _q > 0 else 1.0))
+        if _this_record:
+            _sources["assembly_edges"] = _sources.get("assembly_edges", 0) + len(_this_record)
+        # THE SECOND READER, and it takes ONLY an EXPLICIT parent. An assembly's BOM is
+        # FULL-DEPTH, so a line with no parent recorded is a DESCENDANT of this assembly and
+        # not necessarily a child of it — defaulting those to the reporting assembly, as the
+        # edge loop above legitimately does for its own edges, would flatten every
+        # grandchild onto the top node and call it hierarchy. An edge list omits the parent
+        # when the parent IS this record; a BOM line omits it when nobody could resolve it.
+        # Same-looking blank, opposite meanings.
+        #
+        # Quantity here is the aggregate, which is the right number for the edge when every
+        # instance hangs off the same parent and an over-count when it does not — so this
+        # only ever FILLS a pair the edge list did not report, never overwrites one it did.
+        for _line in (r.get("bom") or []):
+            if not isinstance(_line, dict):
+                continue
+            _child = _clean_pn(_line.get("part_number") or "")
+            _parent = _clean_pn(_line.get("parent_part_number") or "")
+            if not _child or not _parent or _parent == _child:
+                continue
+            if (_parent, _child) in _this_record:
+                continue
+            _q = _num(_line.get("qty"))
+            if _q is None:
+                _q = _num(_line.get("quantity"))
+            _this_record[(_parent, _child)] = float(_q) if _q and _q > 0 else 1.0
+            _sources["bom_parent"] = _sources.get("bom_parent", 0) + 1
         for _k, _v in _this_record.items():
             _seen_edges[_k] = max(_seen_edges.get(_k, 0.0), _v)
     for (_parent, _child), _q in sorted(_seen_edges.items()):
         job.hierarchy.setdefault(_parent, []).append((_child, _q))
-    if job.hierarchy:
-        job.meta["hierarchy_edges"] = sum(len(v) for v in job.hierarchy.values())
-        job.meta["hierarchy_parents"] = sorted(job.hierarchy)
+    job.meta["hierarchy_edges"] = sum(len(v) for v in job.hierarchy.values())
+    job.meta["hierarchy_parents"] = sorted(job.hierarchy)
+    job.meta["hierarchy_sources"] = dict(sorted(_sources.items()))
+    job.meta["hierarchy_assembly_records"] = sum(
+        1 for r in records if int(r.get("doctype") or SW_PART) == SW_ASM)
 
     # BOM = the top assembly's full-depth component list, quantities already rolled up.
     top = _pick_top_assembly(records)

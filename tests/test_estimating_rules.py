@@ -4853,6 +4853,81 @@ def test_the_hierarchy_pass_says_why_it_did_nothing():
     ok("no assembly documents" in _fs, "and does not call an absent tree a fault")
 
 
+def test_the_hierarchy_pass_reports_even_when_there_is_no_extract():
+    """SILENCE AGAIN, ONE LEVEL UP. The three-state message above sat INSIDE
+    `if the extract was accepted`, so the four ways to have no extract at all — the flag
+    off, no folder to look in, no file there, the file refused as another job's — produced
+    no [hierarchy] line whatsoever. That is the state the job has actually been in, and it
+    was the one state the reporting could not describe.
+
+    Two things make it answerable and both are asserted here: the reason is recorded where
+    it happens rather than reconstructed later, and the extract is bound BEFORE the branch
+    so a reader cannot confuse "never assigned" with "assigned None"."""
+    from pathlib import Path as _P6
+    _fs = (_P6(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+
+    # locals().get() cannot tell an unbound name from a refused extract. Both arrived as
+    # None, which is why "the pass printed nothing" stayed unanswerable for several runs.
+    ok('locals().get("_sw_job")' not in _fs,
+       "the hierarchy pass reads the extract directly, not out of locals()")
+    ok("_sw_job = None" in _fs and "_sw_why = " in _fs,
+       "the extract and the reason for not having one are bound before the branch")
+
+    # EVERY WAY OF HAVING NO EXTRACT NAMES ITSELF, at the point it happens.
+    for _phrase in ("SDI_APPLY_SOLIDWORKS is off",
+                    "nowhere to look for",
+                    "no readable _sw_native_extract.json",
+                    "belonging to another job"):
+        ok(_phrase in _fs, f"the no-extract path records: {_phrase}")
+
+    # The reason reaches the ESTIMATOR, not just the console — an unattended intranet run
+    # has no console to read.
+    ok("no SolidWorks extract was applied to this job" in _fs,
+       "and the absent-extract case produces a [hierarchy] line like every other case")
+
+
+def test_the_models_name_the_owner_twice_and_one_reader_is_enough():
+    """TWO READERS FOR ONE FACT. assembly_bom records the owner as `assembly_edges` on the
+    record AND as `parent_part_number` on every BOM line it emits. The connector read only
+    the first, so an extract taken before that key existed — which is every extract already
+    sitting in a job folder — reported no tree at all while carrying the answer.
+
+    The BOM-line reader FILLS gaps and never overwrites: the edge list carries per-instance
+    quantity and is the better source wherever it exists."""
+    from source_connectors.solidworks import normalize_native_extract
+
+    # EDGES ABSENT, PARENTS PRESENT — the old extract, now readable.
+    _old = normalize_native_extract([{
+        "title": "GA", "doctype": 2, "assembly_part_number": "GA",
+        "bom": [{"part_number": "102", "qty": 1, "parent_part_number": "GA"},
+                {"part_number": "05M", "qty": 2, "parent_part_number": "102"}]}])
+    eq(sorted(_old.hierarchy), ["102", "GA"], "both owners are read from the BOM lines")
+    eq(_old.parent_of("05M"), "102",
+       "and 05M hangs off 102, not off the GA it is merely listed under")
+    eq(_old.meta.get("hierarchy_sources"), {"bom_parent": 2},
+       "the source of every edge is recorded, so 'no hierarchy' can never mean "
+       "'we looked in one place'")
+
+    # A FULL-DEPTH LINE WITH NO PARENT IS A DESCENDANT, NOT A CHILD. Defaulting it to the
+    # reporting assembly would hang every grandchild off the top node and call it a tree.
+    _flat = normalize_native_extract([{
+        "title": "GA", "doctype": 2, "assembly_part_number": "GA",
+        "bom": [{"part_number": "05M", "qty": 2}]}])
+    eq(_flat.hierarchy, {},
+       "an unresolved parent invents no edge, however tempting the reporting assembly is")
+
+    # WHERE BOTH EXIST, THE EDGE LIST WINS — it counts instances, the BOM line aggregates.
+    _both = normalize_native_extract([{
+        "title": "GA", "doctype": 2, "assembly_part_number": "GA",
+        "assembly_edges": [{"parent": "GA", "child": "05M", "qty": 1}],
+        "bom": [{"part_number": "05M", "qty": 9, "parent_part_number": "GA"}]}])
+    eq(_both.hierarchy.get("GA"), [("05M", 1.0)],
+       "the edge quantity stands; the aggregated line does not overwrite it")
+    eq(_both.meta.get("hierarchy_sources"), {"assembly_edges": 1},
+       "and the BOM reader is not credited with an edge it did not supply")
+
+
 def test_what_a_part_is_for_survives_costing():
     """TWO ADJUSTABLE FEET, CORRECTLY IDENTIFIED AND CORRECTLY CODED, DROPPED OFF THE SHEET.
 
