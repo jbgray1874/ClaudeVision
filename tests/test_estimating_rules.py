@@ -4703,6 +4703,26 @@ def test_a_stated_joinery_finish_becomes_the_work_it_names():
                        ("edge_banding", "Edge Banding"), ("cnc_routing", "CNC Joinery")):
         eq(_map_operation(_op, True), _dept, f"{_op} costs against {_dept}")
 
+    # AND A RE-INTERPRETATION MUST NOT DELETE A MEASUREMENT. _interpret_part rebuilds
+    # normalized_geometry from the part's raw fields, which discards anything a DXF or a
+    # model measured. That was invisible while this block only ran on parts mis-read as
+    # steel; hoisting it pointed it straight at the one panel whose blank IS the material
+    # cost — 1434 x 748 became None and the GBP 37.95 sheet price went with it.
+    from estimator import estimate_material as _est_mat
+    _measured = _panel("MFC", "LAMINATED AND EDGED")
+    _measured.update({
+        "quantity": 1, "normalized_thickness_mm": 28.0, "flat_pattern_detected": True,
+        "normalized_geometry": {
+            "blank_length_mm": 1434.0, "blank_width_mm": 748.0,
+            "bounding_box_flat_mm": {"length": 1434.0, "width": 748.0, "height": 28.0},
+            "geometry_source": "dxf_flat_pattern"}})
+    _apply_post_build_fixes([_measured], {})
+    _ng = _measured.get("normalized_geometry") or {}
+    eq(_ng.get("blank_length_mm"), 1434.0, "the measured blank survives re-interpretation")
+    eq(_ng.get("blank_width_mm"), 748.0, "in both dimensions")
+    eq((_est_mat(_measured) or {}).get("cost_method"), "board_sheet_yield",
+       "so the panel is still priced by the sheet rather than falling to no geometry")
+
     # A STEEL PART IS UNTOUCHED. The gate is about board, and a powder-coated bracket must
     # not acquire joinery operations because the word EDGE appears somewhere on the sheet.
     _steel = _panel("MILD STEEL", "POWDER COATED - SEMI-GLOSS")

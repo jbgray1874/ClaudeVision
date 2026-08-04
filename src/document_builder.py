@@ -1373,7 +1373,22 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             _joinery.add("handling")
             if sorted(_joinery) != sorted(part.get("textual_operations") or []):
                 part["textual_operations"] = sorted(_joinery)
+                # _interpret_part REBUILDS normalized_geometry, and rebuilding it from a
+                # part's raw fields discards anything a DXF or a model measured. That was
+                # invisible while this block only ran on parts mis-read as steel; hoisting it
+                # to run on real board parts pointed it straight at the one panel on the job
+                # whose blank is the whole material cost — 1434 x 748 became None, and the
+                # GBP 37.95 sheet price with it.
+                #
+                # A re-interpretation must not be able to delete a measurement. The measured
+                # keys are put back exactly as they were; anything the rebuild ADDED is kept.
+                _pre_ng = dict(part.get("normalized_geometry") or {})
                 _interpret_part(part)
+                _post_ng = part.get("normalized_geometry")
+                if isinstance(_post_ng, dict):
+                    for _k, _v in _pre_ng.items():
+                        if _v not in (None, "", [], {}) and _post_ng.get(_k) in (None, "", [], {}):
+                            _post_ng[_k] = _v
 
         if inherited_steel:
             page_mat_match = re.search(
