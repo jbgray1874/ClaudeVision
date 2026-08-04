@@ -1,0 +1,29 @@
+# SDI Intelligence — backend service dependencies.
+#
+# The service had no manifest: fastapi, uvicorn and pydantic are imported and
+# were declared nowhere, so "python app.py" on a machine that had not happened
+# to install them failed at the first import with nothing to point at.
+#
+# Install into the ENGINE's virtualenv rather than a second one. estimate_routes
+# shells out to C:\ClaudeVision\.venv\Scripts\python.exe to run the estimate, so
+# keeping the service in the same environment means one place to look when a
+# version matters, and no chance of the API and the engine disagreeing about
+# what is installed.
+#
+#   cd C:\ClaudeVision
+#   .\.venv\Scripts\python.exe -m pip install -r sdi-intelligence-backend\requirements.txt
+#   .\.venv\Scripts\python.exe sdi-intelligence-backend\app.py
+
+fastapi                 # the API itself
+uvicorn[standard]       # the server app.py starts in __main__
+pydantic                # request models (estimate_routes.EstimateRequest)
+python-dotenv           # config.py reads .env
+requests                # hr_brighthr talks to BrightHR
+
+# Optional. The database endpoints report "not configured" without it rather
+# than failing, so a machine that only needs the estimating page can skip it.
+pyodbc                  # /api/db/ping, SQL Server via ODBC Driver 18
+
+# Optional. tech_radar.py imports this lazily inside a function, so the service
+# starts and every endpoint works without it; only the radar feature needs it.
+anthropic               # tech_radar.py
