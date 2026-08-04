@@ -36,7 +36,10 @@ app = FastAPI(title="SDI Intelligence — Backend", version="0.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    # POST is required by /api/estimate. With GET only, the browser's preflight
+    # fails and the run is refused before any handler sees it — which reads as
+    # "the button does nothing" rather than as a permissions error.
+    allow_methods=["GET", "POST"],
     allow_headers=["X-SDI-Key", "Content-Type"],
 )
 
@@ -149,6 +152,19 @@ def db_ping(x_sdi_key: str | None = Header(default=None)):
 _PORTAL = Path(__file__).with_name("sdi-intelligence-portal.html")
 
 
+_ESTIMATOR = Path(__file__).with_name("sdi-estimating-intelligence.html")
+
+
+@app.get("/estimating")
+def estimating_page():
+    """The estimator's page, same-origin with the API it calls."""
+    if _ESTIMATOR.exists():
+        return FileResponse(str(_ESTIMATOR))
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-estimating-intelligence.html "
+                                           "is not next to app.py"})
+
+
 @app.get("/")
 def home():
     if _PORTAL.exists():
@@ -160,6 +176,10 @@ def home():
 # ── HR pipeline (BrightHR -> InVentry) ──
 from hr_routes import router as hr_router
 app.include_router(hr_router)
+
+# ── Estimating (the SDI Estimating Intelligence page) ──
+from estimate_routes import router as estimate_router
+app.include_router(estimate_router)
 
 
 if __name__ == "__main__":
