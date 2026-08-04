@@ -4810,6 +4810,47 @@ def test_one_item_read_twice_is_one_bom_line():
     eq(len(_diff), 2, "different descriptions are different parts")
 
 
+def test_what_a_part_is_for_survives_costing():
+    """TWO ADJUSTABLE FEET, CORRECTLY IDENTIFIED AND CORRECTLY CODED, DROPPED OFF THE SHEET.
+
+    A read-only pool probe put it beyond argument:
+
+        parts:           LOW068  roles ['assembly', 'bought_in']
+        part_estimates:  LOW068  roles None
+
+    wb_populate decides which block a part belongs in from `page_roles` — a 'bought_in'
+    role is what puts a hardware line on the BOM with its own price — and it reported
+    exactly what it was given: "LOW068 unclassifiable (stock_form='', role=[], ...)
+    - skipped".
+
+    The third field to be lost at this same boundary, after the geometry rollup and the
+    board sheet price. estimate_part builds the costed record as a new dict of named
+    fields, and anything not named is gone."""
+    from estimator import estimate_part
+
+    _foot = {"part_number": "LOW068", "description": "M8 LOW PROFILE ADJUSTABLE FOOT",
+             "quantity": 2, "page_roles": ["assembly", "bought_in"],
+             "roles": ["assembly", "bought_in"], "geometry_rollup": {}, "confidence": {}}
+    _pe = estimate_part(_foot) or {}
+    eq([str(r).lower() for r in (_pe.get("page_roles") or [])],
+       ["assembly", "bought_in"],
+       "the costed record still says what the part is for")
+    ok("bought_in" in [str(r).lower() for r in (_pe.get("page_roles") or [])],
+       "which is the exact test wb_populate applies to route it to the BOM")
+
+    # A PART WITH NO ROLES GAINS NONE. The field is carried, not invented.
+    _bare = estimate_part({"part_number": "X-01", "description": "PLATE", "quantity": 1,
+                           "geometry_rollup": {}, "confidence": {}}) or {}
+    eq(_bare.get("page_roles"), [], "no roles in means no roles out")
+
+    # AND THE READER IS THE ONE WE THINK IT IS.
+    from pathlib import Path as _P4
+    _wb = (_P4(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
+        encoding="utf-8")
+    ok('pe.get("page_roles")' in _wb,
+       "wb_populate classifies on page_roles, which is why it must survive costing")
+
+
 def test_native_hierarchy_gives_a_node_its_parent():
     """THE EDGES WERE READ AND NOTHING CONSUMED THEM.
 

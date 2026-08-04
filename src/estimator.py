@@ -3698,6 +3698,20 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # record — and none of it reached the sheet, because the only pool the sheet reads
         # is this dict. The part laser-cut at 368/hr against its own mirror image's 287.
         "geometry_rollup": part.get("geometry_rollup") or {},
+        # WHAT THE PART IS FOR TRAVELS WITH THE MONEY TOO.
+        #
+        # wb_populate decides which block a part belongs in from `page_roles` — a
+        # 'bought_in' role is what puts a hardware line on the BOM with its own price. The
+        # raw record carries it and the costed one did not, so the workbook asked a part
+        # what it was for and got nothing back.
+        #
+        # 12422-24's LOW068 is what that costs. The raw record reads
+        # roles ['assembly', 'bought_in']; the costed record reads None; and the workbook
+        # says "LOW068 unclassifiable (stock_form='', role=[], ...) - skipped". Two
+        # adjustable feet, correctly identified, correctly coded, dropped off the estimate
+        # because the one field that says what they are stopped at the costing boundary.
+        "page_roles": list(part.get("page_roles") or []),
+        "roles": list(part.get("roles") or []),
         # The model's plate verdict travels with the costed record. It was set on the raw
         # part and never copied here, so the record that carries the folding MONEY had no
         # idea the part was flat, and nothing downstream could compare the two.
