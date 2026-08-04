@@ -4659,6 +4659,59 @@ def test_a_board_is_thicker_than_a_gauge_and_every_reader_has_to_know_it():
        "estimator reads the shared definition rather than restating it")
 
 
+def test_a_stated_joinery_finish_becomes_the_work_it_names():
+    """12422-24's panel states "LAMINATED AND EDGED" and the sheet carried no lamination at
+    all — labour on the largest joinery part, missing because two words were never read.
+
+    Two gaps, stacked. The joinery block was gated on a four-word board list — MDF, TIMBER,
+    PLYWOOD, BOARD — and faced board is none of them, so an MFC panel never entered it and
+    its route came from the model's guess rather than its own stated finish. And the finish
+    test looked for "EDGING" or "EDGE BAND", which do not match "EDGED": the drawing says
+    the work in plain English and the engine read past it.
+
+    Both are real work with a real department. Lamination is a glue-and-press operation and
+    GLUE is the row that pays for it."""
+    from document_builder import _apply_post_build_fixes
+    from wb_populate import _map_operation
+    import config
+
+    def _panel(material, finish):
+        return {"part_number": "12422-24-01J", "description": "END CAP JOINERY PANEL",
+                "materials": [material], "surface_finishes": [finish],
+                "textual_operations": [], "operations": [], "process_notes": [finish],
+                "normalized_material": material, "geometry_rollup": {}, "confidence": {}}
+
+    _p = _panel("MFC", "LAMINATED AND EDGED")
+    _apply_post_build_fixes([_p], {})
+    _ops = set(_p.get("textual_operations") or [])
+    ok("laminating" in _ops, f"LAMINATED is lamination work (got {sorted(_ops)})")
+    ok("edge_banding" in _ops, f"EDGED is edge banding — not only EDGING (got {sorted(_ops)})")
+    ok("cnc_routing" in _ops, "and the panel is still machined")
+
+    # THE BOARD GATE IS THE SHARED DEFINITION, so a faced panel enters the block at all.
+    ok(set(config.FACED_BOARD_TOKENS) & {"MFC", "MELAMINE"},
+       "faced board is in the shared token list the gate reads")
+    for _mat in ("MFC", "MFMDF", "MELAMINE FACED CHIPBOARD"):
+        _q = _panel(_mat, "LAMINATED AND EDGED")
+        _apply_post_build_fixes([_q], {})
+        ok("edge_banding" in (_q.get("textual_operations") or []),
+           f"{_mat} reaches the joinery block")
+
+    # AND EVERY WORD IT PRODUCES REACHES A DEPARTMENT THAT PAYS. An operation nobody can
+    # cost is the silent zero this whole vocabulary exists to prevent.
+    for _op, _dept in (("laminating", "Glue"), ("veneering", "Glue"),
+                       ("edge_banding", "Edge Banding"), ("cnc_routing", "CNC Joinery")):
+        eq(_map_operation(_op, True), _dept, f"{_op} costs against {_dept}")
+
+    # A STEEL PART IS UNTOUCHED. The gate is about board, and a powder-coated bracket must
+    # not acquire joinery operations because the word EDGE appears somewhere on the sheet.
+    _steel = _panel("MILD STEEL", "POWDER COATED - SEMI-GLOSS")
+    _apply_post_build_fixes([_steel], {})
+    eq([o for o in (_steel.get("textual_operations") or [])
+        if o in ("laminating", "edge_banding", "cnc_routing")], [],
+       "a steel bracket gains no joinery work")
+
+
 def test_one_item_read_twice_is_one_bom_line():
     """SEVEN BLANK PRICE CELLS ON 12422-24, AND UDEF WAS NEVER THE PROBLEM.
 

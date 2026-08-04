@@ -157,11 +157,39 @@ def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Op
         if _cust_pinned:
             return _cust_pinned
     # look in folder path + GA title for a known-ish brand token
+    # THE DRAWING NAMES THE CUSTOMER AND WE WERE NOT READING IT.
+    #
+    # This looked only at the folder name, the job stem and the PDF's /Title. 11350's folder
+    # is "11350-BootsLadderRackCommsBar", so Boots was found by accident of naming; 12422-24's
+    # is "12422-24-GA_End Cap_RevB", which names no customer at all — so the same client got
+    # a logo on one job and a text fallback on the next.
+    #
+    # extract_title_block_fields already reads `clients` off the CLIENT: cell, and
+    # `project_titles` beside it. The customer is on the drawing, in a labelled field, and
+    # the one place that needs it was guessing from a filename.
+    def _title_block_tokens() -> str:
+        out = []
+        for holder in (summary,
+                       summary.get("document_analysis") or {},
+                       (summary.get("document_analysis") or {}).get("title_block") or {},
+                       summary.get("pattern_summary") or {},
+                       summary.get("title_block") or {}):
+            if not isinstance(holder, dict):
+                continue
+            for key in ("clients", "client", "customers", "customer", "project_titles"):
+                val = holder.get(key)
+                if isinstance(val, str):
+                    out.append(val)
+                elif isinstance(val, (list, tuple)):
+                    out.extend(str(v) for v in val)
+        return " ".join(out)
+
     hay = " ".join([
         str(summary.get("job_folder") or ""),
         str(job_stem or ""),
         str(_get(summary, "pdf_metadata", "/Title", default="")),
         str(_get(summary, "drawing_metadata", "pdf_metadata", "/Title", default="")),
+        _title_block_tokens(),
     ])
     # if any logo file stem appears in the haystack, that's our customer
     try:

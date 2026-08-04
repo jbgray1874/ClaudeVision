@@ -1325,12 +1325,53 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # call _interpret_part — it does not rewrite part["operations"].
                 part["textual_operations"] = _kept_m
                 part["operations"] = sorted(_kept_ops)
-            if any(k in mat_upper_joined for k in ("MDF", "TIMBER", "PLYWOOD", "BOARD")):
-                _joinery = set(part.get("textual_operations") or [])
-                if "EDGING" in combined_upper or "EDGE BAND" in combined_upper:
-                    _joinery.add("edge_banding")
-                _joinery.add("cnc_routing")
-                _joinery.add("handling")
+                pass
+
+        # ── JOINERY WORK IS DERIVED FOR JOINERY PARTS, WHICH SHOULD NOT NEED SAYING ──────
+        #
+        # This block lived INSIDE the metal branch above — a branch whose whole purpose is
+        # "metal parts do not get a separate hole/drill op". So joinery operations were only
+        # ever derived for parts the engine had decided were METAL, and its board-word test
+        # was catching parts MIS-classified as steel that were really board. A board part
+        # correctly identified as board never reached it at all.
+        #
+        # 12422-24's MFC end cap is what that costs: the largest joinery part on the job,
+        # whose route came from the model's guess instead of its own stated finish.
+        import config as _cfg
+        _board_words = (tuple(getattr(_cfg, "SHEET_BOARD_TOKENS", ()))
+                        + tuple(getattr(_cfg, "FACED_BOARD_TOKENS", ()))
+                        + tuple(getattr(_cfg, "SOLID_TIMBER_TOKENS", ()))
+                        + ("BOARD",))
+        if any(k in mat_upper_joined for k in _board_words):
+            _joinery = set(part.get("textual_operations") or [])
+            # THE DRAWING SAYS "LAMINATED AND EDGED" AND WE READ NEITHER WORD.
+            # "EDGING"/"EDGE BAND" do not match "EDGED", so a finish the drawing states in
+            # plain English produced no operation — and LAMINATED produced none at all, so
+            # the lamination on that panel was never costed. Both are real work with a real
+            # department: EDGE and GLUE.
+            # THE PART'S OWN FINISH, NOT ONLY THE PAGE IT SITS ON. combined_upper is the
+            # whole page — every part drawn on that sheet shares it — while
+            # surface_finishes is the finish extracted FOR THIS PART, and the run log
+            # already prints it: "12422-24-01J: finish detected (LAMINATED AND EDGED)".
+            # Reading the page alone means a panel's finish can be read off its neighbour,
+            # and a part whose finish came from a BOM or a model rather than page text is
+            # not read at all.
+            _finish_text = " ".join([
+                combined_upper,
+                " ".join(str(f) for f in (part.get("surface_finishes") or [])).upper(),
+                str(part.get("normalized_finish") or "").upper(),
+                " ".join(str(n) for n in (part.get("process_notes") or [])).upper(),
+                str(part.get("description") or "").upper(),
+            ])
+            if re.search(r"\bEDG(?:E|ED|ING)\b|\bEDGE\s*BAND", _finish_text):
+                _joinery.add("edge_banding")
+            if re.search(r"\bLAMINAT(?:E|ED|ING|ION)\b", _finish_text):
+                _joinery.add("laminating")
+            if re.search(r"\bVENEER(?:ED|ING)?\b", _finish_text):
+                _joinery.add("veneering")
+            _joinery.add("cnc_routing")
+            _joinery.add("handling")
+            if sorted(_joinery) != sorted(part.get("textual_operations") or []):
                 part["textual_operations"] = sorted(_joinery)
                 _interpret_part(part)
 
