@@ -13539,3 +13539,36 @@ def test_the_canonical_graph_decides_what_a_part_is_not_the_report():
        "material still classifies a record the graph never reached")
     ok(_is_bought_in({"part_number": "X", "is_bought_in": True}),
        "and so does an explicit flag")
+
+
+def test_no_hierarchy_is_not_a_licence_to_guess_an_identity():
+    """A RULE THAT FAILS VISIBLY IN ONE MODULE AND QUIETLY IN ANOTHER IS NOT ONE RULE.
+
+    part_identity.stem_duplicate_target returns "" when a stem matches more than one fuller
+    code: ambiguity is reported, not resolved, and the extra row stays visible for an
+    estimator. The cross-source alias then resolved exactly that kind of ambiguity by
+    length whenever no hierarchy claimed either spelling — the same question answered two
+    opposite ways depending on which file you were in.
+
+    The cross-source case earns the stricter standard. A single pool holding two similar
+    codes is one reader disagreeing with itself; this is TWO readers, weaker evidence, and
+    weaker evidence should demand the better reason. Declining costs a visible row somebody
+    can resolve. Guessing costs a part its identity, silently, on a job nobody has seen."""
+    from route_compiler import _raw_identity_aliases
+
+    _S = "3.5 x 16mm Pan Head Wood Screw"
+    _raw = {"79814P613": {"description": _S, "quantity": 4}}
+    _ext = {"79814P": {"description": _S, "quantity": 4}}
+
+    eq(_raw_identity_aliases(_raw, _ext), {},
+       "with no hierarchy read at all, neither spelling is chosen")
+    eq(_raw_identity_aliases(_raw, _ext, claimed=set()), {},
+       "an empty claim set is the same absence of a reason")
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"UNRELATED-01"}), {},
+       "a hierarchy that names neither of them prefers neither of them")
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"79814P", "79814P613"}), {},
+       "and claiming both is not a preference either")
+
+    # THE POSITIVE CASE IS UNCHANGED — this narrows the guess, it does not disable the fix.
+    eq(_raw_identity_aliases(_raw, _ext, claimed={"79814P"}), {"79814P613": "79814P"},
+       "a hierarchy naming exactly one spelling still resolves it")

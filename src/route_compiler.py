@@ -490,13 +490,21 @@ def _raw_identity_aliases(
         _target = _cands[0]
         # THE CLAIMED SPELLING SURVIVES. Both claimed or neither claimed is not a
         # preference, and choosing anyway would delete a row nobody decided against.
-        if _claimed:
-            if _target.upper() in _claimed and identity.upper() not in _claimed:
-                aliases[identity] = _target
-            elif identity.upper() in _claimed and _target.upper() not in _claimed:
-                aliases[_target] = identity
-        else:
+        #
+        # AND NO HIERARCHY AT ALL IS NOT A LICENCE TO GUESS. This branch used to fall back
+        # to the length rule when nothing claimed either spelling, which resolves an
+        # ambiguity by heuristic — the exact thing part_identity refuses to do when a stem
+        # matches more than one fuller code. A rule that fails visibly in one module and
+        # quietly in another is not one rule.
+        #
+        # The cross-source case earns the stricter standard: a single pool holding two
+        # codes is one reader disagreeing with itself, while this is TWO readers, and the
+        # weaker evidence should demand the better reason. Declining costs a visible row an
+        # estimator can resolve; guessing costs a part its identity, silently.
+        if _target.upper() in _claimed and identity.upper() not in _claimed:
             aliases[identity] = _target
+        elif identity.upper() in _claimed and _target.upper() not in _claimed:
+            aliases[_target] = identity
     return aliases
 
 
