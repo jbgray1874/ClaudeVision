@@ -2103,6 +2103,11 @@ def _finalize_scan_summary(
                 # modelled source data behind every native-sourced number.
                 summary["solidworks_native"] = {
                     "source": "solidworks_api",
+                    # SUCCESS SAYS SO IN THE SAME WORD FAILURE USES. Both refusal paths
+                    # write "found": False and this one wrote nothing, so a reader asking
+                    # the obvious question got None on a perfectly good extract — the tree
+                    # was applied, the geometry was applied, and the record said "unknown".
+                    "found": True,
                     "reliability": 1.0,
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),

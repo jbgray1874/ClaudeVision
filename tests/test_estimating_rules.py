@@ -13382,3 +13382,24 @@ def test_a_price_with_no_supplier_does_not_read_as_a_catalogue_row():
     ok("_SILENT_ORIGIN_CLASSES" in _src, "the silent set exists")
     ok("if not label and cls not in _SILENT_ORIGIN_CLASSES:" in _src,
        "and an unlabelled, non-silent class is given a visible label rather than blank")
+
+
+def test_a_successful_extract_says_so_in_the_same_word_a_refusal_uses():
+    """THE TREE WAS APPLIED AND THE RECORD SAID "UNKNOWN".
+
+    Both refusal paths write "found": False onto summary["solidworks_native"]. The accepted
+    path wrote every other field and not that one, so a probe asking the obvious question got
+    None on a perfectly good extract — 9 assembly edges read, 7 in the tree, geometry
+    applied, and the flag that says whether any of it happened was absent.
+
+    A field that is written only when the answer is "no" cannot be read to mean "yes"."""
+    from pathlib import Path as _PA
+    _fs = (_PA(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    _accept = _fs.find('"source": "solidworks_api",\n                    # SUCCESS SAYS SO')
+    ok(_accept > 0, "the accepted-extract block is still identifiable")
+    _tail = _fs[_accept:_accept + 700]
+    ok('"found": True' in _tail,
+       "an accepted extract records that it was found, beside the fields it filled")
+    eq(_fs.count('"found": False'), 3,
+       "and every refusal path still says so too — the field answers in all states")
