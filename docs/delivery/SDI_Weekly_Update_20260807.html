@@ -252,17 +252,19 @@
     client and drawing number, run, then open the finished report straight from the page.</p>
 
     <div class="vid">
-      <!-- ONE LINE TO CHANGE. Relative path: copy the .mp4 into a media\ folder beside
-           this report on the share. A relative source is the only one every browser
-           will load from a double-clicked file without a policy exception. -->
+      <!-- WHERE THIS POINTS. The report lives in ...\Shared\IT\AI & Automation\StatusReporting
+           and the video in ...\Shared\Estimating\Completed\... — the same share, so a relative
+           path walks to it and NOTHING HAS TO BE COPIED. A capture this size should exist once.
+           If the report is ever filed somewhere else, either fix this one line or copy the video
+           to a media\ folder beside it and use  src="media/<name>.mp4"  instead. -->
       <video controls preload="none" playsinline
-             src="media/12422-24-estimating-intelligence-demo.mp4">
+             src="../../../Estimating/Completed/AI%20Estimating/AISheets/Boots/12422-24/2026-08-05%2013-12-03.mp4">
       </video>
     </div>
 
     <div class="vfall">
-      <b>If the player above is empty</b>, the video has not been copied alongside this report. It can be opened
-      directly from the share:<br>
+      <b>If the player above is empty</b>, this report is not filed in its usual place and the relative path to the
+      video no longer resolves. It can always be opened directly from the share:<br>
       <a href="file://sdi-dc01/shareddata%24/Shared/Estimating/Completed/AI%20Estimating/AISheets/Boots/12422-24/2026-08-05%2013-12-03.mp4">\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets\Boots\12422-24\2026-08-05 13-12-03.mp4</a>
       <p class="vcap" style="margin-top:8px">The video is not embedded in this file — the report stays a few tens of
       kilobytes and opens instantly. Nothing downloads until play is pressed.</p>
