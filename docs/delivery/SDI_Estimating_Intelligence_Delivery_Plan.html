@@ -100,7 +100,7 @@
   <div class="kpi"><span class="k">Working days left</span><div class="v">22</div><div class="n">31 Aug is a bank holiday</div></div>
   <div class="kpi"><span class="k">Overall RAG</span><div class="v amber">AMBER</div><div class="n">Date held; two key dependencies</div></div>
   <div class="kpi"><span class="k">Gates met</span><div class="v amber">2 / 8</div><div class="n">4 in progress, 2 not started</div></div>
-  <div class="kpi"><span class="k">Estimator feedback</span><div class="v">4 returned</div><div class="n">2 in progress · testing stepped up</div></div>
+  <div class="kpi"><span class="k">Estimator feedback</span><div class="v">4 returned</div><div class="n">2 under way · testing stepped up</div></div>
   <div class="kpi"><span class="k">Jobs with estimators</span><div class="v">8 run</div><div class="n">Boots 2 · M&amp;S 4 · Tesco 2</div></div>
   <div class="kpi"><span class="k">Plan effort</span><div class="v">586 h</div><div class="n">39 tasks across 7 phases</div></div>
 </div>
@@ -126,13 +126,15 @@
 
 <div class="banner bad">
   <div class="t">Dependency 1 — Estimating capacity</div>
-  <p>Estimating capacity is a real constraint. There is a very large volume of live work in the queue,
-     and that has made feedback on estimate tests difficult to date. The acceptance gates need
-     estimator review as their evidence, so the pace of validation sets the pace to launch.</p>
-  <p><strong>The position has improved this week.</strong> James Ryan has increased testing and
-     re-affirmed his support, <strong>reviewing four estimates in short order</strong>, and will look at
-     the two Tesco jobs sent to engineering estimations by Nick Garrish. Tim has received two live
-     estimates and has started on them.</p>
+  <p>The acceptance gates take estimator review as their evidence, so <strong>the plan is paced around
+     the validation the estimating team can accommodate</strong> — not the other way round. That team is
+     carrying a very large volume of live customer work, which is exactly why the plan has to be built on
+     what is realistic rather than on what would suit the launch date.</p>
+  <p><strong>The position has improved this week, and that is down to estimating.</strong> James Ryan
+     has increased testing and re-affirmed his support, <strong>reviewing four estimates in short
+     order</strong>, and will look at the two Tesco jobs sent to engineering estimations by Nick Garrish.
+     <strong>Tim has been genuinely busy this week and has still picked up both live estimates and started
+     on them.</strong> Four reviewed and two under way against that workload is good going.</p>
   <p><strong>Next step:</strong> agree together how much validation time can realistically be found
      alongside the live queue, and report reviews completed each week, so the plan reflects what is
      achievable.</p>
@@ -271,8 +273,9 @@
         <td>Launch date confirmed, v1 definition of done written with exclusions, reverse plan dated,
             Jira board live, testing calendar protected, parked backlog registered.</td></tr>
     <tr><td><strong>2. Estimator validation</strong></td><td class="mono">3 Aug–2 Sep</td><td>James Ryan · Tim · Dave</td>
-        <td>Feedback backlog cleared; four parallel-run weeks completed to the agreed customer spread;
-            benefit baseline established; accuracy evidenced against DXF/PDF/hand-drawn targets.</td></tr>
+        <td>Reviews returned at the agreed achievable rate; four parallel-run weeks completed to the
+            agreed customer spread; benefit baseline established; accuracy evidenced against
+            DXF/PDF/hand-drawn targets.</td></tr>
     <tr><td><strong>3. Engine release candidate</strong></td><td class="mono">3–25 Aug</td><td>James Gray</td>
         <td>Silent-settings audit closed, price origins labelled, DWG read path deployed, all critical
             defects closed, <strong>v1.0-rc1 frozen 25 August</strong>.</td></tr>
@@ -306,7 +309,7 @@
 <h2><span class="n">05</span>Infrastructure assessment and required spend</h2>
 
 <p>All AI work currently runs on three developer laptops. That is the single largest operational risk
-   in the programme after the feedback backlog: the production estimating capability, its output
+   in the programme after validation throughput: the production estimating capability, its output
    history and its learning corpus sit on machines that are not backed up as servers, not resilient
    and not available to anyone else.</p>
 
@@ -363,11 +366,12 @@
 <table>
   <thead><tr><th style="width:26%">Risk</th><th style="width:9%">Impact</th><th>Mitigation and owner</th></tr></thead>
   <tbody>
-    <tr><td><strong>Estimating capacity limits validation throughput</strong></td>
+    <tr><td><strong>Validation throughput is limited by live estimating workload</strong></td>
         <td><span class="pill part">Med</span></td>
-        <td>Live customer estimating comes first and the queue is large, but testing has stepped up —
-            four reviewed in short order. Standard feedback form by 7 Aug to reduce the time each review
-            takes; reviews completed reported weekly. <em>James Ryan.</em></td></tr>
+        <td>The live queue is large and rightly comes first, and testing has stepped up alongside it —
+            four reviewed in short order. Our mitigation is to make each review cheaper: standard feedback
+            form by 7 Aug, and the plan built on the rate that is actually achievable.
+            <em>James Gray / James Ryan.</em></td></tr>
     <tr><td><strong>No host available for launch</strong></td><td><span class="pill no">High</span></td>
         <td>Interim host decision by 26 Aug, decoupled from procurement. <em>James Gray / IT.</em></td></tr>
     <tr><td><strong>Capital approval slips past 21 Aug</strong></td><td><span class="pill part">Med</span></td>
@@ -396,9 +400,9 @@
       evidenced alternative. This plan holds the date. <em>Charlotte, by 6 Aug.</em></li>
   <li><strong>Agree hand-drawn packs are out of v1 scope</strong> and parked. They have no test data and
       the agreed accuracy target is 40–50%. <em>Charlotte / James Ryan.</em></li>
-  <li><strong>Agree the validation rate that is achievable</strong> alongside the live estimating
-      queue, so the plan is built on it. Four returned and two in progress is a good start.
-      <em>James Ryan, by 7 Aug.</em></li>
+  <li><strong>Agree the validation rate that is achievable</strong> alongside the live estimating queue,
+      so the plan is built on it rather than on an assumption. Four returned and two under way in a very
+      busy week is a good start. <em>James Gray with James Ryan, by 7 Aug.</em></li>
   <li><strong>Approve the interim-host approach</strong> so the launch is not coupled to hardware lead
       time. <em>Charlotte / IT.</em></li>
   <li><strong>Authorise the hardware assessment to proceed to quotation.</strong> <em>Charlotte.</em></li>
