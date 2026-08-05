@@ -83,4 +83,12 @@ Write-Host "SDI Intelligence service" -ForegroundColor Cyan
 Write-Host "    http://localhost:$Port/estimating" -ForegroundColor Cyan
 Write-Host "Ctrl+C to stop."
 Write-Host ""
+
+# THE SECOND WINDOW IS THE ONE PEOPLE FORGET. This service queues estimates; it
+# does not run them. Without a runner the page is correct and useless, and the
+# reason is on a screen nobody is looking at. So say it here, where somebody is.
+Write-Host "This service QUEUES estimates. It does not run them." -ForegroundColor Yellow
+Write-Host "In a second window, start the runner on a machine with SOLIDWORKS:" -ForegroundColor Yellow
+Write-Host "    C:\ClaudeVision\tools\start\start-runner.ps1 -Server http://localhost:$Port" -ForegroundColor Yellow
+Write-Host ""
 & $python $app
