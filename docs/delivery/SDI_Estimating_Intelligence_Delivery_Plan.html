@@ -88,8 +88,8 @@
   <p class="eyebrow">SDI Intelligence &nbsp;·&nbsp; Delivery Plan &amp; Status Report</p>
   <h1>SDI Estimating <span class="mark">Intelligence</span> — Controlled Launch v1</h1>
   <p class="sub">The reverse delivery plan from today to the committed controlled-launch date, the
-     evidence position against the eight minimum acceptance gates, and the two dependencies that
-     actually own the date.</p>
+     evidence position against the eight minimum acceptance gates, and the key dependencies on
+     the way to it.</p>
   <p class="meta">Prepared by SDI Intelligence &nbsp;·&nbsp; 5 August 2026 &nbsp;·&nbsp;
      Responds to the Mission Critical Delivery Directive issued 30 July 2026 by Matt Evans,
      Managing Director &nbsp;·&nbsp; Senior accountable executive: Charlotte Blackwell</p>
@@ -98,9 +98,9 @@
 <div class="kpis">
   <div class="kpi"><span class="k">Controlled launch</span><div class="v">Mon 7 Sep</div><div class="n">Confirmed against directive target</div></div>
   <div class="kpi"><span class="k">Working days left</span><div class="v">22</div><div class="n">31 Aug is a bank holiday</div></div>
-  <div class="kpi"><span class="k">Overall RAG</span><div class="v amber">AMBER</div><div class="n">Date held; two gating dependencies</div></div>
+  <div class="kpi"><span class="k">Overall RAG</span><div class="v amber">AMBER</div><div class="n">Date held; two key dependencies</div></div>
   <div class="kpi"><span class="k">Gates met</span><div class="v amber">2 / 8</div><div class="n">4 in progress, 2 not started</div></div>
-  <div class="kpi"><span class="k">Estimator feedback</span><div class="v">4 returned</div><div class="n">2 in progress · capacity-constrained</div></div>
+  <div class="kpi"><span class="k">Estimator feedback</span><div class="v">4 returned</div><div class="n">2 in progress · testing stepped up</div></div>
   <div class="kpi"><span class="k">Jobs with estimators</span><div class="v">8 run</div><div class="n">Boots 2 · M&amp;S 4 · Tesco 2</div></div>
   <div class="kpi"><span class="k">Plan effort</span><div class="v">586 h</div><div class="n">39 tasks across 7 phases</div></div>
 </div>
@@ -112,32 +112,30 @@
      CAD share, run at a stated order quantity, and a complete deliverable set filed to the shared
      estimating folder with an audit trail — though <strong>in test on the dev lead's laptop only</strong>,
      because there is no server it can run on. <strong>The date is held at Monday 7 September.</strong>
-     It is held on two dependencies that are not engineering work, and neither is inside this
-     department's control: <strong>estimating capacity for validation</strong>, and <strong>a server
-     that can host the service</strong>. Both have owners and dates in the plan below. Neither is
-     currently trending to close on its own.</p>
+     There are some key dependencies on this — <strong>estimating capacity for validation</strong> and
+     <strong>a server that can host the service</strong>. Both have owners and dates in the plan below.</p>
+  <p>Validation is moving. <strong>James Ryan has increased testing and re-affirmed his commitment,
+     reviewing four estimates in short order this past week</strong>, and will look at the two Tesco jobs
+     sent to engineering estimations by Nick Garrish. <strong>Tim has received two live estimates this
+     week and has started on them.</strong> The server dependency is the one not yet trending to
+     close.</p>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
-<h2><span class="n">01</span>The two dependencies that own the date</h2>
+<h2><span class="n">01</span>Key dependencies</h2>
 
 <div class="banner bad">
   <div class="t">Dependency 1 — Estimating capacity</div>
-  <p><strong>Capacity on the estimating side is a real constraint, and it is the constraint.</strong>
-     There is a very large volume of live work to be estimated by the estimating team, and that
-     workload has made feedback on estimate tests near impossible to date. <strong>That position
-     continues.</strong> Four sheets have now been reviewed and returned with two more in progress —
-     genuine progress, but achieved against a queue of real customer work that rightly comes first.</p>
-  <p>The acceptance gates do not ask whether the engine ran. They ask for evidence that an estimator
-     reviewed the output, that differences trace to named assumptions, and that measured time was
-     saved. None of that can be produced by engineering, so <strong>the rate at which reviews are
-     completed sets the launch date</strong> — not the rate at which the engine improves.</p>
-  <p>This is not a reluctance to test; it is arithmetic. Every hour spent reviewing an AI estimate is
-     an hour not spent on an enquiry with a customer waiting. <strong>Validation time therefore has to
-     be protected and planned rather than found.</strong></p>
+  <p>Estimating capacity is a real constraint. There is a very large volume of live work in the queue,
+     and that has made feedback on estimate tests difficult to date. The acceptance gates need
+     estimator review as their evidence, so the pace of validation sets the pace to launch.</p>
+  <p><strong>The position has improved this week.</strong> James Ryan has increased testing and
+     re-affirmed his support, <strong>reviewing four estimates in short order</strong>, and will look at
+     the two Tesco jobs sent to engineering estimations by Nick Garrish. Tim has received two live
+     estimates and has started on them.</p>
   <p><strong>Next step:</strong> agree together how much validation time can realistically be found
      alongside the live queue, and report reviews completed each week, so the plan reflects what is
-     achievable rather than what would be ideal.</p>
+     achievable.</p>
 </div>
 
 <div class="banner bad">
@@ -170,7 +168,7 @@
     <tr><td><strong>Supported scope</strong></td><td><span class="pill part">In progress</span></td>
         <td>DXF-led and PDF-led packs both process. Target accuracy agreed with estimating: DXF 90%,
             PDF 60–70%, hand-drawn 40–50%. Hand-drawn is <strong>not yet scheduled for testing</strong>
-            and is a candidate for explicit exclusion from v1.</td><td class="mono">Task 2 · 6 Aug</td></tr>
+            and is a candidate for explicit exclusion from v1.</td><td class="mono">Task 2 · 7 Aug</td></tr>
 
     <tr><td><strong>No silent failures</strong></td><td><span class="pill part">In progress</span></td>
         <td>Invariant checks run on every job and report blocking versus unverified findings. Two known
@@ -195,8 +193,8 @@
 
     <tr><td><strong>Learning loop</strong></td><td><span class="pill part">In progress</span></td>
         <td>Corrections captured through the knowledge base rank above every automated source and are
-            reused. The gap is the <strong>return route</strong>: there is no standard feedback form,
-            which is part of why only two sheets have come back.</td><td class="mono">Task 7 · 7 Aug</td></tr>
+            reused. The remaining gap is the <strong>return route</strong> — a standard feedback form,
+            so reviewing a sheet takes as little estimator time as possible.</td><td class="mono">Task 7 · 7 Aug</td></tr>
 
     <tr><td><strong>Measured benefit</strong></td><td><span class="pill no">Not started</span></td>
         <td>No baseline exists for current manual effort, so no reduction can yet be evidenced. This is
@@ -206,7 +204,7 @@
     <tr><td><strong>Operational readiness</strong></td><td><span class="pill no">Not started</span></td>
         <td>No SOP, no training delivered, no support route or escalation defined. Also gates on the
             access-control work: the service currently has no user authentication and cannot be put in
-            front of the wider team as it stands.</td><td class="mono">Task 32–34 · 2 Sep</td></tr>
+            front of the wider team as it stands.</td><td class="mono">Task 32–34 · 3 Sep</td></tr>
   </tbody>
 </table>
 </div>
@@ -366,10 +364,10 @@
   <thead><tr><th style="width:26%">Risk</th><th style="width:9%">Impact</th><th>Mitigation and owner</th></tr></thead>
   <tbody>
     <tr><td><strong>Estimating capacity limits validation throughput</strong></td>
-        <td><span class="pill no">High</span></td>
-        <td>Live customer estimating rightly comes first, and the queue is large. Standard feedback form
-            and return route by 7 Aug to remove friction; <strong>protected calendar time</strong>;
-            reviews completed reported weekly. <em>James Ryan.</em></td></tr>
+        <td><span class="pill part">Med</span></td>
+        <td>Live customer estimating comes first and the queue is large, but testing has stepped up —
+            four reviewed in short order. Standard feedback form by 7 Aug to reduce the time each review
+            takes; reviews completed reported weekly. <em>James Ryan.</em></td></tr>
     <tr><td><strong>No host available for launch</strong></td><td><span class="pill no">High</span></td>
         <td>Interim host decision by 26 Aug, decoupled from procurement. <em>James Gray / IT.</em></td></tr>
     <tr><td><strong>Capital approval slips past 21 Aug</strong></td><td><span class="pill part">Med</span></td>
@@ -398,8 +396,8 @@
       evidenced alternative. This plan holds the date. <em>Charlotte, by 6 Aug.</em></li>
   <li><strong>Agree hand-drawn packs are out of v1 scope</strong> and parked. They have no test data and
       the agreed accuracy target is 40–50%. <em>Charlotte / James Ryan.</em></li>
-  <li><strong>Commit protected estimator review time.</strong> Four returned and two in progress is a
-      start, not an evidence base, and it is being achieved against a full live estimating queue.
+  <li><strong>Agree the validation rate that is achievable</strong> alongside the live estimating
+      queue, so the plan is built on it. Four returned and two in progress is a good start.
       <em>James Ryan, by 7 Aug.</em></li>
   <li><strong>Approve the interim-host approach</strong> so the launch is not coupled to hardware lead
       time. <em>Charlotte / IT.</em></li>
