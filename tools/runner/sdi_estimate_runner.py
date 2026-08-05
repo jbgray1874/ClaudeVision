@@ -134,6 +134,54 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
     ]
 
 
+# ── one runner per machine ───────────────────────────────────────────────────
+def claim_the_machine(engine_root: Path):
+    """Refuse to start if a runner is already running here, and say which one.
+
+    ONE DESKTOP, ONE EXCEL, ONE SOLIDWORKS SESSION. Two runners on one machine
+    would drive the same COM automation from two processes, and they cannot even
+    tell each other apart: the runner id is deliberately stable per machine so a
+    restart does not leave the service listing a graveyard of dead runners, which
+    means every process on this box registers as the SAME runner and posts
+    progress the service cannot attribute.
+
+    It is also how a test window opened on Tuesday is still polling on Friday.
+    Five windows, five processes, a claim every second, and a service log in
+    which nothing else can be seen.
+
+    An OS-level lock rather than a pid file, because it is released when the
+    process dies HOWEVER it dies — Ctrl+C, a crash, a closed window, a machine
+    that went to sleep and never came back. A pid file outlives all of those and
+    then refuses to start the runner you actually want."""
+    lock_path = Path(engine_root) / "output" / ".runner.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+")
+    try:
+        try:
+            import msvcrt                                   # Windows
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except ImportError:
+            import fcntl                                    # everywhere else
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.seek(0)
+        who = handle.read().strip() or "another process"
+        handle.close()
+        raise SystemExit(
+            f"\nA runner is already running on this machine ({who}).\n"
+            f"  One runner per machine: SOLIDWORKS and Excel are driven on one\n"
+            f"  desktop, and a second runner here would fight the first for them.\n"
+            f"  Close that window, or check for stray runners with:\n"
+            f"      Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" |\n"
+            f"        Where-Object CommandLine -like '*sdi_estimate_runner*' |\n"
+            f"        Select-Object ProcessId, CommandLine\n")
+    handle.seek(0); handle.truncate()
+    handle.write(f"pid {os.getpid()} on {platform.node()} since "
+                 f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    handle.flush()
+    return handle          # held open for the life of the process; do not close
+
+
 # ── the polling loop ─────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(description="SDI Estimating Intelligence runner")
@@ -153,6 +201,7 @@ def main() -> int:
         return 2
 
     engine_root = Path(a.engine_root)
+    _lock = claim_the_machine(engine_root)          # noqa: F841 — held, not used
     engine_python = Path(a.engine_python) if a.engine_python else \
         engine_root / ".venv" / "Scripts" / "python.exe"
 

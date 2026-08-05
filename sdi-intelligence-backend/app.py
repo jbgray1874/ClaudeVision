@@ -20,6 +20,7 @@ Security
 """
 
 import os
+import logging
 import mimetypes
 from pathlib import Path
 
@@ -203,4 +204,10 @@ app.include_router(estimate_router)
 
 if __name__ == "__main__":
     import uvicorn
+
+    if os.getenv("SDI_LOG_POLLING", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        from log_filters import QuietPolling
+        logging.getLogger("uvicorn.access").addFilter(QuietPolling())
+        print("[log] runner polling is not logged. SDI_LOG_POLLING=1 to see it.")
+
     uvicorn.run(app, host=config.HOST, port=config.PORT)

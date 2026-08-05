@@ -227,3 +227,33 @@ def test_the_run_folder_names_the_quantity(api):
     assert er.run_folder_name(at, 10) != er.run_folder_name(at, 180)
     assert "(10 off)" in er.run_folder_name(at, 10)
     assert "(180 off)" in er.run_folder_name(at, 180)
+
+
+# ── the log filter ───────────────────────────────────────────────────────────
+def test_only_the_quiet_poll_is_hidden_from_the_log(monkeypatch):
+    """A runner polls every five seconds and hiding that keeps the console usable.
+    Hiding anything else would hide the thing somebody is looking for."""
+    import logging
+    monkeypatch.syspath_prepend(str(BACKEND))
+    from log_filters import QuietPolling
+    f = QuietPolling()
+
+    def access(path, status):
+        r = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, "%s", None, None)
+        r.args = ("127.0.0.1:1", "POST", path, "1.1", status)
+        return r
+
+    # hidden: the heartbeat, having done nothing
+    assert not f.filter(access("/api/estimate/runner/claim", 200))
+    assert not f.filter(access("/api/estimate/runners", 200))
+
+    # kept: everything that went wrong, and everything that happened
+    assert f.filter(access("/api/estimate/runner/claim", 401)), "a rejected runner must show"
+    assert f.filter(access("/api/estimate/runner/claim", 500)), "a broken runner must show"
+    assert f.filter(access("/api/estimate", 200)), "a queued job must show"
+    assert f.filter(access("/api/estimate/abc123/complete", 200)), "a finished run must show"
+    assert f.filter(access("/api/files?path=x", 200)), "browsing must show"
+
+    # a record that is not an access log is not ours to judge
+    other = logging.LogRecord("uvicorn.error", logging.ERROR, "", 0, "boom", None, None)
+    assert f.filter(other)
