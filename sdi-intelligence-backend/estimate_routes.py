@@ -5,31 +5,47 @@ Mount in app.py with two lines:
     from estimate_routes import router as estimate_router
     app.include_router(estimate_router)
 
+WHY THIS IS A QUEUE AND NOT A SUBPROCESS ANY MORE.
+
+The engine drives SOLIDWORKS and Excel through COM. COM needs a licensed,
+interactive desktop session — not a Windows service — so whatever runs an
+estimate needs a SOLIDWORKS seat, an Office licence and somebody logged in.
+SDI-APP01 has none of those and cannot get them: it already carries the PDM
+archive service, the SolidNetWork licence manager, the TRUMPF stack and two SQL
+Server instances on 32 GB, and a hung Excel on that box is a PDM outage rather
+than a failed estimate.
+
+So the work moves and the web service stays. This service holds the page, the
+queue and the run history — no COM, no Excel, no seat — and can sit on SDI-APP01
+today. A RUNNER on a machine that does have a seat polls for work, executes it
+locally and reports back.
+
+THE RUNNER DIALS OUT. It is never connected TO. That means no inbound firewall
+rule, no fixed address, and a runner that is somebody's laptop can move desks,
+go home, or join over VPN without anything being reconfigured.
+
+A runner is a ROLE, not a machine. One laptop today, a dedicated host when one
+is bought, two hosts when throughput matters — the same code, and capacity is
+however many are checked in.
+
 Endpoints (all require header  X-SDI-Key: <SDI_API_KEY> when a key is set):
-    POST /api/estimate            start a run  -> {run_id, output_path}
-    GET  /api/estimate/{run_id}   progress     -> {status, log, output_path, deliverables}
-    GET  /api/estimate            every run this service has started
 
-WHY A SUBPROCESS AND NOT AN IMPORT. The engine drives SolidWorks and Excel
-through COM. Importing it into the web service would put COM on the request
-thread and hold the interpreter for minutes; a child process can be waited on,
-logged, and killed without taking the API with it. It also means the service
-survives an engine crash, which matters when an estimator is watching a page.
+    the page
+      POST /api/estimate                 queue a run  -> {run_id, output_path}
+      GET  /api/estimate/{run_id}        progress
+      GET  /api/estimate                 every run this service knows about
+      GET  /api/estimate/runners         who is checked in, and is anyone
 
-WHY THE OUTPUT IS COPIED RATHER THAN WRITTEN DIRECTLY. main.py writes its
-deliverables under output/estimates/ with its own naming. Pointing it at the
-share instead would make the estimating folder the engine's scratch space —
-every partial run, every failed attempt, in the place Tim keeps real files.
-The run completes locally, then its finished artefacts are copied to
-<root>\\<Client>\\<DrawingNumber>. A failed run copies nothing.
+    the runner
+      POST /api/estimate/runner/claim              take the oldest queued run
+      POST /api/estimate/runner/{run_id}/progress  log lines + renew the lease
+      POST /api/estimate/runner/{run_id}/complete  done or failed, with results
 """
 
 from __future__ import annotations
 
 import os
 import re
-import shutil
-import subprocess
 import threading
 import time
 import uuid
@@ -44,27 +60,25 @@ import config
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
 
-# The engine's own checkout. Override with SDI_ENGINE_ROOT if it moves.
-ENGINE_ROOT = Path(os.getenv("SDI_ENGINE_ROOT", r"C:\ClaudeVision"))
-ENGINE_PY = Path(os.getenv("SDI_ENGINE_PYTHON",
-                           str(ENGINE_ROOT / ".venv" / "Scripts" / "python.exe")))
-
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
 # default mapping here and "sometimes falls off", and a service account never has
 # one at all. The UNC form is the only spelling that means the same thing to a
-# laptop today and to the server later.
+# laptop today and to a dedicated host later.
 OUTPUT_ROOT = Path(os.getenv(
     "SDI_ESTIMATE_OUTPUT_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"))
 
-# What the page offers back for download once a run finishes.
-DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
-
-# The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
-# quote/report, which share a folder); the auditable summary lands in json/.
-WATCHED_DIRS = ("estimates", "json")
-
 _MAX_LOG_LINES = 4000
+
+# How long a runner's claim on a run survives without word from it. A laptop that
+# sleeps mid-estimate must not leave a job "running" for ever while an estimator
+# watches a spinner — the lease expires, the run is failed with a reason, and the
+# queue moves on.
+LEASE_SECONDS = int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "180"))
+
+# A runner that has not polled within this is treated as gone, and the page says
+# so rather than quietly queueing work nobody will pick up.
+RUNNER_ONLINE_SECONDS = int(os.getenv("SDI_RUNNER_ONLINE_SECONDS", "90"))
 
 
 # ── access gate, identical to app.py's ───────────────────────────────────────
@@ -117,7 +131,7 @@ def safe_segment(text: Any) -> str:
     return cleaned[:120]
 
 
-# ── run registry ─────────────────────────────────────────────────────────────
+# ── registries ───────────────────────────────────────────────────────────────
 @dataclass
 class Run:
     run_id: str
@@ -126,13 +140,15 @@ class Run:
     units: int
     job_folder: str
     output_path: str
-    status: str = "running"                  # running | done | error
+    status: str = "queued"          # queued | running | done | error
     error: str = ""
-    started_at: float = field(default_factory=time.time)
+    queued_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None      # when a runner claimed it
     finished_at: Optional[float] = None
+    runner: str = ""                        # which runner is doing it
+    lease_until: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
-    before: Dict[str, float] = field(default_factory=dict)   # output tree at start
 
     def line(self, text: str) -> None:
         if len(self.log) < _MAX_LOG_LINES:
@@ -141,152 +157,77 @@ class Run:
             self.log.append("… log truncated; the full console is in the run's .log file")
 
     def as_json(self) -> Dict[str, Any]:
+        ref = self.started_at or self.queued_at
         return {
             "run_id": self.run_id, "status": self.status, "error": self.error,
             "client": self.client, "drawing_number": self.drawing_number,
             "units": self.units, "output_path": self.output_path,
+            "job_folder": self.job_folder, "runner": self.runner,
             "log": self.log, "deliverables": self.deliverables,
-            "started_at": self.started_at, "finished_at": self.finished_at,
-            "seconds": round((self.finished_at or time.time()) - self.started_at, 1),
+            "queued_at": self.queued_at, "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "seconds": round((self.finished_at or time.time()) - ref, 1),
         }
 
 
+@dataclass
+class Runner:
+    runner_id: str
+    hostname: str = ""
+    last_seen: float = field(default_factory=time.time)
+    run_id: str = ""                       # what it is working on, if anything
+
+    @property
+    def online(self) -> bool:
+        return (time.time() - self.last_seen) <= RUNNER_ONLINE_SECONDS
+
+    def as_json(self) -> Dict[str, Any]:
+        return {"runner_id": self.runner_id, "hostname": self.hostname,
+                "online": self.online, "run_id": self.run_id,
+                "seconds_since_seen": round(time.time() - self.last_seen, 1)}
+
+
 _RUNS: Dict[str, Run] = {}
+_RUNNERS: Dict[str, Runner] = {}
 _LOCK = threading.Lock()
 
 
-def _active() -> Optional[Run]:
-    """ONE ESTIMATE AT A TIME, service-wide — not one per destination.
+def _expire_dead_claims() -> None:
+    """A GATE NOBODY ASKS REPORTS NOTHING, so this is called on every request that
+    reads or changes the queue rather than left to a timer that might not be
+    running. A claim whose lease has run out means the runner stopped talking —
+    lid closed, VPN dropped, process killed — and the run must be failed with a
+    reason rather than left looking busy for ever."""
+    now = time.time()
+    for run in _RUNS.values():
+        if run.status == "running" and run.lease_until and run.lease_until < now:
+            run.status = "error"
+            run.error = (f"The runner ({run.runner or 'unknown'}) stopped responding "
+                         f"{int(now - run.lease_until) + LEASE_SECONDS}s into the run. "
+                         f"Nothing was filed. If that machine went to sleep or lost the "
+                         f"network, start the runner again and re-run the job.")
+            run.line(run.error)
+            run.finished_at = now
+            r = _RUNNERS.get(run.runner)
+            if r is not None and r.run_id == run.run_id:
+                r.run_id = ""
 
-    Two reasons, and either alone would be enough. The engine drives SolidWorks
-    and Excel through COM against a single interactive desktop; two concurrent
-    automations of one Excel instance is not a supported thing to do, whatever
-    folders they write to. And _collect identifies a run's output by what
-    appeared in the output tree while it ran, which is only unambiguous if one
-    run is doing the appearing."""
+
+def _online_runners() -> List[Runner]:
+    return [r for r in _RUNNERS.values() if r.online]
+
+
+def _busy_runner() -> Optional[Run]:
+    """ONE ESTIMATE AT A TIME PER RUNNER. Two concurrent automations of one Excel
+    instance on one desktop is not a supported thing to do, whatever folders they
+    write to. Capacity comes from more runners, not from more parallel COM."""
     for run in _RUNS.values():
         if run.status == "running":
             return run
     return None
 
 
-def _snapshot() -> Dict[str, float]:
-    """Every file in the watched output folders, with its modification time."""
-    seen: Dict[str, float] = {}
-    for name in WATCHED_DIRS:
-        folder = ENGINE_ROOT / "output" / name
-        if not folder.is_dir():
-            continue
-        for item in folder.iterdir():
-            try:
-                if item.is_file():
-                    seen[str(item)] = item.stat().st_mtime
-            except OSError:
-                continue
-    return seen
-
-
-# ── the run itself ───────────────────────────────────────────────────────────
-def _collect(run: Run) -> None:
-    """Copy this run's finished artefacts to the share.
-
-    IDENTIFIED BY WHAT APPEARED, NOT BY WHAT IT IS CALLED. This used to match
-    filenames against the job folder's name, on the belief that main.py builds
-    every output name from it. It does not: the HTML quote is named from the job
-    STEM (12422-24-GA_End Cap_RevB_quote.html) and the workbook from the job
-    NUMBER (12422-24_<timestamp>.xlsx). One matcher, two conventions — so the
-    reports were filed and the spreadsheet, the thing an estimator actually
-    opens, was left behind without a word.
-
-    A name is a guess about the engine's internals; the output tree before and
-    after is an observation of what this run did. Anything new, or rewritten,
-    while the run was going is the run's. That holds for deliverables nobody has
-    written yet, which is the point — this must not need editing every time the
-    engine learns to emit another file."""
-    dest = Path(run.output_path)
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        run.line(f"[collect] cannot create {dest} — {exc}")
-        raise
-
-    after = _snapshot()
-    fresh = [Path(p) for p, mtime in sorted(after.items())
-             if run.before.get(p) is None or mtime > run.before[p]]
-
-    found = 0
-    for item in fresh:
-        if item.suffix.lower() not in DELIVERABLE_SUFFIXES:
-            continue
-        try:
-            shutil.copy2(item, dest / item.name)
-            run.deliverables.append({"name": item.name, "path": str(dest / item.name)})
-            found += 1
-        except OSError as exc:
-            run.line(f"[collect] could not copy {item.name} — {exc}")
-
-    run.line(f"[collect] {found} file(s) written to {dest}")
-    if not found:
-        run.line("[collect] NOTHING was copied. The engine exited cleanly but wrote "
-                 "nothing new into output\\estimates or output\\json — check the log "
-                 "above for what it did instead.")
-
-    # The console is part of the record, and is written LAST so it contains the
-    # collect result too. An estimate filed on a share with no account of how it
-    # was produced is a number nobody can go back and check.
-    try:
-        transcript = dest / f"{safe_segment(run.drawing_number)}_run.log"
-        transcript.write_text("\n".join(run.log) + "\n", encoding="utf-8")
-        run.deliverables.append({"name": transcript.name, "path": str(transcript)})
-    except OSError as exc:
-        run.line(f"[collect] could not write the run log — {exc}")
-
-
-def _execute(run: Run) -> None:
-    job = Path(run.job_folder)
-    cmd = [
-        str(ENGINE_PY) if ENGINE_PY.is_file() else "python",
-        str(ENGINE_ROOT / "src" / "main.py"),
-        "--job", str(job),
-        "--order-qty", str(run.units),
-        "--deliverables",                    # always, as the page promises
-        "--customer", run.client,
-    ]
-    run.line("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
-    try:
-        proc = subprocess.Popen(
-            cmd, cwd=str(ENGINE_ROOT), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-            errors="replace", bufsize=1,
-        )
-    except OSError as exc:
-        run.status, run.error = "error", f"Could not start the engine: {exc}"
-        run.line(run.error); run.finished_at = time.time()
-        return
-
-    assert proc.stdout is not None
-    for text in proc.stdout:
-        run.line(text)
-    code = proc.wait()
-
-    if code != 0:
-        run.status = "error"
-        run.error = f"The engine exited with code {code}. Nothing was filed."
-        run.line(run.error)
-        run.finished_at = time.time()
-        return
-
-    try:
-        _collect(run)
-        run.status = "done"
-    except Exception as exc:                 # noqa: BLE001 — surface, never swallow
-        run.status = "error"
-        run.error = f"The estimate ran but could not be filed: {exc}"
-        run.line(run.error)
-    run.finished_at = time.time()
-
-
-# ── request model ────────────────────────────────────────────────────────────
+# ── request models ───────────────────────────────────────────────────────────
 class EstimateRequest(BaseModel):
     client: str
     drawing_number: str
@@ -297,6 +238,126 @@ class EstimateRequest(BaseModel):
     deliverables: bool = True
 
 
+class ClaimRequest(BaseModel):
+    runner_id: str
+    hostname: str = ""
+
+
+class ProgressRequest(BaseModel):
+    runner_id: str
+    lines: List[str] = []
+
+
+class CompleteRequest(BaseModel):
+    runner_id: str
+    status: str                              # done | error
+    error: str = ""
+    lines: List[str] = []
+    deliverables: List[Dict[str, str]] = []
+
+
+# ══ THE RUNNER'S ENDPOINTS ═══════════════════════════════════════════════════
+# DECLARED BEFORE /{run_id}. FastAPI matches in declaration order, and a path
+# parameter will happily swallow "runner" as a run id if given the chance.
+
+@router.get("/runners")
+def runners(x_sdi_key: Optional[str] = Header(default=None)):
+    """Who is checked in. The page asks this so it can say "no runner is
+    connected" instead of queueing work that nobody will ever pick up."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        _expire_dead_claims()
+        listed = [r.as_json() for r in sorted(_RUNNERS.values(),
+                                              key=lambda r: r.last_seen, reverse=True)]
+        online = [r for r in listed if r["online"]]
+        queued = sum(1 for run in _RUNS.values() if run.status == "queued")
+    return {"runners": listed, "online": len(online), "queued": queued}
+
+
+@router.post("/runner/claim")
+def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A runner asking for work. Returns a run to execute, or nothing."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        _expire_dead_claims()
+        runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        runner.hostname = req.hostname or runner.hostname
+        runner.last_seen = now
+
+        if _busy_runner() is not None:
+            return {"run": None, "reason": "another run is in progress"}
+
+        queued = sorted((r for r in _RUNS.values() if r.status == "queued"),
+                        key=lambda r: r.queued_at)
+        if not queued:
+            return {"run": None, "reason": "nothing queued"}
+
+        run = queued[0]
+        run.status = "running"
+        run.runner = req.runner_id
+        run.started_at = now
+        run.lease_until = now + LEASE_SECONDS
+        runner.run_id = run.run_id
+        run.line(f"Claimed by runner {req.hostname or req.runner_id}")
+
+    return {"run": {
+        "run_id": run.run_id, "client": run.client, "units": run.units,
+        "drawing_number": run.drawing_number, "job_folder": run.job_folder,
+        "output_path": run.output_path,
+    }}
+
+
+@router.post("/runner/{run_id}/progress")
+def progress(run_id: str, req: ProgressRequest,
+             x_sdi_key: Optional[str] = Header(default=None)):
+    """Log lines from the engine, and the heartbeat that renews the lease."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run.")
+        if run.runner != req.runner_id:
+            raise HTTPException(409, "That run is claimed by a different runner.")
+        if run.status != "running":
+            raise HTTPException(409, f"That run is {run.status}, not running.")
+        for text in req.lines:
+            run.line(text)
+        run.lease_until = now + LEASE_SECONDS
+        r = _RUNNERS.get(req.runner_id)
+        if r is not None:
+            r.last_seen = now
+    return {"ok": True, "lease_seconds": LEASE_SECONDS}
+
+
+@router.post("/runner/{run_id}/complete")
+def complete(run_id: str, req: CompleteRequest,
+             x_sdi_key: Optional[str] = Header(default=None)):
+    """The runner reporting the outcome. The runner files the deliverables — it
+    is the machine that has them — and tells us what it wrote."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run.")
+        if run.runner != req.runner_id:
+            raise HTTPException(409, "That run is claimed by a different runner.")
+        for text in req.lines:
+            run.line(text)
+        run.status = "done" if req.status == "done" else "error"
+        run.error = req.error
+        run.deliverables = list(req.deliverables)
+        run.finished_at = now
+        run.lease_until = 0.0
+        r = _RUNNERS.get(req.runner_id)
+        if r is not None:
+            r.last_seen, r.run_id = now, ""
+    return {"ok": True}
+
+
+# ══ THE PAGE'S ENDPOINTS ═════════════════════════════════════════════════════
 @router.post("")
 def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
@@ -324,39 +385,38 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         raise HTTPException(
             403, "That folder is outside the shares this service may read. "
                  "Add it to SDI_FILE_ROOTS if it should be readable.")
-    if not job.is_dir():
-        raise HTTPException(404, f"No such folder: {job}")
+    # NOTE: existence is NOT checked here. This service may not be able to see the
+    # share at all — that is rather the point of a runner — so the runner checks,
+    # and reports a missing folder as a failed run with a reason.
 
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
-    started = time.time()
+    queued_at = time.time()
     drawing_folder = root / client / drawing
-    out = drawing_folder / run_folder_name(started, req.units)
+    out = drawing_folder / run_folder_name(queued_at, req.units)
 
-    # ONE RUN AT A TIME. The page disables its button, and a page is not a
-    # guarantee — two browsers, or a refresh, and there are two.
     with _LOCK:
-        busy = _active()
+        _expire_dead_claims()
+        if not _online_runners():
+            raise HTTPException(
+                503, "No estimating runner is connected, so there is nothing to run "
+                     "this job. Start the runner on a machine with SOLIDWORKS and "
+                     "Excel, then try again.")
+        busy = _busy_runner()
         if busy is not None:
             raise HTTPException(
                 409, f"An estimate is already running — {busy.drawing_number} for "
-                     f"{busy.client}, started {int(time.time() - busy.started_at)}s "
-                     f"ago. The engine drives SolidWorks and Excel on one desktop, "
-                     f"so estimates run one after another. Try again when it finishes.")
+                     f"{busy.client}, started {int(time.time() - (busy.started_at or 0))}s "
+                     f"ago. SOLIDWORKS and Excel are driven on one desktop, so "
+                     f"estimates run one after another.")
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out),
-                  started_at=started)
-        # Taken INSIDE the lock and BEFORE the engine starts, so nothing the run
-        # produces can land in its own "before" picture.
-        run.before = _snapshot()
+                  queued_at=queued_at)
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
     run.line(f"Reading   {job}")
     run.line(f"Filing to {out}")
-    threading.Thread(target=_execute, args=(run,), daemon=True,
-                     name=f"estimate-{run.run_id}").start()
-    # Both paths back: the drawing's folder is what the estimator navigates to,
-    # the run folder is where THIS set of deliverables will be.
+    run.line("Queued — waiting for a runner to pick it up.")
     return {"run_id": run.run_id, "output_path": str(out),
             "drawing_folder": str(drawing_folder)}
 
@@ -364,7 +424,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
 @router.get("/{run_id}")
 def status(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
-    run = _RUNS.get(run_id)
+    with _LOCK:
+        _expire_dead_claims()
+        run = _RUNS.get(run_id)
     if run is None:
         raise HTTPException(404, "No such run. The service may have restarted.")
     return run.as_json()
@@ -372,8 +434,11 @@ def status(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
 
 @router.get("")
 def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
-    """Every run this service has started, newest first. In memory only — a
+    """Every run this service has queued, newest first. In memory only — a
     restart forgets them, and the estimates themselves are on the share."""
     _check_key(x_sdi_key)
-    runs = sorted(_RUNS.values(), key=lambda r: r.started_at, reverse=True)[:limit]
-    return {"runs": [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]}
+    with _LOCK:
+        _expire_dead_claims()
+        runs = sorted(_RUNS.values(), key=lambda r: r.queued_at, reverse=True)[:limit]
+        out = [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]
+    return {"runs": out}

@@ -136,6 +136,13 @@
       </div>
       <p class="req" id="req"></p>
 
+      <div class="dest" id="runnerBox" style="border-left-color:var(--dim);margin-bottom:14px">
+        <span class="k">Estimating runner</span>
+        <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
+        <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
+           queues the job; the runner does the work and files the result.</p>
+      </div>
+
       <div class="dest">
         <span class="k">Output folder</span>
         <div class="p" id="destPath"><span class="pending">Enter a client and drawing number</span></div>
@@ -229,6 +236,7 @@ const api = (p,o={}) => fetch(p,{...o,headers:{"X-SDI-Key":API_KEY,...(o.headers
 const $ = id => document.getElementById(id);
 const units=$("units"), client=$("client"), drawing=$("drawing");
 const runBtn=$("run"), destPath=$("destPath"), req=$("req");
+const runnerBox=$("runnerBox"), runnerText=$("runnerText");
 const fileList=$("fileList"), fileEmpty=$("fileEmpty");
 const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
 
@@ -255,6 +263,7 @@ function refresh(){
   if(!safe(client.value))             missing.push("client");
   if(!safe(drawing.value))            missing.push("drawing number");
   if(!drawings.length)                missing.push("at least one drawing");
+  if(!runnersOnline)                  missing.push("an estimating runner (none connected)");
 
   // Once a run has started, keep showing the folder the SERVER stamped — that is
   // where the files actually are, and "where did it go?" is the first question
@@ -269,6 +278,38 @@ function refresh(){
   req.textContent = running ? "" : (missing.length ? "Still needed: " + missing.join(", ") : "");
 }
 [units,client,drawing].forEach(el => el.addEventListener("input", refresh));
+
+/* ── IS THERE ANYTHING TO RUN THE JOB? ────────────────────────────────
+   The work happens on a runner, not here. If none is connected, pressing
+   the button would put a job on a queue nobody is draining — which looks
+   exactly like working until somebody goes looking for the estimate. So
+   the page asks, says so plainly, and keeps the button disabled. */
+let runnersOnline = 0;
+async function checkRunners(){
+  try{
+    const r = await api("/api/estimate/runners");
+    if(!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    runnersOnline = d.online || 0;
+    const live = (d.runners||[]).filter(x => x.online);
+    if(runnersOnline){
+      runnerBox.style.borderLeftColor = "var(--ok)";
+      runnerText.textContent = live.map(x => x.hostname || x.runner_id).join(", ")
+        + (d.queued ? `  ·  ${d.queued} queued` : "  ·  ready");
+    }else{
+      runnerBox.style.borderLeftColor = "var(--bad)";
+      runnerText.innerHTML = '<span style="color:var(--bad)">No runner connected — '
+        + 'estimates cannot be run</span>';
+    }
+  }catch(e){
+    runnersOnline = 0;
+    runnerBox.style.borderLeftColor = "var(--bad)";
+    runnerText.innerHTML = '<span style="color:var(--bad)">Cannot reach the service</span>';
+  }
+  refresh();
+}
+checkRunners();
+setInterval(checkRunners, 15000);
 
 function renderFiles(){
   fileList.innerHTML = "";
@@ -570,7 +611,13 @@ runBtn.onclick = async () => {
     try{ s = await (await api("/api/estimate/"+runId)).json(); }
     catch(e){ return; }                    // a dropped poll is not a failed run
     (s.log||[]).slice(seen).forEach(line); seen = (s.log||[]).length;
-    if(s.status === "running") return;
+    // "Queued" is a real state now and the estimator should see it rather than a
+    // spinner that means nothing: the job is waiting for a runner to take it.
+    if(s.status === "queued"){ setStatus("run","Queued"); return; }
+    if(s.status === "running"){
+      setStatus("run", s.runner ? "Running on " + s.runner : "Running");
+      return;
+    }
     clearInterval(poll); poll=null; running=false; refresh();
     if(s.status === "done"){
       setStatus("ok","Complete");
