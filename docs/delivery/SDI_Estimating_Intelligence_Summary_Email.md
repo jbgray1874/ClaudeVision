@@ -39,9 +39,12 @@ workload.
 assembly hierarchy from the SolidWorks models is applied so an operation charged on a parent is not
 charged again on its child, and every run reports its own gaps rather than absorbing them.
 
-**Licensing is settled.** No separate SolidWorks API licence is required — the engine uses the COM
-API included with a seat. The seat and an Office licence *are* required on whichever machine runs
-estimates, and both are now carried in the hardware specification.
+**Licensing is settled, and it is a cost.** The engine requires the **SolidWorks COM API at £1,000
+per quarter — £4,000 a year**. It binds that API directly and cannot function without it, so this
+is a required recurring operating cost of the service rather than a discretionary licence. The free
+Document Manager API is not a substitute: it reads document metadata, where the engine has to drive
+SolidWorks and Excel directly. A SolidWorks seat and an Office licence are also required on
+whichever machine runs estimates.
 
 ## Key risks
 
@@ -96,7 +99,8 @@ launch dependency.
 1. Confirm **7 September** as the committed controlled-launch date.
 2. Approve the **interim-host approach**, so launch is not coupled to hardware lead time.
 3. Authorise the **hardware assessment to proceed to quotation** — dedicated estimating host,
-   memory uplift for SDI-APP01, one SolidWorks seat and one Office licence.
+   memory uplift for SDI-APP01, one SolidWorks seat and one Office licence — and **approve the
+   SolidWorks COM API licence at £1,000 per quarter** as a recurring operating cost of the service.
 4. Agree **hand-drawn packs are out of v1** and parked.
 5. Agree the **validation rate** that is realistically achievable alongside the live estimating
    queue, so the plan is built on it rather than on an assumption.

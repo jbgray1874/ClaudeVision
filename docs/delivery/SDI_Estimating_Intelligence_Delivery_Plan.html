@@ -371,10 +371,13 @@
       estate it already runs, irrespective of this programme.</li>
   <li><strong>SOLIDWORKS seat and Office licence</strong> for the runner account. Without both, the
       host is provisioned and unusable — COM automation cannot run headless.</li>
-  <li><strong>No separate API licence is required.</strong> The engine binds <code>SldWorks.Application</code> —
-      the COM API included with any SOLIDWORKS seat, at no additional per-quarter charge. The key-licensed
-      Document Manager API serves the Design Automation workstream and <strong>is not a substitute</strong>: it
-      cannot carry estimating, so the seat and the Office licence must both be in the specification.</li>
+  <li><strong>SOLIDWORKS COM API licence — £1,000 per quarter, £4,000 a year.</strong> The engine binds
+      <code>SldWorks.Application</code> directly and cannot function without it, so this is a required cost
+      rather than a discretionary one. The Document Manager API is licensed at no charge and needs no
+      interactive session, but it reads document metadata rather than driving SOLIDWORKS and Excel — it
+      <strong>cannot carry estimating</strong>, so the cost stands.
+      <strong>This one is recurring, not capital</strong>, and belongs in the operating budget for the service
+      rather than in the one-off hardware case.</li>
   <li><strong>Domain service account</strong> <code>SDI\svc-sdiintel</code> with read on the CAD share,
       modify on AISheets, and <em>Allow log on locally</em>. Requested 5 August.</li>
 </ul>

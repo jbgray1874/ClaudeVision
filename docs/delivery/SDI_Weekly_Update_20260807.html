@@ -172,9 +172,9 @@
     run with estimators</b> across Boots, M&amp;S and Tesco, with <b>four sheets reviewed and returned and two
     more in progress</b> — a real step up from estimating in a very busy week. Two key dependencies remain:
     <b>validation capacity alongside a heavy live estimating queue</b> and <b>a server that cannot host this</b>.
-    A licensing review confirms the
-    engine uses the SOLIDWORKS COM API that comes with a seat — <b>the seat and the Office licence are both
-    necessary and cannot be substituted</b>.</p>
+    A licensing review confirms the engine
+    requires the <b>SOLIDWORKS COM API at £1,000 per quarter</b> — a cost this programme must carry, and one
+    that cannot be avoided by using the free Document Manager API instead.</p>
   </div>
 
   <div class="kpis">
@@ -397,8 +397,10 @@
       <li><b>Dedicated AI / estimating host</b>, kept separate from the PDM estate.</li>
       <li><b>Memory uplift for SDI-APP01</b> — 32 GB is under-provisioned for the PDM and TRUMPF estate it already
       runs, irrespective of this programme.</li>
-      <li><b>One SOLIDWORKS seat and one Office licence</b> for the runner account. <b>Both are necessary</b> — the
-      engine automates SOLIDWORKS and Excel directly and there is no licence-free substitute.</li>
+      <li><b>SOLIDWORKS COM API licence — £1,000 per quarter, £4,000 a year.</b> Required; the engine binds it
+      directly and there is no licence-free substitute.</li>
+      <li><b>One SOLIDWORKS seat and one Office licence</b> for the runner account. The engine automates SOLIDWORKS
+      and Excel directly and cannot run headless.</li>
       <li class="next"><b>Domain service account</b> <code>SDI\svc-sdiintel</code> — read on the CAD share, modify on
       AISheets, and <i>Allow log on locally</i>. Requested from IT on 5 August.</li>
     </ul>
@@ -408,11 +410,11 @@
   <h2><span class="ic">£</span> Licensing review — SolidWorks APIs</h2>
 
   <div class="panel lead">
-    <h3>What the engine actually requires <span class="badge b-plan"><span class="dot info"></span>Confirmed</span></h3>
+    <h3>The COM API is a required cost — £4,000 a year <span class="badge b-prog"><span class="dot warn"></span>Budget Item</span></h3>
     <div class="owner">Owner · James Gray</div>
 
-    <p>The question was raised this week of whether the server needs a separate SolidWorks API licence. A review of
-    what the estimating engine binds to gives a clear answer, and it has a bearing on the hardware specification.</p>
+    <p>The question was raised this week of which SolidWorks API the estimating engine needs and what it costs. A
+    review of what the engine actually binds to gives a clear answer, and it is a cost rather than a saving.</p>
 
     <table>
       <thead>
@@ -421,31 +423,31 @@
       <tbody>
         <tr class="star">
           <td><b>SOLIDWORKS API</b> (COM)<br><code>SldWorks.Application</code></td>
-          <td>Included with any SOLIDWORKS seat. <b>No separate key, no additional cost.</b></td>
-          <td><b class="good">Yes — this is the one</b></td>
+          <td><b class="bad">£1,000 per quarter — £4,000 a year.</b></td>
+          <td><b class="good">Yes — this is the one the engine uses</b></td>
           <td>A SOLIDWORKS seat, installed, with an interactive session</td>
         </tr>
         <tr>
           <td><b>Document Manager API</b><br><span style="font-size:11.5px;color:var(--ink-faint)">SwDocumentMgr</span></td>
-          <td><b>Key-licensed — £1,000 per quarter.</b></td>
+          <td><b class="good">No charge.</b> Key-licensed at no cost</td>
           <td><b>No</b> — serves the Design Automation workstream</td>
           <td>A licence key only. No SOLIDWORKS install, no session</td>
         </tr>
       </tbody>
     </table>
 
-    <div class="strip green">
-      <b>Conclusion — no additional API licence is needed for Estimating.</b> The engine uses the COM API, which is
-      included with a SOLIDWORKS seat SDI already licenses through SolidNetWork. There is no separate per-quarter
-      API charge to add for this programme.
+    <div class="strip red">
+      <b>Conclusion — the COM API is a required, recurring cost of £4,000 a year.</b> The estimating engine binds
+      the COM API directly and cannot function without it. This is not a discretionary licence and it should be
+      budgeted as an operating cost of the service, alongside the SOLIDWORKS seat and the Office licence the
+      estimating host also needs.
     </div>
 
     <div class="strip">
-      <b>What this does mean is that the seat itself is not optional.</b> The COM API is the reason the estimating
-      host needs a SOLIDWORKS seat, an Office licence and an interactive session — it drives SOLIDWORKS and Excel
-      directly, and cannot run headless. The Document Manager API is a different tool serving a different purpose in
-      the Design Automation workstream; <b>it is not a substitute for the COM API</b> and cannot carry estimating.
-      <b>The seat and the Office licence must be carried in the hardware specification.</b>
+      <b>The free option does not replace it.</b> Document Manager is licensed at no charge and needs no SOLIDWORKS
+      install or interactive session, which makes it attractive on paper — but it is a different tool for a
+      different job and <b>cannot carry estimating</b>. It reads document metadata; the engine needs to drive
+      SOLIDWORKS and Excel directly. There is no route to the same output without the COM API, so the cost stands.
     </div>
   </div>
 
@@ -536,9 +538,9 @@
       <li class="risk"><b>No server can host this</b> — SDI-APP01 cannot take an interactive SOLIDWORKS and Excel
       workload beside PDM and two SQL instances on 32 GB. Launch proceeds on an interim host; permanent hardware
       procured in parallel. <span class="badge b-risk">Spend Required</span></li>
-      <li><b>Licensing confirmed</b> — no separate API licence is needed for Estimating; the COM API comes with a
-      SOLIDWORKS seat. <b>The seat and an Office licence are both required</b> on the estimating host and must be
-      carried in the hardware specification. <span class="badge b-plan">Confirmed</span></li>
+      <li><b>Licensing confirmed as a cost, not a saving</b> — the engine requires the <b>COM API at £1,000 per
+      quarter (£4,000 a year)</b>, plus a SOLIDWORKS seat and an Office licence on the estimating host. The free
+      Document Manager API is not a substitute. <span class="badge b-prog">Budget Item</span></li>
       <li><b>Model Engine</b> — order quantity honoured end to end, assembly hierarchy applied to costing, thickness
       read from the arbitrated source, deliverables can no longer be silently lost.
       <span class="badge b-live">Landed</span></li>
