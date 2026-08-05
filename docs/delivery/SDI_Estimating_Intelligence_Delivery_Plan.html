@@ -100,7 +100,7 @@
   <div class="kpi"><span class="k">Working days left</span><div class="v">22</div><div class="n">31 Aug is a bank holiday</div></div>
   <div class="kpi"><span class="k">Overall RAG</span><div class="v amber">AMBER</div><div class="n">Date held; two gating dependencies</div></div>
   <div class="kpi"><span class="k">Gates met</span><div class="v amber">2 / 8</div><div class="n">4 in progress, 2 not started</div></div>
-  <div class="kpi"><span class="k">Estimator feedback</span><div class="v bad">2 returned</div><div class="n">The single biggest risk to the date</div></div>
+  <div class="kpi"><span class="k">Estimator feedback</span><div class="v">4 returned</div><div class="n">2 in progress · capacity-constrained</div></div>
   <div class="kpi"><span class="k">Jobs with estimators</span><div class="v">8 run</div><div class="n">Boots 2 · M&amp;S 4 · Tesco 2</div></div>
   <div class="kpi"><span class="k">Plan effort</span><div class="v">594 h</div><div class="n">39 tasks across 7 phases</div></div>
 </div>
@@ -110,10 +110,11 @@
   <p>The engine works and the workflow is now proven end to end. On 5 August a live enquiry was
      estimated entirely through the SDI Estimating Intelligence web page — drawings selected from the
      CAD share, run at a stated order quantity, and a complete deliverable set filed to the shared
-     estimating folder with an audit trail. <strong>The date is held at Monday 7 September.</strong>
+     estimating folder with an audit trail — though <strong>in test on the dev lead's laptop only</strong>,
+     because there is no server it can run on. <strong>The date is held at Monday 7 September.</strong>
      It is held on two dependencies that are not engineering work, and neither is inside this
-     department's control: <strong>volume of estimator feedback</strong>, and <strong>a server that
-     can host the service</strong>. Both have owners and dates in the plan below. Neither is
+     department's control: <strong>estimating capacity for validation</strong>, and <strong>a server
+     that can host the service</strong>. Both have owners and dates in the plan below. Neither is
      currently trending to close on its own.</p>
 </div>
 
@@ -121,19 +122,22 @@
 <h2><span class="n">01</span>The two dependencies that own the date</h2>
 
 <div class="banner bad">
-  <div class="t">Dependency 1 — Estimator validation evidence</div>
-  <p>Estimating sheets have been shipped for parallel comparison over several weeks.
-     <strong>Two have come back.</strong> The acceptance gates do not ask whether the engine ran; they
-     ask for evidence that an estimator reviewed the output, that differences trace to named
-     assumptions, and that measured time was saved. None of that can be produced by engineering.
-     Every one of those gates is closed by a returned sheet.</p>
-  <p>The agreed capacity is <strong>four parallel estimates per day</strong> (two each from James Ryan
-     and Tim), which is 20 per week and is sufficient for the plan. The constraint is not capacity —
-     it is that reviewed sheets are not being returned. This is the item most likely to move
-     7 September, and it will move it silently unless the return rate is reported weekly from now.</p>
-  <p><strong>Action:</strong> James Ryan to confirm how many sheets have been shipped against the two
-     returned, and to hold named, protected review time in the calendar. Directive rule:
-     <em>users are delivery owners — estimator testing is planned work, not an optional favour.</em></p>
+  <div class="t">Dependency 1 — Estimating capacity</div>
+  <p><strong>Capacity on the estimating side is a real constraint, and it is the constraint.</strong>
+     There is a very large volume of live work to be estimated by the estimating team, and that
+     workload has made feedback on estimate tests near impossible to date. <strong>That position
+     continues.</strong> Four sheets have now been reviewed and returned with two more in progress —
+     genuine progress, but achieved against a queue of real customer work that rightly comes first.</p>
+  <p>The acceptance gates do not ask whether the engine ran. They ask for evidence that an estimator
+     reviewed the output, that differences trace to named assumptions, and that measured time was
+     saved. None of that can be produced by engineering, so <strong>the rate at which reviews are
+     completed sets the launch date</strong> — not the rate at which the engine improves.</p>
+  <p>This is not a reluctance to test; it is arithmetic. Every hour spent reviewing an AI estimate is
+     an hour not spent on an enquiry with a customer waiting. <strong>Validation time therefore has to
+     be protected and planned rather than found.</strong></p>
+  <p><strong>Action:</strong> James Ryan to hold named, protected review time in the calendar, and to
+     report reviews completed each week. Directive rule: <em>users are delivery owners — estimator
+     testing is planned work, not an optional favour.</em></p>
 </div>
 
 <div class="banner bad">
@@ -339,8 +343,8 @@
   <li><strong>SOLIDWORKS seat and Office licence</strong> for the runner account. Without both, the
       host is provisioned and unusable — COM automation cannot run headless.</li>
   <li><strong>No API licence is required.</strong> The engine binds <code>SldWorks.Application</code> — the
-      COM API included with any SOLIDWORKS seat. The key-licensed <strong>Document Manager API at £1,000 per
-      quarter is not used anywhere in the estimating pipeline</strong>. That is £4,000 a year this programme
+      COM API included with any SOLIDWORKS seat. The key-licensed <strong>Document Manager API — the £1,000 per
+      quarter licence — is not used anywhere in the estimating pipeline</strong>. That is £4,000 a year this programme
       does not need to carry; if the licence is retained it should be justified by the workstream that uses it.</li>
   <li><strong>Domain service account</strong> <code>SDI\svc-sdiintel</code> with read on the CAD share,
       modify on AISheets, and <em>Allow log on locally</em>. Requested 5 August.</li>
@@ -373,10 +377,11 @@
 <table>
   <thead><tr><th style="width:26%">Risk</th><th style="width:9%">Impact</th><th>Mitigation and owner</th></tr></thead>
   <tbody>
-    <tr><td><strong>Estimator feedback does not arrive at the required rate</strong></td>
+    <tr><td><strong>Estimating capacity limits validation throughput</strong></td>
         <td><span class="pill no">High</span></td>
-        <td>Standard feedback form and return route by 7 Aug; protected calendar time; weekly reporting
-            of shipped-versus-returned in the delivery dashboard. <em>James Ryan.</em></td></tr>
+        <td>Live customer estimating rightly comes first, and the queue is large. Standard feedback form
+            and return route by 7 Aug to remove friction; <strong>protected calendar time</strong>;
+            reviews completed reported weekly. <em>James Ryan.</em></td></tr>
     <tr><td><strong>No host available for launch</strong></td><td><span class="pill no">High</span></td>
         <td>Interim host decision by 26 Aug, decoupled from procurement. <em>James Gray / IT.</em></td></tr>
     <tr><td><strong>Capital approval slips past 21 Aug</strong></td><td><span class="pill part">Med</span></td>
@@ -405,8 +410,9 @@
       evidenced alternative. This plan holds the date. <em>Charlotte, by 6 Aug.</em></li>
   <li><strong>Agree hand-drawn packs are out of v1 scope</strong> and parked. They have no test data and
       the agreed accuracy target is 40–50%. <em>Charlotte / James Ryan.</em></li>
-  <li><strong>Confirm the shipped-versus-returned sheet count</strong> and commit protected estimator
-      review time. Two returned is not an evidence base. <em>James Ryan, by 7 Aug.</em></li>
+  <li><strong>Commit protected estimator review time.</strong> Four returned and two in progress is a
+      start, not an evidence base, and it is being achieved against a full live estimating queue.
+      <em>James Ryan, by 7 Aug.</em></li>
   <li><strong>Approve the interim-host approach</strong> so the launch is not coupled to hardware lead
       time. <em>Charlotte / IT.</em></li>
   <li><strong>Authorise the hardware assessment to proceed to quotation.</strong> <em>Charlotte.</em></li>

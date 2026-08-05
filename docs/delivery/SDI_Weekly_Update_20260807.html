@@ -155,28 +155,30 @@
     <h1>Latest Update — AI Digital Transformation</h1>
     <p class="sub">The week SDI Estimating Intelligence stopped being a command line. <b>An estimator can now run a
     live enquiry from a web page</b> — pick the drawings, set the quantity, press one button — and a complete
-    deliverable set is filed to the estimating share with a full audit trail. Proven end to end on Wednesday.
-    <b>Eight jobs have been run with estimators</b> across Boots, M&amp;S and Tesco. Two hard constraints now
-    own the launch date and neither is engineering: <b>estimator feedback</b> (two sheets returned) and
-    <b>a server that cannot host this</b>. A licensing review this week also found £4,000 a year that
-    Estimating does not need to spend.</p>
+    deliverable set is filed to the estimating share with a full audit trail. Proven end to end on Wednesday,
+    <b>but in test on the dev lead's laptop only</b> — it cannot yet run on the server. <b>Eight jobs have been
+    run with estimators</b> across Boots, M&amp;S and Tesco, with <b>four sheets reviewed and returned and two
+    more in progress</b>. Two hard constraints now own the launch date and neither is engineering:
+    <b>estimating capacity</b> and <b>a server that cannot host this</b>. A licensing review also established
+    that the <b>£1,000-per-quarter SolidWorks Document Manager API licence is not used by Estimating</b> —
+    £4,000 a year this programme should not be carrying.</p>
   </div>
 
   <div class="kpis">
     <div class="k">
       <div class="lab">Estimating Intelligence</div>
-      <div class="big good">Live E2E</div>
-      <div class="meta">Web page → filed estimate · 5 Aug</div>
+      <div class="big up" style="font-size:19px;line-height:1.2">On Dev Lead<br>Laptop</div>
+      <div class="meta">In test · not deployable to server</div>
     </div>
     <div class="k">
       <div class="lab">Jobs with estimators</div>
       <div class="big acc">8 Run</div>
       <div class="meta">Boots ×2 · M&amp;S ×4 · Tesco ×2</div>
     </div>
-    <div class="k risk">
+    <div class="k">
       <div class="lab">Feedback returned</div>
-      <div class="big bad">2 Sheets</div>
-      <div class="meta">Against many shipped · principal risk</div>
+      <div class="big acc">4 Returned</div>
+      <div class="meta">2 further reviews in progress</div>
     </div>
     <div class="k risk">
       <div class="lab">Host for launch</div>
@@ -252,12 +254,11 @@
         </tr>
         <tr>
           <td><b>M&amp;S set</b></td><td>M&amp;S</td><td>James Ryan</td><td class="n">4</td>
-          <td>Four jobs run and shipped. Awaiting review.</td>
+          <td><b>Reviewed by James Ryan.</b> Four jobs run, shipped and returned.</td>
         </tr>
         <tr>
           <td><b>Tesco set</b></td><td>Tesco</td><td>Nick</td><td class="n">2</td>
-          <td>Two jobs being priced this week for Nick — the first work routed through an account manager rather
-          than estimating directly.</td>
+          <td>Two jobs being priced this week for Nick. <b>Awaiting details.</b></td>
         </tr>
       </tbody>
     </table>
@@ -272,23 +273,21 @@
   <!-- ===================== RISK ===================== -->
   <h2><span class="ic">!</span> Principal risk — estimator feedback</h2>
   <div class="panel alert">
-    <h3>Two sheets returned <span class="badge b-risk"><span class="dot bad"></span>Risk to launch date</span></h3>
+    <h3>Four returned, two in progress <span class="badge b-risk"><span class="dot bad"></span>Risk to launch date</span></h3>
     <div class="owner">Dependency · James Ryan &nbsp;·&nbsp; Tim &nbsp;·&nbsp; Dave</div>
 
-    <p>Estimating sheets have been shipped for parallel comparison over several weeks. <b>Two have come back.</b>
-    The engineering side is not blocked — jobs continue to run and defects continue to close — but
-    <b>the launch gates are</b>.</p>
-
-    <p>This matters more than it did in July, because the acceptance gates set out in the Delivery Directive do not
-    ask whether the engine ran. They ask for evidence that an estimator <b>reviewed</b> the output, that differences
-    <b>trace to named assumptions</b>, and that <b>measured time was saved</b>. None of that can be produced by
-    engineering. <b>Every open gate is closed by a returned sheet.</b></p>
-
     <div class="strip red">
-      <b>Capacity is not the constraint — return rate is.</b> The agreed capacity of four estimates a day is
-      sufficient for the plan. What is missing is reviewed sheets coming back. This is the item most likely to move
-      7 September, and it will move it <b>silently</b> unless shipped-versus-returned is reported every week from now.
+      <b>Capacity on the estimating side is a real constraint, and it is the constraint.</b> There is a very large
+      volume of live work to be estimated by the estimating team, and that workload has made feedback on estimate
+      tests near impossible to date. <b>That position continues.</b> Four sheets have now been reviewed and
+      returned with two more in progress — genuine progress, but achieved against a queue of real customer work
+      that rightly comes first, and no plan should assume otherwise.
     </div>
+
+    <p>This is not a reluctance to test. It is arithmetic: every hour spent reviewing an AI estimate is an hour not
+    spent on an enquiry with a customer waiting. <b>Validation time therefore has to be protected and planned, not
+    found.</b> The Delivery Directive says as much — <i>estimator testing is planned work, not spare-time
+    activity</i> — and this is the week that stops being a principle and becomes a diary entry.</p>
 
     <ul class="clean">
       <li class="next"><b>Landing this week</b> — a standard feedback form and a defined return route, so a review
@@ -499,15 +498,15 @@
       <span class="badge b-live">Developer Testing</span></li>
       <li><b>Eight jobs run with estimators</b> — Boots ×2 (Tim), M&amp;S ×4 (James Ryan), Tesco ×2 (Nick). TTi and
       hand-drawn not yet covered. <span class="badge b-prog">Awaiting Review</span></li>
-      <li class="risk"><b>Estimator feedback is the principal risk</b> — two sheets returned. Every open acceptance
-      gate is closed by a returned sheet, and none of them can be closed by engineering.
-      <span class="badge b-risk">Risk</span></li>
+      <li class="risk"><b>Estimating capacity is the principal risk</b> — four sheets reviewed and returned, two in
+      progress, against a very large queue of live customer estimating that comes first. Validation time must be
+      protected and planned rather than found. <span class="badge b-risk">Risk</span></li>
       <li class="risk"><b>No server can host this</b> — SDI-APP01 cannot take an interactive SOLIDWORKS and Excel
       workload beside PDM and two SQL instances on 32 GB. Launch proceeds on an interim host; permanent hardware
       procured in parallel. <span class="badge b-risk">Spend Required</span></li>
-      <li class="ok"><b>£4,000 a year identified as not required</b> — the estimating engine uses the COM API included
-      with a SOLIDWORKS seat, not the key-licensed Document Manager API.
-      <span class="badge b-done">Saving</span></li>
+      <li class="ok"><b>£4,000 a year identified as not required</b> — the £1,000-per-quarter <b>Document Manager
+      API</b> licence. The estimating engine uses the COM API included with a SOLIDWORKS seat and does not
+      reference Document Manager anywhere. <span class="badge b-done">Saving</span></li>
       <li><b>Model Engine</b> — order quantity honoured end to end, assembly hierarchy applied to costing, thickness
       read from the arbitrated source, deliverables can no longer be silently lost.
       <span class="badge b-live">Landed</span></li>
