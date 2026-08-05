@@ -144,6 +144,56 @@ def test_the_console_is_filed_with_the_estimate(engine):
     assert "[collect]" in text, "the transcript must include the filing result itself"
 
 
+def test_a_rerun_cannot_overwrite_an_earlier_estimate(engine):
+    """The quote is named from the job STEM with no timestamp, so in a flat folder
+    a second run replaced the report belonging to the first run's workbook — and
+    the workbook, being timestamped, stayed. An estimator opening the older
+    spreadsheet then got a report for a different estimate with nothing saying so.
+
+    One folder per run. Nothing is ever overwritten."""
+    er, root = engine
+    est = root / "output" / "estimates"
+    drawing_folder = root / "share" / "Boots" / "12422-24"
+
+    first_at = 1_760_000_000.0
+    second_at = first_at + 3_600          # an hour later, same drawing
+
+    for at, workbook in ((first_at, "12422-24_20260805_100000.xlsx"),
+                         (second_at, "12422-24_20260805_110000.xlsx")):
+        dest = drawing_folder / er.run_folder_name(at, 10)
+        run = er.Run(run_id="t", client="Boots", drawing_number="12422-24", units=10,
+                     job_folder=str(root / "12422-24-GA_End Cap_RevB"),
+                     output_path=str(dest), started_at=at)
+        run.before = er._snapshot()
+        time.sleep(0.01)
+        (est / workbook).write_text(f"workbook for {at}")
+        # Same name every run — this is the file that used to be clobbered.
+        (est / "12422-24-GA_End Cap_RevB_quote.html").write_text(f"quote for {at}")
+        er._collect(run)
+
+    runs = sorted(p for p in drawing_folder.iterdir() if p.is_dir())
+    assert len(runs) == 2, f"expected one folder per run, got {[p.name for p in runs]}"
+
+    for at, folder, workbook in ((first_at, runs[0], "12422-24_20260805_100000.xlsx"),
+                                 (second_at, runs[1], "12422-24_20260805_110000.xlsx")):
+        assert (folder / workbook).is_file(), f"{workbook} missing from {folder.name}"
+        quote = folder / "12422-24-GA_End Cap_RevB_quote.html"
+        assert quote.read_text() == f"quote for {at}", (
+            f"{folder.name} holds a quote from a different run — this is the defect")
+
+    assert runs[0].name < runs[1].name, "folder name order must be time order"
+
+
+def test_the_run_folder_names_the_quantity(engine):
+    """Two estimates of one drawing at different quantities are different
+    estimates, and the quantity is the one thing a timestamp cannot tell you."""
+    er, _ = engine
+    at = 1_760_000_000.0
+    assert er.run_folder_name(at, 10) != er.run_folder_name(at, 180)
+    assert "(10 off)" in er.run_folder_name(at, 10)
+    assert "(180 off)" in er.run_folder_name(at, 180)
+
+
 def test_nothing_written_is_said_out_loud(engine):
     """A gate nobody asks reports nothing. If the engine exits 0 and writes no
     deliverable, the page must say so rather than showing an empty success."""

@@ -139,7 +139,9 @@
       <div class="dest">
         <span class="k">Output folder</span>
         <div class="p" id="destPath"><span class="pending">Enter a client and drawing number</span></div>
-        <p class="note">Created automatically if it does not exist. Written to the share, never to a local disk.</p>
+        <p class="note">Created automatically if it does not exist. Written to the share, never to a
+           local disk. Each run files into its own dated sub-folder here, so re-running a drawing
+           never overwrites an earlier estimate.</p>
       </div>
 
       <button class="btn-run" id="run" disabled>SDI Intelligence Estimator</button>
@@ -237,6 +239,7 @@ let poll     = null;
 /* ── a folder name must survive being a folder name ─────────────────── */
 const safe = s => String(s||"").trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").replace(/\s+/g," ").replace(/\.+$/,"");
 
+let runDest = null;          // the dated run folder the server stamped, once known
 function destination(){
   const c = safe(client.value), d = safe(drawing.value);
   return (c && d) ? `${OUTPUT_ROOT}\\${c}\\${d}` : "";
@@ -253,8 +256,13 @@ function refresh(){
   if(!safe(drawing.value))            missing.push("drawing number");
   if(!drawings.length)                missing.push("at least one drawing");
 
+  // Once a run has started, keep showing the folder the SERVER stamped — that is
+  // where the files actually are, and "where did it go?" is the first question
+  // after a run. It falls away by itself when the client or drawing changes,
+  // because the guessed path is no longer a prefix of it.
   const d = destination();
-  destPath.innerHTML = d ? d : '<span class="pending">Enter a client and drawing number</span>';
+  const show = (runDest && d && runDest.startsWith(d + "\\")) ? runDest : d;
+  destPath.innerHTML = show ? show : '<span class="pending">Enter a client and drawing number</span>';
 
   runBtn.disabled = running || missing.length > 0;
   runBtn.textContent = running ? "Estimating…" : "SDI Intelligence Estimator";
@@ -470,6 +478,7 @@ function setStatus(cls, text){ dot.className = "dot " + cls; statusText.textCont
 
 runBtn.onclick = async () => {
   if(running || runBtn.disabled) return;
+  runDest = null;              // the previous run's folder is not this run's
   running = true; refresh();
   log.innerHTML=""; out.innerHTML="";
   setStatus("run","Running");
@@ -491,7 +500,12 @@ runBtn.onclick = async () => {
     const r = await api("/api/estimate",{method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
-    runId = (await r.json()).run_id;
+    const started = await r.json();
+    runId = started.run_id;
+    // The SERVER decides where this run files — it stamps the folder with the
+    // start time, and the page must show the folder that exists rather than the
+    // one it guessed a second earlier.
+    if(started.output_path){ runDest = started.output_path; refresh(); }
   }catch(e){
     setStatus("err","Failed to start"); line("Could not start the run — "+e.message);
     running=false; refresh(); return;

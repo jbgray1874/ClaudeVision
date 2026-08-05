@@ -88,6 +88,25 @@ def _within_a_root(target: str) -> Optional[Path]:
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
+def run_folder_name(started_at: float, units: int) -> str:
+    """The name of the folder ONE run files into.
+
+    NOTHING IS EVER OVERWRITTEN. Every run of a drawing lands in its own folder,
+    so a re-run cannot replace the quote belonging to an earlier workbook — which
+    is what made the flat layout wrong. The engine names the workbook from the job
+    NUMBER with a timestamp and the quote from the job STEM without one, so a
+    second run left two spreadsheets beside a single report that described only
+    the newer of them. An estimator opening the older one got a report for a
+    different estimate, with nothing on screen saying so.
+
+    Sortable-first date, so Explorer's default name order is time order. The
+    quantity is in the name because a re-run at a different quantity is a
+    DIFFERENT ESTIMATE, and it is the one thing you cannot tell from a timestamp.
+    """
+    stamp = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(started_at))
+    return f"{stamp} ({int(units)} off)"
+
+
 def safe_segment(text: Any) -> str:
     """A client name and a drawing number become FOLDER names, and a folder name
     is not free text. Windows refuses some characters outright and silently
@@ -309,7 +328,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         raise HTTPException(404, f"No such folder: {job}")
 
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
-    out = root / client / drawing
+    started = time.time()
+    drawing_folder = root / client / drawing
+    out = drawing_folder / run_folder_name(started, req.units)
 
     # ONE RUN AT A TIME. The page disables its button, and a page is not a
     # guarantee — two browsers, or a refresh, and there are two.
@@ -322,7 +343,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                      f"ago. The engine drives SolidWorks and Excel on one desktop, "
                      f"so estimates run one after another. Try again when it finishes.")
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
-                  units=int(req.units), job_folder=str(job), output_path=str(out))
+                  units=int(req.units), job_folder=str(job), output_path=str(out),
+                  started_at=started)
         # Taken INSIDE the lock and BEFORE the engine starts, so nothing the run
         # produces can land in its own "before" picture.
         run.before = _snapshot()
@@ -333,7 +355,10 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     run.line(f"Filing to {out}")
     threading.Thread(target=_execute, args=(run,), daemon=True,
                      name=f"estimate-{run.run_id}").start()
-    return {"run_id": run.run_id, "output_path": str(out)}
+    # Both paths back: the drawing's folder is what the estimator navigates to,
+    # the run folder is where THIS set of deliverables will be.
+    return {"run_id": run.run_id, "output_path": str(out),
+            "drawing_folder": str(drawing_folder)}
 
 
 @router.get("/{run_id}")
