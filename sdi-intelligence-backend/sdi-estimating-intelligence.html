@@ -329,20 +329,51 @@ function showRoots(){
     li.onclick=()=>navigate(r.path); listing.appendChild(li);
   });
 }
+function containingRoot(path){
+  // The longest configured root this path sits inside, or null if it sits in none.
+  const p = (path || "").toUpperCase();
+  let best = null;
+  roots.forEach(r => {
+    const R = (r.path || "").toUpperCase();
+    if(R && (p === R || p.startsWith(R + "\\")))
+      if(!best || r.path.length > best.length) best = r.path;
+  });
+  return best;
+}
+function within(path, root){
+  const p = (path||"").toUpperCase(), r = (root||"").toUpperCase();
+  return p === r || p.startsWith(r + "\\");
+}
+
 function parentOf(path){
   // null means "there is no folder above this one" — the share list, not an error.
   const p = (path || "").replace(/\\+$/, "");
   if(!p) return null;
+
+  // A SHARE HAS A TOP, AND IT IS NOT THE TOP OF THE SERVER. Above
+  // ...\AI Estimating\AISheets is ...\AI Estimating, which is not a configured
+  // root and which the service refuses to read. Walking up into it turned "go
+  // back" into "Path is outside the allowed roots" — the same being-stuck the
+  // crumbs were meant to cure, one level higher. The list of shares is the real
+  // parent of a share, so say so and let the caller show it.
+  const root = containingRoot(p);
+  if(root && within(p, root) && p.toUpperCase() === root.toUpperCase()) return null;
   const parts = p.split("\\").filter(Boolean);
+  let up;
   if(p.startsWith("\\\\")){
     // \\server\share is the shallowest LISTABLE folder on a UNC path. Above it
     // is not \\server — that is a machine, and nothing on this page can read it.
     if(parts.length <= 2) return null;
-    return "\\\\" + parts.slice(0, -1).join("\\");
+    up = "\\\\" + parts.slice(0, -1).join("\\");
+  } else {
+    if(parts.length <= 1) return null;
+    up = parts.slice(0, -1).join("\\");
+    if(/^[A-Za-z]:$/.test(up)) up += "\\";        // C: is not a folder; C:\ is
   }
-  if(parts.length <= 1) return null;
-  const up = parts.slice(0, -1).join("\\");
-  return /^[A-Za-z]:$/.test(up) ? up + "\\" : up;   // C: is not a folder; C:\ is
+  // Belt and braces for a root reached by a deeper path than the one we started
+  // from: if the step lands outside every share, it is not a step back.
+  if(root && !within(up, root)) return null;
+  return up;
 }
 function refreshUp(){
   // At a share root there IS still somewhere to go — back to the list of shares.
@@ -363,7 +394,22 @@ dlg.addEventListener("keydown", ev => {
 
 function renderCrumbs(path){
   crumbs.innerHTML = "";
+  // Segments ABOVE the share this path lives in are shown but not offered. They
+  // are part of the path and the estimator should see them; they are also not
+  // readable by this service, and a crumb that answers a click with "Path is
+  // outside the allowed roots" is worse than one that never invited it.
+  // The crumbs are built from the share root downwards, so a segment is reachable
+  // exactly when it is at or below the configured root — i.e. no shorter than it.
+  const root = containingRoot(path);
+  const reachable = acc => !root || acc.length >= root.length;
+
   const step = (label, target) => {
+    if (target && !reachable(target)){
+      crumbs.appendChild(Object.assign(document.createElement("span"),
+        {textContent: label, title: target + " — above the shared folder",
+         style: "color:var(--dim)"}));
+      return;
+    }
     const b = document.createElement("button");
     b.textContent = label;
     b.title = target || "All shares";
