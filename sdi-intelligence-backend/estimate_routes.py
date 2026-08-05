@@ -60,6 +60,10 @@ OUTPUT_ROOT = Path(os.getenv(
 # What the page offers back for download once a run finishes.
 DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
 
+# The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
+# quote/report, which share a folder); the auditable summary lands in json/.
+WATCHED_DIRS = ("estimates", "json")
+
 _MAX_LOG_LINES = 4000
 
 
@@ -109,6 +113,7 @@ class Run:
     finished_at: Optional[float] = None
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
+    before: Dict[str, float] = field(default_factory=dict)   # output tree at start
 
     def line(self, text: str) -> None:
         if len(self.log) < _MAX_LOG_LINES:
@@ -131,26 +136,54 @@ _RUNS: Dict[str, Run] = {}
 _LOCK = threading.Lock()
 
 
-def _active_for(output_path: str) -> Optional[Run]:
-    key = os.path.normcase(output_path)
+def _active() -> Optional[Run]:
+    """ONE ESTIMATE AT A TIME, service-wide — not one per destination.
+
+    Two reasons, and either alone would be enough. The engine drives SolidWorks
+    and Excel through COM against a single interactive desktop; two concurrent
+    automations of one Excel instance is not a supported thing to do, whatever
+    folders they write to. And _collect identifies a run's output by what
+    appeared in the output tree while it ran, which is only unambiguous if one
+    run is doing the appearing."""
     for run in _RUNS.values():
-        if run.status == "running" and os.path.normcase(run.output_path) == key:
+        if run.status == "running":
             return run
     return None
 
 
+def _snapshot() -> Dict[str, float]:
+    """Every file in the watched output folders, with its modification time."""
+    seen: Dict[str, float] = {}
+    for name in WATCHED_DIRS:
+        folder = ENGINE_ROOT / "output" / name
+        if not folder.is_dir():
+            continue
+        for item in folder.iterdir():
+            try:
+                if item.is_file():
+                    seen[str(item)] = item.stat().st_mtime
+            except OSError:
+                continue
+    return seen
+
+
 # ── the run itself ───────────────────────────────────────────────────────────
-def _collect(run: Run, stem_hint: str) -> None:
+def _collect(run: Run) -> None:
     """Copy this run's finished artefacts to the share.
 
-    Matched on the job folder's name, which is what main.py builds every output
-    filename from, and filtered to files written DURING this run — an estimates
-    folder accumulates, and yesterday's workbook for the same drawing must not
-    be filed as today's result."""
-    src = ENGINE_ROOT / "output" / "estimates"
-    if not src.is_dir():
-        run.line(f"[collect] no {src} — nothing to copy")
-        return
+    IDENTIFIED BY WHAT APPEARED, NOT BY WHAT IT IS CALLED. This used to match
+    filenames against the job folder's name, on the belief that main.py builds
+    every output name from it. It does not: the HTML quote is named from the job
+    STEM (12422-24-GA_End Cap_RevB_quote.html) and the workbook from the job
+    NUMBER (12422-24_<timestamp>.xlsx). One matcher, two conventions — so the
+    reports were filed and the spreadsheet, the thing an estimator actually
+    opens, was left behind without a word.
+
+    A name is a guess about the engine's internals; the output tree before and
+    after is an observation of what this run did. Anything new, or rewritten,
+    while the run was going is the run's. That holds for deliverables nobody has
+    written yet, which is the point — this must not need editing every time the
+    engine learns to emit another file."""
     dest = Path(run.output_path)
     try:
         dest.mkdir(parents=True, exist_ok=True)
@@ -158,15 +191,14 @@ def _collect(run: Run, stem_hint: str) -> None:
         run.line(f"[collect] cannot create {dest} — {exc}")
         raise
 
-    key = stem_hint.lower()
+    after = _snapshot()
+    fresh = [Path(p) for p, mtime in sorted(after.items())
+             if run.before.get(p) is None or mtime > run.before[p]]
+
     found = 0
-    for item in sorted(src.iterdir()):
-        if not item.is_file() or item.suffix.lower() not in DELIVERABLE_SUFFIXES:
+    for item in fresh:
+        if item.suffix.lower() not in DELIVERABLE_SUFFIXES:
             continue
-        if key and key not in item.name.lower():
-            continue
-        if item.stat().st_mtime < run.started_at - 5:
-            continue                        # older than this run: not ours
         try:
             shutil.copy2(item, dest / item.name)
             run.deliverables.append({"name": item.name, "path": str(dest / item.name)})
@@ -174,20 +206,21 @@ def _collect(run: Run, stem_hint: str) -> None:
         except OSError as exc:
             run.line(f"[collect] could not copy {item.name} — {exc}")
 
-    # The saved JSON lives elsewhere and is the auditable record of the run.
-    js = ENGINE_ROOT / "output" / "json" / f"{stem_hint}.json"
-    if js.is_file() and js.stat().st_mtime >= run.started_at - 5:
-        try:
-            shutil.copy2(js, dest / js.name)
-            run.deliverables.append({"name": js.name, "path": str(dest / js.name)})
-            found += 1
-        except OSError as exc:
-            run.line(f"[collect] could not copy {js.name} — {exc}")
-
     run.line(f"[collect] {found} file(s) written to {dest}")
     if not found:
-        run.line("[collect] NOTHING was copied. The run finished but produced no "
-                 "artefact this service could identify — check the log above.")
+        run.line("[collect] NOTHING was copied. The engine exited cleanly but wrote "
+                 "nothing new into output\\estimates or output\\json — check the log "
+                 "above for what it did instead.")
+
+    # The console is part of the record, and is written LAST so it contains the
+    # collect result too. An estimate filed on a share with no account of how it
+    # was produced is a number nobody can go back and check.
+    try:
+        transcript = dest / f"{safe_segment(run.drawing_number)}_run.log"
+        transcript.write_text("\n".join(run.log) + "\n", encoding="utf-8")
+        run.deliverables.append({"name": transcript.name, "path": str(transcript)})
+    except OSError as exc:
+        run.line(f"[collect] could not write the run log — {exc}")
 
 
 def _execute(run: Run) -> None:
@@ -225,7 +258,7 @@ def _execute(run: Run) -> None:
         return
 
     try:
-        _collect(run, job.name)
+        _collect(run)
         run.status = "done"
     except Exception as exc:                 # noqa: BLE001 — surface, never swallow
         run.status = "error"
@@ -278,17 +311,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
     out = root / client / drawing
 
-    # ONE RUN PER DESTINATION. Two estimates writing one folder is how a set of
-    # deliverables ends up half from each; the page disables its button, and a
-    # page is not a guarantee.
+    # ONE RUN AT A TIME. The page disables its button, and a page is not a
+    # guarantee — two browsers, or a refresh, and there are two.
     with _LOCK:
-        busy = _active_for(str(out))
+        busy = _active()
         if busy is not None:
             raise HTTPException(
-                409, f"An estimate for {client} / {drawing} is already running "
-                     f"(started {int(time.time() - busy.started_at)}s ago).")
+                409, f"An estimate is already running — {busy.drawing_number} for "
+                     f"{busy.client}, started {int(time.time() - busy.started_at)}s "
+                     f"ago. The engine drives SolidWorks and Excel on one desktop, "
+                     f"so estimates run one after another. Try again when it finishes.")
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out))
+        # Taken INSIDE the lock and BEFORE the engine starts, so nothing the run
+        # produces can land in its own "before" picture.
+        run.before = _snapshot()
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
