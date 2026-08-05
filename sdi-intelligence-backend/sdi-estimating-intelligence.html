@@ -307,7 +307,7 @@ async function openBrowser(m){
   dAll.style.display = (m==="files") ? "" : "none";
   dHelp.textContent = m==="files" ? "Click files to select. Click a folder to open it."
                     : m==="folder" ? "Open a folder, then Use this folder."
-                    : "";
+                    : "Click a file to open it. Reports open in a tab; workbooks download.";
   if(!roots.length){
     try{ roots = (await (await api("/api/roots")).json()).roots || []; }
     catch(e){ roots = []; }
@@ -421,6 +421,13 @@ async function navigate(path){
                 +`<span class="meta">${size}</span>`;
     li.onclick = () => {
       if(it.is_dir){ navigate(it.path); return; }
+      // BROWSING FINISHED WORK MEANS READING IT. Listing an estimate you cannot
+      // open is a directory listing, not a deliverable — the quote and the
+      // decision report render in a tab, the workbook downloads for Excel.
+      if(mode==="output"){
+        window.open("/api/file?path="+encodeURIComponent(it.path), "_blank", "noopener");
+        return;
+      }
       if(mode!=="files") return;
       const on = li.getAttribute("aria-selected")==="true";
       li.setAttribute("aria-selected", on ? "false" : "true");

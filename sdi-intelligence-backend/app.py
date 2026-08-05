@@ -112,6 +112,14 @@ def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=No
     return {"path": str(folder), "items": items}
 
 
+# What a browser can usefully SHOW rather than save. A quote or a decision report
+# is meant to be read; landing it in Downloads and making someone find it again is
+# the difference between a report and a file. Everything else — the workbook above
+# all — belongs in Excel, so it downloads.
+_VIEWABLE = {".html", ".htm", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+             ".txt", ".log", ".md", ".json", ".mp4", ".webm"}
+
+
 @app.get("/api/file")
 def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
     check_key(x_sdi_key)
@@ -122,9 +130,20 @@ def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None
         raise HTTPException(status_code=404, detail="File not found")
     if not _allowed_ext(target):
         raise HTTPException(status_code=415, detail=f"Extension {target.suffix} is not served")
+
     media_type, _ = mimetypes.guess_type(str(target))
+    inline = target.suffix.lower() in _VIEWABLE
+    headers = {}
+    if inline:
+        # SANDBOXED, because these roots are shares. An .html served from this
+        # origin can script the page that served it and reach every endpoint with
+        # the caller's rights — and anybody who can write to the Estimating share
+        # can put an .html on it. The sandbox keeps it rendering and takes away
+        # the origin, which costs a report nothing: ours is one static document.
+        headers["Content-Security-Policy"] = "sandbox allow-downloads allow-popups"
     return FileResponse(str(target), media_type=media_type or "application/octet-stream",
-                        filename=target.name)
+                        filename=target.name, headers=headers,
+                        content_disposition_type="inline" if inline else "attachment")
 
 
 # ── Database ─────────────────────────────────────────────────────────────────
