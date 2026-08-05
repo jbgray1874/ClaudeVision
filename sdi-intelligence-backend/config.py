@@ -1,17 +1,57 @@
 """
 SDI Intelligence — backend configuration loader.
 
-Reads the values you populated in ".env", validates them, and exposes them
-as simple typed attributes for the rest of the service. Nothing secret is
-hard-coded here — it all comes from .env, which is never committed.
+THREE LAYERS, AND WHICH ONE A VALUE BELONGS IN IS DECIDED BY WHAT THE VALUE IS,
+not by which machine it is on.
+
+    env/common.env      committed    the same everywhere: UNC roots, file types
+    env/<profile>.env   committed    differs by machine, not secret: port, origins
+    .env                NEVER        secrets, and any local override
+
+The real environment beats all three. Later layers beat earlier ones, so .env
+wins over a profile, which wins over common.
+
+WHY THIS IS NOT ONE FILE ANY MORE. It was, and that file was doing two
+incompatible jobs. It carried live SQL Server and BrightHR credentials into the
+repository, and — because it was committed — a git merge on a second machine
+would overwrite that machine's own settings with the first machine's. A single
+file cannot be both "the same everywhere" and "different per machine", and
+trying to make it both is how a deployment breaks the thing it was copied from.
 """
 
 import os
+import platform
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env sitting next to this file
-load_dotenv(Path(__file__).with_name(".env"))
+_HERE = Path(__file__).parent
+
+# WHICH PROFILE. Explicit via SDI_PROFILE, otherwise this machine's hostname,
+# otherwise none. Hostname means a new machine needs no argument to start
+# correctly; naming it out loud below means that is convenience rather than
+# magic, because you can see which file was chosen and why.
+_profile = os.getenv("SDI_PROFILE", "").strip() or platform.node().strip().lower()
+
+# LOADED IN DESCENDING PRECEDENCE. python-dotenv's override=False means "do not
+# replace what is already set", so whatever is loaded FIRST wins — and the real
+# environment, being already in os.environ, wins over all of it.
+_layers = [
+    (_HERE / ".env",                       "secrets and local overrides"),
+    (_HERE / "env" / f"{_profile}.env",    f"profile '{_profile}'"),
+    (_HERE / "env" / "common.env",         "settings common to every machine"),
+]
+
+_loaded = []
+for _path, _what in _layers:
+    if _path.is_file():
+        load_dotenv(_path, override=False)
+        _loaded.append(f"{_path.name} ({_what})")
+
+# SAY WHERE THE VALUES CAME FROM. An evening was lost to a port set in one
+# PowerShell window and not another; a configuration that will not tell you
+# which file it read is one you will eventually argue with.
+print("[config] " + (" <- ".join(_loaded) if _loaded
+                     else "NO configuration files found; using defaults and the environment"))
 
 
 def _req(name: str) -> str:

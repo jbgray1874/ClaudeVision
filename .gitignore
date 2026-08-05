@@ -9,7 +9,10 @@ __pycache__/
 # Virtual environments (never commit these)
 venv/
 .venv/
-env/
+# Anchored to the repo root. An unanchored env/ matches at ANY depth, which
+# silently swallowed sdi-intelligence-backend/env/ — configuration, not a
+# virtualenv — and a file that cannot be committed is a file nobody can deploy.
+/env/
 .env
 !config/*.example.env
 
