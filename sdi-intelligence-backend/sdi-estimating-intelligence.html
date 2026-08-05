@@ -315,15 +315,44 @@ function showRoots(){
     li.onclick=()=>navigate(r.path); listing.appendChild(li);
   });
 }
+function renderCrumbs(path){
+  crumbs.innerHTML = "";
+  const step = (label, target) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.title = target || "All shares";
+    b.onclick = target ? () => navigate(target) : showRoots;
+    crumbs.appendChild(b);
+  };
+  const sep = () => crumbs.appendChild(
+    Object.assign(document.createElement("span"),
+                  {textContent: " › ", style: "color:var(--dim)"}));
+
+  step("Shares", null);
+  const parts = path.replace(/\\+$/, "").split("\\").filter(Boolean);
+  if (!parts.length) return;
+  // A UNC share root is TWO segments (\\server\share) and is not navigable in
+  // halves — \\sdi-dc01 on its own is not a folder anybody can list.
+  let acc, next;
+  if (path.startsWith("\\\\") && parts.length > 1){
+    acc = "\\\\" + parts[0] + "\\" + parts[1]; next = 2;
+  } else {
+    acc = parts[0]; next = 1;
+  }
+  sep(); step(acc, acc);
+  for (let i = next; i < parts.length; i++){
+    acc += "\\" + parts[i];
+    sep(); step(parts[i], acc);
+  }
+}
+
 async function navigate(path){
   cwd = path; selected = null;
   listing.innerHTML = '<li><span class="nm" style="color:var(--dim)">Reading…</span></li>';
-  crumbs.innerHTML = "";
-  const up=document.createElement("button"); up.textContent="↑ Up";
-  up.onclick=()=>{ const p=path.replace(/\\+$/,"").split("\\").slice(0,-1).join("\\");
-                   (p && p.length>2) ? navigate(p) : showRoots(); };
-  crumbs.appendChild(up);
-  crumbs.appendChild(document.createTextNode("  " + path));
+  // EVERY LEVEL IS ONE CLICK. An "Up" button walks back a step at a time, and an
+  // empty folder four deep in a CAD vault leaves nothing else to click — which is
+  // how you get stuck somewhere you can see the way out of but cannot reach.
+  renderCrumbs(path);
   let data;
   try{ const r = await api("/api/files?path=" + encodeURIComponent(path));
        if(!r.ok) throw new Error(await r.text()); data = await r.json(); }
