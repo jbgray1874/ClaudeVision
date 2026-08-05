@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDI Intelligence — Weekly Update · 7 Aug 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --bg-2:#141417; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --accent-deep:#e6be00;
+    --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d; --info:#6db3ff;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--body);
+    line-height:1.55; font-size:14px;
+    background-image:radial-gradient(1100px 500px at 80% -10%,rgba(255,212,0,.05),transparent 60%);
+    padding:0 0 80px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 32px}
+  a{color:inherit;text-decoration:none}
+  ::selection{background:var(--accent);color:#000}
+  header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#101013,#0d0d0f);
+         position:sticky;top:0;z-index:20;backdrop-filter:blur(10px)}
+  .head-in{max-width:1080px;margin:0 auto;padding:20px 32px;display:flex;align-items:center;gap:14px}
+  .mark{width:36px;height:36px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none;
+        box-shadow:0 0 0 1px rgba(255,212,0,.3),0 8px 22px -8px rgba(255,212,0,.5)}
+  .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:21px;line-height:1;letter-spacing:-1px}
+  .brand-txt .t1{font-family:var(--disp);font-weight:800;letter-spacing:.12em;font-size:14px}
+  .brand-txt .t2{font-size:10.5px;color:var(--ink-faint);letter-spacing:.34em;text-transform:uppercase;margin-top:2px}
+  .head-meta{margin-left:auto;text-align:right;font-family:var(--mono);font-size:11px;color:var(--ink-faint);letter-spacing:.04em}
+  .head-meta b{color:var(--accent);font-weight:600}
+  .hero{padding:40px 0 8px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:32px;letter-spacing:-.02em;margin-top:8px;line-height:1.05}
+  .sub{color:var(--ink-dim);margin-top:10px;max-width:72ch;font-size:14.5px}
+  h2{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.1em;text-transform:uppercase;
+     color:var(--ink-dim);margin:40px 0 16px;display:flex;align-items:center;gap:12px}
+  h2 .ic{width:22px;height:22px;border-radius:3px;background:var(--surface-2);border:1px solid var(--line);
+         display:grid;place-items:center;font-size:12px;color:var(--accent);flex:none}
+  h2::after{content:"";flex:1;height:1px;background:var(--line-soft)}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:6px 0 4px}
+  .k{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 17px;position:relative;overflow:hidden}
+  .k::before{content:"";position:absolute;inset:0 auto 0 0;width:2px;background:var(--accent);opacity:.55}
+  .k.risk::before{background:var(--fail);opacity:.7}
+  .k .lab{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
+  .k .big{font-family:var(--disp);font-weight:800;font-size:27px;margin-top:8px;letter-spacing:-.02em}
+  .k .meta{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:6px}
+  .good{color:var(--ok)} .up{color:var(--warn)} .acc{color:var(--accent)} .info{color:var(--info)} .bad{color:var(--fail)}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:14px}
+  .panel.lead{border-color:rgba(255,212,0,.28);box-shadow:0 0 0 1px rgba(255,212,0,.06),0 20px 50px -30px rgba(255,212,0,.3)}
+  .panel.alert{border-color:rgba(255,93,93,.35);box-shadow:0 0 0 1px rgba(255,93,93,.06)}
+  .panel h3{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.05em;margin-bottom:4px;color:var(--ink);
+            display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .panel .owner{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--ink-faint);
+                text-transform:uppercase;margin-bottom:14px}
+  .panel p{color:var(--ink-dim);font-size:13.5px;margin:9px 0}
+  .panel p b{color:var(--ink);font-weight:600}
+  .badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;padding:3px 8px;border-radius:100px;
+         text-transform:uppercase;font-weight:500;border:1px solid;display:inline-flex;align-items:center;gap:5px;vertical-align:middle}
+  .b-live{color:var(--ok);border-color:rgba(95,208,138,.4);background:rgba(95,208,138,.08)}
+  .b-prog{color:var(--warn);border-color:rgba(255,157,66,.4);background:rgba(255,157,66,.08)}
+  .b-plan{color:var(--info);border-color:rgba(109,179,255,.4);background:rgba(109,179,255,.08)}
+  .b-done{color:var(--accent);border-color:rgba(255,212,0,.4);background:rgba(255,212,0,.08)}
+  .b-risk{color:var(--fail);border-color:rgba(255,93,93,.45);background:rgba(255,93,93,.09)}
+  .dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.info{background:var(--info)}
+  .dot.acc{background:var(--accent)} .dot.bad{background:var(--fail)}
+  ul.clean{list-style:none;margin:10px 0 4px}
+  ul.clean li{position:relative;padding:6px 0 6px 20px;color:var(--ink-dim);font-size:13.5px;border-bottom:1px solid var(--line-soft)}
+  ul.clean li:last-child{border-bottom:none}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:13px;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+  ul.clean li b{color:var(--ink);font-weight:600}
+  ul.clean li.next::before{background:var(--info)}
+  ul.clean li.risk::before{background:var(--fail)}
+  ul.clean li.ok::before{background:var(--ok)}
+  .strip{background:linear-gradient(90deg,rgba(255,212,0,.09),transparent);border-left:2px solid var(--accent);
+          padding:12px 16px;border-radius:0 var(--r) var(--r) 0;margin:12px 0;font-size:13.5px;color:var(--ink-dim)}
+  .strip.red{background:linear-gradient(90deg,rgba(255,93,93,.10),transparent);border-left-color:var(--fail)}
+  .strip.green{background:linear-gradient(90deg,rgba(95,208,138,.10),transparent);border-left-color:var(--ok)}
+  .strip.blue{background:linear-gradient(90deg,rgba(109,179,255,.10),transparent);border-left-color:var(--info)}
+  .strip b{color:var(--ink);font-weight:600}
+  table{width:100%;border-collapse:collapse;margin:14px 0 6px;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line-soft)}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);
+     background:var(--surface-2);font-weight:500}
+  td{color:var(--ink-dim)}
+  td b{color:var(--ink);font-weight:600}
+  td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  tr.star td{background:rgba(95,208,138,.05)}
+  .tl{margin-top:6px}
+  .tl-row{display:grid;grid-template-columns:120px 1fr;gap:16px;padding:12px 0;border-bottom:1px solid var(--line-soft);
+          align-items:start}
+  .tl-row:last-child{border-bottom:none}
+  .tl-wk{font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--accent);padding-top:2px;font-weight:500}
+  .tl-row.final .tl-wk{color:var(--ok)}
+  .tl-b{font-size:13.2px;color:var(--ink-dim)}
+  .tl-b b{color:var(--ink);font-weight:600;display:block;margin-bottom:3px;font-size:13.5px}
+  .joblist{display:grid;grid-template-columns:1fr 1fr;gap:0 22px;margin-top:8px}
+  .joblist div{font-size:12.8px;color:var(--ink-dim);padding:5px 0 5px 18px;position:relative;
+               border-bottom:1px solid var(--line-soft)}
+  .joblist div::before{content:"";position:absolute;left:2px;top:12px;width:4px;height:4px;border-radius:50%;background:var(--info)}
+  .joblist div b{color:var(--ink);font-weight:600;font-family:var(--mono);font-size:11.5px;letter-spacing:.02em}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  code{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);
+       border-radius:3px;padding:1px 5px;color:var(--accent)}
+  footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--line-soft);
+         font-family:var(--mono);font-size:11px;color:var(--ink-faint);letter-spacing:.04em;text-align:center}
+  footer b{color:var(--ink-dim)}
+  @media(max-width:820px){
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .two,.joblist{grid-template-columns:1fr}
+    .tl-row{grid-template-columns:1fr;gap:4px}
+    h1{font-size:26px}
+    .wrap,.head-in,.head-meta{padding-left:20px;padding-right:20px}
+  }
+  @media print{
+    body{background:#fff;color:#111;background-image:none;padding:0}
+    header{position:static;background:#fff;border-color:#ccc}
+    .panel,.k,table,th,td,.strip{border-color:#ccc}
+    .panel,.k{background:#f8f8f8;box-shadow:none}
+    h2::after{background:#ddd}
+    .sub,.panel p,td,ul.clean li{color:#333}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="head-in">
+    <div class="mark"><b>S</b></div>
+    <div class="brand-txt">
+      <div class="t1">SDI INTELLIGENCE</div>
+      <div class="t2">Digital Transformation</div>
+    </div>
+    <div class="head-meta">
+      WEEKLY UPDATE · <b>WK 32</b><br>Friday 7 August 2026
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <div class="kicker">Programme Status Report</div>
+    <h1>Weekly Update — AI Digital Transformation</h1>
+    <p class="sub">The week SDI Estimating Intelligence stopped being a command line. <b>An estimator can now run a
+    live enquiry from a web page</b> — pick the drawings, set the quantity, press one button — and a complete
+    deliverable set is filed to the estimating share with a full audit trail. Proven end to end on Wednesday.
+    <b>Eight jobs have been run with estimators</b> across Boots, M&amp;S and Tesco. Two hard constraints now
+    own the launch date and neither is engineering: <b>estimator feedback</b> (two sheets returned) and
+    <b>a server that cannot host this</b>. A licensing review this week also found £4,000 a year that
+    Estimating does not need to spend.</p>
+  </div>
+
+  <div class="kpis">
+    <div class="k">
+      <div class="lab">Estimating Intelligence</div>
+      <div class="big good">Live E2E</div>
+      <div class="meta">Web page → filed estimate · 5 Aug</div>
+    </div>
+    <div class="k">
+      <div class="lab">Jobs with estimators</div>
+      <div class="big acc">8 Run</div>
+      <div class="meta">Boots ×2 · M&amp;S ×4 · Tesco ×2</div>
+    </div>
+    <div class="k risk">
+      <div class="lab">Feedback returned</div>
+      <div class="big bad">2 Sheets</div>
+      <div class="meta">Against many shipped · principal risk</div>
+    </div>
+    <div class="k risk">
+      <div class="lab">Host for launch</div>
+      <div class="big bad">Not Fit</div>
+      <div class="meta">SDI-APP01 cannot take AI workload</div>
+    </div>
+  </div>
+
+  <!-- ===================== ESTIMATING INTELLIGENCE APP ===================== -->
+  <h2><span class="ic">◆</span> SDI Estimating Intelligence — the application</h2>
+
+  <div class="panel lead">
+    <h3>An estimator can now run a job without a command line <span class="badge b-live"><span class="dot ok"></span>Developer Testing</span></h3>
+    <div class="owner">Owner · James Gray</div>
+    <p>A new page, <b>SDI Estimating Intelligence</b>, has been built into the SDI Intelligence portal — not as a
+    separate site, but as another item on the existing navigation, so there is one place to go. It was proven
+    end to end on <b>Wednesday 5 August</b> on a live Boots enquiry.</p>
+
+    <ul class="clean">
+      <li><b>Enter units, client and drawing number</b> — the run button stays disabled until all three are present,
+      and stays disabled for the whole of a run so a job cannot be started twice.</li>
+      <li><b>Browse the CAD vault and the estimating shares from the page</b> — <code>\\sdi-dc01\CAD</code> included.
+      Add a job folder, or add drawing files, including <b>every file in a folder in one click</b>.</li>
+      <li><b>Deliverables are filed automatically</b> to
+      <code>\\sdi-dc01\...\AI Estimating\AISheets\&lt;Client&gt;\&lt;Drawing&gt;</code>, created if it does not exist.
+      Each run goes into its own dated sub-folder, so <b>re-running a drawing can never overwrite an earlier
+      estimate</b>.</li>
+      <li><b>Six files per run</b> — the costed workbook, the client quote, the decision report, the summary JSON,
+      the AI extract and the complete run console. The console is filed <i>with</i> the estimate, so a number on the
+      share can always be traced back to how it was produced.</li>
+      <li class="ok"><b>Completed estimates are browsable and readable from the page</b> — reports open in a tab,
+      workbooks download to Excel.</li>
+    </ul>
+
+    <div class="strip green">
+      <b>What this changes.</b> Until this week, running an estimate meant a developer at a terminal. It now takes
+      three fields and a button, and files its own output where estimating already looks for it. That is the
+      difference between a capability and a workflow.
+    </div>
+
+    <div class="strip red">
+      <b>It cannot go to the server yet, and it needs a period of testing first.</b> Two reasons, both real.
+      <b>(1)</b> The service currently has <b>no user authentication</b> — anyone who can reach the port can browse the
+      CAD vault with the service's rights. Windows Authentication and AD group control are scheduled before launch.
+      <b>(2)</b> There is no server it can run on (see Infrastructure below). It stays in developer testing on a
+      named machine until both are closed.
+    </div>
+  </div>
+
+  <!-- ===================== JOBS ===================== -->
+  <h2><span class="ic">▤</span> Live estimating — jobs run with the team</h2>
+
+  <div class="panel">
+    <h3>Eight jobs across three customers <span class="badge b-prog"><span class="dot warn"></span>Awaiting Review</span></h3>
+    <div class="owner">Model Engine · James Gray &nbsp;·&nbsp; Validation · Tim, James Ryan, Nick</div>
+    <p>Live enquiries are being estimated AI-first and passed to estimating for review. Parity figures are
+    <b>deliberately not quoted below</b>: a parity number only means something once the estimator has reviewed the
+    sheet and named the differences. That review is the item running behind.</p>
+
+    <table>
+      <thead>
+        <tr><th>Job</th><th>Customer</th><th>Reviewer</th><th class="n">Jobs</th><th>Position</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>12422-24</b> End Cap (Rev B)</td><td>Boots</td><td>Tim</td><td class="n">1</td>
+          <td><b>Run through the new web page on 5 Aug</b> at 10 off, with the SolidWorks assembly hierarchy applied.
+          Awaiting review.</td>
+        </tr>
+        <tr>
+          <td><b>113509</b> Ladder Rack Comms Bar</td><td>Boots</td><td>Tim</td><td class="n">1</td>
+          <td>Run and shipped for parallel comparison. Awaiting review.</td>
+        </tr>
+        <tr>
+          <td><b>M&amp;S set</b></td><td>M&amp;S</td><td>James Ryan</td><td class="n">4</td>
+          <td>Four jobs run and shipped. Awaiting review.</td>
+        </tr>
+        <tr>
+          <td><b>Tesco set</b></td><td>Tesco</td><td>Nick</td><td class="n">2</td>
+          <td>Two jobs being priced this week for Nick — the first work routed through an account manager rather
+          than estimating directly.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="strip">
+      <b>Coverage note.</b> The agreed parallel-run spread is M&amp;S, Boots, Tesco and TTi at roughly twenty jobs a
+      week (four a day across two reviewers). Boots, M&amp;S and Tesco are now represented. <b>TTi and hand-drawn
+      packs have not yet been run</b> — hand-drawn is recommended for explicit exclusion from v1.
+    </div>
+  </div>
+
+  <!-- ===================== RISK ===================== -->
+  <h2><span class="ic">!</span> Principal risk — estimator feedback</h2>
+  <div class="panel alert">
+    <h3>Two sheets returned <span class="badge b-risk"><span class="dot bad"></span>Risk to launch date</span></h3>
+    <div class="owner">Dependency · James Ryan &nbsp;·&nbsp; Tim &nbsp;·&nbsp; Dave</div>
+
+    <p>Estimating sheets have been shipped for parallel comparison over several weeks. <b>Two have come back.</b>
+    The engineering side is not blocked — jobs continue to run and defects continue to close — but
+    <b>the launch gates are</b>.</p>
+
+    <p>This matters more than it did in July, because the acceptance gates set out in the Delivery Directive do not
+    ask whether the engine ran. They ask for evidence that an estimator <b>reviewed</b> the output, that differences
+    <b>trace to named assumptions</b>, and that <b>measured time was saved</b>. None of that can be produced by
+    engineering. <b>Every open gate is closed by a returned sheet.</b></p>
+
+    <div class="strip red">
+      <b>Capacity is not the constraint — return rate is.</b> The agreed capacity of four estimates a day is
+      sufficient for the plan. What is missing is reviewed sheets coming back. This is the item most likely to move
+      7 September, and it will move it <b>silently</b> unless shipped-versus-returned is reported every week from now.
+    </div>
+
+    <ul class="clean">
+      <li class="next"><b>Landing this week</b> — a standard feedback form and a defined return route, so a review
+      has somewhere to go. Part of why sheets are not coming back is that there is no route for them to come back on.</li>
+      <li class="next"><b>Required from James Ryan</b> — confirm how many sheets have been shipped against the two
+      returned, and hold named, protected review time in the calendar.</li>
+      <li class="risk"><b>Directive rule</b> — <i>users are delivery owners; estimator testing is planned work,
+      not an optional favour.</i></li>
+    </ul>
+  </div>
+
+  <!-- ===================== INFRASTRUCTURE ===================== -->
+  <h2><span class="ic">▣</span> Infrastructure — the estate cannot host this</h2>
+
+  <div class="panel alert">
+    <h3>SDI-APP01 is not fit to run anything AI <span class="badge b-risk"><span class="dot bad"></span>Spend Required</span></h3>
+    <div class="owner">Owner · James Gray &nbsp;·&nbsp; IT / Infrastructure</div>
+
+    <p>An assessment was carried out this week against the estate documented in July. The conclusion is
+    unambiguous: <b>there is currently no server that can host SDI Estimating Intelligence.</b></p>
+
+    <table>
+      <thead>
+        <tr><th>Host</th><th>Already carries</th><th>Assessment</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>SDI-APP01</b> · 10.0.0.5<br><span style="font-size:11.5px;color:var(--ink-faint)">DL380 Gen11 · 32 GB · Xeon 6526Y</span></td>
+          <td>SOLIDWORKS PDM (Archive, ConisioDb, PDM SQL, SolidNetWork licence) · TRUMPF (TRUMPFSQL2 + brokers) ·
+              SDI Intelligence portal :8071</td>
+          <td><b class="bad">Not fit.</b> Two SQL Server instances on 32 GB before anything is added. The estimating
+          engine drives SOLIDWORKS and Excel through COM, which needs a licensed <b>interactive desktop session</b> —
+          not a Windows service — and a SOLIDWORKS session on a real assembly is several gigabytes.
+          <b>A hung Excel on that box is a PDM outage, not a failed estimate.</b></td>
+        </tr>
+        <tr>
+          <td><b>Second DL380 Gen11</b><br><span style="font-size:11.5px;color:var(--ink-faint)">Domain controller</span></td>
+          <td>AD / DC role</td>
+          <td><b class="bad">Not suitable.</b> A domain controller must not run SOLIDWORKS, Office automation or an
+          interactive user session.</td>
+        </tr>
+        <tr>
+          <td><b>5 × VMware VMs</b><br><span style="font-size:11.5px;color:var(--ink-faint)">Server 2019 · Xeon 6242</span></td>
+          <td>ERP, data and remote-access tiers</td>
+          <td><b class="up">Possible interim.</b> Viable as the interim launch host <i>if</i> a VM can be given a
+          SOLIDWORKS seat, Office and an interactive session. Capacity being confirmed.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top:16px"><b>All AI work currently runs on three developer laptops.</b> That is the largest
+    operational risk in the programme after the feedback backlog — the production capability, its output history and
+    its learning corpus sit on machines that are not backed up as servers, not resilient and not available to anyone
+    else.</p>
+
+    <div class="strip red">
+      <b>Sequencing decision.</b> Hardware lead times of four to eight weeks will not land before 7 September. Rather
+      than move the launch to suit procurement, the plan <b>launches on an interim host</b> and cuts over to the
+      permanent AI host after go-live. This is the only sequencing that protects the date without shipping onto a
+      platform that puts PDM at risk.
+    </div>
+
+    <p style="margin-top:16px"><b>Required purchases</b></p>
+    <ul class="clean">
+      <li><b>Dedicated AI / estimating host</b> — so a SOLIDWORKS or Excel failure costs an estimate rather than the
+      PDM estate. Specification, quotation and capital approval are dated in the delivery plan (tasks 26–28).</li>
+      <li><b>Memory uplift for SDI-APP01</b> — 32 GB is under-provisioned for the PDM and TRUMPF estate it already
+      runs, irrespective of this programme.</li>
+      <li><b>One SOLIDWORKS seat and one Office licence</b> for the runner account — without both, the host is
+      provisioned and unusable, because COM automation cannot run headless.</li>
+      <li class="next"><b>Domain service account</b> <code>SDI\svc-sdiintel</code> — read on the CAD share, modify on
+      AISheets, and <i>Allow log on locally</i>. Requested from IT on 5 August.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== LICENSING ===================== -->
+  <h2><span class="ic">£</span> Licensing review — SolidWorks APIs</h2>
+
+  <div class="panel lead">
+    <h3>Estimating does not need the £1,000-per-quarter API licence <span class="badge b-done"><span class="dot acc"></span>£4k/yr Saving</span></h3>
+    <div class="owner">Owner · James Gray</div>
+
+    <p>The question was raised this week of whether the server requires a SolidWorks COM API licence at
+    <b>£1,000 per quarter</b>. A review of what the estimating engine actually binds to gives a clear answer.</p>
+
+    <table>
+      <thead>
+        <tr><th>API</th><th>Licensing</th><th>Used by Estimating?</th><th>Requires</th></tr>
+      </thead>
+      <tbody>
+        <tr class="star">
+          <td><b>SOLIDWORKS API</b> (COM)<br><code>SldWorks.Application</code></td>
+          <td>Included with any SOLIDWORKS seat. <b>No separate key, no additional cost.</b></td>
+          <td><b class="good">Yes — this is the one</b></td>
+          <td>A SOLIDWORKS seat, installed, with an interactive session</td>
+        </tr>
+        <tr>
+          <td><b>Document Manager API</b><br><span style="font-size:11.5px;color:var(--ink-faint)">SwDocumentMgr</span></td>
+          <td><b>Key-licensed — the £1,000 per quarter.</b></td>
+          <td><b class="bad">No</b> — not referenced anywhere in the estimating pipeline</td>
+          <td>A licence key only. No SOLIDWORKS install, no session</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="strip green">
+      <b>Conclusion.</b> The estimating engine uses the COM API, which comes with a SOLIDWORKS seat SDI already
+      licenses through SolidNetWork. <b>The £1,000-per-quarter Document Manager licence is not required by
+      Estimating</b> — £4,000 a year that this programme does not need to carry. If that licence is retained it
+      should be justified by the Design Automation workstream that uses it, not by Estimating.
+    </div>
+
+    <div class="strip blue">
+      <b>But there is a strategic question underneath it, and it is worth £1,000 a quarter to answer.</b>
+      The COM API is precisely <i>why</i> we need an interactive desktop session, a SOLIDWORKS seat and a dedicated
+      host — it is the single constraint driving the hardware spend above. <b>The Document Manager API needs none of
+      those.</b> It reads document properties, BOM structure and <b>cut lists</b> with a licence key alone, headless,
+      as a service.<br><br>
+      This matters because the cut list is where our best data already comes from — on this week's Boots job it
+      supplied thickness, bend counts, flat-pattern dimensions and measured cut lengths, and corrected a bend count
+      the feature tree could not read. If Document Manager covers enough of that, the estimating service could run
+      <b>headless on an ordinary VM with no SOLIDWORKS seat at all</b>, which changes the hardware case entirely.
+      <b>Recommend a short, bounded spike to establish coverage</b> — it is a two-day question with a four-figure
+      annual answer, and Yogesh already holds the licence keys.
+    </div>
+  </div>
+
+  <!-- ===================== DELIVERY ===================== -->
+  <h2><span class="ic">→</span> Delivery — response to the Mission Critical Directive</h2>
+
+  <div class="panel">
+    <h3>Launch date held at Monday 7 September <span class="badge b-prog"><span class="dot warn"></span>Amber</span></h3>
+    <div class="owner">Accountable · Charlotte Blackwell &nbsp;·&nbsp; Delivery · James Gray &amp; James Ryan</div>
+
+    <p>The five-day outputs required by the directive of 30 July are complete or in flight. A <b>dated reverse
+    delivery plan</b> and a <b>status report against the eight acceptance gates</b> have been produced and issued
+    alongside this update.</p>
+
+    <ul class="clean">
+      <li class="ok"><b>Committed launch date</b> — 7 September confirmed, RAG <b>Amber</b>. Held, but on two
+      dependencies outside engineering.</li>
+      <li class="ok"><b>Dated reverse plan</b> — 39 tasks, 7 phases, 594 hours, every one with an owner, dependency
+      chain and definition of done. Issued as a Gantt in the standard project-plan format.</li>
+      <li><b>Gates met: 2 of 8.</b> Explainability and human control are evidenced. The remaining six are marked
+      amber or red because a gate is only green when the <b>evidence</b> exists, not when the capability does.</li>
+      <li class="next"><b>Fixed points</b> — release-candidate freeze <b>25 August</b>; documented go/no-go
+      <b>4 September</b>; controlled launch <b>7 September</b> with manual fallback and a two-week hypercare period.</li>
+      <li class="risk"><b>Still open</b> — Jira launch board, protected testing calendar, benefit baseline. All dated
+      in the plan for the coming week.</li>
+    </ul>
+
+    <div class="strip">
+      <b>Decisions requested this week:</b> confirm 7 September as committed · agree hand-drawn packs are out of v1
+      scope and parked · confirm the shipped-versus-returned sheet count and commit protected review time ·
+      approve the interim-host approach so launch is not coupled to hardware lead time · authorise the hardware
+      assessment to proceed to quotation.
+    </div>
+  </div>
+
+  <!-- ===================== ENGINE ===================== -->
+  <h2><span class="ic">◈</span> Model Engine — accuracy work this week</h2>
+
+  <div class="panel">
+    <h3>Costing correctness and evidence integrity <span class="badge b-live"><span class="dot ok"></span>Landed</span></h3>
+    <div class="owner">Owner · James Gray</div>
+    <ul class="clean">
+      <li class="ok"><b>Order quantity now honoured end to end.</b> Batch economics, setup recovery and the workbook
+      order quantity all move together, and an invariant check confirms the quantity costed is the quantity ordered.
+      Previously a job could be costed at one quantity and rendered at another.</li>
+      <li class="ok"><b>Assembly hierarchy applied to costing.</b> SolidWorks native models now supply the parent/child
+      structure, so an operation charged on a parent is not charged again on its child. A new invariant reports any
+      case where it happens.</li>
+      <li class="ok"><b>Thickness now read from the arbitrated source</b> rather than re-derived — a 28 mm MFC panel
+      was previously reported as 16 mm in the decision report while being costed correctly.</li>
+      <li class="ok"><b>Deliverables can no longer be silently lost.</b> The filing step now identifies a run's output
+      by what the run actually wrote, rather than by guessing at filenames — which had two different conventions.</li>
+      <li class="risk"><b>Open gap — DWG files are not read.</b> The ODA File Converter is not deployed, so a later
+      revision sitting in a pack as a DWG is invisible to the engine. <b>Observed live this week</b> on the Boots
+      pack: a Rev C DWG in a Rev B folder, unread. Free download; scheduled for deployment.</li>
+      <li class="risk"><b>Open gap — an unlabelled price origin still reads as firm.</b> In the release-candidate scope
+      before freeze.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== WEEK AHEAD ===================== -->
+  <h2><span class="ic">▶</span> Week ahead</h2>
+  <div class="panel">
+    <ul class="clean">
+      <li class="next"><b>Feedback route live</b> — standard form and return path, so reviews have somewhere to go.</li>
+      <li class="next"><b>Jira launch board</b> stood up as the single source of truth for the v1 critical path.</li>
+      <li class="next"><b>Benefit baseline started</b> — current manual effort and review-time measurement. Must start
+      now to have a fortnight of data by the go/no-go review.</li>
+      <li class="next"><b>Interim host assessment</b> — confirm whether a VMware VM can carry a SOLIDWORKS seat and an
+      interactive session.</li>
+      <li class="next"><b>Document Manager spike</b> — establish whether headless extraction covers enough to remove
+      the interactive-session constraint entirely.</li>
+      <li class="next"><b>Parallel running continues</b> — TTi packs to be added for customer coverage.</li>
+      <li class="next"><b>Silent-settings audit</b> continues toward the no-silent-failures gate.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== SUMMARY ===================== -->
+  <h2><span class="ic">✦</span> Week at a Glance</h2>
+  <div class="panel">
+    <ul class="clean">
+      <li class="ok"><b>SDI Estimating Intelligence is live end to end</b> — an estimator can run a job from a web
+      page and the deliverables file themselves to the share with a full audit trail. Proven 5 August.
+      <span class="badge b-live">Developer Testing</span></li>
+      <li><b>Eight jobs run with estimators</b> — Boots ×2 (Tim), M&amp;S ×4 (James Ryan), Tesco ×2 (Nick). TTi and
+      hand-drawn not yet covered. <span class="badge b-prog">Awaiting Review</span></li>
+      <li class="risk"><b>Estimator feedback is the principal risk</b> — two sheets returned. Every open acceptance
+      gate is closed by a returned sheet, and none of them can be closed by engineering.
+      <span class="badge b-risk">Risk</span></li>
+      <li class="risk"><b>No server can host this</b> — SDI-APP01 cannot take an interactive SOLIDWORKS and Excel
+      workload beside PDM and two SQL instances on 32 GB. Launch proceeds on an interim host; permanent hardware
+      procured in parallel. <span class="badge b-risk">Spend Required</span></li>
+      <li class="ok"><b>£4,000 a year identified as not required</b> — the estimating engine uses the COM API included
+      with a SOLIDWORKS seat, not the key-licensed Document Manager API.
+      <span class="badge b-done">Saving</span></li>
+      <li><b>Model Engine</b> — order quantity honoured end to end, assembly hierarchy applied to costing, thickness
+      read from the arbitrated source, deliverables can no longer be silently lost.
+      <span class="badge b-live">Landed</span></li>
+      <li><b>Delivery</b> — 7 September held at Amber; reverse plan and gate status issued; release-candidate freeze
+      25 August, go/no-go 4 September. <span class="badge b-plan">On Plan</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    SDI Intelligence · Digital Transformation Programme &nbsp;·&nbsp; Weekly Update &nbsp;·&nbsp; <b>Friday 7 August 2026</b><br>
+    Next update: Friday 14 August 2026 &nbsp;·&nbsp; Accompanying: Delivery Plan &amp; Gantt, Controlled Launch v1
+  </footer>
+
+</div>
+</body>
+</html>
