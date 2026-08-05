@@ -286,9 +286,31 @@ function refresh(){
    the page asks, says so plainly, and keeps the button disabled. */
 let runnersOnline = 0;
 async function checkRunners(){
+  let r;
   try{
-    const r = await api("/api/estimate/runners");
-    if(!r.ok) throw new Error(r.status);
+    r = await api("/api/estimate/runners");
+  }catch(e){
+    // The fetch itself failed: the service is not answering at all.
+    runnersOnline = 0;
+    runnerBox.style.borderLeftColor = "var(--bad)";
+    runnerText.innerHTML = '<span style="color:var(--bad)">Cannot reach the service</span>';
+    refresh(); return;
+  }
+  if(!r.ok){
+    // A REPLY IS NOT A FAILURE TO REPLY, and saying so wastes somebody's morning.
+    // This page is served fresh from disk on every request but estimate_routes is
+    // imported once at start-up, so after a merge the page can be newer than the
+    // service it is talking to. The old route table has no /runners and matches it
+    // as a run id instead — a 404 that means "restart me", not "I am not here".
+    runnersOnline = 0;
+    runnerBox.style.borderLeftColor = "var(--bad)";
+    runnerText.innerHTML = r.status === 404
+      ? '<span style="color:var(--bad)">This page is newer than the service — '
+        + 'restart app.py to pick up the runner queue</span>'
+      : `<span style="color:var(--bad)">The service answered ${r.status}</span>`;
+    refresh(); return;
+  }
+  try{
     const d = await r.json();
     runnersOnline = d.online || 0;
     const live = (d.runners||[]).filter(x => x.online);
