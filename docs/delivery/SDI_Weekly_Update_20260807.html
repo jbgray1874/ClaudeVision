@@ -159,15 +159,15 @@
     <b>but in test on the dev lead's laptop only</b> — it cannot yet run on the server. <b>Eight jobs have been
     run with estimators</b> across Boots, M&amp;S and Tesco, with <b>four sheets reviewed and returned and two
     more in progress</b>. Two hard constraints now own the launch date and neither is engineering:
-    <b>estimating capacity</b> and <b>a server that cannot host this</b>. A licensing review also established
-    that the <b>£1,000-per-quarter SolidWorks Document Manager API licence is not used by Estimating</b> —
-    £4,000 a year this programme should not be carrying.</p>
+    <b>estimating capacity</b> and <b>a server that cannot host this</b>. A licensing review confirms the
+    engine uses the SOLIDWORKS COM API that comes with a seat — <b>the seat and the Office licence are both
+    necessary and cannot be substituted</b>.</p>
   </div>
 
   <div class="kpis">
     <div class="k">
       <div class="lab">Estimating Intelligence</div>
-      <div class="big up" style="font-size:19px;line-height:1.2">On Dev Lead<br>Laptop</div>
+      <div class="big up" style="font-size:17px;line-height:1.2">On Engineers /<br>Dev Lead Laptop</div>
       <div class="meta">In test · not deployable to server</div>
     </div>
     <div class="k">
@@ -284,18 +284,16 @@
       that rightly comes first, and no plan should assume otherwise.
     </div>
 
-    <p>This is not a reluctance to test. It is arithmetic: every hour spent reviewing an AI estimate is an hour not
-    spent on an enquiry with a customer waiting. <b>Validation time therefore has to be protected and planned, not
-    found.</b> The Delivery Directive says as much — <i>estimator testing is planned work, not spare-time
-    activity</i> — and this is the week that stops being a principle and becomes a diary entry.</p>
+    <p>It is simple arithmetic: an hour spent reviewing an AI estimate is an hour not spent on an enquiry with a
+    customer waiting, and the live queue rightly wins. Validation throughput is therefore a <b>planning question for
+    the business</b>, not something engineering can resolve — and it sets the pace at which the acceptance gates can
+    be evidenced.</p>
 
     <ul class="clean">
-      <li class="next"><b>Landing this week</b> — a standard feedback form and a defined return route, so a review
-      has somewhere to go. Part of why sheets are not coming back is that there is no route for them to come back on.</li>
-      <li class="next"><b>Required from James Ryan</b> — confirm how many sheets have been shipped against the two
-      returned, and hold named, protected review time in the calendar.</li>
-      <li class="risk"><b>Directive rule</b> — <i>users are delivery owners; estimator testing is planned work,
-      not an optional favour.</i></li>
+      <li class="next"><b>Support from this side</b> — a standard feedback form and a simple return route, so
+      reviewing a sheet takes as little of an estimator's time as possible.</li>
+      <li class="next"><b>To agree together</b> — how much validation time can realistically be found alongside the
+      live queue, so the plan reflects what is achievable rather than what would be ideal.</li>
     </ul>
   </div>
 
@@ -344,20 +342,19 @@
     else.</p>
 
     <div class="strip red">
-      <b>Sequencing decision.</b> Hardware lead times of four to eight weeks will not land before 7 September. Rather
-      than move the launch to suit procurement, the plan <b>launches on an interim host</b> and cuts over to the
-      permanent AI host after go-live. This is the only sequencing that protects the date without shipping onto a
-      platform that puts PDM at risk.
+      <b>Sequencing decision.</b> Lead times have not yet been established, but between resourcing, cost approval
+      and hardware availability it is <b>unlikely that a permanent server can be ready by 7 September</b>. Rather
+      than couple the launch to procurement, the plan <b>launches on an interim host</b> and moves to the permanent
+      AI host once it is available. This protects the date without shipping onto a platform that puts PDM at risk.
     </div>
 
     <p style="margin-top:16px"><b>Required purchases</b></p>
     <ul class="clean">
-      <li><b>Dedicated AI / estimating host</b> — so a SOLIDWORKS or Excel failure costs an estimate rather than the
-      PDM estate. Specification, quotation and capital approval are dated in the delivery plan (tasks 26–28).</li>
+      <li><b>Dedicated AI / estimating host</b>, kept separate from the PDM estate.</li>
       <li><b>Memory uplift for SDI-APP01</b> — 32 GB is under-provisioned for the PDM and TRUMPF estate it already
       runs, irrespective of this programme.</li>
-      <li><b>One SOLIDWORKS seat and one Office licence</b> for the runner account — without both, the host is
-      provisioned and unusable, because COM automation cannot run headless.</li>
+      <li><b>One SOLIDWORKS seat and one Office licence</b> for the runner account. <b>Both are necessary</b> — the
+      engine automates SOLIDWORKS and Excel directly and there is no licence-free substitute.</li>
       <li class="next"><b>Domain service account</b> <code>SDI\svc-sdiintel</code> — read on the CAD share, modify on
       AISheets, and <i>Allow log on locally</i>. Requested from IT on 5 August.</li>
     </ul>
@@ -367,11 +364,11 @@
   <h2><span class="ic">£</span> Licensing review — SolidWorks APIs</h2>
 
   <div class="panel lead">
-    <h3>Estimating does not need the £1,000-per-quarter API licence <span class="badge b-done"><span class="dot acc"></span>£4k/yr Saving</span></h3>
+    <h3>What the engine actually requires <span class="badge b-plan"><span class="dot info"></span>Confirmed</span></h3>
     <div class="owner">Owner · James Gray</div>
 
-    <p>The question was raised this week of whether the server requires a SolidWorks COM API licence at
-    <b>£1,000 per quarter</b>. A review of what the estimating engine actually binds to gives a clear answer.</p>
+    <p>The question was raised this week of whether the server needs a separate SolidWorks API licence. A review of
+    what the estimating engine binds to gives a clear answer, and it has a bearing on the hardware specification.</p>
 
     <table>
       <thead>
@@ -386,32 +383,25 @@
         </tr>
         <tr>
           <td><b>Document Manager API</b><br><span style="font-size:11.5px;color:var(--ink-faint)">SwDocumentMgr</span></td>
-          <td><b>Key-licensed — the £1,000 per quarter.</b></td>
-          <td><b class="bad">No</b> — not referenced anywhere in the estimating pipeline</td>
+          <td><b>Key-licensed — £1,000 per quarter.</b></td>
+          <td><b>No</b> — serves the Design Automation workstream</td>
           <td>A licence key only. No SOLIDWORKS install, no session</td>
         </tr>
       </tbody>
     </table>
 
     <div class="strip green">
-      <b>Conclusion.</b> The estimating engine uses the COM API, which comes with a SOLIDWORKS seat SDI already
-      licenses through SolidNetWork. <b>The £1,000-per-quarter Document Manager licence is not required by
-      Estimating</b> — £4,000 a year that this programme does not need to carry. If that licence is retained it
-      should be justified by the Design Automation workstream that uses it, not by Estimating.
+      <b>Conclusion — no additional API licence is needed for Estimating.</b> The engine uses the COM API, which is
+      included with a SOLIDWORKS seat SDI already licenses through SolidNetWork. There is no separate per-quarter
+      API charge to add for this programme.
     </div>
 
-    <div class="strip blue">
-      <b>But there is a strategic question underneath it, and it is worth £1,000 a quarter to answer.</b>
-      The COM API is precisely <i>why</i> we need an interactive desktop session, a SOLIDWORKS seat and a dedicated
-      host — it is the single constraint driving the hardware spend above. <b>The Document Manager API needs none of
-      those.</b> It reads document properties, BOM structure and <b>cut lists</b> with a licence key alone, headless,
-      as a service.<br><br>
-      This matters because the cut list is where our best data already comes from — on this week's Boots job it
-      supplied thickness, bend counts, flat-pattern dimensions and measured cut lengths, and corrected a bend count
-      the feature tree could not read. If Document Manager covers enough of that, the estimating service could run
-      <b>headless on an ordinary VM with no SOLIDWORKS seat at all</b>, which changes the hardware case entirely.
-      <b>Recommend a short, bounded spike to establish coverage</b> — it is a two-day question with a four-figure
-      annual answer, and Yogesh already holds the licence keys.
+    <div class="strip">
+      <b>What this does mean is that the seat itself is not optional.</b> The COM API is the reason the estimating
+      host needs a SOLIDWORKS seat, an Office licence and an interactive session — it drives SOLIDWORKS and Excel
+      directly, and cannot run headless. The Document Manager API is a different tool serving a different purpose in
+      the Design Automation workstream; <b>it is not a substitute for the COM API</b> and cannot carry estimating.
+      <b>The seat and the Office licence must be carried in the hardware specification.</b>
     </div>
   </div>
 
@@ -429,14 +419,12 @@
     <ul class="clean">
       <li class="ok"><b>Committed launch date</b> — 7 September confirmed, RAG <b>Amber</b>. Held, but on two
       dependencies outside engineering.</li>
-      <li class="ok"><b>Dated reverse plan</b> — 39 tasks, 7 phases, 594 hours, every one with an owner, dependency
+      <li class="ok"><b>Dated reverse plan</b> — 39 tasks, 7 phases, 586 hours, every one with an owner, dependency
       chain and definition of done. Issued as a Gantt in the standard project-plan format.</li>
       <li><b>Gates met: 2 of 8.</b> Explainability and human control are evidenced. The remaining six are marked
       amber or red because a gate is only green when the <b>evidence</b> exists, not when the capability does.</li>
       <li class="next"><b>Fixed points</b> — release-candidate freeze <b>25 August</b>; documented go/no-go
       <b>4 September</b>; controlled launch <b>7 September</b> with manual fallback and a two-week hypercare period.</li>
-      <li class="risk"><b>Still open</b> — Jira launch board, protected testing calendar, benefit baseline. All dated
-      in the plan for the coming week.</li>
     </ul>
 
     <div class="strip">
@@ -482,8 +470,6 @@
       now to have a fortnight of data by the go/no-go review.</li>
       <li class="next"><b>Interim host assessment</b> — confirm whether a VMware VM can carry a SOLIDWORKS seat and an
       interactive session.</li>
-      <li class="next"><b>Document Manager spike</b> — establish whether headless extraction covers enough to remove
-      the interactive-session constraint entirely.</li>
       <li class="next"><b>Parallel running continues</b> — TTi packs to be added for customer coverage.</li>
       <li class="next"><b>Silent-settings audit</b> continues toward the no-silent-failures gate.</li>
     </ul>
@@ -504,9 +490,9 @@
       <li class="risk"><b>No server can host this</b> — SDI-APP01 cannot take an interactive SOLIDWORKS and Excel
       workload beside PDM and two SQL instances on 32 GB. Launch proceeds on an interim host; permanent hardware
       procured in parallel. <span class="badge b-risk">Spend Required</span></li>
-      <li class="ok"><b>£4,000 a year identified as not required</b> — the £1,000-per-quarter <b>Document Manager
-      API</b> licence. The estimating engine uses the COM API included with a SOLIDWORKS seat and does not
-      reference Document Manager anywhere. <span class="badge b-done">Saving</span></li>
+      <li><b>Licensing confirmed</b> — no separate API licence is needed for Estimating; the COM API comes with a
+      SOLIDWORKS seat. <b>The seat and an Office licence are both required</b> on the estimating host and must be
+      carried in the hardware specification. <span class="badge b-plan">Confirmed</span></li>
       <li><b>Model Engine</b> — order quantity honoured end to end, assembly hierarchy applied to costing, thickness
       read from the arbitrated source, deliverables can no longer be silently lost.
       <span class="badge b-live">Landed</span></li>

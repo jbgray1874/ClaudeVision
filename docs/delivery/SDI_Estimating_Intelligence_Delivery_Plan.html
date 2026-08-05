@@ -102,7 +102,7 @@
   <div class="kpi"><span class="k">Gates met</span><div class="v amber">2 / 8</div><div class="n">4 in progress, 2 not started</div></div>
   <div class="kpi"><span class="k">Estimator feedback</span><div class="v">4 returned</div><div class="n">2 in progress · capacity-constrained</div></div>
   <div class="kpi"><span class="k">Jobs with estimators</span><div class="v">8 run</div><div class="n">Boots 2 · M&amp;S 4 · Tesco 2</div></div>
-  <div class="kpi"><span class="k">Plan effort</span><div class="v">594 h</div><div class="n">39 tasks across 7 phases</div></div>
+  <div class="kpi"><span class="k">Plan effort</span><div class="v">586 h</div><div class="n">39 tasks across 7 phases</div></div>
 </div>
 
 <div class="banner">
@@ -135,9 +135,9 @@
   <p>This is not a reluctance to test; it is arithmetic. Every hour spent reviewing an AI estimate is
      an hour not spent on an enquiry with a customer waiting. <strong>Validation time therefore has to
      be protected and planned rather than found.</strong></p>
-  <p><strong>Action:</strong> James Ryan to hold named, protected review time in the calendar, and to
-     report reviews completed each week. Directive rule: <em>users are delivery owners — estimator
-     testing is planned work, not an optional favour.</em></p>
+  <p><strong>Next step:</strong> agree together how much validation time can realistically be found
+     alongside the live queue, and report reviews completed each week, so the plan reflects what is
+     achievable rather than what would be ideal.</p>
 </div>
 
 <div class="banner bad">
@@ -151,10 +151,11 @@
      SOLIDWORKS session on a real assembly is several gigabytes and CPU-hungry. Co-locating that with
      the PDM Archive service means a hung Excel or a SOLIDWORKS crash becomes a PDM outage rather than
      a failed estimate.</p>
-  <p><strong>Consequence for the date:</strong> hardware lead times of four to eight weeks will not
-     land before 7 September. The launch therefore proceeds on an <strong>interim host</strong>
-     (task 29–30), with the permanent AI host specified, quoted, approved and procured in parallel
-     and delivered after launch. That sequencing is deliberate and is what keeps the date.</p>
+  <p><strong>Consequence for the date:</strong> lead times have not yet been established, but between
+     resourcing, cost approval and hardware availability it is <strong>unlikely that a permanent server
+     can be ready by 7 September</strong>. The launch therefore proceeds on an <strong>interim host</strong>
+     (tasks 29–30), with the permanent AI host specified, quoted, approved and procured in parallel and
+     delivered once available. That sequencing is deliberate and is what keeps the date.</p>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -260,7 +261,7 @@
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
 <h2><span class="n">04</span>Critical path to 7 September</h2>
-<p class="lead">Seven phases, 39 tasks, 594 hours. The full dated plan with dependencies, owners and effort is in
+<p class="lead">Seven phases, 39 tasks, 586 hours. The full dated plan with dependencies, owners and effort is in
    the accompanying Gantt workbook. Bars are driven by status, so the chart stays live as the plan is
    updated.</p>
 
@@ -335,40 +336,27 @@
 
 <h3>Required purchases</h3>
 <ul>
-  <li><strong>Dedicated AI / estimating host</strong> — the workload needs its own machine so a
-      SOLIDWORKS or Excel failure costs an estimate rather than the PDM estate. Specification under
-      task 26, quotations task 27, capital approval task 28.</li>
+  <li><strong>Dedicated AI / estimating host</strong>, kept separate from the PDM estate. Specification
+      under task 26, quotations task 27, capital approval task 28.</li>
   <li><strong>Memory uplift for SDI-APP01</strong> — 32 GB is under-provisioned for the PDM and TRUMPF
       estate it already runs, irrespective of this programme.</li>
   <li><strong>SOLIDWORKS seat and Office licence</strong> for the runner account. Without both, the
       host is provisioned and unusable — COM automation cannot run headless.</li>
-  <li><strong>No API licence is required.</strong> The engine binds <code>SldWorks.Application</code> — the
-      COM API included with any SOLIDWORKS seat. The key-licensed <strong>Document Manager API — the £1,000 per
-      quarter licence — is not used anywhere in the estimating pipeline</strong>. That is £4,000 a year this programme
-      does not need to carry; if the licence is retained it should be justified by the workstream that uses it.</li>
+  <li><strong>No separate API licence is required.</strong> The engine binds <code>SldWorks.Application</code> —
+      the COM API included with any SOLIDWORKS seat, at no additional per-quarter charge. The key-licensed
+      Document Manager API serves the Design Automation workstream and <strong>is not a substitute</strong>: it
+      cannot carry estimating, so the seat and the Office licence must both be in the specification.</li>
   <li><strong>Domain service account</strong> <code>SDI\svc-sdiintel</code> with read on the CAD share,
       modify on AISheets, and <em>Allow log on locally</em>. Requested 5 August.</li>
 </ul>
 
 <div class="banner">
-  <div class="t">Open question worth answering before the hardware is bought</div>
-  <p>The COM API is the reason a SOLIDWORKS seat, an interactive desktop and a dedicated host are needed at all —
-     it is the single constraint driving this spend. The <strong>Document Manager API needs none of them</strong>:
-     it reads document properties, BOM structure and <strong>cut lists</strong> with a licence key alone, headless,
-     as a service. The cut list is already where the best data comes from — on this week's Boots job it supplied
-     thickness, bend counts, flat-pattern dimensions and measured cut lengths, and corrected a bend count the
-     feature tree could not read.</p>
-  <p>If Document Manager covers enough of that, the service could run on an ordinary VM with <strong>no SOLIDWORKS
-     seat and no interactive session</strong>, which changes the hardware case entirely. A bounded two-day spike is
-     scheduled (task 6, 10–12 Aug) before quotations are committed. Yogesh already holds the licence keys.</p>
-</div>
-
-<div class="banner">
   <div class="t">Sequencing decision</div>
-  <p>Hardware lead time is four to eight weeks and will not land before 7 September. Rather than move
-     the launch to suit procurement, the plan launches on an interim host and cuts over to the
-     permanent AI host after go-live, during or after hypercare. This is the only sequencing that
-     protects Matt's date without shipping onto a platform that puts PDM at risk.</p>
+  <p>Lead times are not yet established, but between resourcing, cost approval and hardware
+     availability a permanent server is unlikely to be ready by 7 September. Rather than couple the
+     launch to procurement, the plan launches on an interim host and moves to the permanent AI host
+     once available, during or after hypercare. This protects the date without shipping onto a
+     platform that puts PDM at risk.</p>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
