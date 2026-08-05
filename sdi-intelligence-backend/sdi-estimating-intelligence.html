@@ -248,6 +248,28 @@ let poll     = null;
 const safe = s => String(s||"").trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").replace(/\s+/g," ").replace(/\.+$/,"");
 
 let runDest = null;          // the dated run folder the server stamped, once known
+
+/* ── DOES THE DRAWING NUMBER MATCH THE DRAWINGS? ──────────────────────
+   A transposed digit — 12242-24 for 12422-24 — files a real estimate under a
+   drawing number that does not exist, and nothing downstream ever objects: the
+   folder is created on demand, the engine reads the pack it was given, and the
+   number only has to be right for a human to find it again. It is discovered
+   weeks later by somebody who cannot find an estimate they know was run.
+
+   The page already holds both facts and was not comparing them. Compared on
+   alphanumerics only, because 12422-24 and 12422_24 and 1242224 are the same
+   drawing and the difference is a typing convention, not a disagreement.
+
+   A WARNING, NOT A BLOCK. There are honest reasons for a mismatch — a job
+   folder named after the enquiry, a customer's own numbering — and a page that
+   refuses to proceed on a guess is worse than one that raises an eyebrow. */
+const alnum = t => String(t||"").toUpperCase().replace(/[^A-Z0-9]/g, "");
+function drawingNumberLooksWrong(){
+  const want = alnum(drawing.value);
+  if(want.length < 4 || !drawings.length) return false;   // too short to be evidence
+  return !drawings.some(d => alnum(d.name).includes(want) || alnum(d.path).includes(want));
+}
+
 function destination(){
   const c = safe(client.value), d = safe(drawing.value);
   return (c && d) ? `${OUTPUT_ROOT}\\${c}\\${d}` : "";
@@ -275,7 +297,17 @@ function refresh(){
 
   runBtn.disabled = running || missing.length > 0;
   runBtn.textContent = running ? "Estimating…" : "SDI Intelligence Estimator";
-  req.textContent = running ? "" : (missing.length ? "Still needed: " + missing.join(", ") : "");
+  if(running){
+    req.textContent = ""; req.style.color = "";
+  }else if(missing.length){
+    req.textContent = "Still needed: " + missing.join(", "); req.style.color = "";
+  }else if(drawingNumberLooksWrong()){
+    req.textContent = "Check the drawing number — " + safe(drawing.value)
+                    + " does not appear in any drawing you have added";
+    req.style.color = "var(--bad)";
+  }else{
+    req.textContent = ""; req.style.color = "";
+  }
 }
 [units,client,drawing].forEach(el => el.addEventListener("input", refresh));
 
