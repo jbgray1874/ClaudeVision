@@ -33,11 +33,21 @@ if (-not (Test-Path $runner)) { throw "No runner at $runner. Merge the branch fi
 # here rather than in the runner because a question asked here cannot break the
 # process asking it. Two attempts at doing this with a file lock inside Python
 # both ended by stopping the one runner that was wanted.
-$mine = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-          Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' -and $_.ProcessId -ne $PID })
+$all = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+         Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' -and $_.ProcessId -ne $PID })
+
+# ONE RUNNER IS TWO PROCESSES. A virtualenv python.exe on Windows is a launcher
+# that starts the BASE interpreter as a child, so a single healthy runner shows
+# up twice - the .venv one and the Python3xx one - with identical command lines.
+# Counting processes would report every runner as its own duplicate. Dropping
+# any process whose parent is also a runner leaves one entry per actual launch.
+$ids  = @($all | ForEach-Object { $_.ProcessId })
+$mine = @($all | Where-Object { $ids -notcontains $_.ParentProcessId })
+
 if ($mine.Count -gt 0) {
     Write-Host "A runner is already running on this machine:" -ForegroundColor Red
-    $mine | Select-Object ProcessId, CommandLine | Format-Table -AutoSize -Wrap | Out-String | Write-Host
+    Write-Host "  $($mine.Count) runner(s), $($all.Count) process(es) - a venv python starts the base one as a child." -ForegroundColor Red
+    $all | Select-Object ProcessId, ParentProcessId, CommandLine | Format-Table -AutoSize -Wrap | Out-String | Write-Host
     Write-Host "One runner per machine: SOLIDWORKS and Excel are driven on one desktop." -ForegroundColor Yellow
     Write-Host "Stop them all with:" -ForegroundColor Yellow
     Write-Host "    Get-CimInstance Win32_Process -Filter ""Name='python.exe'"" |" -ForegroundColor Yellow
