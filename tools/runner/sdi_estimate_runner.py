@@ -169,30 +169,72 @@ def main() -> int:
     print(f"  runner   {runner_id}  ({platform.node()})")
     print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop\n")
 
-    complained = False
+    complained = None
     while True:
         try:
             r = requests.post(f"{base}/runner/claim", json={
                 "runner_id": runner_id, "hostname": platform.node()},
                 headers=headers, timeout=20)
-            r.raise_for_status()
-            job = (r.json() or {}).get("run")
-            complained = False
         except Exception as exc:                       # noqa: BLE001 — keep polling
             # SAY IT ONCE. A runner that cannot reach the server prints a line a
             # second, and the one useful message scrolls away.
-            if not complained:
-                print(f"[{time.strftime('%H:%M:%S')}] cannot reach {a.server} — {exc}")
-                print("   still trying; this will not be repeated until it changes.")
-                complained = True
+            complained = _say_once(complained, "unreachable",
+                f"cannot reach {a.server} — {exc}",
+                "   still trying; this will not be repeated until it changes.")
             time.sleep(a.poll_seconds)
             continue
+
+        # A REPLY IS NOT A FAILURE TO REPLY, and the difference is somebody's
+        # morning. The service answers on this port; if it answers 404 it is an
+        # OLDER BUILD that has no runner endpoints, and the fix is Ctrl+C on the
+        # service, not an hour spent on firewalls and ports.
+        if r.status_code == 404:
+            complained = _say_once(complained, "old-service",
+                f"the service at {a.server} answered 404 for the runner queue.",
+                "   It is running an older build with no runner endpoints.",
+                "   Restart app.py there — the page is served from disk on every",
+                "   request, but the routes are imported once at start-up.")
+            time.sleep(a.poll_seconds)
+            continue
+        if r.status_code == 401:
+            complained = _say_once(complained, "unauthorised",
+                f"the service at {a.server} rejected this runner (401).",
+                "   SDI_API_KEY must match on both sides. Pass --api-key, or set",
+                "   SDI_API_KEY in this runner's environment.")
+            time.sleep(a.poll_seconds)
+            continue
+        try:
+            r.raise_for_status()
+            job = (r.json() or {}).get("run")
+        except Exception as exc:                       # noqa: BLE001
+            complained = _say_once(complained, "bad-reply",
+                f"the service answered {r.status_code} — {exc}")
+            time.sleep(a.poll_seconds)
+            continue
+        if complained:
+            print(f"[{time.strftime('%H:%M:%S')}] connected to {a.server}.")
+        complained = None
 
         if not job:
             time.sleep(a.poll_seconds)
             continue
 
         _execute(requests, base, headers, job, engine_root, engine_python, runner_id)
+
+
+def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:
+    """Print a complaint the first time, and stay quiet until the COMPLAINT changes.
+
+    A runner that cannot get work prints once every poll, and the one line that
+    would have told somebody what to do scrolls away inside a minute. Keyed on the
+    KIND of problem rather than a flag, so a service that goes from unreachable to
+    404 says so instead of staying silent because it already complained once."""
+    if current == kind:
+        return current
+    print(f"[{time.strftime('%H:%M:%S')}] {lines[0]}")
+    for extra in lines[1:]:
+        print(extra)
+    return kind
 
 
 def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
