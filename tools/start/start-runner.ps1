@@ -29,6 +29,23 @@ $runner = Join-Path $Root "tools\runner\sdi_estimate_runner.py"
 if (-not (Test-Path $python)) { throw "No engine virtualenv at $python" }
 if (-not (Test-Path $runner)) { throw "No runner at $runner. Merge the branch first." }
 
+# ASK WINDOWS DIRECTLY. This is the authoritative duplicate check, and it lives
+# here rather than in the runner because a question asked here cannot break the
+# process asking it. Two attempts at doing this with a file lock inside Python
+# both ended by stopping the one runner that was wanted.
+$mine = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+          Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' -and $_.ProcessId -ne $PID })
+if ($mine.Count -gt 0) {
+    Write-Host "A runner is already running on this machine:" -ForegroundColor Red
+    $mine | Select-Object ProcessId, CommandLine | Format-Table -AutoSize -Wrap | Out-String | Write-Host
+    Write-Host "One runner per machine: SOLIDWORKS and Excel are driven on one desktop." -ForegroundColor Yellow
+    Write-Host "Stop them all with:" -ForegroundColor Yellow
+    Write-Host "    Get-CimInstance Win32_Process -Filter ""Name='python.exe'"" |" -ForegroundColor Yellow
+    Write-Host "      Where-Object CommandLine -like '*sdi_estimate_runner*' |" -ForegroundColor Yellow
+    Write-Host "      ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }" -ForegroundColor Yellow
+    exit 1
+}
+
 $env:SDI_SERVER = $Server
 if ($ApiKey) { $env:SDI_API_KEY = $ApiKey }
 

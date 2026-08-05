@@ -134,71 +134,117 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
     ]
 
 
-# ── one runner per machine ───────────────────────────────────────────────────
-# The lock is taken on a byte FAR PAST anything we write. msvcrt.locking locks at
-# the file's current position, so locking byte 0 and then writing the holder's
-# identity there means the process fights its own lock — which is exactly what
-# the first version did, and it failed with "Permission denied" on the flush.
-# Separating the two regions means the lock is a lock and the text is text.
+# ── one runner per machine, advisory ─────────────────────────────────────────
+# THIS MUST NEVER STOP THE RUNNER STARTING. It exists because six runners were
+# once found polling at once; it does not exist to be clever, and it has already
+# failed twice in ways that stopped the one runner somebody actually wanted:
+# once by locking the byte it then wrote to, and once by failing to READ a byte
+# another handle held. Both times a guard against an unlikely problem became the
+# problem.
+#
+# So it now fails OPEN. A definite, understood "somebody else holds this" is
+# reported and refused. Anything else at all - a permission oddity, a share that
+# does not support locking, an exception nobody predicted - warns and carries on.
+# The authoritative check lives in start-runner.ps1, where Windows can be asked
+# the question directly and an answer cannot break the process asking it.
 _LOCK_BYTE = 4096
 _IDENTITY_BYTES = 256
 
 
 def claim_the_machine(engine_root: Path):
-    """Refuse to start if a runner is already running here, and say which one.
+    """Best-effort single-instance advisory. Returns a handle, or None.
 
-    ONE DESKTOP, ONE EXCEL, ONE SOLIDWORKS SESSION. Two runners on one machine
-    would drive the same COM automation from two processes, and they cannot even
-    tell each other apart: the runner id is deliberately stable per machine so a
-    restart does not leave the service listing a graveyard of dead runners, which
-    means every process on this box registers as the SAME runner.
+    Two runners on one machine drive the same COM automation from two processes,
+    and the service cannot even tell them apart: the runner id is deliberately
+    stable per machine so a restart does not leave a graveyard of dead runners,
+    which means every process here registers as the SAME runner.
 
-    It is also how a window opened on Tuesday is still polling on Friday. Six of
-    them were found running at once, three under the wrong interpreter.
-
-    An OS-level lock rather than a pid file, because it is released when the
-    process dies HOWEVER it dies: Ctrl+C, a crash, a closed window, a laptop that
-    slept and never came back. A pid file survives all of those and then refuses
-    to start the runner you actually want. The pid we write is only for the
-    message — the lock decides, so the text can be stale without harming anything.
-    """
+    An OS lock rather than a pid file, because it is released when the process
+    dies HOWEVER it dies - Ctrl+C, a crash, a closed window, a sleeping laptop.
+    The pid written alongside is only for the message; the lock decides, so that
+    text may be stale without anything behaving incorrectly."""
     lock_path = Path(engine_root) / "output" / ".runner.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+        handle = os.fdopen(fd, "r+b")
 
-    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-    handle = os.fdopen(fd, "r+b")          # binary: no newline translation to trip on
+        previous = ""
+        try:
+            handle.seek(0)
+            previous = handle.read(_IDENTITY_BYTES).decode("utf-8", "replace").strip("\x00 \r\n")
+        except OSError:
+            # Reading byte 0 failed, which on Windows means another handle holds
+            # it - almost certainly a runner from an older build of this file.
+            # That IS the condition we are looking for, so say so.
+            previous = previous or "another process (it holds the lock file)"
+            handle.close()
+            _refuse(previous)
 
-    handle.seek(0)
-    previous = handle.read(_IDENTITY_BYTES).decode("utf-8", "replace").strip("\x00 \r\n")
+        if not _take_lock(handle):
+            handle.close()
+            _refuse(previous or "process unknown")
 
+        identity = (f"pid {os.getpid()} on {platform.node()} since "
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
+        handle.seek(0)
+        handle.write(identity.encode("utf-8")[:_IDENTITY_BYTES].ljust(_IDENTITY_BYTES, b" "))
+        handle.flush()
+        return handle
+
+    except SystemExit:
+        raise                                   # a real refusal: let it through
+    except Exception as exc:                    # noqa: BLE001 - fail OPEN, always
+        print(f"[lock] could not take the single-runner lock ({exc.__class__.__name__}: "
+              f"{exc}). Carrying on - check for other runners by hand if estimates "
+              f"behave oddly.")
+        try:
+            if handle is not None:
+                handle.close()
+        except Exception:                       # noqa: BLE001
+            pass
+        return None
+
+
+def _take_lock(handle) -> bool:
+    """True if this process now holds the lock, False if somebody else does.
+
+    TWO QUESTIONS, KEPT APART. "Which locking API does this platform have" and
+    "did the lock succeed" are different, and answering them in one try/except
+    got it wrong: fcntl.flock was called INSIDE the except ImportError handler,
+    so the BlockingIOError it raises when another process holds the lock was not
+    caught by the sibling except OSError. The refusal became a fail-open, and the
+    guard silently stopped guarding — visible only because the check that proves
+    it printed STARTED ANYWAY."""
     handle.seek(_LOCK_BYTE)
     try:
+        import msvcrt                                       # Windows
+    except ImportError:
+        import fcntl                                        # everywhere else
         try:
-            import msvcrt                                   # Windows
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        except ImportError:
-            import fcntl                                    # everywhere else
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+    try:
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return True
     except OSError:
-        handle.close()
-        raise SystemExit(
-            f"\nA runner is already running on this machine "
-            f"({previous or 'process unknown'}).\n"
-            f"  One runner per machine: SOLIDWORKS and Excel are driven on one\n"
-            f"  desktop, and a second runner here would fight the first for them.\n"
-            f"  Close that window, or find strays with:\n"
-            f"      Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" |\n"
-            f"        Where-Object CommandLine -like '*sdi_estimate_runner*' |\n"
-            f"        Select-Object ProcessId, CommandLine\n")
+        return False
 
-    # Written at offset 0, padded to a fixed width and never truncated, so it can
-    # never reach the locked byte.
-    identity = (f"pid {os.getpid()} on {platform.node()} since "
-                f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
-    handle.seek(0)
-    handle.write(identity.encode("utf-8")[:_IDENTITY_BYTES].ljust(_IDENTITY_BYTES, b" "))
-    handle.flush()
-    return handle          # held open for the life of the process; do not close
+
+def _refuse(who: str):
+    raise SystemExit(
+        f"\nA runner is already running on this machine ({who}).\n"
+        f"  One runner per machine: SOLIDWORKS and Excel are driven on one\n"
+        f"  desktop, and a second runner here would fight the first for them.\n"
+        f"  Close that window, or find strays with:\n"
+        f"      Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" |\n"
+        f"        Where-Object CommandLine -like '*sdi_estimate_runner*' |\n"
+        f"        Select-Object ProcessId, CommandLine\n"
+        f"  If nothing is listed, delete the stale lock and start again:\n"
+        f"      Remove-Item C:\\ClaudeVision\\output\\.runner.lock\n")
 
 
 # ── the polling loop ─────────────────────────────────────────────────────────

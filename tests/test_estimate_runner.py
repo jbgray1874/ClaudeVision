@@ -219,3 +219,39 @@ def test_writing_the_identity_does_not_fight_the_lock(engine):
     text = lock_file.read_bytes()[:runner._IDENTITY_BYTES].decode().strip()
     assert f"pid {os.getpid()}" in text
     held.close()
+
+
+def test_an_unexpected_failure_never_stops_the_runner(engine, monkeypatch, capsys):
+    """THE GUARD MUST NOT BECOME THE PROBLEM. This one has twice stopped the one
+    runner somebody wanted: once by locking the byte it then wrote to, once by
+    failing to read a byte another handle held. A definite "somebody else has
+    this" is refused; anything else at all warns and carries on."""
+    runner, root = engine
+
+    def explode(*_a, **_k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(runner.os, "open", explode)
+
+    assert runner.claim_the_machine(root) is None, "it must return, not raise"
+    assert "could not take the single-runner lock" in capsys.readouterr().out
+
+
+def test_the_refusal_survives_the_platform_branch(engine):
+    """Two questions kept apart: which locking API this platform has, and whether
+    the lock succeeded. Answering both in one try/except put fcntl.flock inside
+    the except ImportError handler, so the error it raises when another process
+    holds the lock escaped the sibling except OSError — and the refusal quietly
+    became a fail-open."""
+    runner, root = engine
+    held = runner.claim_the_machine(root)
+    assert held is not None
+    assert runner._take_lock(held) is True, "the holder still holds it"
+
+    import os as _os
+    second = _os.fdopen(_os.open(str(root / "output" / ".runner.lock"),
+                                 _os.O_RDWR | _os.O_CREAT), "r+b")
+    try:
+        assert runner._take_lock(second) is False, (
+            "a second handle must be refused, not fail open")
+    finally:
+        second.close(); held.close()
