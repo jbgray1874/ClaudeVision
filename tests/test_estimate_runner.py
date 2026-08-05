@@ -174,3 +174,48 @@ def test_the_engine_is_driven_exactly_as_a_person_would(engine):
     assert cmd[cmd.index("--order-qty") + 1] == "10"
     assert cmd[cmd.index("--customer") + 1] == "Boots"
     assert cmd[0] == "python", "a missing engine python must fall back to PATH, not crash"
+
+
+# ── one runner per machine ───────────────────────────────────────────────────
+def test_a_second_runner_on_this_machine_refuses_and_names_the_first(engine):
+    """Two runners on one desktop fight over one Excel and one SOLIDWORKS
+    session, and the service cannot tell them apart because the runner id is
+    deliberately stable per machine. Six were found running at once."""
+    runner, root = engine
+
+    held = runner.claim_the_machine(root)
+    assert held is not None
+
+    with pytest.raises(SystemExit) as exit_info:
+        runner.claim_the_machine(root)
+
+    said = str(exit_info.value)
+    assert "already running on this machine" in said
+    assert f"pid {os.getpid()}" in said, "it must name WHICH process, not just that one exists"
+    assert "sdi_estimate_runner" in said, "and give the command to find strays"
+
+
+def test_the_lock_is_released_when_the_holder_lets_go(engine):
+    """The lock is an OS lock, not a pid file, precisely so it survives nothing:
+    Ctrl+C, a crash, a closed window, a laptop that slept. A pid file outlives
+    all of those and then refuses to start the runner you actually want."""
+    runner, root = engine
+    first = runner.claim_the_machine(root)
+    first.close()                                   # as process exit would
+    second = runner.claim_the_machine(root)         # must not raise
+    assert second is not None
+    second.close()
+
+
+def test_writing_the_identity_does_not_fight_the_lock(engine):
+    """The first version locked byte 0 and then wrote the holder's identity to
+    byte 0 through the same handle, and died on the flush with Permission
+    denied. The lock byte sits far past anything written."""
+    runner, root = engine
+    assert runner._LOCK_BYTE > runner._IDENTITY_BYTES, (
+        "the locked byte must be outside the region the identity is written to")
+    held = runner.claim_the_machine(root)           # would raise if they overlapped
+    lock_file = root / "output" / ".runner.lock"
+    text = lock_file.read_bytes()[:runner._IDENTITY_BYTES].decode().strip()
+    assert f"pid {os.getpid()}" in text
+    held.close()

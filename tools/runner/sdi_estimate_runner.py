@@ -135,6 +135,15 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
 
 
 # ── one runner per machine ───────────────────────────────────────────────────
+# The lock is taken on a byte FAR PAST anything we write. msvcrt.locking locks at
+# the file's current position, so locking byte 0 and then writing the holder's
+# identity there means the process fights its own lock — which is exactly what
+# the first version did, and it failed with "Permission denied" on the flush.
+# Separating the two regions means the lock is a lock and the text is text.
+_LOCK_BYTE = 4096
+_IDENTITY_BYTES = 256
+
+
 def claim_the_machine(engine_root: Path):
     """Refuse to start if a runner is already running here, and say which one.
 
@@ -142,20 +151,27 @@ def claim_the_machine(engine_root: Path):
     would drive the same COM automation from two processes, and they cannot even
     tell each other apart: the runner id is deliberately stable per machine so a
     restart does not leave the service listing a graveyard of dead runners, which
-    means every process on this box registers as the SAME runner and posts
-    progress the service cannot attribute.
+    means every process on this box registers as the SAME runner.
 
-    It is also how a test window opened on Tuesday is still polling on Friday.
-    Five windows, five processes, a claim every second, and a service log in
-    which nothing else can be seen.
+    It is also how a window opened on Tuesday is still polling on Friday. Six of
+    them were found running at once, three under the wrong interpreter.
 
     An OS-level lock rather than a pid file, because it is released when the
-    process dies HOWEVER it dies — Ctrl+C, a crash, a closed window, a machine
-    that went to sleep and never came back. A pid file outlives all of those and
-    then refuses to start the runner you actually want."""
+    process dies HOWEVER it dies: Ctrl+C, a crash, a closed window, a laptop that
+    slept and never came back. A pid file survives all of those and then refuses
+    to start the runner you actually want. The pid we write is only for the
+    message — the lock decides, so the text can be stale without harming anything.
+    """
     lock_path = Path(engine_root) / "output" / ".runner.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(lock_path, "a+")
+
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    handle = os.fdopen(fd, "r+b")          # binary: no newline translation to trip on
+
+    handle.seek(0)
+    previous = handle.read(_IDENTITY_BYTES).decode("utf-8", "replace").strip("\x00 \r\n")
+
+    handle.seek(_LOCK_BYTE)
     try:
         try:
             import msvcrt                                   # Windows
@@ -164,20 +180,23 @@ def claim_the_machine(engine_root: Path):
             import fcntl                                    # everywhere else
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        handle.seek(0)
-        who = handle.read().strip() or "another process"
         handle.close()
         raise SystemExit(
-            f"\nA runner is already running on this machine ({who}).\n"
+            f"\nA runner is already running on this machine "
+            f"({previous or 'process unknown'}).\n"
             f"  One runner per machine: SOLIDWORKS and Excel are driven on one\n"
             f"  desktop, and a second runner here would fight the first for them.\n"
-            f"  Close that window, or check for stray runners with:\n"
+            f"  Close that window, or find strays with:\n"
             f"      Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" |\n"
             f"        Where-Object CommandLine -like '*sdi_estimate_runner*' |\n"
             f"        Select-Object ProcessId, CommandLine\n")
-    handle.seek(0); handle.truncate()
-    handle.write(f"pid {os.getpid()} on {platform.node()} since "
-                 f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Written at offset 0, padded to a fixed width and never truncated, so it can
+    # never reach the locked byte.
+    identity = (f"pid {os.getpid()} on {platform.node()} since "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    handle.seek(0)
+    handle.write(identity.encode("utf-8")[:_IDENTITY_BYTES].ljust(_IDENTITY_BYTES, b" "))
     handle.flush()
     return handle          # held open for the life of the process; do not close
 
