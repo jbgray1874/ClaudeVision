@@ -191,6 +191,7 @@
   <ul class="listing" id="listing"></ul>
   <div class="dfoot">
     <span class="left" id="dHelp"></span>
+    <button id="dAll">Add all</button>
     <button id="dChoose">Use this folder</button>
   </div>
 </dialog>
@@ -283,8 +284,9 @@ $("clearFiles").onclick = () => { drawings = []; renderFiles(); refresh(); };
    open. That distinction is the whole point — a native picker would give
    file contents the estimator cannot re-read from disk. */
 const dlg=$("browser"), listing=$("listing"), crumbs=$("crumbs"),
-      dTitle=$("dTitle"), dHelp=$("dHelp"), dChoose=$("dChoose");
+      dTitle=$("dTitle"), dHelp=$("dHelp"), dChoose=$("dChoose"), dAll=$("dAll");
 let mode="folder", cwd="", roots=[], selected=null;
+let shown=[];                 // the listable FILES in the folder on screen
 
 async function openBrowser(m){
   mode = m; selected = null;
@@ -292,6 +294,7 @@ async function openBrowser(m){
                      : m==="files"  ? "Select drawing files"
                      : "Completed estimates";
   dChoose.style.display = (m==="output") ? "none" : "";
+  dAll.style.display = (m==="files") ? "" : "none";
   dHelp.textContent = m==="files" ? "Click files to select. Click a folder to open it."
                     : m==="folder" ? "Open a folder, then Use this folder."
                     : "";
@@ -349,6 +352,7 @@ function renderCrumbs(path){
 async function navigate(path){
   cwd = path; selected = null;
   listing.innerHTML = '<li><span class="nm" style="color:var(--dim)">Reading…</span></li>';
+  shown = []; refreshAddAll();
   // EVERY LEVEL IS ONE CLICK. An "Up" button walks back a step at a time, and an
   // empty folder four deep in a CAD vault leaves nothing else to click — which is
   // how you get stuck somewhere you can see the way out of but cannot reach.
@@ -359,6 +363,8 @@ async function navigate(path){
   catch(e){ listing.innerHTML = `<li><span class="nm" style="color:var(--bad)">Cannot read this folder — ${e.message}</span></li>`; return; }
 
   listing.innerHTML="";
+  shown = (data.items||[]).filter(it => !it.is_dir);
+  refreshAddAll();
   if(!(data.items||[]).length)
     listing.innerHTML='<li><span class="nm" style="color:var(--dim)">Empty</span></li>';
   (data.items||[]).forEach(it => {
@@ -376,11 +382,31 @@ async function navigate(path){
       if(on) drawings = drawings.filter(d => d.path !== it.path);
       else if(!drawings.some(d => d.path===it.path))
         drawings.push({path:it.path, name:it.name, is_dir:false});
-      renderFiles(); refresh();
+      renderFiles(); refresh(); refreshAddAll();
     };
     listing.appendChild(li);
   });
 }
+function refreshAddAll(){
+  // NAMES THE NUMBER, so nobody presses it wondering what it will do. A folder of
+  // twelve DXFs is the ordinary case and clicking twelve times is not a workflow.
+  const pending = shown.filter(it => !drawings.some(d => d.path === it.path));
+  dAll.textContent = pending.length ? `Add all ${pending.length}` : "Add all";
+  dAll.disabled = !pending.length;
+}
+
+dAll.onclick = () => {
+  shown.forEach(it => {
+    if(drawings.some(d => d.path === it.path)) return;
+    drawings.push({path: it.path, name: it.name, is_dir: false});
+  });
+  // The rows already on screen must agree with what was just added.
+  [...listing.children].forEach(li => {
+    if(!li.classList.contains("dir")) li.setAttribute("aria-selected","true");
+  });
+  renderFiles(); refresh(); refreshAddAll();
+};
+
 dChoose.onclick = () => {
   if(mode==="folder" && cwd){
     if(!drawings.some(d => d.path===cwd))
