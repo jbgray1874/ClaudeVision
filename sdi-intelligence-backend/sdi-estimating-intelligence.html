@@ -185,6 +185,7 @@
 <dialog id="browser">
   <div class="dhead">
     <h3 id="dTitle">Select a job folder</h3>
+    <button id="dUp" title="Up one level (Backspace)">↑ Up</button>
     <button id="dClose">Close</button>
   </div>
   <div class="crumbs" id="crumbs"></div>
@@ -284,7 +285,8 @@ $("clearFiles").onclick = () => { drawings = []; renderFiles(); refresh(); };
    open. That distinction is the whole point — a native picker would give
    file contents the estimator cannot re-read from disk. */
 const dlg=$("browser"), listing=$("listing"), crumbs=$("crumbs"),
-      dTitle=$("dTitle"), dHelp=$("dHelp"), dChoose=$("dChoose"), dAll=$("dAll");
+      dTitle=$("dTitle"), dHelp=$("dHelp"), dChoose=$("dChoose"), dAll=$("dAll"),
+      dUp=$("dUp");
 let mode="folder", cwd="", roots=[], selected=null;
 let shown=[];                 // the listable FILES in the folder on screen
 
@@ -310,6 +312,7 @@ async function openBrowser(m){
 }
 function showRoots(){
   cwd=""; crumbs.textContent="Shares";
+  shown=[]; refreshAddAll(); refreshUp();
   listing.innerHTML="";
   roots.forEach(r => {
     const li=document.createElement("li"); li.className="dir";
@@ -318,6 +321,38 @@ function showRoots(){
     li.onclick=()=>navigate(r.path); listing.appendChild(li);
   });
 }
+function parentOf(path){
+  // null means "there is no folder above this one" — the share list, not an error.
+  const p = (path || "").replace(/\\+$/, "");
+  if(!p) return null;
+  const parts = p.split("\\").filter(Boolean);
+  if(p.startsWith("\\\\")){
+    // \\server\share is the shallowest LISTABLE folder on a UNC path. Above it
+    // is not \\server — that is a machine, and nothing on this page can read it.
+    if(parts.length <= 2) return null;
+    return "\\\\" + parts.slice(0, -1).join("\\");
+  }
+  if(parts.length <= 1) return null;
+  const up = parts.slice(0, -1).join("\\");
+  return /^[A-Za-z]:$/.test(up) ? up + "\\" : up;   // C: is not a folder; C:\ is
+}
+function refreshUp(){
+  // At a share root there IS still somewhere to go — back to the list of shares.
+  // Only the share list itself has nothing above it.
+  dUp.style.display = cwd ? "" : "none";
+  dUp.disabled = !cwd;
+}
+dUp.onclick = () => { if(cwd){ const up = parentOf(cwd); up ? navigate(up) : showRoots(); } };
+
+// Backspace is what Explorer does, and the dialog has no text field to steal it.
+dlg.addEventListener("keydown", ev => {
+  const typing = /^(INPUT|TEXTAREA)$/.test(ev.target.tagName || "");
+  if(typing) return;
+  if(ev.key === "Backspace" || (ev.altKey && ev.key === "ArrowLeft")){
+    ev.preventDefault(); dUp.onclick();
+  }
+});
+
 function renderCrumbs(path){
   crumbs.innerHTML = "";
   const step = (label, target) => {
@@ -352,10 +387,12 @@ function renderCrumbs(path){
 async function navigate(path){
   cwd = path; selected = null;
   listing.innerHTML = '<li><span class="nm" style="color:var(--dim)">Reading…</span></li>';
-  shown = []; refreshAddAll();
-  // EVERY LEVEL IS ONE CLICK. An "Up" button walks back a step at a time, and an
-  // empty folder four deep in a CAD vault leaves nothing else to click — which is
-  // how you get stuck somewhere you can see the way out of but cannot reach.
+  shown = []; refreshAddAll(); refreshUp();
+  // TWO WAYS BACK, because they answer different questions. Up answers "that was
+  // the wrong folder" — one step, the same reflex as Explorer. The crumbs answer
+  // "take me to the client" from four levels down without four clicks. Neither
+  // depends on the listing having anything in it: an empty folder deep in a CAD
+  // vault is exactly where you get stuck if the only way out is a row to click.
   renderCrumbs(path);
   let data;
   try{ const r = await api("/api/files?path=" + encodeURIComponent(path));
