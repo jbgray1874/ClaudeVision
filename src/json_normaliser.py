@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import part_code_conventions
 from source_precedence import apply_field
 
 logger = logging.getLogger(__name__)
@@ -235,10 +236,24 @@ def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:
     other steel hints -> lexicon on declared material string.
     """
     raw = _first_material_text(part)
-    # Reject OCR artefacts misread as materials (Card, Led, Vinyl etc.)
-    _REJECT_MAT = {"LED", "CARD", "VINYL", "TAPE"}
-    if str(raw or "").strip().upper() in _REJECT_MAT:
-        raw = ""
+    # DID THE MATERIAL TEXT SAY ANYTHING WE RECOGNISE?
+    #
+    # This used to be `_REJECT_MAT = {"LED", "CARD", "VINYL", "TAPE"}` — four OCR artefacts,
+    # hand-listed, one per job that had gone wrong. Every one of them is simply a token the
+    # lexicon does not resolve, so the list was a sample of a rule rather than the rule, and
+    # the fifth job brings the fifth token: on 12392 the steel brackets read "Card 2mm", which
+    # the exact-match set does not contain. They reached costing with no material at all.
+    #
+    # The general test is the lexicon itself. Text that resolves to nothing we hold is not a
+    # material; it is noise that happens to be non-empty, and it must not outrank what the
+    # drawing states elsewhere — least of all its own part-numbering convention.
+    #
+    # DELIBERATELY NOT BLANKED HERE. The old list cleared `raw`, which is safe for four
+    # tokens and wrong in general: "PMMA" and "DISPA" also resolve to nothing, and branches
+    # below read them as substrings to reach ACRYLIC and BOUGHT_IN. Blanking every
+    # unresolvable token would take those readings with it. The question is asked instead at
+    # the two gates that were each approximating it with a list of their own.
+    _raw_says_something = normalise_material(raw) is not None
     pn = str(part.get("part_number") or "")
     blob = _part_text_blob(part).upper()
     pn_u = pn.upper()
@@ -342,7 +357,12 @@ def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:
         or "WELDMENT" in _desc_upper
         or "WELDMENT" in pn_u
     )
-    if _is_wire_tube and str(raw or "").upper() in ("", "UNKNOWN", "TIMBER", "WOOD", "NONE"):
+    # The literal list this used to test — "", UNKNOWN, TIMBER, WOOD, NONE — is two ideas:
+    # the text said nothing, or it said timber over geometry that cannot be timber. Both
+    # survive; unresolvable noise now joins the first, so a wire frame whose material read
+    # "Card" is steel for the same reason a blank one is.
+    _raw_resolved = normalise_material(raw)
+    if _is_wire_tube and (_raw_resolved is None or _raw_resolved == "TIMBER"):
         return "MILD_STEEL"
 
     # Timber joinery / boards when description clearly says so (before generic SA rule).
@@ -357,17 +377,24 @@ def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:
         return "MILD_STEEL"
 
     # PN suffix inference: -xxM=MILD_STEEL, -xxA=ACRYLIC, -xxT=MDF
-    _raw_u = str(raw or "").strip().upper()
-    if not _raw_u or _raw_u in ("UNKNOWN","NONE",""):
-        _sfx_m = re.search(r"-\d+([TMAatma])$", pn_u.strip())
-        if _sfx_m:
-            _s = _sfx_m.group(1).upper()
-            if _s == "M":
-                return "MILD_STEEL"
-            elif _s == "A":
-                return "ACRYLIC"
-            elif _s == "T":
-                return "MDF"
+    #
+    # THE GATE ASKED THE WRONG QUESTION. It asked whether the material text was ABSENT
+    # ("", UNKNOWN, NONE) when what it means is whether the text told us anything. Those are
+    # the same on a blank drawing and different on a noisy one, and the noisy case is the
+    # common one: "Card", "Card 2mm", "N/A", "TBC", "SEE DRAWING" are all non-empty and all
+    # resolve to nothing. Under the old gate each of them silently outranked SDI's own
+    # numbering convention, and the part went forward with no material — which is how job
+    # 12392's -01M and -02M brackets, parts we laser and fold ourselves, came back as
+    # purchased components with an AI market estimate standing in for the steel.
+    #
+    # Still weak, and still last: every branch above — a stated material, timber cues,
+    # acrylic cues, wire/tube geometry — has already had its say. A convention only speaks
+    # where the drawing did not.
+    if not _raw_says_something:
+        _sfx = part_code_conventions.material_suffix(pn_u.strip())
+        _by_letter = {"M": "MILD_STEEL", "A": "ACRYLIC", "T": "MDF"}
+        if _sfx in _by_letter:
+            return _by_letter[_sfx]
     return normalise_material(raw)
 
 

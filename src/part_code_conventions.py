@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-__all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base"]
+__all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base", "material_suffix"]
 
 # A trailing material letter, and only after a digit — so "11350-01-01M" yields
 # "11350-01-01" while a code that simply ends in a letter ("...-GA") is left alone.
@@ -57,6 +57,29 @@ _MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\d-])", re.IGNORECASE)
 # whose name merely ends in those characters are untouched.
 _MIRROR_SUFFIX = re.compile(r"(?:[\s_-]+|(?<=\d))MIR(?:ROR(?:ED)?|ORED|OR)?$",
                             re.IGNORECASE)
+
+
+def material_suffix(identity: str) -> str:
+    """The material letter SDI's numbering convention puts on a part it CUTS — "M", "A",
+    "T" — or "" for a code that carries none.
+
+    `base_code` has always stripped this letter; nothing could ask what it SAID. That
+    asymmetry is why job 12392's "-01M" and "-02M" brackets reached costing with no material
+    at all: the drawing's material text read as "Card", which resolves to nothing in our
+    lexicon, and the readers that fall back on the part number only did so when the text was
+    BLANK. Unresolvable text is not blank, so the convention never got to speak, and a part
+    with no material defaults to bought-in — fabrication labour silently gone from two steel
+    brackets we cut ourselves.
+
+    Returned as the LETTER, not a material code. This module knows the drawing's spelling
+    conventions and deliberately not the material lexicon: which sheet "M" buys is
+    json_normaliser's question, and answering it here would put the lexicon in two places.
+
+    WEAK BY CONSTRUCTION, exactly as `base_code` treats it. A suffix is a naming convention,
+    not an observation. Every caller must let a material the drawing actually STATES win.
+    """
+    match = _MATERIAL_SUFFIX.match(str(identity or "").strip())
+    return match.group(2).upper() if match else ""
 
 
 def is_mirror_code(identity: str) -> bool:

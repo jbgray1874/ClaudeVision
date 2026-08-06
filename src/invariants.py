@@ -1001,6 +1001,87 @@ def check_uncorroborated_bom_lines_are_not_silent(summary: Any) -> List[Dict[str
         share_pct=round(_share, 1))]
 
 
+def check_bom_lines_survive_the_merge(summary: Any) -> List[Dict[str, Any]]:
+    """A part used by two assemblies must still be two BOM lines when costing sees it.
+
+    A BOM line is the statement "this assembly uses N of that part". The same part under two
+    assemblies is two lines, two quantities and two owners, and the readers record it that
+    way — bom_pipeline stamps every row with its parent page and deliberately does not
+    deduplicate, because "the same code legitimately recurs across parent BOMs".
+
+    Then the rollup merged by part number. On job 12392 — one enquiry, two GAs — the 02
+    drawing's 16 M4x8 fixings and the 04 drawing's 4 survived as one line of 16; the 04
+    brackets lost the edge that named their parent and arrived at costing as orphans. The
+    engine held both lists the whole time and compared them to nothing.
+
+    So this compares them. Deliberately narrow: it asks only about codes the readers
+    themselves recorded under MORE THAN ONE parent, and only where some of those lines
+    survived. A code that vanishes entirely has a different cause — drawing furniture, a
+    weldment parent shadowed by its children, a catalogue reclassification — and those are
+    legitimate whole-row drops that other checks and other rules govern. Partial survival
+    cannot be any of them: it is a merge that treated two lines as one.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("bom_line_survival", "This job is not a readable structure.")
+    da = summary.get("document_analysis")
+    if not isinstance(da, dict):
+        return []
+    raw = da.get("bom_rows")
+    final = da.get("bay_bom_rows")
+    # No rollup ran on this job, so there is no merge to check. Not a failure and not a
+    # silent pass either — there are genuinely no two lists here to compare.
+    if not isinstance(raw, list) or not isinstance(final, list) or not raw or not final:
+        return []
+
+    # ONE DEFINITION OF A LINE, shared with the code that does the merging. A private copy
+    # here would agree with it today and drift the first time either is touched — which is
+    # the failure this check exists to catch, reproduced inside the check itself.
+    try:
+        from bay_rollup import _row_code, _row_parent
+    except Exception as exc:                                        # noqa: BLE001
+        return _unevaluated("bom_line_survival",
+                            f"The BOM line identity could not be imported ({exc}).")
+
+    def _lines(rows: List[Any]) -> Dict[str, set]:
+        out: Dict[str, set] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            code, parent = _row_code(r), _row_parent(r)
+            if code and parent:
+                out.setdefault(code, set()).add(parent)
+        return out
+
+    before, after = _lines(raw), _lines(final)
+    collapsed = []
+    for code, parents in sorted(before.items()):
+        if len(parents) < 2:
+            continue                       # one owner: nothing could have been collapsed
+        kept = after.get(code) or set()
+        if not kept:
+            continue                       # dropped whole, which is not this check's claim
+        if len(kept) < len(parents):
+            collapsed.append({"part_number": code,
+                              "parents_read": sorted(parents),
+                              "parents_kept": sorted(kept),
+                              "lines_lost": len(parents) - len(kept)})
+    if not collapsed:
+        return []
+
+    _lost = sum(c["lines_lost"] for c in collapsed)
+    return [_violation(
+        "bom_lines_collapsed_by_part_number", BLOCKING,
+        f"{_lost} BOM line(s) across {len(collapsed)} part(s) were merged away between the "
+        f"drawing read and costing. Each was a separate assembly's use of the part, with its "
+        f"own quantity: "
+        + "; ".join(f"{c['part_number']} read under {len(c['parents_read'])} assemblies "
+                    f"({', '.join(c['parents_read'])}), costed under "
+                    f"{len(c['parents_kept'])}" for c in collapsed[:6])
+        + ". The quantities of the lost lines are not in the estimate and the parts they "
+          "belonged to have no parent.",
+        parts=collapsed[:10], count=len(collapsed), lines_lost=_lost)]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -1594,6 +1675,7 @@ CHECKS = (
     check_price_disagreement_is_declared,
     check_a_measured_plate_is_not_charged_for_folding,
     check_canonical_route_shadow,
+    check_bom_lines_survive_the_merge,
     check_prices_are_firm,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,

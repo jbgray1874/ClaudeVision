@@ -29,6 +29,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+# The one module that knows how SDI's part numbers are spelled. Identity-only and
+# dependency-free, like this one, so asking it here costs nothing and keeps the convention
+# in a single place — a private regex in each reader is how one of them goes quietly stale.
+import part_code_conventions
+
 __all__ = [
     "is_bought_in",
     "bought_in_reason",
@@ -110,6 +115,22 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
         # The weakest signal there is: "we could not identify the material". A family read
         # from the drawing is a positive statement and outranks that absence.
         if fam in FABRICATED_FAMILIES:
+            return ""
+        # SO IS THE PART NUMBER. "12392-04-01M" is not a name; it is SDI's own convention for
+        # a part we cut in metal (-M steel, -A acrylic, -T MDF), and it is written by the
+        # person who drew it. That is a statement about what the part IS, from the drawing,
+        # in exactly the way a stated family is — so it stops the same default, and only that
+        # default. Every catalogue rule above has already returned: a BI- code, a bought-in
+        # page role, a bought-in-only source and an explicit flag all outrank this and are
+        # untouched, which matters because the cost of getting THIS wrong is a purchased item
+        # carrying laser and fold time.
+        #
+        # Two independent paths reached the same wrong answer on 12392 and this is the second
+        # one. The first was json_normaliser never consulting the convention when the material
+        # text was noise rather than blank; fixing it there means these brackets arrive as
+        # MILD_STEEL and never reach this branch. But a part can be stamped BOUGHT_IN by other
+        # routes, and a rule that holds in one module and not the other is not one rule.
+        if part_code_conventions.material_suffix(_upper(part.get("part_number"))):
             return ""
         return "no material was identified, so it defaulted to bought-in"
     return ""

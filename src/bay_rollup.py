@@ -111,6 +111,30 @@ def _row_qty(row: Dict[str, Any]) -> float:
     return 1.0
 
 
+def _row_parent(row: Dict[str, Any]) -> str:
+    """WHICH ASSEMBLY THIS LINE BELONGS TO, as the reader recorded it — "" when unrecorded.
+
+    A BOM line is not a part. It is the statement "this assembly uses N of that part", and
+    the same part under two assemblies is two lines with two quantities and two owners.
+    bom_pipeline knows this and says so in its own docstring: it deliberately does not
+    deduplicate, "the same code legitimately recurs across parent BOMs", and it stamps every
+    row with the parent page it came from.
+
+    Nothing downstream ever read that field. Job 12392 is one enquiry with two GAs — 02 with
+    16 M4x8 fixings, 04 with 4 more — and a dedupe keyed on the part number alone kept one
+    FIXING line and dropped the other, along with its parent edge and its quantity. The
+    reader had the tree; the merge threw it away.
+
+    source_pdf is accepted as the fallback because the folder merge stamps it on every row,
+    so even a reader that records no page label still distinguishes two drawings.
+    """
+    for key in ("bom_parent", "parent", "parent_code", "source_pdf"):
+        v = str(row.get(key) or "").strip()
+        if v:
+            return v.upper()
+    return ""
+
+
 def _est_code(est: Dict[str, Any]) -> str:
     return _norm_code(est.get("part_number") or est.get("item_number") or "")
 
@@ -531,21 +555,64 @@ def dedupe_bom_rows_for_bay_rollup(
     bom_rows: List[Dict[str, Any]],
     part_estimates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """One BOM row per part code; drop synthesized detail rows already on a GA line."""
+    """One BOM row per LINE — (parent, code) — dropping synthesized rows already on a GA line.
+
+    This was one row per part CODE, which is the same thing only while a job has a single
+    assembly. Give it two GAs from one enquiry and it silently keeps whichever fixing line
+    it met first; give it one GA whose sub-assemblies each use the same fastener and it does
+    the same thing inside a single drawing. Both are ordinary, and both lost a real line, a
+    real quantity and a real parent edge with nothing said.
+
+    SPLITTING REQUIRES POSITIVE EVIDENCE, which is what makes this safe to turn on
+    everywhere. Two rows become two lines only where the readers RECORDED two different
+    parents. A row whose parent is unrecorded cannot be shown to be a separate line, so it
+    collapses onto the code exactly as before — which means a job carrying no parent
+    evidence at all behaves identically to the old code, by construction rather than by a
+    flag. The change can add a line only where the drawing said there was one.
+    """
     est_codes = {_est_code(e) for e in part_estimates if _est_code(e)}
     shadowed = codes_shadowed_by_parent_bom(bom_rows, est_codes)
-    by_code: Dict[str, Dict[str, Any]] = {}
+
+    # Which codes were seen under a NAMED parent, and which parents. Collected first because
+    # the floating rows below need to know whether a code has any parented line at all.
+    parents_by_code: Dict[str, set] = {}
+    for row in bom_rows:
+        code, parent = _row_code(row), _row_parent(row)
+        if code and parent:
+            parents_by_code.setdefault(code, set()).add(parent)
+
+    by_line: Dict[tuple, Dict[str, Any]] = {}
     for row in bom_rows:
         code = _row_code(row)
         if not code:
             continue
         if row.get("source") == "folder_job_synthesized" and code in shadowed:
             continue
+        parent = _row_parent(row)
+        # AN UNPARENTED ROW IS NOT A SECOND LINE. Where the code already has parented lines,
+        # this row is the same part read by something that did not record an owner — a
+        # catalogue scan, a synthesized fallback. Keying it on "" would emit it alongside
+        # the real lines and count the part twice, so it joins the first parent instead and
+        # is settled by source priority like any other duplicate.
+        if not parent:
+            known = parents_by_code.get(code)
+            parent = sorted(known)[0] if known else ""
+        key = (code, parent)
         pri = _BOM_SOURCE_PRIORITY.get(str(row.get("source") or ""), 5)
-        prev = by_code.get(code)
+        prev = by_line.get(key)
         if prev is None or pri < _BOM_SOURCE_PRIORITY.get(str(prev.get("source") or ""), 5):
-            by_code[code] = row
-    return list(by_code.values())
+            by_line[key] = row
+
+    # SAY WHEN A CODE IS OWNED TWICE. Downstream readers key on the part number in several
+    # places, so a code with two lines is a shape they have not had to handle before; if one
+    # of them collapses them again this is the sentence that makes the difference visible.
+    _multi = {c: sorted(p) for c, p in parents_by_code.items() if len(p) > 1}
+    if _multi:
+        for _code, _parents in sorted(_multi.items()):
+            print(f"   [bom] '{_code}' is used by {len(_parents)} assemblies "
+                  f"({', '.join(_parents)}) — kept as separate lines", flush=True)
+
+    return list(by_line.values())
 
 
 def dedupe_weldment_parent_rows(bom_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
