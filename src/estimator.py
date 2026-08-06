@@ -1749,11 +1749,26 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # fabricated leaf, and measurement outranks a transcribed hierarchy (dxf 80 >
     # llm_full_extract 40). Where they disagree the geometry wins and the part stays a leaf.
     _sub_asm_by_bom = bool(part.get("is_sub_assembly")) and not _has_own_flat
+    # THE FIFTH SPELLING. The canonical graph reaches its own conclusion and stamps it as
+    # canonical_kind; this test knew four field names and not that one. Asked through the
+    # shared predicate so there is one definition of "this is a parent" rather than a copy
+    # per pass — the exact defect the comment above records, one name later.
+    #
+    # Unioned, never substituted: this can only recognise MORE parents than before, and the
+    # failure direction it guards is a parent charged as a leaf, which books material and
+    # fabrication twice. Still gated on _has_own_flat below for the hierarchy-only signals,
+    # because a measured flat outranks a transcribed tree.
+    try:
+        import bought_in_policy as _bip
+        _canonical_parent = (_bip.is_assembly(part) and not _has_own_flat)
+    except Exception:
+        _canonical_parent = False
     _is_weldment_parent = (
         any(_t in _desc_wm for _t in _wm_tokens)
         or (not _has_own_flat and any(re.search(_sfx, _pn_wm) for _sfx in _wm_suffixes))
         or bool(part.get("is_assembly_parent"))
         or _sub_asm_by_bom
+        or _canonical_parent
     )
     if _is_weldment_parent:
         # ONE PARENT TEST, NOT TWO THAT DISAGREE.

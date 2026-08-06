@@ -1082,6 +1082,73 @@ def check_bom_lines_survive_the_merge(summary: Any) -> List[Dict[str, Any]]:
         parts=collapsed[:10], count=len(collapsed), lines_lost=_lost)]
 
 
+def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, Any]]:
+    """A parent carrying its children's material or their single-blank operations.
+
+    THE ANSWER WAS RIGHT AND THE READER WAS LOOKING AT A DIFFERENT FIELD. estimator.py
+    records the defect in its own comment — "both suppressions here and in estimate_part
+    keyed on is_assembly_parent, a different name for the same idea" — and 12120-01-103,
+    correctly identified as a sub-assembly from the GA tree, was still given sheet material,
+    a laser and a fold. 12392's panel assembly collected CNC routing, edge banding and
+    laminating from an MDF title block on another sheet.
+
+    So this asks the question at the end, where the four spellings have collapsed into one
+    observable fact: does a record everything agrees is a parent still carry material money
+    or a leaf operation? Both are double counts — the children carry them — and both are
+    money, so BLOCKING.
+
+    Joining and finishing are deliberately not asked about. Welding a parent is the work, and
+    a welded frame is coated as one thing.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("assembly_scope", "This job is not a readable structure.")
+    parts = _parts(summary)
+    if not parts:
+        return []
+    try:
+        import bought_in_policy
+    except Exception as exc:                                        # noqa: BLE001
+        return _unevaluated("assembly_scope",
+                            f"The assembly predicate could not be imported ({exc}).")
+
+    offenders: List[Dict[str, Any]] = []
+    for part in parts:
+        if not bought_in_policy.is_assembly(part):
+            continue
+        # A MEASURED FLAT OUTRANKS A TRANSCRIBED TREE, and the estimator says so where it
+        # decides. A part with its own geometry is a fabricated leaf whatever a hierarchy
+        # called it, and claiming here would contradict the pass that priced it.
+        if part.get("dxf_measured_outline") or part.get("native_flat_pattern") \
+                or part.get("flat_pattern_detected"):
+            continue
+        money = _num(part.get("unit_material_cost_gbp")) or 0.0
+        ops = sorted({str(o) for field in ("textual_operations", "inferred_operations")
+                      for o in (part.get(field) or [])
+                      if str(o).strip().lower() in bought_in_policy.LEAF_ONLY_OPS})
+        if money > 0.005 or ops:
+            offenders.append({
+                "part_number": part.get("part_number"),
+                "reason_it_is_a_parent": bought_in_policy.assembly_reason(part),
+                "material_gbp": round(money, 4) if money else 0.0,
+                "leaf_operations": ops,
+            })
+    if not offenders:
+        return []
+
+    _money = sum(o["material_gbp"] for o in offenders)
+    return [_violation(
+        "assembly_charged_as_a_blank", BLOCKING,
+        f"{len(offenders)} record(s) the hierarchy calls a parent still carry material or "
+        f"single-blank operations that belong to their children"
+        + (f", worth GBP {_money:,.2f} of material" if _money else "") + ": "
+        + "; ".join(f"{o['part_number']} ({o['reason_it_is_a_parent']})"
+                    + (f" GBP {o['material_gbp']:,.2f}" if o["material_gbp"] else "")
+                    + (f" + {', '.join(o['leaf_operations'])}" if o["leaf_operations"] else "")
+                    for o in offenders[:6])
+        + ". Each is counted twice — once here and once on the parts it is made from.",
+        parts=offenders[:10], count=len(offenders), material_gbp=round(_money, 2))]
+
+
 def check_prices_are_firm(summary: Any) -> List[Dict[str, Any]]:
     """Is every applied price one we have actually committed to honour?
 
@@ -1676,6 +1743,7 @@ CHECKS = (
     check_a_measured_plate_is_not_charged_for_folding,
     check_canonical_route_shadow,
     check_bom_lines_survive_the_merge,
+    check_an_assembly_is_not_charged_as_a_blank,
     check_prices_are_firm,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,

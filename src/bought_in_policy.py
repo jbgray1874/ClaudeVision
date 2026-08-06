@@ -41,6 +41,8 @@ __all__ = [
     "bought_in_conflict",
     "strip_fabrication_ops",
     "strip_leaf_operations",
+    "is_assembly",
+    "assembly_reason",
     "FABRICATION_OPS",
     "LEAF_ONLY_OPS",
     "FABRICATED_FAMILIES",
@@ -215,6 +217,43 @@ def bought_in_conflict(part: Dict[str, Any]) -> bool:
     """Bought-in by identity, yet carrying its own measured geometry — the two sources
     disagree about what this part is. Flagged for an estimator, never auto-resolved."""
     return is_bought_in(part) and has_fabrication_evidence(part)
+
+
+def assembly_reason(part: Dict[str, Any]) -> str:
+    """WHY this record is a parent rather than a part we cut, in words, or "" for a leaf.
+
+    THE SAME IDEA UNDER FOUR NAMES. estimator.py's own comment records the defect: "both
+    suppressions here and in estimate_part keyed on is_assembly_parent, a different name for
+    the same idea", and 12120-01-103 was correctly identified as a sub-assembly from the GA
+    tree while still being given sheet material, a laser and a fold — because the field that
+    said so was not the field that pass read. The canonical graph adds a fifth spelling,
+    canonical_kind.
+
+    A union, deliberately, exactly as is_bought_in is: adopting this predicate cannot make
+    any consumer recognise FEWER assemblies than it did before. That is what makes it safe to
+    introduce into a costing path — the failure direction is a parent charged as a leaf,
+    which is material and fabrication booked twice, and a union can only reduce it.
+
+    It does NOT decide anything about geometry. A part with its own measured flat is a
+    fabricated leaf whatever a transcribed hierarchy says, and that arbitration stays where
+    it is, in the caller that holds the measurement.
+    """
+    if not isinstance(part, dict):
+        return ""
+    if str(part.get("canonical_kind") or "").strip().lower() == "assembly":
+        return "the canonical part graph compiled it as an assembly"
+    if part.get("is_assembly_parent"):
+        return "flagged an assembly parent on the record"
+    if part.get("is_sub_assembly"):
+        return "the drawing's hierarchy names it as a sub-assembly"
+    if part.get("assembly_children"):
+        return "it names children of its own"
+    return ""
+
+
+def is_assembly(part: Dict[str, Any]) -> bool:
+    """True when the record is a parent: its material and leaf work belong to its children."""
+    return bool(assembly_reason(part))
 
 
 def strip_leaf_operations(part: Dict[str, Any]) -> List[str]:

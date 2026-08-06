@@ -1076,6 +1076,7 @@ def apply_canonical_evidence_to_parts(
             # laminating, read from an MDF title block on another sheet of the pack, onto a
             # thing that is two steel panels bolted together. A flag no pass reads is a
             # comment. Joining and finishing are untouched: they are what an assembly is.
+            part["canonical_kind"] = "assembly"   # so every later pass reads one answer
             _dropped = bought_in_policy.strip_leaf_operations(part)
             if _dropped:
                 part.setdefault("removed_operations", []).extend(_dropped)

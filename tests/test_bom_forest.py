@@ -300,3 +300,59 @@ def test_a_drawing_file_named_in_the_spaced_form_is_still_recognised():
         [{"part_number": "12392-04-01M", "quantity": 2, "bom_parent": "12392-04-GA"}],
         job_drawing_numbers({"job_source_pdfs": [{"name": "12392-04 - GA.pdf"}]}))
     assert g["parents"].get("12392-04-01M") == {"12392-04-GA"}
+
+
+# ── one predicate, asked by every pass ───────────────────────────────────────────────────
+
+def test_every_spelling_of_parent_reaches_one_answer():
+    """estimator.py records the defect in its own comment: "both suppressions here and in
+    estimate_part keyed on is_assembly_parent, a different name for the same idea". The
+    canonical graph then added a fifth spelling. A union, so no consumer can recognise FEWER
+    parents than it did — the failure direction is a parent charged as a leaf, which books
+    material and fabrication twice."""
+    import bought_in_policy as bp
+    for record, expect in (
+        ({"canonical_kind": "assembly"}, "canonical part graph"),
+        ({"is_assembly_parent": True}, "flagged an assembly parent"),
+        ({"is_sub_assembly": True}, "sub-assembly"),
+        ({"assembly_children": ["12392-02-01M"]}, "children of its own"),
+    ):
+        assert expect in bp.assembly_reason(record), record
+    assert not bp.is_assembly({"part_number": "12392-02-01M"})
+    assert not bp.is_assembly({"assembly_children": []})
+
+
+def test_an_assembly_charged_as_a_blank_is_blocking():
+    import invariants
+    found = invariants.check_an_assembly_is_not_charged_as_a_blank({"parts": [
+        {"part_number": "12392-02-201", "canonical_kind": "assembly",
+         "unit_material_cost_gbp": 4.12, "textual_operations": ["cnc_routing"]},
+    ]})
+    assert len(found) == 1
+    assert found[0]["severity"] == invariants.BLOCKING
+    assert found[0]["detail"]["parts"][0]["leaf_operations"] == ["cnc_routing"]
+    assert found[0]["detail"]["material_gbp"] == 4.12
+
+
+def test_a_measured_flat_outranks_a_transcribed_tree():
+    """The estimator says so where it decides; claiming here would contradict the pass that
+    priced it. A part with its own geometry is a fabricated leaf whatever a hierarchy said."""
+    import invariants
+    assert invariants.check_an_assembly_is_not_charged_as_a_blank({"parts": [
+        {"part_number": "12392-02-01M", "is_sub_assembly": True,
+         "dxf_measured_outline": True, "unit_material_cost_gbp": 4.12},
+    ]}) == []
+
+
+def test_a_parent_carrying_only_joining_or_finish_is_not_claimed():
+    import invariants
+    assert invariants.check_an_assembly_is_not_charged_as_a_blank({"parts": [
+        {"part_number": "12392-02-201", "canonical_kind": "assembly",
+         "unit_material_cost_gbp": 0.0,
+         "textual_operations": ["welding", "powder_coating", "assembly"]},
+    ]}) == []
+
+
+def test_the_assembly_scope_check_is_registered():
+    import invariants
+    assert invariants.check_an_assembly_is_not_charged_as_a_blank in invariants.CHECKS
