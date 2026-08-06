@@ -40,7 +40,9 @@ __all__ = [
     "has_fabrication_evidence",
     "bought_in_conflict",
     "strip_fabrication_ops",
+    "strip_leaf_operations",
     "FABRICATION_OPS",
+    "LEAF_ONLY_OPS",
     "FABRICATED_FAMILIES",
 ]
 
@@ -80,6 +82,34 @@ FABRICATION_OPS = frozenset({
     "pin_router", "edge_banding", "wire_forming", "robomac", "hole_machining",
     "drilling", "deburring", "deburr", "linishing", "glue", "gluing", "glueing",
     "bonding", "powder_coating", "wet_spray", "diamond_polish", "diamond_polishing",
+})
+
+
+# OPERATIONS THAT CAN ONLY HAPPEN TO ONE PIECE OF STOCK, so an assembly cannot incur them —
+# they belong to the parts it is made from. A deliberate SUBSET of FABRICATION_OPS, and what
+# is left out is the point:
+#
+#   JOINING stays. Welding, gluing and bonding are what an assembly IS. The route compiler
+#   already has a weld-parent rule for exactly this, and stripping welds from a weldment
+#   would take the job's real labour out of the estimate.
+#   FINISHING stays. A welded frame is powder coated as one thing, after joining, and
+#   assembly-level finish is a case this engine handles on purpose.
+#
+# What remains cuts, forms or dresses a single blank: you cannot laser an assembly, and you
+# cannot edge-band one. On job 12392 the panel assembly 12392-02-201 collected cnc_routing,
+# edge banding and laminating from an MDF title block on a different sheet of the same pack —
+# three joinery operations on a thing that is two steel panels bolted together, each
+# unverifiable because no part on the assembly could have incurred them.
+#
+# The vocabulary lives here beside FABRICATION_OPS on purpose: two lists of operation names
+# maintained separately are two lists that disagree the first time one is edited.
+LEAF_ONLY_OPS = frozenset({
+    "laser_cutting", "laser", "punch", "punching", "guillotine", "saw", "tube_cut",
+    "folding", "fold", "linebend", "line_bending", "rolling", "roll", "tubebend",
+    "tube_bending", "cnc_routing", "cnc", "cnc_machining", "cnc_joinery", "pin_router",
+    "edge_banding", "edgebanding", "laminating", "lamination", "veneering",
+    "wire_forming", "robomac", "hole_machining", "drilling", "deburring", "deburr",
+    "linishing",
 })
 
 
@@ -185,6 +215,37 @@ def bought_in_conflict(part: Dict[str, Any]) -> bool:
     """Bought-in by identity, yet carrying its own measured geometry — the two sources
     disagree about what this part is. Flagged for an estimator, never auto-resolved."""
     return is_bought_in(part) and has_fabrication_evidence(part)
+
+
+def strip_leaf_operations(part: Dict[str, Any]) -> List[str]:
+    """Remove single-blank operations from an ASSEMBLY, in place. Returns what was removed.
+
+    Deliberately mirrors strip_fabrication_ops, because it is the same shape of mistake in
+    the other direction: there, a purchased part carrying work we never did; here, a parent
+    carrying work that belongs to its children. Both put labour on a record that cannot have
+    incurred it, and both were flagged for an estimator and then charged anyway.
+
+    Does nothing unless the record is already classified as an assembly. That classification
+    is the canonical graph's to make and this never second-guesses it — a part wrongly called
+    an assembly is a different defect, and silently stripping its route would hide it.
+    """
+    if not (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+            or str(part.get("canonical_kind") or "").lower() == "assembly"):
+        return []
+    removed: List[str] = []
+    for field in ("textual_operations", "inferred_operations"):
+        vals = part.get(field)
+        if not isinstance(vals, list):
+            continue
+        kept: List[Any] = []
+        for op in vals:
+            if str(op).strip().lower() in LEAF_ONLY_OPS:
+                if str(op) not in removed:
+                    removed.append(str(op))
+            else:
+                kept.append(op)
+        part[field] = kept
+    return removed
 
 
 def strip_fabrication_ops(part: Dict[str, Any]) -> List[str]:

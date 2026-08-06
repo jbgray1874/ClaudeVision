@@ -15,6 +15,7 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
+import bought_in_policy
 from source_precedence import rank
 
 
@@ -534,6 +535,37 @@ def _raw_identity_aliases(
     return aliases
 
 
+def _code_spellings(value: Any) -> List[str]:
+    """Every spelling of one code that a matcher should try, best first.
+
+    THE READER AND THE GRAPH DO NOT SPELL A CODE THE SAME WAY, and this is the third time
+    that has cost a correct rule its effect. merge_boms takes the parent from the title block
+    verbatim — its own docstring gives "1282 - GA" as the example — while this module's
+    clean_part_number only collapses whitespace and uppercases, so it holds "1282 - GA" and
+    the graph holds "1282-GA". An edge matched on the first would never find the second, and
+    the whole BOM hierarchy source would be a silent no-op on real drawings while passing
+    every test written in the graph's own spelling.
+
+    part_identity.normalize_part_code is the reader that knows the drawing's forms — spaced
+    hyphens, "1450 GA", trailing separators. Both spellings are offered and the caller takes
+    whichever names something it already knows. Offering two spellings cannot invent a match:
+    the identity still has to exist.
+    """
+    out: List[str] = []
+    primary = clean_part_number(value)
+    if primary:
+        out.append(primary)
+    try:
+        from part_identity import normalize_part_code
+
+        alt = normalize_part_code(value)
+        if alt and alt not in out:
+            out.append(alt)
+    except Exception:
+        pass
+    return out
+
+
 def _bom_stated_edges(
     bom_rows: Optional[Sequence[Mapping[str, Any]]],
     aliases: Mapping[str, str],
@@ -570,19 +602,25 @@ def _bom_stated_edges(
     telling two lines apart. Distinguishing lines needs only a discriminator; naming an owner
     needs a part. "12392-04-GA.pdf" is a fine discriminator and not an assembly.
     """
+    def _resolve(value: Any, must_be_known: bool) -> str:
+        """The first spelling of this code the graph recognises; the plain one otherwise."""
+        spellings = [aliases.get(s, s) for s in _code_spellings(value)]
+        for spelling in spellings:
+            if spelling in known:
+                return spelling
+        return "" if must_be_known else (spellings[0] if spellings else "")
+
     edges: List[tuple] = []
     for row in bom_rows or []:
         if not isinstance(row, Mapping):
             continue
-        child = clean_part_number(row.get("part_number") or row.get("part_code")
-                                  or row.get("code"))
-        parent = clean_part_number(row.get("bom_parent") or row.get("parent")
-                                   or row.get("parent_code"))
-        if not child or not parent:
-            continue
-        child = aliases.get(child, child)
-        parent = aliases.get(parent, parent)
-        if child == parent or parent not in known:
+        child = _resolve(row.get("part_number") or row.get("part_code")
+                         or row.get("code"), False)
+        # The parent MUST resolve to something we know — that is the refusal above, and it
+        # is why trying two spellings here is safe: neither can name a node that is not there.
+        parent = _resolve(row.get("bom_parent") or row.get("parent")
+                          or row.get("parent_code"), True)
+        if not child or not parent or child == parent:
             continue
         edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0))
     return edges
@@ -795,7 +833,9 @@ def build_part_graph(
     # THE DRAWINGS WE ACTUALLY OPENED are assemblies we know exist, whether or not any part
     # record was created for them. On a pack whose second GA the extract never read, this is
     # the difference between an owner and an orphan.
-    _drawings = {clean_part_number(d) for d in (known_assemblies or [])}
+    # Both spellings, for the same reason the edge reader tries both: a drawing named
+    # "12392-04 - GA.pdf" must be recognisable as the assembly the graph calls 12392-04-GA.
+    _drawings = {s for d in (known_assemblies or []) for s in _code_spellings(d)}
     _drawings.discard("")
     for _child_id, _parent_id, _qty in _bom_stated_edges(
             bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings):
@@ -1019,6 +1059,18 @@ def apply_canonical_evidence_to_parts(
                     "material and leaf-only fabrication belong to its children")
             if _msg not in _flags:
                 _flags.append(_msg)
+            # AND THEN IT WAS CHARGED ANYWAY. The sentence above has been written onto
+            # assembly parents for as long as this function has existed, and nothing acted
+            # on it — 12392's panel assembly carried CNC routing, edge banding and
+            # laminating, read from an MDF title block on another sheet of the pack, onto a
+            # thing that is two steel panels bolted together. A flag no pass reads is a
+            # comment. Joining and finishing are untouched: they are what an assembly is.
+            _dropped = bought_in_policy.strip_leaf_operations(part)
+            if _dropped:
+                part.setdefault("removed_operations", []).extend(_dropped)
+                _flags.append(
+                    "removed leaf-only operations that an assembly cannot incur ("
+                    + ", ".join(_dropped) + "); they belong to the parts it is made from")
         elif node.kind == "bought_in":
             roles = list(part.get("page_roles") or [])
             if "bought_in" not in {str(role).strip().lower() for role in roles}:

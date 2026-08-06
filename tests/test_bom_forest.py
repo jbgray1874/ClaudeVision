@@ -205,3 +205,98 @@ def test_the_drawing_numbers_come_from_the_files_we_opened():
     # it, because a drawing whose number we do not know must not head a tree.
     assert "12392-04-GA" not in job_drawing_numbers(
         {"job_source_pdfs": [{"name": "Mod mount bracket set.pdf"}]})
+
+
+# ── an assembly is not a blank ──────────────────────────────────────────────────────────
+
+def test_an_assembly_does_not_keep_operations_only_a_blank_can_incur():
+    """12392-02-201 is two steel panels bolted together. It collected CNC routing, edge
+    banding and laminating from an MDF title block on another sheet of the same pack — three
+    joinery operations on a thing no joinery touches, each unverifiable because no part on
+    the assembly could have incurred them.
+
+    The flag saying so has been written onto assembly parents for as long as the function
+    has existed, and nothing ever read it."""
+    from route_compiler import apply_canonical_evidence_to_parts
+
+    parts = [dict(p) for p in PARTS]
+    for part in parts:
+        if part["part_number"] == "12392-02-201":
+            part["textual_operations"] = ["cnc_routing", "edge_banding", "laminating",
+                                          "assembly", "welding"]
+    apply_canonical_evidence_to_parts(parts, EXTRACT_02_ONLY, BOM_ROWS, DRAWINGS)
+    _201 = next(p for p in parts if p["part_number"] == "12392-02-201")
+
+    assert _201["is_assembly_parent"] is True
+    assert _201["textual_operations"] == ["assembly", "welding"], \
+        "joining is what an assembly IS and must survive"
+    assert set(_201["removed_operations"]) == {"cnc_routing", "edge_banding", "laminating"}
+    assert any("leaf-only operations" in f for f in _201["review_flags"]), \
+        "a strip nobody announces is the silent write these checks exist to catch"
+
+
+def test_a_leaf_keeps_every_operation_it_has():
+    """MUTATION: the same operations on a part that is NOT an assembly are untouched, so the
+    classification is what decides — not the operation names."""
+    from route_compiler import apply_canonical_evidence_to_parts
+
+    parts = [dict(p) for p in PARTS]
+    for part in parts:
+        if part["part_number"] == "12392-02-01M":
+            part["textual_operations"] = ["cnc_routing", "edge_banding", "laser_cutting"]
+    apply_canonical_evidence_to_parts(parts, EXTRACT_02_ONLY, BOM_ROWS, DRAWINGS)
+    _01m = next(p for p in parts if p["part_number"] == "12392-02-01M")
+    assert _01m["textual_operations"] == ["cnc_routing", "edge_banding", "laser_cutting"]
+    assert not _01m.get("removed_operations")
+
+
+def test_a_weldment_parent_keeps_its_weld_and_its_finish():
+    """Joining and finishing are deliberately outside the stripped set. A weldment that lost
+    its weld would lose the job's real labour, and a welded frame is powder coated as one
+    thing after joining — a case this engine handles on purpose."""
+    import bought_in_policy
+    part = {"is_assembly_parent": True,
+            "textual_operations": ["welding", "spot_welding", "dress_welds", "glue",
+                                   "bonding", "powder_coating", "wet_spray",
+                                   "diamond_polish", "assembly", "hardware_insertion"]}
+    assert bought_in_policy.strip_leaf_operations(part) == []
+    assert len(part["textual_operations"]) == 10
+
+
+def test_the_two_operation_vocabularies_do_not_contradict_each_other():
+    """LEAF_ONLY_OPS is a subset of FABRICATION_OPS by design — anything a purchased part
+    cannot incur, plus the joinery names FABRICATION_OPS spells differently. Two lists of
+    operation names maintained separately are two lists that disagree."""
+    import bought_in_policy as bp
+    _extra = bp.LEAF_ONLY_OPS - bp.FABRICATION_OPS
+    assert _extra <= {"edgebanding", "laminating", "lamination", "veneering"}, \
+        f"a leaf-only op that is not a fabrication op at all: {_extra}"
+    # Joining and finishing must never appear in the stripped set.
+    assert not (bp.LEAF_ONLY_OPS & {"welding", "spot_welding", "resistance_welding",
+                                    "dress_welds", "glue", "gluing", "bonding",
+                                    "powder_coating", "wet_spray", "diamond_polish"})
+
+
+def test_the_title_block_spelling_is_the_one_that_actually_arrives():
+    """THE NEAR MISS. merge_boms takes the parent from the title block verbatim — its own
+    docstring gives "1282 - GA" as the example — while this module's clean_part_number only
+    uppercases and collapses whitespace. So the reader says "12392-04 - GA" and the graph
+    says "12392-04-GA", and an edge matched on one would never find the other.
+
+    Every test above is written in the graph's spelling and would have passed while the whole
+    BOM hierarchy source did nothing at all on a real drawing. This is the third time in this
+    codebase that a correct rule was handed a spelling it did not accept."""
+    rows = [{"part_number": "12392-04-01M", "quantity": 2, "bom_parent": "12392-04 - GA"},
+            {"part_number": "12392-04-02M", "quantity": 2, "bom_parent": "12392-04 - GA"}]
+    g = build_part_graph(PARTS, EXTRACT_02_ONLY, rows, DRAWINGS)
+    assert g["parents"].get("12392-04-01M") == {"12392-04-GA"}
+    assert g["top_assemblies"] == ["12392-02-GA", "12392-04-GA"]
+    assert [i["part_number"] for i in g["issues"]] == []
+
+
+def test_a_drawing_file_named_in_the_spaced_form_is_still_recognised():
+    g = build_part_graph(
+        PARTS, EXTRACT_02_ONLY,
+        [{"part_number": "12392-04-01M", "quantity": 2, "bom_parent": "12392-04-GA"}],
+        job_drawing_numbers({"job_source_pdfs": [{"name": "12392-04 - GA.pdf"}]}))
+    assert g["parents"].get("12392-04-01M") == {"12392-04-GA"}
