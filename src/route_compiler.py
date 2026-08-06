@@ -631,6 +631,7 @@ def build_part_graph(
     llm_extract: Optional[Mapping[str, Any]] = None,
     bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     known_assemblies: Optional[Iterable[str]] = None,
+    page_owner: Optional[Mapping[int, str]] = None,
 ) -> Dict[str, Any]:
     """Build canonical nodes and hierarchy edges from the whole job.
 
@@ -857,6 +858,46 @@ def build_part_graph(
         records.setdefault(_parent_id, {})["is_sub_assembly"] = True
         records[_parent_id]["hierarchy_source"] = "bom_table"
 
+    # ── AND THE PAGE A PART WAS LISTED ON, when no reader gave it an owner ────────────
+    # The last resort, and it exists because the readers above can all be empty at once.
+    # On 12392 the deterministic BOM reader found no rows, so nothing carried bom_parent;
+    # the vision extract had read only the first of two drawings, so its assemblies covered
+    # half the job; and the rows that reached costing were synthesised from the costed parts
+    # with no parent at all. Three hierarchy sources and every one of them silent for the
+    # second GA, while each of its parts still knew which page it appeared on.
+    #
+    # ASSEMBLY PAGES ONLY (see assembly_page_owners): a detail sheet is one part drawn large,
+    # not an owner. And still only for a part nothing else claimed, still only to a drawing
+    # the job already knows, and never to itself.
+    for _part in (parts or []):
+        if not isinstance(_part, Mapping):
+            continue
+        _pid = clean_part_number(_part.get("part_number") or _part.get("item_number"))
+        _pid = aliases.get(_pid, _pid)
+        if not _pid or _pid in parents or _pid in children:
+            continue                      # owned already, or is itself a parent
+        for _page in (_part.get("pages") or []):
+            try:
+                _owner_raw = (page_owner or {}).get(int(_page))
+            except (TypeError, ValueError):
+                continue
+            if not _owner_raw:
+                continue
+            _owner = ""
+            for _spelling in _code_spellings(_owner_raw):
+                _spelling = aliases.get(_spelling, _spelling)
+                if _spelling in raw or _spelling in extracted or _spelling in children \
+                        or _spelling in _drawings:
+                    _owner = _spelling
+                    break
+            if not _owner or _owner == _pid:
+                continue
+            children.setdefault(_owner, {})[_pid] = number(_part.get("quantity"), 1.0) or 1.0
+            parents.setdefault(_pid, set()).add(_owner)
+            records.setdefault(_owner, {})["is_sub_assembly"] = True
+            records[_owner]["hierarchy_source"] = "assembly_page"
+            break
+
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
     top_id = aliases.get(top_id, top_id)
@@ -1030,6 +1071,7 @@ def apply_canonical_evidence_to_parts(
     llm_extract: Optional[Mapping[str, Any]] = None,
     bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     known_assemblies: Optional[Iterable[str]] = None,
+    page_owner: Optional[Mapping[int, str]] = None,
 ) -> Dict[str, Any]:
     """Make the canonical graph authoritative BEFORE costing, not after it.
 
@@ -1049,7 +1091,7 @@ def apply_canonical_evidence_to_parts(
 
     Returns the compiled graph so the caller can record what it found.
     """
-    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies)
+    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner)
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
     for part in parts or []:
@@ -1119,11 +1161,22 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
     # is built from. Falling back to bom_rows keeps every job that never took the rollup path.
     compiled = compile_job_route(population, summary.get("llm_full_extract") or {},
                                  _da.get("bay_bom_rows") or _da.get("bom_rows") or [],
-                                 job_drawing_numbers(summary))
+                                 job_drawing_numbers(summary),
+                                 _assembly_page_owners(summary))
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
     return payload
+
+
+def _assembly_page_owners(summary: Mapping[str, Any]) -> Dict[int, str]:
+    """file_scan owns this reading; imported lazily so route_compiler stays importable
+    without it, and returns {} rather than raising if it cannot be reached."""
+    try:
+        from file_scan import assembly_page_owners
+        return assembly_page_owners(summary)
+    except Exception:                                       # noqa: BLE001
+        return {}
 
 
 def job_drawing_numbers(summary: Mapping[str, Any]) -> List[str]:
@@ -1367,10 +1420,11 @@ def compile_job_route(
     llm_extract: Optional[Mapping[str, Any]] = None,
     bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     known_assemblies: Optional[Iterable[str]] = None,
+    page_owner: Optional[Mapping[int, str]] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
-    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies)
+    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]

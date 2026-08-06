@@ -872,6 +872,49 @@ def _page_drawing_number(page: Dict[str, Any]) -> str:
     return uniq[0] if len(uniq) == 1 else ""
 
 
+def assembly_page_owners(summary: Dict[str, Any]) -> Dict[int, str]:
+    """page number -> the drawing that page IS, for pages carrying an assembly BOM.
+
+    THE ROWS ARE NOT ALWAYS WHERE THE ATTRIBUTION LOOKS. attribute_bom_rows_to_source_pages
+    stamps document_analysis["bom_rows"], which is what the deterministic text reader
+    produces — and on job 12392 that reader found nothing at all. The BOM arrived from the
+    vision extract and from rows synthesised out of the costed parts, neither of which
+    carries a parent, so the hierarchy source had nothing to consume and every part on the
+    second drawing stayed an orphan. The chain was correct and wired to an empty tap.
+
+    A part still knows which PAGES it appeared on, whatever read it. That is the fact this
+    exposes: the page's own role, which the engine already infers, and the drawing that page
+    belongs to. A part on an ASSEMBLY page of a drawing is listed by that drawing.
+
+    ASSEMBLY PAGES ONLY, and that is the whole safety of it. A detail sheet is not an owner —
+    it is one part drawn large — so giving it children would invent a parent for every part
+    that merely has its own sheet. The role is read from the page, not guessed from the file
+    name; where the title block does not name a drawing the file's own stem stands in, and
+    the compiler refuses any owner it cannot already identify, so a descriptive file name
+    resolves to nothing and no edge is made.
+    """
+    owners: Dict[int, str] = {}
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        role = str(((page.get("page_role") or {}) if isinstance(page.get("page_role"), dict)
+                    else {}).get("primary_role") or "").strip().lower()
+        if role != "assembly":
+            continue
+        number = page.get("page_number")
+        if number is None:
+            continue
+        drawing = _page_drawing_number(page)
+        if not drawing:
+            stem = str(page.get("source_pdf_name") or "")
+            if stem.lower().endswith(".pdf"):
+                stem = stem[:-4]
+            drawing = normalize_text(stem).upper().strip()
+        if drawing:
+            owners[int(number)] = drawing
+    return owners
+
+
 def attribute_bom_rows_to_source_pages(rows: List[Dict[str, Any]],
                                        pages: List[Dict[str, Any]]) -> int:
     """Stamp each BOM row with the page that printed it, and that page's drawing number.
@@ -2711,7 +2754,8 @@ def _finalize_scan_summary(
             summary["manufacturing_writeup"]["parts"],
             summary.get("llm_full_extract") or {},
             (summary.get("document_analysis") or {}).get("bom_rows") or [],
-            job_drawing_numbers(summary))
+            job_drawing_numbers(summary),
+            assembly_page_owners(summary))
         summary["canonical_part_graph_pre_cost"] = {
             "nodes": len(_canon_pre.get("nodes") or []),
             "issues": list(_canon_pre.get("issues") or []),
@@ -2747,6 +2791,32 @@ def _finalize_scan_summary(
     except Exception as _lm_err:
         print(f"   [bom] late truncated-code merge skipped: "
               f"{type(_lm_err).__name__}: {_lm_err}", flush=True)
+
+    # AND THE LEAF-OPERATION STRIP AGAIN, AT THE LAST BOUNDARY BEFORE COSTING.
+    #
+    # apply_canonical_evidence_to_parts removes them where it classifies a record as an
+    # assembly, and on 12392 they were back by the time the invariants ran: 12392-02-201 was
+    # reported carrying folding and laser_cutting on a workbook whose own log says the
+    # assembly was excluded from material. Something between the two re-derives operations
+    # from the drawing text.
+    #
+    # This is the same answer the truncated-code merge above reaches for the same reason:
+    # rather than a third guess at which pass, the rule runs once more at the point nothing
+    # can add an operation after it. strip_leaf_operations is idempotent and does nothing at
+    # all to a record the graph has not called an assembly, so the second call is free on a
+    # job the first one settled.
+    try:
+        import bought_in_policy as _bip
+        for _p in summary["manufacturing_writeup"]["parts"]:
+            _late_dropped = _bip.strip_leaf_operations(_p)
+            if _late_dropped:
+                _p.setdefault("removed_operations", []).extend(_late_dropped)
+                print(f"   [route] '{_p.get('part_number')}' is an assembly and had "
+                      f"{', '.join(_late_dropped)} put back on it after the first strip; "
+                      f"removed again — that work belongs to its children", flush=True)
+    except Exception as _strip_err:
+        print(f"   [route] late leaf-operation strip skipped: "
+              f"{type(_strip_err).__name__}: {_strip_err}", flush=True)
 
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")

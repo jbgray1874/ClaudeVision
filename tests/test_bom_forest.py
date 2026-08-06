@@ -356,3 +356,125 @@ def test_a_parent_carrying_only_joining_or_finish_is_not_claimed():
 def test_the_assembly_scope_check_is_registered():
     import invariants
     assert invariants.check_an_assembly_is_not_charged_as_a_blank in invariants.CHECKS
+
+
+# ── the case the fixtures missed: every reader empty but the page ───────────────────────
+
+def _page(n, drawing, role):
+    return {"page_number": n, "source_pdf_name": f"{drawing}.pdf",
+            "page_role": {"primary_role": role},
+            "region_text": {"title_block": f"DWG NO {drawing} REV A", "bom": "", "notes": ""}}
+
+
+PAGED_SUMMARY = {"pages": [_page(1, "12392-02-GA", "assembly"),
+                           _page(2, "12392-02-01M", "detail"),
+                           _page(3, "12392-04-GA", "assembly"),
+                           _page(4, "12392-04-01M", "detail")]}
+
+PAGED_PARTS = [
+    {"part_number": "12392-02-GA", "description": "GA", "quantity": 1, "pages": [1]},
+    {"part_number": "12392-02-201", "description": "PANEL ASSY", "quantity": 1, "pages": [1]},
+    {"part_number": "12392-04-GA", "description": "GA", "quantity": 1, "pages": [3]},
+    {"part_number": "12392-04-01M", "description": "BACK MOUNT", "quantity": 2, "pages": [3, 4]},
+    {"part_number": "12392-04-02M", "description": "FRONT MOUNT", "quantity": 2, "pages": [3]},
+]
+
+# The extract as it actually came back: it read the FIRST drawing only.
+PARTIAL_EXTRACT = {
+    "top_assembly": {"part_number": "12392-02-GA"},
+    "assemblies": [{"part_number": "12392-02-GA",
+                    "children": [{"part_number": "12392-02-201", "qty": 1}]}],
+}
+
+
+def _owners():
+    import file_scan
+    return file_scan.assembly_page_owners(PAGED_SUMMARY)
+
+
+def test_only_assembly_pages_are_owners():
+    """A detail sheet is one part drawn large, not an owner. Giving it children would invent
+    a parent for every part that merely has its own sheet."""
+    assert _owners() == {1: "12392-02-GA", 3: "12392-04-GA"}
+
+
+def test_the_tree_builds_when_every_other_reader_was_silent():
+    """THE CASE THE 367 PASSING FIXTURES MISSED. On the real 12392 the deterministic BOM
+    reader found no rows, so nothing carried bom_parent; the vision extract had read only the
+    first of two drawings; and the rows that reached costing were synthesised from the costed
+    parts with no parent at all. Three hierarchy sources, all silent for the second GA — and
+    every fixture supplied bom_rows, so every fixture passed."""
+    g = build_part_graph(PAGED_PARTS, PARTIAL_EXTRACT, [],          # <- no BOM rows at all
+                         ["12392-02-GA", "12392-04-GA"], _owners())
+    assert g["top_assemblies"] == ["12392-02-GA", "12392-04-GA"]
+    assert g["parents"]["12392-04-01M"] == {"12392-04-GA"}
+    assert g["parents"]["12392-04-02M"] == {"12392-04-GA"}
+    assert [i["part_number"] for i in g["issues"]] == []
+
+
+def test_the_defect_returns_without_the_page_owner():
+    """MUTATION: the same job with no page evidence is the run you actually got."""
+    g = build_part_graph(PAGED_PARTS, PARTIAL_EXTRACT, [],
+                         ["12392-02-GA", "12392-04-GA"], None)
+    orphans = {i["part_number"] for i in g["issues"]}
+    assert {"12392-04-01M", "12392-04-02M"} <= orphans
+
+
+def test_a_part_seen_only_on_its_own_detail_sheet_gets_no_owner():
+    """Nothing claimed it and no assembly page lists it, so it stays visibly disconnected —
+    which is the honest outcome, not an invented parent."""
+    parts = PAGED_PARTS + [{"part_number": "12392-04-09M", "description": "SPACER",
+                            "quantity": 1, "pages": [4]}]
+    g = build_part_graph(parts, PARTIAL_EXTRACT, [],
+                         ["12392-02-GA", "12392-04-GA"], _owners())
+    assert "12392-04-09M" in {i["part_number"] for i in g["issues"]}
+
+
+def test_an_assembly_is_never_made_its_own_child():
+    g = build_part_graph(PAGED_PARTS, PARTIAL_EXTRACT, [],
+                         ["12392-02-GA", "12392-04-GA"], _owners())
+    for root in g["top_assemblies"]:
+        assert root not in (g["parents"].get(root) or set())
+    assert "12392-04-GA" not in g["parents"]
+
+
+def test_a_page_naming_a_drawing_we_never_opened_makes_no_edge():
+    """The owner must be a node the job already knows. A part record for the GA is one way
+    to know it — so this removes that record too, leaving the drawing list as the only
+    evidence, and then takes the drawing list away. With neither, no edge."""
+    parts = [p for p in PAGED_PARTS if p["part_number"] != "12392-04-GA"]
+    g = build_part_graph(parts, PARTIAL_EXTRACT, [], ["12392-02-GA"], _owners())
+    assert "12392-04-01M" in {i["part_number"] for i in g["issues"]}
+    assert "12392-04-GA" not in g["parents"].get("12392-04-01M", set())
+
+    # And with the drawing list restored, the same job resolves — the GA never had a part
+    # record of its own, which is the ordinary case for a sheet that only lists parts.
+    ok = build_part_graph(parts, PARTIAL_EXTRACT, [],
+                          ["12392-02-GA", "12392-04-GA"], _owners())
+    assert ok["parents"]["12392-04-01M"] == {"12392-04-GA"}
+
+
+def test_another_source_still_wins_over_the_page():
+    """Last resort means last. An extract that placed the part keeps it."""
+    extract = {"top_assembly": {"part_number": "12392-02-GA"},
+               "assemblies": [{"part_number": "12392-02-201",
+                               "children": [{"part_number": "12392-04-01M", "qty": 2}]},
+                              {"part_number": "12392-02-GA",
+                               "children": [{"part_number": "12392-02-201", "qty": 1}]}]}
+    g = build_part_graph(PAGED_PARTS, extract, [],
+                         ["12392-02-GA", "12392-04-GA"], _owners())
+    assert g["parents"]["12392-04-01M"] == {"12392-02-201"}
+
+
+def test_the_late_strip_removes_operations_put_back_after_the_first_one():
+    """apply_canonical_evidence_to_parts strips them, and on the real 12392 they were back by
+    the time the invariants ran. The rule runs once more where nothing can add an operation
+    after it, and being idempotent the second call is free on a job the first one settled."""
+    import bought_in_policy as bp
+    part = {"part_number": "12392-02-201", "canonical_kind": "assembly",
+            "textual_operations": ["folding", "laser_cutting", "assembly"]}
+    assert bp.strip_leaf_operations(part) == ["folding", "laser_cutting"]
+    assert bp.strip_leaf_operations(part) == [], "idempotent — nothing left to remove"
+    part["textual_operations"].extend(["cnc_routing", "edge_banding"])   # a later writer
+    assert bp.strip_leaf_operations(part) == ["cnc_routing", "edge_banding"]
+    assert part["textual_operations"] == ["assembly"]
