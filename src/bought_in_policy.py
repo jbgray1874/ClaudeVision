@@ -131,8 +131,23 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
     # Catalogue identity first — these are the strong signals and they are not overridable.
     if part.get("is_bought_in") or part.get("_bought_in_from_text_scan"):
         return "flagged bought-in on the record"
-    if "bought_in" in [str(r).lower() for r in (part.get("page_roles") or [])]:
-        return "the drawing page is a bought-in page"
+    _roles = [str(r).strip().lower() for r in (part.get("page_roles") or [])]
+    if "bought_in" in _roles:
+        # A PAGE ROLE THAT CONTRADICTS ITSELF IS NOT AUTHORITY. 12392's mounting brackets
+        # carry BOTH "detail" and "bought_in": one page reads as a detail sheet for a part we
+        # cut, another as a bought-in listing. That is two readings of the same code
+        # disagreeing, not a catalogue statement — and taken as decisive it stripped the
+        # laser and the fold from two steel brackets the workbook then had to put back.
+        #
+        # Only a SECOND positive signal overturns it, so this cannot be reached by absence:
+        # the part must both be drawn as a detail AND carry SDI's own material-suffix
+        # convention, which is a code written by whoever drew it. Two statements that we make
+        # the part, against one that reads it as bought. Every stronger rule — an explicit
+        # flag, a bought-in-only source, a BI- code family — is checked before this and is
+        # untouched.
+        _detailed = any(r in {"detail", "fabricated", "flat_pattern"} for r in _roles)
+        if not (_detailed and part_code_conventions.material_suffix(_upper(part.get("part_number")))):
+            return "the drawing page is a bought-in page"
     src = str(part.get("source") or "").lower()
     for tok in _BOUGHT_IN_SOURCE_TOKENS:
         if tok in src:

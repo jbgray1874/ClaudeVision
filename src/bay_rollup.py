@@ -135,6 +135,31 @@ def _row_parent(row: Dict[str, Any]) -> str:
     return ""
 
 
+def _same_thing(a: str, b: str) -> bool:
+    """Could these two descriptions be the same BOM line read twice?
+
+    ONE PARENT CAN LIST A CODE TWICE. 12392-04-GA carries FIXING M4x8 and FIXING M4x10 —
+    generic code, two different bolts, two quantities. Keyed on (parent, code) the second
+    line vanished, which is the same loss the part-number key used to cause, one level in.
+
+    But description cannot simply join the key either: the readers spell one line several
+    ways. A deterministic table reads "SCREW" where vision reads "BUTTON HEAD SCREW M4x8",
+    and keying on the text would split a single line into two and count the fastener twice.
+
+    So the test is CONTAINMENT, not equality. One description that contains the other is one
+    line described at two lengths; two that name different things — M4x8 and M4x10 — are two
+    lines. An empty description tells us nothing and cannot be used to split, so it merges.
+    """
+    x, y = _norm_desc(a), _norm_desc(b)
+    if not x or not y:
+        return True
+    return x in y or y in x
+
+
+def _norm_desc(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).strip()
+
+
 def _est_code(est: Dict[str, Any]) -> str:
     return _norm_code(est.get("part_number") or est.get("item_number") or "")
 
@@ -597,8 +622,19 @@ def dedupe_bom_rows_for_bay_rollup(
         if not parent:
             known = parents_by_code.get(code)
             parent = sorted(known)[0] if known else ""
-        key = (code, parent)
+        # ONE PARENT CAN LIST A CODE TWICE — see _same_thing. The key is (code, parent) plus
+        # an occurrence number, assigned by walking the lines already kept under that pair
+        # and joining the first one this could BE. Where it could be none of them it is a new
+        # line, so FIXING M4x8 and FIXING M4x10 under one GA stay two orders of two bolts.
         pri = _BOM_SOURCE_PRIORITY.get(str(row.get("source") or ""), 5)
+        desc = _row_description(row)
+        key = None
+        for seen, kept in by_line.items():
+            if seen[0] == code and seen[1] == parent and _same_thing(desc, _row_description(kept)):
+                key = seen
+                break
+        if key is None:
+            key = (code, parent, sum(1 for k in by_line if k[0] == code and k[1] == parent))
         prev = by_line.get(key)
         if prev is None or pri < _BOM_SOURCE_PRIORITY.get(str(prev.get("source") or ""), 5):
             by_line[key] = row

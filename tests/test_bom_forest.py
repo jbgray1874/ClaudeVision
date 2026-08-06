@@ -323,15 +323,49 @@ def test_every_spelling_of_parent_reaches_one_answer():
 
 
 def test_an_assembly_charged_as_a_blank_is_blocking():
+    """A PRICED row charging the parent for a single-blank operation, plus material."""
     import invariants
-    found = invariants.check_an_assembly_is_not_charged_as_a_blank({"parts": [
-        {"part_number": "12392-02-201", "canonical_kind": "assembly",
-         "unit_material_cost_gbp": 4.12, "textual_operations": ["cnc_routing"]},
-    ]})
+    found = invariants.check_an_assembly_is_not_charged_as_a_blank({
+        "parts": [{"part_number": "12392-02-201", "canonical_kind": "assembly",
+                   "unit_material_cost_gbp": 4.12}],
+        "workbook_labour": {"rows": [
+            {"operation": "cnc_routing", "participants": ["12392-02-201"],
+             "labour_cost_gbp": 18.40},
+        ]},
+    })
     assert len(found) == 1
     assert found[0]["severity"] == invariants.BLOCKING
     assert found[0]["detail"]["parts"][0]["leaf_operations"] == ["cnc_routing"]
     assert found[0]["detail"]["material_gbp"] == 4.12
+
+
+def test_a_drawing_cue_the_workbook_already_refused_is_not_a_blocker():
+    """THE FALSE BLOCKER THIS CHECK SHIPPED WITH. On the real 12392 it blocked the job for
+    CNC routing and edge banding on 12392-02-201 — on a run whose own log says "excluded
+    canonical assembly parent: 12392-02-201" and whose priced rows charge that assembly
+    nothing. The record carried a cue, the sheet had already refused it, and the check called
+    it money. An estimator who learns to scroll past one false blocker scrolls past all."""
+    import invariants
+    assert invariants.check_an_assembly_is_not_charged_as_a_blank({
+        "parts": [{"part_number": "12392-02-201", "canonical_kind": "assembly",
+                   "unit_material_cost_gbp": 0.0,
+                   "textual_operations": ["cnc_routing", "edge_banding", "laminating"]}],
+        "workbook_labour": {"rows": [
+            {"operation": "laser_cutting", "participants": ["12392-02-01M"],
+             "labour_cost_gbp": 68.19},
+        ]},
+    }) == []
+
+
+def test_a_labour_row_costing_nothing_charges_nobody():
+    import invariants
+    assert invariants.check_an_assembly_is_not_charged_as_a_blank({
+        "parts": [{"part_number": "12392-02-201", "canonical_kind": "assembly"}],
+        "workbook_labour": {"rows": [
+            {"operation": "cnc_routing", "participants": ["12392-02-201"],
+             "labour_cost_gbp": 0.0},
+        ]},
+    }) == []
 
 
 def test_a_measured_flat_outranks_a_transcribed_tree():

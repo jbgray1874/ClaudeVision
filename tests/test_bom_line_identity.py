@@ -259,3 +259,86 @@ def test_the_check_reports_that_it_verified_nothing_when_it_cannot_run():
 def test_the_check_is_registered():
     """A check that is written and never called is the defect it was written to catch."""
     assert invariants.check_bom_lines_survive_the_merge in invariants.CHECKS
+
+
+# ── the six-defect punch list from the live 12392 run ───────────────────────────────────
+
+def test_a_drawing_number_is_read_from_a_real_file_name():
+    """DEFECT 1, AND IT EXPLAINED THE OTHER FIVE. job_drawing_numbers took the whole stem, so
+    "12392-04-GA Mod Bracket Set_revA.pdf" produced "12392-04-GA MOD BRACKET SET_REVA" and
+    matched the BOM's parent "12392-04-GA" nowhere. Estimating names drawings
+    "<number> <what it is>_rev<x>" — a convention, not prose."""
+    from route_compiler import job_drawing_numbers as jdn
+
+    def one(name):
+        return jdn({"job_source_pdfs": [{"name": name}]})
+
+    assert one("12392-04-GA Mod Bracket Set_revA.pdf") == ["12392-04-GA"]
+    assert one("12422-24-GA_End Cap_RevB.pdf") == ["12422-24-GA"]
+    assert one("12392-02-GA.pdf") == ["12392-02-GA"]
+    # The spaced forms merge_boms documents, and the trap in them: the head alone is
+    # "12392-04", a perfectly good drawing number and the wrong one.
+    assert one("12392-04 - GA.pdf") == ["12392-04-GA"]
+    assert one("1282 - GA.pdf") == ["1282-GA"]
+    assert one("1450 GA.pdf") == ["1450-GA"]
+    # The safety this replaced a blanket refusal with: a name that is not a number yields
+    # nothing, because a drawing whose number we cannot read must not head a tree.
+    assert one("Mod mount bracket set.pdf") == []
+    assert one("Drawing1.pdf") == []
+    assert one("Scan_001.pdf") == []
+
+
+def test_one_parent_may_list_a_code_twice():
+    """DEFECT 2. 12392-04-GA carries FIXING M4x8 and FIXING M4x10 — generic code, two
+    different bolts, two quantities. Keyed on (parent, code) the second line vanished, which
+    is the part-number collapse again, one level in."""
+    import bay_rollup
+    rows = [
+        {"part_number": "FIXING", "description": "BUTTON HEAD SCREW M4X8", "quantity": 16,
+         "bom_parent": "12392-02-GA"},
+        {"part_number": "FIXING", "description": "BUTTON HEAD SCREW M4X8", "quantity": 4,
+         "bom_parent": "12392-04-GA"},
+        {"part_number": "FIXING", "description": "BUTTON HEAD SCREW M4X10", "quantity": 4,
+         "bom_parent": "12392-04-GA"},
+    ]
+    out = bay_rollup.dedupe_bom_rows_for_bay_rollup(rows, [])
+    assert len(out) == 3, f"a line was merged away: {[r['description'] for r in out]}"
+    under_04 = sorted(r["description"] for r in out if r["bom_parent"] == "12392-04-GA")
+    assert under_04 == ["BUTTON HEAD SCREW M4X10", "BUTTON HEAD SCREW M4X8"]
+
+
+def test_but_two_readers_spelling_one_line_still_merge():
+    """The reason description cannot simply join the key: a deterministic table reads "SCREW"
+    where vision reads "BUTTON HEAD SCREW M4x8". Keying on the text would split one line in
+    two and count the fastener twice. Containment, not equality."""
+    import bay_rollup
+    rows = [
+        {"part_number": "FIXING", "description": "SCREW", "quantity": 16,
+         "bom_parent": "12392-02-GA", "source": "document_analysis"},
+        {"part_number": "FIXING", "description": "BUTTON HEAD SCREW M4X8", "quantity": 16,
+         "bom_parent": "12392-02-GA", "source": "bay_bom"},
+    ]
+    out = bay_rollup.dedupe_bom_rows_for_bay_rollup(rows, [])
+    assert len(out) == 1
+    assert out[0]["source"] == "bay_bom", "source priority still decides the winner"
+
+
+def test_a_page_role_that_contradicts_itself_is_not_authority():
+    """DEFECT 3. The brackets carry BOTH "detail" and "bought_in" — two readings of one code
+    disagreeing, not a catalogue statement. Taken as decisive it stripped the laser and the
+    fold from two steel brackets the workbook then had to put back."""
+    import bought_in_policy as bp
+    assert not bp.is_bought_in(
+        {"part_number": "12392-04-01M", "page_roles": ["detail", "bought_in"]})
+    # One signal alone is still decisive: a bought-in page on its own, or a mixed reading on
+    # a code that carries no material-suffix convention of ours.
+    assert bp.is_bought_in({"part_number": "12392-04-01M", "page_roles": ["bought_in"]})
+    assert bp.is_bought_in({"part_number": "TBM571", "page_roles": ["detail", "bought_in"]})
+    # And every stronger rule is checked first, so none of them can be reached by this.
+    for stronger in ({"is_bought_in": True},
+                     {"source": "bought_in_recogniser"},
+                     {"material_family": "bought_in"}):
+        part = {"part_number": "12392-04-01M", "page_roles": ["detail", "bought_in"]}
+        part.update(stronger)
+        assert bp.is_bought_in(part), stronger
+    assert bp.is_bought_in({"part_number": "BI-X01M", "page_roles": ["detail", "bought_in"]})

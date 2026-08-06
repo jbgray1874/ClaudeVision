@@ -1188,10 +1188,20 @@ def job_drawing_numbers(summary: Mapping[str, Any]) -> List[str]:
     On 12392 that is precisely what happened to the second drawing, and every part it owned
     was reported as belonging to nothing.
 
-    The suffix is dropped and nothing else is: "12392-04-GA.pdf" names 12392-04-GA. No
-    attempt is made to derive an assembly code from a descriptive file name, because a file
-    called "Mod mount bracket set.pdf" names a drawing whose number we do not know, and
-    guessing one would put a phantom at the head of the tree.
+    THE NUMBER IS THE FIRST TOKEN, AND THE REST IS WHAT THE DRAWING IS CALLED. This took the
+    whole stem, so "12392-04-GA Mod Bracket Set_revA.pdf" produced the identity "12392-04-GA
+    MOD BRACKET SET_REVA", which matches the BOM's parent "12392-04-GA" nowhere. Every part
+    on that drawing was then reported as belonging to nothing — and the refusal that caused
+    it was written here deliberately, out of a worry about descriptive names, without
+    checking what a real SDI file is actually called. Estimating names drawings
+    "<number> <what it is>_rev<x>", which is a convention, not prose.
+
+    The safety survives intact, because it was never about the suffix: a token is accepted
+    only if it LOOKS like a drawing number — digits and separators, at least one of each.
+    "Mod mount bracket set.pdf" still yields nothing, because "Mod" is not a number, and a
+    drawing whose number we cannot read must not head a tree. Callers validate the result
+    against the identities the job already knows, so a wrong guess here cannot become an edge
+    on its own; this only decides whether there is a candidate to check at all.
     """
     names: List[str] = []
     for entry in (summary.get("job_source_pdfs") or []):
@@ -1199,10 +1209,34 @@ def job_drawing_numbers(summary: Mapping[str, Any]) -> List[str]:
         stem = str(raw or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         if stem.lower().endswith(".pdf"):
             stem = stem[:-4]
-        code = clean_part_number(stem)
-        if code and code not in names:
-            names.append(code)
+        # Split on space AND underscore: "12422-24-GA_End Cap_RevB" separates the number
+        # from the description with an underscore, "12392-04-GA Mod Bracket Set" with a
+        # space, and the same pack contains both spellings.
+        head = re.split(r"[\s_]+", stem.strip(), maxsplit=1)[0]
+        # Both the head and the whole stem, each in both spellings — a drawing is filed as
+        # "1282 - GA.pdf" as readily as "1282-GA.pdf", and only normalize_part_code joins
+        # the spaced form. THE LONGEST that still looks like a number wins: on
+        # "12392-04 - GA.pdf" the head alone is "12392-04", which is a perfectly good
+        # drawing number and the wrong one. A description cannot win this contest because
+        # it does not look like a number at all.
+        found = [s for candidate in (head, stem) for s in _code_spellings(candidate)
+                 if _looks_like_a_drawing_number(s)]
+        if found:
+            best = max(found, key=len)
+            if best not in names:
+                names.append(best)
     return names
+
+
+# A drawing number carries digits and at least one separator — "12392-04-GA", "1282-GA".
+# A word does not. This is the whole of the protection against a descriptive file name being
+# read as an assembly, so it is deliberately a positive test rather than a list of things to
+# reject: anything that does not look like a number is not one.
+_DRAWING_NUMBER_SHAPE = re.compile(r"^[0-9][0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
+
+
+def _looks_like_a_drawing_number(text: Any) -> bool:
+    return bool(_DRAWING_NUMBER_SHAPE.match(str(text or "").strip()))
 
 
 def _roots_that_ship(graph: Mapping[str, Any]) -> List[str]:

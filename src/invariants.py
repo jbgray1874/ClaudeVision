@@ -1181,6 +1181,18 @@ def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, 
 
     Joining and finishing are deliberately not asked about. Welding a parent is the work, and
     a welded frame is coated as one thing.
+
+    AND IT ASKS THE WORKBOOK, NOT THE DRAWING. The first version read the operations sitting
+    on the part record and blocked 12392 for CNC routing and edge banding on 12392-02-201 —
+    on a run whose own log says "excluded canonical assembly parent: 12392-02-201 (material
+    belongs to leaf children)" and whose priced rows charge that assembly nothing. The record
+    carried a cue; the sheet had already refused it; the check called it money. A blocker
+    that fires on evidence rather than on cost is noise in front of the real failures, and
+    an estimator who learns to scroll past one learns to scroll past all of them.
+
+    So a leaf operation counts only where a calculated labour row charges this part for it.
+    Where no priced rows exist to read — a run that never reached the workbook — the check
+    says so rather than falling back to the record and guessing.
     """
     if not isinstance(summary, dict):
         return _unevaluated("assembly_scope", "This job is not a readable structure.")
@@ -1193,6 +1205,23 @@ def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, 
         return _unevaluated("assembly_scope",
                             f"The assembly predicate could not be imported ({exc}).")
 
+    # WHICH PARTS A CALCULATED LABOUR ROW ACTUALLY CHARGES, and for what. The rows name their
+    # participants; a part absent from all of them is charged nothing whatever its record says.
+    rows = _node(summary, "workbook_labour").get("rows")
+    if not isinstance(rows, list):
+        rows = (_node(summary, "final_estimate").get("labour_rows")
+                if isinstance(_node(summary, "final_estimate").get("labour_rows"), list) else None)
+    charged: Dict[str, set] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (_num(row.get("labour_cost_gbp")) or _num(row.get("total_value_gbp")) or 0.0) <= 0.005:
+                continue                  # a row costing nothing charges nobody
+            op = str(row.get("operation") or "").strip().lower()
+            for who in (row.get("participants") or row.get("part_numbers") or []):
+                charged.setdefault(str(who).strip().upper(), set()).add(op)
+
     offenders: List[Dict[str, Any]] = []
     for part in parts:
         if not bought_in_policy.is_assembly(part):
@@ -1204,9 +1233,10 @@ def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, 
                 or part.get("flat_pattern_detected"):
             continue
         money = _num(part.get("unit_material_cost_gbp")) or 0.0
-        ops = sorted({str(o) for field in ("textual_operations", "inferred_operations")
-                      for o in (part.get(field) or [])
-                      if str(o).strip().lower() in bought_in_policy.LEAF_ONLY_OPS})
+        # Only what a priced row charges THIS part. Reading the record instead is what made
+        # this a false blocker on a job the workbook had already got right.
+        ops = sorted({op for op in charged.get(str(part.get("part_number") or "").strip().upper(), set())
+                      if op in bought_in_policy.LEAF_ONLY_OPS})
         if money > 0.005 or ops:
             offenders.append({
                 "part_number": part.get("part_number"),
