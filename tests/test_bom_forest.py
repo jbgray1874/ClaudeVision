@@ -1,0 +1,207 @@
+"""
+An enquiry can ship more than one thing, and the BOM table knows who owns what.
+
+Job 12392 is one enquiry with two general arrangements — a panel (02) and a bracket set
+(04). The vision extract read only the first drawing. Everything on the second therefore
+had no stated parent, was not the top assembly, and arrived at costing as a disconnected
+leaf; the BOM row naming its owner was in the summary the whole time and this compiler had
+never been given it.
+
+Two defects, and they compound:
+
+    THE THIRD SOURCE   the deterministic BOM read states parents, and only the description
+                       rule and the extract were ever consulted
+    ONE ROOT           the graph asked for THE top assembly, singular, so the second GA was
+                       not a root, its subtree never cascaded a quantity, and it was
+                       reported as an orphan
+
+The target tree these tests hold to is the one the drawings state:
+
+    12392-02-GA                    12392-04-GA
+      201 -> 01M, 02M               04-01M x2
+      TBM571 x8                     04-02M x2
+      FIXING M4x8 x16               FIXING M4x8 x4
+      17G
+
+Every refusal is tested as carefully as every edge. An edge this cannot make is a visible
+orphan; an edge it makes wrongly is a silent one, and the second is the expensive kind.
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+
+from route_compiler import build_part_graph, job_drawing_numbers, _roots_that_ship
+
+
+PARTS = [
+    {"part_number": "12392-02-GA", "description": "GENERAL ARRANGEMENT", "quantity": 1},
+    {"part_number": "12392-02-201", "description": "PANEL ASSEMBLY", "quantity": 1},
+    {"part_number": "12392-02-01M", "description": "FACE PANEL", "quantity": 1},
+    {"part_number": "12392-02-02M", "description": "BACK PANEL", "quantity": 1},
+    {"part_number": "12392-02-17G", "description": "GRAPHIC", "quantity": 1},
+    {"part_number": "TBM571", "description": "STANDOFF", "quantity": 8},
+    {"part_number": "FIXING", "description": "BUTTON HEAD SCREW M4x8", "quantity": 16},
+    {"part_number": "12392-04-01M", "description": "MOD MOUNT BRACKET", "quantity": 2},
+    {"part_number": "12392-04-02M", "description": "MOD MOUNT PLATE", "quantity": 2},
+]
+
+# What the vision pass returned: the 02 drawing only. This is the real shape of the failure —
+# not a broken extract, a partial one.
+EXTRACT_02_ONLY = {
+    "top_assembly": {"part_number": "12392-02-GA"},
+    "assemblies": [
+        {"part_number": "12392-02-GA", "children": [
+            {"part_number": "12392-02-201", "qty": 1},
+            {"part_number": "12392-02-17G", "qty": 1},
+            {"part_number": "TBM571", "qty": 8},
+            {"part_number": "FIXING", "qty": 16},
+        ]},
+        {"part_number": "12392-02-201", "children": [
+            {"part_number": "12392-02-01M", "qty": 1},
+            {"part_number": "12392-02-02M", "qty": 1},
+        ]},
+    ],
+}
+
+# What the deterministic BOM reader saw: both drawings' tables, each row stamped with the
+# title block that listed it.
+BOM_ROWS = [
+    {"part_number": "12392-02-201", "quantity": 1, "bom_parent": "12392-02-GA"},
+    {"part_number": "12392-02-17G", "quantity": 1, "bom_parent": "12392-02-GA"},
+    {"part_number": "TBM571", "quantity": 8, "bom_parent": "12392-02-GA"},
+    {"part_number": "FIXING", "quantity": 16, "bom_parent": "12392-02-GA",
+     "description": "BUTTON HEAD SCREW M4x8"},
+    {"part_number": "12392-02-01M", "quantity": 1, "bom_parent": "12392-02-201"},
+    {"part_number": "12392-02-02M", "quantity": 1, "bom_parent": "12392-02-201"},
+    {"part_number": "12392-04-01M", "quantity": 2, "bom_parent": "12392-04-GA"},
+    {"part_number": "12392-04-02M", "quantity": 2, "bom_parent": "12392-04-GA"},
+    {"part_number": "FIXING", "quantity": 4, "bom_parent": "12392-04-GA",
+     "description": "BUTTON HEAD SCREW M4x8"},
+]
+
+DRAWINGS = ["12392-02-GA", "12392-04-GA"]
+
+
+def _graph(**kw):
+    return build_part_graph(kw.get("parts", PARTS),
+                            kw.get("extract", EXTRACT_02_ONLY),
+                            kw.get("bom_rows", BOM_ROWS),
+                            kw.get("drawings", DRAWINGS))
+
+
+def test_the_defect_reproduces_without_the_bom():
+    """The precondition. With only the extract, the 04 parts belong to nothing — which is
+    exactly what job 12392 reported, six times, as a blocking invariant."""
+    orphans = {i["part_number"] for i in build_part_graph(PARTS, EXTRACT_02_ONLY)["issues"]}
+    assert "12392-04-01M" in orphans
+    assert "12392-04-02M" in orphans
+
+
+def test_the_bom_table_gives_the_unclaimed_parts_their_owner():
+    g = _graph()
+    assert g["parents"].get("12392-04-01M") == {"12392-04-GA"}
+    assert g["parents"].get("12392-04-02M") == {"12392-04-GA"}
+
+
+def test_no_node_is_left_disconnected():
+    g = _graph()
+    # NOT VACUOUS: the disconnected check only runs when the graph has roots, so an empty
+    # issue list would also be what a graph that gave up entirely produced.
+    assert g["top_assemblies"], "no roots means this assertion proves nothing"
+    assert [i["part_number"] for i in g["issues"]] == []
+
+
+def test_both_general_arrangements_are_roots():
+    g = _graph()
+    assert g["top_assemblies"] == ["12392-02-GA", "12392-04-GA"]
+    assert set(_roots_that_ship(g)) == {"12392-02-GA", "12392-04-GA"}
+    # top_assembly keeps its old meaning for every reader that means "the one anchor".
+    assert g["top_assembly"] == "12392-02-GA"
+
+
+def test_every_subtree_cascades_its_quantity():
+    """With one root the second GA's subtree never ran, so its parts kept their own drawing
+    quantity by accident rather than by descent — right here, wrong for the first multiplier
+    a GA carries."""
+    q = _graph()["quantities"]
+    assert q["12392-04-01M"] == 2
+    assert q["12392-04-02M"] == 2
+    assert q["TBM571"] == 8
+    assert q["12392-02-01M"] == 1
+
+
+def test_the_bom_never_re_parents_a_part_the_extract_already_placed():
+    """01M is the extract's child of 201 and the BOM's child of 201 too — but if a reader
+    ever disagreed, the graph must keep the owner it already had. A wrong parent is worse
+    than a missing one, so this source can only ever fill a hole."""
+    contradicting = [dict(r) for r in BOM_ROWS]
+    for row in contradicting:
+        if row["part_number"] == "12392-02-01M":
+            row["bom_parent"] = "12392-02-GA"       # the weaker, direct-to-GA edge
+    g = _graph(bom_rows=contradicting)
+    assert g["parents"]["12392-02-01M"] == {"12392-02-201"}, \
+        "the sub-assembly edge must survive a BOM row that names the GA instead"
+
+
+def test_a_parent_naming_nothing_we_know_makes_no_edge():
+    """merge_boms falls back to "<file>#<page>" when no title block was read. A node
+    invented from that would be a phantom assembly carrying real children."""
+    rows = [{"part_number": "12392-04-01M", "quantity": 2,
+             "bom_parent": "12392-04-GA.pdf#0"}]
+    g = build_part_graph(PARTS, EXTRACT_02_ONLY, rows, DRAWINGS)
+    assert "12392-04-01M" in {i["part_number"] for i in g["issues"]}
+    assert not any("#" in n.part_number for n in g["nodes"])
+
+
+def test_a_drawing_we_never_opened_is_not_an_assembly():
+    """The exception that lets the second GA own its parts is evidence — we scanned that
+    drawing. Take the evidence away and the refusal returns."""
+    g = build_part_graph(PARTS, EXTRACT_02_ONLY, BOM_ROWS, ["12392-02-GA"])
+    assert "12392-04-01M" in {i["part_number"] for i in g["issues"]}
+    assert "12392-04-GA" not in g["parents"].get("12392-04-01M", set())
+
+
+def test_the_orphan_says_which_owner_the_bom_named():
+    """When an edge is refused, the label that was refused is the most actionable fact
+    about why the node is still here."""
+    parts = PARTS + [{"part_number": "12392-05-01M", "description": "SPACER",
+                      "quantity": 1, "bom_parent": "12392-05-GA"}]
+    issues = {i["part_number"]: i
+              for i in build_part_graph(parts, EXTRACT_02_ONLY, BOM_ROWS, DRAWINGS)["issues"]}
+    assert issues["12392-05-01M"]["bom_stated_parent"] == "12392-05-GA"
+    assert issues["12392-05-01M"]["bom_stated_parent_is_a_known_node"] is False
+
+
+def test_a_single_ga_job_is_unchanged():
+    """The safety property. One drawing, one root, the same answer as before the forest."""
+    parts = [p for p in PARTS if not p["part_number"].startswith("12392-04")]
+    rows = [r for r in BOM_ROWS if r.get("bom_parent") != "12392-04-GA"]
+    g = build_part_graph(parts, EXTRACT_02_ONLY, rows, ["12392-02-GA"])
+    assert g["top_assemblies"] == ["12392-02-GA"]
+    assert g["top_assembly"] == "12392-02-GA"
+    assert [i["part_number"] for i in g["issues"]] == []
+    # Identical to the same job compiled with no BOM rows at all.
+    assert g["top_assembly"] == build_part_graph(parts, EXTRACT_02_ONLY)["top_assembly"]
+
+
+def test_a_job_with_no_bom_rows_is_untouched():
+    """Every job before this one passed no rows at all, and must compile bit-identically."""
+    a = build_part_graph(PARTS, EXTRACT_02_ONLY)
+    b = build_part_graph(PARTS, EXTRACT_02_ONLY, [], [])
+    assert a["parents"] == b["parents"]
+    assert a["quantities"] == b["quantities"]
+    assert [i["part_number"] for i in a["issues"]] == [i["part_number"] for i in b["issues"]]
+
+
+def test_the_drawing_numbers_come_from_the_files_we_opened():
+    assert job_drawing_numbers({"job_source_pdfs": [
+        {"name": "12392-02-GA.pdf"}, {"name": "12392-04-GA.pdf"},
+    ]}) == ["12392-02-GA", "12392-04-GA"]
+    assert job_drawing_numbers({}) == []
+    # A descriptive file name yields whatever it says and no more — nothing is derived from
+    # it, because a drawing whose number we do not know must not head a tree.
+    assert "12392-04-GA" not in job_drawing_numbers(
+        {"job_source_pdfs": [{"name": "Mod mount bracket set.pdf"}]})

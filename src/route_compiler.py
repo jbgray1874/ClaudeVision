@@ -534,11 +534,79 @@ def _raw_identity_aliases(
     return aliases
 
 
+def _bom_stated_edges(
+    bom_rows: Optional[Sequence[Mapping[str, Any]]],
+    aliases: Mapping[str, str],
+    known: Set[str],
+) -> List[tuple]:
+    """(child, parent, qty) for every BOM row that names an owner we already know.
+
+    THE DETERMINISTIC READ OF A BOM TABLE IS THE STRONGEST HIERARCHY EVIDENCE ON A DRAWING
+    PACK, and it was the only one this compiler never consulted. bom_pipeline stamps each row
+    with the parent page whose table listed it, and says in its own docstring that it does not
+    deduplicate because "the same code legitimately recurs across parent BOMs".
+
+    THREE REFUSALS, each one a way this could do harm:
+
+    A PARENT WE DO NOT ALREADY KNOW IS NOT CREATED. merge_boms takes this label from the
+    title block verbatim when a reader found one and falls back to "<file>#<page>" when none
+    did, so it is usually a part code and sometimes a file name — and a node invented from a
+    file name would be a phantom assembly carrying real children.
+
+    THE ONE EXCEPTION IS EVIDENCE, NOT A GUESS: an assembly we know exists because we opened
+    its drawing. `known` includes the job's own drawing numbers, so a title block naming
+    "12392-04-GA" on a job that read 12392-04-GA.pdf is a general arrangement we have in our
+    hands, not a code inferred from a string. That is what lets the second GA of an enquiry
+    own its parts when the extract only read the first. A label matching no part and no
+    drawing still makes no edge, and the child stays visibly disconnected — the honest
+    outcome, because a missing edge can be seen and a wrong one cannot.
+
+    NOTHING IS RE-PARENTED. Applied only where the child has no owner at all (enforced by the
+    caller), so this cannot move a part from the assembly the model or the extract put it in.
+    The module's rule is that a wrong parent is worse than a missing one; an edge that can
+    only ever fill a hole cannot break that.
+
+    source_pdf IS NOT ACCEPTED AS A PARENT HERE, though the rollup merge does accept it for
+    telling two lines apart. Distinguishing lines needs only a discriminator; naming an owner
+    needs a part. "12392-04-GA.pdf" is a fine discriminator and not an assembly.
+    """
+    edges: List[tuple] = []
+    for row in bom_rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        child = clean_part_number(row.get("part_number") or row.get("part_code")
+                                  or row.get("code"))
+        parent = clean_part_number(row.get("bom_parent") or row.get("parent")
+                                   or row.get("parent_code"))
+        if not child or not parent:
+            continue
+        child = aliases.get(child, child)
+        parent = aliases.get(parent, parent)
+        if child == parent or parent not in known:
+            continue
+        edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0))
+    return edges
+
+
 def build_part_graph(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
+    bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
+    known_assemblies: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
-    """Build canonical nodes and hierarchy edges from the whole job."""
+    """Build canonical nodes and hierarchy edges from the whole job.
+
+    THREE SOURCES OF HIERARCHY, and until now this read two. The description rule writes
+    children onto the part records; the extract states assemblies. The third is the BOM table
+    itself: bom_pipeline reads it deterministically and stamps every row with the parent page
+    that listed it. That field reached this module in the records and was reported as an
+    unread fact in the disconnected-node issue — never used to make an edge.
+
+    On job 12392 the extract read only one of the enquiry's two drawings, so every part on
+    the other became a leaf nobody claimed, while the BOM row that named its owner sat in the
+    summary unread. `bom_rows` closes that: see _bom_stated_edges for why it can only ever
+    connect an orphan.
+    """
     llm_extract = llm_extract or {}
     raw_original = _raw_parts(parts)
     extracted = _extract_part_records(llm_extract)
@@ -723,6 +791,21 @@ def build_part_graph(
             children[parent_id][child_id] = qty
             parents.setdefault(child_id, set()).add(parent_id)
 
+    # ── HIERARCHY THE BOM TABLE STATED, where nothing else claimed the part ──────────
+    # THE DRAWINGS WE ACTUALLY OPENED are assemblies we know exist, whether or not any part
+    # record was created for them. On a pack whose second GA the extract never read, this is
+    # the difference between an owner and an orphan.
+    _drawings = {clean_part_number(d) for d in (known_assemblies or [])}
+    _drawings.discard("")
+    for _child_id, _parent_id, _qty in _bom_stated_edges(
+            bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings):
+        if _child_id in parents:
+            continue                      # already owned; this is additive, never a re-parent
+        children.setdefault(_parent_id, {})[_child_id] = _qty
+        parents.setdefault(_child_id, set()).add(_parent_id)
+        records.setdefault(_parent_id, {})["is_sub_assembly"] = True
+        records[_parent_id]["hierarchy_source"] = "bom_table"
+
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
     top_id = aliases.get(top_id, top_id)
@@ -734,9 +817,25 @@ def build_part_graph(
             ga_roots = [item for item in roots if re.search(r"(?:^|-)GA$", item)]
             if len(ga_roots) == 1:
                 top_id = ga_roots[0]
+
+    # AN ENQUIRY CAN HAVE MORE THAN ONE THING THAT SHIPS. 12392 is one job with two general
+    # arrangements — a panel and a bracket set — and this asked for THE top assembly, singular.
+    # The extract had read only the first drawing, so the second GA and everything under it
+    # was not the top, had no parent, and was reported as a disconnected node; had the extract
+    # read neither, top_id would have been blank and the quantity cascade would not have run
+    # at all, leaving every part at its own drawing quantity.
+    #
+    # A root is a node that owns children and that nothing owns. That is the definition
+    # already used above; it is only the "exactly one" that was wrong. Any assembly the
+    # extract explicitly named as top stays a root whether or not it has edges yet, so a job
+    # with one GA resolves to exactly the same single root as before.
+    top_ids: List[str] = [top_id] if top_id else []
+    for _root in sorted(set(children) - set(parents)):
+        if _root and _root not in top_ids and children.get(_root):
+            top_ids.append(_root)
+
     identities: Set[str] = set(raw) | set(extracted) | set(children) | set(parents)
-    if top_id:
-        identities.add(top_id)
+    identities.update(t for t in top_ids if t)
 
     quantities: Dict[str, float] = {}
 
@@ -749,8 +848,10 @@ def build_part_graph(
         for child_id, child_qty in (children.get(identity) or {}).items():
             add_descendants(child_id, factor * child_qty, next_path)
 
-    if top_id:
-        add_descendants(top_id, 1.0, set())
+    # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
+    # not two halves of one. A part under both accumulates, which is what the += above is for.
+    for _root in top_ids:
+        add_descendants(_root, 1.0, set())
     for identity in identities:
         if identity not in quantities:
             quantities[identity] = number(
@@ -797,10 +898,11 @@ def build_part_graph(
         ))
 
     graph_issues = []
-    if top_id:
+    if top_ids:
+        _roots = set(top_ids)
         for node in nodes:
             if (
-                node.part_number != top_id
+                node.part_number not in _roots
                 and not node.parents
                 and node.part_number not in {"PACKAGING", "DELIVERY", "POWDER"}
             ):
@@ -819,6 +921,11 @@ def build_part_graph(
                 # that a component belongs to this job is not evidence of which assembly
                 # owns it, and guessing an owner is how a note-only item becomes a BOM line.
                 _stated = clean_part_number(_rec.get("parent_part_number") or "")
+                # WHICH OWNER THE BOM TABLE NAMED, when one was named and could not be used.
+                # Now that BOM edges are joined, an orphan that still carries one means the
+                # label named nothing this job knows — the refusal in _bom_stated_edges — and
+                # that is the single most actionable fact about why it is still here.
+                _bom_stated = clean_part_number(_rec.get("bom_parent") or "")
                 graph_issues.append({
                     "code": "bom_node_disconnected",
                     "part_number": node.part_number,
@@ -830,6 +937,9 @@ def build_part_graph(
                     "qty_per_unit": node.qty_per_unit,
                     "stated_parent_part_number": _stated,
                     "stated_parent_is_a_known_node": bool(_stated and _stated in identities),
+                    "bom_stated_parent": _bom_stated,
+                    "bom_stated_parent_is_a_known_node": bool(
+                        _bom_stated and _bom_stated in identities),
                     "page_roles": [str(r) for r in (_rec.get("page_roles")
                                                     or _rec.get("roles") or [])],
                     "record_source": str(_rec.get("source")
@@ -855,13 +965,20 @@ def build_part_graph(
         "parents": parents,
         "children": {key: set(value) for key, value in children.items()},
         "quantities": quantities,
+        # top_assembly stays exactly what it was — the single declared or deduced top, blank
+        # where there is no single one. Every existing reader keeps its meaning. top_assemblies
+        # is the full forest, and the readers for which "is this the thing that ships" is the
+        # real question ask that one instead: with two GAs, both of them ship.
         "top_assembly": top_id,
+        "top_assemblies": list(top_ids),
     }
 
 
 def apply_canonical_evidence_to_parts(
     parts: Sequence[Dict[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
+    bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
+    known_assemblies: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Make the canonical graph authoritative BEFORE costing, not after it.
 
@@ -881,7 +998,7 @@ def apply_canonical_evidence_to_parts(
 
     Returns the compiled graph so the caller can record what it found.
     """
-    graph = build_part_graph(parts, llm_extract)
+    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies)
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
     for part in parts or []:
@@ -933,11 +1050,57 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
         if isinstance(item, Mapping)
         and clean_part_number(item.get("part_number") or item.get("item_number")) not in raw_ids
     ]
-    compiled = compile_job_route(population, summary.get("llm_full_extract") or {})
+    _da = summary.get("document_analysis") or {}
+    # bay_bom_rows FIRST: it is the merged, line-identified population and the one the sheet
+    # is built from. Falling back to bom_rows keeps every job that never took the rollup path.
+    compiled = compile_job_route(population, summary.get("llm_full_extract") or {},
+                                 _da.get("bay_bom_rows") or _da.get("bom_rows") or [],
+                                 job_drawing_numbers(summary))
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
     return payload
+
+
+def job_drawing_numbers(summary: Mapping[str, Any]) -> List[str]:
+    """The drawing numbers this job actually opened, from the file names it read.
+
+    A general arrangement whose PDF we scanned exists — that is not an inference, it is the
+    pack in our hands. It is worth stating separately from the part records because a GA can
+    perfectly well produce no part record of its own: it is the sheet that lists the parts.
+    On 12392 that is precisely what happened to the second drawing, and every part it owned
+    was reported as belonging to nothing.
+
+    The suffix is dropped and nothing else is: "12392-04-GA.pdf" names 12392-04-GA. No
+    attempt is made to derive an assembly code from a descriptive file name, because a file
+    called "Mod mount bracket set.pdf" names a drawing whose number we do not know, and
+    guessing one would put a phantom at the head of the tree.
+    """
+    names: List[str] = []
+    for entry in (summary.get("job_source_pdfs") or []):
+        raw = entry.get("name") if isinstance(entry, Mapping) else entry
+        stem = str(raw or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if stem.lower().endswith(".pdf"):
+            stem = stem[:-4]
+        code = clean_part_number(stem)
+        if code and code not in names:
+            names.append(code)
+    return names
+
+
+def _roots_that_ship(graph: Mapping[str, Any]) -> List[str]:
+    """Every assembly at the head of the forest — the things an order actually delivers.
+
+    top_assembly is the single declared or deduced top and stays exactly that, because
+    several readers mean "the one anchor" by it. This answers the different question three
+    of them were really asking: is this node something that ships, and therefore something
+    that must be packed and sequenced last. On a one-GA job the two answers are the same set.
+    """
+    roots = [str(r) for r in (graph.get("top_assemblies") or []) if r]
+    if roots:
+        return roots
+    single = str(graph.get("top_assembly") or "")
+    return [single] if single else []
 
 
 def _ancestor_distances(identity: str, parents: Mapping[str, Set[str]]) -> Dict[str, int]:
@@ -1138,10 +1301,12 @@ def arbitrate_event(
 def compile_job_route(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
+    bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
+    known_assemblies: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
-    graph = build_part_graph(parts, llm_extract)
+    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]
@@ -1555,6 +1720,7 @@ def compile_job_route(
                 _lowest_common_assembly(
                     insertion_parts, graph["parents"], kinds)
                 or graph["top_assembly"]
+                or (_roots_that_ship(graph) or [""])[0]
                 or insertion_parts[0]
             )
             insertion_route_id = stable_id("route", {
@@ -1607,7 +1773,11 @@ def compile_job_route(
         # Assemble/pack row: a welded bracket that nobody handles or packs. The invariant
         # was right to report handling as unpriced -- there was genuinely nothing charging
         # for it.
-        _is_top = node.part_number == graph["top_assembly"]
+        # BOTH GAs SHIP. This asked whether the node is THE top assembly, which on a
+        # two-GA enquiry is true of at most one of them — so the other, if it owned a weld,
+        # lost its assembly event and the sheet carried no Assemble/pack row for something
+        # somebody still has to box. The question is whether this node is a root.
+        _is_top = node.part_number in _roots_that_ship(graph)
         if (
             node.kind != "assembly"
             or not node.children
@@ -1633,7 +1803,7 @@ def compile_job_route(
             scope="assembly",
             participants=[edge.part_number for edge in node.children],
             qty_per_unit=node.qty_per_unit,
-            sequence=90 if node.part_number == graph["top_assembly"] else 60,
+            sequence=90 if _is_top else 60,
             reason=("the top assembly is packed whatever joined it"
                     if _is_top else "non-welded BOM parent requires one assembly event"),
             route_id=assembly_route_id,
@@ -1824,7 +1994,7 @@ def compile_job_route(
         # NEVER THE TOP ASSEMBLY. It is the thing that ships, and it is packed however it
         # was joined — 2085-GA owned its weld, lost its assembly event, and the sheet
         # carried no Assemble/pack row for a bracket somebody still has to box.
-        if _d.target_id == graph.get("top_assembly"):
+        if _d.target_id in _roots_that_ship(graph):
             continue
         _specific = _specific_by_target.get(_d.target_id) or []
         if not _specific:

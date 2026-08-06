@@ -2595,16 +2595,25 @@ def _finalize_scan_summary(
         print(f"   [mirror] skipped: {type(_mirror_err).__name__}: {_mirror_err}", flush=True)
 
     try:
-        from route_compiler import apply_canonical_evidence_to_parts
+        from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
+        # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
+        # answer. This runs before costing, so a part the BOM parents is an assembly's child
+        # here rather than a disconnected leaf that has already been priced as one.
         _canon_pre = apply_canonical_evidence_to_parts(
             summary["manufacturing_writeup"]["parts"],
-            summary.get("llm_full_extract") or {})
+            summary.get("llm_full_extract") or {},
+            (summary.get("document_analysis") or {}).get("bom_rows") or [],
+            job_drawing_numbers(summary))
         summary["canonical_part_graph_pre_cost"] = {
             "nodes": len(_canon_pre.get("nodes") or []),
             "issues": list(_canon_pre.get("issues") or []),
+            "roots": list(_canon_pre.get("top_assemblies") or []),
         }
+        _roots = [r for r in (_canon_pre.get("top_assemblies") or []) if r]
         print(f"   [canonical-part-graph] applied before costing: "
-              f"{len(_canon_pre.get('nodes') or [])} node(s)", flush=True)
+              f"{len(_canon_pre.get('nodes') or [])} node(s)"
+              + (f"; {len(_roots)} assemblies ship on this enquiry ({', '.join(_roots)})"
+                 if len(_roots) > 1 else ""), flush=True)
     except Exception as _canon_pre_err:
         print(f"   [canonical-part-graph] pre-cost application skipped: "
               f"{type(_canon_pre_err).__name__}: {_canon_pre_err}", flush=True)
