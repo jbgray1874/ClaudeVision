@@ -138,8 +138,17 @@ def reconciled_bom_rows_for_job(
 
     flat: List[Dict[str, Any]] = []
     findings_extra: List[Dict[str, Any]] = []
-    for pg in result.get("pages", []):
+    # Parents, not pages. A page is one sheet; a parent is one drawing's bill of
+    # materials, which is the thing an estimate is built from. Reading pages here gave a
+    # parent whose list spans two sheets two half-BOMs, and a fixings table repeated on
+    # a detail sheet double the fixings. Falls back to pages so an older reconcile
+    # result — or a caller that builds one by hand — still flattens.
+    _groups = result.get("parents")
+    if _groups is None:
+        _groups = result.get("pages", [])
+    for pg in _groups:
         parent = pg.get("label")
+        _parent_known = pg.get("parent_known", True)
         for r in pg.get("rows", []):
             code = _norm_code(r.get("part_number") or r.get("part_ref") or "")
             desc = str(r.get("description") or "").strip()
@@ -172,6 +181,13 @@ def reconciled_bom_rows_for_job(
                 "bom_confidence": r.get("confidence"),
                 "bom_flag": r.get("flag"),
                 "bom_parent": parent,
+                # False when the sheet's title block named no drawing and this group is a
+                # file+page placeholder. It groups the rows correctly and it is not a
+                # drawing number, so nothing downstream may hang a hierarchy on it.
+                "bom_parent_known": _parent_known,
+                # Which sheet the row was read off, and any others that restated it.
+                "bom_sheet": r.get("sheet"),
+                "bom_also_on_sheets": list(r.get("also_on_sheets") or []) or None,
             })
     # A reader that did not run is the only failure this module cannot see in its output:
     # the rows simply are not there, and a job read by one path looks exactly like a job

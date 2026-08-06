@@ -200,6 +200,84 @@ def code_quality_findings(parent_label: str, rows: List[Dict[str, Any]]) -> List
 # Everything else — detail sheets, sections, revision pages — is read from cache if it
 # happens to be there and otherwise not read at all. Skipping is recorded, not silent:
 # a page nobody looked at is not a page with no BOM on it.
+def merge_pages_into_parents(pages: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Gather every page's rows under the drawing that owns them.
+
+    A parts list is not confined to the GA. It continues onto a second sheet, it is
+    repeated as a fixings table on a detail, and a sub-assembly states its own on the
+    page that details it. Reading page by page and stopping there gives one BOM per
+    SHEET, so a parent whose list spans two sheets arrives as two half-BOMs and a
+    fixings table repeated for the fitter's convenience arrives as double the fixings.
+
+    WHAT MAKES TWO ROWS ONE LINE. Within a single parent's bill of materials the item
+    number is unique — that is what an item number is for. So:
+
+        same parent, same item, same code      one line, seen on two sheets
+        same parent, different item            two lines (a continuation sheet)
+        same parent, same item, DIFFERENT code the sheets disagree; both are emitted
+                                               and flagged, because dropping either
+                                               loses a real part to tidy up a conflict
+
+    Rows under DIFFERENT parents are never folded together. One code legitimately
+    appears in several assemblies, and collapsing those is how a part used twice
+    becomes a part used once — the global part-number deduplication this system has
+    already been bitten by.
+    """
+    by_parent: Dict[str, Dict[str, Any]] = {}
+    findings: List[str] = []
+    for pg in pages:
+        label = pg.get("label") or ""
+        key = _bare(label) or label
+        entry = by_parent.setdefault(key, {
+            "label": label, "parent_known": bool(pg.get("parent_known")),
+            "sheets": [], "rows": [], "_by_item": {},
+        })
+        if pg.get("parent_known") and not entry["parent_known"]:
+            # A page that knows its drawing names the group; a page-identity placeholder
+            # never overrides a real title block.
+            entry["label"] = label
+            entry["parent_known"] = True
+        _sheet = pg.get("sheet") or label
+        if _sheet not in entry["sheets"]:
+            entry["sheets"].append(_sheet)
+        for row in pg.get("rows", []):
+            item = str(row.get("item_number") or "").strip()
+            code = _bare(row.get("part_number") or row.get("part_ref") or "")
+            if not item:
+                entry["rows"].append(dict(row, sheet=_sheet))
+                continue
+            prior = entry["_by_item"].get(item)
+            if prior is None:
+                _r = dict(row, sheet=_sheet)
+                entry["_by_item"][item] = _r
+                entry["rows"].append(_r)
+                continue
+            prior_code = _bare(prior.get("part_number") or prior.get("part_ref") or "")
+            if prior_code == code:
+                # The same line on a second sheet. Record where it was seen; do not
+                # count it twice.
+                _seen = prior.setdefault("also_on_sheets", [])
+                if _sheet not in _seen and _sheet != prior.get("sheet"):
+                    _seen.append(_sheet)
+                continue
+            _r = dict(row, sheet=_sheet)
+            _r["flag"] = ((_r.get("flag") or "") + "; " if _r.get("flag") else "") + (
+                f"item {item} is '{prior.get('part_ref') or prior_code}' on "
+                f"{prior.get('sheet')} and '{row.get('part_ref') or code}' on {_sheet} — "
+                f"the sheets disagree; both are costed until someone says which is right")
+            entry["rows"].append(_r)
+            findings.append(f"[{entry['label']}] {_r['flag']}")
+
+    out = []
+    for entry in by_parent.values():
+        entry.pop("_by_item", None)
+        if len(entry["sheets"]) > 1:
+            findings.append(f"[{entry['label']}] parts list read from {len(entry['sheets'])} "
+                            f"sheets: {', '.join(str(s) for s in entry['sheets'])}")
+        out.append(entry)
+    return out, findings
+
+
 def page_needs_vision(verdict: Dict[str, Any]) -> Tuple[bool, str]:
     """Decide from what the deterministic reader SAW, not from a guess about the page.
 
@@ -431,11 +509,22 @@ def reconcile_job(
         fkey = f"F:{fp}"
         a_bom = a_index.get(fkey)
         b_bom = b_index.get(fkey)
-        label = (b_bom or {}).get("parent") or (a_bom or {}).get("parent") or fp
+        # A page whose title block named no drawing falls back to its own file+page
+        # identity. That groups the page's rows, which is right, but "12392-04-GA.pdf#1"
+        # is not a drawing number and nothing downstream may build a hierarchy on it as
+        # though it were. Say which it is rather than leaving it to be guessed from the
+        # shape of a string.
+        _named = (b_bom or {}).get("parent") or (a_bom or {}).get("parent") or ""
+        label = _named or fp
         merged, findings = reconcile_page(a_bom, b_bom, label)
         if not merged:
             continue
         page_findings = list(findings) + code_quality_findings(label, merged)
+        if not _named:
+            page_findings.append(
+                f"[{fp}] this sheet's title block names no drawing number, so its "
+                f"{len(merged)} BOM row(s) are grouped by the page they were read from "
+                f"and cannot be placed under a parent assembly")
         total_findings.extend(page_findings)
         for r in merged:
             s = r["source"]
@@ -448,6 +537,7 @@ def reconcile_job(
             elif s == "A_ONLY":
                 counts["a_only"] += 1
         pages.append({"label": label, "a_bom": a_bom, "b_bom": b_bom,
+                      "parent_known": bool(_named), "sheet": fp,
                       "rows": merged, "findings": page_findings})
     # A job where one path never ran is not a reconciled job — it is a single-reader read
     # wearing a reconciled job's shape, and every "BOTH ... HIGH confidence" it cannot
@@ -459,8 +549,14 @@ def reconcile_job(
     if pdf_paths and pathA is not None and not a_boms:
         unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
                        "detail": "deterministic reader found no BOM table on any page of this job"})
+    # Pages carry one BOM per SHEET. Parents carry one BOM per DRAWING, which is what a
+    # bill of materials is: a continuation sheet finishes a list rather than starting a
+    # second one, and a fixings table repeated on a detail is the same fixings.
+    parents, parent_findings = merge_pages_into_parents(pages)
+    total_findings.extend(parent_findings)
     return {
-        "pages": pages, "findings": total_findings, "counts": counts,
+        "pages": pages, "parents": parents,
+        "findings": total_findings, "counts": counts,
         "pdf_paths": list(pdf_paths), "a_count": len(a_boms), "b_count": len(b_boms),
         "unread": unread, "vision_calls": dict(spend),
     }
