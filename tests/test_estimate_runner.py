@@ -245,7 +245,14 @@ def test_the_refusal_survives_the_platform_branch(engine):
     runner, root = engine
     held = runner.claim_the_machine(root)
     assert held is not None
-    assert runner._take_lock(held) is True, "the holder still holds it"
+
+    # RE-LOCKING YOUR OWN HANDLE IS NOT A TEST OF ANYTHING, and asserting it
+    # succeeded encoded one platform's semantics as if they were the rule. POSIX
+    # flock is re-entrant per descriptor, so this returned True on Linux and the
+    # assertion looked meaningful; Windows byte-range locks are not re-entrant, so
+    # the same call correctly returns False and the test failed on the only
+    # platform the runner runs on. The claim below — that a SECOND handle is
+    # refused — is the one that matters, and it is true on both.
 
     import os as _os
     second = _os.fdopen(_os.open(str(root / "output" / ".runner.lock"),
@@ -255,3 +262,48 @@ def test_the_refusal_survives_the_platform_branch(engine):
             "a second handle must be refused, not fail open")
     finally:
         second.close(); held.close()
+
+
+def test_reading_the_identity_never_reaches_the_locked_byte(engine, monkeypatch):
+    """THE LOCK WAS BREAKING THE READ IT EXISTS TO ENABLE, on Windows only.
+
+    The identity sits at byte 0 and the lock at byte 4096, which looks like ample
+    separation and is not: a BUFFERED read of 256 bytes issues a raw read of
+    io.DEFAULT_BUFFER_SIZE — 8192 — so it spans the locked byte every time. POSIX
+    flock is advisory and blocks nothing, so every test passed here while the
+    refusal on Windows could not name the pid and said "another process" instead.
+    The one thing an estimator needs from that message is which window to close.
+
+    The outcome is indistinguishable on the platform these tests run on, so this
+    asserts the MECHANISM instead. Note which assertion does the work: a buffered
+    implementation fills through FileIO.readinto at C level and never calls
+    os.read at all, so `assert asked` is what fails if this is reverted. The size
+    check is a second line on the raw path, not the primary guard — a monkeypatch
+    of os.read cannot observe the very reads that caused the defect.
+    """
+    runner, root = engine
+    held = runner.claim_the_machine(root)
+    assert held is not None
+
+    asked = []
+    real_read = runner.os.read
+    monkeypatch.setattr(runner.os, "read",
+                        lambda fd, n: (asked.append(n), real_read(fd, n))[1])
+
+    runner._read_identity(root / "output" / ".runner.lock")
+
+    assert asked, "the identity must actually be read"
+    assert max(asked) <= runner._IDENTITY_BYTES, (
+        f"a read of {max(asked)} bytes reaches past byte {runner._LOCK_BYTE} and is "
+        f"refused by a mandatory lock; it must ask for at most "
+        f"{runner._IDENTITY_BYTES}")
+
+
+def test_the_refusal_names_the_holder_while_the_lock_is_held(engine):
+    """The user-visible property the size guard above protects: with the lock
+    genuinely held, the identity is still readable and the message still says who."""
+    runner, root = engine
+    held = runner.claim_the_machine(root)
+    assert held is not None
+    said = runner._read_identity(root / "output" / ".runner.lock")
+    assert f"pid {os.getpid()}" in said, said

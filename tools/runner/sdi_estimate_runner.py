@@ -151,6 +151,43 @@ _LOCK_BYTE = 4096
 _IDENTITY_BYTES = 256
 
 
+def _read_identity(lock_path: Path) -> str:
+    """Who the lock file says holds it, read WITHOUT touching the locked byte.
+
+    THE LOCK WAS BREAKING THE READ IT EXISTS TO ENABLE, and only on Windows.
+
+    The identity sits at byte 0 and the lock at byte 4096, which looks like ample
+    separation and is not: a buffered read of 256 bytes fills through the raw
+    layer at io.DEFAULT_BUFFER_SIZE - 8192 bytes - so it spans byte 4096 every
+    time. On Linux that is harmless because flock is advisory and blocks nothing.
+    On Windows a byte-range lock is MANDATORY, so the read failed, and the refusal
+    fell back to "another process (it holds the lock file)" instead of naming the
+    pid. The one thing an estimator needs from that message - WHICH window to
+    close - was missing on the only platform this runs on.
+
+    So the read is raw and exactly _IDENTITY_BYTES long: os.read asks for what it
+    is given and no more, so it cannot reach the locked byte however the buffer
+    size changes. On its own descriptor, too - reading through the handle that
+    holds the lock would move that handle's file position, and _take_lock depends
+    on where it is.
+    """
+    fd = None
+    try:
+        fd = os.open(str(lock_path), os.O_RDONLY)
+        return os.read(fd, _IDENTITY_BYTES).decode("utf-8", "replace").strip("\x00 \r\n")
+    except (OSError, ValueError):
+        # A read that still fails has told us something real: somebody holds the
+        # file in a way that excludes us. The caller says exactly that rather than
+        # inventing a name for them.
+        return ""
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def claim_the_machine(engine_root: Path):
     """Best-effort single-instance advisory. Returns a handle, or None.
 
@@ -170,21 +207,13 @@ def claim_the_machine(engine_root: Path):
         fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
         handle = os.fdopen(fd, "r+b")
 
-        previous = ""
-        try:
-            handle.seek(0)
-            previous = handle.read(_IDENTITY_BYTES).decode("utf-8", "replace").strip("\x00 \r\n")
-        except OSError:
-            # Reading byte 0 failed, which on Windows means another handle holds
-            # it - almost certainly a runner from an older build of this file.
-            # That IS the condition we are looking for, so say so.
-            previous = previous or "another process (it holds the lock file)"
-            handle.close()
-            _refuse(previous)
+        # READ BEFORE LOCKING, on a descriptor of its own. Whether anybody holds
+        # the lock is _take_lock's question; this only asks what the file says.
+        previous = _read_identity(lock_path)
 
         if not _take_lock(handle):
             handle.close()
-            _refuse(previous or "process unknown")
+            _refuse(previous or "another process (it holds the lock file)")
 
         identity = (f"pid {os.getpid()} on {platform.node()} since "
                     f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
