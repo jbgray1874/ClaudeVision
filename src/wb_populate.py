@@ -84,6 +84,11 @@ except Exception:
     _MATERIAL_TOTAL_ERROR_TOLERANT = True
 from typing import Any, Dict, List, Optional, Tuple
 
+# The one module that answers "do we make this or buy it". Identity-only and
+# dependency-free, so it is safe to ask anywhere — including inside the finish gate,
+# which used to answer it privately and disagreed with the rest of the engine.
+import bought_in_policy as _bought_in_policy
+
 # What goes next to a price nobody can reproduce. Short enough for a spreadsheet cell and
 # blunt enough that it cannot be read as a supplier quote.
 _INDICATIVE_TAG = "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]"
@@ -3159,8 +3164,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # A bought-in consumable is not a fabricated part and cannot be the thing that goes
         # through the booth. Any job carrying a powder CODE in its BOM had this bug.
-        _pg_roles_boughtin = [str(_r).lower() for _r in (_mp.get("page_roles") or [])]
-        if (not _pn) or ("bought_in" in _pg_roles_boughtin):
+        #
+        # AND IT ASKS THE MODULE THAT OWNS THAT QUESTION. This was a substring test on
+        # page_roles, which is one of seven signals bought_in_policy weighs — and the
+        # weakest of them where a record carries two roles at once. On 12392 all four steel
+        # leaves carry BOTH "detail" and "bought_in", so every one of them was skipped here
+        # and the scan came back holding a single entry: the assembly's EDGED. The engine
+        # then reported "no part's finish reads RAW" about a job whose own observations say
+        # 12392-02-01M reads RAW, claimed powder on that raw part, and left the route
+        # decision unverifiable.
+        #
+        # A private copy of a rule that exists elsewhere is how two readers of one job come
+        # to disagree about what it says. The predicate already treats a mixed detail +
+        # bought-in reading as a conflict rather than authority, and every strong catalogue
+        # signal still returns True from it, so the tin of paint above is still excluded —
+        # by identity now, rather than by a role that a fabricated part can also carry.
+        if not _pn or _bought_in_policy.is_bought_in(_mp):
             continue
         _fin = str(_mp.get("normalized_finish") or "").strip()
         if not _fin:
