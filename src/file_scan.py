@@ -1687,6 +1687,12 @@ def _finalize_scan_summary(
             # reads it. Written BEFORE the rows guard so a job the readers could not read
             # at all still says who was unable to read it.
             _da["bom_readers_unread"] = list(_dp.get("unread") or [])
+            _da["bom_vision_calls"] = dict(_dp.get("vision_calls") or {})
+            _vc = _da["bom_vision_calls"]
+            if _vc:
+                print(f"   [bom-vision] {_vc.get('paid', 0)} page(s) sent to the model, "
+                      f"{_vc.get('cached', 0)} from cache, "
+                      f"{_vc.get('skipped', 0)} not selected", flush=True)
             if _dp.get("rows"):
                 _da["bom_rows"] = _dp["rows"]
                 _da["bom_code_quality_findings"] = _dp.get("findings", [])

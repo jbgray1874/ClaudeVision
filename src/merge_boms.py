@@ -181,11 +181,53 @@ def code_quality_findings(parent_label: str, rows: List[Dict[str, Any]]) -> List
 # ---------------------------------------------------------------------------
 # Run both readers over a job.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Which pages are worth paying to look at.
+# ---------------------------------------------------------------------------
+# A vision call is charged mostly on image size, so the expensive pattern is every page
+# of every pack on every run. The cheap pattern is the one that is actually wanted: the
+# pages that carry a bill of materials, and the pages that look like they should carry
+# one but came back empty.
+#
+# Two pages therefore earn a call:
+#
+#   the deterministic reader FOUND a table here   -> corroborate it. This is where the
+#       money is, and a row only one reader saw is the whole reason to read twice.
+#   the page TALKS like a parts list and the deterministic reader found nothing ->
+#       this is the coverage gap. A whole parent BOM absent from a job lives here, and
+#       it is invisible in the output because what is wrong with it is what is not in it.
+#
+# Everything else — detail sheets, sections, revision pages — is read from cache if it
+# happens to be there and otherwise not read at all. Skipping is recorded, not silent:
+# a page nobody looked at is not a page with no BOM on it.
+_BOM_TABLE_WORDS = (
+    "ITEM", "QTY", "QUANTITY", "PART NO", "PART NUMBER", "PARTNO",
+    "DESCRIPTION", "PARTS LIST", "BILL OF MATERIAL", "MATERIAL", "REF",
+)
+_MIN_BOM_VOCAB_HITS = 3
+
+
+def page_talks_like_a_parts_list(text: str) -> bool:
+    """True when a page's own words name the columns of a bill of materials.
+
+    Deliberately a vocabulary count and not a layout test: the pages this must catch are
+    exactly the ones whose layout defeated the table reader. Three distinct column words
+    because "MATERIAL" or "REF" alone appears in most title blocks, and one word is how a
+    policy meant to save money ends up paying for every sheet in the pack.
+    """
+    up = (text or "").upper()
+    return sum(1 for w in _BOM_TABLE_WORDS if w in up) >= _MIN_BOM_VOCAB_HITS
+
+
 # A page neither reader could look at is a page whose BOM cannot be missing-or-present:
 # it is simply unknown, and that is the one state this module must never report as clean.
 # Both runners therefore append to `unread`, and reconcile_job carries those out to the
 # caller as findings. Prints alone were how a whole job ran vision-blind in silence.
-def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = None,
+               survey: Optional[Dict[Tuple[str, int], bool]] = None) -> List[Dict[str, Any]]:
+    """Read every page deterministically, and — since the page is already open — note
+    whether it talks like a parts list, into `survey` keyed by (pdf_name, page_index).
+    That survey is what lets Path B spend only where a BOM plausibly is."""
     import pdfplumber
     out: List[Dict[str, Any]] = []
     if pathA is None:
@@ -197,6 +239,14 @@ def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = No
         try:
             with pdfplumber.open(p) as pdf:
                 for pi, page in enumerate(pdf.pages):
+                    if survey is not None:
+                        try:
+                            survey[(os.path.basename(p), pi)] = page_talks_like_a_parts_list(
+                                page.extract_text() or "")
+                        except Exception:
+                            # A page whose text will not come out is exactly a page vision
+                            # should see. Unknown is not "no".
+                            survey[(os.path.basename(p), pi)] = True
                     bom = pathA.read_bom_from_page(page)
                     if bom:
                         bom["page_index"] = pi
@@ -210,7 +260,13 @@ def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = No
     return out
 
 
-def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]] = None,
+               worth_paying_for: Optional[Dict[Tuple[str, int], bool]] = None,
+               spend: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
+    """Read pages with the vision model. `worth_paying_for` maps (pdf_name, page_index)
+    to whether this page earns a paid call; a page not in it, or mapped False, is read
+    from cache if present and otherwise left unread and recorded. None means the caller
+    did not select, and every page is paid for — the standalone tool's behaviour."""
     out: List[Dict[str, Any]] = []
     if pathB is None:
         if unread is not None:
@@ -231,17 +287,37 @@ def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]
                                "detail": f"{type(exc).__name__}: {exc}"})
             continue
         for pi in range(n):
+            _name = os.path.basename(p)
+            _pay = force_all or worth_paying_for is None or worth_paying_for.get((_name, pi), False)
             try:
                 png = pathB.render_page_to_png(p, pi, dpi=args.dpi, max_side=args.max_side)
                 res = pathB.get_vision_bom_cached(
-                    png, model=args.model, pdf_name=os.path.basename(p), page_index=pi,
+                    png, model=args.model, pdf_name=_name, page_index=pi,
                     cache_dir=args.cache_dir, use_cache=not args.no_cache, refresh=this_refresh,
+                    cache_only=not _pay,
                 )
             except Exception as exc:
-                print(f"  [Path B error] {os.path.basename(p)} p{pi}: {exc}")
+                print(f"  [Path B error] {_name} p{pi}: {exc}")
                 if unread is not None:
-                    unread.append({"path": "B", "scope": "page", "pdf": os.path.basename(p), "page": pi,
+                    unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
                                    "detail": f"{type(exc).__name__}: {exc}"})
+                continue
+            if spend is not None:
+                if res.get("skipped"):
+                    spend["skipped"] = spend.get("skipped", 0) + 1
+                elif res.get("cache_hit"):
+                    spend["cached"] = spend.get("cached", 0) + 1
+                else:
+                    spend["paid"] = spend.get("paid", 0) + 1
+            if res.get("skipped"):
+                # Not an error and not an empty page — a page nobody looked at. Recorded
+                # so "no BOM here" is never inferred from a call that was never made.
+                if unread is not None:
+                    unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
+                                   "detail": "not read by the vision model: the page does not "
+                                             "talk like a parts list and the deterministic "
+                                             "reader found no table on it",
+                                   "reason": "not_selected"})
                 continue
             parsed = res["parsed"]
             if parsed and parsed.get("rows"):
@@ -275,6 +351,7 @@ def reconcile_job(
     force_llm=False,
     refresh_file=None,
     verbose=False,
+    select_pages=True,
 ):
     """Dual-path BOM reconcile for a set of PDFs (library entry point).
 
@@ -296,15 +373,32 @@ def reconcile_job(
         force_llm=force_llm, refresh_file=refresh_file,
     )
     unread: List[Dict[str, Any]] = []
+    survey: Dict[Tuple[str, int], bool] = {}
+    spend: Dict[str, int] = {"paid": 0, "cached": 0, "skipped": 0}
     if verbose:
         print("\nRunning Path A (deterministic extract_words)...")
-    a_boms = run_path_a(pdf_paths, unread)
+    a_boms = run_path_a(pdf_paths, unread, survey)
     if verbose:
         print(f"  Path A found {len(a_boms)} BOM table(s).")
-        print("Running Path B (Grok vision, cached)...")
-    b_boms = run_path_b(pdf_paths, _args, unread)
+
+    # A page earns a paid vision call when Path A found a table on it (corroborate the
+    # money) or when the page's own words name parts-list columns and Path A found
+    # nothing (the coverage gap). `select_pages=False` restores every-page behaviour.
+    if select_pages:
+        worth: Dict[Tuple[str, int], bool] = dict(survey)
+        for bom in a_boms:
+            worth[(bom.get("pdf_name", ""), bom.get("page_index", -1))] = True
+    else:
+        worth = None  # type: ignore[assignment]
     if verbose:
-        print(f"  Path B found {len(b_boms)} BOM table(s).")
+        _n = sum(1 for v in (worth or {}).values() if v)
+        print(f"Running Path B (Grok vision, cached) on "
+              f"{_n if worth is not None else 'all'} selected page(s)...")
+    b_boms = run_path_b(pdf_paths, _args, unread, worth, spend)
+    if verbose:
+        print(f"  Path B found {len(b_boms)} BOM table(s). "
+              f"Vision calls: {spend['paid']} paid, {spend['cached']} from cache, "
+              f"{spend['skipped']} pages not selected.")
 
     b_index = _index_by_keys(b_boms)
     a_index = _index_by_keys(a_boms)
@@ -351,7 +445,7 @@ def reconcile_job(
     return {
         "pages": pages, "findings": total_findings, "counts": counts,
         "pdf_paths": list(pdf_paths), "a_count": len(a_boms), "b_count": len(b_boms),
-        "unread": unread,
+        "unread": unread, "vision_calls": dict(spend),
     }
 
 

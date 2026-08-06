@@ -254,14 +254,21 @@ def _cache_path(cache_dir: str, key: str) -> str:
 
 def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_index: int,
                           cache_dir: str, use_cache: bool = True,
-                          refresh: bool = False) -> Dict[str, Any]:
+                          refresh: bool = False, cache_only: bool = False) -> Dict[str, Any]:
     """Return {'parsed':..., 'raw_response':..., 'cache_hit':bool} for a page.
 
     - use_cache False  -> always call Grok, never read/write cache.
     - refresh True     -> ignore any existing entry, call Grok, overwrite it.
+    - cache_only True  -> use an existing entry if there is one, but NEVER call Grok;
+                          a miss returns parsed=None with 'skipped': True.
     - otherwise        -> load from cache if present; else call Grok and store.
     Re-parsing: on a cache hit we RE-PARSE the stored raw_response with the current
     parser (so parser fixes take effect for free), but do NOT re-call Grok.
+
+    cache_only exists so the decision NOT to spend on a page never becomes a decision
+    not to KNOW about it. The cache is keyed on the page image, so an already-read page
+    costs nothing to read again — being selective about which pages are worth paying for
+    should not throw away pages already paid for.
     """
     key = _cache_key(png_bytes, model, PROMPT_VERSION)
     path = _cache_path(cache_dir, key)
@@ -275,6 +282,9 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
             return {"parsed": parsed, "raw_response": raw, "cache_hit": True}
         except Exception:
             pass  # corrupt/old cache entry -> fall through and re-fetch
+
+    if cache_only:
+        return {"parsed": None, "raw_response": "", "cache_hit": False, "skipped": True}
 
     # miss (or refresh / no-cache): call Grok
     raw = call_vision_llm(png_bytes, model=model)

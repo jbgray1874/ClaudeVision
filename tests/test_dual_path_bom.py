@@ -99,13 +99,27 @@ class _StubPathA:
         }
 
 
-def _stub_pdfplumber(monkeypatch, pages=1):
-    """A pdfplumber whose open() yields `pages` blank pages, so run_path_a has work."""
+def _stub_pdfplumber(monkeypatch, pages=1, texts=None):
+    """A pdfplumber whose open() yields `pages` pages, so run_path_a has work.
+
+    `texts` gives each page's extract_text(). Default is a title block with no
+    parts-list vocabulary — a plain detail sheet.
+    """
     import types
+
+    class _Page:
+        def __init__(self, text):
+            self._text = text
+
+        def extract_text(self):
+            return self._text
 
     class _Pdf:
         def __init__(self):
-            self.pages = [object() for _ in range(pages)]
+            self.pages = [
+                _Page((texts or {}).get(i, "SCALE 1:2  DRAWN BY  SHEET 1 OF 4"))
+                for i in range(pages)
+            ]
 
         def __enter__(self):
             return self
@@ -287,3 +301,196 @@ def test_the_check_is_registered():
     import invariants
 
     assert invariants.check_both_bom_readers_ran in invariants.CHECKS
+
+
+# ---------------------------------------------------------------------------
+# 5. Paying for the pages that carry a BOM, and only those
+# ---------------------------------------------------------------------------
+def test_a_title_block_alone_does_not_buy_a_vision_call():
+    """MATERIAL and REF appear in most title blocks. One column word must not be
+    enough, or a policy meant to save money pays for every sheet in the pack."""
+    assert merge_boms.page_talks_like_a_parts_list("MATERIAL: MILD STEEL  REF: A") is False
+    assert merge_boms.page_talks_like_a_parts_list("SCALE 1:2  DRAWN BY  SHEET 1 OF 4") is False
+
+
+def test_a_parts_list_page_buys_one():
+    assert merge_boms.page_talks_like_a_parts_list(
+        "ITEM NO.  PART NUMBER  DESCRIPTION  QTY") is True
+    assert merge_boms.page_talks_like_a_parts_list(
+        "Bill of Material\nitem  qty  description") is True
+
+
+class _CountingPathB:
+    """Records which pages were paid for and which were only asked of the cache."""
+
+    DEFAULT_CACHE_DIR = ""
+
+    def __init__(self, cached=(), pages=1):
+        self.paid = []
+        self.asked = []
+        self._cached = set(cached)
+        self._pages = pages
+
+    def count_pages(self, _path):
+        return self._pages
+
+    def render_page_to_png(self, _path, pi, dpi=300, max_side=2000):
+        return f"png{pi}".encode()
+
+    def get_vision_bom_cached(self, png, *, model, pdf_name, page_index, cache_dir,
+                              use_cache=True, refresh=False, cache_only=False):
+        self.asked.append(page_index)
+        if page_index in self._cached:
+            return {"parsed": {"parent": "1282-GA", "rows": [
+                {"item_number": "1", "part_ref": "1282-01", "description": "PANEL",
+                 "quantity": 2}]}, "cache_hit": True}
+        if cache_only:
+            return {"parsed": None, "raw_response": "", "cache_hit": False, "skipped": True}
+        self.paid.append(page_index)
+        return {"parsed": {"parent": "1282-GA", "rows": []}, "cache_hit": False}
+
+
+def _args(**kw):
+    import argparse as _ap
+    base = dict(dpi=300, max_side=2000, model="m", cache_dir="", no_cache=False,
+                refresh=False, force_llm=False, refresh_file=None)
+    base.update(kw)
+    return _ap.Namespace(**base)
+
+
+def test_only_selected_pages_are_paid_for(monkeypatch, tmp_path):
+    stub = _CountingPathB(pages=4)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "job.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    spend = {}
+    merge_boms.run_path_b([str(pdf)], _args(), [],
+                          {("job.pdf", 0): True, ("job.pdf", 2): True}, spend)
+
+    assert stub.paid == [0, 2], "only the selected pages may reach the model"
+    assert spend["paid"] == 2 and spend["skipped"] == 2
+
+
+def test_a_cached_page_is_used_even_when_not_selected(monkeypatch, tmp_path):
+    """Being selective about what to PAY for must not mean discarding what is already
+    paid for. The cache is keyed on the page image, so re-reading it costs nothing."""
+    stub = _CountingPathB(cached={3}, pages=4)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "job.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    spend = {}
+    out = merge_boms.run_path_b([str(pdf)], _args(), [], {}, spend)
+
+    assert stub.paid == [], "no page was selected, so nothing may be paid for"
+    assert spend["cached"] == 1
+    assert out and out[0]["page_index"] == 3, "the cached page's rows must still arrive"
+
+
+def test_a_page_nobody_looked_at_is_recorded_not_assumed_empty(monkeypatch, tmp_path):
+    stub = _CountingPathB(pages=2)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "job.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    unread = []
+    merge_boms.run_path_b([str(pdf)], _args(), unread, {}, {})
+
+    assert len(unread) == 2
+    assert all(u["reason"] == "not_selected" for u in unread)
+    assert all(u["scope"] == "page" for u in unread), "a skipped page is a page-level gap"
+
+
+def test_force_llm_overrides_the_selection(monkeypatch, tmp_path):
+    stub = _CountingPathB(pages=3)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "job.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    merge_boms.run_path_b([str(pdf)], _args(force_llm=True), [], {}, {})
+    assert stub.paid == [0, 1, 2]
+
+
+def test_a_page_path_a_read_is_always_worth_corroborating(monkeypatch, tmp_path):
+    """Selection must not skip the page carrying the money. A row only one reader saw
+    is the entire reason the BOM is read twice."""
+    _stub_pdfplumber(monkeypatch, pages=3)
+
+    class _SilentPathA:
+        @staticmethod
+        def read_bom_from_page(page):
+            # A table on the page pdfplumber's text made look like nothing.
+            _SilentPathA.calls = getattr(_SilentPathA, "calls", 0) + 1
+            if _SilentPathA.calls == 2:
+                return {"parent": "1282-GA", "rows": [
+                    {"item_number": "1", "part_ref": "1282-01", "description": "PANEL",
+                     "quantity": 2}]}
+            return None
+
+    stub = _CountingPathB(pages=3)
+    monkeypatch.setattr(merge_boms, "pathA", _SilentPathA)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "job.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    merge_boms.reconcile_job([str(pdf)])
+    assert stub.paid == [1], "the page Path A found a table on, and no other"
+
+
+def test_a_page_whose_text_will_not_come_out_is_paid_for(monkeypatch, tmp_path):
+    """A scanned or raster sheet yields no text, so no vocabulary test can pass on it.
+    That is precisely the page vision exists for: unknown is not the same as no."""
+    class _RasterPage:
+        def extract_text(self):
+            raise ValueError("no text layer")
+
+    import types
+
+    class _Pdf:
+        pages = [_RasterPage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    module = types.ModuleType("pdfplumber")
+    module.open = lambda _p: _Pdf()
+    monkeypatch.setitem(sys.modules, "pdfplumber", module)
+
+    class _NoPathA:
+        @staticmethod
+        def read_bom_from_page(page):
+            return None
+
+    stub = _CountingPathB(pages=1)
+    monkeypatch.setattr(merge_boms, "pathA", _NoPathA)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    merge_boms.reconcile_job([str(pdf)])
+    assert stub.paid == [0]
+
+
+def test_a_parts_list_page_path_a_missed_is_paid_for(monkeypatch, tmp_path):
+    """The coverage gap: the page names parts-list columns and the table reader found
+    nothing. A whole parent BOM absent from a job lives here."""
+    _stub_pdfplumber(monkeypatch, pages=2,
+                     texts={1: "ITEM NO.  PART NUMBER  DESCRIPTION  QTY"})
+
+    class _NoPathA:
+        @staticmethod
+        def read_bom_from_page(page):
+            return None
+
+    stub = _CountingPathB(pages=2)
+    monkeypatch.setattr(merge_boms, "pathA", _NoPathA)
+    monkeypatch.setattr(merge_boms, "pathB", stub)
+    pdf = tmp_path / "job.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    merge_boms.reconcile_job([str(pdf)])
+    assert stub.paid == [1], "the parts-list page only; the plain detail sheet is skipped"

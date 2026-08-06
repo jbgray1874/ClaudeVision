@@ -197,6 +197,9 @@ def reconciled_bom_rows_for_job(
         "rows": flat,
         "findings": list(result.get("findings", [])) + findings_extra,
         "unread": list(result.get("unread", []) or []),
+        # {'paid','cached','skipped'} vision calls. Reported so the cost of a run is a
+        # number an estimator can see rather than something inferred from the bill.
+        "vision_calls": dict(result.get("vision_calls") or {}),
         "counts": result.get("counts", {}),
         "pdf_paths": result.get("pdf_paths", []),
         # a_count/b_count = how many BOM tables each reader found across the job.
