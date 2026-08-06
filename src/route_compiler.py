@@ -1261,11 +1261,13 @@ def job_drawing_numbers(summary: Mapping[str, Any]) -> List[str]:
 # A word does not. This is the whole of the protection against a descriptive file name being
 # read as an assembly, so it is deliberately a positive test rather than a list of things to
 # reject: anything that does not look like a number is not one.
-_DRAWING_NUMBER_SHAPE = re.compile(r"^[0-9][0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
-
-
 def _looks_like_a_drawing_number(text: Any) -> bool:
-    return bool(_DRAWING_NUMBER_SHAPE.match(str(text or "").strip()))
+    # The shape lives in part_code_conventions so the BOM reader's title-block read and
+    # this compiler cannot disagree about what a drawing number looks like. They did:
+    # the reader required three hyphenated segments, so it found no parent on any
+    # two-segment job and the compiler then had nothing to build a hierarchy from.
+    import part_code_conventions
+    return part_code_conventions.looks_like_a_drawing_number(text)
 
 
 def _roots_that_ship(graph: Mapping[str, Any]) -> List[str]:

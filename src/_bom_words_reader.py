@@ -26,7 +26,8 @@ import glob
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional
+import part_code_conventions
+from typing import Any, Dict, List, Optional, Tuple
 
 # ── Reuse bom_table_extractor's proven logic; fall back to inlined copies ──
 try:
@@ -85,7 +86,12 @@ _HDR_ITEM = {"ITEM", "ITEMNO", "ITEM NO", "NO", "POS", "POSITION", "PART ITEM"}
 _HDR_CODE = {"DWG", "DWG NO", "DWGNO", "PARTNO", "PART NO", "PART", "PART NUMBER",
              "PARTNUMBER", "DRAWING", "DRAWING NO", "REF", "PART REF"}
 _HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
-_HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD"}
+# NO OFF / OFF is the standard UK engineering-drawing spelling of quantity and is as
+# common on a customer's sheet as QTY. Its absence here rejected the whole header row,
+# so every BOM on such a drawing was invisible to the deterministic reader — and the
+# page then read as having no parts list at all rather than as one we failed on.
+_HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
+            "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
 
 
 def _hdr_norm(t: str) -> str:
@@ -221,14 +227,48 @@ def _parse_row(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str,
 
 
 def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
-    """The parent assembly = the DWG NO in the title block (a 12120-01-* token
-    low on the page). We take the last such token (title block sits at bottom)."""
-    cand = None
-    for w in sorted(words, key=lambda w: w["top"]):
-        t = w["text"].strip()
-        if re.match(r"^\d{3,}-\d+-[A-Z0-9]+$", t, re.I):
-            cand = t  # keep the lowest (last) match = title block
-    return cand
+    """The parent assembly = the drawing number in the title block, low on the page.
+
+    Two things this used to get wrong, and each one left a whole page's BOM rows with no
+    parent — which is a hierarchy that cannot be built, not a hierarchy that is wrong.
+
+    IT REQUIRED THREE HYPHENATED SEGMENTS (r"^\\d{3,}-\\d+-[A-Z0-9]+$"). That is the
+    12120 house style. 1282-GA, 12392-04 and 3886-GA are two, and matched nothing. The
+    shape test now comes from part_code_conventions, which route_compiler also uses, so
+    the reader and the compiler cannot disagree about what a drawing number looks like.
+
+    IT READ ONE WORD AT A TIME. CAD title blocks print "1282 - GA" with real spaces, so
+    pdfplumber returns three words and no single one of them is a drawing number. Words
+    sharing a y-band are now joined before testing, longest run first, so a spaced code
+    is recognised as the one code it is.
+
+    Still the LOWEST match on the page, because that is where a title block sits — but
+    only the bottom third is considered, so a drawing number written in a note or a
+    revision table cannot be mistaken for this sheet's own.
+    """
+    if not words:
+        return None
+    _bottom = max(w["top"] for w in words)
+    _top = min(w["top"] for w in words)
+    _cutoff = _top + (_bottom - _top) * 0.6  # the title block band
+
+    best: Optional[Tuple[float, str]] = None
+    for row in _cluster_rows([w for w in words if w["top"] >= _cutoff]):
+        row = sorted(row, key=lambda w: w["x0"])
+        # Longest run of adjacent words first: "1282 - GA" must beat "1282" alone.
+        for length in range(len(row), 0, -1):
+            for start in range(0, len(row) - length + 1):
+                run = row[start:start + length]
+                joined = "".join(w["text"] for w in run).strip()
+                if not part_code_conventions.looks_like_a_drawing_number(joined):
+                    continue
+                # Lowest on the page wins; among equals, the longer code is the more
+                # specific one ("1282-GA" over "1282-G" from a truncated run).
+                key = (run[0]["top"], len(joined))
+                if best is None or key > (best[0], len(best[1])):
+                    best = (run[0]["top"], joined.upper())
+                break
+    return best[1] if best else None
 
 
 def survey_page(page) -> Dict[str, Any]:

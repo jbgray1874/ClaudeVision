@@ -82,6 +82,26 @@ def material_suffix(identity: str) -> str:
     return match.group(2).upper() if match else ""
 
 
+# A drawing number: opens with a digit, then at least one hyphenated segment.
+#   12120-01-001  1282-GA  12392-02  3886-GA-C  2085-01
+# It deliberately does NOT require three segments. The BOM reader's title-block regex
+# did (r"^\d{3,}-\d+-[A-Z0-9]+$"), which is the 12120 house style and not SDI's rule:
+# on 1282, 12392-04 and 3886-GA it matched nothing, so every BOM row those pages
+# produced arrived with no parent. A row with no parent cannot join a hierarchy, and a
+# hierarchy assembled from rows that could not say who owned them is the failure that
+# has been read as "the family tree is broken" on job after job.
+_DRAWING_NUMBER_SHAPE = re.compile(r"^[0-9][0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
+
+
+def looks_like_a_drawing_number(text: str) -> bool:
+    """True when a token has the shape of an SDI or customer drawing number.
+
+    Shape only. It says a token COULD name a drawing, never that this drawing exists —
+    the direction of safety this module keeps everywhere else.
+    """
+    return bool(_DRAWING_NUMBER_SHAPE.match(str(text or "").strip()))
+
+
 def bare_code(identity: str) -> str:
     """Match-normalise a code: uppercase, strip ALL separators (spaces and hyphens).
 
