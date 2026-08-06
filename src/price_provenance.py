@@ -418,6 +418,32 @@ def stamp_affects_total(block: Dict[str, Any]) -> bool:
     return bool(block.get("applied"))
 
 
+def mark_withheld(record: Any) -> int:
+    """Record that this line's price did NOT reach the total. Returns how many stamps changed.
+
+    THE WRITER KNEW AND NEVER SAID SO. stamp_affects_total already asks the right question —
+    a price can be resolved and then not added — but it can only read what somebody wrote,
+    and it falls back to `applied`, which is True for a price that was found. When
+    wb_populate withholds an AI market estimate from the price column and writes GBP 0.00 on
+    the line, the stamp still read as money in the total, and price_not_reproducible blocked
+    job 12392 for a figure the sheet had deliberately refused.
+
+    THE GUARD IT PROTECTS MUST SURVIVE. On 11350 an AI estimate of GBP 86.04 DID enter the
+    material total and moved it every run; that is what this invariant exists to catch, and
+    it is untouched, because a price that reached the total is never marked here. The
+    distinction is not "was it generated" but "is it in the money" — mentioned in provenance
+    is not the same as added to a number.
+    """
+    changed = 0
+    for _path, block in iter_price_stamps(record):
+        if block.get("affects_total") is not False:
+            block["affects_total"] = False
+            block["withheld_reason"] = str(block.get("withheld_reason")
+                                           or "kept off the price column by the engine")
+            changed += 1
+    return changed
+
+
 def stamp_is_ai_estimate(block: Dict[str, Any]) -> bool:
     """Was this price generated rather than looked up?
 

@@ -2712,6 +2712,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"(config.POWDER_KG_PER_M2). Estimator to check.", flags)
             else:
                 price = None
+                # AND SAY SO WHERE A CHECKER CAN READ IT, not only in a console flag.
+                # stamp_affects_total already asks the right question — a price can be
+                # resolved and then not added — but it falls back to `applied`, which is
+                # True for a price that was FOUND. So the stamp still read as money in the
+                # total, and price_not_reproducible blocked job 12392 for a figure this very
+                # branch had deliberately refused to put on the sheet. The writer knew and
+                # never wrote it down.
+                try:
+                    import price_provenance as _pp
+                    _pp.mark_withheld(pe)
+                except Exception:                       # noqa: BLE001
+                    pass
                 # Two different reasons reach this branch and an estimator needs to know
                 # which: a quantity nobody could read, or a figure nobody could reproduce.
                 if _line["withheld_gbp"]:
