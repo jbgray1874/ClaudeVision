@@ -837,10 +837,21 @@ def build_part_graph(
     # "12392-04 - GA.pdf" must be recognisable as the assembly the graph calls 12392-04-GA.
     _drawings = {s for d in (known_assemblies or []) for s in _code_spellings(d)}
     _drawings.discard("")
+    # A PART OWNED BY ANOTHER SOURCE IS NOT RE-OWNED; A PART THE BOM OWNS TWICE IS OWNED
+    # TWICE. Those are different facts and one rule was answering both. Refusing any child
+    # that already had a parent also refused the SECOND BOM line for a fastener both general
+    # arrangements use — so the panel's 16 screws were an edge and the bracket set's 4 were
+    # nothing, and the cascade summed 16 where the drawings say 20.
+    #
+    # The distinction is which source disagreed. An extract or a model that placed this part
+    # still wins outright: a wrong parent is worse than a missing one and that has not
+    # changed. But two BOM rows naming two owners are not in conflict — they are two
+    # assemblies that each use the part, which is the ordinary shape of a fastener.
+    _claimed_before_bom = set(parents)
     for _child_id, _parent_id, _qty in _bom_stated_edges(
             bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings):
-        if _child_id in parents:
-            continue                      # already owned; this is additive, never a re-parent
+        if _child_id in _claimed_before_bom:
+            continue
         children.setdefault(_parent_id, {})[_child_id] = _qty
         parents.setdefault(_child_id, set()).add(_parent_id)
         records.setdefault(_parent_id, {})["is_sub_assembly"] = True

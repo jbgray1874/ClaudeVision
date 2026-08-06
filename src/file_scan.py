@@ -453,7 +453,7 @@ def merge_job_pdf_summaries(
         "pdf_metadata": dict(primary_summary.get("pdf_metadata") or {}),
     }
 
-    bom_by_key: Dict[str, Dict[str, Any]] = {}
+    bom_by_key: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     part_numbers: set[str] = set()
     dates: set[str] = set()
     revisions: set[str] = set()
@@ -496,11 +496,20 @@ def merge_job_pdf_summaries(
 
         doc = summary.get("document_analysis") or {}
         for row in doc.get("bom_rows") or []:
-            key = _normalize_bom_part_key(row.get("part_number"))
-            if not key:
+            code = _normalize_bom_part_key(row.get("part_number"))
+            if not code:
                 continue
             row_copy = dict(row)
             row_copy["source_pdf"] = pdf_path.name
+            # THE LINE, NOT THE CODE. This kept one row per part number across the whole
+            # folder, so an enquiry with two general arrangements lost one of every fastener
+            # line that both drawings used — the quantity and the owner with it, before any
+            # other pass could see either. The parent comes from the sheet's own title block;
+            # where no sheet named one, the key falls back to the code and this behaves
+            # exactly as it did, which is what makes it safe to turn on for every job.
+            key = (_normalize_bom_part_key(row.get("bom_parent")),
+                   code,
+                   normalize_text(str(row.get("description") or "")).upper())
             existing = bom_by_key.get(key)
             if existing is None or _bom_row_merge_preferred(row_copy, existing, pdf_path, primary_pdf):
                 bom_by_key[key] = row_copy
@@ -841,6 +850,91 @@ def _clean_field_list(values: List[str], field: str) -> List[str]:
     return [v for v in (values or []) if not _is_revision_table_noise(v)]
 
 
+def _page_drawing_number(page: Dict[str, Any]) -> str:
+    """The drawing this page IS, from its own title block — "" when it does not say.
+
+    Deliberately the title block and nothing else. A drawing number appearing anywhere else
+    on a sheet is usually a reference to another sheet, and taking one would make a detail
+    claim to own the assembly that references it.
+    """
+    text = normalize_text(str((page.get("region_text") or {}).get("title_block") or ""))
+    if not text:
+        return ""
+    found = re.findall(config.DRAWING_NUMBER_PATTERN, text, flags=re.IGNORECASE)
+    # ONE, OR NONE. A title block region that caught two drawing numbers has caught a
+    # cross-reference as well as its own, and there is no way to tell which is which from
+    # here. Naming the wrong one would give every row on the page the wrong owner.
+    uniq = []
+    for f in found:
+        c = normalize_text(str(f)).upper().strip()
+        if c and c not in uniq:
+            uniq.append(c)
+    return uniq[0] if len(uniq) == 1 else ""
+
+
+def attribute_bom_rows_to_source_pages(rows: List[Dict[str, Any]],
+                                       pages: List[Dict[str, Any]]) -> int:
+    """Stamp each BOM row with the page that printed it, and that page's drawing number.
+
+    THE OWNERSHIP IS NOT LOST LATER — IT IS NEVER RECORDED. summarise_document joins every
+    page's BOM region into one string and runs one regex over the lot, so a row arrives with
+    an item number, a code, a description and a quantity, and no idea which sheet it was on.
+    Every downstream attempt to recover the tree is therefore reconstructing something the
+    first read threw away, which is why it keeps half-working.
+
+    This does NOT change which rows are read. The joined-text pass runs exactly as before and
+    produces exactly the same rows; this walks them afterwards and says where each came from.
+    Additive by construction: a row that cannot be placed is left alone and carries no parent,
+    which is the same "" every row carried before.
+
+    TWO OF THE SAME CODE ON TWO SHEETS ARE TWO ROWS, and they must not both be attributed to
+    the first sheet. Each page's occurrences are consumed as they are claimed, so a fastener
+    listed on the panel GA and again on the bracket GA gets one row per sheet — which is the
+    whole point, because those are different quantities under different owners.
+
+    Returns how many rows were placed, so the caller can say when it placed none.
+    """
+    if not rows or not pages:
+        return 0
+    # What each page's BOM region says, and how many times it names each code.
+    page_info: List[Tuple[Dict[str, Any], str, str]] = []
+    for page in pages:
+        region = (page.get("region_text") or {})
+        text = normalize_text(f"{region.get('bom') or ''} {region.get('notes') or ''}").upper()
+        if text.strip():
+            page_info.append((page, text, _page_drawing_number(page)))
+    if not page_info:
+        return 0
+
+    remaining: List[Dict[str, int]] = []
+    for _page, text, _dwg in page_info:
+        counts: Dict[str, int] = {}
+        for row in rows:
+            code = str(row.get("part_number") or "").upper().strip()
+            if code and code not in counts:
+                counts[code] = text.count(code)
+        remaining.append(counts)
+
+    placed = 0
+    for row in rows:
+        code = str(row.get("part_number") or "").upper().strip()
+        if not code:
+            continue
+        for index, (page, _text, drawing) in enumerate(page_info):
+            if remaining[index].get(code, 0) <= 0:
+                continue
+            remaining[index][code] -= 1
+            row["source_page"] = page.get("page_number")
+            # The parent is the DRAWING the page is, not the page. A sheet with no readable
+            # title block places the row without claiming an owner for it — the honest
+            # outcome, and the one the compiler's refusal is built to expect.
+            if drawing:
+                row["bom_parent"] = drawing
+            placed += 1
+            break
+    return placed
+
+
 def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypdf_pages: List[str], vision_pages: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
     joined_text = "\n\n".join(page["text"] for page in plumber_pages if page["text"])
     joined_title_block = "\n\n".join(page["region_text"]["title_block"] for page in plumber_pages if page["region_text"]["title_block"])
@@ -858,6 +952,20 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
         notes_text=joined_notes,
         page_role_hint="document",
     )
+
+    # WHERE EACH ROW CAME FROM, recorded at the only point it is still knowable.
+    _placed = attribute_bom_rows_to_source_pages(
+        document_analysis.get("bom_rows") or [], plumber_pages)
+    _rows_total = len(document_analysis.get("bom_rows") or [])
+    if _rows_total:
+        _owned = sum(1 for r in document_analysis["bom_rows"] if r.get("bom_parent"))
+        # A GATE NOBODY ASKS REPORTS NOTHING. If attribution places nothing, or places rows
+        # without ever finding a drawing number, the hierarchy that depends on it will be
+        # silently absent — and that is exactly how this defect survived to a customer price.
+        print(f"   [bom] {_placed}/{_rows_total} row(s) traced to a sheet; "
+              f"{_owned} carry the drawing that owns them"
+              + ("" if _owned else " — no title block on any BOM page named a drawing, so "
+                                   "these rows state no hierarchy"), flush=True)
 
     tb = document_analysis.get("title_block") or {}
     for field in ("colours", "surface_finishes"):
