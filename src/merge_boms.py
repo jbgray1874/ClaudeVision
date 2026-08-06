@@ -200,23 +200,30 @@ def code_quality_findings(parent_label: str, rows: List[Dict[str, Any]]) -> List
 # Everything else — detail sheets, sections, revision pages — is read from cache if it
 # happens to be there and otherwise not read at all. Skipping is recorded, not silent:
 # a page nobody looked at is not a page with no BOM on it.
-_BOM_TABLE_WORDS = (
-    "ITEM", "QTY", "QUANTITY", "PART NO", "PART NUMBER", "PARTNO",
-    "DESCRIPTION", "PARTS LIST", "BILL OF MATERIAL", "MATERIAL", "REF",
-)
-_MIN_BOM_VOCAB_HITS = 3
+def page_needs_vision(verdict: Dict[str, Any]) -> Tuple[bool, str]:
+    """Decide from what the deterministic reader SAW, not from a guess about the page.
 
+    The first version of this asked whether the page's text contained parts-list words,
+    against a word list written here. That was wrong twice over. It kept a private copy
+    of a vocabulary the reader already owns — so the two could drift, and only one of
+    them would ever be corrected. And more fundamentally it decided whether text
+    extraction could be trusted by consulting the text extraction, which is circular on
+    precisely the pages that matter.
 
-def page_talks_like_a_parts_list(text: str) -> bool:
-    """True when a page's own words name the columns of a bill of materials.
-
-    Deliberately a vocabulary count and not a layout test: the pages this must catch are
-    exactly the ones whose layout defeated the table reader. Three distinct column words
-    because "MATERIAL" or "REF" alone appears in most title blocks, and one word is how a
-    policy meant to save money ends up paying for every sheet in the pack.
+    The reader's own verdict does not have that problem. It knows the difference between
+    a page it read, a page it could not read, and a page with nothing on it.
     """
-    up = (text or "").upper()
-    return sum(1 for w in _BOM_TABLE_WORDS if w in up) >= _MIN_BOM_VOCAB_HITS
+    if not verdict.get("has_text"):
+        return True, "no text layer — a scanned or raster sheet is what vision is for"
+    if verdict.get("header_found") and verdict.get("rows_parsed"):
+        return True, "a parts list was read here; corroborate the rows that carry cost"
+    if verdict.get("header_found"):
+        return True, ("a parts-list header was found and no rows parsed under it — "
+                      "a table this reader could see and could not read")
+    if verdict.get("header_words"):
+        return True, ("parts-list column words are on this page but no header row "
+                      "qualified — the layout defeated the row clustering")
+    return False, "no parts-list structure or vocabulary on this page"
 
 
 # A page neither reader could look at is a page whose BOM cannot be missing-or-present:
@@ -241,12 +248,12 @@ def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = No
                 for pi, page in enumerate(pdf.pages):
                     if survey is not None:
                         try:
-                            survey[(os.path.basename(p), pi)] = page_talks_like_a_parts_list(
-                                page.extract_text() or "")
+                            _v = pathA.survey_page(page)
                         except Exception:
-                            # A page whose text will not come out is exactly a page vision
-                            # should see. Unknown is not "no".
-                            survey[(os.path.basename(p), pi)] = True
+                            # A page this reader cannot even survey is exactly a page
+                            # vision should see. Unknown is not "no".
+                            _v = {"has_text": False}
+                        survey[(os.path.basename(p), pi)] = page_needs_vision(_v)
                     bom = pathA.read_bom_from_page(page)
                     if bom:
                         bom["page_index"] = pi
@@ -385,15 +392,25 @@ def reconcile_job(
     # money) or when the page's own words name parts-list columns and Path A found
     # nothing (the coverage gap). `select_pages=False` restores every-page behaviour.
     if select_pages:
-        worth: Dict[Tuple[str, int], bool] = dict(survey)
+        worth: Dict[Tuple[str, int], bool] = {k: v[0] for k, v in survey.items()}
+        why: Dict[Tuple[str, int], str] = {k: v[1] for k, v in survey.items()}
+        # Belt and braces. survey_page already returns True for a page it read a table
+        # on, but a page reaching a_boms without a survey entry — a reader that answered
+        # one call and not the other — must not lose its corroboration to a missing key.
         for bom in a_boms:
-            worth[(bom.get("pdf_name", ""), bom.get("page_index", -1))] = True
+            _k = (bom.get("pdf_name", ""), bom.get("page_index", -1))
+            if not worth.get(_k):
+                worth[_k] = True
+                why[_k] = "a parts list was read here; corroborate the rows that carry cost"
     else:
         worth = None  # type: ignore[assignment]
+        why = {}
     if verbose:
-        _n = sum(1 for v in (worth or {}).values() if v)
         print(f"Running Path B (Grok vision, cached) on "
-              f"{_n if worth is not None else 'all'} selected page(s)...")
+              f"{sum(1 for v in worth.values() if v) if worth is not None else 'all'} "
+              f"selected page(s)...")
+        for (pdf_name, pi), sel in sorted((worth or {}).items()):
+            print(f"    {'read ' if sel else 'skip '} {pdf_name} p{pi + 1}: {why.get((pdf_name, pi), '')}")
     b_boms = run_path_b(pdf_paths, _args, unread, worth, spend)
     if verbose:
         print(f"  Path B found {len(b_boms)} BOM table(s). "

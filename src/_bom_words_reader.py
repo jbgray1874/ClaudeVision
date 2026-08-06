@@ -231,6 +231,52 @@ def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
     return cand
 
 
+def survey_page(page) -> Dict[str, Any]:
+    """What this reader SAW on a page, as distinct from what it managed to read.
+
+    read_bom_from_page answers one bit — a BOM or None — and returns None from six
+    different places that mean entirely different things. "This is a plain detail sheet"
+    and "there is a parts list here whose header row I could see and whose rows I could
+    not parse" arrive as the same value. The second is the single best reason to spend a
+    vision call on a page, and it was indistinguishable from the best reason not to.
+
+    Returns:
+        has_text      the page yielded words at all. False = raster/scanned sheet.
+        header_found  a full BOM header row (item + description + qty, in order).
+        header_words  header VOCABULARY is present even though no header row qualified —
+                      the words are there but the layout defeated the row clustering.
+        rows_parsed   how many data rows came out under those headers.
+
+    Deliberately reuses _HDR_* — the synonym sets the header matcher itself uses — so
+    "does this page talk like a parts list" cannot drift away from "does this page parse
+    as a parts list". Two lists is how one of them silently stops recognising NO OFF.
+    """
+    verdict = {"has_text": False, "header_found": False, "header_words": False,
+               "rows_parsed": 0}
+    try:
+        words = page.extract_words(x_tolerance=1.5, y_tolerance=1.5) or []
+    except Exception:
+        return verdict
+    if not words:
+        return verdict
+    verdict["has_text"] = True
+
+    norms = {_hdr_norm(w["text"]) for w in words}
+    hits = sum(1 for colset in (_HDR_ITEM, _HDR_CODE, _HDR_DESC, _HDR_QTY)
+               if norms & colset)
+    # Three of the four column families. Two is too easy: _HDR_CODE contains "REF" and
+    # "PART", and _HDR_ITEM contains "NO", all of which appear in ordinary title blocks.
+    verdict["header_words"] = hits >= 3
+
+    rows = _cluster_rows(words)
+    headers = _find_all_headers(rows)
+    verdict["header_found"] = bool(headers)
+    if headers:
+        bom = read_bom_from_page(page)
+        verdict["rows_parsed"] = len((bom or {}).get("rows") or [])
+    return verdict
+
+
 def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
     """Return {'parent': dwgno, 'rows': [...]} for a page that has a BOM table,
     else None. Uses extract_words()+x-columns (not extract_tables)."""

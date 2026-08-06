@@ -91,6 +91,11 @@ class _StubPathA:
     """Finds one BOM row on one page, so 'B is missing' is the only difference."""
 
     @staticmethod
+    def survey_page(page):
+        import _bom_words_reader as wr
+        return wr.survey_page(page)
+
+    @staticmethod
     def read_bom_from_page(page):
         return {
             "parent": "1282-GA",
@@ -99,11 +104,22 @@ class _StubPathA:
         }
 
 
-def _stub_pdfplumber(monkeypatch, pages=1, texts=None):
-    """A pdfplumber whose open() yields `pages` pages, so run_path_a has work.
+def _words(text, top=100.0):
+    """Turn a line of text into pdfplumber-shaped word dicts on one y-band."""
+    out, x = [], 10.0
+    for tok in text.split():
+        out.append({"text": tok, "x0": x, "x1": x + 8 * len(tok), "top": top,
+                    "bottom": top + 8})
+        x += 8 * len(tok) + 12
+    return out
 
-    `texts` gives each page's extract_text(). Default is a title block with no
-    parts-list vocabulary — a plain detail sheet.
+
+def _stub_pdfplumber(monkeypatch, pages=1, texts=None):
+    """A pdfplumber whose open() yields `pages` pages carrying real word geometry, so
+    the deterministic reader's own survey_page runs against them.
+
+    `texts` gives each page's single line of words. The default is a title block with
+    no parts-list column vocabulary — a plain detail sheet.
     """
     import types
 
@@ -111,13 +127,16 @@ def _stub_pdfplumber(monkeypatch, pages=1, texts=None):
         def __init__(self, text):
             self._text = text
 
+        def extract_words(self, **_kw):
+            return _words(self._text)
+
         def extract_text(self):
             return self._text
 
     class _Pdf:
         def __init__(self):
             self.pages = [
-                _Page((texts or {}).get(i, "SCALE 1:2  DRAWN BY  SHEET 1 OF 4"))
+                _Page((texts or {}).get(i, "SCALE 1:2 DRAWN BY SHEET 1 OF 4"))
                 for i in range(pages)
             ]
 
@@ -130,6 +149,18 @@ def _stub_pdfplumber(monkeypatch, pages=1, texts=None):
     module = types.ModuleType("pdfplumber")
     module.open = lambda _path: _Pdf()
     monkeypatch.setitem(sys.modules, "pdfplumber", module)
+
+
+def _delegating_path_a(read_bom_from_page):
+    """A Path A stub whose survey_page is the REAL one, so selection is exercised
+    against the shipped rule rather than against the stub's opinion of it."""
+    import _bom_words_reader as wr
+
+    class _Stub:
+        survey_page = staticmethod(wr.survey_page)
+
+    _Stub.read_bom_from_page = staticmethod(read_bom_from_page)
+    return _Stub
 
 
 def test_a_vision_reader_that_will_not_import_is_reported_not_swallowed(monkeypatch, tmp_path):
@@ -306,18 +337,89 @@ def test_the_check_is_registered():
 # ---------------------------------------------------------------------------
 # 5. Paying for the pages that carry a BOM, and only those
 # ---------------------------------------------------------------------------
-def test_a_title_block_alone_does_not_buy_a_vision_call():
-    """MATERIAL and REF appear in most title blocks. One column word must not be
-    enough, or a policy meant to save money pays for every sheet in the pack."""
-    assert merge_boms.page_talks_like_a_parts_list("MATERIAL: MILD STEEL  REF: A") is False
-    assert merge_boms.page_talks_like_a_parts_list("SCALE 1:2  DRAWN BY  SHEET 1 OF 4") is False
+def test_a_page_with_nothing_on_it_is_not_paid_for():
+    assert merge_boms.page_needs_vision(
+        {"has_text": True, "header_found": False, "header_words": False,
+         "rows_parsed": 0})[0] is False
 
 
-def test_a_parts_list_page_buys_one():
-    assert merge_boms.page_talks_like_a_parts_list(
-        "ITEM NO.  PART NUMBER  DESCRIPTION  QTY") is True
-    assert merge_boms.page_talks_like_a_parts_list(
-        "Bill of Material\nitem  qty  description") is True
+def test_a_table_the_reader_could_see_and_not_read_is_the_loudest_reason_to_pay():
+    """A header row found with zero rows under it. This is the coverage gap, and it
+    used to arrive as the same None as a plain detail sheet."""
+    pay, why = merge_boms.page_needs_vision(
+        {"has_text": True, "header_found": True, "header_words": True, "rows_parsed": 0})
+    assert pay is True
+    assert "could not read" in why
+
+
+def test_a_page_the_reader_read_is_still_corroborated():
+    pay, why = merge_boms.page_needs_vision(
+        {"has_text": True, "header_found": True, "header_words": True, "rows_parsed": 7})
+    assert pay is True
+    assert "corroborate" in why
+
+
+def test_column_words_without_a_qualifying_header_row_are_paid_for():
+    pay, why = merge_boms.page_needs_vision(
+        {"has_text": True, "header_found": False, "header_words": True, "rows_parsed": 0})
+    assert pay is True
+    assert "layout" in why
+
+
+def test_a_page_with_no_text_layer_is_paid_for():
+    pay, why = merge_boms.page_needs_vision({"has_text": False})
+    assert pay is True
+    assert "raster" in why
+
+
+def test_the_selection_vocabulary_is_the_readers_own():
+    """A private copy of the header synonyms here would drift from the ones the header
+    matcher uses, and only one of the two would ever be corrected."""
+    source = (SRC / "merge_boms.py").read_text(encoding="utf-8")
+    for word in ("DESCRIPTION", "QUANTITY", "PARTS LIST", "BILL OF MATERIAL"):
+        assert word not in source, (
+            f"merge_boms carries its own parts-list vocabulary ({word}); the synonym sets "
+            f"in _bom_words_reader are the one definition")
+
+
+def test_the_survey_and_the_header_matcher_agree_on_a_real_header():
+    """survey_page must say header_found on exactly what _find_all_headers accepts."""
+    import _bom_words_reader as wr
+
+    def _w(text, x0, top):
+        return {"text": text, "x0": x0, "x1": x0 + 20, "top": top, "bottom": top + 8}
+
+    header = [_w("ITEM", 10, 100), _w("PART", 60, 100), _w("NO", 85, 100),
+              _w("DESCRIPTION", 120, 100), _w("QTY", 300, 100)]
+
+    class _Page:
+        def extract_words(self, **_kw):
+            return header
+
+    v = wr.survey_page(_Page())
+    assert v["has_text"] is True
+    assert v["header_words"] is True, "the column words are plainly present"
+    assert v["header_found"] is True, "and the header matcher accepts this row"
+
+
+def test_a_title_block_does_not_read_as_a_parts_list():
+    import _bom_words_reader as wr
+
+    def _w(text, x0, top):
+        return {"text": text, "x0": x0, "x1": x0 + 20, "top": top, "bottom": top + 8}
+
+    # REF and PART are in _HDR_CODE; NO is in _HDR_ITEM. Two families, not three.
+    title_block = [_w("REF", 10, 500), _w("NO", 40, 500), _w("SCALE", 80, 500),
+                   _w("1:2", 120, 500), _w("MATERIAL", 10, 520)]
+
+    class _Page:
+        def extract_words(self, **_kw):
+            return title_block
+
+    v = wr.survey_page(_Page())
+    assert v["header_found"] is False
+    assert v["header_words"] is False, "two column families is a title block, not a BOM"
+    assert merge_boms.page_needs_vision(v)[0] is False
 
 
 class _CountingPathB:
@@ -417,17 +519,19 @@ def test_a_page_path_a_read_is_always_worth_corroborating(monkeypatch, tmp_path)
     is the entire reason the BOM is read twice."""
     _stub_pdfplumber(monkeypatch, pages=3)
 
-    class _SilentPathA:
-        @staticmethod
-        def read_bom_from_page(page):
-            # A table on the page pdfplumber's text made look like nothing.
-            _SilentPathA.calls = getattr(_SilentPathA, "calls", 0) + 1
-            if _SilentPathA.calls == 2:
-                return {"parent": "1282-GA", "rows": [
-                    {"item_number": "1", "part_ref": "1282-01", "description": "PANEL",
-                     "quantity": 2}]}
-            return None
+    _state = {"calls": 0}
 
+    def _read(page):
+        # A table on page 2 only. Its words carry no header vocabulary, so the ONLY
+        # reason to pay for that page is that the deterministic reader read it.
+        _state["calls"] += 1
+        if _state["calls"] == 2:
+            return {"parent": "1282-GA", "rows": [
+                {"item_number": "1", "part_ref": "1282-01", "description": "PANEL",
+                 "quantity": 2}]}
+        return None
+
+    _SilentPathA = _delegating_path_a(_read)
     stub = _CountingPathB(pages=3)
     monkeypatch.setattr(merge_boms, "pathA", _SilentPathA)
     monkeypatch.setattr(merge_boms, "pathB", stub)
@@ -460,10 +564,7 @@ def test_a_page_whose_text_will_not_come_out_is_paid_for(monkeypatch, tmp_path):
     module.open = lambda _p: _Pdf()
     monkeypatch.setitem(sys.modules, "pdfplumber", module)
 
-    class _NoPathA:
-        @staticmethod
-        def read_bom_from_page(page):
-            return None
+    _NoPathA = _delegating_path_a(lambda page: None)
 
     stub = _CountingPathB(pages=1)
     monkeypatch.setattr(merge_boms, "pathA", _NoPathA)
@@ -481,10 +582,7 @@ def test_a_parts_list_page_path_a_missed_is_paid_for(monkeypatch, tmp_path):
     _stub_pdfplumber(monkeypatch, pages=2,
                      texts={1: "ITEM NO.  PART NUMBER  DESCRIPTION  QTY"})
 
-    class _NoPathA:
-        @staticmethod
-        def read_bom_from_page(page):
-            return None
+    _NoPathA = _delegating_path_a(lambda page: None)
 
     stub = _CountingPathB(pages=2)
     monkeypatch.setattr(merge_boms, "pathA", _NoPathA)
