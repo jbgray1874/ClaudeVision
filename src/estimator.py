@@ -4720,6 +4720,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                         existing_descriptions=_existing_descs,
                         fabricated_descriptions=_fab_descs,
                         stub_builder=_bought_in_part_stub,
+                        # The pages the notes above were read from, so a recognised purchase
+                        # can say which sheet listed it. The join at _note_text is what the
+                        # recogniser reads; this is only how it reports where a hit came
+                        # from, so nothing about which phrases match changes.
+                        pages=(summary.get("pages") or []),
                     )
                     # GUARD 2 (job 1310): never keep a bought-in that IS the job itself.
                     # The recogniser read the PROJECT TITLE from the title block, matched it

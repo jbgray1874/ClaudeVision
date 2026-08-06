@@ -398,6 +398,38 @@ def get_reference(get_connection) -> BoughtInReference:
 # ---------------------------------------------------------------------------
 # The layer-2 prose recogniser.
 # ---------------------------------------------------------------------------
+def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optional[int]:
+    """The page number whose own text contains this phrase, or None.
+
+    First match wins, in page order. Where a phrase appears on several sheets the first is
+    as defensible as any — and the compiler only ever uses this to offer an owner, which it
+    then refuses unless the page is an assembly page of a drawing the job already knows.
+    """
+    if not phrase or not pages:
+        return None
+    needle = " ".join(str(phrase).upper().split())
+    if not needle:
+        return None
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        blob = []
+        region = page.get("region_text")
+        if isinstance(region, dict):
+            blob.append(str(region.get("notes") or ""))
+        for key in ("pdfplumber_text", "normalized_text", "pypdf_text", "text_preview", "text"):
+            value = page.get(key)
+            if value:
+                blob.append(str(value))
+        if needle in " ".join(blob).upper():
+            number = page.get("page_number")
+            try:
+                return int(number)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def recognise_bought_in_in_prose(
     note_text: str,
     *,
@@ -406,6 +438,7 @@ def recognise_bought_in_in_prose(
     existing_descriptions: Optional[Set[str]] = None,
     fabricated_descriptions: Optional[Set[str]] = None,
     stub_builder=None,
+    pages: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Deterministically recognise bought-in items described in THIS drawing's prose.
     Scans the prose for head-word-anchored vocabulary phrases (mined from SDI history) PLUS
@@ -498,6 +531,20 @@ def recognise_bought_in_in_prose(
         stub["source"] = "prose_recogniser_layer2"
         stub["_layer2_recognised"] = True
         stub["_headword"] = head
+        # WHICH SHEET SAID SO. The caller reads the notes page by page and joins them one
+        # line before calling this, so the page was known and thrown away — and a recognised
+        # purchase with no page can never be given an owner. BI-BOLTBZP is a real GBP 0.83
+        # bolt that blocked job 12392 as a "disconnected node" for exactly that reason:
+        # nothing could say which drawing listed it.
+        #
+        # Attributed AFTER the match rather than by scanning per page, so which phrases are
+        # recognised does not change at all — the same defect was fixed the same way for BOM
+        # rows. A phrase spanning a page break still matches; it simply lands on no page,
+        # which is the honest answer.
+        _found_on = _page_that_says(phrase, pages)
+        if _found_on is not None:
+            stub["pages"] = [_found_on]
+            stub["source_page"] = _found_on
         stub["page_roles"] = ["bought_in"]
         stub["review_flag"] = True
         flags = [f"Deterministically recognised in drawing notes (head-word: '{head}')"]
