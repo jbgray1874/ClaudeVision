@@ -40,28 +40,37 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+# This module started life as a standalone script and exited the process when a
+# reader would not import. It is now imported by the live pipeline, where that
+# call would take the whole estimate down over a missing optional dependency —
+# so an import failure is recorded and reported instead. main() still refuses to
+# run without both readers; the difference is that only main() may end the process.
+PATH_A_IMPORT_ERROR: Optional[str] = None
+PATH_B_IMPORT_ERROR: Optional[str] = None
+
 # ---- import Path A (deterministic reader) ----
 try:
     import _bom_words_reader as pathA
-except Exception as exc:
-    print(f"Could not import _bom_words_reader (Path A): {exc}")
-    print("Run this from C:\\ClaudeVision\\src where _bom_words_reader.py lives.")
-    sys.exit(1)
+except Exception as exc:  # pragma: no cover - environment-dependent
+    pathA = None  # type: ignore[assignment]
+    PATH_A_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 # ---- import Path B (vision reader + cache) ----
 try:
     import _bom_vision_reader as pathB
-except Exception as exc:
-    print(f"Could not import _bom_vision_reader (Path B): {exc}")
-    print("Run this from C:\\ClaudeVision\\src where _bom_vision_reader.py lives.")
-    sys.exit(1)
+except Exception as exc:  # pragma: no cover - environment-dependent
+    pathB = None  # type: ignore[assignment]
+    PATH_B_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------
 # Shared normalisation (bare code = uppercase, all separators stripped), reused
 # from Path B so A and B codes compare identically.
 # ---------------------------------------------------------------------------
-_bare = pathB._bare_code  # '3886-GA-' / '1450 - GA' / '1455-C GA' -> '3886GA' / '1450GA' / '1455CGA'
+# '3886-GA-' / '1450 - GA' / '1455-C GA' -> '3886GA' / '1450GA' / '1455CGA'.
+# Taken from part_code_conventions, not from Path B: reconciliation must still be able to
+# compare codes on a machine where the vision reader will not import.
+from part_code_conventions import bare_code as _bare
 
 
 def _parent_key(parent: Optional[str], pdf_name: str, page_index: int) -> str:
@@ -172,9 +181,18 @@ def code_quality_findings(parent_label: str, rows: List[Dict[str, Any]]) -> List
 # ---------------------------------------------------------------------------
 # Run both readers over a job.
 # ---------------------------------------------------------------------------
-def run_path_a(pdf_paths: List[str]) -> List[Dict[str, Any]]:
+# A page neither reader could look at is a page whose BOM cannot be missing-or-present:
+# it is simply unknown, and that is the one state this module must never report as clean.
+# Both runners therefore append to `unread`, and reconcile_job carries those out to the
+# caller as findings. Prints alone were how a whole job ran vision-blind in silence.
+def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     import pdfplumber
     out: List[Dict[str, Any]] = []
+    if pathA is None:
+        if unread is not None:
+            unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
+                           "detail": f"deterministic BOM reader unavailable ({PATH_A_IMPORT_ERROR})"})
+        return out
     for p in pdf_paths:
         try:
             with pdfplumber.open(p) as pdf:
@@ -186,11 +204,19 @@ def run_path_a(pdf_paths: List[str]) -> List[Dict[str, Any]]:
                         out.append(bom)
         except Exception as exc:
             print(f"  [Path A skip] {os.path.basename(p)}: {exc}")
+            if unread is not None:
+                unread.append({"path": "A", "scope": "file", "pdf": os.path.basename(p), "page": None,
+                               "detail": f"{type(exc).__name__}: {exc}"})
     return out
 
 
-def run_path_b(pdf_paths: List[str], args) -> List[Dict[str, Any]]:
+def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    if pathB is None:
+        if unread is not None:
+            unread.append({"path": "B", "scope": "job", "pdf": "", "page": None,
+                           "detail": f"vision BOM reader unavailable ({PATH_B_IMPORT_ERROR})"})
+        return out
     force_all = args.refresh or args.force_llm
     for p in pdf_paths:
         this_refresh = force_all or (
@@ -200,6 +226,9 @@ def run_path_b(pdf_paths: List[str], args) -> List[Dict[str, Any]]:
             n = pathB.count_pages(p)
         except Exception as exc:
             print(f"  [Path B skip] {os.path.basename(p)}: {exc}")
+            if unread is not None:
+                unread.append({"path": "B", "scope": "file", "pdf": os.path.basename(p), "page": None,
+                               "detail": f"{type(exc).__name__}: {exc}"})
             continue
         for pi in range(n):
             try:
@@ -210,6 +239,9 @@ def run_path_b(pdf_paths: List[str], args) -> List[Dict[str, Any]]:
                 )
             except Exception as exc:
                 print(f"  [Path B error] {os.path.basename(p)} p{pi}: {exc}")
+                if unread is not None:
+                    unread.append({"path": "B", "scope": "page", "pdf": os.path.basename(p), "page": pi,
+                                   "detail": f"{type(exc).__name__}: {exc}"})
                 continue
             parsed = res["parsed"]
             if parsed and parsed.get("rows"):
@@ -220,7 +252,15 @@ def run_path_b(pdf_paths: List[str], args) -> List[Dict[str, Any]]:
 
 
 def find_pdfs(pdf_dir: str) -> List[str]:
-    return pathB.find_pdfs(pdf_dir)  # reuse the deduped finder
+    if pathB is not None:
+        return pathB.find_pdfs(pdf_dir)  # reuse the deduped finder
+    # Same contract as the deduped finder: case-insensitive, one entry per real file.
+    # Finding the job's PDFs must not depend on the vision reader importing.
+    seen: Dict[str, str] = {}
+    for name in sorted(os.listdir(pdf_dir)):
+        if name.lower().endswith(".pdf"):
+            seen.setdefault(name.lower(), os.path.join(pdf_dir, name))
+    return list(seen.values())
 
 
 def reconcile_job(
@@ -249,19 +289,20 @@ def reconcile_job(
     if model is None:
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
     if cache_dir is None:
-        cache_dir = pathB.DEFAULT_CACHE_DIR
+        cache_dir = pathB.DEFAULT_CACHE_DIR if pathB is not None else ""
     _args = argparse.Namespace(
         pdf=None, pdf_dir=None, dpi=dpi, max_side=max_side, model=model,
         cache_dir=cache_dir, no_cache=no_cache, refresh=refresh,
         force_llm=force_llm, refresh_file=refresh_file,
     )
+    unread: List[Dict[str, Any]] = []
     if verbose:
         print("\nRunning Path A (deterministic extract_words)...")
-    a_boms = run_path_a(pdf_paths)
+    a_boms = run_path_a(pdf_paths, unread)
     if verbose:
         print(f"  Path A found {len(a_boms)} BOM table(s).")
         print("Running Path B (Grok vision, cached)...")
-    b_boms = run_path_b(pdf_paths, _args)
+    b_boms = run_path_b(pdf_paths, _args, unread)
     if verbose:
         print(f"  Path B found {len(b_boms)} BOM table(s).")
 
@@ -297,13 +338,34 @@ def reconcile_job(
                 counts["a_only"] += 1
         pages.append({"label": label, "a_bom": a_bom, "b_bom": b_bom,
                       "rows": merged, "findings": page_findings})
+    # A job where one path never ran is not a reconciled job — it is a single-reader read
+    # wearing a reconciled job's shape, and every "BOTH ... HIGH confidence" it cannot
+    # produce is a corroboration that silently did not happen. Say so out loud.
+    if pdf_paths and not any(u.get("path") == "B" and u.get("scope") == "job" for u in unread):
+        if not b_boms:
+            unread.append({"path": "B", "scope": "job", "pdf": "", "page": None,
+                           "detail": "vision reader returned no BOM table on any page of this job"})
+    if pdf_paths and pathA is not None and not a_boms:
+        unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
+                       "detail": "deterministic reader found no BOM table on any page of this job"})
     return {
         "pages": pages, "findings": total_findings, "counts": counts,
         "pdf_paths": list(pdf_paths), "a_count": len(a_boms), "b_count": len(b_boms),
+        "unread": unread,
     }
 
 
 def main():
+    # Only the command line may end the process. Run standalone, this tool exists to
+    # compare two readers, so one missing reader makes it pointless and it should say so
+    # loudly. Imported, the same condition is a degraded read the caller must be told
+    # about — never a reason to take an estimate down.
+    for _label, _mod, _err in (("A (_bom_words_reader)", pathA, PATH_A_IMPORT_ERROR),
+                               ("B (_bom_vision_reader)", pathB, PATH_B_IMPORT_ERROR)):
+        if _mod is None:
+            print(f"Could not import Path {_label}: {_err}")
+            print("Run this from the src/ directory, with the project's virtualenv active.")
+            sys.exit(1)
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf-dir", default=None)
     ap.add_argument("--pdf", default=None)

@@ -1009,6 +1009,68 @@ def check_uncorroborated_bom_lines_are_not_silent(summary: Any) -> List[Dict[str
         share_pct=round(_share, 1))]
 
 
+def check_both_bom_readers_ran(summary: Any) -> List[Dict[str, Any]]:
+    """A BOM read by one reader must not be reported as a BOM read by two.
+
+    The parts list is read twice on purpose — a deterministic word-geometry reader and a
+    vision pass over the rendered page — and the check above
+    (check_uncorroborated_bom_lines_are_not_silent) doubts any row only one of them saw.
+    That check works entirely from per-row flags, so it is completely silent when a whole
+    reader never ran: no row is marked A_ONLY if nothing was ever asked to corroborate it.
+
+    Every row then looks unflagged, which is the appearance of agreement rather than
+    agreement. This is the one BOM failure that cannot be seen in the output, because what
+    is wrong with the output is what is not in it.
+
+    Not a warning about a missing feature. A vision pass that could not run is the reason
+    a whole parent BOM can be absent from a job and nothing say so.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("bom_readers_ran", "This job is not a readable structure.")
+    da = summary.get("document_analysis")
+    if not isinstance(da, dict):
+        return []
+    unread = da.get("bom_readers_unread")
+    if unread is None:
+        return _unevaluated(
+            "bom_readers_ran",
+            "This job carries no record of which BOM readers ran. Re-run it; a scan "
+            "produced before the readers reported their own coverage cannot answer this.")
+    if not isinstance(unread, list) or not unread:
+        return []
+
+    rows = da.get("bom_rows")
+    row_count = len(rows) if isinstance(rows, list) else 0
+    job_scope = [u for u in unread if isinstance(u, dict) and u.get("scope") == "job"]
+    page_scope = [u for u in unread if isinstance(u, dict) and u.get("scope") != "job"]
+
+    out: List[Dict[str, Any]] = []
+    if job_scope:
+        _who = ", ".join(sorted({("deterministic" if u.get("path") == "A" else "vision")
+                                 for u in job_scope}))
+        _why = "; ".join(str(u.get("detail") or "").strip() for u in job_scope if u.get("detail"))
+        out.append(_violation(
+            "bom_reader_never_ran", BLOCKING,
+            f"The {_who} BOM reader did not run on this job ({_why}). The {row_count} BOM "
+            f"line(s) costed here were read once, not twice, so none of them carries "
+            f"corroboration and no line only one reader could see has been flagged as such. "
+            f"A parent BOM missing from this estimate would look exactly like a job that "
+            f"has none.",
+            readers=_who, unread=job_scope[:6], bom_rows=row_count))
+    if page_scope:
+        _pages = "; ".join(
+            f"{u.get('pdf') or '?'}"
+            + (f" page {int(u['page']) + 1}" if u.get("page") is not None else "")
+            + f" ({'deterministic' if u.get('path') == 'A' else 'vision'}: {u.get('detail')})"
+            for u in page_scope[:6])
+        out.append(_violation(
+            "bom_page_not_read_by_both", WARNING,
+            f"{len(page_scope)} page(s) were read by only one BOM reader: {_pages}. Rows on "
+            f"those pages are uncorroborated even where they are not flagged.",
+            count=len(page_scope), pages=page_scope[:10]))
+    return out
+
+
 def check_bom_lines_survive_the_merge(summary: Any) -> List[Dict[str, Any]]:
     """A part used by two assemblies must still be two BOM lines when costing sees it.
 
@@ -1896,6 +1958,7 @@ CHECKS = (
     check_prices_are_firm,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
+    check_both_bom_readers_ran,
     check_the_quantity_costed_is_the_quantity_ordered,
     check_an_operation_is_not_charged_on_a_parent_and_its_child,
 )

@@ -16,8 +16,26 @@ Nothing here calls Grok directly — it delegates to the proven merge_boms funct
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
+
+
+def dual_path_enabled() -> bool:
+    """Whether the reconciled two-reader BOM is the job's BOM. Default: yes.
+
+    It was built behind SDI_DUALPATH_BOM, default OFF, so that turning it on could not
+    change a baseline. The consequence was that no live run ever read a BOM table: the
+    rows reaching the estimate came from regexes over pdfplumber's text flow, which
+    scrambles ruled CAD tables and needs per-drawing string repairs to survive — the
+    opposite of a rule that carries to the next job. A drawing states its own bill of
+    materials; reading it is not an experiment.
+
+    SDI_DUALPATH_BOM=0 still forces the old single-reader path for a like-for-like
+    comparison. The check lives HERE, once, because it previously existed as two
+    independent env reads in file_scan and either could have gone stale on its own.
+    """
+    return os.getenv("SDI_DUALPATH_BOM", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 # A "formal code" is normalised (whitespace squashed, upper-cased, hyphens cleaned):
@@ -155,9 +173,30 @@ def reconciled_bom_rows_for_job(
                 "bom_flag": r.get("flag"),
                 "bom_parent": parent,
             })
+    # A reader that did not run is the only failure this module cannot see in its output:
+    # the rows simply are not there, and a job read by one path looks exactly like a job
+    # both paths agreed was small. Promote every unread scope to a finding so the absence
+    # is stated rather than inferred from a count nobody compares.
+    for u in result.get("unread", []) or []:
+        _scope = u.get("scope")
+        _where = u.get("pdf") or "this job"
+        if u.get("page") is not None:
+            _where = f"{_where} page {int(u['page']) + 1}"
+        findings_extra.append({
+            "code": "bom_reader_did_not_run",
+            "detail": (
+                f"{'deterministic' if u.get('path') == 'A' else 'vision'} BOM reader did not "
+                f"read {_where}: {u.get('detail')}. Rows it would have contributed are not "
+                f"missing from the BOM — they are unknown, and no row on this "
+                f"{'job' if _scope == 'job' else _scope} carries two-reader corroboration."
+            ),
+            "page": u.get("pdf") or None,
+            "severity": "blocking" if _scope == "job" else "review",
+        })
     return {
         "rows": flat,
         "findings": list(result.get("findings", [])) + findings_extra,
+        "unread": list(result.get("unread", []) or []),
         "counts": result.get("counts", {}),
         "pdf_paths": result.get("pdf_paths", []),
         # a_count/b_count = how many BOM tables each reader found across the job.

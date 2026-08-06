@@ -40,6 +40,7 @@ import re
 import sys
 import hashlib
 import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Load C:\ClaudeVision\.env the same way the rest of the project does, so the
@@ -222,7 +223,19 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
 # deterministic). The raw response is stored too, so a PARSER change can re-parse
 # the cached raw WITHOUT re-calling Grok — only a model/prompt change re-fetches.
 # ---------------------------------------------------------------------------
-DEFAULT_CACHE_DIR = r"C:\ClaudeVision\cache\vision_bom"
+def _default_cache_dir() -> str:
+    """Where cached vision reads live. Derived from the installed tree, not from the
+    path one machine happened to be checked out at: a hardcoded C:\\ClaudeVision means
+    every re-run on any other machine pays for Grok again and silently gets nothing
+    when the drive is absent."""
+    try:
+        import config
+        return str(config.BASE_DIR / "cache" / "vision_bom")
+    except Exception:
+        return str(Path(__file__).resolve().parents[1] / "cache" / "vision_bom")
+
+
+DEFAULT_CACHE_DIR = _default_cache_dir()
 
 
 def _cache_key(png_bytes: bytes, model: str, prompt_version: str) -> str:
@@ -353,8 +366,14 @@ def _bare_code(s: str) -> str:
     """Match-normalise a code: uppercase, strip ALL separators (spaces, hyphens).
     So '1455-C GA', '1455-C-GA', '1455-C- GA', '1455 C GA' all become '1455CGA'.
     This makes code matching robust to the stray-space / hyphen-split variants
-    SDI drawings produce (the class the bom_table_extractor docstring names)."""
-    return re.sub(r"[\s\-]+", "", (s or "").upper())
+    SDI drawings produce (the class the bom_table_extractor docstring names).
+
+    The rule itself lives in part_code_conventions, because the dual-path reconciler
+    compares this reader's codes with the deterministic reader's and must go on doing
+    so when this module is unavailable. Kept as a name here so callers of the vision
+    reader are unaffected."""
+    from part_code_conventions import bare_code
+    return bare_code(s)
 
 
 def _token_matches(exp_tok: str, part_ref: str, desc: str) -> bool:

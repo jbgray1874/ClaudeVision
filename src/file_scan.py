@@ -1643,12 +1643,14 @@ def _finalize_scan_summary(
     summary = merge_page_analysis(summary, geom_pages)
     _debug("done merge_page_analysis")
 
-    # -- Dual-path BOM override (flagged, default OFF) --------------------------
-    # When SDI_DUALPATH_BOM is set, the deterministic (pdfplumber) + vision (Grok)
-    # reconciled reader becomes the authoritative source of the bom_rows that
-    # build_document_writeup consumes below. Flag OFF => byte-identical to baseline.
+    # -- Dual-path BOM read (default ON) ---------------------------------------
+    # The deterministic (pdfplumber word-geometry) + vision (Grok) reconciled reader is
+    # the authoritative source of the bom_rows that build_document_writeup consumes
+    # below. It reads the parts list the drawing PRINTS; the fallback reconstructs one
+    # from scrambled text. SDI_DUALPATH_BOM=0 restores the fallback for comparison.
     # Any failure leaves the existing rows untouched (a scan never breaks on this).
-    if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
+    from bom_pipeline import dual_path_enabled as _dual_path_enabled
+    if _dual_path_enabled():
         try:
             from bom_pipeline import reconciled_bom_rows_for_job
             # Prefer the EXACT PDF paths the pipeline already scanned (job_source_pdfs)
@@ -1678,8 +1680,14 @@ def _finalize_scan_summary(
             print(f"   [recon-input] _dp keys={sorted((_dp or {}).keys())} "
                   f"pdf_paths={len((_dp or {}).get('pdf_paths') or [])} "
                   f"a_count={(_dp or {}).get('a_count')} b_count={(_dp or {}).get('b_count')}", flush=True)
+            _da = summary.setdefault("document_analysis", {})
+            # Recorded whether or not rows came back. Which readers covered this job is
+            # the one fact that cannot be recovered from the rows themselves — an absent
+            # reader leaves no trace in what it did not find — and check_both_bom_readers_ran
+            # reads it. Written BEFORE the rows guard so a job the readers could not read
+            # at all still says who was unable to read it.
+            _da["bom_readers_unread"] = list(_dp.get("unread") or [])
             if _dp.get("rows"):
-                _da = summary.setdefault("document_analysis", {})
                 _da["bom_rows"] = _dp["rows"]
                 _da["bom_code_quality_findings"] = _dp.get("findings", [])
                 _debug(f"dual-path bom_rows applied: {len(_dp['rows'])} rows")
@@ -2822,21 +2830,21 @@ def _finalize_scan_summary(
     _debug("done estimate_document")
 
     # UNCONDITIONAL recon probe (temporary): proves this branch is reached and shows the env +
-    # _dp state here, independent of the SDI_DUALPATH_BOM gate below. Remove once diagnosed.
+    # _dp state here, independent of the dual-path gate below. Remove once diagnosed.
     try:
         _dp_probe_state = f"defined rows={len((_dp or {}).get('rows') or [])}" if isinstance(_dp, dict) else f"defined non-dict:{type(_dp).__name__}"
     except NameError:
         _dp_probe_state = "NOT-DEFINED"
     print(f"   [recon-probe] post-estimate_document reached | scan_mode={summary.get('scan_mode')!r} | "
-          f"SDI_DUALPATH_BOM={os.getenv('SDI_DUALPATH_BOM')!r} | _dp={_dp_probe_state}", flush=True)
+          f"dual_path={_dual_path_enabled()} | _dp={_dp_probe_state}", flush=True)
 
     # Dual-path -> part_estimates reconcile: runs HERE, AFTER estimate_document has built
     # part_estimates, so the fastener corrections (self-clinch 1->4, knob 1->2, add
     # BI-PEMSTUD) land on the FINAL list the sheet reads. The earlier inline copy ran
     # before part_estimates existed and silently no-op'd (STATUS doc S3.3).
-    if os.getenv("SDI_DUALPATH_BOM", "").lower() in {"1", "true", "yes"}:
+    if _dual_path_enabled():
         try:
-            _dp_after = _dp  # defined above when SDI_DUALPATH_BOM ran; NameError-guarded
+            _dp_after = _dp  # defined above when the dual path ran; NameError-guarded
             # DIAGNOSTIC (temporary): show the runtime inputs so a silent no-op is explainable.
             _dp_rows_diag = (_dp_after.get("rows") or []) if isinstance(_dp_after, dict) else None
             _pe_diag = (summary.get("estimate_summary") or {}).get("part_estimates")

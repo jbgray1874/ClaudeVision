@@ -82,6 +82,25 @@ def material_suffix(identity: str) -> str:
     return match.group(2).upper() if match else ""
 
 
+def bare_code(identity: str) -> str:
+    """Match-normalise a code: uppercase, strip ALL separators (spaces and hyphens).
+
+    "1455-C GA", "1455-C-GA", "1455-C- GA" and "1455 C GA" all become "1455CGA".
+
+    A CAD table read through any text extractor splits and re-spaces hyphenated codes
+    unpredictably — the same code comes back differently from two readers looking at the
+    same page. This is the form in which two readers' codes may be COMPARED. It is
+    deliberately not the form in which a code is STORED: it destroys the separators an
+    estimator reads, and `_norm_code` in bom_pipeline is what keeps a code presentable.
+
+    It lives here rather than in either reader because the dual-path reconciler compares
+    the deterministic reader's codes against the vision reader's, and a comparison whose
+    definition sits inside one of the two things being compared cannot survive that reader
+    being unavailable — nor stay honest if either side ever edits its own copy.
+    """
+    return re.sub(r"[\s\-]+", "", str(identity or "").upper())
+
+
 def is_mirror_code(identity: str) -> bool:
     """True when the code names a mirrored derivation of another part."""
     text = str(identity or "").strip()
