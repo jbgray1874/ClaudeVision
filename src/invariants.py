@@ -1082,6 +1082,88 @@ def check_bom_lines_survive_the_merge(summary: Any) -> List[Dict[str, Any]]:
         parts=collapsed[:10], count=len(collapsed), lines_lost=_lost)]
 
 
+# The closest two cut lines can credibly run in sheet metal, in millimetres. A laser kerf is
+# nearer 0.2mm, so this is generous by a factor of five on purpose: the test exists to catch a
+# blank that is impossible, not one that is merely dense. A part whose whole cut path implies
+# an average line spacing under this did not come from the blank recorded beside it.
+_MIN_CREDIBLE_CUT_SPACING_MM = 1.0
+
+# And then only complain at several times over. A long narrow strip is nearly all perimeter —
+# 2500 x 2 has 5,004mm of outline in 5,000mm2 of room — so a bare "over one" would fire on
+# geometry that is unusual rather than impossible. The cases this exists for clear the bar by
+# a hundredfold, so the margin costs nothing and buys the check the right to be BLOCKING.
+_CUT_PATH_ABSURDITY_MARGIN = 3.0
+
+
+def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[str, Any]]:
+    """The cut path must fit inside the blank it was cut from.
+
+    ON 12392 THE ENGINE HELD BOTH NUMBERS AND COMPARED THEM TO NOTHING. The back panel was
+    recorded as a 16 x 3.7 blank and a 6,678mm cut path — six and a half metres of cutting
+    inside a rectangle the size of a staple. It priced at GBP 0.01, the sheet claimed 5,865
+    parts out of one 2500 x 1250, and the material total for a steel panel job came to GBP
+    1.54. Nothing said a word, because each number is plausible on its own and only the pair
+    is absurd.
+
+    THE TEST IS AREA, NOT PERIMETER. Comparing cut length to the bounding perimeter looks
+    obvious and is wrong in both directions: a disc's outline is shorter than its bounding
+    box, and a legitimately busy panel has far more internal cutting than perimeter. What
+    cannot happen is cut path that will not FIT — a length of line needs width to live in, so
+    the blank's area divided by the total cut length is the average spacing between cuts, and
+    below about a millimetre that is not a part, it is two readings of different things.
+
+    WHICH ONE IS WRONG IS NOT DECIDED HERE. The blank may be in the wrong unit, or the cut
+    length may have come from a different part. Both are real causes and the repair differs,
+    so the violation states the contradiction and the ratio and leaves the reading to whoever
+    can open the drawing. BLOCKING because the material price is computed from the blank: a
+    job that reaches this state is not merely uncertain, it is quoting the wrong metal.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("blank_vs_cut_path", "This job is not a readable structure.")
+    parts = _parts(summary)
+    if not parts:
+        return []
+
+    impossible: List[Dict[str, Any]] = []
+    for part in parts:
+        length = _blank_num(part, "blank_length_mm", "overall_length_mm")
+        width = _blank_num(part, "blank_width_mm", "overall_width_mm")
+        cut = _blank_num(part, "cut_length_mm", "dxf_measured_cut_length",
+                         "estimated_cut_length_mm", "total_cut_length_mm")
+        if not length or not width or not cut:
+            continue                      # nothing to compare; other checks own absence
+        area = length * width
+        room = area / _MIN_CREDIBLE_CUT_SPACING_MM
+        if cut <= room * _CUT_PATH_ABSURDITY_MARGIN:
+            continue
+        impossible.append({
+            "part_number": part.get("part_number"),
+            "blank_mm": [round(length, 2), round(width, 2)],
+            "blank_area_mm2": round(area, 1),
+            "cut_length_mm": round(cut, 1),
+            # How much bigger the cut path is than the blank could hold. Named because "it
+            # is wrong" is not actionable and "169 times" points straight at a unit error.
+            "times_too_long": round(cut / room, 1) if room else None,
+            "implied_cut_spacing_mm": round(area / cut, 4) if cut else None,
+        })
+    if not impossible:
+        return []
+
+    return [_violation(
+        "blank_and_cut_path_disagree", BLOCKING,
+        f"{len(impossible)} part(s) carry a cut path that will not fit inside the blank "
+        f"recorded for them, so one of the two is wrong and the material is priced from the "
+        f"blank: "
+        + "; ".join(f"{p['part_number']} is {p['blank_mm'][0]:g} x {p['blank_mm'][1]:g} mm "
+                    f"with a {p['cut_length_mm']:,.0f} mm cut path "
+                    f"({p['times_too_long']:g}x more than it could hold, implying cuts "
+                    f"{p['implied_cut_spacing_mm']:g} mm apart)"
+                    for p in impossible[:6])
+        + ". A blank in the wrong unit prices the metal at a fraction of its cost and puts "
+          "an impossible number of parts on a sheet.",
+        parts=impossible[:10], count=len(impossible))]
+
+
 def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, Any]]:
     """A parent carrying its children's material or their single-blank operations.
 
@@ -1744,6 +1826,7 @@ CHECKS = (
     check_canonical_route_shadow,
     check_bom_lines_survive_the_merge,
     check_an_assembly_is_not_charged_as_a_blank,
+    check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
