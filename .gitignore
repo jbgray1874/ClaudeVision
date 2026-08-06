@@ -48,6 +48,12 @@ input/
 Thumbs.db
 
 # ── Explicit keeps (override the broad ignores above) ────────────────────
+# A BROAD IGNORE PLUS ONE EXCEPTION IS A TRAP FOR THE NEXT FILE. `*.txt` above
+# means every new .txt is invisible to `git add -A`, which reports nothing —
+# requirements-dev.txt was written, committed, pushed and merged before anybody
+# noticed it had never left the machine it was created on. Anything meant to be
+# kept has to be named here.
 !requirements.txt
+!requirements-dev.txt
 !corpus/*.jsonl
 cache/
