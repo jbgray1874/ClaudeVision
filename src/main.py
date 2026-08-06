@@ -1055,6 +1055,19 @@ def main() -> None:
                           f"final_estimate and will report those checks as unverified.",
                           flush=True)
             _target = _doc if isinstance(_doc, dict) else summary
+            # WHAT THE RUN KNOWS THAT THE STAMPED FILE PREDATES. Checking the file rather
+            # than memory is right — two views of one job that disagree is the defect this
+            # layer exists to stop — but the file is a snapshot, and populate_workbook
+            # declares which lines it REFUSED to price after that snapshot was taken. On
+            # 12392 the AI estimate for the header graphic was withheld and written as GBP 0,
+            # and price_not_reproducible blocked the job for it anyway, because the
+            # declaration existed only in memory. Carried across explicitly rather than left
+            # to whichever pass happens to serialise last.
+            if _target is not summary:
+                for _carry in ("withheld_price_lines",):
+                    _val = summary.get(_carry)
+                    if _val and not _target.get(_carry):
+                        _target[_carry] = list(_val) if isinstance(_val, list) else _val
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
             print(_fmt_inv(_inv), flush=True)

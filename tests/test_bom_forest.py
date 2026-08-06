@@ -545,3 +545,84 @@ def test_the_compiler_reads_occurrences_before_projections():
     before = src.index('_da.get("bom_rows")')
     after = src.index('_da.get("bay_bom_rows")')
     assert before < after, "the occurrence ledger must be passed ahead of the projection"
+
+
+# ── a decision is not a charge ───────────────────────────────────────────────────────────
+
+def test_a_ruled_out_decision_is_not_a_charge():
+    """12392 reported folding and laser_cutting "charged on 12392-02-201" against a workbook
+    whose Fold and Laser rows list only (01M, 02M) and (04-01M, 04-02M) — 201 appears in one
+    Assemble/pack row and nowhere else. The check bucketed EVERY decision, whatever its
+    status and whether or not one ever produced a priced row.
+
+    Ruled-out decisions are the point of the ruling: a NOT_APPLICABLE claim exists so the
+    reason survives, and counting it as money undoes that."""
+    import invariants
+    job = {
+        "solidworks_native": {"hierarchy": {"12392-02-201": [["12392-02-01M", 1.0]]}},
+        "canonical_route_shadow": {
+            "decisions": [
+                {"decision_id": "d1", "operation": "folding", "status": "required",
+                 "participants": ["12392-02-01M"]},
+                {"decision_id": "d2", "operation": "folding", "status": "not_applicable",
+                 "participants": ["12392-02-201"]},
+            ],
+            "priced_route_rows": [{"decision_id": "d1", "operation": "folding"}],
+        },
+    }
+    assert invariants.check_an_operation_is_not_charged_on_a_parent_and_its_child(job) == []
+
+
+def test_a_decision_with_no_priced_row_is_not_a_charge():
+    """Required, but nothing joined to it — so the workbook charges nobody for it."""
+    import invariants
+    job = {
+        "solidworks_native": {"hierarchy": {"12392-02-201": [["12392-02-01M", 1.0]]}},
+        "canonical_route_shadow": {
+            "decisions": [
+                {"decision_id": "d1", "operation": "folding", "status": "required",
+                 "participants": ["12392-02-01M"]},
+                {"decision_id": "d2", "operation": "folding", "status": "required",
+                 "participants": ["12392-02-201"]},
+            ],
+            "priced_route_rows": [{"decision_id": "d1", "operation": "folding"}],
+        },
+    }
+    assert invariants.check_an_operation_is_not_charged_on_a_parent_and_its_child(job) == []
+
+
+def test_but_two_priced_rows_on_a_parent_and_its_child_still_surface():
+    """MUTATION: the guard must not have silenced the thing the check is for. 12422-24's
+    P.Coat on 102 and again on 05M — both required, both priced — is the case it exists to
+    catch, and it must still fire."""
+    import invariants
+    job = {
+        "solidworks_native": {"hierarchy": {"12422-24-102": [["12422-24-05M", 1.0]]}},
+        "canonical_route_shadow": {
+            "decisions": [
+                {"decision_id": "d1", "operation": "P.Coat", "status": "required",
+                 "participants": ["12422-24-102"]},
+                {"decision_id": "d2", "operation": "P.Coat", "status": "required",
+                 "participants": ["12422-24-05M"]},
+            ],
+            "priced_route_rows": [{"decision_id": "d1"}, {"decision_id": "d2"}],
+        },
+    }
+    found = invariants.check_an_operation_is_not_charged_on_a_parent_and_its_child(job)
+    assert len(found) == 1
+    assert found[0]["severity"] == invariants.UNVERIFIED
+    assert found[0]["detail"]["assembly"] == "12422-24-102"
+
+
+def test_a_writer_that_records_no_status_is_not_blinded():
+    """Requiring the field would silently stop this check on any path that omits it, and the
+    thing it guards is metal through the oven twice."""
+    import invariants
+    job = {
+        "solidworks_native": {"hierarchy": {"12422-24-102": [["12422-24-05M", 1.0]]}},
+        "canonical_route_shadow": {"decisions": [
+            {"decision_id": "d1", "operation": "P.Coat", "participants": ["12422-24-102"]},
+            {"decision_id": "d2", "operation": "P.Coat", "participants": ["12422-24-05M"]},
+        ]},
+    }
+    assert len(invariants.check_an_operation_is_not_charged_on_a_parent_and_its_child(job)) == 1

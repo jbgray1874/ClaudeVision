@@ -1694,9 +1694,37 @@ def check_an_operation_is_not_charged_on_a_parent_and_its_child(
     # contains", and an operation is the set of all its rows. Grouped by operation name,
     # which is what the workbook prices by.
     shadow = _node(summary, "canonical_route_shadow")
+
+    # A DECISION IS NOT A CHARGE. This bucketed EVERY decision on the job, whatever its
+    # status and whether or not it ever produced a priced row — so on 12392 it reported
+    # folding and laser_cutting as "charged on 12392-02-201" against a workbook whose Fold
+    # and Laser rows list only (01M, 02M) and (04-01M, 04-02M). 201 appears in one
+    # Assemble/pack row and nowhere else.
+    #
+    # Ruled-out decisions are the point of the ruling: a NOT_APPLICABLE powder claim exists
+    # precisely so the reason survives, and counting it as money undoes that. Same defect
+    # class as check_an_assembly_is_not_charged_as_a_blank had, one check along, and the same
+    # answer: ask the priced rows.
+    _priced_ids = {str(r.get("decision_id") or "")
+                   for r in (shadow.get("priced_route_rows") or [])
+                   if isinstance(r, dict)}
+    _priced_ids.discard("")
+
     by_operation: Dict[str, Dict[str, Any]] = {}
     for decision in (shadow.get("decisions") or []):
         if not isinstance(decision, dict):
+            continue
+        # A decision that STATES a status other than required is ruled out. One that states
+        # none is not: some writers do not set the field, and requiring it would silently
+        # blind this check on those paths — the failure direction that matters here, because
+        # the thing it guards is metal through the oven twice.
+        _status = str(decision.get("status") or "").strip().lower()
+        if _status and _status != "required":
+            continue
+        # Where priced rows exist, a decision counts only if one of them joined to it. Where
+        # none exist at all — a run that never reached the workbook — required status is the
+        # best evidence available, and that is still narrower than counting everything.
+        if _priced_ids and str(decision.get("decision_id") or "") not in _priced_ids:
             continue
         op = str(decision.get("operation") or "").strip()
         if not op:
