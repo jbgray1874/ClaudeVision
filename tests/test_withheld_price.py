@@ -89,3 +89,41 @@ def test_the_withholding_branch_calls_it():
     import inspect
     import wb_populate
     assert "_pp.mark_withheld(pe)" in inspect.getsource(wb_populate)
+
+
+def test_a_line_withheld_is_honoured_wherever_its_stamps_live():
+    """TWO OFFENDING LINES BECAME ONE, WHICH IS THE SAME DEFECT AT HALF THE VOLUME. A part's
+    price stamp is written in more than one place — the costed record and the raw part record
+    the geometry passes hold — and marking the object in hand left the twin still reading as
+    money. Withholding is a property of the LINE."""
+    import invariants
+    summary = {
+        "estimate_summary": {"part_estimates": [_part()]},   # marked copy
+        "parts": [_part()],                                  # the twin nobody marked
+        "final_estimate": {"totals": {"unit_gbp": 41.98}},
+    }
+    price_provenance.mark_withheld(summary["estimate_summary"]["part_estimates"][0])
+    assert len(invariants.check_prices_are_reproducible(summary)) == 1, \
+        "precondition: the unmarked twin still blocks"
+
+    summary["withheld_price_lines"] = ["12392-02-17G"]
+    assert invariants.check_prices_are_reproducible(summary) == []
+
+
+def test_the_declaration_cannot_silence_a_price_that_reached_the_total():
+    """Only the branch that writes GBP 0.00 onto the sheet adds a code, and it adds the code
+    it refused. A DIFFERENT part's applied AI price is untouched — this is not a mute button."""
+    import invariants
+    other = _part()
+    other["part_number"] = "11350-01-02 MIR"
+    summary = {"estimate_summary": {"part_estimates": [other]},
+               "withheld_price_lines": ["12392-02-17G"],
+               "final_estimate": {"totals": {"unit_gbp": 86.04}}}
+    found = invariants.check_prices_are_reproducible(summary)
+    assert len(found) == 1 and found[0]["severity"] == invariants.BLOCKING
+
+
+def test_the_withholding_branch_declares_the_line():
+    import inspect
+    import wb_populate
+    assert 'summary.setdefault("withheld_price_lines", [])' in inspect.getsource(wb_populate)

@@ -2722,6 +2722,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 try:
                     import price_provenance as _pp
                     _pp.mark_withheld(pe)
+                    # AND ON THE LINE, NOT ONLY ON THIS COPY OF IT. A part's price stamp is
+                    # written in more than one place — the costed record here and the raw
+                    # part record the geometry passes hold — and marking the object in hand
+                    # left the twin still reading as money. 12392 went from two offending
+                    # lines to one, which is the same defect at half the volume. Withholding
+                    # is a property of the LINE; recorded once, honoured wherever its stamps
+                    # live.
+                    _code = str(pe.get("part_number") or "").strip().upper()
+                    if _code:
+                        _wl = summary.setdefault("withheld_price_lines", [])
+                        if _code not in _wl:
+                            _wl.append(_code)
                 except Exception:                       # noqa: BLE001
                     pass
                 # Two different reasons reach this branch and an estimator needs to know

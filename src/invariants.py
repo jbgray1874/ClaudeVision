@@ -827,8 +827,16 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
             "price_reproducibility",
             "No priced lines carrying a price-source stamp were found anywhere on this job.")
 
+    # LINES THE WORKBOOK REFUSED TO PRICE. Declared by the branch that refused them, so a
+    # part whose stamp is written in two places is honoured in both — see mark_withheld.
+    # Deliberately NOT a way to silence this check: only the code that writes GBP 0.00 onto
+    # the sheet adds a code here, and a price that reached the total never appears.
+    _withheld = {str(c).strip().upper()
+                 for c in (summary.get("withheld_price_lines") or []) if str(c).strip()}
     guessed = []
     for path, block, owner in price_provenance.applied_ai_prices(summary):
+        if str(owner or "").strip().upper() in _withheld:
+            continue
         _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
         guessed.append({
             "part": owner, "where": path,
