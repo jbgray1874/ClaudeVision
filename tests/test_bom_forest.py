@@ -512,3 +512,36 @@ def test_the_late_strip_removes_operations_put_back_after_the_first_one():
     part["textual_operations"].extend(["cnc_routing", "edge_banding"])   # a later writer
     assert bp.strip_leaf_operations(part) == ["cnc_routing", "edge_banding"]
     assert part["textual_operations"] == ["assembly"]
+
+
+def test_a_rejected_parent_is_named_out_loud(capsys):
+    """SIX BLOCKING DISCONNECTS, AND THE ONE FACT THAT EXPLAINED ALL SIX WAS DISCARDED
+    WITHOUT A WORD. The refusal in _bom_stated_edges is correct — a parent naming nothing we
+    know must not become an edge — but it was silent, so a run where every GA parent was
+    rejected because the drawing numbers came from descriptive file names looked exactly like
+    a run where the drawings stated no hierarchy at all."""
+    parts = [{"part_number": c, "description": c, "quantity": 1}
+             for c in ("12392-02-GA", "12392-04-01M")]
+    rows = [{"part_number": "12392-04-01M", "quantity": 2, "bom_parent": "12392-04-GA"}]
+
+    build_part_graph(parts, {}, rows, ["12392-02-GA"])
+    said = capsys.readouterr().out
+    assert "name an owner this job does not recognise" in said
+    assert "12392-04-GA" in said, "the rejected owner must be named — that IS the diagnosis"
+
+    # And it stays quiet when every parent resolves, so the line means something when it
+    # does appear.
+    build_part_graph(parts, {}, rows, ["12392-02-GA", "12392-04-GA"])
+    assert "does not recognise" not in capsys.readouterr().out
+
+
+def test_the_compiler_reads_occurrences_before_projections():
+    """bay_bom_rows is a PROJECTION — deduped, with shadowed rows dropped — so it can only
+    hold less hierarchy than the ledger it was made from. Preferring it, as the first version
+    of this did, means compiling the tree from a list that has already lost lines."""
+    import route_compiler, inspect
+    src = inspect.getsource(route_compiler.refresh_canonical_route_after_reconciliation)
+    assert 'list(_da.get("bom_rows") or [])' in src
+    before = src.index('_da.get("bom_rows")')
+    after = src.index('_da.get("bay_bom_rows")')
+    assert before < after, "the occurrence ledger must be passed ahead of the projection"

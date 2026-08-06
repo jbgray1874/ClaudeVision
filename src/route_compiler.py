@@ -570,6 +570,7 @@ def _bom_stated_edges(
     bom_rows: Optional[Sequence[Mapping[str, Any]]],
     aliases: Mapping[str, str],
     known: Set[str],
+    rejected: Optional[List[str]] = None,
 ) -> List[tuple]:
     """(child, parent, qty) for every BOM row that names an owner we already know.
 
@@ -610,16 +611,24 @@ def _bom_stated_edges(
                 return spelling
         return "" if must_be_known else (spellings[0] if spellings else "")
 
+    rejected = rejected if rejected is not None else []
     edges: List[tuple] = []
     for row in bom_rows or []:
         if not isinstance(row, Mapping):
             continue
         child = _resolve(row.get("part_number") or row.get("part_code")
                          or row.get("code"), False)
+        _stated = row.get("bom_parent") or row.get("parent") or row.get("parent_code")
         # The parent MUST resolve to something we know — that is the refusal above, and it
         # is why trying two spellings here is safe: neither can name a node that is not there.
-        parent = _resolve(row.get("bom_parent") or row.get("parent")
-                          or row.get("parent_code"), True)
+        parent = _resolve(_stated, True)
+        if _stated and not parent:
+            # SAY WHOSE OWNER WE THREW AWAY. This refusal is correct and it was silent, so a
+            # run where every GA parent was rejected — because the drawing numbers came from
+            # descriptive file names and matched nothing — looked exactly like a run where
+            # the drawings stated no hierarchy at all. Six blocking disconnected nodes, and
+            # the one fact that explains all six was discarded without a word.
+            rejected.append(str(_stated))
         if not child or not parent or child == parent:
             continue
         edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0))
@@ -849,8 +858,17 @@ def build_part_graph(
     # changed. But two BOM rows naming two owners are not in conflict — they are two
     # assemblies that each use the part, which is the ordinary shape of a fastener.
     _claimed_before_bom = set(parents)
-    for _child_id, _parent_id, _qty in _bom_stated_edges(
-            bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings):
+    _rejected_parents: List[str] = []
+    _bom_edges = _bom_stated_edges(
+        bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings,
+        _rejected_parents)
+    if _rejected_parents:
+        _unique = sorted({r for r in _rejected_parents if r})
+        print(f"   [bom] {len(_rejected_parents)} row(s) name an owner this job does not "
+              f"recognise, so no edge was made for them: {', '.join(_unique[:6])}"
+              + (f" (+{len(_unique) - 6} more)" if len(_unique) > 6 else "")
+              + ". Their parts will be reported as disconnected.", flush=True)
+    for _child_id, _parent_id, _qty in _bom_edges:
         if _child_id in _claimed_before_bom:
             continue
         children.setdefault(_parent_id, {})[_child_id] = _qty
@@ -1157,10 +1175,21 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
         and clean_part_number(item.get("part_number") or item.get("item_number")) not in raw_ids
     ]
     _da = summary.get("document_analysis") or {}
-    # bay_bom_rows FIRST: it is the merged, line-identified population and the one the sheet
-    # is built from. Falling back to bom_rows keeps every job that never took the rollup path.
+    # THE OCCURRENCES FIRST, AND THE PROJECTION ONLY AFTER THEM. This preferred
+    # bay_bom_rows, on the reasoning that it is the population the sheet is built from —
+    # which is exactly why it is the wrong input. bay_bom_rows is a PROJECTION: it is
+    # deduped, shadowed rows are dropped from it, and it can only ever hold less hierarchy
+    # than the ledger it was made from. document_analysis.bom_rows is what the readers
+    # actually recorded, one row per printed line, and it is the only list that can be
+    # trusted to still contain a parent the rollup happened to collapse.
+    #
+    # Both are passed, occurrences first, because the projection also carries rows the
+    # occurrences never had — synthesised and catalogue lines. Those state no parent, so
+    # they add nothing to the hierarchy and cost nothing to include; where a row appears in
+    # both, the edge is identical and adding it twice is a no-op.
     compiled = compile_job_route(population, summary.get("llm_full_extract") or {},
-                                 _da.get("bay_bom_rows") or _da.get("bom_rows") or [],
+                                 list(_da.get("bom_rows") or [])
+                                 + list(_da.get("bay_bom_rows") or []),
                                  job_drawing_numbers(summary),
                                  _assembly_page_owners(summary))
     payload = project_priced_route(compiled, final_estimates)
