@@ -133,6 +133,20 @@ _ORIGIN_LABELS = {
 _SILENT_ORIGIN_CLASSES = {"catalogue", "config"}
 
 
+def _price_is_reproducible(pe: Dict[str, Any]) -> bool:
+    """True when every stamp that puts money on this line will repeat next run."""
+    try:
+        import price_provenance
+    except ImportError:
+        return False
+    stamps = [b for _p, b in price_provenance.iter_price_stamps(pe)
+              if price_provenance.stamp_affects_total(b)]
+    ai = [b for b in stamps if price_provenance.stamp_source_class(b) == "ai_estimate"]
+    if not ai:
+        return True          # nothing generated here; catalogue rates repeat by nature
+    return all(price_provenance.stamp_is_reproducible(b) for b in ai)
+
+
 def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     """(label for the supplier column, is this an unrepeatable guess?) for one BOM line.
 
@@ -159,7 +173,11 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
         return "", False
     cls = price_provenance.stamp_source_class(best)
     if cls == "ai_estimate":
-        return f"{_llm_engine_name(best)} - INDICATIVE", True
+        # Indicative either way. The second value asks the narrower question the price
+        # column turns on: is this figure the SAME next run? An unrepeatable one is kept
+        # off the total; a stored one prices the line, tagged.
+        return (f"{_llm_engine_name(best)} - INDICATIVE",
+                not price_provenance.stamp_is_reproducible(best))
     label = _ORIGIN_LABELS.get(cls)
     if label is None:
         # An unrecognised class is not a silent one. Prefer the source's own name where it
@@ -2687,6 +2705,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # the record, unpriced means unpriced.
         # An AI market estimate is not a price — bom_line_pricing says why, and says it
         # somewhere a fixture can reach. The row loop keeps only the call.
+        # Carry the reproducibility verdict onto the record the decision reads. Without
+        # this the rule exists and nothing asks it — the defect this branch has already
+        # been fixed for twice.
+        pe = dict(pe)
+        pe["_price_is_reproducible"] = _price_is_reproducible(pe)
         _line = bom_line_pricing(pe, _indicative, _bom_line_price(pe))
         pe = _line["part"]
 

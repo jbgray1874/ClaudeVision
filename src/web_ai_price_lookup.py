@@ -353,7 +353,30 @@ def _call_xai_llm(
         return None
 
 
-def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto") -> Dict[str, Any]:
+def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto",
+                         *, use_cache: bool = True, refresh: bool = False) -> Dict[str, Any]:
+    """Ask the model for an indicative UK trade price, once per distinct specification.
+
+    The same part asked four times returned £35.62, £95.62, £75.62 and £85.62. That is
+    what kept this number out of the price column — not that it was uncertain, but that
+    it moved sixty pounds while the job stood still. An uncertain number an estimator can
+    weigh; a number that answers differently every time it is asked cannot be weighed at
+    all, because there is nothing stable to weigh.
+
+    So it is asked once and stored against the spec that produced it. It changes when the
+    part changes, when the model or prompt changes, or when somebody refreshes it.
+    """
+    import generated_price_cache as _gpc
+
+    _model = os.environ.get("XAI_MODEL", "grok-4.3") if provider != "anthropic" else "anthropic"
+    return _gpc.cached_estimate(
+        spec, provider, _model,
+        lambda: _llm_market_estimate_uncached(spec, provider),
+        use_cache=use_cache, refresh=refresh,
+    )
+
+
+def _llm_market_estimate_uncached(spec: Dict[str, Any], provider: str = "auto") -> Dict[str, Any]:
     """
     Ask LLM for indicative UK trade price.
     Returns a standardised result dict.

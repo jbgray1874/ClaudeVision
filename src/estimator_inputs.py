@@ -184,11 +184,25 @@ def indicative_price_to_withhold(part: Mapping[str, Any], is_indicative: bool,
 
     The number is returned, not discarded — it belongs on the line as a hint, where it
     informs without being summed.
+
+    WHAT ACTUALLY DISQUALIFIED IT WAS INSTABILITY, NOT UNCERTAINTY. Every sentence above
+    turns on the figure CHANGING between runs, and that is now fixable: a generated price
+    is asked once per specification and stored, so the same part returns the same number
+    tomorrow and on somebody else's machine. Once it holds still, an estimator can weigh
+    it exactly as they weigh any other indicative figure — and estimating would rather
+    have a low-confidence number to correct than a blank to fill from nothing.
+
+    So a REPRODUCIBLE estimate now prices the line, loudly tagged as indicative. Only one
+    that cannot be reproduced is still kept off the total, because a total nobody can
+    reproduce is not an estimate at all — two people reading the same job on the same day
+    would disagree about what it says.
     """
     if not is_indicative:
         return None
     if isinstance(part, Mapping) and part.get("_price_explicitly_withheld"):
         return None          # already an estimator input; nothing to move
+    if isinstance(part, Mapping) and part.get("_price_is_reproducible"):
+        return None          # it holds still; price it, tagged as indicative
     value = _num(price_gbp)
     return value if value and value > 0 else None
 

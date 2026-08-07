@@ -388,6 +388,30 @@ def stamp_source_class(block: Dict[str, Any]) -> str:
     )
 
 
+def stamp_is_reproducible(block: Dict[str, Any]) -> bool:
+    """Will this price come back the same on the next run of the same job?
+
+    Only a GENERATED price can fail this. A catalogue rate, a spreadsheet cell and a
+    historical line all repeat perfectly by their nature — the question only arises for
+    a figure the model composed, which is why the flag is written by the generated-price
+    cache and read here.
+
+    Note the difference from FIRM. A list price repeats perfectly and commits nobody;
+    reproducible means two people reading this job on the same day see the same number,
+    which is the minimum for it to be discussed at all. check_prices_are_firm asks the
+    other question.
+    """
+    if not isinstance(block, dict):
+        return False
+    if block.get("price_is_reproducible") is True:
+        return True
+    for key in ("selected", "result", "price", "detail"):
+        inner = block.get(key)
+        if isinstance(inner, dict) and inner.get("price_is_reproducible") is True:
+            return True
+    return False
+
+
 def iter_price_stamps(node: Any, _path: str = "") -> Iterator[Tuple[str, Dict[str, Any]]]:
     """Walk any job/part/estimate structure and yield (path, block) for every price stamp.
 
