@@ -1200,12 +1200,16 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         width = _blank_num(part, "blank_width_mm", "overall_width_mm")
         cut = _blank_num(part, "cut_length_mm", "dxf_measured_cut_length",
                          "estimated_cut_length_mm", "total_cut_length_mm")
-        if not length or not width or not cut:
+        # ONE DEFINITION OF IMPOSSIBLE, shared with the estimator that prices from the
+        # blank. A private copy here would let this block a job the pricer had already
+        # costed at a hundredth of its value — a second opinion nobody acted on, arriving
+        # after the money was written down.
+        import blank_credibility as _bc
+        verdict = _bc.assess(length, width, cut)
+        if not verdict["evaluated"] or verdict["credible"]:
             continue                      # nothing to compare; other checks own absence
         area = length * width
-        room = area / _MIN_CREDIBLE_CUT_SPACING_MM
-        if cut <= room * _CUT_PATH_ABSURDITY_MARGIN:
-            continue
+        room = _bc.cut_path_a_blank_could_hold_mm(length, width) or 0.0
         impossible.append({
             "part_number": part.get("part_number"),
             "blank_mm": [round(length, 2), round(width, 2)],
