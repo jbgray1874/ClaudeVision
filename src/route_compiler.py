@@ -323,7 +323,9 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
     )
 
 
-def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
+def _drawing_code_aliases(identities: Iterable[str],
+                          records: Optional[Mapping[str, Mapping[str, Any]]] = None,
+                          refused: Optional[List[Dict[str, str]]] = None) -> Dict[str, str]:
     """Join the codes the FILES use to the codes the DRAWING's BOM uses.
 
     THE SAME PART UNDER TWO NAMES IS TWO PARTS, and that is the expensive failure. On 11350
@@ -344,6 +346,15 @@ def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
     merely looks suffixed but whose base is not on this job stays exactly as it is — the
     safe direction, because inventing a join costs a part its own identity while declining
     one only costs a merge the estimator can see.
+
+    AND NOT ACROSS KINDS. This pass used to receive nothing but strings, so it could not
+    ask what the two codes WERE — it merged on the naming convention alone. A material
+    suffix says "<code> cut in that material", which is a claim about a part we make; if
+    the base code is a bought-in line, the convention has matched a spelling and not a
+    part, and following it hands a fabricated leaf's identity — with its route and its
+    measured blank — to something we purchase. `records` is how it can now decline, and
+    every refusal is recorded rather than silently skipped: a join we would once have made
+    and now do not is exactly the thing somebody will need to see.
     """
     from part_code_conventions import alias_targets
 
@@ -366,16 +377,32 @@ def _drawing_code_aliases(identities: Iterable[str]) -> Dict[str, str]:
     for _i in sorted(known, key=lambda v: (-len(v), v)):
         _by_squash.setdefault(_squash(_i), _i)
 
+    _rec = {str(k).strip().upper(): v for k, v in (records or {}).items()
+            if isinstance(v, Mapping)}
+
+    def _may_merge(source: str, target: str) -> bool:
+        a, b = _rec.get(source), _rec.get(target)
+        if a is None or b is None:
+            return True          # nothing known about one end; the other tests still hold
+        if _kinds_are_compatible(a, b):
+            return True
+        if refused is not None:
+            refused.append({"identity": source, "target": target,
+                            "identity_kind": _record_kind(a) or "unstated",
+                            "target_kind": _record_kind(b) or "unstated"})
+        return False
+
     aliases: Dict[str, str] = {}
     for identity in sorted(known):
         # Same part, two spellings: bind the shorter onto the drawing's own.
         _canon = _by_squash.get(_squash(identity))
         if _canon and _canon != identity:
-            aliases[identity] = _canon
+            if _may_merge(identity, _canon):
+                aliases[identity] = _canon
             continue
         for _t in alias_targets(identity):
             _hit = _by_squash.get(_squash(_t.strip().upper()))
-            if _hit and _hit != identity:
+            if _hit and _hit != identity and _may_merge(identity, _hit):
                 aliases[identity] = _hit
                 break
     return aliases
@@ -392,13 +419,33 @@ def _quantities_do_not_disagree(a: Optional[float], b: Optional[float]) -> bool:
 
 
 def _record_kind(record: Mapping[str, Any]) -> str:
-    """assembly / bought_in / leaf, from whatever the record already states. '' = unstated."""
+    """assembly / bought_in / leaf, from whatever the record already states. '' = unstated.
+
+    EVIDENCE OF FABRICATION OUTRANKS A FLAG. A part we measured a blank on, or read a
+    laser and a fold against, is something we CUT — and it stays that whatever a
+    canonical_kind field says, because the flag is a classification and the geometry is
+    an observation. Asked the other way round, an unstated kind abstained, and abstaining
+    is what let a fabricated leaf be aliased onto a bought-in that merely looked like a
+    spelling of it: the leaf's route and its measured blank go with its identity.
+
+    The asymmetry is deliberate and it is the safe direction. Calling a bought-in
+    "fabricated" costs a route nobody will book, which an estimator sees on the sheet.
+    Calling a fabricated leaf "bought-in" deletes the cutting, folding and welding from a
+    part we make, and nothing on the sheet says so.
+    """
     kind = str(record.get("canonical_kind") or "").lower().strip()
-    if kind in ("assembly", "bought_in", "leaf"):
-        return kind
     if record.get("is_sub_assembly") or record.get("is_assembly_parent") \
-            or (record.get("assembly_children") or []):
+            or (record.get("assembly_children") or []) or kind == "assembly":
         return "assembly"
+    try:
+        # The merge-purpose bar, not the make/buy one — see the predicate's own note on
+        # why the two differ.
+        if bought_in_policy.looks_fabricated_for_identity(dict(record)):
+            return "leaf"
+    except Exception:                                              # noqa: BLE001
+        pass
+    if kind in ("bought_in", "leaf"):
+        return kind
     if _bought_in_record(record) or record.get("is_bought_in") is True:
         return "bought_in"
     return ""
@@ -688,8 +735,19 @@ def build_part_graph(
             if isinstance(_e, Mapping):
                 _hierarchy_codes.add(clean_part_number(_e.get("part_number")))
     _hierarchy_codes.discard("")
+    # The records, so the naming convention can be checked against what the two codes ARE
+    # rather than only against how they are spelled. Both pools, because a code may be
+    # known to one reader and not the other, and the pool that holds it is the pool that
+    # knows its kind.
+    _kind_records: Dict[str, Mapping[str, Any]] = {}
+    for _pool in (extracted, raw_original):
+        for _id, _rec in (_pool or {}).items():
+            if isinstance(_rec, Mapping):
+                _kind_records.setdefault(str(_id).strip().upper(), _rec)
+    _refused_cross_kind: List[Dict[str, str]] = []
     for _src, _dst in _drawing_code_aliases(
-            set(raw_original) | set(extracted) | _hierarchy_codes).items():
+            set(raw_original) | set(extracted) | _hierarchy_codes,
+            _kind_records, _refused_cross_kind).items():
         aliases.setdefault(_src, _dst)
     # THE SAME COLLAPSE, ON THE OTHER SIDE. The alias map was applied to the part records
     # and not to the extract's own BOM rows, so a duplicate spelling that appears ONLY in
@@ -1008,6 +1066,22 @@ def build_part_graph(
         ))
 
     graph_issues = []
+    # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
+    # two codes are one part and their kinds said otherwise. Either the convention matched
+    # a spelling rather than a part — the case this guard exists for — or one of the two
+    # records is classified wrongly, and that is worth someone knowing. Silently not
+    # merging leaves an estimator looking at two rows with no idea why.
+    for _r in _refused_cross_kind:
+        graph_issues.append({
+            "code": "identity_merge_refused_across_kinds",
+            "identity": _r["identity"],
+            "target": _r["target"],
+            "detail": (f"{_r['identity']} ({_r['identity_kind']}) was not merged into "
+                       f"{_r['target']} ({_r['target_kind']}) — the naming convention says "
+                       f"they are one part and their kinds say they are not. A part we "
+                       f"fabricate does not become one we purchase because their codes "
+                       f"match, so both stay visible for a ruling."),
+        })
     if top_ids:
         _roots = set(top_ids)
         for node in nodes:

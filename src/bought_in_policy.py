@@ -228,6 +228,33 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     return "dxf" in _gs and _gs != "dxf_matched_no_geometry"
 
 
+def looks_fabricated_for_identity(part: Dict[str, Any]) -> bool:
+    """A LOWER bar than has_fabrication_evidence, for a narrower and more destructive
+    question: may these two identities be merged into one node?
+
+    has_fabrication_evidence decides make-or-buy, so it demands measured geometry and
+    nothing less — a drawing, a material and a thickness are things a bought-in component
+    has too. That bar is right for classification and wrong here, because the consequences
+    are not symmetric.
+
+    Refusing a merge costs a visible extra row an estimator can look at and resolve.
+    Allowing a wrong one hands a fabricated leaf's identity to something we purchase, and
+    its laser, fold and weld go with it — silently, because the row it was on is gone.
+
+    So a part with a leaf-only operation read against it counts here even without measured
+    geometry. You do not laser-cut or fold something you buy in, and if the note scan has
+    put those against a purchased part, that is a mis-read worth seeing rather than a
+    reason to merge.
+    """
+    if has_fabrication_evidence(part):
+        return True
+    ops = {str(o).strip().lower().replace(" ", "_")
+           for o in (part.get("textual_operations") or [])}
+    ops |= {str(o).strip().lower().replace(" ", "_")
+            for o in ((part.get("manufacturing_interpretation") or {}).get("operations") or [])}
+    return bool(ops & LEAF_ONLY_OPS)
+
+
 def bought_in_conflict(part: Dict[str, Any]) -> bool:
     """Bought-in by identity, yet carrying its own measured geometry — the two sources
     disagree about what this part is. Flagged for an estimator, never auto-resolved."""
