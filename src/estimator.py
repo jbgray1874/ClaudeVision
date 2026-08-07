@@ -1780,8 +1780,16 @@ def _blank_that_could_have_been_cut(
               f"UNDER-STATES a folded part — estimator to confirm.", flush=True)
         return better["blank_length_mm"], better["blank_width_mm"]
 
-    part["blank_length_mm"] = None
-    part["blank_width_mm"] = None
+    # CLEAR IT EVERYWHERE IT IS WRITTEN, not just where it is read first. The rejected
+    # 16 x 3.7 went on blocking the job after this gate refused it, because the invariant
+    # falls back to overall_length_mm and normalized_geometry when blank_length_mm is
+    # absent — so removing one copy simply moved which copy got believed.
+    for _holder in (part, part.get("normalized_geometry"), part.get("geometry_rollup")):
+        if isinstance(_holder, dict):
+            for _key in ("blank_length_mm", "blank_width_mm", "blank_area_mm2",
+                         "overall_length_mm", "overall_width_mm"):
+                if _holder.get(_key) is not None:
+                    _holder[_key] = None
     part["blank_rejected_reason"] = verdict["reason"]
     if "blank_impossible_no_replacement" not in _flags:
         _flags.append("blank_impossible_no_replacement")

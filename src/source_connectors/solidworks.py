@@ -1237,6 +1237,26 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         part["solidworks_part_number"] = pn
         flags = part.setdefault("review_flags", [])
 
+        # ── THE MODEL'S BOUNDING BOX, KEPT ─────────────────────────────────────────
+        #
+        # It was read for every part and used for exactly one thing: a tube's cut length.
+        # For everything else it was discarded, which meant a part whose recorded blank
+        # turned out to be impossible had nothing measured to fall back on — 12392's back
+        # panel was rejected as 16 x 3.7 and then priced as a bought-in, on a job whose
+        # model states 130 x 1435 x 1.5.
+        #
+        # A bounding box is NOT a blank: a folded part unfolds longer than the box it
+        # folds into, so anything using it is using a floor and must say so. But it is
+        # measured, it is the real envelope, and keeping it costs nothing. A reader that
+        # wants a floor can now find one instead of finding nothing.
+        _bbox_all = [f for f in (_num(v) for v in (getattr(nat, "bbox_mm", None) or [])) if f]
+        if _bbox_all:
+            part["bbox_mm"] = list(_bbox_all)
+            part["bbox_mm_source"] = SOURCE_NAME
+            _ng_bb = part.setdefault("normalized_geometry", {})
+            if isinstance(_ng_bb, dict):
+                _ng_bb["bbox_mm"] = list(_bbox_all)
+
         # ── SECTION CUT LENGTH: the model knows what the drawing never printed ────
         #
         # A tube's cut length is the one number the section path cannot do without, and on a

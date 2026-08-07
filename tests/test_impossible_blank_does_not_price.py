@@ -160,3 +160,33 @@ def test_estimate_material_leaves_a_credible_blank_alone():
     assert out.get("blank_length_mm") == 1405
     assert out.get("blank_width_mm") == 143.04
     assert not part.get("review_flags")
+
+
+# ---------------------------------------------------------------------------
+# The rejection has to reach every copy, and the model has to keep its box
+# ---------------------------------------------------------------------------
+def test_the_rejected_blank_stops_blocking_the_job():
+    """Clearing blank_length_mm alone moved which copy got believed rather than removing
+    it: the invariant falls back to overall_length_mm, so 12392 went on blocking on a
+    16 x 3.7 the pricer had already refused."""
+    import invariants
+
+    part = _priced(overall_length_mm=16, overall_width_mm=3.7)[0]
+    assert invariants.check_a_blank_and_its_cut_path_can_both_be_true({"parts": [part]}) == []
+
+
+def test_the_bounding_box_floor_also_clears_the_block():
+    import invariants
+
+    part = _priced(overall_length_mm=16, overall_width_mm=3.7,
+                   bbox_mm=[130.0, 1435.0, 1.5])[0]
+    assert part["blank_length_mm"] == 1435.0
+    assert invariants.check_a_blank_and_its_cut_path_can_both_be_true({"parts": [part]}) == []
+
+
+def test_the_model_keeps_its_bounding_box_for_every_part():
+    """It was read for every part and kept for one thing — a tube's cut length. A part
+    whose blank turns out impossible then had nothing measured to fall back on."""
+    source = (SRC / "source_connectors" / "solidworks.py").read_text(encoding="utf-8")
+    assert 'part["bbox_mm"] = list(_bbox_all)' in source
+    assert 'part["bbox_mm_source"]' in source
