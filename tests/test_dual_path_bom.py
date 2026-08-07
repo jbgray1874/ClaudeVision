@@ -268,10 +268,22 @@ def test_the_vision_readers_own_name_still_answers():
 
 
 def test_the_vision_cache_is_not_pinned_to_one_machines_drive():
+    """The cache directory must be DERIVED from the install, not written down.
+
+    Asserting that the literal "C:\\ClaudeVision" is absent from the VALUE cannot tell
+    the two apart, because on the estimating machine the install genuinely is at
+    C:\\ClaudeVision and the correctly derived path contains that text. That test passed
+    everywhere except the one place it was meant to protect. So: check the value against
+    the derived path, and check the SOURCE for a written-down one separately.
+    """
+    import config
     import _bom_vision_reader
 
-    assert "C:\\ClaudeVision" not in _bom_vision_reader.DEFAULT_CACHE_DIR
-    assert _bom_vision_reader.DEFAULT_CACHE_DIR.endswith(os.path.join("cache", "vision_bom"))
+    assert _bom_vision_reader.DEFAULT_CACHE_DIR == str(config.BASE_DIR / "cache" / "vision_bom")
+
+    source = (SRC / "_bom_vision_reader.py").read_text(encoding="utf-8")
+    literal = "C:" + chr(92) + "ClaudeVision" + chr(92) + "cache"
+    assert literal not in source, "the cache path is written down rather than derived"
 
 
 # ---------------------------------------------------------------------------
