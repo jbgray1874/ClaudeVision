@@ -153,6 +153,7 @@ def _material_family(material: Optional[str]) -> str:
 def _inject_dims(part: Dict[str, Any], length_mm: float, width_mm: float,
                  basis: str, source_part: Optional[str], note: str) -> None:
     """Write inferred blank dims into normalized_geometry and tag the part."""
+    _SOURCE = "geometry_inference"   # rank 20 in source_precedence: provisional by construction
     ng = part.get("normalized_geometry")
     if not isinstance(ng, dict):
         ng = {}
@@ -164,6 +165,14 @@ def _inject_dims(part: Dict[str, Any], length_mm: float, width_mm: float,
     conf["blank_length_mm"] = 0.4
     ng["confidence"] = conf
     ng["_inferred"] = True
+    # SAY WHO WROTE IT. A blank with no recorded source is invisible to arbitration: the
+    # next pass has nothing to weigh itself against and overwrites it silently. It also
+    # left 12392 unable to answer where a 16 x 3.7 back panel came from, which is the
+    # question that mattered once the number was known to be wrong.
+    ng["blank_length_mm_source"] = _SOURCE
+    ng["blank_width_mm_source"] = _SOURCE
+    part.setdefault("blank_length_mm_source", _SOURCE)
+    part.setdefault("blank_width_mm_source", _SOURCE)
     part["normalized_geometry"] = ng
 
     part["geometry_inferred"] = True

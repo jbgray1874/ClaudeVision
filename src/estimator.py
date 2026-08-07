@@ -1697,6 +1697,100 @@ def _canonical_material_family(raw: Any) -> Any:
     return raw
 
 
+def _blank_that_could_have_been_cut(
+    part: Dict[str, Any],
+    blank_length: Optional[float],
+    blank_width: Optional[float],
+) -> Tuple[Optional[float], Optional[float]]:
+    """Refuse a blank the part's own cut path proves impossible, before it prices anything.
+
+    Job 12392's back panel reached this function as 16 x 3.7 mm carrying a 6,679 mm cut
+    path — six and a half metres of cutting inside a rectangle the size of a staple. It
+    priced at GBP 0.01 and the sheet claimed 5,865 of them out of one 2500 x 1250, on what
+    is almost certainly the largest part in the job.
+
+    The invariant caught it and blocked the quote. This function is why that was not
+    enough: the check ran after the workbook had already been written, so the number was
+    named as wrong and used anyway. A rule that only reports arrives too late to matter.
+
+    WHAT REPLACES IT. The modelled bounding box, when there is one that could have held
+    the cut. A bounding box UNDER-states a developed length — a folded part unfolds longer
+    than the box it folds into — so this is a floor and is stamped as one. A floor is worth
+    having only because the alternative here is wrong by a hundredfold, and an estimator
+    correcting a low number is in a better position than one who never saw the part.
+
+    WHEN NOTHING SURVIVES, NOTHING IS RETURNED. The part then carries no blank, prices no
+    material, and says so. Inventing a plausible-looking size is precisely the failure this
+    exists to end.
+    """
+    if not blank_length or not blank_width:
+        return blank_length, blank_width
+    try:
+        import blank_credibility as _bc
+    except ImportError:                                            # pragma: no cover
+        return blank_length, blank_width
+
+    cut = None
+    for holder in (part, part.get("normalized_geometry") or {},
+                   part.get("geometry_rollup") or {}):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("cut_length_mm", "dxf_measured_cut_length",
+                    "estimated_cut_length_mm", "total_cut_length_mm"):
+            value = _safe_float(holder.get(key))
+            if value:
+                cut = value
+                break
+        if cut:
+            break
+
+    verdict = _bc.assess(blank_length, blank_width, cut)
+    if not verdict["evaluated"] or verdict["credible"]:
+        return blank_length, blank_width
+
+    _pn = str(part.get("part_number") or "?")
+    _flags = part.setdefault("review_flags", [])
+
+    # The bounding box, from wherever the native read put it. Offered as a floor only.
+    _bbox = []
+    for holder in (part, part.get("normalized_geometry") or {},
+                   part.get("native_geometry") or {}):
+        if isinstance(holder, dict) and isinstance(holder.get("bbox_mm"), (list, tuple)):
+            _bbox = [_safe_float(v) for v in holder["bbox_mm"]]
+            _bbox = sorted([v for v in _bbox if v], reverse=True)
+            if len(_bbox) >= 2:
+                break
+    candidates = ()
+    if len(_bbox) >= 2:
+        candidates = (("solidworks bounding box (a floor — a folded part unfolds longer)",
+                       _bbox[0], _bbox[1]),)
+
+    better = _bc.better_blank_from(candidates, cut)
+    if better:
+        part["blank_length_mm"] = better["blank_length_mm"]
+        part["blank_width_mm"] = better["blank_width_mm"]
+        part["blank_length_mm_source"] = "bounding_box_floor"
+        part["blank_width_mm_source"] = "bounding_box_floor"
+        part["blank_replaced_reason"] = verdict["reason"]
+        if "blank_replaced_by_bounding_box_floor" not in _flags:
+            _flags.append("blank_replaced_by_bounding_box_floor")
+        print(f"   [blank] {_pn}: recorded blank rejected — {verdict['reason']}. "
+              f"Priced from the {better['source']} instead: "
+              f"{better['blank_length_mm']:g} x {better['blank_width_mm']:g} mm. "
+              f"UNDER-STATES a folded part — estimator to confirm.", flush=True)
+        return better["blank_length_mm"], better["blank_width_mm"]
+
+    part["blank_length_mm"] = None
+    part["blank_width_mm"] = None
+    part["blank_rejected_reason"] = verdict["reason"]
+    if "blank_impossible_no_replacement" not in _flags:
+        _flags.append("blank_impossible_no_replacement")
+    print(f"   [blank] {_pn}: recorded blank rejected — {verdict['reason']}. "
+          f"Nothing on this part could have held that cut, so it carries NO blank and "
+          f"NO material cost. ESTIMATOR TO SIZE.", flush=True)
+    return None, None
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     material = part.get("normalized_material") or _first(part.get("materials", []))
     material = _canonical_material_family(material)
@@ -1712,6 +1806,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
     blank_length, blank_width = estimate_blank_size(dims)
+    blank_length, blank_width = _blank_that_could_have_been_cut(
+        part, blank_length, blank_width)
 
     # FIX 2 (general): a weldment/assembly PARENT part is a roll-up of child parts that
     # are themselves in the BOM and individually material-costed. Giving the parent its

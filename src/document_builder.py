@@ -1265,6 +1265,10 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 if _own_l and _own_w:
                     part["blank_length_mm"] = _own_l
                     part["blank_width_mm"] = _own_w
+                    # The part's OWN measured overall dims. Stamped so arbitration can
+                    # weigh it, and so a wrong blank can be traced to whoever wrote it.
+                    part["blank_length_mm_source"] = "overall_dimensions"
+                    part["blank_width_mm_source"] = "overall_dimensions"
                     _blank_l, _blank_w = _own_l, _own_w
             if not _blank_l or not _blank_w:
                 _pt_dims = re.findall(
@@ -1275,14 +1279,21 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     [float(v) for v in _pt_dims if 50 <= float(v) <= 3000],
                     reverse=True,
                 )
+                # The two largest numbers anywhere in the document text. Context-blind by
+                # construction, which is why it is last and why saying so matters more here
+                # than anywhere else: a blank from this source is a guess wearing a
+                # measurement's clothes, and only the stamp tells them apart.
                 if len(_nums) >= 2 and not _blank_l:
                     part["blank_length_mm"] = _nums[0]
                     part["blank_width_mm"] = _nums[1]
                     part["overall_length_mm"] = _nums[0]
                     part["overall_width_mm"] = _nums[1]
+                    part["blank_length_mm_source"] = "document_text_largest_numbers"
+                    part["blank_width_mm_source"] = "document_text_largest_numbers"
                 elif len(_nums) == 1 and not _blank_l:
                     part["blank_length_mm"] = _nums[0]
                     part["overall_length_mm"] = _nums[0]
+                    part["blank_length_mm_source"] = "document_text_largest_numbers"
 
         if _is_non_metal_mat and not inherited_steel:
             _fab_ops = {
