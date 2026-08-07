@@ -1724,42 +1724,86 @@ def _blank_that_could_have_been_cut(
     exists to end.
     """
     if not blank_length or not blank_width:
+        # No blank to judge. Absence is another check's business, and reasoning about a
+        # value that is not there is how this function came to format None as a number.
         return blank_length, blank_width
     try:
         import blank_credibility as _bc
     except ImportError:                                            # pragma: no cover
         return blank_length, blank_width
 
+    _pn = str(part.get("part_number") or "?")
+    _flags = part.setdefault("review_flags", [])
+    # Kept before the clearing below, because the inference needs the overalls the
+    # drawing printed and the clearing removes them — the first version read them AFTER
+    # they had been nulled and silently inferred nothing.
+    _orig_l, _orig_w = blank_length, blank_width
+    _orig_overall_l = _safe_float(part.get("overall_length_mm"))
+    _orig_overall_w = _safe_float(part.get("overall_width_mm"))
+    _folded = bool(part.get("bend_count") or part.get("fold_count")) or any(
+        _op in (part.get("textual_operations") or []) for _op in ("folding", "bending"))
+    _bbox_raw = []
+    for _h in (part, part.get("normalized_geometry") or {}, part.get("native_geometry") or {}):
+        if isinstance(_h, dict) and isinstance(_h.get("bbox_mm"), (list, tuple)):
+            _bbox_raw = list(_h["bbox_mm"])
+            break
+
+    # ONLY A MEASURED CUT PATH IS EVIDENCE. estimated_cut_length_mm is the PDF page
+    # reader's sum of every vector on the sheet — borders, views, dimension lines, title
+    # block — at 72 points to the inch with no drawing scale. On 12392 that produced a
+    # "6,679 mm cut path" for a part with no flat at all, and comparing it to a blank
+    # scraped off the same sheet was two pieces of nonsense agreeing about nothing.
     cut = None
     for holder in (part, part.get("normalized_geometry") or {},
                    part.get("geometry_rollup") or {}):
         if not isinstance(holder, dict):
             continue
-        for key in ("cut_length_mm", "dxf_measured_cut_length",
-                    "estimated_cut_length_mm", "total_cut_length_mm"):
+        for key in ("cut_length_mm", "dxf_measured_cut_length", "total_cut_length_mm"):
             value = _safe_float(holder.get(key))
-            if value:
+            if not value:
+                continue
+            _src = (holder.get(f"{key}_source") or holder.get("geometry_source")
+                    or part.get("geometry_source"))
+            if _bc.cut_path_is_measured(_src):
                 cut = value
                 break
         if cut:
             break
 
-    verdict = _bc.assess(blank_length, blank_width, cut)
-    if not verdict["evaluated"] or verdict["credible"]:
-        return blank_length, blank_width
+    # A BLANK IS EVIDENCE ONLY IF SOMETHING MEASURED IT. Refusing the page-summed cut
+    # path above removed the only thing that had been catching a bad blank — the pair
+    # test needs both numbers, and one of them has just been correctly disqualified. So
+    # the blank is now judged on its own provenance, which is the policy's rule 3: a page
+    # vector sum or a dimension scraped off the sheet is never blank evidence.
+    #
+    # An UNSTAMPED blank is not assumed measured. 12392's 16 x 3.7 carried no source at
+    # all, which is precisely what made it impossible to argue with.
+    _blank_src = (part.get("blank_length_mm_source")
+                  or (part.get("normalized_geometry") or {}).get("blank_length_mm_source")
+                  or part.get("geometry_source"))
+    _blank_measured = _bc.cut_path_is_measured(_blank_src)
 
-    _pn = str(part.get("part_number") or "?")
-    _flags = part.setdefault("review_flags", [])
+    verdict = _bc.assess(blank_length, blank_width, cut)
+    if verdict["evaluated"] and not verdict["credible"]:
+        pass                       # measured or not, the pair is impossible
+    elif _blank_measured:
+        return blank_length, blank_width
+    elif _bc.plausible_as_a_sheet_part(blank_length, blank_width):
+        # Unstamped, but it could be the size of something we cut and nothing contradicts
+        # it. Keep it — refusing every unstamped blank stopped a 120 x 80 bracket costing
+        # at all, on a part whose cut path fits it perfectly. Flagged, not trusted.
+        if "blank_source_not_recorded" not in _flags:
+            _flags.append("blank_source_not_recorded")
+        return blank_length, blank_width
+    else:
+        verdict = {"evaluated": True, "credible": False,
+                   "reason": (f"a {blank_length:g} x {blank_width:g} mm blank is not the "
+                              f"size of a sheet fabrication and nothing measured it"
+                              + (f" (source: {_blank_src})" if _blank_src else ""))}
+
 
     # The bounding box, from wherever the native read put it. Offered as a floor only.
-    _bbox = []
-    for holder in (part, part.get("normalized_geometry") or {},
-                   part.get("native_geometry") or {}):
-        if isinstance(holder, dict) and isinstance(holder.get("bbox_mm"), (list, tuple)):
-            _bbox = [_safe_float(v) for v in holder["bbox_mm"]]
-            _bbox = sorted([v for v in _bbox if v], reverse=True)
-            if len(_bbox) >= 2:
-                break
+    _bbox = sorted([v for v in (_safe_float(b) for b in _bbox_raw) if v], reverse=True)
     candidates = ()
     if len(_bbox) >= 2:
         candidates = (("solidworks bounding box (a floor — a folded part unfolds longer)",
@@ -1790,12 +1834,42 @@ def _blank_that_could_have_been_cut(
                          "overall_length_mm", "overall_width_mm"):
                 if _holder.get(_key) is not None:
                     _holder[_key] = None
+    # PRIORITY 2: the overall size the DETAIL prints. Nothing measured a flat, so the
+    # drawing's own number is the best there is — and pricing from it beats leaving a
+    # material gap on a part we cut ourselves. Marked inferred, ranked below measured,
+    # and put on the estimator's list to confirm.
+    _inf = _bc.blank_from_drawing_overalls(
+        _orig_overall_l or _orig_l,
+        _orig_overall_w or _orig_w,
+        _safe_thickness_mm(part),
+        is_folded=bool(_folded),
+        developed_length_mm=part.get("developed_length_mm"),
+        bbox_mm=_bbox_raw,
+    )
+    if _inf.get("usable"):
+        part["blank_length_mm"] = _inf["blank_length_mm"]
+        part["blank_width_mm"] = _inf["blank_width_mm"]
+        part["blank_length_mm_source"] = _inf["source"]
+        part["blank_width_mm_source"] = _inf["source"]
+        part["geometry_source"] = _inf["source"]
+        part["blank_is_inferred"] = True
+        part["blank_inferred_reason"] = _inf["reason"]
+        if "blank_inferred_from_drawing_overalls" not in _flags:
+            _flags.append("blank_inferred_from_drawing_overalls")
+        print(f"   [blank] {_pn}: {_inf['reason']} "
+              f"({_inf['blank_length_mm']:g} x {_inf['blank_width_mm']:g} mm).", flush=True)
+        return _inf["blank_length_mm"], _inf["blank_width_mm"]
+
     part["blank_rejected_reason"] = verdict["reason"]
     if "blank_impossible_no_replacement" not in _flags:
         _flags.append("blank_impossible_no_replacement")
+    # Say why NOTHING could replace it, not merely that nothing did. "Estimator to size"
+    # is a task; "folded, and no flat pattern or developed length is stated" is the same
+    # task with the answer attached.
+    part["blank_needs_sizing_reason"] = _inf.get("reason") or verdict["reason"]
     print(f"   [blank] {_pn}: recorded blank rejected — {verdict['reason']}. "
-          f"Nothing on this part could have held that cut, so it carries NO blank and "
-          f"NO material cost. ESTIMATOR TO SIZE.", flush=True)
+          f"No usable replacement: {part['blank_needs_sizing_reason']}. "
+          f"NO blank and NO material cost — ESTIMATOR TO SIZE.", flush=True)
     return None, None
 
 

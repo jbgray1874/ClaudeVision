@@ -125,6 +125,13 @@ SOURCE_RANK: Dict[str, int] = {
     "mirror_of_measured": 75,
     "drawing_deterministic": 70,
     "title_block": 70,
+    # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
+    # off the drawing, not a guess — but it is one inference away from a measurement: an
+    # overall is the finished part, and only a flat one has the same extent as its blank.
+    # So it ranks below anything measured and above anything reasoned, and every consumer
+    # must go on showing it as inferred. A pack with no model is priced from this or not
+    # priced at all, which is why it exists; it is not a substitute for a flat pattern.
+    "pdf_overall_dims": 65,
     "bom_tree": 60,
     "override_rule": 50,
     "llm_extract": 40,

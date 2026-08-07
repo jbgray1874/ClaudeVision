@@ -89,6 +89,133 @@ def is_credible(length_mm: Any, width_mm: Any, cut_path_mm: Any) -> bool:
     return bool(assess(length_mm, width_mm, cut_path_mm)["credible"])
 
 
+# A cut path is only evidence when something MEASURED it. The PDF page reader sums every
+# vector on the sheet — borders, views, dimension lines, leader lines, title block — and
+# converts at 72 points to the inch with no drawing scale applied. On an A3 sheet that is
+# thousands of millimetres of "cut path" belonging to the drawing, not the part, and on
+# 12392 it was 6,679 mm against a part with no flat at all.
+MEASURING_CUT_PATH_SOURCES = frozenset({
+    "solidworks_api", "solidworks_flat_pattern", "dxf", "dxf_flat_pattern",
+    "native", "estimator_confirmed", "knowledge_base",
+    # A mirrored part's geometry is its twin's, measured. Rank 75 in source_precedence,
+    # above every drawing read. Omitting it would have refused the measured blank on
+    # every mirrored part in the system.
+    "mirror_of_measured",
+})
+
+# Where a page-summed total lives. Named so it can be refused by name rather than by
+# guessing from its value — a page sum and a real cut path are the same kind of number.
+PAGE_SUMMED_CUT_PATH_KEYS = ("estimated_cut_length_mm",)
+
+
+def cut_path_is_measured(source: Any) -> bool:
+    """True when a cut path came from something that measured the PART.
+
+    Deliberately a whitelist. A new reader that does not say what it is gets treated as
+    unmeasured, which costs an unfired check; the reverse costs a priced wrong number.
+    """
+    return str(source or "").strip().lower() in MEASURING_CUT_PATH_SOURCES
+
+
+# The size range a sheet fabrication's overall dimension can credibly take. Below this a
+# number is a hole pitch, a radius, a gauge or a scale bar; above it, nothing SDI cuts.
+MIN_SHEET_PART_MM = 10.0
+MAX_SHEET_PART_MM = 4000.0
+
+
+def plausible_as_a_sheet_part(length_mm: Any, width_mm: Any) -> bool:
+    """Could these two numbers be the overall size of something we cut?
+
+    This is what separates a blank nobody stamped but which is probably right — 120 x 80
+    off a DXF merge that never recorded its source — from one that is plainly a feature
+    dimension read as a part, like 12392's 16 x 3.7.
+
+    Provenance alone could not make that distinction. Refusing every unstamped blank
+    stopped a 120 x 80 bracket costing at all, on a part whose cut path fits it perfectly;
+    accepting every unstamped blank is how the back panel priced at a penny.
+    """
+    length, width = _num(length_mm), _num(width_mm)
+    if not length or not width:
+        return False
+    return all(MIN_SHEET_PART_MM <= v <= MAX_SHEET_PART_MM for v in (length, width))
+
+
+def blank_from_drawing_overalls(
+    overall_length_mm: Any,
+    overall_width_mm: Any,
+    thickness_mm: Any,
+    *,
+    is_folded: bool = False,
+    developed_length_mm: Any = None,
+    bbox_mm: Any = None,
+) -> Dict[str, Any]:
+    """The blank a detail's printed overall size implies, or a refusal with its reason.
+
+    Priority 2 of the sizing policy: when nothing measured a flat, the drawing's own
+    overall size is a real number off a real detail, and pricing from it beats leaving a
+    material gap. It is an INFERENCE — an overall describes the finished part — so it is
+    returned marked, ranked below anything measured, and must stay visible as inferred
+    everywhere it lands.
+
+    THE GUARDRAILS ARE THE WHOLE POINT. Without them this becomes the failure it replaces:
+    12392's back panel was "sized" at 16 x 3.7 by taking small plausible numbers off the
+    sheet, and priced at a penny.
+
+      - BOTH dimensions, or nothing. One number is not a blank.
+      - THICKNESS REQUIRED. A sheet part with no thickness cannot be costed anyway, and
+        demanding it rejects text scraped off a page that was never about this part.
+      - PLAUSIBLE AS A SHEET PART. A dimension under 10mm or over 4m is not the overall
+        size of a fabrication; it is a hole pitch, a radius, or a scale bar.
+      - A FOLDED PART'S OVERALL IS NOT ITS BLANK. It unfolds longer. Refused unless a
+        developed length is stated, or the bounding box proves the part never leaves the
+        plane — a box whose smallest dimension is the material thickness has no fold out
+        of plane, whatever the route says.
+    """
+    length, width = _num(overall_length_mm), _num(overall_width_mm)
+    thickness = _num(thickness_mm)
+
+    def _no(reason: str) -> Dict[str, Any]:
+        return {"usable": False, "reason": reason, "blank_length_mm": None,
+                "blank_width_mm": None, "source": None}
+
+    if not length or not width:
+        return _no("the detail does not print both an overall length and an overall width")
+    if not thickness:
+        return _no("no material thickness is stated, so an overall size cannot become a blank")
+    for value, name in ((length, "length"), (width, "width")):
+        if value < 10.0 or value > 4000.0:
+            return _no(f"an overall {name} of {value:g} mm is not the size of a sheet "
+                       f"fabrication — this is a feature dimension, not the part")
+
+    if is_folded:
+        developed = _num(developed_length_mm)
+        if developed:
+            return {"usable": True, "blank_length_mm": developed,
+                    "blank_width_mm": min(length, width),
+                    "source": "pdf_overall_dims",
+                    "reason": (f"folded part sized from the stated developed length "
+                               f"{developed:g} mm — inferred from drawing, confirm before "
+                               f"a firm quote")}
+        # A box whose smallest side IS the material has nothing folded out of plane.
+        _box = sorted([v for v in (_num(b) for b in (bbox_mm or [])) if v])
+        if len(_box) >= 3 and abs(_box[0] - thickness) <= max(0.3, thickness * 0.25):
+            return {"usable": True, "blank_length_mm": max(length, width),
+                    "blank_width_mm": min(length, width),
+                    "source": "pdf_overall_dims",
+                    "reason": (f"the route names folding, but the model's envelope is "
+                               f"{_box[0]:g} mm deep — the material thickness — so nothing "
+                               f"leaves the plane and the overall IS the blank. Inferred "
+                               f"from drawing, confirm before a firm quote")}
+        return _no("the part is folded and no developed length or flat pattern is stated — "
+                   "an overall size understates a folded blank, so this needs a flat/DXF")
+
+    return {"usable": True, "blank_length_mm": max(length, width),
+            "blank_width_mm": min(length, width), "source": "pdf_overall_dims",
+            "reason": (f"flat part sized from the detail's printed overall "
+                       f"{max(length, width):g} x {min(length, width):g} x {thickness:g} mm "
+                       f"— inferred from drawing, confirm before a firm quote")}
+
+
 def better_blank_from(candidates: Tuple[Tuple[str, Any, Any], ...],
                       cut_path_mm: Any) -> Optional[Dict[str, Any]]:
     """The first candidate blank that could hold this cut path, with where it came from.
@@ -102,9 +229,14 @@ def better_blank_from(candidates: Tuple[Tuple[str, Any, Any], ...],
     can stand behind, and saying so is the only honest answer left.
     """
     for name, length, width in candidates or ():
-        if is_credible(length, width, cut_path_mm) and _num(length) and _num(width):
-            verdict = assess(length, width, cut_path_mm)
-            if verdict["evaluated"]:
-                return {"source": name, "blank_length_mm": _num(length),
-                        "blank_width_mm": _num(width), "assessment": verdict}
+        if not (_num(length) and _num(width)):
+            continue
+        if is_credible(length, width, cut_path_mm):
+            # NOT conditional on the pair having been evaluated. Requiring a verdict meant
+            # a measured bounding box was refused whenever there was no cut path to test
+            # it against — which is exactly the case it exists for, since a part with no
+            # measured flat usually has no measured cut path either.
+            return {"source": name, "blank_length_mm": _num(length),
+                    "blank_width_mm": _num(width),
+                    "assessment": assess(length, width, cut_path_mm)}
     return None
