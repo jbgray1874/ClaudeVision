@@ -91,8 +91,13 @@ def test_a_two_segment_number_is_read():
 
 def test_a_spaced_number_is_read_as_one_code():
     """CAD title blocks print "1282 - GA" with real spaces. pdfplumber returns three
-    words and none of them is a drawing number on its own."""
-    got = wr._title_block_dwg_no(_sheet([("1282", 600), ("-", 640), ("GA", 660)]))
+    words and none of them is a drawing number on its own.
+
+    The x positions are spaced as REAL spaces — about two points at this text height.
+    They were originally 8 and 20 points apart, which is a cell border rather than a
+    space, and the test only passed because the reader would join across any distance
+    at all. That is the same permissiveness that read a whole description as a code."""
+    got = wr._title_block_dwg_no(_sheet([("1282", 600), ("-", 634), ("GA", 644)]))
     assert got == "1282-GA"
 
 
@@ -104,7 +109,7 @@ def test_the_longest_run_wins_over_its_own_prefix():
     """"12392-02" and "12392-02-GA" are both drawing-number shaped. The specific one
     is this sheet's; the prefix is its parent's, and taking it would silently reparent
     every row on the page."""
-    got = wr._title_block_dwg_no(_sheet([("12392-02", 600), ("-", 664), ("GA", 684)]))
+    got = wr._title_block_dwg_no(_sheet([("12392-02", 600), ("-", 664), ("GA", 674)]))
     assert got == "12392-02-GA"
 
 
@@ -164,3 +169,63 @@ def test_the_quantity_synonyms_have_one_home():
     assert "NO OFF" in wr._HDR_QTY
     merge_source = (SRC / "merge_boms.py").read_text(encoding="utf-8")
     assert "NO OFF" not in merge_source
+
+
+# ---------------------------------------------------------------------------
+# The 12392 title block, as it really is
+# ---------------------------------------------------------------------------
+# Taken from the run: page 1 of "12392-02-GA 1-wide GC Panel_revA.pdf" produced
+#   '1-WIDEGIFTCARDGATEPOSTPANELTESCOIMS1-WIDEGIFTCARDGATEPOST12392-02-GAA'
+# as its parent. The description, the customer, the description again, the real drawing
+# number and the revision letter, run together — and preferred because it was LONGEST.
+def _title_row(tokens, top=780.0, x=40.0, gap=8.0):
+    """Words spaced like separate title-block cells (a wide gap between each)."""
+    out = []
+    for tok in tokens:
+        out.append(_w(tok, x, top))
+        x += 8.0 * len(tok) + gap
+    return out
+
+
+_REAL_12392_TITLE_ROW = [
+    "1-WIDE", "GIFT", "CARD", "GATE", "POST", "PANEL", "TESCO", "IMS",
+    "1-WIDE", "GIFT", "CARD", "GATE", "POST", "12392-02-GA", "A",
+]
+
+
+def test_the_real_12392_title_block_yields_the_drawing_number():
+    words = _title_row(_REAL_12392_TITLE_ROW)
+    assert wr._title_block_dwg_no(words) == "12392-02-GA"
+
+
+def test_a_description_cannot_be_read_as_a_drawing_number():
+    """"1-WIDE GIFT CARD GATE POST" joined up opens with a digit and carries hyphens.
+    A job number is not one digit long, and that is what refuses it."""
+    from part_code_conventions import looks_like_a_drawing_number as ok
+
+    assert ok("1-WIDEGIFTCARDGATEPOSTPANEL") is False
+    assert ok("1-WIDE") is False
+    assert ok("2-OFF") is False
+    assert ok("4-WAY") is False
+
+
+def test_the_revision_letter_is_not_absorbed_into_the_code():
+    """"12392-02-GA" and "A" sit in adjacent title-block cells. Joined they make
+    "12392-02-GAA", which is drawing-number shaped and is not this drawing."""
+    words = _title_row(["12392-02-GA", "A"])
+    assert wr._title_block_dwg_no(words) == "12392-02-GA"
+
+
+def test_a_spaced_code_still_joins_across_real_spaces():
+    """The exception joining exists for: "1282 - GA" printed with actual spaces, which
+    are a couple of points wide rather than a cell border."""
+    words = [_w("1282", 600, 780), _w("-", 626, 780), _w("GA", 632, 780)]
+    assert wr._title_block_dwg_no(words) == "1282-GA"
+
+
+def test_a_bom_row_code_above_the_title_block_does_not_win():
+    """Codes quoted higher up the sheet are the BOM's own rows. The title block is at
+    the bottom, so the lowest match is this drawing."""
+    words = [_w("12392-02-01M", 520, 520), _w("12392-02-17G", 520, 560)]
+    words += _title_row(["12392-02-GA", "A"])
+    assert wr._title_block_dwg_no(words) == "12392-02-GA"

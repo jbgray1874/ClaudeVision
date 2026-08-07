@@ -90,7 +90,17 @@ def material_suffix(identity: str) -> str:
 # produced arrived with no parent. A row with no parent cannot join a hierarchy, and a
 # hierarchy assembled from rows that could not say who owned them is the failure that
 # has been read as "the family tree is broken" on job after job.
-_DRAWING_NUMBER_SHAPE = re.compile(r"^[0-9][0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
+# THE LEADING RUN IS A JOB NUMBER, AND JOB NUMBERS ARE NOT ONE DIGIT LONG.
+# The first version of this asked only for a leading digit. On 12392-02 the title block's
+# description row reads "1-WIDE GIFT CARD GATE POST PANEL TESCO IMS ...", and joined up it
+# is "1-WIDEGIFTCARDGATEPOSTPANEL..." — which opens with a digit, carries a hyphen, and is
+# otherwise letters. It passed. The description won the contest the shape test exists to
+# stop it winning, and it beat the real 12392-02-GA sitting at the end of the same row.
+#
+# Three digits minimum. Every job number here is four or five (1282, 2085, 3886, 11350,
+# 12120, 12392), so this costs nothing real and refuses "1-WIDE", "2-OFF", "4-WAY" and
+# every other dimension or count that opens a description.
+_DRAWING_NUMBER_SHAPE = re.compile(r"^[0-9]{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+$", re.IGNORECASE)
 
 
 def looks_like_a_drawing_number(text: str) -> bool:

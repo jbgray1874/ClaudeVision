@@ -252,22 +252,67 @@ def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
     _top = min(w["top"] for w in words)
     _cutoff = _top + (_bottom - _top) * 0.6  # the title block band
 
+    band = _cluster_rows([w for w in words if w["top"] >= _cutoff])
+
+    # WHAT WENT WRONG, AND WHAT ACTUALLY FIXES IT.
+    #
+    # Joining every adjacent word and preferring the longest match read a whole
+    # title-block row as one token. On 12392-02 that produced
+    #   "1-WIDEGIFTCARDGATEPOSTPANELTESCOIMS1-WIDEGIFTCARDGATEPOST12392-02-GAA"
+    # — description, customer, description again, the real drawing number and the revision
+    # letter, run together and preferred precisely BECAUSE it was longest. Every BOM row on
+    # the job then had no parent it could name.
+    #
+    # The fix is the GAP, not the preference. Those words sit in separate title-block
+    # cells; nothing but a reader willing to join across any distance would ever have run
+    # them together. Preferring a single word instead was the obvious repair and the wrong
+    # one: on a title block printing "12392-02 - GA" the single word "12392-02" is itself a
+    # perfectly good drawing number, and it is the parent of this sheet rather than this
+    # sheet — taking it silently reparents every row on the page one level up.
+    #
+    # So: every single word and every join across a real space, and the longest of those
+    # lowest on the page wins.
+    candidates: List[Tuple[float, str]] = [
+        (w["top"], w["text"]) for row in band for w in row]
+    joined: List[Tuple[float, str]] = []
+    for row in band:
+        for start in range(len(row)):
+            text = row[start]["text"]
+            right_edge = row[start]["x1"]
+            for nxt in row[start + 1:]:
+                if nxt["x0"] - right_edge > _max_join_gap(nxt):
+                    break  # a cell border, not a space
+                text += nxt["text"]
+                right_edge = nxt["x1"]
+                joined.append((row[start]["top"], text))
+    return _lowest_drawing_number(candidates + joined)
+
+
+# A real space between words is a fraction of the text's own height; the distance across
+# a title-block cell border is far more. Joining only across the former is what keeps a
+# drawing number from absorbing the revision letter printed in the box beside it.
+# Measured against the text rather than fixed in points, because a title block sets its
+# description in 8pt and its drawing number in 14, and one absolute threshold cannot be
+# right for both.
+_JOIN_GAP_AS_FRACTION_OF_HEIGHT = 0.6
+
+
+def _max_join_gap(word: dict) -> float:
+    height = float(word.get("bottom", 0.0)) - float(word.get("top", 0.0))
+    return max(height, 6.0) * _JOIN_GAP_AS_FRACTION_OF_HEIGHT
+
+
+def _lowest_drawing_number(candidates: List[Tuple[float, str]]) -> Optional[str]:
+    """The drawing-number-shaped candidate lowest on the page — a title block sits at the
+    bottom, and codes quoted higher up are the BOM's rows or a cross-reference to another
+    sheet. Among candidates on one line, the longer is the more specific."""
     best: Optional[Tuple[float, str]] = None
-    for row in _cluster_rows([w for w in words if w["top"] >= _cutoff]):
-        row = sorted(row, key=lambda w: w["x0"])
-        # Longest run of adjacent words first: "1282 - GA" must beat "1282" alone.
-        for length in range(len(row), 0, -1):
-            for start in range(0, len(row) - length + 1):
-                run = row[start:start + length]
-                joined = "".join(w["text"] for w in run).strip()
-                if not part_code_conventions.looks_like_a_drawing_number(joined):
-                    continue
-                # Lowest on the page wins; among equals, the longer code is the more
-                # specific one ("1282-GA" over "1282-G" from a truncated run).
-                key = (run[0]["top"], len(joined))
-                if best is None or key > (best[0], len(best[1])):
-                    best = (run[0]["top"], joined.upper())
-                break
+    for top, text in candidates:
+        code = str(text or "").strip()
+        if not part_code_conventions.looks_like_a_drawing_number(code):
+            continue
+        if best is None or (top, len(code)) > (best[0], len(best[1])):
+            best = (top, code.upper())
     return best[1] if best else None
 
 
