@@ -398,6 +398,32 @@ def get_reference(get_connection) -> BoughtInReference:
 # ---------------------------------------------------------------------------
 # The layer-2 prose recogniser.
 # ---------------------------------------------------------------------------
+def _phrase_tokens(text: Any) -> List[str]:
+    """The alphanumeric runs in a piece of text, upper-cased.
+
+    "M6 BOLT, BZP" and "BOLT(BZP)" and "BOLT - BZP" all reduce to the same words, which is
+    what makes a phrase findable on a sheet that punctuates it differently from the way the
+    recogniser read it.
+    """
+    return re.findall(r"[A-Z0-9]+", str(text or "").upper())
+
+
+def _tokens_run_in(needle: List[str], haystack: List[str]) -> bool:
+    """True when `needle` appears in `haystack` as a consecutive run, in order.
+
+    Consecutive and in order on purpose. A page that merely contains both words somewhere
+    is not a page that names the part, and matching that loosely would hand an owner to a
+    sheet that never mentioned it — which is worse than leaving it unowned.
+    """
+    if not needle or len(needle) > len(haystack):
+        return False
+    first = needle[0]
+    for i in range(len(haystack) - len(needle) + 1):
+        if haystack[i] == first and haystack[i:i + len(needle)] == needle:
+            return True
+    return False
+
+
 def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optional[int]:
     """The page number whose own text contains this phrase, or None.
 
@@ -414,8 +440,17 @@ def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optio
     """
     if not phrase or not pages:
         return None
-    needle = " ".join(str(phrase).upper().split())
-    if not needle:
+    # WORDS, NOT CHARACTERS. Collapsing whitespace fixed the line-wrap case and left every
+    # punctuated one failing: a note reads "M6 BOLT, BZP" or "BOLT (BZP)" or "BOLT - BZP"
+    # as readily as "BOLT BZP", and a drawing note is full of punctuation. On 12392 the
+    # button-head screw found its page and the bolt did not, which is the same phrase
+    # matcher succeeding and failing on the same sheet for want of a comma.
+    #
+    # Alphanumeric runs, matched CONSECUTIVELY AND IN ORDER. That is deliberately tight:
+    # it accepts any separator between the words and still refuses "BZP BOLT", which is a
+    # different phrase, and refuses a page that merely contains both words apart.
+    _needle = _phrase_tokens(phrase)
+    if not _needle:
         return None
     for page in pages:
         if not isinstance(page, dict):
@@ -428,7 +463,7 @@ def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optio
             value = page.get(key)
             if value:
                 blob.append(str(value))
-        if needle in " ".join(" ".join(blob).upper().split()):
+        if _tokens_run_in(_needle, _phrase_tokens(" ".join(blob))):
             number = page.get("page_number")
             try:
                 return int(number)

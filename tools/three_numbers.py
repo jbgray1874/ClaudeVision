@@ -86,7 +86,12 @@ def main() -> int:
     else:
         print("   no uncorroborated-route finding (either all corroborated, or the check "
               "found no canonical route decisions)")
-    decisions = ((doc.get("canonical_route") or {}).get("decisions") or [])
+    # The key the compiler writes. Reading doc["canonical_route"] reported "required
+    # operations: 0" on a job with twelve of them — the instrument lying in the same way
+    # the check it was measuring did, and for the same reason.
+    _shadow = ((doc.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or doc.get("canonical_route_shadow") or {})
+    decisions = (_shadow.get("decisions") or [])
     req = [d for d in decisions if isinstance(d, dict) and d.get("status") == "required"]
     quoted = [d for d in req if str(d.get("evidence") or "").strip()]
     print(f"   required operations: {len(req)}   carrying an evidence quote: {len(quoted)}")

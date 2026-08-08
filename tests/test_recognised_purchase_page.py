@@ -64,3 +64,55 @@ def test_no_pages_and_no_phrase_are_answered_honestly():
 
 def test_a_page_with_no_number_does_not_pretend_to_have_one():
     assert bir._page_that_says("BOLT BZP", [{"text": "USE BOLT BZP"}]) is None
+
+
+# ---------------------------------------------------------------------------
+# Punctuation is not identity either
+# ---------------------------------------------------------------------------
+# Collapsing whitespace fixed the line-wrap case and left every punctuated one failing.
+# On 12392 the button-head screw found its page and the bolt did not — the same matcher
+# succeeding and failing on the same sheet, for want of a comma.
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("note", [
+    "M6 BOLT, BZP",
+    "BOLT (BZP)",
+    "BOLT - BZP",
+    "BOLT/BZP",
+    "M6 BOLT\nBZP",
+    "FIX WITH M6 BOLT  BZP AND WASHER",
+])
+def test_any_separator_between_the_words_still_finds_the_page(note):
+    assert bir._page_that_says("BOLT BZP", [{"page_number": 1, "text": note}]) == 1
+
+
+@pytest.mark.parametrize("note", [
+    "BZP BOLT",                    # a different phrase, not a spelling of this one
+    "BOLT M6 WASHER BZP",          # both words present, but not this phrase
+    "SCREW AND WASHER ONLY",       # absent
+    "BOLTBZP",                     # one token, not two
+])
+def test_the_match_stays_tight(note):
+    """Consecutive and in order on purpose. A page that merely contains both words is not
+    a page that names the part, and matching that loosely hands an owner to a sheet that
+    never mentioned it — worse than leaving it unowned."""
+    assert bir._page_that_says("BOLT BZP", [{"page_number": 1, "text": note}]) is None
+
+
+def test_the_phrase_itself_may_be_punctuated():
+    """The recogniser reads the phrase off the note too, so it can arrive punctuated."""
+    assert bir._page_that_says("BOLT, BZP", [{"page_number": 4, "text": "M6 BOLT BZP"}]) == 4
+
+
+def test_tokenising_ignores_case_and_separators_consistently():
+    assert bir._phrase_tokens("M6 Bolt, BZP") == ["M6", "BOLT", "BZP"]
+    assert bir._phrase_tokens("") == []
+    assert bir._phrase_tokens(None) == []
+
+
+def test_a_run_must_be_consecutive():
+    assert bir._tokens_run_in(["BOLT", "BZP"], ["M6", "BOLT", "BZP"]) is True
+    assert bir._tokens_run_in(["BOLT", "BZP"], ["BOLT", "M6", "BZP"]) is False
+    assert bir._tokens_run_in([], ["BOLT"]) is False
+    assert bir._tokens_run_in(["BOLT", "BZP"], ["BOLT"]) is False
