@@ -75,6 +75,44 @@ def main() -> int:
     for f in _disc[:3]:
         print(f"      {str(f.get('message') or '')[:150]}")
 
+    # WHY AN EDGE DID NOT FORM. A page on the part is necessary and not sufficient: the
+    # page must be an ASSEMBLY page of a drawing the job already knows, and the record the
+    # COMPILER sees must still carry the page — which is not always the record the reader
+    # wrote. Printing all three turns "still disconnected" into one of three answers.
+    print("   assembly pages that can own (page -> drawing):")
+    _owners = {}
+    for _pg in (doc.get("pages") or []):
+        if not isinstance(_pg, dict):
+            continue
+        _role = ((_pg.get("page_role") or {}) if isinstance(_pg.get("page_role"), dict)
+                 else {}).get("primary_role")
+        _num = _pg.get("page_number")
+        if str(_role or "").strip().lower() == "assembly" and _num is not None:
+            _owners[_num] = "assembly"
+        print(f"      page {_num}: role={str(_role or '?')!r}")
+    if not _owners:
+        print("      NONE — no page is classified as an assembly page, so no page can own")
+
+    _unowned = set()
+    for f in _disc:
+        _m = str(f.get("message") or "")
+        for _p in parts:
+            _c = str((_p or {}).get("part_number") or "")
+            if _c and _c in _m:
+                _unowned.add(_c)
+    _mw = ((doc.get("manufacturing_writeup") or {}).get("parts") or [])
+    _pe = ((doc.get("estimate_summary") or {}).get("part_estimates") or [])
+    print("   does the record the COMPILER sees still carry the page?")
+    for _code in sorted(_unowned):
+        for _label, _pool in (("manufacturing_writeup", _mw), ("part_estimates", _pe)):
+            _hit = next((r for r in _pool if isinstance(r, dict)
+                         and str(r.get("part_number") or "") == _code), None)
+            if _hit is None:
+                print(f"      {_code} in {_label}: ABSENT")
+            else:
+                print(f"      {_code} in {_label}: source_page={_hit.get('source_page')!r} "
+                      f"pages={_hit.get('pages')!r}")
+
     # ── 2. CORROBORATION ────────────────────────────────────────────────────────────
     print("\n2. CORROBORATION")
     _unc = [f for f in findings if f.get("code") == "route_operation_not_corroborated"]
