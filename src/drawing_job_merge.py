@@ -122,6 +122,34 @@ def dxf_declares_bend_layer(path: Path) -> Optional[bool]:
         return None
 
 
+def dxf_can_rule_out_folding(path: Path, flat_pattern_detected: Any,
+                             resolved_bends: Any) -> bool:
+    """May this DXF's zero bend count be used to REMOVE a fold the drawing states?
+
+    Only when all three hold: the export is a flat pattern, it resolved zero bends, and it
+    DECLARES a bend layer — so the zero is a measurement rather than a silence.
+
+    This exists as a function because the same rule was written out twice and corrected
+    once. The guarded copy is the one the 11350 fix touched; a second copy further down the
+    same function stripped `folding` on `flat_pattern_detected and bends == 0` with no
+    layer check at all, and stayed that way because the test drove the first copy and never
+    reached the second. It only surfaced when a polyline-profiled flat started being read
+    at all — geometry arriving where there had been none is what let the unguarded branch
+    finally fire.
+
+    A private copy of a rule that exists elsewhere is how two readers of one job come to
+    disagree about what it says.
+    """
+    if not flat_pattern_detected:
+        return False
+    try:
+        if int(resolved_bends or 0) != 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    return bool(dxf_declares_bend_layer(path))
+
+
 def drawing_export_reason(path: Path) -> Optional[str]:
     """Why this DXF is a DRAWING of a part rather than the part's flat pattern — or None.
 
@@ -406,7 +434,12 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         # Strip it here — this branch runs for every genuine flat-pattern part and
         # is upstream of (and not gated by) the conditional re-infer block. The
         # downstream routing reads this exact list to emit the Fold op.
-        if int(flat.get("bend_count") or 0) == 0:
+        #
+        # THROUGH THE SHARED RULE. The THIRD spelling of this test, and the one that
+        # actually fires first: `bend_count == 0` alone reads a cut-only export's silence
+        # about bends as a measured zero. The 11350 fix reached one of the three copies,
+        # and because this one runs upstream of that one it was the copy doing the damage.
+        if dxf_can_rule_out_folding(dxf_path, True, flat.get("bend_count")):
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
@@ -621,13 +654,16 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         # export carries no bend layer, and reading its silence as "does not fold" ruled the
         # fold off 11350's left arm — a part the drawing shows formed. Where the layer is
         # missing the question is left OPEN, so the drawing's own reading still decides.
-        _declares_bends = dxf_declares_bend_layer(dxf_path)
-        if part.get("flat_pattern_detected") and _resolved_bends == 0 and not _declares_bends:
+        # ONE COMPUTATION, USED BOTH WAYS. The flag below and the strip further down are
+        # the two halves of the same question, and asking it twice in two spellings is how
+        # this rule came to have three copies and one correction.
+        _can_rule_out = dxf_can_rule_out_folding(
+            dxf_path, part.get("flat_pattern_detected"), _resolved_bends)
+        if part.get("flat_pattern_detected") and _resolved_bends == 0 and not _can_rule_out:
             part.setdefault("review_flags", []).append(
                 f"DXF {dxf_path.name} carries no bend layer, so it cannot say whether this "
                 f"part folds. Folding left as the drawing states it — confirm.")
-        if (part.get("flat_pattern_detected") and _resolved_bends == 0
-                and _declares_bends):
+        if _can_rule_out:
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
                 if isinstance(_ops, list) and "folding" in _ops:
@@ -684,7 +720,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                     # The merge above only ADDs, so a stale 'folding' would survive;
                     # strip it here. process_router reads this exact list to emit the
                     # Fold op, so removing it here removes the phantom fold.
-                    if part.get("flat_pattern_detected") and bends == 0:
+                    #
+                    # THROUGH THE SHARED RULE. This tested `flat_pattern_detected and
+                    # bends == 0` directly, which is the pre-11350 spelling: it reads a
+                    # cut-only export's SILENCE about bends as a measured zero and takes
+                    # the fold off a part the drawing shows formed. The guard was added to
+                    # the copy above and never to this one.
+                    if dxf_can_rule_out_folding(dxf_path,
+                                                part.get("flat_pattern_detected"), bends):
                         merged = [op for op in merged if op != "folding"]
                     part["operations"] = merged
                     part["textual_operations"] = merged

@@ -980,6 +980,25 @@ def _get_layer_entities(
         if lay in wanted and (entity_types is None or e.dxftype() in entity_types):
             result.append(e)
 
+    # POLYLINES ARE EXPLODED TOO, AND FOR THE SAME REASON AS INSERTS. The outline path
+    # asks this function for {"LINE"} and {"ARC"} and nothing else, so a profile drawn as
+    # one closed LWPOLYLINE — which is what Inventor, Solid Edge, most nesting software and
+    # nearly every customer-supplied DXF write — contributed no segments at all. Measured:
+    # a 200 x 100 plate with one hole came back blank 0.0 x 0.0, cut length 0, and STILL
+    # reported one hole, because the hole counter walks polylines and the outline reader
+    # does not. Two readers of one file disagreeing about what is in it.
+    #
+    # SolidWorks writes LINE + ARC, which is why SDI's own packs never showed this and a
+    # customer's DXF would have.
+    #
+    # virtual_entities() is the right conversion rather than get_points(): a LWPOLYLINE
+    # carries BULGE values for its arc segments, and reading the vertices alone turns every
+    # filleted corner into a chord — a quietly short cut length and a quietly small area on
+    # a part that looked like it read fine.
+    _EXPLODES_TO_SEGMENTS = {"LWPOLYLINE", "POLYLINE"}
+    _wants_segments = entity_types is None or bool(
+        {"LINE", "ARC"} & set(entity_types))
+
     def _walk(entities: Any, depth: int = 0, inherited: Optional[str] = None) -> None:
         for e in entities:
             if e.dxftype() == "INSERT" and depth < 5:
@@ -994,6 +1013,21 @@ def _get_layer_entities(
                     _own = _entity_layer(e)
                     _walk(kids, depth + 1,
                           inherited if _own in ('', '0') else (_own or inherited))
+                    continue
+            if (_wants_segments and e.dxftype() in _EXPLODES_TO_SEGMENTS
+                    and (entity_types is None or e.dxftype() not in entity_types)):
+                # Only where the caller did NOT ask for the polyline itself — the hole and
+                # contour counters do ask, and must keep receiving it whole.
+                _lay = _entity_layer(e)
+                if inherited and _lay in ("", "0"):
+                    _lay = inherited
+                if _lay in wanted:
+                    try:
+                        for _seg in e.virtual_entities():
+                            if entity_types is None or _seg.dxftype() in entity_types:
+                                result.append(_seg)
+                    except Exception:
+                        pass
                     continue
             _consider(e, inherited)
 
@@ -1486,6 +1520,36 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
     outline  = _exact_perimeter_and_area(cut_lines, cut_arcs, scale, cut_circs)
     notches  = _detect_corner_notches(cut_lines, scale)
 
+    # ── A ZERO THAT SAYS WHY ──────────────────────────────────────────────────
+    # The outline reader understands LINE, ARC and CIRCLE, plus the polylines exploded
+    # into them. Anything else on a cut layer — a SPLINE profile, an ELLIPSE, a HATCH
+    # boundary — produces a 0 x 0 blank and a cut length of zero, and said nothing at all:
+    # measured on a spline-outlined plate, which reported blank 0.0 x 0.0 AND one hole,
+    # because the hole counter reads entity types this does not.
+    #
+    # Adding spline support would fix one type and leave the next silent. Naming what was
+    # on the layer turns every unsupported type, including ones not written yet, into a
+    # stated refusal — and a refusal that names the entity is one somebody can act on,
+    # where a zero is indistinguishable from an empty file.
+    _unread_outline: List[str] = []
+    if not (outline.get("blank_length_mm") or 0):
+        _seen = {}
+        for _e, _lay in _all_entities_with_layers(msp):
+            if (_lay or "").upper() in {l.upper() for l in CUT_LAYERS}:
+                _seen[_e.dxftype()] = _seen.get(_e.dxftype(), 0) + 1
+        _unhandled = {t: n for t, n in _seen.items()
+                      if t not in {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE"}}
+        if _unhandled:
+            _unread_outline = [
+                f"the cut layer holds {n} {t} entit{'y' if n == 1 else 'ies'} that this "
+                f"reader cannot measure — the blank and cut length are ZERO because of "
+                f"that, not because the file is empty"
+                for t, n in sorted(_unhandled.items())]
+        elif _seen:
+            _unread_outline = [
+                f"the cut layer holds geometry ({', '.join(sorted(_seen))}) but no outline "
+                f"could be measured from it — treat the zero blank as unread, not as small"]
+
     # Holes — circles on CUT_LAYERS or all layers (excluding tiny features)
     # Circles inside a block are geometry too. msp.query("CIRCLE") never enters an INSERT,
     # so on an export that blocks the profile every hole vanished: 06M carries eight circles
@@ -1575,6 +1639,8 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         "scale_to_mm":          scale,
         "flat_pattern_detected": is_flat,
         "geometry_score":       geometry_score,
+        # Why a zero blank is zero. Empty on every file this reader measured.
+        "outline_unread_reasons": _unread_outline,
 
         # Filename metadata
         "part_number":          fn_data.get("part_number"),
