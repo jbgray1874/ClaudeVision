@@ -1,6 +1,13 @@
 <#
     Run one job through the estimator.
 
+    RUN IT FROM THE REPO ROOT. This script lives beside src\, not inside it, so from
+    C:\ClaudeVision\src the name does not resolve and PowerShell reports it as an unknown
+    command rather than a missing file:
+
+        cd C:\ClaudeVision
+        .\run-job.ps1 12392
+
         .\run-job.ps1 12392                        # a bare job number is enough
         .\run-job.ps1 'C:\ClaudeVision\input\drawings\12392-02'
         .\run-job.ps1 12392 -Deliverables
@@ -19,11 +26,18 @@
     and, when nothing matches, PRINTS WHAT IT DID FIND so the next attempt is a
     correction rather than another guess.
 
-    To make the share searchable, set it once per machine:
+    To make the share searchable, set it once per machine. Point it at the folder that
+    HOLDS the packs, not at a pack:
 
-        setx SDI_JOBS_ROOT "K:\Shared\Estimating\<your live enquiry folder>"
+        setx SDI_JOBS_ROOT "K:\Shared\Estimating\Completed\AI Estimating\Live Enquiry"
 
-    (reopen the console afterwards — setx does not affect the session that ran it).
+    setx writes it for FUTURE consoles and does not touch the one that ran it, so either
+    reopen the console or set it for this session as well:
+
+        $env:SDI_JOBS_ROOT = "K:\Shared\Estimating\Completed\AI Estimating\Live Enquiry"
+
+    Pointing it at one pack still works — the parent is searched too — but every sibling
+    pack on the enquiry is then reachable by number, which is the point of setting it.
 
     Exists because a long command line pasted into a console loses its first character
     often enough to matter, and PowerShell then runs the fragment: "C:\ClaudeVision\..."
@@ -51,11 +65,32 @@ if (-not (Test-Path $python)) { Write-Error "no virtualenv at $python"; exit 1 }
 # Where a pack can live, most specific first. SDI_JOBS_ROOT is how a machine points at
 # the estimating share without this script carrying anybody's drive letter — a hardcoded
 # path is exactly the kind of per-site detail that stops working on the next machine.
+# The @() WRAPS THE PIPELINE, not just the list. A pipeline that yields one item unwraps
+# to that item, so with only one existing root $searchRoots would be a bare string — and
+# the += below would concatenate onto it rather than append to a list, producing a path
+# that is two paths glued together and exists nowhere.
 $searchRoots = @(
-    (Join-Path $root 'input\drawings')
-    $env:SDI_JOBS_ROOT
-    (Get-Location).Path
-) | Where-Object { $_ -and (Test-Path $_) }
+    @(
+        (Join-Path $root 'input\drawings')
+        $env:SDI_JOBS_ROOT
+        (Get-Location).Path
+    ) | Where-Object { $_ -and (Test-Path $_) }
+)
+
+# A ROOT POINTED AT ONE PACK STILL WORKS. "Jobs root" reads as "where my job is" at least
+# as naturally as "where my jobs are", and the first person to set it pointed it straight
+# at 12392-02. Searching only the CHILDREN of that would look inside the pack — at its DXF
+# and PDF sub-folders — and match nothing, for a reason no message would have explained.
+# So a root that is itself a pack has its PARENT searched too, which also makes the sibling
+# packs on the same enquiry reachable by number.
+$jobsRootIsAPack = $false
+if ($env:SDI_JOBS_ROOT -and (Test-Path $env:SDI_JOBS_ROOT)) {
+    if ((Split-Path $env:SDI_JOBS_ROOT -Leaf) -match '^\d{3,6}([-_].*)?$') {
+        $jobsRootIsAPack = $true
+        $parent = Split-Path $env:SDI_JOBS_ROOT -Parent
+        if ($parent -and (Test-Path $parent)) { $searchRoots += $parent }
+    }
+}
 
 function Resolve-Job([string] $wanted) {
     if (Test-Path $wanted) { return (Resolve-Path $wanted).Path }
@@ -64,6 +99,13 @@ function Resolve-Job([string] $wanted) {
     # so '12392' finds '12392-02' but '12392-02' is never answered with '12392-04'.
     $leaf = Split-Path $wanted -Leaf
     foreach ($mode in @('exact', 'prefix')) {
+        # The roots themselves, before their children: a root that IS the pack answers
+        # here rather than being searched fruitlessly from the inside.
+        foreach ($r in $searchRoots) {
+            $rn = Split-Path $r -Leaf
+            $isHit = if ($mode -eq 'exact') { $rn -ieq $leaf } else { $rn -ilike "$leaf*" }
+            if ($isHit) { return (Resolve-Path $r).Path }
+        }
         foreach ($r in $searchRoots) {
             $hits = @(Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue |
                       Where-Object {
@@ -90,9 +132,18 @@ if (-not $resolved) {
     Write-Host "`nSearched:" -ForegroundColor Cyan
     foreach ($r in $searchRoots) { Write-Host "    $r" }
     if (-not $env:SDI_JOBS_ROOT) {
-        Write-Host "`nSDI_JOBS_ROOT is not set, so the estimating share was not searched." -ForegroundColor Yellow
-        Write-Host '    setx SDI_JOBS_ROOT "K:\Shared\Estimating\<your live enquiry folder>"'
-        Write-Host '    (then reopen this console)'
+        Write-Host "`nSDI_JOBS_ROOT is not set in THIS console, so the estimating share was" -ForegroundColor Yellow
+        Write-Host 'not searched. setx writes it for future consoles and does NOT affect the'
+        Write-Host 'one that ran it, which is the usual reason this appears right after setting it.'
+        Write-Host '    $env:SDI_JOBS_ROOT = "K:\...\Live Enquiry"     # this console, now'
+        Write-Host '    setx SDI_JOBS_ROOT "K:\...\Live Enquiry"       # every console after'
+    }
+    elseif ($jobsRootIsAPack) {
+        Write-Host "`nSDI_JOBS_ROOT points at ONE PACK, not at the folder that holds your" -ForegroundColor Yellow
+        Write-Host "packs: $env:SDI_JOBS_ROOT"
+        Write-Host 'Its parent was searched as well, so this should still have worked — if it'
+        Write-Host 'did not, set it one level up:'
+        Write-Host "    setx SDI_JOBS_ROOT `"$(Split-Path $env:SDI_JOBS_ROOT -Parent)`""
     }
     # Collected, then printed. Assigning to an outer variable from inside a pipeline
     # script block is a scoping question with a version-dependent answer, and this file
