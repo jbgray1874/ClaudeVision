@@ -51,13 +51,16 @@ def test_a_claim_with_no_evidence_says_nothing_rather_than_none():
 # The invariant that weighs it
 # ---------------------------------------------------------------------------
 def _job(corroborated, value=8.0, other=2.0):
+    # THE KEY THE COMPILER ACTUALLY WRITES. The first version of these fixtures invented
+    # summary["canonical_route"], which nothing produces, so every test passed against a
+    # shape that never occurs and the check reported clean on a live job.
     return {
-        "canonical_route": {"decisions": [
+        "estimate_summary": {"canonical_route_shadow": {"decisions": [
             {"operation": "weld", "target_id": "12392-02-01M", "status": "required",
              "corroborated": corroborated, "source": "llm_full_extract"},
             {"operation": "fold", "target_id": "12392-02-02M", "status": "required",
              "corroborated": True, "source": "dxf"},
-        ]},
+        ]}},
         "final_estimate": {"labour_rows": [
             {"operation": "weld", "total_value_gbp": value},
             {"operation": "fold", "total_value_gbp": other},
@@ -87,6 +90,16 @@ def test_a_route_everything_read_is_silent():
     """Mutation guard. If this fires on a fully-corroborated route it means nothing when
     it fires at all."""
     assert invariants.check_uncorroborated_route_operations(_job(True)) == []
+
+
+def test_the_check_reads_the_key_the_compiler_writes():
+    """A check that cannot find its data is worse than no check: it occupies the place
+    where somebody would have looked. This one asked for summary["canonical_route"] and
+    reported clean on a job whose labour was mostly uncorroborated."""
+    compiler = (SRC / "route_compiler.py").read_text(encoding="utf-8")
+    checks = (SRC / "invariants.py").read_text(encoding="utf-8")
+    assert 'estimate_summary["canonical_route_shadow"] = payload' in compiler
+    assert '_node(summary, "canonical_route_shadow").get("decisions")' in checks
 
 
 def test_a_job_with_no_canonical_route_is_left_to_the_check_that_owns_it():

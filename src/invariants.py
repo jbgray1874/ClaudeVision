@@ -1044,8 +1044,14 @@ def check_uncorroborated_route_operations(summary: Any) -> List[Dict[str, Any]]:
     if not isinstance(rows, list) or not rows:
         return []
 
+    # WHERE THE ROUTE ACTUALLY IS. This asked summary["canonical_route"], which nothing
+    # writes — the compiler stamps estimate_summary["canonical_route_shadow"] and
+    # check_canonical_route_shadow reads it through _node. So on 12392 this check found no
+    # decisions, returned nothing, and reported clean on a job where most of the labour is
+    # uncorroborated. A check that cannot find its data is worse than no check: it occupies
+    # the place where somebody would have looked.
     decisions = {}
-    for _d in ((summary.get("canonical_route") or {}).get("decisions") or []):
+    for _d in (_node(summary, "canonical_route_shadow").get("decisions") or []):
         if isinstance(_d, dict) and _d.get("status") == "required":
             _op = str(_d.get("operation") or "").strip().lower()
             _tgt = str(_d.get("target_id") or "").strip().upper()
