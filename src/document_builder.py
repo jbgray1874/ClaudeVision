@@ -2108,7 +2108,25 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
         if part["surface_finishes"]:
             observations.append(f"{pn}: finish detected ({', '.join(part['surface_finishes'])}).")
         if part["materials"]:
-            observations.append(f"{pn}: material detected ({', '.join(part['materials'])}).")
+            # WHAT WE CONCLUDED, AND ONLY THEN WHAT WE READ. This printed the raw material
+            # tokens as though they were the answer, so job 12392 told an estimator four
+            # times that a part we cut in mild steel was "Card" — the scrambled text the
+            # arbitration had already rejected in favour of the SolidWorks material. The
+            # costing was right on every one of them.
+            #
+            # Nothing was wrong with the engine and everything was wrong with the sentence.
+            # An estimator reading "material detected (Card)" against a steel bracket has
+            # been given a reason to distrust a sheet that was correct, and a report that
+            # shows the loser of an arbitration is worse than one that shows nothing.
+            _read = ", ".join(part["materials"])
+            _costed = str(part.get("normalized_material") or "").strip()
+            if _costed and _costed.upper().replace("_", " ") not in _read.upper():
+                observations.append(
+                    f"{pn}: material {_costed} "
+                    f"(from {part.get('material_source') or 'the strongest source'}); "
+                    f"the drawing text read as '{_read}' and was not used.")
+            else:
+                observations.append(f"{pn}: material detected ({_read}).")
         if part["slot_detected"] or part["geometry_rollup"]["estimated_slot_like_features"]:
             observations.append(f"{pn}: slot-like geometry or text cues detected.")
         if part["process_notes"]:
