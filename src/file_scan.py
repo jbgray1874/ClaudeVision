@@ -861,6 +861,56 @@ def _page_drawing_number(page: Dict[str, Any]) -> str:
     if not text:
         return ""
     found = re.findall(config.DRAWING_NUMBER_PATTERN, text, flags=re.IGNORECASE)
+    if not found:
+        # THE LABEL IS NOT THE NUMBER. DRAWING_NUMBER_PATTERN requires a literal "DWG NO"
+        # or "DRAWING NO" immediately before the code, so a title block whose label does
+        # not survive text extraction next to its number yields nothing — and
+        # assembly_page_owners then falls back to the FILE STEM, which matches no part the
+        # job knows, so the page can own nothing.
+        #
+        # That is why job 12392's bolt stayed disconnected with a page in hand: page 6 is
+        # an assembly page, the record carried source_page=6 into both compiler pools, and
+        # the only thing missing was the page's own name.
+        #
+        # The shape rule needs no label. It is the same authority the BOM reader's title
+        # block read uses — part_code_conventions.looks_like_a_drawing_number — which finds
+        # 12392-04-GA on this very sheet. Adjacent tokens are joined first so a spaced
+        # "1282 - GA" reads as one code, and the LONGEST match wins so "12392-02" cannot
+        # beat "12392-02-GA" and reparent the sheet onto its own parent.
+        # THE SHAPE RULE, NOT THE LABEL. Two things it must not do.
+        #
+        # It must not swallow the description: joining greedily turned
+        # "12392-04-GA MOD BRACKET SET" into "12392-04-GAMODBRACKETSET", which passes the
+        # shape test because every word is alphanumeric. So tokens are only joined across
+        # a literal "-", which is the spaced form a drawing prints as "1282 - GA" and is
+        # never how a description continues.
+        #
+        # And it must not take a prefix: "12392-02 - GA" reads as "12392-02" if single
+        # tokens simply win, and that is the sheet's PARENT — every row on the page would
+        # be reparented one level up.
+        import part_code_conventions as _pcc
+        _toks = [t for t in re.split(r"\s+", text.upper()) if t]
+        _codes = []
+        _i = 0
+        while _i < len(_toks):
+            if not _pcc.looks_like_a_drawing_number(_toks[_i]) and not (
+                    _i + 2 < len(_toks) and _toks[_i + 1] == "-"):
+                _i += 1
+                continue
+            _run, _j = _toks[_i], _i
+            while _j + 2 < len(_toks) and _toks[_j + 1] == "-" \
+                    and _pcc.looks_like_a_drawing_number(_run + "-" + _toks[_j + 2]):
+                _run = _run + "-" + _toks[_j + 2]
+                _j += 2
+            if _pcc.looks_like_a_drawing_number(_run) and _run not in _codes:
+                _codes.append(_run)
+            _i = _j + 1
+        # ONE, OR NONE, exactly as the labelled path: a region holding two drawing numbers
+        # has caught a cross-reference as well as its own, and naming the wrong one gives
+        # every row on the page the wrong owner.
+        if len(_codes) == 1:
+            found = _codes
+
     # ONE, OR NONE. A title block region that caught two drawing numbers has caught a
     # cross-reference as well as its own, and there is no way to tell which is which from
     # here. Naming the wrong one would give every row on the page the wrong owner.
