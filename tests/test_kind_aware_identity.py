@@ -148,3 +148,51 @@ def test_a_refused_merge_reaches_the_graph_issues():
               if i.get("code") == "identity_merge_refused_across_kinds"]
     assert issues, "a declined join must be visible"
     assert "does not become one we purchase" in issues[0]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# A purchase that knows its sheet can be owned by it
+# ---------------------------------------------------------------------------
+# The page rule read part["pages"] and nothing else. A prose-recognised purchase carries
+# both `pages` and `source_page`; a BOM row carries `source_page` alone; and the record
+# reaching the compiler is not always the one the reader wrote — a costed part estimate can
+# arrive with the page dropped. So a bolt that knew perfectly well which sheet named it
+# still had no owner, and blocked the job as a disconnected node.
+def _owned(part, page_owner):
+    graph = rc.build_part_graph(
+        [{"part_number": "12392-04-GA", "description": "MOD BRACKET SET",
+          "is_assembly_parent": True}, part],
+        None, None, None, page_owner)
+    return {n.part_number: list(n.parents) for n in graph["nodes"]}
+
+
+def test_a_purchase_is_owned_by_the_assembly_sheet_that_names_it():
+    owners = _owned({"part_number": "BI-BOLTBZP", "description": "Bolt Bzp",
+                     "is_bought_in": True, "source_page": 6, "quantity": 4},
+                    {6: "12392-04-GA"})
+    assert owners["BI-BOLTBZP"] == ["12392-04-GA"]
+
+
+def test_the_older_pages_spelling_still_works():
+    owners = _owned({"part_number": "BI-BOLTBZP", "description": "Bolt Bzp",
+                     "is_bought_in": True, "pages": [6], "quantity": 4},
+                    {6: "12392-04-GA"})
+    assert owners["BI-BOLTBZP"] == ["12392-04-GA"]
+
+
+def test_a_purchase_with_no_page_is_still_left_unowned():
+    """Mutation guard. The page is what makes the ownership defensible; without one there
+    is nothing to hang it on, and inventing a parent is worse than a visible blocker."""
+    owners = _owned({"part_number": "BI-BOLTBZP", "description": "Bolt Bzp",
+                     "is_bought_in": True, "quantity": 4},
+                    {6: "12392-04-GA"})
+    assert owners["BI-BOLTBZP"] == []
+
+
+def test_a_page_that_owns_nothing_confers_nothing():
+    """A detail sheet is one part drawn large, not an owner — assembly_page_owners only
+    ever offers assembly pages, and a page absent from that map must give no edge."""
+    owners = _owned({"part_number": "BI-BOLTBZP", "description": "Bolt Bzp",
+                     "is_bought_in": True, "source_page": 3, "quantity": 4},
+                    {6: "12392-04-GA"})
+    assert owners["BI-BOLTBZP"] == []

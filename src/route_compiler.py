@@ -974,7 +974,17 @@ def build_part_graph(
         _pid = aliases.get(_pid, _pid)
         if not _pid or _pid in parents or _pid in children:
             continue                      # owned already, or is itself a parent
-        for _page in (_part.get("pages") or []):
+        # BOTH SPELLINGS OF "WHICH SHEET". A prose-recognised purchase carries pages AND
+        # source_page; a BOM row carries source_page alone; and the record that reaches
+        # this compiler is not always the one the reader wrote — a costed part estimate can
+        # arrive with the page dropped. Reading one key meant a bolt that knew its sheet
+        # still had no owner, which is the field existing somewhere the reader was not
+        # looking, for the sixth time on this branch.
+        _pages = list(_part.get("pages") or [])
+        _sp = _part.get("source_page")
+        if _sp is not None and _sp not in _pages:
+            _pages.append(_sp)
+        for _page in _pages:
             try:
                 _owner_raw = (page_owner or {}).get(int(_page))
             except (TypeError, ValueError):
