@@ -77,6 +77,87 @@ $searchRoots = @(
     ) | Where-Object { $_ -and (Test-Path $_) }
 )
 
+# A SET-BUT-DEAD ROOT WAS SILENT, and silence here is the worst possible answer: the
+# variable was set correctly, the console echoed nothing, and the script then reported
+# "no job folder matching '12392'" while listing two roots that never included the share.
+# Every part of that is true and it points at the wrong thing entirely.
+$jobsRootUnreachable = [bool]($env:SDI_JOBS_ROOT -and -not (Test-Path $env:SDI_JOBS_ROOT))
+
+function Show-PathDiagnosis([string] $p) {
+    <#
+        WHY a path is not reachable, not merely that it is not. On Windows the three
+        causes need three different actions and look identical from Test-Path:
+
+          the drive is not mapped in this session
+          the drive IS mapped but this shell cannot see it (elevation)
+          the drive is fine and the path below it is wrong
+
+        The third is diagnosed by walking up to the deepest ancestor that DOES exist —
+        which names the exact component where the typed path leaves reality.
+    #>
+    Write-Host "`nSDI_JOBS_ROOT is set but not reachable from this session:" -ForegroundColor Red
+    Write-Host "    $p"
+
+    $qual = ''
+    try { $qual = Split-Path $p -Qualifier -ErrorAction Stop } catch { }
+
+    if ($p -like '\\*') {
+        Write-Host "`nIt is a UNC path. Check the server name and that you have access:" -ForegroundColor Yellow
+        Write-Host "    Test-Path '$(($p -split '\\')[0..3] -join '\')'"
+    }
+    elseif ($qual) {
+        $drv = Get-PSDrive -Name $qual.TrimEnd(':') -ErrorAction SilentlyContinue
+        if (-not $drv) {
+            Write-Host "`nDrive $qual is not mapped in this session." -ForegroundColor Yellow
+            $elevated = $false
+            try {
+                $elevated = ([Security.Principal.WindowsPrincipal] `
+                    [Security.Principal.WindowsIdentity]::GetCurrent()
+                    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            } catch { }
+            if ($elevated) {
+                # This has cost this project a day before. Mapped drives belong to a logon
+                # token, and an elevated shell runs under a DIFFERENT token — so a drive
+                # that is present in Explorer and in a normal console is simply absent
+                # here, with no error anywhere to say why.
+                Write-Host 'This console is ELEVATED, and mapped drives belong to the' -ForegroundColor Yellow
+                Write-Host 'non-elevated logon token. A drive you can see in Explorer is'
+                Write-Host 'invisible here. Run this script from a NORMAL PowerShell, or'
+                Write-Host 'use the UNC path, which does not depend on the mapping.'
+            } else {
+                Write-Host "    net use $qual  \\<server>\<share>"
+                Write-Host '    — or set SDI_JOBS_ROOT to the UNC path instead, which needs no mapping.'
+            }
+        }
+        elseif ($drv.DisplayRoot) {
+            Write-Host "`nDrive $qual is mapped to $($drv.DisplayRoot), so the drive is fine" -ForegroundColor Yellow
+            Write-Host 'and the path below it is not. The UNC equivalent of what you set is:'
+            Write-Host "    $($p -replace [regex]::Escape($qual), [regex]::Escape($drv.DisplayRoot).Replace('\\','\'))"
+        }
+    }
+
+    # THE DEEPEST THING THAT DOES EXIST. Naming it turns "that path is wrong" into "the
+    # path is right up to here and wrong after it", which is one look rather than a hunt.
+    $probe = $p
+    while ($probe -and -not (Test-Path $probe)) {
+        $next = Split-Path $probe -Parent
+        if (-not $next -or $next -eq $probe) { $probe = ''; break }
+        $probe = $next
+    }
+    if ($probe) {
+        Write-Host "`nThe path exists as far as:" -ForegroundColor Cyan
+        Write-Host "    $probe"
+        $kids = @(Get-ChildItem -LiteralPath $probe -Directory -ErrorAction SilentlyContinue |
+                  Select-Object -First 15 -ExpandProperty Name)
+        if ($kids) {
+            Write-Host '  and below that are:'
+            foreach ($k in $kids) { Write-Host "    $k" }
+        }
+    } else {
+        Write-Host "`nNo part of that path is reachable." -ForegroundColor Cyan
+    }
+}
+
 # A ROOT POINTED AT ONE PACK STILL WORKS. "Jobs root" reads as "where my job is" at least
 # as naturally as "where my jobs are", and the first person to set it pointed it straight
 # at 12392-02. Searching only the CHILDREN of that would look inside the pack — at its DXF
@@ -131,7 +212,10 @@ if (-not $resolved) {
     Write-Host "no job folder matching '$Job'." -ForegroundColor Red
     Write-Host "`nSearched:" -ForegroundColor Cyan
     foreach ($r in $searchRoots) { Write-Host "    $r" }
-    if (-not $env:SDI_JOBS_ROOT) {
+    if ($jobsRootUnreachable) {
+        Show-PathDiagnosis $env:SDI_JOBS_ROOT
+    }
+    elseif (-not $env:SDI_JOBS_ROOT) {
         Write-Host "`nSDI_JOBS_ROOT is not set in THIS console, so the estimating share was" -ForegroundColor Yellow
         Write-Host 'not searched. setx writes it for future consoles and does NOT affect the'
         Write-Host 'one that ran it, which is the usual reason this appears right after setting it.'
@@ -148,14 +232,28 @@ if (-not $resolved) {
     # Collected, then printed. Assigning to an outer variable from inside a pipeline
     # script block is a scoping question with a version-dependent answer, and this file
     # exists because a console surprise cost a day.
+    # A JOB FOLDER IS ONE WITH DRAWINGS IN IT. Listing every directory under the roots put
+    # .venv, .github, .pytest_cache and src on a list headed "Jobs found", which is worse
+    # than printing nothing: it invites the reader to try one. Tested by what a pack IS —
+    # it holds drawings — rather than by a blocklist of names that would need extending
+    # for every new directory anybody adds.
     $found = @()
     foreach ($r in $searchRoots) {
-        $found += @(Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue |
-                    Select-Object -First 25 -ExpandProperty FullName)
+        $found += @(
+            Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue |
+                Select-Object -First 60 |
+                Where-Object {
+                    $null -ne (Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Depth 1 `
+                                   -Include *.pdf, *.dxf, *.sldprt, *.sldasm `
+                                   -ErrorAction SilentlyContinue |
+                               Select-Object -First 1)
+                } |
+                Select-Object -First 25 -ExpandProperty FullName
+        )
     }
-    Write-Host "`nJobs found:" -ForegroundColor Cyan
+    Write-Host "`nFolders holding drawings:" -ForegroundColor Cyan
     if ($found.Count -eq 0) {
-        Write-Host '    (none — no pack has been copied down yet)'
+        Write-Host '    (none under the roots above — no pack has been copied down yet)'
     } else {
         foreach ($f in $found) { Write-Host "    $f" }
     }
