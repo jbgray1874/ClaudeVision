@@ -6745,8 +6745,12 @@ def test_the_same_pack_produces_the_same_route():
        "and a redrawn drawing silently keeps the old route; drop the prompt and a rule change "
        "is never re-asked")
     ok("_cache_write(_key, obj)" in _src, "and the result is stored")
-    ok('_ikey = _cache_key("infer", payload, model, SYSTEM_INFER)' in _src,
-       "the inference key covers its whole payload — which is where the weld came from")
+    ok('_ikey = _cache_key("infer", payload, model, SYSTEM_INFER, _INFER_PROMPT)' in _src,
+       "the inference key covers its whole payload AND its prompt — the payload is where "
+       "the weld came from, and the prompt is the question that produced it. The line two "
+       "assertions above says drop the prompt and a rule change is never re-asked; this "
+       "path was keyed on the system message alone, so it was the case that sentence "
+       "describes")
     ok("_cache_write(_ikey, _res)" in _src, "and it is stored too")
 
 

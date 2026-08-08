@@ -91,7 +91,8 @@ _SCHEMA = """{
     {"sequence": 10, "operation": "", "department": "", "part_numbers": [],
      "scope": "part|assembly", "qty_per_unit": 1,
      "material_family": "metal|acrylic|timber|wire|tube|mixed",
-     "description": "", "inferred": false, "confidence": "high|medium|low", "notes": ""}
+     "description": "", "inferred": false, "confidence": "high|medium|low", "notes": "",
+     "evidence": "", "evidence_where": ""}
   ],
   "assemblies": [{"part_number": "", "children": [{"part_number": "", "qty": 0}]}],
   "spec": {"weld": null, "powder_micron": null, "tolerances": null,
@@ -105,6 +106,18 @@ _SCHEMA = """{
 # has one thing to read, and the `inferred` flag on every route — plus the `source` on every
 # BOM row — is what separates a reading from a judgement, per item rather than per pass.
 _COMMON_RULES = """
+EVIDENCE. For every route, quote the words on the drawing that put that operation there in
+"evidence", and say where you read them in "evidence_where" (for example "detail sheet
+note", "title block finish field", "weld symbol", "section view"). Copy the drawing's own
+text. Do not paraphrase it, do not tidy it, and do not translate a code into what you think
+it means — "P/C 30% GLOSS" is the evidence, "powder coating" is not.
+
+Leave "evidence" EMPTY when the operation is something you concluded rather than read. An
+empty field is the correct and useful answer there: it says this operation needs a human to
+confirm it, and a plausible sentence invented to fill the box removes the one signal that
+would have told anybody to look. You are never penalised for an empty evidence field and
+the operation is still costed — it is simply marked as needing confirmation.
+
 MATERIAL FAMILIES. Classify every component: metal, acrylic, timber, wire, tube, bought_in.
 thickness_or_section uses the style that suits the family — "1.2mm" for sheet and acrylic,
 "18mm" for board, "\u00d86mm" for wire and round tube, "25x25x1.5 SHS" for box section.
@@ -641,7 +654,14 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
             f"===== PARTS STILL MISSING DETAIL =====\n"
             f"{json.dumps(missing, ensure_ascii=False)}\n"
         )
-        _ikey = _cache_key("infer", payload, model, SYSTEM_INFER)
+        # THE PROMPT IS PART OF THE KEY, and on this path it was not. The module's own
+        # note says the key covers the document text, the model AND the prompt so that a
+        # prompt edit misses and re-asks; the full pass does that and the inference pass
+        # keyed only on the system message. So an edit to _INFER_PROMPT — adding the
+        # evidence fields, say — would have gone on returning the answer to the question
+        # asked before it, indefinitely, and looked exactly like a prompt that had no
+        # effect.
+        _ikey = _cache_key("infer", payload, model, SYSTEM_INFER, _INFER_PROMPT)
         _ihit = _cache_read(_ikey)
         if _ihit is not None:
             return _ihit
