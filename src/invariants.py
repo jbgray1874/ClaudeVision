@@ -989,6 +989,16 @@ def check_uncorroborated_bom_lines_are_not_silent(summary: Any) -> List[Dict[str
         for pn, meta in flagged.items():
             if _code.startswith(pn):
                 _v = _num(row.get("total_value_gbp")) or 0.0
+                # A ZERO ROW IS NOT A COSTED LINE, and the sentence above says so —
+                # "only money makes it worth interrupting for" — while the code counted
+                # every match. A fabricated part appears in material_rows TWICE: once in
+                # the Bill of Materials at GBP 0.00, listed for completeness because its
+                # metal is costed in the Sheet Steel block, and once in that block for
+                # real. Counting both reported "2 BOM line(s)" for one part and named the
+                # same panel twice, at GBP 0.00 and at GBP 4.31, in a message about how
+                # much money the doubt covers.
+                if _v <= 0:
+                    break
                 costed.append({**meta, "value_gbp": round(_v, 2)})
                 worth += _v
                 break

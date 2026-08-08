@@ -604,3 +604,53 @@ def test_a_parts_list_page_path_a_missed_is_paid_for(monkeypatch, tmp_path):
 
     merge_boms.reconcile_job([str(pdf)])
     assert stub.paid == [1], "the parts-list page only; the plain detail sheet is skipped"
+
+
+# ---------------------------------------------------------------------------
+# 6. A zero row is not a costed line
+# ---------------------------------------------------------------------------
+def _uncorroborated_job(rows):
+    return {
+        "document_analysis": {"bom_rows": [
+            {"part_number": "12392-02-01M", "description": "BACK PANEL",
+             "bom_source": "A_ONLY", "bom_flag": "A-only — review", "quantity": 1}]},
+        "final_estimate": {"totals": {"material_gbp": 13.00}, "material_rows": rows},
+    }
+
+
+def test_a_fabricated_part_is_counted_once_not_twice():
+    """A fabricated part appears in material_rows TWICE: in the Bill of Materials at
+    GBP 0.00, listed for completeness because its metal is costed in the Sheet Steel
+    block, and once in that block for real. Counting both reported "2 BOM line(s)" for one
+    part and named the same panel at GBP 0.00 and at GBP 4.31 in the same sentence."""
+    import invariants
+
+    out = invariants.check_uncorroborated_bom_lines_are_not_silent(_uncorroborated_job([
+        {"part_code": "12392-02-01M", "description": "BACK PANEL", "total_value_gbp": 0.0},
+        {"part_code": "12392-02-01M", "description": "BACK PANEL", "total_value_gbp": 4.31},
+    ]))
+    assert len(out) == 1
+    assert out[0]["detail"]["count"] == 1
+    assert out[0]["detail"]["value_gbp"] == 4.31
+
+
+def test_the_money_it_does_carry_still_blocks():
+    """Mutation guard. The panel carries a third of the material on one reader's word;
+    de-duplicating the report must not soften the finding."""
+    import invariants
+
+    out = invariants.check_uncorroborated_bom_lines_are_not_silent(_uncorroborated_job([
+        {"part_code": "12392-02-01M", "description": "BACK PANEL", "total_value_gbp": 4.31},
+    ]))
+    assert out[0]["severity"] == invariants.BLOCKING
+    assert out[0]["detail"]["share_pct"] > 25
+
+
+def test_a_part_with_only_a_zero_row_raises_nothing():
+    """Identification is not pricing. A flagged row that costs nothing is not money the
+    doubt covers, and saying it is would interrupt an estimator for GBP 0.00."""
+    import invariants
+
+    assert invariants.check_uncorroborated_bom_lines_are_not_silent(_uncorroborated_job([
+        {"part_code": "12392-02-01M", "description": "BACK PANEL", "total_value_gbp": 0.0},
+    ])) == []
