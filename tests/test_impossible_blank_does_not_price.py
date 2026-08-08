@@ -164,3 +164,26 @@ def test_the_model_keeps_its_bounding_box_for_every_part():
     source = (SRC / "source_connectors" / "solidworks.py").read_text(encoding="utf-8")
     assert 'part["bbox_mm"] = list(_bbox_all)' in source
     assert 'part["bbox_mm_source"]' in source
+
+
+# ---------------------------------------------------------------------------
+# Where a blank came from, on both of its dimensions
+# ---------------------------------------------------------------------------
+def test_every_writer_of_a_blank_stamps_both_dimensions():
+    """The metal is priced on the AREA, so attributing the length and not the width leaves
+    half of every blank unaccountable. SolidWorks — the best source there is — stamped only
+    the length, which cost nothing to be silent about and so went unnoticed."""
+    for name in ("source_connectors/solidworks.py", "geometry_inference.py",
+                 "document_builder.py", "estimator.py"):
+        text = (SRC / name).read_text(encoding="utf-8")
+        if "blank_length_mm_source" not in text:
+            continue
+        assert "blank_width_mm_source" in text, (
+            f"{name} records where a blank's LENGTH came from and not its WIDTH")
+
+
+def test_the_provenance_audit_covers_both_dimensions():
+    import invariants
+
+    assert "blank_length_mm" in invariants._ATTRIBUTED_FIELDS
+    assert "blank_width_mm" in invariants._ATTRIBUTED_FIELDS

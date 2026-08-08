@@ -918,7 +918,11 @@ def _reject_dxf_geometry(part: Dict[str, Any], nat: "NativePart",
     part["blank_length_mm"], part["blank_width_mm"] = fl, fw
     part["blank_area_mm2"] = fl * fw
     part["geometry_source"] = NATIVE_GEOMETRY_SOURCE
+    # BOTH DIMENSIONS. Only the length was stamped, and the metal is priced on the AREA —
+    # so the best source we have was attributing half of every blank it measured. It cost
+    # nothing to be silent about, which is exactly why nobody noticed.
     part["blank_length_mm_source"] = SOURCE_NAME
+    part["blank_width_mm_source"] = SOURCE_NAME
     part["native_flat_pattern"] = True
     part["dxf_geometry_rejected"] = True
     part["dxf_measured_outline"] = False

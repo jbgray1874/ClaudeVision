@@ -540,8 +540,21 @@ def check_measured_geometry_is_complete(summary: Any) -> List[Dict[str, Any]]:
 
 
 # ── 6. stronger evidence is never silently overwritten ───────────────────────────────
+# The fields whose SOURCE must be recorded, because each of them decides money and each is
+# written by more than one reader. A field not in this tuple is not attributed and nothing
+# says so — which is the difference between "we know where this came from" and "nobody has
+# asked".
+#
+# blank_width_mm was missing while blank_length_mm was audited, and the metal is priced on
+# the AREA: half of every blank on every job was unattributable and no check minded.
+#
+# Deliberately still short. Finish, operations, cut length and bend count are also written
+# by several readers and are NOT audited yet; adding them is a real extension and belongs
+# with the work that makes them stamped, not before it. Listing a field here that nothing
+# stamps produces a warning on every part of every job, which is noise wearing rigour's
+# clothes.
 _ATTRIBUTED_FIELDS = ("normalized_material", "quantity", "normalized_thickness_mm",
-                      "blank_length_mm")
+                      "blank_length_mm", "blank_width_mm")
 
 
 def _source_key_for(field: str) -> str:
