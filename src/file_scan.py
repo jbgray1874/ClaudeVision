@@ -304,6 +304,29 @@ def _score_primary_job_pdf(pdf_path: Path, summary: Dict[str, Any]) -> int:
     return score
 
 
+def _merge_bom_rows(winner: Dict[str, Any], loser: Dict[str, Any]) -> None:
+    """Fold the losing drawing's reading of one BOM line into the row we are keeping.
+
+    Both rows were read off a printed parts table, so both are `bom_tree` and neither
+    outranks the other: the loser fills what the winner left blank, and where the two
+    disagree the winner stands and the disagreement is written onto it. `source_pdf`
+    names which drawing this row was taken from and must keep naming the winner's.
+    """
+    try:
+        from record_merge import merge_records, BOOKKEEPING_FIELDS
+    except Exception:                                              # pragma: no cover
+        return
+    _notes = merge_records(
+        winner, loser, winner_source="bom_tree", loser_source="bom_tree",
+        decided=("part_number", "bom_parent"),
+        skip=tuple(BOOKKEEPING_FIELDS) + ("source_pdf",),
+        label=f"BOM line {winner.get('part_number')} also on "
+              f"{loser.get('source_pdf') or 'another drawing'}")
+    if _notes and os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
+        for _n in _notes:
+            print(f"   [bom-merge] {_n}", flush=True)
+
+
 def _bom_row_merge_preferred(
     row: Dict[str, Any],
     existing: Dict[str, Any],
@@ -511,8 +534,22 @@ def merge_job_pdf_summaries(
                    code,
                    normalize_text(str(row.get("description") or "")).upper())
             existing = bom_by_key.get(key)
-            if existing is None or _bom_row_merge_preferred(row_copy, existing, pdf_path, primary_pdf):
+            if existing is None:
                 bom_by_key[key] = row_copy
+            else:
+                # TWO DRAWINGS PRINTING ONE LINE. The preference rule below decides which
+                # ROW to keep — the primary GA's, on principle, because it is the sheet the
+                # job is quoted from. It was then kept WHOLESALE, so where the primary's
+                # table clipped a column and the other drawing printed it, the winning row
+                # carried the blank and the reading that had the number was dropped. Both
+                # readings come off a parts table and rank equally, so the loser can fill
+                # gaps and displace nothing; where they genuinely differ, the disagreement
+                # is recorded on the surviving row instead of vanishing with it.
+                _prefer_new = _bom_row_merge_preferred(row_copy, existing, pdf_path, primary_pdf)
+                _winner, _loser = ((row_copy, existing) if _prefer_new
+                                   else (existing, row_copy))
+                _merge_bom_rows(_winner, _loser)
+                bom_by_key[key] = _winner
 
         ps = summary.get("pattern_summary") or {}
         part_numbers.update(ps.get("part_numbers") or [])

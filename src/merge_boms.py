@@ -72,6 +72,19 @@ except Exception as exc:  # pragma: no cover - environment-dependent
 # compare codes on a machine where the vision reader will not import.
 from part_code_conventions import bare_code as _bare
 
+# WHAT READ EACH PATH, in the vocabulary precedence arbitrates with. Path A reads a parts
+# table off the PDF's own text layer, which is what `bom_tree` means; Path B transcribes a
+# rendered image, which is `llm_extract` and ranks below it. Naming them any other way
+# would let a vision reading displace a deterministic one on rank alone.
+PATH_A_SOURCE = "bom_tree"
+PATH_B_SOURCE = "llm_extract"
+
+try:
+    from record_merge import merge_records as _merge_records
+except Exception:                                                  # pragma: no cover
+    def _merge_records(winner, loser, **_kw):                       # type: ignore[misc]
+        return []
+
 
 def _parent_key(parent: Optional[str], pdf_name: str, page_index: int) -> str:
     """Group key for aligning A and B. Prefer a normalised parent code; if absent
@@ -119,12 +132,28 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
             code_agree = (a_code == b_code) or (a_code == "" and b_code == "") \
                 or (a_code and b_code and (a_code in b_code or b_code in a_code))
             qty_agree = (a_qty == b_qty)
+            # THE ROW CONTEST SETTLES THE CODE AND THE QUANTITY. It does not settle the
+            # rest of the line, and taking the winner wholesale threw away every column
+            # the loser read and the winner did not — a description vision transcribed
+            # off a page whose text layer clipped it arrived, agreed, and was discarded
+            # unflagged, because nothing about it disagreed. The two fields the rule
+            # below arbitrates stay arbitrated by it; every other field is merged under
+            # precedence, so gaps fill and genuine conflicts are recorded.
+            _decided = ("part_ref", "quantity")
             if code_agree and qty_agree:
                 row = dict(a); row["source"] = "BOTH"; row["confidence"] = "HIGH"; row["flag"] = ""
+                _notes = _merge_records(row, b, winner_source=PATH_A_SOURCE,
+                                        loser_source=PATH_B_SOURCE, decided=_decided,
+                                        label=f"[{parent_label}] item {item}")
+                findings.extend(_notes)
                 merged.append(row)
             else:
                 # conflict -> Grok wins (your Q1), flag override + drawing-inconsistency
                 row = dict(b)
+                _notes = _merge_records(row, a, winner_source=PATH_B_SOURCE,
+                                        loser_source=PATH_A_SOURCE, decided=_decided,
+                                        label=f"[{parent_label}] item {item}")
+                findings.extend(_notes)
                 row["source"] = "B_OVERRIDE"; row["confidence"] = "LOW"
                 diff = []
                 if not code_agree:
@@ -255,10 +284,18 @@ def merge_pages_into_parents(pages: List[Dict[str, Any]]) -> Tuple[List[Dict[str
             prior_code = _bare(prior.get("part_number") or prior.get("part_ref") or "")
             if prior_code == code:
                 # The same line on a second sheet. Record where it was seen; do not
-                # count it twice.
+                # count it twice — and READ IT. Noting the sheet and nothing else meant
+                # a column the first sheet clipped and the second sheet printed in full
+                # was never taken, on a row we had positively identified as the same
+                # line. Both readings come off a parts table, so they rank equally:
+                # the second fills what the first left blank and can displace nothing.
                 _seen = prior.setdefault("also_on_sheets", [])
                 if _sheet not in _seen and _sheet != prior.get("sheet"):
                     _seen.append(_sheet)
+                findings.extend(_merge_records(
+                    prior, row, winner_source=PATH_A_SOURCE, loser_source=PATH_A_SOURCE,
+                    decided=("item_number",),
+                    label=f"[{entry['label']}] item {item} on {_sheet}"))
                 continue
             _r = dict(row, sheet=_sheet)
             _r["flag"] = ((_r.get("flag") or "") + "; " if _r.get("flag") else "") + (

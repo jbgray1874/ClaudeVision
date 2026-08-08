@@ -386,10 +386,30 @@ def test_a_page_with_no_text_layer_is_paid_for():
 
 def test_the_selection_vocabulary_is_the_readers_own():
     """A private copy of the header synonyms here would drift from the ones the header
-    matcher uses, and only one of the two would ever be corrected."""
+    matcher uses, and only one of the two would ever be corrected.
+
+    Read against the CODE, not the file, and against the right thing in the code. The
+    first version matched the raw text and failed on a COMMENT describing what a merge
+    decides; the second matched every string literal and failed on `row.get("quantity")`,
+    which is this module reading a field of its own row schema — not a column heading it
+    hopes to recognise. Neither was the defect. A guard satisfied by rewording a comment
+    or renaming a dict key leaves the thing it defends against free to arrive next week.
+
+    What a private vocabulary actually looks like here: the synonyms `_bom_words_reader`
+    matches printed headings against, which are UPPERCASE because printed headings are.
+    Schema keys are lowercase. That is the line, and it is the one the codebase already
+    draws.
+    """
+    import ast
+
     source = (SRC / "merge_boms.py").read_text(encoding="utf-8")
+    headings = [n.value for n in ast.walk(ast.parse(source))
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and len(n.value) <= 40
+                and any(c.isalpha() for c in n.value)
+                and n.value == n.value.upper()]
     for word in ("DESCRIPTION", "QUANTITY", "PARTS LIST", "BILL OF MATERIAL"):
-        assert word not in source, (
+        assert not any(word in s for s in headings), (
             f"merge_boms carries its own parts-list vocabulary ({word}); the synonym sets "
             f"in _bom_words_reader are the one definition")
 
