@@ -33,6 +33,14 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from source_precedence import apply_field as _apply_field
 
+# What a bounding box means about a part — one definition, shared with the estimator's
+# blank sizing. Soft, because this connector must still run on a machine where an optional
+# geometry dependency did not install; the envelope upgrade is then simply not offered.
+try:
+    import blank_credibility as _bc
+except Exception:                                                  # pragma: no cover
+    _bc = None                                                     # type: ignore[assignment]
+
 SOURCE_NAME = "solidworks_api"
 RELIABILITY = 1.0
 EXTRACT_FILENAME = "_sw_native_extract.json"
@@ -1260,6 +1268,31 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             _ng_bb = part.setdefault("normalized_geometry", {})
             if isinstance(_ng_bb, dict):
                 _ng_bb["bbox_mm"] = list(_bbox_all)
+
+            # ── THE GAUGE IS IN THE ENVELOPE, AND NOBODY WAS READING IT ──────────
+            #
+            # The thickness branch below fires only when the sheet-metal cut list
+            # publishes a thickness. Where it does not — a part modelled as a solid, a
+            # cut list the analyser could not reach — the gauge came from whatever else
+            # had guessed at it. 12392-02-01M ended up with 1.5 mm stamped
+            # llm_full_extract, rank 40, on a part whose SolidWorks envelope is
+            # 130 x 1435 x 1.5. The number was right and its provenance was three ranks
+            # weaker than the evidence sitting on the same record.
+            #
+            # This never CHANGES a thickness. It submits the model's envelope depth only
+            # where a thickness is already recorded and the envelope agrees with it, so
+            # the value cannot move and only the rank can: agreement upgrading provenance,
+            # which is what apply_field is for. A part with no recorded thickness is left
+            # alone deliberately — the smallest side of a machined block is not a gauge,
+            # and there is nothing here to tell a sheet part from one.
+            if _bc is not None and _bc.envelope_proves_it_never_leaves_the_plane(
+                    _bbox_all, part.get("normalized_thickness_mm")):
+                _env_thk = min(_bbox_all)
+                if _apply_field(part, "normalized_thickness_mm", _env_thk, SOURCE_NAME):
+                    flags.append(
+                        f"thickness {_env_thk:g}mm confirmed by the model's bounding box "
+                        f"({' x '.join(f'{v:g}' for v in sorted(_bbox_all, reverse=True))}"
+                        f") — the value was already right, the provenance was not")
 
         # ── SECTION CUT LENGTH: the model knows what the drawing never printed ────
         #

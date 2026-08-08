@@ -140,6 +140,33 @@ def plausible_as_a_sheet_part(length_mm: Any, width_mm: Any) -> bool:
     return all(MIN_SHEET_PART_MM <= v <= MAX_SHEET_PART_MM for v in (length, width))
 
 
+def envelope_proves_it_never_leaves_the_plane(bbox_mm: Any, thickness_mm: Any) -> bool:
+    """Is this part flat, on the evidence of its own bounding box?
+
+    A box whose SMALLEST side is the material thickness has nothing folded, rolled or
+    pressed out of plane — whatever the route says, and whatever the description calls it.
+    12392's back panel carries `folding` in its operations and a 130 x 1435 x 1.5 envelope:
+    the fold is a return along the sheet, not out of it, and the model proves it.
+
+    This matters twice over, which is why it has a name instead of living inline:
+
+      - it decides whether a drawing's printed overall may be read as a blank at all;
+      - it decides whether a bounding box is the part's BLANK or merely a floor under it.
+
+    Those two questions were being answered by the same arithmetic written out twice, and
+    a rule with two spellings is a rule that will one day be corrected in one of them.
+    """
+    thickness = _num(thickness_mm)
+    if not thickness:
+        return False
+    box = sorted([v for v in (_num(b) for b in (bbox_mm or [])) if v])
+    if len(box) < 3:
+        return False
+    # Tolerance carries gauge rounding, not a different material: 0.3 mm absolute for thin
+    # sheet, a quarter of the gauge for anything heavy enough that 0.3 is noise.
+    return abs(box[0] - thickness) <= max(0.3, thickness * 0.25)
+
+
 def blank_from_drawing_overalls(
     overall_length_mm: Any,
     overall_width_mm: Any,
@@ -198,7 +225,7 @@ def blank_from_drawing_overalls(
                                f"a firm quote")}
         # A box whose smallest side IS the material has nothing folded out of plane.
         _box = sorted([v for v in (_num(b) for b in (bbox_mm or [])) if v])
-        if len(_box) >= 3 and abs(_box[0] - thickness) <= max(0.3, thickness * 0.25):
+        if envelope_proves_it_never_leaves_the_plane(bbox_mm, thickness):
             return {"usable": True, "blank_length_mm": max(length, width),
                     "blank_width_mm": min(length, width),
                     "source": "pdf_overall_dims",

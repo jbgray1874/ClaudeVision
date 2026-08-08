@@ -1813,6 +1813,36 @@ def _blank_that_could_have_been_cut(
     if better:
         part["blank_length_mm"] = better["blank_length_mm"]
         part["blank_width_mm"] = better["blank_width_mm"]
+
+        # A FLOOR ONLY WHERE IT IS ONE. "bounding_box_floor" ranks ZERO — fills gaps,
+        # never displaces anything — which is right for a folded part, whose box under-
+        # reads the blank it unfolds from. It is wrong for a part the model proves never
+        # leaves the plane: there the envelope IS the blank, measured, and stamping it at
+        # rank 0 left a 1435 x 130 figure off the model open to replacement by a rank-20
+        # inference, silently, on the two numbers that drive both the laser and the
+        # material cost.
+        #
+        # The derived datum inherits the source of the measurement it rests on, and no
+        # more: strip the source off the bbox and this falls straight back to a floor.
+        _bbox_src = str(part.get("bbox_mm_source")
+                        or (part.get("normalized_geometry") or {}).get("bbox_mm_source")
+                        or "").strip()
+        _flat = _bc.envelope_proves_it_never_leaves_the_plane(
+            _bbox_raw, part.get("normalized_thickness_mm"))
+        if _flat and _bc.cut_path_is_measured(_bbox_src):
+            part["blank_length_mm_source"] = _bbox_src
+            part["blank_width_mm_source"] = _bbox_src
+            part["blank_replaced_reason"] = verdict["reason"]
+            if "blank_replaced_by_measured_envelope" not in _flags:
+                _flags.append("blank_replaced_by_measured_envelope")
+            print(f"   [blank] {_pn}: recorded blank rejected — {verdict['reason']}. "
+                  f"Priced from the {_bbox_src} envelope instead: "
+                  f"{better['blank_length_mm']:g} x {better['blank_width_mm']:g} mm. "
+                  f"The envelope is {min(_bbox):g} mm deep — the material thickness — so "
+                  f"nothing leaves the plane and this IS the blank, not a floor under it.",
+                  flush=True)
+            return better["blank_length_mm"], better["blank_width_mm"]
+
         part["blank_length_mm_source"] = "bounding_box_floor"
         part["blank_width_mm_source"] = "bounding_box_floor"
         part["blank_replaced_reason"] = verdict["reason"]
