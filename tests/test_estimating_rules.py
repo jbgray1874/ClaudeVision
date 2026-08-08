@@ -6592,8 +6592,12 @@ def test_the_model_supplies_the_cut_length_the_drawing_never_printed():
                 [150.0, 12.7, 12.7])
     eq((tube.get("section_stock") or {}).get("length_mm"), 150.0,
        "the cut length comes from the model's bounding box")
-    eq((tube.get("section_stock") or {}).get("length_source"), "solidworks_api",
-       "and is stamped as measured, not inferred")
+    # length_mm_source, not length_source. The old key followed no convention, so nothing
+    # in the codebase read it: section length was stamped and never arbitrated by anything,
+    # and never appeared in a provenance trail either. apply_field on the dotted path
+    # writes the name every reader already looks for.
+    eq((tube.get("section_stock") or {}).get("length_mm_source"), "solidworks_api",
+       "a STRAIGHT section's longest envelope dimension IS its cut length — measured")
     ok(any("does not print one" in str(f) for f in (tube.get("review_flags") or [])),
        "with the estimator told where it came from")
 
@@ -6619,6 +6623,19 @@ def test_the_model_supplies_the_cut_length_the_drawing_never_printed():
     eq((bent.get("section_stock") or {}).get("length_mm"), 150.0, "the envelope is used")
     ok(any("UNDER-READS" in str(f) for f in (bent.get("review_flags") or [])),
        "and flagged as the envelope of a bent part, not its developed length")
+    # AND NOT AT RANK 90. The flag was doing the honest work while the rank undid it: at
+    # solidworks_api nothing may correct this, so a developed length later printed on the
+    # drawing (rank 70) would be REFUSED by precedence in favour of a figure we already
+    # know is short. A prose warning is for a person; the rank is what the machine acts on,
+    # and the two were saying opposite things.
+    eq((bent.get("section_stock") or {}).get("length_mm_source"), "geometry_inference",
+       "an under-reading envelope must not be defended by the strongest rank in the system")
+    from source_precedence import apply_field as _af, source_of as _so
+    _af(bent, "section_stock.length_mm", 195.0, "drawing_deterministic")
+    eq((bent.get("section_stock") or {}).get("length_mm"), 195.0,
+       "a developed length printed on the drawing must be able to correct the envelope")
+    eq(_so(bent, "section_stock.length_mm"), "drawing_deterministic",
+       "and the trail must say the drawing supplied it")
 
 
 def test_a_native_extract_for_another_job_is_refused():

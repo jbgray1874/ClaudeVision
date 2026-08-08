@@ -1192,10 +1192,51 @@ def _exact_perimeter_and_area(
     perimeter  = line_length + arc_length
 
     # Bounding box from cut lines
-    xs = [e.dxf.start.x * scale for e in cut_lines] + \
-         [e.dxf.end.x   * scale for e in cut_lines]
-    ys = [e.dxf.start.y * scale for e in cut_lines] + \
-         [e.dxf.end.y   * scale for e in cut_lines]
+    # THE BLANK IS THE EXTENT OF THE WHOLE OUTLINE, NOT OF ITS STRAIGHT PARTS.
+    #
+    # This measured line endpoints alone, so every arc that reaches beyond them was left
+    # out of the part's own size: a radiused nose, a rounded end, a D-shape, a bulged
+    # polyline edge. Measured on a 200 x 100 plate with two outward bulges — true extent
+    # 220.0 x 100, reported 200 x 100. The blank comes back SMALL, and a small blank is an
+    # under-priced one: 6.6% of the material on that plate alone.
+    #
+    # It also broke the net area, one step further on. The reconstruction correctly found
+    # 21343mm2 of material inside an outline the bbox said was 20000mm2, so fill came out
+    # at 106.7% — outside the 30-100.5% plausibility band — and the abstain gate threw the
+    # CORRECT figure away and substituted the wrong bbox. A part with rounded ends was
+    # costed on its straight-edged shadow, twice over.
+    #
+    # Arcs are measured by the same flattening the polygonize path uses, so the two cannot
+    # disagree about where the outline goes. The sagitta is expressed in native units, so
+    # it means 0.2mm whether the file is drawn in millimetres or inches.
+    _pts_x: List[float] = [e.dxf.start.x * scale for e in cut_lines] + \
+                          [e.dxf.end.x   * scale for e in cut_lines]
+    _pts_y: List[float] = [e.dxf.start.y * scale for e in cut_lines] + \
+                          [e.dxf.end.y   * scale for e in cut_lines]
+    _sag_bb = 0.20 / max(scale, 1e-9)
+    for e in (cut_arcs or []):
+        try:
+            for v in e.flattening(_sag_bb):
+                _pts_x.append(v.x * scale)
+                _pts_y.append(v.y * scale)
+        except Exception:
+            continue
+
+    # A DISC HAS NO STRAIGHT EDGES AT ALL. With no lines and no arcs the outline can only
+    # be a circle, and reading nothing gave a 0 x 0 blank on a perfectly measurable part.
+    # Only in that case, because anywhere else a circle is a HOLE and its extent is inside
+    # the profile already.
+    if not _pts_x and (cut_circs or []):
+        for e in cut_circs:
+            try:
+                r = float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
+                cx, cy = e.dxf.center.x * scale, e.dxf.center.y * scale
+                _pts_x += [cx - r, cx + r]
+                _pts_y += [cy - r, cy + r]
+            except Exception:
+                continue
+
+    xs, ys = _pts_x, _pts_y
     if not xs:
         return {"perimeter_mm": round(perimeter, 3), "area_mm2": 0.0,
                 "blank_length_mm": 0.0, "blank_width_mm": 0.0, "bbox_fill_pct": 0.0}

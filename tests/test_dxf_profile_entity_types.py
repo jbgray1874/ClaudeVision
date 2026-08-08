@@ -95,7 +95,12 @@ def test_a_filleted_polyline_keeps_its_arcs():
             format="xyseb", close=True, dxfattribs={"layer": CUT})
 
     out = _read(draw)
-    assert (out.get("blank_length_mm"), out.get("blank_width_mm")) == (L, W)
+    # 220, NOT 200. This asserted (L, W) when it was written, which encoded the very
+    # defect found immediately afterwards: the bounding box was built from line endpoints
+    # alone, so the outward bulges did not count towards the part's size. The plate is
+    # genuinely 220 x 100 and the assertion was agreeing with the bug.
+    assert out.get("blank_length_mm") == pytest.approx(220.0, abs=0.3)
+    assert out.get("blank_width_mm") == pytest.approx(W, abs=0.3)
     assert (out.get("perimeter_mm") or 0) > 2 * (L + W), \
         "the fillet arcs were flattened to chords — bulges were dropped"
 
@@ -233,6 +238,77 @@ def test_every_removal_of_folding_goes_through_the_shared_rule():
         "a fold is removed without asking whether the DXF is entitled to rule it out — "
         "an absent bend layer is silence, not a measured zero:\n  "
         + "\n  ".join(unguarded))
+
+
+# ── the blank is the extent of the WHOLE outline ────────────────────────────────────
+def _bulged(b):
+    def draw(msp):
+        msp.add_lwpolyline(
+            [(0, 0, 0, 0, 0.0), (L, 0, 0, 0, b), (L, W, 0, 0, 0.0), (0, W, 0, 0, b)],
+            format="xyseb", close=True, dxfattribs={"layer": CUT})
+    return draw
+
+
+@pytest.mark.parametrize("bulge,expect_len", [(0.2, 220.0), (0.5, 250.0)])
+def test_an_arc_that_reaches_past_the_straight_edges_is_part_of_the_blank(bulge, expect_len):
+    """The bounding box was built from LINE endpoints alone.
+
+    Every arc reaching beyond them was left out of the part's own size — a radiused nose,
+    a rounded end, a D-shape, a bulged polyline edge. The plate below is genuinely
+    220 x 100 and was reported 200 x 100: the blank comes back small, and a small blank is
+    an under-priced one.
+    """
+    out = _read(_bulged(bulge))
+    assert out.get("blank_length_mm") == pytest.approx(expect_len, abs=0.3), \
+        "the outward arc was not counted in the blank extent"
+    assert out.get("blank_width_mm") == pytest.approx(W, abs=0.3)
+
+
+def test_the_abstain_gate_no_longer_throws_away_a_correct_area():
+    """The second failure, caused by the first and worse than it.
+
+    The reconstruction correctly found more material inside the outline than the (too
+    small) bbox said existed, so fill came out above 100% — outside the plausibility band
+    — and the gate discarded the CORRECT area and substituted the wrong bbox. A part with
+    rounded ends was costed on its straight-edged shadow, twice over.
+    """
+    out = _read(_bulged(0.2))
+    fill = out.get("bbox_fill_pct") or 0
+    assert 30.0 <= fill <= 100.5, f"fill {fill}% is outside the band the gate accepts"
+    assert out.get("blank_area_mm2") == pytest.approx(21343.9, rel=0.01), \
+        "the polygonised area was replaced by the bounding box"
+
+
+def test_a_disc_has_a_size():
+    """No lines and no arcs, so the outline can only be the circle. Reading nothing gave
+    a 0 x 0 blank on a perfectly measurable part.
+
+    Only in that case: anywhere else a circle is a HOLE, and folding hole extents into the
+    blank would be wrong in the other direction.
+    """
+    out = _read(lambda msp: msp.add_circle((0, 0), 60, dxfattribs={"layer": CUT}))
+    assert out.get("blank_length_mm") == pytest.approx(120.0, abs=0.3)
+    assert out.get("blank_width_mm") == pytest.approx(120.0, abs=0.3)
+
+
+def test_a_hole_is_not_mistaken_for_the_outline():
+    """The guard on the disc rule. A plate with a hole must measure the plate."""
+    def draw(msp):
+        _lwpolyline(msp)
+        msp.add_circle((L / 2, W / 2), 5, dxfattribs={"layer": CUT})
+
+    out = _read(draw)
+    assert out.get("blank_length_mm") == pytest.approx(L, abs=0.3)
+
+
+def test_the_arc_extent_and_the_area_use_one_flattening_tolerance():
+    """Two tolerances would let the bbox and the reconstruction disagree about where the
+    outline goes — which is precisely the disagreement that tripped the abstain gate."""
+    src = (Path(__file__).resolve().parents[1] / "src" / "dxf_reader.py.py").read_text(
+        encoding="utf-8-sig")
+    assert src.count("0.20 / max(scale, 1e-9)") == 2, \
+        "the flattening sagitta is no longer written the same way in both places"
+
 
 if __name__ == "__main__":                                          # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

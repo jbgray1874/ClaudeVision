@@ -1314,19 +1314,37 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             _bb = [f for f in (_num(v) for v in (getattr(nat, "bbox_mm", None) or [])) if f]
             if _bb:
                 _len = max(_bb)
-                _ss = dict(_ss)
-                _ss["length_mm"] = round(_len, 2)
-                _ss["length_source"] = "solidworks_api"
-                part["section_stock"] = _ss
-                out["section_length"] = out.get("section_length", 0) + 1
                 _bent = any(o in (part.get("textual_operations") or [])
                             for o in ("tube_bending", "rolling"))
-                flags.append(
-                    f"section cut length {_len:.1f}mm taken from the MODEL's bounding box — "
-                    f"the drawing does not print one" +
-                    (". The part is also bent, so this is the ENVELOPE, not the developed "
-                     "length, and it UNDER-READS: confirm the cut length before quoting"
-                     if _bent else ""))
+                # AN UNDER-READING NUMBER MUST NOT CARRY THE STRONGEST RANK IN THE SYSTEM.
+                #
+                # For a STRAIGHT section the longest bounding-box side IS the cut length —
+                # a measurement, and rank 90 is right. For a BENT one it is the envelope,
+                # and the comment above says so: it under-reads. Stamping that at 90 means
+                # nothing may correct it — a developed length later printed on the drawing
+                # (rank 70) would be REFUSED by precedence in favour of a figure we already
+                # know is short, and under-reading a tube is how a job gets quoted short.
+                #
+                # The flag was doing the honest work and the rank was undoing it. A prose
+                # warning is for a person; the rank is what the machine acts on, and the
+                # two were saying opposite things. A derivation that adds an assumption
+                # steps down — the same rule that puts mirror_of_measured below the flat it
+                # mirrors.
+                _len_src = "geometry_inference" if _bent else SOURCE_NAME
+                # THROUGH THE RESOLVER, AND UNDER THE CONVENTION. This wrote `length_source`
+                # by hand — a key nothing in the codebase reads, so section length was never
+                # arbitrated by anything and never appeared in a provenance trail either.
+                # apply_field on a dotted path writes `length_mm_source`, which is the name
+                # every reader already looks for.
+                if _apply_field(part, "section_stock.length_mm", round(_len, 2), _len_src):
+                    out["section_length"] = out.get("section_length", 0) + 1
+                    flags.append(
+                        f"section cut length {_len:.1f}mm taken from the MODEL's bounding "
+                        f"box — the drawing does not print one" +
+                        (". The part is also bent, so this is the ENVELOPE, not the "
+                         "developed length, and it UNDER-READS: recorded as inferred so a "
+                         "stated developed length can still correct it — confirm the cut "
+                         "length before quoting" if _bent else ""))
 
         # ── STRUCTURE: assembly row -> parent, never costed for material ──────────
         # The native BOM is FULL DEPTH: a sub-assembly and all of its children appear.
