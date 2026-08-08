@@ -90,7 +90,7 @@ def _circle_holes(msp, scale):
             r = float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
             if r >= 0.5:
                 c = (e.dxf.center.x * scale, e.dxf.center.y * scale)
-                holes.append(Point(c).buffer(r, resolution=16))
+                holes.append(Point(c).buffer(r, 16))
     return holes
 
 

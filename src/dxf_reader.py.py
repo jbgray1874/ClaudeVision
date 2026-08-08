@@ -1113,7 +1113,18 @@ def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbox_area_mm2):
             if r < 0.5:
                 continue
             c = (e.dxf.center.x * scale, e.dxf.center.y * scale)
-            disc = Point(c).buffer(r, resolution=16)
+            # POSITIONAL, DELIBERATELY. Shapely renamed this argument: it is `resolution`
+            # in 1.x and `quad_segs` in 2.x, and 2.1 deprecates the old spelling — which is
+            # where the DeprecationWarning in the test run comes from. Naming either one
+            # pins this module to a Shapely major version, and when the deprecated name is
+            # finally removed the call raises TypeError inside a `try/except Exception`
+            # that would swallow it: every hole would silently stop being subtracted from
+            # net area, on the measured-geometry path that ranks 80.
+            #
+            # The second positional parameter has meant "segments per quarter circle" in
+            # both versions, so passing it positionally is correct on either and cannot
+            # rot. 16 is unchanged.
+            disc = Point(c).buffer(r, 16)
             if outer.contains(disc.representative_point()):
                 net_area = max(0.0, net_area - disc.area)
         except Exception:
