@@ -174,15 +174,55 @@ function Show-PathDiagnosis([string] $p) {
                 $m = [regex]::Match($stale[0].Line, '(\\\\[^\s]+)')
                 if ($m.Success) { $unc = $p -replace [regex]::Escape($qual), $m.Groups[1].Value }
             }
+            # THE REGISTRY REMEMBERS THE SERVER EVEN WHEN NOTHING ELSE DOES. A persistent
+            # mapping is stored under HKCU:\Network\<letter> with its RemotePath, and it
+            # survives the connection dying, the letter being released, and the session
+            # ending. That makes it the one place the REAL \\server\share can be read back
+            # after "System error 67 - the network name cannot be found" has established
+            # that the name being typed is not it. Guessing a server name produces error 67
+            # indefinitely; reading it produces the answer once.
+            if (-not $unc) {
+                try {
+                    $reg = Get-ItemProperty "HKCU:\Network\$($qual.TrimEnd(':'))" -ErrorAction Stop
+                    if ($reg.RemotePath) {
+                        $unc = $p -replace [regex]::Escape($qual), $reg.RemotePath
+                        Write-Host "`n$qual is remembered in the registry as $($reg.RemotePath)." -ForegroundColor Yellow
+                    }
+                } catch { }
+            }
             Write-Host "`nOr skip the drive letter entirely — a UNC path needs no mapping," -ForegroundColor Cyan
             Write-Host 'survives elevation, and is the more robust thing to put in the variable:'
             if ($unc) {
                 Write-Host "    `$env:SDI_JOBS_ROOT = '$unc'"
             } else {
                 Write-Host "    `$env:SDI_JOBS_ROOT = '\\<server>\<share>$($p.Substring($qual.Length))'"
-                Write-Host '    (find <server>\<share> with:  net use   — or in Explorer, the'
-                Write-Host "     drive shows as \\server\share ($qual))"
+                # DO NOT GUESS THE SERVER. A wrong \\server\share returns "System error 67
+                # - the network name cannot be found", which is indistinguishable from the
+                # server being down, so guessing produces the same message forever. Every
+                # line below reads the name from somewhere it is already recorded.
+                Write-Host "`n    Find <server>\<share> — do not guess it, a wrong name gives" -ForegroundColor Cyan
+                Write-Host '    "System error 67" whatever the reason:'
+                Write-Host '        Get-ChildItem HKCU:\Network | ForEach-Object {'
+                Write-Host '            "$($_.PSChildName): $((Get-ItemProperty $_.PSPath).RemotePath)" }'
+                Write-Host '        net use'
+                Write-Host '        Get-SmbMapping'
+                Write-Host '    — or in Explorer, This PC shows the drive as share (\\server)'
+                $known = @()
+                try {
+                    $known = @(Get-ChildItem 'HKCU:\Network' -ErrorAction Stop | ForEach-Object {
+                        "$($_.PSChildName): $((Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).RemotePath)"
+                    })
+                } catch { }
+                if ($known) {
+                    Write-Host "`n    This machine remembers these mappings:" -ForegroundColor Cyan
+                    foreach ($k in $known) { Write-Host "        $k" }
+                }
             }
+            # QUOTE IT. A share name ending in $ is ordinary on a Windows server, and $ is
+            # PowerShell's variable sigil — an unquoted or double-quoted UNC can lose part
+            # of itself to interpolation before net use ever sees it, which then reports a
+            # name the user never typed.
+            Write-Host "`n    Single-quote any UNC containing `$ — double quotes interpolate it." -ForegroundColor DarkGray
         }
         elseif ($drv.DisplayRoot) {
             Write-Host "`nDrive $qual is mapped to $($drv.DisplayRoot), so the drive is fine" -ForegroundColor Yellow
