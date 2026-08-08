@@ -107,24 +107,31 @@ def main() -> int:
     except Exception:
         suffix = lambda s: (str(s or "").strip().upper()[-1:]
                             if str(s or "").strip().upper()[-1:] in "MAT" else "")
-    bad = []
+    # RAW READING vs CONCLUSION, side by side. Reporting only that "Card" appears somewhere
+    # on a part cannot tell a broken arbitration from a working one whose loser is still
+    # being displayed — and those need opposite fixes. The workbook costs these parts as
+    # MILD STEEL, so the question is which field the estimator is being shown.
+    rows = []
     for p in parts:
         if not isinstance(p, dict):
             continue
         code = str(p.get("part_number") or "")
         if not suffix(code):
             continue
-        for key in ("materials", "material", "normalized_material", "raw_material"):
-            v = p.get(key)
-            for m in (v if isinstance(v, list) else [v]):
-                if m and "CARD" in str(m).upper():
-                    bad.append((code, key, m))
-    if bad:
-        print(f"   {len(bad)} reading(s) of CARD on a part whose code says we cut it:")
-        for c, k, m in bad[:6]:
-            print(f"      {c}: {k}={m!r}")
-    else:
-        print("   no CARD readings on suffixed parts")
+        raw = p.get("materials") or p.get("material") or p.get("raw_material")
+        if isinstance(raw, list):
+            raw = ", ".join(str(v) for v in raw if v)
+        rows.append((code, raw, p.get("normalized_material"),
+                     p.get("material_source") or p.get("normalized_material_source")))
+    if not rows:
+        print("   no material-suffixed parts on this job")
+    _wrong = [r for r in rows if r[2] and "CARD" in str(r[2]).upper()]
+    _stale = [r for r in rows if "CARD" in str(r[1] or "").upper()
+              and r[2] and "CARD" not in str(r[2]).upper()]
+    for code, raw, norm, src in rows[:8]:
+        print(f"      {code:16} raw={str(raw)!r:24} costed={str(norm)!r:14} source={src!r}")
+    print(f"   costed as CARD (arbitration failing): {len(_wrong)}")
+    print(f"   raw says CARD, costed otherwise (display only): {len(_stale)}")
     return 0
 
 
