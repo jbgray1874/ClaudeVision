@@ -39,6 +39,19 @@
     Pointing it at one pack still works — the parent is searched too — but every sibling
     pack on the enquiry is then reachable by number, which is the point of setting it.
 
+    PREFER THE UNC PATH TO A DRIVE LETTER:
+
+        setx SDI_JOBS_ROOT "\\<server>\<share>\Shared\Estimating\...\Live Enquiry"
+
+    A mapped letter is per-logon-token and per-session. It disappears in an elevated
+    console, it goes stale while still holding its letter (which is what "System error 85
+    — the local device name is already in use" means when the drive is nowhere to be
+    seen), and it is absent entirely on a machine that never mapped it. A UNC path has
+    none of those properties. Where a letter has gone stale, release it before re-mapping:
+
+        net use K: /delete
+        net use K: \\<server>\<share> /persistent:yes
+
     Exists because a long command line pasted into a console loses its first character
     often enough to matter, and PowerShell then runs the fragment: "C:\ClaudeVision\..."
     arriving as ":\ClaudeVision\..." leaves a bare "r 42", which is Invoke-History, which
@@ -109,6 +122,29 @@ function Show-PathDiagnosis([string] $p) {
         $drv = Get-PSDrive -Name $qual.TrimEnd(':') -ErrorAction SilentlyContinue
         if (-not $drv) {
             Write-Host "`nDrive $qual is not mapped in this session." -ForegroundColor Yellow
+
+            # REGISTERED BUT DISCONNECTED IS NOT THE SAME AS UNMAPPED, and it is the case
+            # that wastes the most time: Get-PSDrive cannot see the letter, so the obvious
+            # move is to map it — and `net use K: \\server\share` then fails with
+            # "System error 85 — the local device name is already in use", which reads as a
+            # contradiction. It is not. The persistent mapping is still registered, the
+            # redirector is holding the letter, and the connection behind it is dead. The
+            # letter must be released before it can be re-used, and trying a DIFFERENT
+            # letter usually fails the same way because it is stale for the same reason.
+            $stale = $null
+            try {
+                $stale = (& net use 2>$null | Select-String -SimpleMatch "$qual ")
+            } catch { }
+            if ($stale) {
+                Write-Host "`n...but $qual IS registered as a persistent mapping. `net use` says:" -ForegroundColor Yellow
+                $stale | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
+                Write-Host "`nA registered-but-disconnected mapping still holds the letter, which"
+                Write-Host 'is why mapping it again returns "System error 85 - the local device'
+                Write-Host 'name is already in use". Release it first:'
+                Write-Host "    net use $qual /delete" -ForegroundColor Cyan
+                Write-Host "    net use $qual \\<server>\<share> /persistent:yes" -ForegroundColor Cyan
+            }
+
             $elevated = $false
             try {
                 $elevated = ([Security.Principal.WindowsPrincipal] `
@@ -120,13 +156,32 @@ function Show-PathDiagnosis([string] $p) {
                 # token, and an elevated shell runs under a DIFFERENT token — so a drive
                 # that is present in Explorer and in a normal console is simply absent
                 # here, with no error anywhere to say why.
-                Write-Host 'This console is ELEVATED, and mapped drives belong to the' -ForegroundColor Yellow
+                Write-Host "`nThis console is ELEVATED, and mapped drives belong to the" -ForegroundColor Yellow
                 Write-Host 'non-elevated logon token. A drive you can see in Explorer is'
                 Write-Host 'invisible here. Run this script from a NORMAL PowerShell, or'
                 Write-Host 'use the UNC path, which does not depend on the mapping.'
+            } elseif (-not $stale) {
+                Write-Host "    net use $qual \\<server>\<share> /persistent:yes"
+            }
+
+            # THE ROUTE THAT AVOIDS ALL OF THE ABOVE. A UNC path needs no drive letter, so
+            # it cannot be stale, cannot be held by another session, and does not vanish
+            # when the shell is elevated. Where the letter has ever been mapped the server
+            # is recoverable from the persistent mapping, so the exact line to paste can be
+            # printed rather than described.
+            $unc = ''
+            if ($stale) {
+                $m = [regex]::Match($stale[0].Line, '(\\\\[^\s]+)')
+                if ($m.Success) { $unc = $p -replace [regex]::Escape($qual), $m.Groups[1].Value }
+            }
+            Write-Host "`nOr skip the drive letter entirely — a UNC path needs no mapping," -ForegroundColor Cyan
+            Write-Host 'survives elevation, and is the more robust thing to put in the variable:'
+            if ($unc) {
+                Write-Host "    `$env:SDI_JOBS_ROOT = '$unc'"
             } else {
-                Write-Host "    net use $qual  \\<server>\<share>"
-                Write-Host '    — or set SDI_JOBS_ROOT to the UNC path instead, which needs no mapping.'
+                Write-Host "    `$env:SDI_JOBS_ROOT = '\\<server>\<share>$($p.Substring($qual.Length))'"
+                Write-Host '    (find <server>\<share> with:  net use   — or in Explorer, the'
+                Write-Host "     drive shows as \\server\share ($qual))"
             }
         }
         elseif ($drv.DisplayRoot) {
@@ -140,11 +195,19 @@ function Show-PathDiagnosis([string] $p) {
     # path is right up to here and wrong after it", which is one look rather than a hunt.
     $probe = $p
     while ($probe -and -not (Test-Path $probe)) {
+        # STOP AT THE SHARE ROOT. Above \\server\share there is nothing to test — the walk
+        # would climb to \\server and then to \\, neither of which is a place a pack could
+        # be, and reporting "the path exists as far as \\" is worse than reporting nothing.
+        if ($probe -like '\\*' -and (($probe.TrimStart('\') -split '\\').Count -le 2)) {
+            $probe = ''; break
+        }
         $next = Split-Path $probe -Parent
         if (-not $next -or $next -eq $probe) { $probe = ''; break }
         $probe = $next
     }
-    if ($probe) {
+    # A bare root is not a useful answer. "The path exists as far as \" tells the reader
+    # only that their filesystem exists, in the place a real finding would have gone.
+    if ($probe -and ($probe.TrimEnd('\', '/').Length -gt 2)) {
         Write-Host "`nThe path exists as far as:" -ForegroundColor Cyan
         Write-Host "    $probe"
         $kids = @(Get-ChildItem -LiteralPath $probe -Directory -ErrorAction SilentlyContinue |
@@ -221,6 +284,10 @@ if (-not $resolved) {
         Write-Host 'one that ran it, which is the usual reason this appears right after setting it.'
         Write-Host '    $env:SDI_JOBS_ROOT = "K:\...\Live Enquiry"     # this console, now'
         Write-Host '    setx SDI_JOBS_ROOT "K:\...\Live Enquiry"       # every console after'
+        Write-Host "`nA UNC path is the better value: no drive letter to go stale, nothing" -ForegroundColor Cyan
+        Write-Host 'to break when the console is elevated, and it works on a machine that'
+        Write-Host 'never mapped the share at all:'
+        Write-Host '    $env:SDI_JOBS_ROOT = "\\<server>\<share>\...\Live Enquiry"'
     }
     elseif ($jobsRootIsAPack) {
         Write-Host "`nSDI_JOBS_ROOT points at ONE PACK, not at the folder that holds your" -ForegroundColor Yellow
