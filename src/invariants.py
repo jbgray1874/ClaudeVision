@@ -1019,6 +1019,84 @@ def check_uncorroborated_bom_lines_are_not_silent(summary: Any) -> List[Dict[str
         share_pct=round(_share, 1))]
 
 
+def check_uncorroborated_route_operations(summary: Any) -> List[Dict[str, Any]]:
+    """Labour charged for work nothing read off the drawing.
+
+    THE BOM IS READ TWICE AND THE ROUTE IS NOT. A BOM row only one reader saw is emitted,
+    flagged, and blocked when it carries real money — check_uncorroborated_bom_lines_are_
+    not_silent. The route has had no equivalent: an operation reasoned by the model and an
+    operation measured off a cut list both arrive as REQUIRED, distinguishable only by a
+    rank number nothing downstream weighed.
+
+    A route decision is corroborated when some claim behind it was READ — a bend count, a
+    weld symbol, a finish note, a cut-list property — or quotes the drawing's own words.
+    Everything else is proposal, and proposal that reaches the labour column is exactly the
+    work an estimator would want to look at first.
+
+    NOT A DEMOTION. Dropping an uncorroborated operation would be worse than keeping it:
+    work the model saw and we did not is precisely what gets forgotten, and forgetting it
+    costs real minutes on the shop floor. This names it and prices the doubt.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("uncorroborated_route", "This job is not a readable structure.")
+    fe = _node(summary, "final_estimate")
+    rows = fe.get("labour_rows") or fe.get("calculated_labour_rows") or []
+    if not isinstance(rows, list) or not rows:
+        return []
+
+    decisions = {}
+    for _d in ((summary.get("canonical_route") or {}).get("decisions") or []):
+        if isinstance(_d, dict) and _d.get("status") == "required":
+            _op = str(_d.get("operation") or "").strip().lower()
+            _tgt = str(_d.get("target_id") or "").strip().upper()
+            if _op:
+                decisions[(_op, _tgt)] = _d
+    if not decisions:
+        # NOT unevaluated. A job with no canonical route decisions has not hidden this
+        # answer — it has no canonical route, which check_canonical_route_shadow owns and
+        # reports. Claiming "unverified" here made every complete, consistent job
+        # unreleasable over a route this check was never given.
+        return []
+
+    total = 0.0
+    flagged, worth = [], 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        _v = _num(row.get("total_value_gbp")) or _num(row.get("labour_cost_gbp")) or 0.0
+        total += _v
+        if _v <= 0:
+            continue
+        _op = str(row.get("operation") or "").strip().lower().replace(" ", "_")
+        for (_dop, _dtgt), _d in decisions.items():
+            if _dop != _op and _dop not in _op:
+                continue
+            if _d.get("corroborated") is False:
+                flagged.append({"operation": row.get("operation"), "target": _dtgt,
+                                "value_gbp": round(_v, 2),
+                                "sources": _d.get("source"),
+                                "evidence": _d.get("evidence") or None})
+                worth += _v
+            break
+    if not flagged:
+        return []
+
+    _share = (worth / total * 100.0) if total > 0 else 0.0
+    _sev = BLOCKING if _share >= 40.0 else WARNING
+    return [_violation(
+        "route_operation_not_corroborated", _sev,
+        f"{len(flagged)} priced operation(s) carry GBP {worth:,.2f} of a GBP {total:,.2f} "
+        f"labour total ({_share:.0f}%) on work nothing read off the drawing — no measured "
+        f"feature, no quoted note: "
+        + "; ".join(f"{f['operation']} on {f['target'] or '?'} @ GBP {f['value_gbp']:,.2f}"
+                    for f in flagged[:6])
+        + ". Kept on the estimate deliberately, because work the model saw and we did not "
+          "is what gets forgotten — but an estimator should confirm it before this is a "
+          "quote.",
+        operations=flagged[:10], count=len(flagged), value_gbp=round(worth, 2),
+        share_pct=round(_share, 1))]
+
+
 def check_both_bom_readers_ran(summary: Any) -> List[Dict[str, Any]]:
     """A BOM read by one reader must not be reported as a BOM read by two.
 
@@ -1973,6 +2051,7 @@ CHECKS = (
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
     check_both_bom_readers_ran,
+    check_uncorroborated_route_operations,
     check_the_quantity_costed_is_the_quantity_ordered,
     check_an_operation_is_not_charged_on_a_parent_and_its_child,
 )

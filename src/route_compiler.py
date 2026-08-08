@@ -173,6 +173,15 @@ class OperationClaim:
     confidence: Optional[float] = None
     reason: str = ""
     route_id: str = ""
+    # WHAT PUT THIS OPERATION HERE, in the drawing's own words. A finish note, a weld
+    # symbol, a bend line count, a cut-list property.
+    #
+    # `reason` is our prose about the claim; this is the DRAWING's. The difference decides
+    # whether an operation can be checked: a claim that quotes the sheet can be held
+    # against the sheet, and a bare operation name cannot be argued with at all. It is
+    # what makes an LLM claim corroborable rather than merely ranked.
+    evidence: str = ""
+    evidence_where: str = ""
 
 
 @dataclass
@@ -193,6 +202,15 @@ class OperationDecision:
     field_provenance: Dict[str, str]
     conflicts: List[Dict[str, Any]]
     claims: List[Dict[str, Any]]
+    # The drawing's own words behind this operation, carried from the strongest claim
+    # that had any. Empty means nothing quoted the sheet — which is a fact about the
+    # decision an estimator should be able to see, not a blank to be filled in.
+    evidence: str = ""
+    evidence_where: str = ""
+    # True when something READ this operation off the drawing or the model, rather than
+    # reasoning it from the job. False is not a fault — it is a fact an estimator is
+    # entitled to see, and what check_uncorroborated_route_operations weighs.
+    corroborated: bool = True
 
 
 def make_claim(
@@ -209,6 +227,8 @@ def make_claim(
     confidence: Any = None,
     reason: Any = "",
     route_id: str = "",
+    evidence: Any = "",
+    evidence_where: Any = "",
 ) -> OperationClaim:
     operation_name = clean_operation(operation)
     status_name = status if status in VALID_STATUSES else UNVERIFIED
@@ -245,6 +265,8 @@ def make_claim(
         confidence=confidence_value(confidence),
         reason=str(reason or ""),
         route_id=str(route_id or ""),
+        evidence=" ".join(str(evidence or "").split())[:300],
+        evidence_where=" ".join(str(evidence_where or "").split())[:120],
     )
 
 
@@ -1518,6 +1540,26 @@ def arbitrate_event(
     if conflicts:
         status = UNVERIFIED
 
+    # ── WHETHER ANYTHING READ THIS, OR WE ONLY REASONED IT ──────────────────────────
+    #
+    # Recorded, NOT enforced. The first version of this demoted an uncorroborated REQUIRED
+    # operation to UNVERIFIED and broke eight tests, correctly: the extract is today the
+    # primary route source, so demoting all of it collapses the route to nothing anybody
+    # would price.
+    #
+    # The BOM does not work that way either, and it is the model to copy. A row only one
+    # reader saw is not dropped — it is emitted, flagged, and an invariant blocks when the
+    # money behind the doubt is material. Weight belongs where the cost is known, and that
+    # is not here.
+    #
+    # So: a decision is corroborated when any claim behind it was READ rather than
+    # reasoned, or quotes the drawing's own words. Everything else is proposed, and says so.
+    _reasoned_sources = {"llm_full_extract", "llm_extract", "inference", "geometry_inference"}
+    _read_it = [c for c in claims
+                if str(c.source or "").strip().lower() not in _reasoned_sources]
+    _quoted_it = [c for c in claims if str(getattr(c, "evidence", "") or "").strip()]
+    _corroborated = bool(_read_it or _quoted_it)
+
     # Multiplicity exists only for required work. Participant count is never a fallback.
     qty = metadata.get("qty_per_unit") if status == REQUIRED else None
     if status == REQUIRED and qty is None:
@@ -1532,6 +1574,17 @@ def arbitrate_event(
     if conflicts:
         reason = "conflicting claims require estimator resolution"
 
+    # THE EVIDENCE OF THE STRONGEST CLAIM THAT HAS ANY. A decision assembled from several
+    # claims should quote the drawing where any of them could, not only where the winner
+    # happened to. Measured sources rank first, so this prefers a cut-list property or a
+    # bend count over a note, and a note over nothing.
+    _ev = ""
+    _ev_where = ""
+    for _c in sorted(claims, key=lambda c: -(c.source_rank or 0)):
+        if getattr(_c, "evidence", ""):
+            _ev, _ev_where = _c.evidence, getattr(_c, "evidence_where", "")
+            break
+
     return OperationDecision(
         decision_id=decision_id,
         route_id=str(metadata.get("route_id") or status_winner.route_id or ""),
@@ -1545,6 +1598,9 @@ def arbitrate_event(
         sequence=metadata.get("sequence"),
         source=status_winner.source,
         source_rank=strongest_rank,
+        evidence=_ev,
+        evidence_where=_ev_where,
+        corroborated=_corroborated,
         confidence=status_winner.confidence,
         reason=reason,
         field_provenance=provenance,
@@ -1686,6 +1742,12 @@ def compile_job_route(
                 target_id=target_id,
                 scope=scope,
                 participants=members,
+                # WHAT THE DRAWING SAID, if the extract quoted it. A claim carrying the
+                # sheet's own words can be held against the sheet; a bare operation name
+                # cannot be argued with, only ranked.
+                evidence=(route.get("evidence") or route.get("drawing_note")
+                          or route.get("quote") or ""),
+                evidence_where=(route.get("evidence_where") or route.get("where") or ""),
                 # A ROUTE-GROUP QUANTITY IS NOT EACH TARGET'S QUANTITY.
                 #
                 # 2085's tube_cut names both tubes and states qty_per_unit 2 -- two tubes
