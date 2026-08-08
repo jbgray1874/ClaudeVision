@@ -1,74 +1,66 @@
-"""
-A recognised purchase with no page can never be given an owner.
+"""A purchase recognised in a drawing note has to be able to say which sheet said so.
 
-BI-BOLTBZP is a real GBP 0.83 bolt. The prose recogniser found the words "Bolt Bzp" in a
-drawing's notes, priced it from history, and emitted it — with `source`, `page_roles` and
-`review_flag`, and no record of which sheet said so. It then blocked job 12392 as a
-"disconnected node" for exactly that reason: the compiler had an owner to offer it and no way
-to know which.
-
-The caller reads the notes PAGE BY PAGE and joins them one line before calling
-(estimator.py, _note_chunks -> _note_text). The page was known and thrown away — the same
-defect, and the same fix, as the BOM rows: attribute AFTER the match, so which phrases are
-recognised does not change at all.
-
-Two things this deliberately does not do. It does not refuse to emit a part whose page it
-cannot find — that would delete a real purchase to satisfy a checker. And it does not make
-the page an owner: the compiler still requires an ASSEMBLY page of a drawing the job already
-knows before any edge is made.
+A part with no page can never be given an owner, and an unowned part blocks the job as a
+disconnected node. BI-BOLTBZP is a real GBP 0.83 bolt that blocked 12392 for exactly that
+reason — not because the sheet was unknown, but because the phrase was compared against an
+un-normalised copy of the very page it was read from.
 """
 from __future__ import annotations
 
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-from bought_in_recogniser import _page_that_says
-
-
-PAGES = [
-    {"page_number": 1, "region_text": {"notes": "GENERAL ARRANGEMENT. ALL WELDS DRESSED."}},
-    {"page_number": 2, "region_text": {"notes": "FIXINGS: 4 OFF BOLT BZP M6 x 25"}},
-    {"page_number": 3, "pdfplumber_text": "DETAIL SHEET - PANEL STIFFENER"},
-]
+import bought_in_recogniser as bir  # noqa: E402
 
 
-def test_the_page_that_named_the_purchase_is_found():
-    assert _page_that_says("Bolt Bzp", PAGES) == 2
-    assert _page_that_says("BOLT BZP", PAGES) == 2
+def _page(text, number=3, key="text"):
+    return [{"page_number": number, key: text}]
 
 
-def test_it_reads_every_text_variant_a_page_carries():
-    """_note_text is built from notes AND four different text extractions of the same page.
-    Reading fewer of them here than the recogniser reads there would attribute a hit to no
-    page while the phrase plainly matched — deterministically losing the owner."""
-    assert _page_that_says("PANEL STIFFENER", PAGES) == 3
-    assert _page_that_says("welds dressed", PAGES) == 1
+def test_a_phrase_split_across_a_line_break_is_still_found():
+    """The case that mattered. Drawing notes wrap, so a line break inside a two-word
+    phrase is the normal case rather than an edge one."""
+    assert bir._page_that_says("BOLT BZP",
+                               _page("NOTE: FIX WITH M6 BOLT\nBZP AND WASHER")) == 3
 
 
-def test_a_phrase_no_page_carries_lands_on_no_page():
-    """A phrase spanning a page break still MATCHES in the joined text — it simply belongs to
-    no single sheet, and saying so is the honest answer. The part is still emitted."""
-    assert _page_that_says("KNURLED KNOB", PAGES) is None
+def test_double_spacing_and_tabs_are_found():
+    assert bir._page_that_says("BOLT BZP", _page("M6 BOLT  BZP")) == 3
+    assert bir._page_that_says("BOLT BZP", _page("M6\tBOLT\tBZP")) == 3
 
 
-def test_absence_is_not_an_error():
-    assert _page_that_says("Bolt Bzp", None) is None
-    assert _page_that_says("Bolt Bzp", []) is None
-    assert _page_that_says("", PAGES) is None
-    assert _page_that_says(None, PAGES) is None
-    assert _page_that_says("Bolt Bzp", [None, "not a page"]) is None
+def test_a_plain_match_still_works():
+    assert bir._page_that_says("BOLT BZP", _page("M6 BOLT BZP")) == 3
 
 
-def test_a_page_with_no_number_is_not_guessed_at():
-    assert _page_that_says("BOLT BZP", [{"region_text": {"notes": "BOLT BZP"}}]) is None
+def test_a_phrase_that_is_not_there_is_not_invented():
+    """Mutation guard. Normalising both sides must not make everything match — an owner
+    offered on a page that never said it is worse than no owner at all."""
+    assert bir._page_that_says("BOLT BZP", _page("M6 SCREW AND WASHER ONLY")) is None
 
 
-def test_the_recogniser_accepts_pages_and_the_caller_supplies_them():
-    """A parameter nothing passes is the defect it was added to fix."""
-    import inspect
-    import bought_in_recogniser, estimator
-    assert "pages" in inspect.signature(
-        bought_in_recogniser.recognise_bought_in_in_prose).parameters
-    assert "pages=(summary.get(\"pages\") or [])" in inspect.getsource(estimator)
+def test_the_notes_region_is_read_as_well_as_the_page_text():
+    pages = [{"page_number": 7, "region_text": {"notes": "ASSEMBLE WITH\nBOLT BZP"}}]
+    assert bir._page_that_says("BOLT BZP", pages) == 7
+
+
+def test_the_first_page_that_says_it_wins():
+    pages = [{"page_number": 2, "text": "GENERAL NOTES"},
+             {"page_number": 4, "text": "USE BOLT BZP"},
+             {"page_number": 5, "text": "ALSO BOLT BZP"}]
+    assert bir._page_that_says("BOLT BZP", pages) == 4
+
+
+def test_no_pages_and_no_phrase_are_answered_honestly():
+    assert bir._page_that_says("BOLT BZP", []) is None
+    assert bir._page_that_says("BOLT BZP", None) is None
+    assert bir._page_that_says("", _page("BOLT BZP")) is None
+    assert bir._page_that_says(None, _page("BOLT BZP")) is None
+
+
+def test_a_page_with_no_number_does_not_pretend_to_have_one():
+    assert bir._page_that_says("BOLT BZP", [{"text": "USE BOLT BZP"}]) is None

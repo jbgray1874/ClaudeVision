@@ -404,6 +404,13 @@ def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optio
     First match wins, in page order. Where a phrase appears on several sheets the first is
     as defensible as any — and the compiler only ever uses this to offer an owner, which it
     then refuses unless the page is an assembly page of a drawing the job already knows.
+
+    BOTH SIDES ARE NORMALISED, and originally only one was. The needle had its whitespace
+    collapsed and the page text did not, so "BOLT BZP" failed to match a note reading
+    "BOLT\\nBZP" — and drawing notes wrap constantly, which makes a line break the normal
+    case rather than an edge one. BI-BOLTBZP is a real GBP 0.83 bolt that blocked job 12392
+    as a disconnected node for exactly this: the sheet that named it was found, compared
+    against an un-normalised copy of itself, and reported as not saying so.
     """
     if not phrase or not pages:
         return None
@@ -421,7 +428,7 @@ def _page_that_says(phrase: Any, pages: Optional[List[Dict[str, Any]]]) -> Optio
             value = page.get(key)
             if value:
                 blob.append(str(value))
-        if needle in " ".join(blob).upper():
+        if needle in " ".join(" ".join(blob).upper().split()):
             number = page.get("page_number")
             try:
                 return int(number)
