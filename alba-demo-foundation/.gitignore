@@ -1,0 +1,5 @@
+# The repository root ignores *.json to keep extractor output out of git.
+# This package's manifest is source, so re-include it explicitly.
+!package.json
+
+node_modules/

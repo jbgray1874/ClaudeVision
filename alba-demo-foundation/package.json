@@ -1,0 +1,21 @@
+{
+  "name": "alba-demo-foundation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared portfolio data model, KPI engine and scenario logic for the Alba scenario-led demo",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./scenario1": "./src/scenario1-revenue-miss.js",
+    "./scenario4": "./src/scenario4-expansion.js"
+  },
+  "scripts": {
+    "demo": "node bin/demo.js",
+    "demo:reports": "node bin/demo.js reports",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
