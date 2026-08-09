@@ -32,21 +32,66 @@ No dependencies, no network, no filesystem, no wall clock. Node 18+.
 | `src/actions.js` | Alert and action tracker, through to closed-loop outcome |
 | `src/report.js` | Exception Report and Growth Opportunity Brief, payload plus Markdown |
 | `src/index.js` | Portfolio Health Command Centre and the public surface |
+| `src/adapters/albaPip.js` | Emits the platform's own `buildFinance()` and board-pack shapes |
 
 ## Using it in the React app
 
-Copy `src/` to `src/lib/demo/` in `alba-pip` and import from the index:
+Copy `src/` to `src/lib/demo/` in `alba-pip`.
+
+**The existing screens need no changes.** `src/adapters/albaPip.js` emits the
+shape `buildFinance(company)` already returns, so `FinanceDrilldown.jsx` keeps
+its four levels, its breadcrumb and its Xero overlay untouched:
+
+```js
+import { toFinanceShape } from './lib/demo/adapters/albaPip.js';
+
+// drop-in for buildFinance(company) — same keys, same GBP thousands
+const fin = toFinanceShape(company.id);
+```
+
+What changes is what sits behind those keys: eighteen months of history instead
+of one seed row, every figure carrying its source, and sub-lines that sum
+exactly to the totals above them.
+
+For the board pack, the adapter inverts the current arrangement. `api/ai/
+boardpack.js` currently asks Grok to produce the whole schema, metrics
+included. Instead:
+
+```js
+import { toBoardPackSchema, BOARD_PACK_PROMPT } from './lib/demo/adapters/albaPip.js';
+
+const pack = toBoardPackSchema('meridian');
+// every keyMetric, risk, opportunity and action is calculated;
+// executiveSummary and outlook are null, for the model to write
+```
+
+The new demo surfaces are separate and additive:
 
 ```js
 import { buildCommandCentre, buildScenario1, buildScenario4 } from './lib/demo';
-
-const cc = buildCommandCentre();          // portfolio table, rollup, split alert lists
-const s1 = buildScenario1();              // forecast, bridge, deals, insight card
-const s4 = buildScenario4();              // scored customers, qualified cohort, insight card
 ```
 
 Every builder returns plain data. Nothing renders, nothing fetches, so the
 screens stay free to present it however the brand requires.
+
+## Fidelity to the platform
+
+The five companies already in the platform are **calibrated onto
+`src/lib/financeData.js`**: the final month of each generated history
+reproduces the live seed exactly — cash, burn, revenue, budget, gross margin
+and EBITDA margin. Meridian still shows 663k of cash, 138k of burn and 4.8
+months of runway. A test asserts it for all five.
+
+Runway uses the platform's basis (closing cash over current monthly burn), not
+a trailing average. The average is arguably better, but a second, better number
+that disagrees with the one already on screen is the exact inconsistency the
+acceptance criteria forbid.
+
+Two of the specification's scenarios need companies larger than any in the
+current portfolio — a USD 1.2m quarterly miss is not available on a company
+billing £261k a month. Those run on **Kestrel Analytics** and **Halcyon
+Payments**, added alongside the existing five. Nothing existing was resized to
+fit a scenario.
 
 ## Design decisions worth knowing
 

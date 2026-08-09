@@ -22,11 +22,11 @@ test('the baseline reproduces the reported cash position exactly', () => {
   const reported = runway(company.series);
 
   assert.ok(near(base.openingCash, last(company.series).cashClose));
-  assert.ok(near(base.monthlyBurn, reported.avgMonthlyBurn));
+  assert.ok(near(base.monthlyBurn, reported.monthlyBurn));
 
   // The identity the whole model hangs on.
   assert.ok(
-    near(base.monthlyOutflow - base.monthlyReceipts, reported.avgMonthlyBurn),
+    near(base.monthlyOutflow - base.monthlyReceipts, reported.monthlyBurn),
     'outflow less receipts must equal the burn the company reports',
   );
   assert.ok(

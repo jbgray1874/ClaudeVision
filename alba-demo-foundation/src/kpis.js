@@ -96,18 +96,27 @@ export function projectedQuarter(series, quarterKey) {
   };
 }
 
-/** Trailing cash runway. Burn is a three-month average to damp single-month noise. */
+/** Cash runway, on the same basis the platform already reports it. */
 export function runway(series, atIndex = series.length - 1) {
   const row = series[atIndex];
   const window = series.slice(Math.max(0, atIndex - 2), atIndex + 1);
   const avgBurn = sumBy(window, 'netBurn') / window.length;
+
+  // The platform computes runway as closing cash over the current month's burn.
+  // A trailing average is arguably the better measure, but a second, better
+  // number that disagrees with the one already on screen is not an improvement
+  // — it is the inconsistency the acceptance criteria forbid. The average is
+  // still reported, for the deterioration narrative.
+  const burn = row.netBurn;
+
   return {
     month: row.month,
     cash: row.cashClose,
+    monthlyBurn: burn,
     avgMonthlyBurn: avgBurn,
-    months: avgBurn <= 0 ? Infinity : row.cashClose / avgBurn,
+    months: burn <= 0 ? Infinity : row.cashClose / burn,
     burnWindow: window.map((r) => ({ month: r.month, netBurn: r.netBurn })),
-    method: 'closing cash ÷ trailing three-month average net burn',
+    method: 'closing cash ÷ current monthly net burn',
   };
 }
 

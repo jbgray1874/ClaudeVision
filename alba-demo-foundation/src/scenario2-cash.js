@@ -26,11 +26,11 @@ export const ASSUMPTIONS = {
   companyId: 'meridian',
   weeks: 13,
   dsoDays: 62,
-  averageSalary: 0.086,       // millions per employee per year, fully loaded
+  averageSalary: 0.062,       // millions per employee per year, fully loaded
   payrollWeeksOfMonth: 4,     // payroll clears every fourth week
-  debtServicePerQuarter: 0.09,
-  minimumCash: 2.40,          // board-agreed floor that triggers a funding process
-  plannedHires: 6,            // over the next quarter, at plan
+  debtServicePerQuarter: 0.045,
+  minimumCash: 0.30,          // board-agreed floor that triggers a funding process
+  plannedHires: 4,            // over the next quarter, at plan
   collectionsReleaseWeeks: 8, // a DSO improvement releases working capital over this period
 };
 
@@ -45,7 +45,7 @@ export function cashBaseline() {
 
   // Total outflow is fixed by the identity: receipts less outflow is the burn
   // the company reports. Nothing here is free to drift away from that.
-  const monthlyOutflow = monthlyReceipts + reported.avgMonthlyBurn;
+  const monthlyOutflow = monthlyReceipts + reported.monthlyBurn;
   const monthlyPayroll = (latest.headcount * ASSUMPTIONS.averageSalary) / 12;
   const monthlyDebtService = ASSUMPTIONS.debtServicePerQuarter / 3;
   const monthlySuppliers = monthlyOutflow - monthlyPayroll - monthlyDebtService;
@@ -60,7 +60,7 @@ export function cashBaseline() {
     monthlyPayroll,
     monthlySuppliers,
     monthlyDebtService,
-    monthlyBurn: reported.avgMonthlyBurn,
+    monthlyBurn: reported.monthlyBurn,
     openingCash: latest.cashClose,
     composition: {
       payrollShare: monthlyPayroll / monthlyOutflow,
@@ -169,7 +169,7 @@ export function buildManagementCases() {
   const base = cashBaseline();
 
   const cases = [
-    { name: 'Current trajectory, including the 6 planned hires', levers: {} },
+    { name: `Current trajectory, including the ${ASSUMPTIONS.plannedHires} planned hires`, levers: {} },
     { name: 'Collections plan (15 days of DSO)', levers: { collectionsDaysImprovement: 15 } },
     {
       name: 'Collections plus hiring pause',

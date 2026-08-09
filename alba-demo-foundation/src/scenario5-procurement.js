@@ -59,7 +59,7 @@ const VENDORS = [
       { company: 'meridian',   ledgerName: 'Northwind Cloud Services',            renewal: '2027-03-31' },
       { company: 'swiftlogix', ledgerName: 'Northwind Cloud Svcs Pte',            renewal: '2026-12-31' },
       { company: 'lumen',      ledgerName: 'Northwind Cloud Services FZ-LLC',     renewal: '2027-02-28' },
-      { company: 'verdant',    ledgerName: 'northwind cloud services pte ltd',    renewal: '2026-10-31' },
+      { company: 'halcyon',    ledgerName: 'northwind cloud services pte ltd',    renewal: '2026-10-31' },
       { company: 'solstice',   ledgerName: 'Northwind Cloud Services (DMCC)',     renewal: '2027-04-30' },
     ],
   },
@@ -83,7 +83,7 @@ const VENDORS = [
       { company: 'kestrel',    ledgerName: 'PeopleFirst HR Platform',       renewal: '2027-03-31' },
       { company: 'swiftlogix', ledgerName: 'Peoplefirst HR Pte Ltd',        renewal: '2026-11-30' },
       { company: 'lumen',      ledgerName: 'PeopleFirst HR Software FZ',    renewal: '2027-01-31' },
-      { company: 'verdant',    ledgerName: 'PEOPLEFIRST HR',                renewal: '2026-12-31' },
+      { company: 'halcyon',    ledgerName: 'PEOPLEFIRST HR',                renewal: '2026-12-31' },
     ],
   },
   {
@@ -96,7 +96,7 @@ const VENDORS = [
       { company: 'forgetech',  ledgerName: 'Talentbridge Recruitment',           renewal: '2026-11-30' },
       { company: 'northgate',  ledgerName: 'TALENTBRIDGE RECRUITMENT LTD',       renewal: '2027-01-31' },
       { company: 'solstice',   ledgerName: 'Talentbridge Recruitment ME FZ-LLC', renewal: '2026-12-31' },
-      { company: 'verdant',    ledgerName: 'Talentbridge Recruitment Pte',       renewal: '2027-03-31' },
+      { company: 'halcyon',    ledgerName: 'Talentbridge Recruitment Pte',       renewal: '2027-03-31' },
     ],
   },
   {
@@ -134,7 +134,7 @@ const VENDORS = [
       { company: 'northgate',  ledgerName: 'Atlas Collaboration Suite Ltd',    renewal: '2027-03-31' },
       { company: 'swiftlogix', ledgerName: 'Atlas Collaboration Suite Pte',    renewal: '2026-12-31' },
       { company: 'lumen',      ledgerName: 'Atlas Collab Suite FZ-LLC',        renewal: '2027-02-28' },
-      { company: 'verdant',    ledgerName: 'atlas collaboration suite',        renewal: '2027-01-31' },
+      { company: 'halcyon',    ledgerName: 'atlas collaboration suite',        renewal: '2027-01-31' },
     ],
   },
   {
@@ -143,7 +143,7 @@ const VENDORS = [
     portfolioSpend: 0.25,
     contracts: [
       { company: 'swiftlogix', ledgerName: 'Orbit Telecom Pte Ltd',   renewal: '2026-12-31' },
-      { company: 'verdant',    ledgerName: 'Orbit Telecom',           renewal: '2027-01-31' },
+      { company: 'halcyon',    ledgerName: 'Orbit Telecom',           renewal: '2027-01-31' },
       { company: 'solstice',   ledgerName: 'Orbit Telecom FZ-LLC',    renewal: '2026-11-30' },
     ],
   },

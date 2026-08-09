@@ -16,7 +16,7 @@ import {
   buildCashRunwaySignal,
   buildMarginSignal,
 } from '../src/index.js';
-import { getPortfolio, MONTH_KEYS } from '../src/portfolio.js';
+import { getPortfolio, MONTH_KEYS, FIN_SEED } from '../src/portfolio.js';
 import { projectedQuarter, quarterOf, runway, last } from '../src/kpis.js';
 import { buildExceptionReport, buildGrowthOpportunityBrief, toMarkdown } from '../src/report.js';
 import { trackerFor, advance, outcome } from '../src/actions.js';
@@ -164,9 +164,33 @@ test('the runway signal states a comparison the data actually supports', () => {
   const insight = buildCashRunwaySignal();
   const meridian = getPortfolio().find((c) => c.id === 'meridian');
   const now = runway(meridian.series);
-  assert.ok(now.months > 7 && now.months < 10, `runway of ${now.months.toFixed(1)} months`);
+
+  // The platform shows 663k of cash against 138k of burn. This must agree.
+  const expected = FIN_SEED.meridian.cash / FIN_SEED.meridian.burn;
+  assert.ok(Math.abs(now.months - expected) < 0.5,
+    `runway of ${now.months.toFixed(1)} months must match the platform's ${expected.toFixed(1)}`);
+
   const prior = insight.evidence.find((e) => e.label === 'Runway at the last review');
   assert.ok(prior.value.includes('months in 20'), 'the prior reading must name its month');
+});
+
+test('every company already in the platform reproduces its live seed values', () => {
+  for (const [id, seed] of Object.entries(FIN_SEED)) {
+    const company = getPortfolio().find((c) => c.id === id);
+    assert.ok(company, `${id} is missing from the portfolio`);
+    const latest = last(company.series);
+
+    const check = (label, got, want, tol = 0.6) =>
+      assert.ok(Math.abs(got - want) < tol,
+        `${id} ${label}: generated ${got.toFixed(1)}k against the platform's ${want}k`);
+
+    check('revenue', latest.revenue * 1000, seed.revenue);
+    check('budget', latest.planRevenue * 1000, seed.budget);
+    check('cash', latest.cashClose * 1000, seed.cash);
+    check('burn', latest.netBurn * 1000, seed.burn);
+    check('gross margin', latest.grossMarginPct * 100, seed.gm, 0.3);
+    check('EBITDA margin', latest.ebitdaMarginPct * 100, seed.ebitdaPct, 0.3);
+  }
 });
 
 test('reports render from the payload without a language model', () => {

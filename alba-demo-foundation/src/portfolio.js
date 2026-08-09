@@ -32,10 +32,32 @@ export function monthKeys(count = MONTHS, endMonth = '2026-08') {
 export const MONTH_KEYS = monthKeys();
 
 /**
+ * The platform's live seed data, from `src/lib/financeData.js` (values in GBP
+ * thousands). These are the figures the deployed screens show today.
+ *
+ * Any company that already exists in the platform is calibrated so that the
+ * final month of its generated history reproduces these numbers exactly. The
+ * history is new; the present is not allowed to move. A demo dataset that
+ * quietly restates the cash position of a company already on screen is a
+ * defect, not an improvement.
+ */
+export const FIN_SEED = {
+  meridian:   { cash: 663,  burn: 138, revenue: 261, budget: 300, gm: 71, ebitdaPct: -8  },
+  payflo:     { cash: 1646, burn: 147, revenue: 412, budget: 368, gm: 78, ebitdaPct: 14  },
+  swiftlogix: { cash: 972,  burn: 120, revenue: 384, budget: 400, gm: 42, ebitdaPct: 6   },
+  careos:     { cash: 426,  burn: 185, revenue: 162, budget: 253, gm: 55, ebitdaPct: -31 },
+  forgetech:  { cash: 1974, burn: 210, revenue: 618, budget: 600, gm: 38, ebitdaPct: 18  },
+};
+
+/** Burn eighteen months ago, as a share of today's — how the cash story developed. */
+const BURN_RAMP_FROM = 0.62;
+
+/**
  * Company definitions.
  *
  * `arc` fields describe the intended trajectory. They are inputs to generation,
  * not the displayed numbers — everything shown is computed from the series.
+ * Companies carrying an `anchor` are calibrated onto it after generation.
  */
 export const COMPANIES = [
   {
@@ -65,6 +87,7 @@ export const COMPANIES = [
   },
   {
     id: 'meridian',
+    anchor: FIN_SEED.meridian,
     name: 'Meridian SaaS',
     sector: 'B2B SaaS',
     stage: 'Series A',
@@ -86,13 +109,14 @@ export const COMPANIES = [
       cashStart: 8.6,
       burnStart: 0.19,
       burnRamp: 0.0124,
-      headcountStart: 48,
-      headcountGrowth: 0.9,
+      headcountStart: 28,
+      headcountGrowth: 0.5,
       headcountPlanGap: -2, // hiring ahead of plan, part of the burn problem
     },
   },
   {
     id: 'payflo',
+    anchor: FIN_SEED.payflo,
     name: 'PayFlo',
     sector: 'FinTech',
     stage: 'Growth PE',
@@ -118,6 +142,7 @@ export const COMPANIES = [
   },
   {
     id: 'forgetech',
+    anchor: FIN_SEED.forgetech,
     name: 'ForgeTech',
     sector: 'Manufacturing',
     stage: 'PE Growth',
@@ -143,6 +168,7 @@ export const COMPANIES = [
   },
   {
     id: 'careos',
+    anchor: FIN_SEED.careos,
     name: 'CareOS',
     sector: 'HealthTech',
     stage: 'Series A',
@@ -168,6 +194,7 @@ export const COMPANIES = [
   },
   {
     id: 'swiftlogix',
+    anchor: FIN_SEED.swiftlogix,
     name: 'SwiftLogix',
     sector: 'Logistics',
     stage: 'Series B',
@@ -259,26 +286,28 @@ export const COMPANIES = [
     },
   },
   {
-    id: 'verdant',
-    name: 'Verdant Foods',
-    sector: 'Consumer',
-    stage: 'PE Growth',
+    id: 'halcyon',
+    name: 'Halcyon Payments',
+    sector: 'B2B SaaS',
+    stage: 'Growth PE',
     region: 'Singapore',
     currency: 'USD',
-    healthScore: 58,
-    rag: 'AMBER',
+    fund: 'Alba Growth I',
+    scenario: 'expansion',
+    healthScore: 83,
+    rag: 'GREEN',
     prevRag: 'GREEN',
     arc: {
-      revenueStart: 3.42,
-      revenueGrowth: 0.0049,
-      planPremium: 0.115,
-      gmStart: 0.34,
-      gmEnd: 0.305,
-      opexRatio: 0.32,
-      cashStart: 5.9,
-      headcountStart: 265,
-      headcountGrowth: 0.4,
-      headcountPlanGap: 5,
+      revenueStart: 2.42,
+      revenueGrowth: 0.0152,
+      planPremium: 0.002, // tracking plan closely — nothing here draws attention
+      gmStart: 0.73,
+      gmEnd: 0.745,
+      opexRatio: 0.64,
+      cashStart: 21.4,
+      headcountStart: 186,
+      headcountGrowth: 1.9,
+      headcountPlanGap: 1,
     },
   },
 ];
@@ -368,12 +397,84 @@ export function buildSeries(company) {
   return rows;
 }
 
+/**
+ * Force the final month onto the platform's live seed values.
+ *
+ * Generation gives a plausible shape; calibration makes the endpoint true. The
+ * whole series is scaled rather than the last row overwritten, so the history
+ * stays smooth and every derived figure — variance, margin, runway — still
+ * reconciles with what the deployed screens already show.
+ *
+ * Seed values are in GBP thousands; this package works in millions.
+ */
+function calibrate(rows, anchor) {
+  const target = {
+    revenue: anchor.revenue / 1000,
+    budget: anchor.budget / 1000,
+    cash: anchor.cash / 1000,
+    burn: anchor.burn / 1000,
+    gm: anchor.gm / 100,
+    ebitdaPct: anchor.ebitdaPct / 100,
+  };
+
+  const final = rows[rows.length - 1];
+  const revenueScale = target.revenue / final.revenue;
+  const planScale = target.budget / final.planRevenue;
+  const marginShift = target.gm - final.grossMarginPct;
+
+  // Burn ramps from a lower base to today's reported figure. Cash is then the
+  // running consequence, ending exactly on the seed balance.
+  const n = rows.length;
+  const burns = rows.map((_, i) =>
+    round(target.burn * (BURN_RAMP_FROM + ((1 - BURN_RAMP_FROM) * i) / (n - 1))),
+  );
+
+  const cashByMonth = new Array(n);
+  cashByMonth[n - 1] = target.cash;
+  for (let i = n - 2; i >= 0; i--) {
+    cashByMonth[i] = round(cashByMonth[i + 1] + burns[i + 1]);
+  }
+
+  return rows.map((r, i) => {
+    const revenue = round(r.revenue * revenueScale);
+    const planRevenue = round(r.planRevenue * planScale);
+    const gm = Math.max(0.05, Math.min(0.95, r.grossMarginPct + marginShift));
+    const cogs = round(revenue * (1 - gm));
+    const grossProfit = round(revenue - cogs, 6);
+
+    // Operating cost is set so the final month lands on the seed EBITDA margin,
+    // then held at that proportion of gross profit across the history.
+    const finalGross = target.revenue * target.gm;
+    const finalEbitda = target.revenue * target.ebitdaPct;
+    const opexOverGross = (finalGross - finalEbitda) / finalGross;
+    const opex = round(grossProfit * opexOverGross);
+    const ebitda = round(grossProfit - opex, 6);
+
+    return {
+      ...r,
+      revenue,
+      planRevenue,
+      cogs,
+      grossProfit,
+      grossMarginPct: round(grossProfit / revenue, 5),
+      opex,
+      ebitda,
+      ebitdaMarginPct: round(ebitda / revenue, 5),
+      cashClose: cashByMonth[i],
+      netBurn: burns[i],
+    };
+  });
+}
+
 let cache = null;
 
 /** The whole portfolio, generated once and memoised. */
 export function getPortfolio() {
   if (cache) return cache;
-  cache = COMPANIES.map((c) => ({ ...c, series: buildSeries(c) }));
+  cache = COMPANIES.map((c) => {
+    const series = buildSeries(c);
+    return { ...c, series: c.anchor ? calibrate(series, c.anchor) : series };
+  });
   return cache;
 }
 

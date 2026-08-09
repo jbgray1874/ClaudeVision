@@ -16,7 +16,7 @@ import { getCompany, SOURCES, AS_OF } from './portfolio.js';
 import { makeInsight, CONFIDENCE, formatMoney, formatPct } from './insight.js';
 import { rngFor, between } from './rng.js';
 
-const COMPANY_ID = 'payflo';
+const COMPANY_ID = 'halcyon';
 
 export const PRODUCTS = {
   A: 'Payments Core',
@@ -34,9 +34,9 @@ export const SCORE_WEIGHTS = {
 };
 
 export const PARAMS = {
-  customerCount: 48,
+  customerCount: 42,
   qualifyingScore: 65,
-  attachUplift: 0.21,      // Reconciliation Suite ACV as a share of the account's Payments Core ARR
+  attachUplift: 0.25,      // Reconciliation Suite ACV as a share of the account's Payments Core ARR
   conversionFloor: 0.10,
   conversionCeiling: 0.70,
   rangeSensitivity: 0.15,  // ± applied to expected conversion for the reported range
