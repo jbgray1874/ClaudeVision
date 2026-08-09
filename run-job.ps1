@@ -263,11 +263,15 @@ function Show-PathDiagnosis([string] $p) {
     # path is right up to here and wrong after it", which is one look rather than a hunt.
     $probe = $p
     while ($probe -and -not (Test-Path $probe)) {
-        # STOP AT THE SHARE ROOT. Above \\server\share there is nothing to test — the walk
-        # would climb to \\server and then to \\, neither of which is a place a pack could
-        # be, and reporting "the path exists as far as \\" is worse than reporting nothing.
+        # STOP AT THE SHARE ROOT — AFTER TESTING IT. Above \\server\share there is nothing
+        # to test, and reporting "exists as far as \\" is worse than reporting nothing. But
+        # the first version broke out BEFORE testing the share root, so it announced "no
+        # part of that path is reachable" about a share it had never tried — which is the
+        # opposite of the truth when the share is fine and only the folders below it are
+        # wrong, and that is the common case.
         if ($probe -like '\\*' -and (($probe.TrimStart('\') -split '\\').Count -le 2)) {
-            $probe = ''; break
+            if (-not (Test-Path $probe)) { $probe = '' }
+            break
         }
         $next = Split-Path $probe -Parent
         if (-not $next -or $next -eq $probe) { $probe = ''; break }
@@ -378,9 +382,16 @@ if (-not $resolved) {
             Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue |
                 Select-Object -First 60 |
                 Where-Object {
+                    # EXTENSION TESTED IN POWERSHELL, NOT PASSED TO -Include. Windows
+                    # PowerShell 5.1 IGNORES -Include when it is combined with -LiteralPath,
+                    # so the filter silently did nothing and every directory holding any
+                    # file at all qualified: src\__pycache__ and src\source_connectors were
+                    # offered to the reader under a heading saying they held drawings. It
+                    # worked under PowerShell 7, which is how it passed review — the same
+                    # class of miss as testing a guard on a machine that cannot run it.
                     $null -ne (Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Depth 1 `
-                                   -Include *.pdf, *.dxf, *.sldprt, *.sldasm `
                                    -ErrorAction SilentlyContinue |
+                               Where-Object { $_.Extension -in '.pdf', '.dxf', '.sldprt', '.sldasm' } |
                                Select-Object -First 1)
                 } |
                 Select-Object -First 25 -ExpandProperty FullName
