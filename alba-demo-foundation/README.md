@@ -26,6 +26,8 @@ No dependencies, no network, no filesystem, no wall clock. Node 18+.
 | `src/insight.js` | The standard Alba insight card, and the guard that refuses one without evidence |
 | `src/scenario1-revenue-miss.js` | Scenario 1 — forecast, driver bridge, named pipeline |
 | `src/scenario4-expansion.js` | Scenario 4 — account scoring, cohort, expected value |
+| `src/scenario2-cash.js` | Scenario 2 — 13-week forecast, management levers, side-by-side cases |
+| `src/scenario5-procurement.js` | Scenario 5 — vendor resolution, cross-portfolio spend, savings |
 | `src/secondary-signals.js` | Scenarios 2 and 3 at alert strength |
 | `src/actions.js` | Alert and action tracker, through to closed-loop outcome |
 | `src/report.js` | Exception Report and Growth Opportunity Brief, payload plus Markdown |
@@ -89,17 +91,37 @@ Against the targets in the specification, as of the current parameters:
 | Cash runway 14 months → ~8 | 13.8 months (2026-04) → 8.5 |
 | Gross margin 42% → 34% | 42.0% → 34.0% |
 | Cross-sell opportunity USD 1.5–2.0m ARR | USD 1.49m – 2.01m |
+| Procurement saving USD 0.8–1.1m | USD 0.84m – 1.13m |
 
 These fall out of the parameters at the top of each scenario module rather than
 being written in. Change `PARAMS.planStepUp` and the whole story moves together.
 
+## Two more design decisions
+
+**The cash model is anchored to reported burn, not built bottom-up.** A
+bottom-up build — headcount times salary, plus suppliers, plus debt service —
+produces an implied burn that does not match what the company reports, and the
+portfolio table then contradicts the cash screen. Instead, total outflow is
+fixed by the identity *receipts less outflow equals reported burn*, payroll is
+calculated from headcount, and supplier spend is the residual. The forward
+baseline is legitimately shorter than the reported trailing runway because it
+funds the hiring plan — so `forwardVsReported` states that in words rather than
+leaving two numbers to disagree on screen.
+
+**Vendor matching grades rather than guesses.** `Atlas Collab Suite` and
+`Atlas Collaboration Suite` merge automatically on a prefix match.
+`Talentbridge Search & Selection` and `Talentbridge Recruitment Ltd` are the
+same supplier trading under two names, and no string operation can know that —
+so that spend goes to a review queue and is **excluded from the headline saving**
+until confirmed, with the held-back upside stated separately. Counting it would
+be the easy route to a bigger number and the fast route to losing the room.
+
 ## Not built yet
 
-- Scenario 2 and 3 drill-downs — the 13-week cash forecast, working-capital
-  analysis, side-by-side management scenarios, margin bridge decomposition and
-  customer/product profitability table. The KPI primitives they need
-  (`runway`, `lastMonthAboveRunway`, `marginMovement`) are here and tested.
-- Scenario 5, cross-portfolio procurement. The specification places it in
-  phase 2, after the company-level model is credible.
+- Scenario 3 drill-down — margin bridge decomposition and the customer/product
+  profitability table. The primitive it needs (`marginMovement`) is here and tested.
+- Working-capital detail for scenario 2 — AR ageing by band and customer
+  concentration. The live Xero connection already returns this for Meridian.
+- A benchmark set. The specification allows a small illustrative one.
 - PDF and Word rendering. `toMarkdown` produces the content; the branded
   wrapper belongs with the existing HTML report templates.

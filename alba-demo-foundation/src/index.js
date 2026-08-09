@@ -17,9 +17,12 @@ import { portfolioRollup, runway, last, quarterOf, projectedQuarter, CASH_GENERA
 import { buildScenario1 } from './scenario1-revenue-miss.js';
 import { buildScenario4 } from './scenario4-expansion.js';
 import { buildCashRunwaySignal, buildMarginSignal } from './secondary-signals.js';
+import { buildScenario5 } from './scenario5-procurement.js';
+export { buildCashScenario, buildManagementCases, cashBaseline } from './scenario2-cash.js';
 import { summarise } from './insight.js';
 
-export { buildScenario1, buildScenario4, buildCashRunwaySignal, buildMarginSignal };
+export { buildScenario1, buildScenario4, buildScenario5, buildCashRunwaySignal, buildMarginSignal };
+export { buildProcurementReport, normaliseVendorName, matchQuality } from './scenario5-procurement.js';
 
 /**
  * Portfolio Health Command Centre.
@@ -73,7 +76,8 @@ export function buildCommandCentre() {
     companies: rows,
     riskAlerts: [scenario1.insight, buildCashRunwaySignal(), buildMarginSignal()]
       .map((i) => ({ insight: i, line: summarise(i) })),
-    opportunityAlerts: [scenario4.insight].map((i) => ({ insight: i, line: summarise(i) })),
+    opportunityAlerts: [scenario4.insight, buildScenario5().insight]
+      .map((i) => ({ insight: i, line: summarise(i) })),
     filters: {
       fund: [...new Set(rows.map((r) => r.fund))],
       sector: [...new Set(rows.map((r) => r.sector))],
