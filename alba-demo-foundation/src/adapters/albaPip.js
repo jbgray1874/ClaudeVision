@@ -1,102 +1,106 @@
 /**
- * Adapters onto the platform's existing contracts.
+ * Adapters onto the platform's real contracts.
  *
- * The React app already has two well-defined shapes, documented in the source
- * handover: the object `buildFinance(company)` returns in `src/lib/financeData.js`,
- * and the JSON schema `api/ai/boardpack.js` instructs Grok to produce. Both are
- * already consumed by working screens.
+ * Verified against `jbgray1874/alba-pip` at 2c591dc — `src/lib/financeData.js`
+ * and `api/ai/boardpack.js`. An earlier version of this file was written from
+ * the prose description in the source-code handover and got every array element
+ * shape wrong: `arAging` rows are `{bucket, val, color}` not `{label, value}`,
+ * the bridge discriminator is `kind` not `type`, and `burnCats`, `byProduct`
+ * and `opexLines` each carry a `series` that `FinanceDrilldown.jsx` reads to
+ * draw its sparklines. Emitting the guessed shapes would have blanked the
+ * drill-down.
  *
- * Rather than ask those screens to change, this module emits the same shapes
- * from calculated data. `FinanceDrilldown.jsx` keeps its four levels, its
- * breadcrumb and its Xero overlay untouched; what changes is that the numbers
- * behind them now come from eighteen months of history rather than a single
- * seed row, and carry their source.
+ * What this adds is not shape but substance. The platform synthesises each
+ * sparkline with `trend(end, 6, growth)` — an independent straight line drawn
+ * back from every metric's current value, so the payroll trend and the R&D
+ * trend have no common origin and cannot be reconciled against each other.
+ * Here every series is a slice of one eighteen-month ledger, so they do.
  *
- * Units: the platform works in GBP thousands. This package works in millions.
- * The conversion happens here and nowhere else.
+ * Units follow the platform exactly, including its internal inconsistency:
+ * `balance`, `burn`, `value` fields are in GBP thousands, while `amount` and
+ * `val` fields are in whole pounds. This package works in millions; the
+ * conversion happens here and nowhere else.
  */
 
 import { getCompany, getPortfolio, FIN_SEED, SOURCES, AS_OF } from '../portfolio.js';
-import { last, runway, sumBy } from '../kpis.js';
+import { last, runway } from '../kpis.js';
 import { buildScenario1 } from '../scenario1-revenue-miss.js';
 import { buildScenario4 } from '../scenario4-expansion.js';
 import { buildCashRunwaySignal, buildMarginSignal } from '../secondary-signals.js';
 
-/** Millions → thousands, rounded the way the platform displays them. */
-const k = (millions) => Math.round(millions * 1000);
+/** Millions → thousands, the platform's working unit. */
+const k = (millions) => millions * 1000;
+/** Millions → whole pounds, for the `amount` and `val` fields. */
+const pounds = (millions) => Math.round(millions * 1_000_000);
 
-/**
- * Split a whole number across shares so the parts sum to the total exactly.
- *
- * Rounding each share independently leaves the parts a unit or two off the
- * figure above them, which on a waterfall or a category breakdown reads as an
- * arithmetic error. Largest remainder puts the rounding difference somewhere
- * deliberate instead.
- */
-function allocate(total, shares) {
-  const raw = shares.map((s) => total * s);
-  const floors = raw.map(Math.floor);
-  let remainder = Math.round(total - floors.reduce((t, f) => t + f, 0));
-  const order = raw
-    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
-    .sort((a, b) => b.frac - a.frac);
-  const out = [...floors];
-  for (let n = 0; n < order.length && remainder > 0; n++, remainder--) out[order[n].i] += 1;
-  return out;
+const round1 = (n) => Math.round(n * 10) / 10;
+
+// ── Constants mirrored from src/lib/financeData.js ──────────────────────────
+// Kept identical, including the colours, so nothing already on screen moves.
+
+export const BURN_SPLIT = [
+  { key: 'payroll', label: 'Payroll & Benefits', prop: 0.59, color: '#3d8bff' },
+  { key: 'marketing', label: 'Sales & Marketing', prop: 0.15, color: '#9b6dff' },
+  { key: 'overheads', label: 'Overheads & Facilities', prop: 0.16, color: '#f5a524' },
+  { key: 'saas', label: 'Software & SaaS', prop: 0.10, color: '#00c97a' },
+];
+
+export const REV_PRODUCTS = [
+  { key: 'core', label: 'Core Platform', prop: 0.60 },
+  { key: 'addons', label: 'Add-on Modules', prop: 0.24 },
+  { key: 'services', label: 'Professional Services', prop: 0.16 },
+];
+
+export const REV_REGIONS = [
+  { key: 'uk', label: 'United Kingdom', prop: 0.57 },
+  { key: 'eu', label: 'Europe', prop: 0.27 },
+  { key: 'na', label: 'North America', prop: 0.16 },
+];
+
+const CUSTOMERS = [
+  'Acme Corporation', 'Beta Holdings', 'TechVentures Ltd', 'Delta Systems',
+  'Gamma Industries', 'Orion Retail', 'Vertex Group', 'Halo Logistics',
+];
+
+const DEBTOR_SPLIT = [0.33, 0.245, 0.20, 0.13, 0.095];
+const DEBTOR_DAYS = [47, 38, 52, 33, 41];
+const OVERDUE_RATIO = 0.28;
+
+const AR_BANDS = [
+  { bucket: 'Current (0–30)', color: '#00c97a' },
+  { bucket: '31–60 days', color: '#f5a524' },
+  { bucket: '61–90 days', color: '#ff8a3d' },
+  { bucket: '90+ days', color: '#ff3d5a' },
+];
+
+const OPEX_SPLIT = [
+  { bridgeLabel: 'Sales & Mktg', label: 'Sales & Marketing', prop: 0.34 },
+  { bridgeLabel: 'R&D', label: 'Research & Development', prop: 0.35 },
+  { bridgeLabel: 'G&A', label: 'General & Admin', prop: 0.31 },
+];
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Six-month series for a metric, taken from the ledger rather than synthesised. */
+function seriesFrom(series, field, prop) {
+  return series.slice(-6).map((r) => round1(k(r[field]) * prop));
 }
 
-/** Proportions the platform already uses, kept so existing screens do not shift. */
-export const BURN_CATEGORIES = [
-  { key: 'payroll', label: 'Payroll', share: 0.59 },
-  { key: 'marketing', label: 'Sales & Marketing', share: 0.15 },
-  { key: 'overheads', label: 'Overheads', share: 0.16 },
-  { key: 'saas', label: 'Software & Infrastructure', share: 0.10 },
-];
-
-export const REVENUE_BY_PRODUCT = [
-  { label: 'Core Platform', share: 0.60 },
-  { label: 'Add-ons', share: 0.24 },
-  { label: 'Services', share: 0.16 },
-];
-
-export const REVENUE_BY_REGION = [
-  { label: 'UK', share: 0.57 },
-  { label: 'EU', share: 0.27 },
-  { label: 'North America', share: 0.16 },
-];
-
-export const AR_AGING_BANDS = [
-  { label: 'Current', share: 0.46 },
-  { label: '31–60 days', share: 0.27 },
-  { label: '61–90 days', share: 0.17 },
-  { label: '90 days+', share: 0.10 },
-];
-
-const OVERDUE_RATIO = 0.28; // the platform's existing relationship to monthly revenue
-
-const OPEX_LINES = [
-  { label: 'Sales & Marketing', share: 0.42 },
-  { label: 'R&D', share: 0.35 },
-  { label: 'G&A', share: 0.23 },
-];
-
-function ragFor(company, runwayMonths) {
-  if (company.rag) return company.rag.toLowerCase();
-  if (runwayMonths < 4) return 'red';
-  if (runwayMonths < 9) return 'amber';
-  return 'green';
+function debtorStatus(days) {
+  return days > 45 ? 'critical' : days > 35 ? 'overdue' : 'watch';
 }
 
 /**
- * Emit the `buildFinance(company)` shape, in GBP thousands.
+ * Emit the `buildFinance(co)` shape.
  *
- * Drop-in for `src/lib/financeData.js`. The reconciliation principle the
- * platform already relies on is preserved: EBITDA is gross profit less opex,
- * gross profit is revenue less cost of sales, and the overdue total is the sum
- * of the individual debtor rows rather than a separately computed figure.
+ * Signature-compatible: accepts the company object the platform passes, or an
+ * id. Every key the platform returns is present with the same name, type and
+ * unit; `history`, `source` and `refreshedAt` are added, which existing
+ * consumers ignore and the evidence trail needs.
  */
-export function toFinanceShape(companyId) {
-  const company = getCompany(companyId);
+export function toFinanceShape(co) {
+  const id = typeof co === 'string' ? co : co.id;
+  const company = getCompany(id);
   const series = company.series;
   const latest = last(series);
   const rw = runway(series);
@@ -105,104 +109,106 @@ export function toFinanceShape(companyId) {
   const budget = k(latest.planRevenue);
   const cash = k(latest.cashClose);
   const burn = k(latest.netBurn);
-  const grossProfit = k(latest.grossProfit);
-  const cogs = k(latest.cogs);
-  const opex = k(latest.opex);
-  const ebitda = k(latest.ebitda);
+  const gm = Math.round(latest.grossMarginPct * 100);
+  const ebitdaPct = Math.round(latest.ebitdaMarginPct * 100);
 
-  // Debtors first; the overdue total is then their sum, not an independent number.
-  const overdueTarget = revenue * OVERDUE_RATIO;
-  const debtorSplit = [0.42, 0.31, 0.27];
-  const debtorNames = ['DIISR', 'Rex Media Group', 'Port & Philip Freight'];
-  const debtors = debtorNames.map((party, i) => ({
-    party,
-    amount: Math.round(overdueTarget * debtorSplit[i]),
-    daysOverdue: [47, 33, 21][i],
-    status: ['Escalated', 'Chasing', 'Reminder sent'][i],
+  // ── Burn categories ──
+  const burnCats = BURN_SPLIT.map((b) => ({
+    ...b,
+    value: burn * b.prop,
+    series: seriesFrom(series, 'netBurn', b.prop),
   }));
-  const overdueTotal = debtors.reduce((t, d) => t + d.amount, 0);
 
-  const receivable = Math.round(revenue * 1.34);
-  const opexParts = allocate(opex, OPEX_LINES.map((l) => l.share));
+  // ── AR and overdue debtors ──
+  const overdueTotal = +(revenue * OVERDUE_RATIO).toFixed(0);
+  const debtors = DEBTOR_SPLIT.map((p, i) => ({
+    party: CUSTOMERS[i],
+    amount: Math.round(overdueTotal * p * 1000),
+    daysOverdue: DEBTOR_DAYS[i],
+    invoice: `INV-${2400 + i * 7}`,
+    due: `${5 + i * 4} Apr 2026`,
+    status: debtorStatus(DEBTOR_DAYS[i]),
+  }));
+
+  const arAging = [
+    { ...AR_BANDS[0], val: Math.round(revenue * 0.57 * 1000) },
+    { ...AR_BANDS[1], val: Math.round(overdueTotal * 0.70 * 1000) },
+    { ...AR_BANDS[2], val: Math.round(overdueTotal * 0.22 * 1000) },
+    { ...AR_BANDS[3], val: Math.round(overdueTotal * 0.08 * 1000) },
+  ].map(({ bucket, val, color }) => ({ bucket, val, color }));
+
+  // ── Cash projection, forward from the as-of month ──
+  const asOfMonth = Number(AS_OF.slice(5, 7)) - 1;
+  const cashProj = Array.from({ length: 9 }, (_, i) => ({
+    m: MONTH_ABBR[(asOfMonth + i) % 12],
+    v: Math.round(cash - burn * i),
+  })).filter((p) => p.v > -burn);
+
+  // ── Revenue breakdowns ──
+  const byProduct = REV_PRODUCTS.map((p) => ({
+    ...p,
+    value: revenue * p.prop,
+    series: seriesFrom(series, 'revenue', p.prop),
+  }));
+  const byRegion = REV_REGIONS.map((r) => ({ ...r, value: revenue * r.prop }));
+
+  const deals = CUSTOMERS.slice(0, 6).map((c, i) => ({
+    party: c,
+    amount: Math.round(revenue * [0.16, 0.13, 0.11, 0.09, 0.07, 0.05][i] * 1000),
+    product: REV_PRODUCTS[i % 3].label,
+    region: REV_REGIONS[i % 3].label,
+    invoice: `INV-${2500 + i * 5}`,
+    date: `${2 + i * 3} May 2026`,
+    status: 'paid',
+  }));
+
+  // ── EBITDA bridge ──
+  const grossProfit = (revenue * gm) / 100;
+  const cogs = revenue - grossProfit;
+  const ebitda = (revenue * ebitdaPct) / 100;
+  const opexTotal = grossProfit - ebitda;
+
+  const bridge = [
+    { label: 'Revenue', value: revenue, kind: 'start' },
+    { label: 'Cost of Sales', value: -cogs, kind: 'neg' },
+    { label: 'Gross Profit', value: grossProfit, kind: 'subtotal' },
+    ...OPEX_SPLIT.map((o) => ({ label: o.bridgeLabel, value: -opexTotal * o.prop, kind: 'neg' })),
+    { label: 'EBITDA', value: ebitda, kind: 'end' },
+  ];
+
+  const opexLines = OPEX_SPLIT.map((o) => ({
+    label: o.label,
+    value: opexTotal * o.prop,
+    series: seriesFrom(series, 'opex', o.prop),
+  }));
 
   return {
-    seed: FIN_SEED[companyId] ?? null,
-    runway: Math.round(rw.months * 10) / 10,
-    status: ragFor(company, rw.months),
+    seed: FIN_SEED[id] ?? null,
+    runway: rw.months === Infinity ? Infinity : +(cash / burn).toFixed(1),
+    status: typeof co === 'object' && co.status ? co.status : (company.rag ?? '').toLowerCase(),
 
     cash: {
-      balance: cash,
-      burn,
-      runway: Math.round(rw.months * 10) / 10,
-      burnCats: (() => {
-        const parts = allocate(burn, BURN_CATEGORIES.map((c) => c.share));
-        return BURN_CATEGORIES.map((c, i) => ({ label: c.label, value: parts[i], share: c.share }));
-      })(),
-      debtors,
-      arAging: (() => {
-        const parts = allocate(receivable, AR_AGING_BANDS.map((b) => b.share));
-        return AR_AGING_BANDS.map((b, i) => ({ label: b.label, value: parts[i] }));
-      })(),
-      overdueTotal,
-      // Nine months forward on the current burn — the platform's existing chart.
-      cashProj: Array.from({ length: 9 }, (_, i) => ({
-        month: i + 1,
-        balance: Math.max(0, cash - burn * (i + 1)),
-      })),
-      // New: the actual eighteen-month history behind the position.
+      balance: cash, burn, runway: +(cash / burn).toFixed(1),
+      burnCats, debtors, arAging, overdueTotal, cashProj,
+      // Additive: the ledger the series above are drawn from.
       history: series.map((r) => ({ month: r.month, balance: k(r.cashClose), burn: k(r.netBurn) })),
       source: SOURCES.bank.system,
       refreshedAt: AS_OF,
     },
 
     revenue: {
-      total: revenue,
-      budget,
-      variance: revenue - budget,
-      variancePct: (revenue - budget) / budget,
-      byProduct: (() => {
-        const parts = allocate(revenue, REVENUE_BY_PRODUCT.map((p) => p.share));
-        return REVENUE_BY_PRODUCT.map((p, i) => ({ label: p.label, value: parts[i] }));
-      })(),
-      byRegion: (() => {
-        const parts = allocate(revenue, REVENUE_BY_REGION.map((r) => r.share));
-        return REVENUE_BY_REGION.map((r, i) => ({ label: r.label, value: parts[i] }));
-      })(),
-      deals: topDeals(companyId, revenue),
-      history: series.map((r) => ({
-        month: r.month,
-        actual: k(r.revenue),
-        budget: k(r.planRevenue),
-      })),
+      total: revenue, budget, byProduct, byRegion, deals,
+      history: series.map((r) => ({ month: r.month, actual: k(r.revenue), budget: k(r.planRevenue) })),
       source: SOURCES.financials.system,
       refreshedAt: AS_OF,
     },
 
     ebitda: {
-      pct: Math.round(latest.ebitdaMarginPct * 1000) / 10,
-      value: grossProfit - opexParts.reduce((t, v) => t + v, 0),
-      grossMargin: Math.round(latest.grossMarginPct * 1000) / 10,
-      bridge: [
-        { label: 'Revenue', value: revenue, type: 'total' },
-        { label: 'Cost of sales', value: -cogs, type: 'delta' },
-        { label: 'Gross profit', value: grossProfit, type: 'subtotal' },
-        ...OPEX_LINES.map((l, i) => ({ label: l.label, value: -opexParts[i], type: 'delta' })),
-        {
-          label: 'EBITDA',
-          value: grossProfit - opexParts.reduce((t, v) => t + v, 0),
-          type: 'total',
-        },
-      ],
-      opexLines: OPEX_LINES.map((l, i) => ({
-        label: l.label,
-        value: opexParts[i],
-        // Six-month trend from the real series rather than an invented sparkline.
-        trend: series.slice(-6).map((r) => Math.round(k(r.opex) * l.share)),
-      })),
+      pct: ebitdaPct, value: ebitda, bridge, opexLines, grossMargin: gm,
       history: series.map((r) => ({
         month: r.month,
         ebitda: k(r.ebitda),
-        marginPct: Math.round(r.ebitdaMarginPct * 1000) / 10,
+        marginPct: round1(r.ebitdaMarginPct * 100),
       })),
       source: SOURCES.financials.system,
       refreshedAt: AS_OF,
@@ -210,106 +216,75 @@ export function toFinanceShape(companyId) {
   };
 }
 
-function topDeals(companyId, monthlyRevenue) {
-  const names = [
-    'Harborline Insurance', 'Straits Manufacturing', 'Vantage Health Network',
-    'Orient Freight', 'Caldera Energy', 'Meridian Bank Trust',
-  ];
-  const shares = [0.19, 0.16, 0.14, 0.12, 0.10, 0.08];
-  const renewals = ['2026-11-30', '2027-01-31', '2026-12-31', '2027-03-31', '2027-02-28', '2026-10-31'];
-  return names.map((name, i) => ({
-    customer: name,
-    value: Math.round(monthlyRevenue * 12 * shares[i]),
-    renewal: renewals[i],
-  }));
-}
-
-/** Every company, in the platform's shape. */
 export function toFinanceShapeAll() {
   return Object.fromEntries(getPortfolio().map((c) => [c.id, toFinanceShape(c.id)]));
+}
+
+// ── Board pack ──────────────────────────────────────────────────────────────
+
+/** The platform formats deadlines as "30 Jun 2026". */
+function ukDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${d} ${MONTH_ABBR[m - 1]} ${y}`;
 }
 
 /**
  * Emit the `api/ai/boardpack.js` JSON schema from calculated values.
  *
- * The existing endpoint asks Grok to produce this object in full, which means
- * the model supplies the metrics as well as the prose. This inverts that: the
- * metrics, risks, opportunities and actions are computed here, and the two
- * genuinely narrative fields are left for the model to write.
- *
- * Pass the result to the frontend renderer unchanged, or hand it to Grok as
- * context with instructions to fill only `executiveSummary` and `outlook`.
+ * The endpoint currently asks Grok to return this object whole — metrics
+ * included — and falls back to a hardcoded pack when the key is absent. Both
+ * paths put figures in the model's gift. Here every metric, risk, opportunity
+ * and action is computed, and only `executiveSummary` and `outlook` are left
+ * null for the model to write.
  */
-export function toBoardPackSchema(companyId) {
-  const company = getCompany(companyId);
-  const series = company.series;
-  const latest = last(series);
-  const rw = runway(series);
-  const cur = company.currency;
-  const sym = { GBP: '£', USD: '$' }[cur] ?? '';
+export function toBoardPackSchema(co) {
+  const id = typeof co === 'string' ? co : co.id;
+  const company = getCompany(id);
+  const latest = last(company.series);
+  const rw = runway(company.series);
+  const sym = { GBP: '£', USD: '$' }[company.currency] ?? '';
+  const kk = (m) => `${sym}${Math.round(m * 1000)}k`;
+  const rag = (good, ok) => (good ? 'green' : ok ? 'amber' : 'red');
 
-  const money = (millions) => `${sym}${k(millions)}k`;
-  const ragOf = (ok, warn) => (ok ? 'green' : warn ? 'amber' : 'red');
-
-  const insights = collectInsightsFor(companyId);
-  const quarter = series.slice(-3);
+  const insights = insightsFor(id);
 
   return {
-    company: company.name,
-    asOf: AS_OF,
-
-    // Left for the language model. Everything else is calculated.
     executiveSummary: null,
     outlook: null,
 
     keyMetrics: [
       {
-        label: 'Revenue (month)',
-        value: money(latest.revenue),
-        vs: `plan ${money(latest.planRevenue)}`,
-        rag: ragOf(latest.revenue >= latest.planRevenue, latest.revenue >= latest.planRevenue * 0.95),
-      },
-      {
-        label: 'Revenue (quarter)',
-        value: money(sumBy(quarter, 'revenue')),
-        vs: `plan ${money(sumBy(quarter, 'planRevenue'))}`,
-        rag: ragOf(
-          sumBy(quarter, 'revenue') >= sumBy(quarter, 'planRevenue'),
-          sumBy(quarter, 'revenue') >= sumBy(quarter, 'planRevenue') * 0.95,
-        ),
-      },
-      {
-        label: 'Gross margin',
-        value: `${(latest.grossMarginPct * 100).toFixed(1)}%`,
-        vs: `${(series[0].grossMarginPct * 100).toFixed(1)}% eighteen months ago`,
-        rag: ragOf(
-          latest.grossMarginPct >= series[0].grossMarginPct,
-          latest.grossMarginPct >= series[0].grossMarginPct - 0.03,
-        ),
-      },
-      {
-        label: 'EBITDA margin',
-        value: `${(latest.ebitdaMarginPct * 100).toFixed(1)}%`,
-        vs: `${money(latest.ebitda)} this month`,
-        rag: ragOf(latest.ebitda > 0, latest.ebitdaMarginPct > -0.1),
-      },
-      {
-        label: 'Cash',
-        value: money(latest.cashClose),
-        vs: `burn ${money(latest.netBurn)} per month`,
-        rag: ragOf(rw.months >= 12, rw.months >= 6),
+        label: 'MRR',
+        value: kk(latest.revenue),
+        vs: `target ${kk(latest.planRevenue)}`,
+        rag: rag(latest.revenue >= latest.planRevenue, latest.revenue >= latest.planRevenue * 0.95),
       },
       {
         label: 'Runway',
-        value: Number.isFinite(rw.months) ? `${rw.months.toFixed(1)} months` : 'Cash generative',
-        vs: rw.method,
-        rag: ragOf(rw.months >= 12, rw.months >= 6),
+        value: Number.isFinite(rw.months) ? `${rw.months.toFixed(1)}mo` : 'Cash generative',
+        vs: 'target 6mo',
+        rag: rag(rw.months >= 12, rw.months >= 6),
+      },
+      {
+        label: 'Gross Margin',
+        value: `${Math.round(latest.grossMarginPct * 100)}%`,
+        vs: `${Math.round(company.series[0].grossMarginPct * 100)}% 18 months ago`,
+        rag: rag(
+          latest.grossMarginPct >= company.series[0].grossMarginPct,
+          latest.grossMarginPct >= company.series[0].grossMarginPct - 0.03,
+        ),
+      },
+      {
+        label: 'EBITDA Margin',
+        value: `${(latest.ebitdaMarginPct * 100).toFixed(1)}%`,
+        vs: `${kk(latest.ebitda)} this month`,
+        rag: rag(latest.ebitda > 0, latest.ebitdaMarginPct > -0.1),
       },
       {
         label: 'Headcount',
         value: String(latest.headcount),
         vs: `plan ${latest.planHeadcount}`,
-        rag: ragOf(latest.headcount >= latest.planHeadcount, true),
+        rag: rag(latest.headcount >= latest.planHeadcount, true),
       },
     ],
 
@@ -334,7 +309,7 @@ export function toBoardPackSchema(companyId) {
       i.actions.map((a) => ({
         action: a.action,
         owner: a.owner,
-        deadline: a.due, // the platform's field name
+        deadline: ukDate(a.due),
         priority: i.type === 'risk' ? 'high' : 'medium',
         rationale: a.rationale,
       })),
@@ -342,41 +317,34 @@ export function toBoardPackSchema(companyId) {
 
     provenance: {
       note:
-        'Every metric, risk, opportunity and action in this object is calculated from the ' +
-        'portfolio data model. The language model is asked only for executiveSummary and outlook.',
+        'Every metric, risk, opportunity and action here is calculated from the portfolio data ' +
+        'model. The language model is asked only for executiveSummary and outlook.',
       sources: [...new Set(insights.flatMap((i) => i.evidence.map((e) => e.source)))],
       refreshedAt: AS_OF,
     },
   };
 }
 
-function collectInsightsFor(companyId) {
-  const all = [];
-  const scenario1 = buildScenario1();
-  if (scenario1.company.id === companyId) all.push(scenario1.insight);
-  const scenario4 = buildScenario4();
-  if (scenario4.company.id === companyId) all.push(scenario4.insight);
-  if (companyId === 'meridian') all.push(buildCashRunwaySignal());
-  if (companyId === 'forgetech') all.push(buildMarginSignal());
-  return all;
+function insightsFor(id) {
+  const out = [];
+  const s1 = buildScenario1();
+  if (s1.company.id === id) out.push(s1.insight);
+  const s4 = buildScenario4();
+  if (s4.company.id === id) out.push(s4.insight);
+  if (id === 'meridian') out.push(buildCashRunwaySignal());
+  if (id === 'forgetech') out.push(buildMarginSignal());
+  return out;
 }
 
-/**
- * The prompt to send alongside `toBoardPackSchema()`.
- *
- * Written to close the failure mode the current endpoint leaves open: a model
- * asked to produce the whole schema will supply plausible numbers when it is
- * unsure, and a wrong cash position in a board pack is not recoverable.
- */
 export const BOARD_PACK_PROMPT =
   'You are given a board pack object in which every metric, risk, opportunity and action has ' +
   'already been calculated from source systems. Return the same object with only two fields ' +
-  'changed: write `executiveSummary` (at most 120 words) and `outlook` (at most 60 words). ' +
-  'Do not add, remove, reorder or alter any other field. Do not introduce any figure that does ' +
-  'not already appear in the object. If a figure you want to cite is not present, write around ' +
-  'it. UK English, direct, commercially minded, no waffle.';
+  'changed: write `executiveSummary` (2-3 sentences) and `outlook` (2 sentences). Do not add, ' +
+  'remove, reorder or alter any other field. Do not introduce any figure that does not already ' +
+  'appear in the object. If a figure you want to cite is not present, write around it. ' +
+  'UK English, direct, commercially minded, no waffle.';
 
-/** The `FEED_STATUS` shape, extended to cover the demo dataset. */
+/** The `FEED_STATUS` shape from src/lib/dataFeeds.js, extended for the demo dataset. */
 export function toFeedStatus({ xero = false, stripe = false, hubspot = false } = {}) {
   return {
     portfolio: { status: 'simulated', label: 'Alba demo dataset', detail: '10 companies, 18 months' },

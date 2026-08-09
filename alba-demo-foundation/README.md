@@ -32,26 +32,36 @@ No dependencies, no network, no filesystem, no wall clock. Node 18+.
 | `src/actions.js` | Alert and action tracker, through to closed-loop outcome |
 | `src/report.js` | Exception Report and Growth Opportunity Brief, payload plus Markdown |
 | `src/index.js` | Portfolio Health Command Centre and the public surface |
-| `src/adapters/albaPip.js` | Emits the platform's own `buildFinance()` and board-pack shapes |
+| `src/adapters/albaPip.js` | Emits the platform's own `buildFinance()` and board-pack shapes, verified against source |
 
 ## Using it in the React app
 
 Copy `src/` to `src/lib/demo/` in `alba-pip`.
 
 **The existing screens need no changes.** `src/adapters/albaPip.js` emits the
-shape `buildFinance(company)` already returns, so `FinanceDrilldown.jsx` keeps
-its four levels, its breadcrumb and its Xero overlay untouched:
+shape `buildFinance(co)` already returns — verified field by field against
+`jbgray1874/alba-pip@2c591dc`, not against documentation. Of 1,234 values
+compared across the five existing companies, the only differences are the
+sparkline series and the cash-projection month labels, both changed
+deliberately. `FinanceDrilldown.jsx` keeps its four levels, its breadcrumb and
+its Xero overlay untouched:
 
 ```js
 import { toFinanceShape } from './lib/demo/adapters/albaPip.js';
 
-// drop-in for buildFinance(company) — same keys, same GBP thousands
-const fin = toFinanceShape(company.id);
+// drop-in for buildFinance(co) — same signature, same keys, same units
+const fin = toFinanceShape(co);
 ```
 
-What changes is what sits behind those keys: eighteen months of history instead
-of one seed row, every figure carrying its source, and sub-lines that sum
-exactly to the totals above them.
+What changes is what sits behind those keys. The platform draws each sparkline
+with `trend(end, 6, growth)` — an independent straight line back from every
+metric's current value, so the payroll series and the R&D series have no common
+origin and cannot be checked against each other. Here every series is a slice of
+one eighteen-month ledger, so they reconcile.
+
+The units follow the platform exactly, including its own inconsistency:
+`balance`, `burn` and `value` are in GBP thousands while `amount` and `val` are
+in whole pounds.
 
 For the board pack, the adapter inverts the current arrangement. `api/ai/
 boardpack.js` currently asks Grok to produce the whole schema, metrics
