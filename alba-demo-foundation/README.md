@@ -88,7 +88,7 @@ Against the targets in the specification, as of the current parameters:
 | Next-quarter miss ~USD 1.2m | USD 1.20m |
 | Pipeline coverage 3.2x → 1.9x | 3.20x → 1.90x |
 | Win rate 31% → 22% | 31% → 22% |
-| Cash runway 14 months → ~8 | 13.8 months (2026-04) → 8.5 |
+| Cash runway 14 months → ~8 | 14.2 months (2026-04) → 8.5 |
 | Gross margin 42% → 34% | 42.0% → 34.0% |
 | Cross-sell opportunity USD 1.5–2.0m ARR | USD 1.49m – 2.01m |
 | Procurement saving USD 0.8–1.1m | USD 0.84m – 1.13m |
