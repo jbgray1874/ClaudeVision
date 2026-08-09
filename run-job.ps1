@@ -74,6 +74,34 @@ $main   = Join-Path $root 'src\main.py'
 
 if (-not (Test-Path $python)) { Write-Error "no virtualenv at $python"; exit 1 }
 
+# ── ELEVATION IS NOT NEUTRAL FOR THIS PIPELINE ──────────────────────────────────────
+# Said once, up front, because both of its consequences look like something else:
+#
+#   DRIVE MAPPINGS are per-logon-token. A share mapped in an elevated console exists
+#   ONLY there, and one mapped in a normal console is invisible here. Whichever way
+#   round it is, the symptom is a path that plainly exists and cannot be read.
+#
+#   EXCEL COM does not reliably automate from an elevated process against a normal
+#   desktop session. That is how the workbook gets generated, so an elevated run can
+#   produce a clean estimate and no spreadsheet — and the estimate is not the
+#   deliverable, the spreadsheet is.
+#
+# A warning rather than a refusal: an elevated run is sometimes the only one that can
+# see the share, and a half-finished run that says why beats a refusal to start.
+try {
+    if (([Security.Principal.WindowsPrincipal] `
+         [Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Host 'NOTE: this console is ELEVATED.' -ForegroundColor Yellow
+        Write-Host '  - drive mappings made here are invisible to a normal console, and'
+        Write-Host '    a share mapped normally is invisible here;'
+        Write-Host '  - Excel COM automation is unreliable from an elevated process, so'
+        Write-Host '    the workbook may not be written even when the estimate succeeds.'
+        Write-Host '  A normal PowerShell with a UNC path avoids both.' -ForegroundColor Yellow
+        Write-Host ''
+    }
+} catch { }
+
 # ── RESOLVE THE JOB ─────────────────────────────────────────────────────────────────
 # Where a pack can live, most specific first. SDI_JOBS_ROOT is how a machine points at
 # the estimating share without this script carrying anybody's drive letter — a hardcoded
