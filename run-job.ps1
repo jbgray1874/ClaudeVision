@@ -267,7 +267,13 @@ function Show-PathDiagnosis([string] $p) {
         elseif ($drv.DisplayRoot) {
             Write-Host "`nDrive $qual is mapped to $($drv.DisplayRoot), so the drive is fine" -ForegroundColor Yellow
             Write-Host 'and the path below it is not. The UNC equivalent of what you set is:'
-            Write-Host "    $($p -replace [regex]::Escape($qual), [regex]::Escape($drv.DisplayRoot).Replace('\\','\'))"
+            # PLAIN CONCATENATION, NOT -replace. [regex]::Escape turns a '$' into '\$',
+            # and a Windows admin share ends in one -- so this printed
+            # \\sdi-dc01\shareddata\$\Estimating\... with a stray backslash, in a line
+            # whose entire purpose is to be pasted. A diagnostic that hands the reader a
+            # path that cannot work is worse than one that says nothing: it looks like an
+            # answer, and the next failure gets blamed on the share.
+            Write-Host "    $($drv.DisplayRoot + $p.Substring($qual.Length))"
         }
     }
 
