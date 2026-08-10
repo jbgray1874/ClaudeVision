@@ -630,9 +630,6 @@ def operation_scope_for(pe: Dict[str, Any], op: str,
     return None
 
 
-_ACRYLIC_NEVER_POWDER = {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA", "POLYCARBONATE"}
-
-
 def section_coated_area_m2(part: Dict[str, Any]) -> float:
     """Powder-coated surface of one SECTION-STOCK part (tube, box, angle, flat bar), m2.
 
@@ -661,10 +658,11 @@ def section_coated_area_m2(part: Dict[str, Any]) -> float:
     _ss = _p.get("section_stock") or {}
     if not _ss:
         return 0.0
-    _mat = str(_p.get("normalized_material")
-               or (_p.get("material_estimate") or {}).get("material") or "").upper().replace("_", " ")
-    if _mat in _ACRYLIC_NEVER_POWDER or _p.get("acrylic_no_powder"):
-        return 0.0          # acrylic tube is polished, never coated
+    # ONE ANSWER TO "CAN THIS BE COATED". This used to hold its own five-name set and
+    # compare the material by EXACT equality, so "PETG OR PC" and every other spelling
+    # of a plastic tube contributed coated area.
+    if part_cannot_be_powder_coated(_p):
+        return 0.0          # a plastic section is polished or left as-is, never coated
     _a = _safe(_ss.get("a"))
     _b = _safe(_ss.get("b"))
     if not _a:
@@ -896,10 +894,6 @@ _ZERO_IS_UNREAD_GEOMETRY_FIELDS = frozenset({
 })
 
 
-_ACRYLIC_NEVER_POWDERED = {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA",
-                           "POLYCARBONATE"}
-
-
 def part_cannot_be_powder_coated(pe: Dict[str, Any]) -> bool:
     """Is this part physically incapable of going through the powder oven?
 
@@ -917,11 +911,16 @@ def part_cannot_be_powder_coated(pe: Dict[str, Any]) -> bool:
     that reaches the price is the wrong one.
 
     Steel is unaffected: the rule returns False for every metal, so no existing job moves.
+
+    THE LOCAL SET IS GONE. It named five plastics and compared them by EXACT equality, so
+    it answered "coatable" for PETG, ABS, PVC, polypropylene and every material string that
+    carried so much as a grade suffix. stock_form_rules.non_metal_reason now answers for
+    the class, and this function's job is only to ask it with the right material.
     """
     mat = str(pe.get("normalized_material")
               or (pe.get("material_estimate") or {}).get("material") or ""
               ).upper().replace("_", " ")
-    if mat in _ACRYLIC_NEVER_POWDERED or bool(pe.get("acrylic_no_powder")):
+    if bool(pe.get("acrylic_no_powder")):
         return True
     try:
         from stock_form_rules import is_impossible_operation as _impossible
