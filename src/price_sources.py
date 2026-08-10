@@ -324,12 +324,34 @@ def get_best_price(request: PriceRequest, connectors: Optional[Dict[str, Any]] =
             audit_trail.append({"source": source_name, "status": "skipped", "reason": "connector_unavailable"})
             continue
 
-        source_candidates = _fetch_candidates_from_connector(connector, request)
+        # ONE PRICE SOURCE FAILING MUST NOT END THE ESTIMATE.
+        #
+        # A connector that cannot answer is a source with no candidates -- the waterfall
+        # exists precisely so the next one is asked. It was not written that way: an
+        # exception here propagated out of estimate_material, out of estimate_part, out of
+        # estimate_document and killed main.py. Job 11650's side panels died mid-run
+        # because Excel returned RPC_E_CALL_REJECTED ("call was rejected by callee") when
+        # the spreadsheet connector tried to open the price template -- Excel was busy, or
+        # the shell was elevated and Excel was not. No estimate, no workbook, no partial
+        # answer, over a price lookup that has three fallbacks behind it.
+        #
+        # Recorded as a FAILED source rather than a quiet skip: a source that errored and
+        # one that had nothing to say are different facts, and the audit trail is where an
+        # estimator finds out which prices were never even asked for.
+        try:
+            source_candidates = _fetch_candidates_from_connector(connector, request)
+            _status, _reason = "queried", None
+        except Exception as _e_conn:                                # noqa: BLE001
+            source_candidates = []
+            _status, _reason = "failed", f"{type(_e_conn).__name__}: {_e_conn}"
+            print(f"   [price] {source_name} could not be queried ({_reason}) -- "
+                  f"falling through to the next source", flush=True)
         audit_trail.append(
             {
                 "source": source_name,
-                "status": "queried",
+                "status": _status,
                 "candidate_count": len(source_candidates),
+                **({"reason": _reason} if _reason else {}),
             }
         )
         candidates.extend(source_candidates)
