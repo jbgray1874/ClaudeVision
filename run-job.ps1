@@ -65,7 +65,13 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)] [string] $Job,
     [switch] $Deliverables,
-    [switch] $Twice
+    [switch] $Twice,
+    # RESOLUTION WITHOUT THE RUN, so another script can reuse these rules instead of
+    # keeping its own copy of them. Everything this script prints goes through Write-Host,
+    # which writes to the HOST and never to the output stream — so a caller cannot capture
+    # a run, and run-packs.ps1 came back with a table of blank cells that read exactly like
+    # four free packs. It asks for the folder now and runs the engine itself.
+    [switch] $ResolveOnly
 )
 
 $root   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -406,6 +412,7 @@ if (-not $resolved) {
     exit 1
 }
 $Job = $resolved
+if ($ResolveOnly) { Write-Output $Job; exit 0 }
 Write-Host "job: $Job" -ForegroundColor DarkGray
 
 $estArgs = @($main, '--job', $Job, '--generate-ai-spreadsheet')
