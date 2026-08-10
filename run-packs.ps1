@@ -9,7 +9,7 @@
     parallel run actually needs is the row a reviewer reads: which pack, what it costed,
     whether it blocked, and whether it gave the same answer twice.
 
-    Everything here is run-job.ps1's resolution and run-job.ps1's engine — this only
+    Everything here is run-job.ps1's resolution and run-job.ps1's engine - this only
     sequences them and reads back the lines the engine already prints. Nothing is
     recomputed, so a figure in this table cannot disagree with the run it came from.
 
@@ -39,7 +39,7 @@ if (-not $Jobs -or $Jobs.Count -eq 0) {
 if (-not (Test-Path $python)) { Write-Error "no virtualenv at $python"; exit 1 }
 if (-not (Test-Path $runJob)) { Write-Error "run-job.ps1 is not beside this script"; exit 1 }
 
-# ── READ BACK WHAT THE ENGINE SAID ──────────────────────────────────────────────────
+# -- READ BACK WHAT THE ENGINE SAID --------------------------------------------------
 # Parsed from the run's own output rather than recomputed from the JSON. A second reader
 # of the same facts is how two numbers describing one run come to disagree, and this
 # whole codebase has spent the week removing those.
@@ -50,8 +50,8 @@ function Read-RunFacts([string[]] $lines) {
         bomOwned = ''; bomRows = ''
     }
     foreach ($l in $lines) {
-        # [^\d]* RATHER THAN .? FOR THE CURRENCY MARK. The engine prints "£12.99"; a
-        # console in the wrong code page renders that as two characters ("┬ú12.99"), which
+        # [^\d]* RATHER THAN .? FOR THE CURRENCY MARK. The engine prints "GBP12.99"; a
+        # console in the wrong code page renders that as two characters ("the mojibake form12.99"), which
         # is exactly what this machine's output shows. A single-character wildcard matches
         # the first spelling and silently fails on the second, and a failed parse here
         # produces a blank cell that reads like a free pack.
@@ -81,7 +81,7 @@ foreach ($job in $Jobs) {
 
     # RESOLVE THROUGH run-job.ps1's RULES, NOT A SECOND COPY OF THEM. A bare job number
     # has to mean the same thing to both scripts, and the way to guarantee that is one
-    # implementation — so this asks run-job.ps1 to do the run.
+    # implementation - so this asks run-job.ps1 to do the run.
     #
     # A HASHTABLE, NOT AN ARRAY. Splatting an array passes its elements POSITIONALLY, so
     # @('-Job', $job) binds the literal string "-Job" to the first parameter and leaves the
@@ -89,7 +89,7 @@ foreach ($job in $Jobs) {
     # '11650-00-GA'". Only a hashtable splats by NAME.
     $folder = & $runJob -Job $job -ResolveOnly 2>$null | Select-Object -Last 1
     if (-not $folder) {
-        Write-Host "could not resolve '$job' — run .\run-job.ps1 $job on its own to see why" -ForegroundColor Red
+        Write-Host "could not resolve '$job' - run .\run-job.ps1 $job on its own to see why" -ForegroundColor Red
         $results += [pscustomobject]@{
             Job = $job; Unit = ''; Material = ''; Labour = ''; Blocking = ''
             Warnings = ''; 'BOM owned' = ''; Reproducible = 'not run'; Workbook = ''
@@ -103,7 +103,7 @@ foreach ($job in $Jobs) {
 
     # THE ENGINE IS RUN HERE, THE FOLDER IS RESOLVED THERE. run-job.ps1 prints everything
     # through Write-Host, which writes to the HOST and never to the output stream, so a
-    # caller cannot capture a run through it — the first version of this produced a table
+    # caller cannot capture a run through it - the first version of this produced a table
     # of blank cells while the runs behind it were perfectly fine, which reads exactly like
     # four free packs. Asking it only for the folder keeps ONE resolver and lets this
     # script capture what the engine says.
@@ -144,22 +144,22 @@ foreach ($r in $results) {
     else { Write-Host "    $($r.Job): NO WORKBOOK WRITTEN" -ForegroundColor Red }
 }
 
-# WHAT A BLANK COLUMN MEANS. An empty Unit is not a free pack — it is a run whose totals
+# WHAT A BLANK COLUMN MEANS. An empty Unit is not a free pack - it is a run whose totals
 # line never appeared, which is a failed or half-finished run wearing the same face as a
 # cheap one. Said out loud, because a table of blanks reads as success at a glance.
 $missing = @($results | Where-Object { -not $_.Unit })
 if ($missing.Count) {
-    Write-Host "`n$($missing.Count) pack(s) produced NO unit total — those runs did not finish," -ForegroundColor Red
+    Write-Host "`n$($missing.Count) pack(s) produced NO unit total - those runs did not finish," -ForegroundColor Red
     Write-Host 'they were not free. Scroll back to the pack named above for the reason.'
 }
 $blocked = @($results | Where-Object { $_.Blocking -and [int]$_.Blocking -gt 0 })
 if ($blocked.Count) {
-    Write-Host "`n$($blocked.Count) pack(s) carry blocking findings — provisional, not a quote." -ForegroundColor Yellow
+    Write-Host "`n$($blocked.Count) pack(s) carry blocking findings - provisional, not a quote." -ForegroundColor Yellow
 }
 
 if ($Summary) {
     $md = @()
-    $md += "# Parallel run — $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+    $md += "# Parallel run - $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
     $md += ''
     $md += '| Job | Unit | Material | Labour | Blocking | Warnings | BOM owned | Reproducible |'
     $md += '|---|---|---|---|---|---|---|---|'
@@ -173,7 +173,7 @@ if ($Summary) {
     }
     $md += ''
     $md += 'Every figure above is read back from the run''s own output, not recomputed.'
-    $md += 'Provisional until the blocking findings are cleared — not a quote.'
+    $md += 'Provisional until the blocking findings are cleared - not a quote.'
     $dir = Split-Path $Summary -Parent
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $md -join "`r`n" | Set-Content -LiteralPath $Summary -Encoding UTF8

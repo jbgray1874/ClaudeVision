@@ -15,7 +15,7 @@
 
     A BARE JOB NUMBER RESOLVES. Typing the full path is where this goes wrong: three
     sessions in a row were lost to a placeholder path being pasted verbatim, and the
-    script's only answer was "no such job folder" — true, unhelpful, and identical
+    script's only answer was "no such job folder" - true, unhelpful, and identical
     whether the pack was missing, on a share that had not mounted, or simply spelled
     differently. Give it 12392 and it searches:
 
@@ -36,7 +36,7 @@
 
         $env:SDI_JOBS_ROOT = "K:\Shared\Estimating\Completed\AI Estimating\Live Enquiry"
 
-    Pointing it at one pack still works — the parent is searched too — but every sibling
+    Pointing it at one pack still works - the parent is searched too - but every sibling
     pack on the enquiry is then reachable by number, which is the point of setting it.
 
     PREFER THE UNC PATH TO A DRIVE LETTER:
@@ -45,7 +45,7 @@
 
     A mapped letter is per-logon-token and per-session. It disappears in an elevated
     console, it goes stale while still holding its letter (which is what "System error 85
-    — the local device name is already in use" means when the drive is nowhere to be
+    - the local device name is already in use" means when the drive is nowhere to be
     seen), and it is absent entirely on a machine that never mapped it. A UNC path has
     none of those properties. Where a letter has gone stale, release it before re-mapping:
 
@@ -68,7 +68,7 @@ param(
     [switch] $Twice,
     # RESOLUTION WITHOUT THE RUN, so another script can reuse these rules instead of
     # keeping its own copy of them. Everything this script prints goes through Write-Host,
-    # which writes to the HOST and never to the output stream — so a caller cannot capture
+    # which writes to the HOST and never to the output stream - so a caller cannot capture
     # a run, and run-packs.ps1 came back with a table of blank cells that read exactly like
     # four free packs. It asks for the folder now and runs the engine itself.
     [switch] $ResolveOnly
@@ -80,7 +80,7 @@ $main   = Join-Path $root 'src\main.py'
 
 if (-not (Test-Path $python)) { Write-Error "no virtualenv at $python"; exit 1 }
 
-# ── ELEVATION IS NOT NEUTRAL FOR THIS PIPELINE ──────────────────────────────────────
+# -- ELEVATION IS NOT NEUTRAL FOR THIS PIPELINE --------------------------------------
 # Said once, up front, because both of its consequences look like something else:
 #
 #   DRIVE MAPPINGS are per-logon-token. A share mapped in an elevated console exists
@@ -89,7 +89,7 @@ if (-not (Test-Path $python)) { Write-Error "no virtualenv at $python"; exit 1 }
 #
 #   EXCEL COM does not reliably automate from an elevated process against a normal
 #   desktop session. That is how the workbook gets generated, so an elevated run can
-#   produce a clean estimate and no spreadsheet — and the estimate is not the
+#   produce a clean estimate and no spreadsheet - and the estimate is not the
 #   deliverable, the spreadsheet is.
 #
 # A warning rather than a refusal: an elevated run is sometimes the only one that can
@@ -108,12 +108,12 @@ try {
     }
 } catch { }
 
-# ── RESOLVE THE JOB ─────────────────────────────────────────────────────────────────
+# -- RESOLVE THE JOB -----------------------------------------------------------------
 # Where a pack can live, most specific first. SDI_JOBS_ROOT is how a machine points at
-# the estimating share without this script carrying anybody's drive letter — a hardcoded
+# the estimating share without this script carrying anybody's drive letter - a hardcoded
 # path is exactly the kind of per-site detail that stops working on the next machine.
 # The @() WRAPS THE PIPELINE, not just the list. A pipeline that yields one item unwraps
-# to that item, so with only one existing root $searchRoots would be a bare string — and
+# to that item, so with only one existing root $searchRoots would be a bare string - and
 # the += below would concatenate onto it rather than append to a list, producing a path
 # that is two paths glued together and exists nowhere.
 $searchRoots = @(
@@ -139,7 +139,7 @@ function Show-PathDiagnosis([string] $p) {
           the drive IS mapped but this shell cannot see it (elevation)
           the drive is fine and the path below it is wrong
 
-        The third is diagnosed by walking up to the deepest ancestor that DOES exist —
+        The third is diagnosed by walking up to the deepest ancestor that DOES exist -
         which names the exact component where the typed path leaves reality.
     #>
     Write-Host "`nSDI_JOBS_ROOT is set but not reachable from this session:" -ForegroundColor Red
@@ -159,8 +159,8 @@ function Show-PathDiagnosis([string] $p) {
 
             # REGISTERED BUT DISCONNECTED IS NOT THE SAME AS UNMAPPED, and it is the case
             # that wastes the most time: Get-PSDrive cannot see the letter, so the obvious
-            # move is to map it — and `net use K: \\server\share` then fails with
-            # "System error 85 — the local device name is already in use", which reads as a
+            # move is to map it - and `net use K: \\server\share` then fails with
+            # "System error 85 - the local device name is already in use", which reads as a
             # contradiction. It is not. The persistent mapping is still registered, the
             # redirector is holding the letter, and the connection behind it is dead. The
             # letter must be released before it can be re-used, and trying a DIFFERENT
@@ -187,7 +187,7 @@ function Show-PathDiagnosis([string] $p) {
             } catch { }
             if ($elevated) {
                 # This has cost this project a day before. Mapped drives belong to a logon
-                # token, and an elevated shell runs under a DIFFERENT token — so a drive
+                # token, and an elevated shell runs under a DIFFERENT token - so a drive
                 # that is present in Explorer and in a normal console is simply absent
                 # here, with no error anywhere to say why.
                 Write-Host "`nThis console is ELEVATED, and mapped drives belong to the" -ForegroundColor Yellow
@@ -224,7 +224,7 @@ function Show-PathDiagnosis([string] $p) {
                     }
                 } catch { }
             }
-            Write-Host "`nOr skip the drive letter entirely — a UNC path needs no mapping," -ForegroundColor Cyan
+            Write-Host "`nOr skip the drive letter entirely - a UNC path needs no mapping," -ForegroundColor Cyan
             Write-Host 'survives elevation, and is the more robust thing to put in the variable:'
             if ($unc) {
                 Write-Host "    `$env:SDI_JOBS_ROOT = '$unc'"
@@ -234,13 +234,13 @@ function Show-PathDiagnosis([string] $p) {
                 # - the network name cannot be found", which is indistinguishable from the
                 # server being down, so guessing produces the same message forever. Every
                 # line below reads the name from somewhere it is already recorded.
-                Write-Host "`n    Find <server>\<share> — do not guess it, a wrong name gives" -ForegroundColor Cyan
+                Write-Host "`n    Find <server>\<share> - do not guess it, a wrong name gives" -ForegroundColor Cyan
                 Write-Host '    "System error 67" whatever the reason:'
                 Write-Host '        Get-ChildItem HKCU:\Network | ForEach-Object {'
                 Write-Host '            "$($_.PSChildName): $((Get-ItemProperty $_.PSPath).RemotePath)" }'
                 Write-Host '        net use'
                 Write-Host '        Get-SmbMapping'
-                Write-Host '    — or in Explorer, This PC shows the drive as share (\\server)'
+                Write-Host '    - or in Explorer, This PC shows the drive as share (\\server)'
                 $known = @()
                 try {
                     $known = @(Get-ChildItem 'HKCU:\Network' -ErrorAction Stop | ForEach-Object {
@@ -253,10 +253,10 @@ function Show-PathDiagnosis([string] $p) {
                 }
             }
             # QUOTE IT. A share name ending in $ is ordinary on a Windows server, and $ is
-            # PowerShell's variable sigil — an unquoted or double-quoted UNC can lose part
+            # PowerShell's variable sigil - an unquoted or double-quoted UNC can lose part
             # of itself to interpolation before net use ever sees it, which then reports a
             # name the user never typed.
-            Write-Host "`n    Single-quote any UNC containing `$ — double quotes interpolate it." -ForegroundColor DarkGray
+            Write-Host "`n    Single-quote any UNC containing `$ - double quotes interpolate it." -ForegroundColor DarkGray
         }
         elseif ($drv.DisplayRoot) {
             Write-Host "`nDrive $qual is mapped to $($drv.DisplayRoot), so the drive is fine" -ForegroundColor Yellow
@@ -269,10 +269,10 @@ function Show-PathDiagnosis([string] $p) {
     # path is right up to here and wrong after it", which is one look rather than a hunt.
     $probe = $p
     while ($probe -and -not (Test-Path $probe)) {
-        # STOP AT THE SHARE ROOT — AFTER TESTING IT. Above \\server\share there is nothing
+        # STOP AT THE SHARE ROOT - AFTER TESTING IT. Above \\server\share there is nothing
         # to test, and reporting "exists as far as \\" is worse than reporting nothing. But
         # the first version broke out BEFORE testing the share root, so it announced "no
-        # part of that path is reachable" about a share it had never tried — which is the
+        # part of that path is reachable" about a share it had never tried - which is the
         # opposite of the truth when the share is fine and only the folders below it are
         # wrong, and that is the common case.
         if ($probe -like '\\*' -and (($probe.TrimStart('\') -split '\\').Count -le 2)) {
@@ -301,8 +301,8 @@ function Show-PathDiagnosis([string] $p) {
 
 # A ROOT POINTED AT ONE PACK STILL WORKS. "Jobs root" reads as "where my job is" at least
 # as naturally as "where my jobs are", and the first person to set it pointed it straight
-# at 12392-02. Searching only the CHILDREN of that would look inside the pack — at its DXF
-# and PDF sub-folders — and match nothing, for a reason no message would have explained.
+# at 12392-02. Searching only the CHILDREN of that would look inside the pack - at its DXF
+# and PDF sub-folders - and match nothing, for a reason no message would have explained.
 # So a root that is itself a pack has its PARENT searched too, which also makes the sibling
 # packs on the same enquiry reachable by number.
 $jobsRootIsAPack = $false
@@ -370,7 +370,7 @@ if (-not $resolved) {
     elseif ($jobsRootIsAPack) {
         Write-Host "`nSDI_JOBS_ROOT points at ONE PACK, not at the folder that holds your" -ForegroundColor Yellow
         Write-Host "packs: $env:SDI_JOBS_ROOT"
-        Write-Host 'Its parent was searched as well, so this should still have worked — if it'
+        Write-Host 'Its parent was searched as well, so this should still have worked - if it'
         Write-Host 'did not, set it one level up:'
         Write-Host "    setx SDI_JOBS_ROOT `"$(Split-Path $env:SDI_JOBS_ROOT -Parent)`""
     }
@@ -379,8 +379,8 @@ if (-not $resolved) {
     # exists because a console surprise cost a day.
     # A JOB FOLDER IS ONE WITH DRAWINGS IN IT. Listing every directory under the roots put
     # .venv, .github, .pytest_cache and src on a list headed "Jobs found", which is worse
-    # than printing nothing: it invites the reader to try one. Tested by what a pack IS —
-    # it holds drawings — rather than by a blocklist of names that would need extending
+    # than printing nothing: it invites the reader to try one. Tested by what a pack IS -
+    # it holds drawings - rather than by a blocklist of names that would need extending
     # for every new directory anybody adds.
     $found = @()
     foreach ($r in $searchRoots) {
@@ -393,7 +393,7 @@ if (-not $resolved) {
                     # so the filter silently did nothing and every directory holding any
                     # file at all qualified: src\__pycache__ and src\source_connectors were
                     # offered to the reader under a heading saying they held drawings. It
-                    # worked under PowerShell 7, which is how it passed review — the same
+                    # worked under PowerShell 7, which is how it passed review - the same
                     # class of miss as testing a guard on a machine that cannot run it.
                     $null -ne (Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Depth 1 `
                                    -ErrorAction SilentlyContinue |
@@ -405,7 +405,7 @@ if (-not $resolved) {
     }
     Write-Host "`nFolders holding drawings:" -ForegroundColor Cyan
     if ($found.Count -eq 0) {
-        Write-Host '    (none under the roots above — no pack has been copied down yet)'
+        Write-Host '    (none under the roots above - no pack has been copied down yet)'
     } else {
         foreach ($f in $found) { Write-Host "    $f" }
     }
@@ -431,9 +431,9 @@ if ($Twice) {
     Write-Host "run 1: $first"
     Write-Host "run 2: $second"
     if ($first -eq $second) {
-        Write-Host 'IDENTICAL — the caches and the deterministic path hold.' -ForegroundColor Green
+        Write-Host 'IDENTICAL - the caches and the deterministic path hold.' -ForegroundColor Green
     } else {
-        Write-Host 'DIFFERENT — same code and same pack produced two answers.' -ForegroundColor Red
+        Write-Host 'DIFFERENT - same code and same pack produced two answers.' -ForegroundColor Red
     }
 }
 
