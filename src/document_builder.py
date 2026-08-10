@@ -1873,6 +1873,80 @@ def _parse_fixing_bom_rows_from_page_text(page_text: str) -> List[Dict[str, Any]
     return out
 
 
+_MATERIAL_OBSERVATION_PREFIX = ": material "
+
+
+def material_observation(pn: str, part: Dict[str, Any]) -> str:
+    """The one sentence that tells an estimator what this part is made of, and who said so.
+
+    WHAT WE CONCLUDED, AND ONLY THEN WHAT WE READ. This printed the raw material tokens as
+    though they were the answer, so job 12392 told an estimator four times that a part we
+    cut in mild steel was "Card" — the scrambled text the arbitration had already rejected
+    in favour of the SolidWorks material. The costing was right on every one of them.
+
+    Nothing was wrong with the engine and everything was wrong with the sentence. An
+    estimator reading "material detected (Card)" against a steel bracket has been given a
+    reason to distrust a sheet that was correct, and a report that shows the loser of an
+    arbitration is worse than one that shows nothing.
+
+    A FUNCTION, so the sentence can be rebuilt later from the finished record. See
+    restate_material_observations: this runs long before the strongest sources have
+    spoken, and a sentence naming a source is a claim that has to stay true.
+    """
+    _read = ", ".join(part.get("materials") or [])
+    _costed = str(part.get("normalized_material") or "").strip()
+    if _costed and _costed.upper().replace("_", " ") not in _read.upper():
+        return (f"{pn}{_MATERIAL_OBSERVATION_PREFIX}{_costed} "
+                f"(from {part.get('material_source') or 'the strongest source'}); "
+                f"the drawing text read as '{_read}' and was not used.")
+    return f"{pn}: material detected ({_read})."
+
+
+def restate_material_observations(summary: Dict[str, Any]) -> int:
+    """Rebuild every material observation from the record as it finally stands.
+
+    THE SENTENCE WAS A SNAPSHOT OF AN UNFINISHED ARBITRATION. build_document_writeup runs
+    at file_scan.py:1912; the SolidWorks connector applies the model's material at 2352.
+    So the observation was composed while the strongest source had not yet spoken, and on
+    job 12392 it told the estimator
+
+        12392-02-01M: material MILD STEEL (from drawing_deterministic)
+
+    about a record whose own provenance trail says solidworks_api. The value was right and
+    the attribution named a source that had lost. An estimator who goes to the title block
+    to check that will not find the answer there — the model supplied it.
+
+    Runs after every applier, over the same part objects, and rewrites only the material
+    line. Returns how many sentences changed, so a run that silently restates nothing can
+    be told from one that had nothing to restate.
+    """
+    writeup = summary.get("manufacturing_writeup") or {}
+    obs = writeup.get("manufacturing_observations")
+    parts = writeup.get("parts") or summary.get("parts") or []
+    if not isinstance(obs, list) or not parts:
+        return 0
+
+    by_pn = {}
+    for p in parts:
+        if isinstance(p, dict) and p.get("part_number"):
+            by_pn[str(p["part_number"])] = p
+
+    changed = 0
+    for i, line in enumerate(obs):
+        text = str(line)
+        if _MATERIAL_OBSERVATION_PREFIX not in text and ": material detected (" not in text:
+            continue
+        pn = text.split(":", 1)[0].strip()
+        part = by_pn.get(pn)
+        if part is None or not (part.get("materials") or []):
+            continue
+        fresh = material_observation(pn, part)
+        if fresh != text:
+            obs[i] = fresh
+            changed += 1
+    return changed
+
+
 def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = build_part_index(summary)
 
@@ -2118,15 +2192,7 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
             # An estimator reading "material detected (Card)" against a steel bracket has
             # been given a reason to distrust a sheet that was correct, and a report that
             # shows the loser of an arbitration is worse than one that shows nothing.
-            _read = ", ".join(part["materials"])
-            _costed = str(part.get("normalized_material") or "").strip()
-            if _costed and _costed.upper().replace("_", " ") not in _read.upper():
-                observations.append(
-                    f"{pn}: material {_costed} "
-                    f"(from {part.get('material_source') or 'the strongest source'}); "
-                    f"the drawing text read as '{_read}' and was not used.")
-            else:
-                observations.append(f"{pn}: material detected ({_read}).")
+            observations.append(material_observation(pn, part))
         if part["slot_detected"] or part["geometry_rollup"]["estimated_slot_like_features"]:
             observations.append(f"{pn}: slot-like geometry or text cues detected.")
         if part["process_notes"]:

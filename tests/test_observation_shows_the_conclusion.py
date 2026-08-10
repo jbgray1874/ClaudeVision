@@ -21,13 +21,20 @@ if str(SRC) not in sys.path:
 
 
 def _observation(part):
-    """The single material sentence document_builder would emit for this part."""
-    source = (SRC / "document_builder.py").read_text(encoding="utf-8")
-    block = source[source.index('if part["materials"]:'):]
-    block = block[:block.index('if part["slot_detected"]')]
-    ns = {"observations": [], "part": part, "pn": part["part_number"]}
-    exec(compile(re.sub(r"^        ", "", block, flags=re.M), "<obs>", "exec"), ns)
-    return ns["observations"][0] if ns["observations"] else ""
+    """The single material sentence document_builder would emit for this part.
+
+    CALLS THE FUNCTION NOW. This used to slice the source between two known lines and
+    exec the block in a hand-built namespace, because the sentence lived inline in a
+    600-line loop and there was nothing to call. That harness tested a TEXT REGION: it
+    broke the moment the sentence was extracted into a function — correctly, since the
+    region no longer existed — and it would equally have kept passing on a copy of the
+    logic that the pipeline had stopped using.
+
+    The sentence is now document_builder.material_observation, so this exercises the
+    thing that actually runs.
+    """
+    from document_builder import material_observation
+    return material_observation(part["part_number"], part)
 
 
 def test_the_rejected_reading_is_not_presented_as_the_material():

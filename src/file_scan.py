@@ -3035,6 +3035,23 @@ def _finalize_scan_summary(
         print(f"   [bay] rollup skipped: {_be_err}", flush=True)
 
     _debug("start _build_additive_summary_sections")
+    # THE DELIVERABLE MUST DESCRIBE THE RECORD AS IT FINALLY STANDS. The write-up's
+    # observations are composed at line ~1912, before the SolidWorks connector applies the
+    # model's material at ~2352 — so a sentence naming its source named whichever source
+    # happened to hold the field halfway through arbitration. Job 12392 printed "material
+    # MILD STEEL (from drawing_deterministic)" about a record whose own trail says
+    # solidworks_api: the value right, the attribution naming a source that had lost, and
+    # an estimator sent to a title block that does not hold the answer.
+    try:
+        from document_builder import restate_material_observations as _restate_mat
+        _n_restated = _restate_mat(summary)
+        if _n_restated:
+            print(f"   [observations] restated {_n_restated} material line(s) from the "
+                  f"finished record — they were composed before the strongest source ran",
+                  flush=True)
+    except Exception as _e_obs:
+        print(f"   [observations] material restatement skipped ({_e_obs})", flush=True)
+
     _build_additive_summary_sections(summary)
     _debug("done _build_additive_summary_sections")
     _debug("start normalise_json")
