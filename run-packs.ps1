@@ -1,7 +1,7 @@
 <#
     Run several packs and print ONE table, for a parallel run against estimating.
 
-        .\run-packs.ps1 11650-00-GA 11650-04-SA01 8278-01-GA 8278-02-GA
+        .\run-packs.ps1 11650-00-GA:45 11650-04-SA01:5 8278-01-GA 8278-02-GA
         .\run-packs.ps1 -Jobs 11650,8278 -Twice
         .\run-packs.ps1 11650-00-GA -Twice -Summary 'C:\ClaudeVision\output\week.md'
 
@@ -16,6 +16,18 @@
     -Twice runs each pack through unchanged and compares. Same code, same pack, same
     answer is the property that has to hold before an estimator sees any of it; a pack
     that moves between two runs of the same code has nothing to say about accuracy yet.
+
+    ORDER QUANTITY PER PACK, as job:qty -- "11650-00-GA:45". Setup is amortised as
+    (rate/60 x setup_mins) / qty, so a 45-off job costed at the 180-off default spreads
+    its setup over four times too many units and every labour line comes out light. Packs
+    on one enquiry rarely share a quantity: 45 cabinets and 5 sets of side panels is one
+    job to the customer and two demand figures to the shop.
+
+    The split is on the LAST colon, and only when what follows it is all digits, so
+    'C:\packs\11650-00-GA' is a path and 'C:\packs\11650-00-GA:45' is that path at 45 off.
+
+    A pack given no quantity is costed at whatever the engine infers, and the table says
+    'default' in the Qty column so nobody reads an assumption as a statement.
 
     -Summary writes the table to a markdown file as well, so the week's evidence survives
     the console buffer.
@@ -73,8 +85,24 @@ function Read-RunFacts([string[]] $lines) {
     return $facts
 }
 
+function Split-JobSpec([string] $spec) {
+    # LAST COLON, DIGITS ONLY. A Windows path carries a colon at position 1, so splitting
+    # on the first one turns 'C:\packs\11650' into drive 'C' at quantity '\packs\11650'.
+    $i = $spec.LastIndexOf(':')
+    if ($i -gt 1) {
+        $tail = $spec.Substring($i + 1)
+        if ($tail -match '^\d+$') {
+            return @{ Job = $spec.Substring(0, $i); Qty = [int] $tail }
+        }
+    }
+    return @{ Job = $spec; Qty = 0 }
+}
+
 $results = @()
-foreach ($job in $Jobs) {
+foreach ($spec in $Jobs) {
+    $parsed = Split-JobSpec $spec
+    $job = $parsed.Job
+    $qty = $parsed.Qty
     Write-Host "`n=============================================================" -ForegroundColor Cyan
     Write-Host " $job" -ForegroundColor Cyan
     Write-Host "=============================================================" -ForegroundColor Cyan
@@ -91,7 +119,8 @@ foreach ($job in $Jobs) {
     if (-not $folder) {
         Write-Host "could not resolve '$job' - run .\run-job.ps1 $job on its own to see why" -ForegroundColor Red
         $results += [pscustomobject]@{
-            Job = $job; Unit = ''; Material = ''; Labour = ''; Blocking = ''
+            Job = $job; Qty = if ($qty -gt 0) { "$qty" } else { 'default' }
+            Unit = ''; Material = ''; Labour = ''; Blocking = ''
             Warnings = ''; 'BOM owned' = ''; Reproducible = 'not run'; Workbook = ''
         }
         continue
@@ -100,6 +129,12 @@ foreach ($job in $Jobs) {
 
     $engineArgs = @($main, '--job', $folder, '--generate-ai-spreadsheet')
     if ($Deliverables) { $engineArgs += '--deliverables' }
+    if ($qty -gt 0) {
+        $engineArgs += @('--order-qty', "$qty")
+        Write-Host "order quantity: $qty off" -ForegroundColor DarkGray
+    } else {
+        Write-Host 'order quantity: not stated - the engine will assume one' -ForegroundColor Yellow
+    }
 
     # THE ENGINE IS RUN HERE, THE FOLDER IS RESOLVED THERE. run-job.ps1 prints everything
     # through Write-Host, which writes to the HOST and never to the output stream, so a
@@ -124,6 +159,7 @@ foreach ($job in $Jobs) {
 
     $results += [pscustomobject]@{
         Job          = $job
+        Qty          = if ($qty -gt 0) { "$qty" } else { 'default' }
         Unit         = $f1.unit
         Material     = $f1.material
         Labour       = $f1.labour
@@ -136,7 +172,7 @@ foreach ($job in $Jobs) {
 }
 
 Write-Host "`n`n================= PARALLEL RUN =================" -ForegroundColor Cyan
-$results | Format-Table Job, Unit, Material, Labour, Blocking, Warnings, 'BOM owned', Reproducible -AutoSize | Out-Host
+$results | Format-Table Job, Qty, Unit, Material, Labour, Blocking, Warnings, 'BOM owned', Reproducible -AutoSize | Out-Host
 
 Write-Host 'Workbooks:' -ForegroundColor Cyan
 foreach ($r in $results) {
@@ -161,10 +197,10 @@ if ($Summary) {
     $md = @()
     $md += "# Parallel run - $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
     $md += ''
-    $md += '| Job | Unit | Material | Labour | Blocking | Warnings | BOM owned | Reproducible |'
-    $md += '|---|---|---|---|---|---|---|---|'
+    $md += '| Job | Qty | Unit | Material | Labour | Blocking | Warnings | BOM owned | Reproducible |'
+    $md += '|---|---|---|---|---|---|---|---|---|'
     foreach ($r in $results) {
-        $md += "| $($r.Job) | $($r.Unit) | $($r.Material) | $($r.Labour) | $($r.Blocking) | $($r.Warnings) | $($r.'BOM owned') | $($r.Reproducible) |"
+        $md += "| $($r.Job) | $($r.Qty) | $($r.Unit) | $($r.Material) | $($r.Labour) | $($r.Blocking) | $($r.Warnings) | $($r.'BOM owned') | $($r.Reproducible) |"
     }
     $md += ''
     $md += '## Workbooks'

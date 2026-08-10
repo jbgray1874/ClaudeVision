@@ -71,7 +71,13 @@ param(
     # which writes to the HOST and never to the output stream - so a caller cannot capture
     # a run, and run-packs.ps1 came back with a table of blank cells that read exactly like
     # four free packs. It asks for the folder now and runs the engine itself.
-    [switch] $ResolveOnly
+    [switch] $ResolveOnly,
+    # THE ORDER QUANTITY IS THE ONE FACT THE CUSTOMER STATES DIRECTLY. Setup is amortised
+    # as (rate/60 x setup_mins) / qty, so a 45-off job costed at the 180-off default
+    # spreads its setup over four times too many units and every labour line comes out
+    # light. The engine takes it and says which of the three sources supplied it; it just
+    # had no way through this script.
+    [int] $OrderQty = 0
 )
 
 $root   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -417,6 +423,10 @@ Write-Host "job: $Job" -ForegroundColor DarkGray
 
 $estArgs = @($main, '--job', $Job, '--generate-ai-spreadsheet')
 if ($Deliverables) { $estArgs += '--deliverables' }
+if ($OrderQty -gt 0) {
+    $estArgs += @('--order-qty', "$OrderQty")
+    Write-Host "order quantity: $OrderQty off" -ForegroundColor DarkGray
+}
 
 function Invoke-Run([string] $label) {
     Write-Host "`n=== $label ===`n" -ForegroundColor Cyan
