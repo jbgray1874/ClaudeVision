@@ -999,13 +999,46 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     return _candidates[0][2]
 
 
+# PLASTICS THE SHOP CUTS, spelled as the drawings spell them. Everything here is matched
+# as a SUBSTRING of the material name, which is why the list is plastics only.
+#
+# WHY NOT REUSE document_builder._NON_METAL_KEYWORDS. It knows every name here and more --
+# and it also contains "LED", for light panels. "COLD ROLLED STEEL" and "ANNEALED" both
+# contain LED, so unioning that set into a substring test would route mild steel into the
+# board block and price it as plastic. The two lists answer different questions: that one
+# asks "does this text mention something non-metal", this one asks "is this part made of
+# plastic sheet". Keeping them apart is deliberate.
+#
+# PETG IS WHY THIS LIST EXISTS. Job 11650's side panels are PETG, and PETG contains none of
+# the old tokens -- not POLY, not ACRYLIC, nothing. So a 1250 x 525 plastic panel was
+# classified as sheet steel and costed at GBP 900/tonne: GBP 22.96 of a GBP 111 material
+# total, on a part that is not metal, with a number that looks entirely plausible. Its
+# opposite hand went unpriced. POLYCARBONATE routed correctly the whole time because it
+# happens to contain POLY, which is what made the failure look like a one-off.
+_PLASTIC_SHEET_TOKENS = (
+    "ACRYLIC", "PERSPEX", "POLY",            # POLY catches POLYCARBONATE/PROP/STYRENE/ETHYLENE
+    "PETG", "PET ",                          # PET with a space: "PET" alone matches PETROL, PETG
+    "HIPS", "ABS", "PVC", "FOAM", "NYLON",
+    "ACETAL", "DELRIN", "HDPE", "UHMW", "PMMA",
+)
+
+# Board and timber. A glued-and-pinned timber crate is not sheet metal either, but it is
+# not plastic, and _is_timber below needs to tell them apart to name a department.
+_BOARD_TIMBER_TOKENS = (
+    "MDF", "BOARD", "MELAMINE", "MFC",
+    "TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+    "SPRUCE", "BEECH", "BIRCH",
+)
+
+
 def _is_board(mat: str) -> bool:
+    """Not sheet metal -- so it is costed by area in the Other Sheet Material block.
+
+    The name is historic: this decides the COST STREAM, and everything that is not metal
+    shares one. _is_timber narrows it again where a department has to be named.
+    """
     m = (mat or "").upper()
-    return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD",
-                                "MELAMINE", "MFC",
-                                # timber families — a glued-and-pinned timber crate is NOT sheet metal
-                                "TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
-                                "SPRUCE", "BEECH", "BIRCH"))
+    return any(k in m for k in _PLASTIC_SHEET_TOKENS + _BOARD_TIMBER_TOKENS)
 
 
 _TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
