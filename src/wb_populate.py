@@ -246,6 +246,7 @@ CELL_MAP = {
         "col_desc": 3, "col_qty": 5, "col_length": 6, "col_width": 7, "col_gauge": 8,
         "col_sheet_l": 9, "col_sheet_w": 10,      # optional; WB defaults if blank
         "col_holes": 19, "col_internal_cut": 20,  # S/T: laser-calc inputs (No of holes / Internal Cutting Distance)
+        "first_formula_col": 11,                  # K: Qty Per Sheet onwards — see _clean_error_cells
     },
 
     # Other Sheet Material (board/acrylic/HIPS). desc, qty, length, width, thickness.
@@ -254,6 +255,12 @@ CELL_MAP = {
         "first_row": 84, "last_row": 91,          # 8 slots (+25: BOM widened 2026-07-13)
         "col_desc": 3, "col_qty": 4, "col_length": 5, "col_width": 6, "col_thick": 7,
         "col_sheet_l": 8, "col_sheet_w": 9, "col_cost_per_sheet": 12,
+        # J, ONE LEFT OF SHEET STEEL'S. Other Sheet has no gauge column, so its whole
+        # formula region is shifted one column left and its Qty Per Sheet lands on J(10)
+        # where Sheet Steel's lands on K(11). _clean_error_cells used to start at 11 for
+        # both, which is why 11650's PETG side panels shipped a visible #VALUE! in Qty Per
+        # Sheet while an equally undimensioned steel row showed a clean blank.
+        "first_formula_col": 10,
     },
 
     # Labour block. Engine writes operation-name (C), qty (H), and THROUGHPUT (I).
@@ -1825,9 +1832,17 @@ def _clean_error_cells(ws, flags=None):
             if not blk:
                 continue
             fr, lr = blk["first_row"], blk["last_row"]
+            # WHERE THE FORMULAS START IS A PROPERTY OF THE BLOCK, NOT A CONSTANT. The two
+            # blocks do not share a column layout — Other Sheet carries no gauge column, so
+            # everything after the sheet size sits one column left. Asking each block where
+            # its own formula region begins is the only way one sweep can clean both.
+            # Inputs inside the range are unaffected: only cells holding a formula string
+            # are touched, and every cell this module writes is a number.
+            first_c = int(blk.get("first_formula_col") or 11)
             for r in range(fr, lr + 1):
-                # K(11)..AH(34): Qty Per Sheet, Cost Per Part, and the row's rate-calculator cells
-                for c in range(11, 35):
+                # first_formula_col..AH(34): Qty Per Sheet, Cost Per Part, and the row's
+                # rate-calculator cells.
+                for c in range(first_c, 35):
                     cell = ws.cell(row=r, column=c)
                     v = cell.value
                     if isinstance(v, str) and v.startswith("=") and "IFERROR(" not in v.upper():
@@ -2088,6 +2103,38 @@ _THROUGHPUT_UNMEASURED = frozenset({
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
+
+
+# The WB nests a part by dividing the sheet size by the part size. A blank part length is
+# therefore not a blank cost — it is a division that fails, and Excel renders that failure
+# as #VALUE!/#DIV/0! in Qty Per Sheet with no statement of why. An estimator reading a row
+# with a part name, a quantity, an error and no dimensions has to guess whether the engine
+# could not measure the part or the template is broken.
+#
+# ONE IMPLEMENTATION, TWO BLOCKS. Sheet Steel grew this marker when 12392 shipped rows
+# with no gauge; Other Sheet did not, and 11650's PETG side panels then shipped exactly the
+# same failure wearing a different face - two panels, no length, no width, #VALUE! where a
+# quantity should be. A rule that lives in one branch of a pair is how the pair comes to
+# disagree about what an unmeasured part looks like.
+_DIMS_REQUIRED = "DIMS REQUIRED"
+
+
+def mark_row_needs_dimensions(ws, row: int, col_desc: int, missing) -> bool:
+    """Say on the sheet, in the row itself, that this part was never measured.
+
+    The row KEEPS ITS FORMULA. Filling the named cells in Excel recomputes the line and the
+    (error-tolerant) material total picks it up - so the marker is an instruction to the
+    estimator, not a dead row. Returns True if it wrote, False if the row already said so.
+    """
+    names = [str(n) for n in (missing or []) if n]
+    if not names:
+        return False
+    cell = ws.cell(row=row, column=col_desc)
+    current = str(cell.value or "")
+    if _DIMS_REQUIRED in current:
+        return False
+    cell.value = f"{current}  ⚠ {_DIMS_REQUIRED} ({', '.join(names)}) — not costed"
+    return True
 
 
 def route_group_id(wb_op: Any, material: Any, thickness: Any, part_numbers: Any = (),
@@ -2965,16 +3012,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if not (length and width and gauge):
             _flag(f"steel {pe.get('part_number')} missing dim(s) "
                   f"(L={length} W={width} G={gauge}) — WB cost will be 0/wrong.", flags)
-            # Loud, on-sheet marker so the estimator sees exactly which rows to complete —
-            # the row keeps its formula, so filling L/W/G recomputes it and the (error-tolerant)
-            # material total picks it up automatically. Which dim is missing is named.
-            _miss = ", ".join(
-                _n for _n, _v in (("L", length), ("W", width), ("gauge", gauge)) if not _v
-            )
-            _dcell = ws.cell(row=row, column=s["col_desc"])
-            _dcur = str(_dcell.value or "")
-            if "DIMS REQUIRED" not in _dcur:
-                _dcell.value = f"{_dcur}  ⚠ DIMS REQUIRED ({_miss}) — not costed"
+            # Loud, on-sheet marker so the estimator sees exactly which rows to complete.
+            mark_row_needs_dimensions(
+                ws, row, s["col_desc"],
+                [_n for _n, _v in (("L", length), ("W", width), ("gauge", gauge)) if not _v])
         row += 1
 
     # ── Other Sheet block: desc, qty, length, width, thickness ─────────────
@@ -2994,6 +3035,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=o["col_length"], value=length)
         ws.cell(row=row, column=o["col_width"],  value=width)
         ws.cell(row=row, column=o["col_thick"],  value=thick)
+        if not (length and width):
+            # The side-panel failure. A board/plastic part with no blank size nests into
+            # nothing: Qty Per Sheet errors, Cost Per Part is 0, and the row otherwise looks
+            # like any other. Named here for the same reason Sheet Steel names it.
+            _miss = [_n for _n, _v in (("L", length), ("W", width)) if not _v]
+            _flag(f"other-sheet {pe.get('part_number')} missing dim(s) "
+                  f"(L={length} W={width}) — WB cost will be 0/wrong.", flags)
+            mark_row_needs_dimensions(ws, row, o["col_desc"], _miss)
         # sheet size: WB nesting divides by sheet L/W — MUST be non-blank or it
         # produces #VALUE! that propagates into M59 and poisons the whole total.
         # Board stock default 2440×1220 (standard sheet); use engine's if present.
