@@ -894,6 +894,32 @@ def _page_drawing_number(page: Dict[str, Any]) -> str:
     on a sheet is usually a reference to another sheet, and taking one would make a detail
     claim to own the assembly that references it.
     """
+    # THE WORD GEOMETRY FIRST, AND THE SAME READER THE BOM PATH USES.
+    #
+    # This read region_text["title_block"] — a crop taken by _zone_boxes and flattened to a
+    # string. The BOM reader reads the SAME title block from word positions, with its own
+    # band cutoff and its own run-joining. Two readers of one thing, and only one of them
+    # was ever corrected: tools/diagnose_title_block.py finds 12392-04-GA on a sheet where
+    # this returns "", because the crop and the band do not agree about where a title block
+    # is, and because a flattened string has lost the y-positions that tell a title block
+    # from a revision table.
+    #
+    # On job 12392 that cost the whole hierarchy: "4/4 row(s) traced to a sheet; 0 carry the
+    # drawing that owns them". Rows placed on the right pages, every one of them an orphan,
+    # and two bought-in nodes disconnected downstream because no page could own anything.
+    #
+    # The words are already on the page dict, so the reader that works can simply be asked.
+    # The region text stays as the fallback for a page whose words were never captured.
+    _words = page.get("words") or []
+    if _words:
+        try:
+            import _bom_words_reader as _wr
+            _tb = _wr._title_block_dwg_no(_words)
+            if _tb:
+                return normalize_text(str(_tb)).upper().strip()
+        except Exception:
+            pass
+
     text = normalize_text(str((page.get("region_text") or {}).get("title_block") or ""))
     if not text:
         return ""
