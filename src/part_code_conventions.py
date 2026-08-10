@@ -55,8 +55,18 @@ _MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\d-])", re.IGNORECASE)
 # So the marker is accepted with a separator, or directly after a DIGIT. The digit is what
 # keeps it safe: a code ending in letters is left whole, so "BRACKET-MIRAGE" and any part
 # whose name merely ends in those characters are untouched.
-_MIRROR_SUFFIX = re.compile(r"(?:[\s_-]+|(?<=\d))MIR(?:ROR(?:ED)?|ORED|OR)?$",
-                            re.IGNORECASE)
+# HANDED IS THE SAME FACT IN ANOTHER HOUSE STYLE. Boots' Christmas coffret prints its
+# opposite hand as "11650-04-01A-HANDED", and its revision table records "HANDED VARIANTS"
+# as the change that introduced them. A rule that knows only MIR/MIRROR reads that as an
+# unrelated part: it gets no geometry from the hand that WAS measured, and a pack-
+# completeness check counts it as a drawing nobody supplied. Both are wrong for the same
+# reason, and both are fixed by admitting the word the drawing actually uses.
+#
+# HAND alone is deliberately not accepted: "LEFT-HAND" and "-RH" are descriptions of a
+# part, not markers of a derivation, and admitting them would collapse two real parts.
+_MIRROR_SUFFIX = re.compile(
+    r"(?:[\s_-]+|(?<=\d))(?:MIR(?:ROR(?:ED)?|ORED|OR)?|HANDED)$",
+    re.IGNORECASE)
 
 
 def material_suffix(identity: str) -> str:

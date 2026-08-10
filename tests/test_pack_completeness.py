@@ -131,3 +131,49 @@ def test_it_fires_through_check_job():
 
 if __name__ == "__main__":                                          # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# a mirror has no drawing of its own
+# ---------------------------------------------------------------------------
+# THE SPELLINGS THAT ACTUALLY REACH THIS RULE. The first version of this also
+# parametrised "11350-01-02 MIR" and "Mirror11350-01-02M", and both passed with the mirror
+# rule deleted -- neither is drawing-number SHAPED (one carries a space, the other opens
+# with letters), so the check skips them before the mirror question is ever asked. Two of
+# three cases were proving nothing, and only a mutation showed it.
+#
+# "11350-01-02MIR" is the form the pipeline actually holds: normalize_part_code collapses
+# the drawing's spaced "11350-01-02 MIR" to exactly this.
+@pytest.mark.parametrize("mirror_code,seed", [
+    ("11350-01-02MIR", "11350-01-02"),
+    ("11650-04-01A-HANDED", "11650-04-01A"),
+])
+def test_a_mirror_is_satisfied_by_the_sheet_that_details_its_seed(mirror_code, seed):
+    """The other hand of a part is detailed on ONE sheet.
+
+    Asking for a drawing that was never going to exist would put a blocker on every
+    handed pair in the system -- and a blocker that fires on correct packs is how
+    estimators learn to scroll past all of them.
+    """
+    import part_code_conventions as _pcc
+    assert _pcc.looks_like_a_drawing_number(mirror_code), \
+        "this spelling never reaches the mirror rule, so it proves nothing about it"
+    job = _job(
+        [{"part_number": seed, "description": "SIDE PANEL", "quantity": 1},
+         {"part_number": mirror_code, "description": "SIDE PANEL RH", "quantity": 1}],
+        pages=[_page("11650-05-SA01"), _page(seed)])
+    assert check(job) == []
+
+
+def test_a_mirror_whose_seed_is_also_absent_still_blocks():
+    """The exemption is for the mirror's MISSING SHEET, not for the mirror. If neither
+    hand was supplied, two lines are unread and both should say so."""
+    job = _job(
+        [{"part_number": "11650-04-01A", "description": "SIDE PANEL", "quantity": 1},
+         {"part_number": "11650-04-01A-HANDED", "description": "SIDE PANEL RH",
+          "quantity": 1}],
+        pages=[_page("11650-05-SA01")])
+
+    out = check(job)
+    assert len(out) == 1
+    assert out[0]["detail"]["count"] == 2

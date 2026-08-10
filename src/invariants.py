@@ -2010,6 +2010,15 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
             continue
         if _bare(code) in present:
             continue
+        # A MIRROR HAS NO DRAWING OF ITS OWN. "11350-01-02 MIR" and 11650's
+        # "11650-04-01A-HANDED" are the other hand of a part detailed on ONE sheet; the
+        # pack is complete when that sheet is present. Asking for a drawing that was never
+        # going to exist would put a blocker on every handed pair in the system, and a
+        # blocker that fires on correct packs is how estimators learn to scroll past all of
+        # them.
+        _seed = pcc.mirror_base(code)
+        if _seed and _bare(_seed) in present:
+            continue
         missing.append({"part_number": code,
                         "description": str(row.get("description") or "").strip(),
                         "quantity": row.get("quantity"),
