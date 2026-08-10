@@ -1935,6 +1935,102 @@ def check_an_operation_is_not_charged_on_a_parent_and_its_child(
     return out
 
 
+def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dict[str, Any]]:
+    """A BOM line naming a drawing this pack does not contain is UNREAD, not free.
+
+    Job 11650's cabinet costed at GBP 7.37 a unit with GBP 1.81 of material, on a fragrance
+    coffret cabinet at 45 off. Nothing was broken. The GA's bill of materials is
+    11650-01-GA, 11650-02-GA and 11650-03-GA -- three sub-assemblies whose detail drawings
+    are not in the folder. The engine correctly declined to charge material on an assembly
+    parent, correctly found no leaves to charge it on, and produced a number that looks
+    exactly like a finished estimate for a nearly empty one.
+
+    That is the worst shape a wrong answer can take here, and it is not a pricing failure:
+    every individual decision was right. The pack is incomplete, and only a check that
+    compares what the BOM NAMES against what the pack CONTAINS can say so.
+
+    WHAT COUNTS AS CONTAINED. A drawing is present if any page in this job names it -- the
+    same title-block reading the hierarchy is built from -- or if a part record carries
+    measured geometry for it. Either means somebody read the thing itself.
+
+    WHAT IS NOT ASKED. Bought-in lines name catalogue items, not drawings: a fastener, a
+    lock, a knurled knob has no detail sheet in the pack and never will. Only codes that
+    look like SDI drawing numbers are considered, through part_code_conventions, so the
+    rule cannot drift from what the rest of the engine calls a drawing.
+
+    BLOCKING, because a missing child is missing MONEY and the total reads as complete. An
+    estimator who sees GBP 7.37 and no blocker has been told the cabinet is cheap.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("pack_completeness", "This job is not a readable structure.")
+
+    rows = _node(summary, "document_analysis").get("bom_rows")
+    if not isinstance(rows, list) or not rows:
+        # No BOM to check against. check_both_bom_readers_ran owns that failure; saying
+        # nothing here is right, and saying "clean" would be a lie about a job with no BOM.
+        return []
+
+    try:
+        import part_code_conventions as pcc
+    except Exception as exc:                                        # noqa: BLE001
+        return _unevaluated("pack_completeness",
+                            f"The drawing-number convention could not be imported ({exc}).")
+
+    def _bare(code: Any) -> str:
+        return str(pcc.bare_code(code) or "").strip().upper()
+
+    # EVERYTHING THIS PACK DEMONSTRABLY READ. A page that names a drawing was read; a part
+    # carrying measured geometry was read. Both are recorded already.
+    present = set()
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        for key in ("drawing_number", "page_drawing_number"):
+            if page.get(key):
+                present.add(_bare(page[key]))
+        tb = ((page.get("page_analysis") or {}).get("title_block") or {})
+        for value in (tb.get("drawing_numbers") or []):
+            present.add(_bare(value))
+    for part in _parts(summary):
+        code = _bare(part.get("part_number"))
+        if not code:
+            continue
+        _geom = part.get("geometry_rollup") or {}
+        if (part.get("blank_length_mm") or part.get("normalized_thickness_mm")
+                or _geom.get("estimated_cut_length_mm") or part.get("flat_pattern_detected")):
+            present.add(code)
+    present.discard("")
+
+    missing = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("part_number") or "").strip()
+        if not code or not pcc.looks_like_a_drawing_number(code):
+            continue
+        if _bare(code) in present:
+            continue
+        missing.append({"part_number": code,
+                        "description": str(row.get("description") or "").strip(),
+                        "quantity": row.get("quantity"),
+                        "named_by": str(row.get("bom_parent") or "").strip()})
+
+    if not missing:
+        return []
+
+    _named = ", ".join(f"{m['part_number']}"
+                       + (f" ({m['description']})" if m["description"] else "")
+                       for m in missing[:6])
+    _more = f" and {len(missing) - 6} more" if len(missing) > 6 else ""
+    return [_violation(
+        "bom_names_a_drawing_the_pack_does_not_contain", BLOCKING,
+        f"{len(missing)} bill-of-materials line(s) name a drawing that is not in this pack: "
+        f"{_named}{_more}. Nothing read those parts, so nothing costed them -- and the "
+        f"total still reads as a finished estimate. This is an incomplete pack, not a cheap "
+        f"job: ask for the missing detail drawings before quoting.",
+        missing=missing, count=len(missing))]
+
+
 def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict[str, Any]]:
     """THE HEADER SAID 10 AND THE MATHS SAID 180.
 
@@ -2073,6 +2169,7 @@ CHECKS = (
     check_uncorroborated_route_operations,
     check_the_quantity_costed_is_the_quantity_ordered,
     check_an_operation_is_not_charged_on_a_parent_and_its_child,
+    check_the_pack_contains_the_drawings_its_bom_names,
 )
 
 
