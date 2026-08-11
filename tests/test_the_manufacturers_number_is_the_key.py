@@ -301,14 +301,33 @@ def test_the_price_lookup_actually_asks_for_the_reference():
     assert _calls(_PRICING, "lookup_keys") >= 1
 
 
+# THE CODE, NOT THE PROSE ABOUT THE CODE. Every guard below reads the PARSED body of
+# _get_udef_anchor. ast.unparse drops comments entirely, so a paragraph explaining why a
+# fuzzy match would be dangerous can no longer satisfy -- or trip -- a check looking for one.
+# This file was written the other way first and the LIKE-refusing guard failed on its own
+# explanation of the LIKE it permits. That is the fifth time this repository has been caught
+# by the same trap, and it is the last place it can happen here.
+_ANCHOR_NODE = next(n for n in ast.walk(ast.parse(_PRICING))
+                    if isinstance(n, ast.FunctionDef) and n.name == "_get_udef_anchor")
+_ANCHOR = ast.unparse(_ANCHOR_NODE)
+_UDEF_QUERIES = [n.value for n in ast.walk(_ANCHOR_NODE)
+                 if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                 and "FROM dbo.UDEF" in n.value]
+
+
+def _sole_query(*needles):
+    hits = [q for q in _UDEF_QUERIES if all(n in q for n in needles)]
+    assert len(hits) == 1, f"expected exactly one query matching {needles}, found {len(hits)}"
+    return hits[0]
+
+
 def test_the_reference_arm_matches_exactly_and_never_loosely():
-    """The whole safety argument rests on this. A reference recovered from a description is a
-    guess about which characters are the key; matched with LIKE it could attach a hinge's
-    price to a foot. Matched exactly it finds that article number or it finds nothing."""
-    anchor = _PRICING[_PRICING.index("def _get_udef_anchor"):_PRICING.index("row = self._fetch_one_with_retry")]
-    arm = anchor[anchor.index("for key in supplier_reference.lookup_keys"):]
+    """The whole safety argument for the exact arm rests on this. A reference recovered from a
+    description is a guess about which characters are the key; matched with LIKE against a
+    part code it could attach a hinge's price to a foot. Matched exactly it finds that article
+    number or it finds nothing."""
+    arm = _sole_query("[Part code] = LTRIM(RTRIM(?)) AND")
     assert "LIKE" not in arm.upper(), "the manufacturer-reference arm has acquired a fuzzy match"
-    assert "[Part code] = LTRIM(RTRIM(?))" in arm
 
 
 # ── and the estimator can SEE which of the two kinds of nothing they have ───────────
@@ -365,6 +384,183 @@ def test_the_section_is_wired_into_the_report_and_not_merely_defined():
         if isinstance(n, ast.FunctionDef) and n.name == "_render_verdict"))
     assert "_purchased_key_section" in body, \
         "the section is defined and never called -- built is not wired, again"
+
+
+# ── a word the text extractor glued onto a code ─────────────────────────────────────
+def test_a_word_run_into_a_code_by_the_extractor_is_trimmed_off():
+    """11650's BOM cell reads "KSM6----N5--5A0Knob Diameter 19.1 mm" -- the code and the next
+    word arrive with no space between them, which is ordinary in extracted PDF text where a
+    cell wraps. Every other convention here is a whole-token match and is immune; the
+    configured form is recognised by SEARCHING for a double dash, so it swallowed the tail
+    and produced a key no supplier has ever published."""
+    out = sr.find_references("M6 KNURLED KNOB | KSM6----N5--5A0Knob Diameter 19.1 mm")
+    assert [r["reference"] for r in out] == ["KSM6----N5--5A0"]
+    assert out[0]["raw_token"] == "KSM6----N5--5A0KNOB", "the trim hid what it removed"
+
+
+def test_a_code_that_legitimately_ends_in_digits_is_left_alone():
+    out = sr.find_references("SLIDE KSM4----N3--5A0")
+    assert [r["reference"] for r in out] == ["KSM4----N3--5A0"]
+    assert "raw_token" not in out[0]
+
+
+# ── two lines, one article ──────────────────────────────────────────────────────────
+# The cabinet BOM carries the Essentra levelling foot twice, and each line's description
+# names the OTHER line's key. Priced without this, the job buys four feet and pays for two
+# it never orders -- a visible GBP 0.46 gap turned into a hidden GBP 0.46 over-charge.
+_CABINET_BOM = [
+    ("ESSENTRA FOOT-466122", "FIXING1081-M8, 25MM FOOT, 25MM THREAD", None),
+    ("FIXING1659", "M6 KNURLED KNOB | KSM6----N5--5A0Knob Diameter 19.1 mm", 0.27),
+    ("FIXING1081", "Essentra Ref. 466122 - Leveling Foot - Black25.0 mm Threads, M8", 0.22),
+    ("FIXING", "Nylon Washer", 0.66),
+    ("FIXINGTBC", "M4 KNURLED KNOB [ESSENTRA: KSM4----N3--5A0]", None),
+    ("MAG CATCH", "HAFELE 246.41.745", None),
+    ("STD PART", "M4 THREADED PEM STUD (LENGTH: 18mm)", None),
+]
+
+
+def _bom():
+    return [sr.attach_references({"part_number": pn, "description": d, "quantity": 2,
+                                  "unit_cost_gbp": p}) for pn, d, p in _CABINET_BOM]
+
+
+def test_the_same_article_named_twice_is_found_on_the_real_bom():
+    rows = _bom()
+    groups = [[rows[i]["part_number"] for i in g] for g in sr.same_article_groups(rows)]
+    assert groups == [["ESSENTRA FOOT-466122", "FIXING1081"]]
+
+
+def test_the_two_knurled_knobs_are_not_the_same_part():
+    """THE FAILURE THIS RULE MUST NOT HAVE. M4 and M6 sit beside each other on this sheet:
+    same supplier, same words, GBP 0.00 and GBP 0.27. Merging on family or description would
+    price the M4 at the M6's rate and nobody would ever see it. An article NUMBER is an
+    identity; a description is not."""
+    rows = _bom()
+    merged = {frozenset(rows[i]["part_number"] for i in g) for g in sr.same_article_groups(rows)}
+    assert not any({"FIXING1659", "FIXINGTBC"} <= m for m in merged)
+
+
+def test_a_bare_stem_does_not_swallow_every_line_that_starts_with_it():
+    """"FIXING1081-M8" contains the characters of FIXING1081 and also of FIXING, which is a
+    different part on the same sheet -- a nylon washer at GBP 0.66. Substring matching would
+    merge every FIXING line on every job into one."""
+    rows = _bom()
+    for g in sr.same_article_groups(rows):
+        assert "FIXING" not in [rows[i]["part_number"] for i in g]
+
+
+def test_lines_with_no_reference_never_group():
+    """Two lines that say nothing about their identity are not thereby the same part. This is
+    the direction that silently deletes money, so it is asserted rather than assumed."""
+    rows = [{"part_number": "A", "description": "BRACKET"},
+            {"part_number": "B", "description": "BRACKET"}]
+    assert sr.same_article_groups(rows) == []
+
+
+def test_a_single_line_is_not_a_group():
+    assert sr.same_article_groups([{"part_number": "A", "description": "FOOT-466122"}]) == []
+
+
+def test_three_lines_naming_one_article_form_one_group():
+    rows = [{"part_number": "A", "description": "FOOT-466122"},
+            {"part_number": "B", "description": "Essentra Ref. 466122"},
+            {"part_number": "C", "description": "PART No. 466122 FOOT"}]
+    assert sr.same_article_groups(rows) == [[0, 1, 2]]
+
+
+# ── the writer keeps the money on one line and says so on the other ─────────────────
+_WB = Path(sr.__file__).with_name("wb_populate.py").read_text(encoding="utf-8")
+
+
+def test_the_bom_writer_deduplicates_before_it_writes():
+    """Order is the whole safety argument. Dedup after the rows are written changes nothing;
+    dedup after pricing double-counts once and then corrects a number nobody re-reads."""
+    assert "same_article_groups(bom_parts)" in _WB
+    assert _WB.index("same_article_groups(bom_parts)") < _WB.index('row = b["first_row"]')
+
+
+def test_the_duplicate_line_survives_at_zero_rather_than_disappearing():
+    """The drawing really does name the part twice. A line that vanishes between the BOM an
+    estimator reads and the sheet they check is how trust in the sheet goes -- so the line
+    stays, at zero, naming where its money went."""
+    block = _WB[_WB.index("same_article_groups(bom_parts)"):_WB.index('row = b["first_row"]')]
+    assert '_dup["unit_cost_gbp"] = 0.0' in block
+    assert "_duplicate_of" in block and "_no_price_reason" in block
+    assert "del " not in block and ".pop(" not in block and ".remove(" not in block, \
+        "the duplicate line is being removed rather than zeroed"
+
+
+def test_the_priced_line_is_the_one_that_keeps_the_money():
+    block = _WB[_WB.index("same_article_groups(bom_parts)"):_WB.index('row = b["first_row"]')]
+    assert "_priced[0] if _priced else _grp[0]" in block, \
+        "the kept line is not chosen by which one actually carries a price"
+
+
+def test_the_estimator_is_told_to_check_the_quantity():
+    """Two lines naming one article is USUALLY a duplicate and is occasionally a genuine
+    mis-numbering of two different fittings. The engine cannot tell those apart, so it says
+    what it did and asks -- rather than quietly halving a quantity that was right."""
+    assert "CHECK THE QUANTITY" in _WB
+
+
+# ── the catalogue join that makes the dedup necessary ───────────────────────────────
+def test_the_lookup_reads_the_reference_out_of_the_catalogue_description():
+    """UDEF's [Part code] is SDI's own code, so the exact arm cannot fire until a supplier
+    price file is loaded. The reference is already in the table though -- FIXING1081 reads
+    "Essentra Ref. 466122" -- which is exactly what 11650's unpriced "ESSENTRA FOOT-466122"
+    line carries. GBP 0.22 a foot, in the catalogue, unreachable because nobody looked at the
+    text."""
+    _sole_query("u.[Description] LIKE", "TOP 2")
+
+
+def test_the_description_join_prices_nothing_when_two_rows_match():
+    """LIKE is only safe here because exactly one row may match. "Specific" is a judgement;
+    "unique" is a fact, and the fact is what decides. Two matches is an ambiguity nobody in
+    this process can resolve, and the house rule for that is to price nothing and say so
+    rather than pick the dearer."""
+    assert "TOP 2" in _sole_query("u.[Description] LIKE", "TOP 2"), \
+        "the query cannot detect a second match"
+    assert "if len(rows) != 1:" in _ANCHOR
+
+
+def test_a_short_key_is_never_used_for_a_description_search():
+    """A three-character string appears inside a thousand descriptions. The unique-match rule
+    would usually refuse those anyway -- but 'usually' is how a two-character key eventually
+    finds exactly one row and prices a foot as a light fitting."""
+    assert "len(key) < 5" in _ANCHOR
+
+
+def test_a_minted_key_is_never_sent_to_the_catalogue_at_all():
+    """BI-BINDINGSCREW as a LIKE pattern is not merely useless, it is the one key guaranteed
+    to match nothing -- and sending it costs a query on every unpriced line on every job."""
+    assert "is_synthesised_key(key)" in _ANCHOR
+
+
+# ── and it does not land on the estimator's checklist ───────────────────────────────
+import estimator_inputs as ei                                        # noqa: E402
+
+
+def test_a_duplicate_line_is_not_an_outstanding_estimator_input():
+    """THE SAME FAILURE THROUGH A DIFFERENT DOOR. Job 11350 listed six outstanding inputs and
+    two were "enter a unit rate" for parts the Sheet Steel block had already costed on the
+    same sheet -- asking for the double-count back. Two lines of noise in six is enough to
+    make a person stop reading, and what gets lost is the packaging and the fixings that were
+    real. A duplicate article at GBP 0.00 is exactly that shape of nothing."""
+    dup = {"part_number": "ESSENTRA FOOT-466122", "description": "FOOT",
+           "_duplicate_of": "FIXING1081"}
+    assert ei.canonical_pricing_status(dup, 0.0) == ei.NOT_APPLICABLE
+    note = ei.input_note_for_line(dup)
+    assert note["kind"] == ei.DUPLICATE_ARTICLE
+    assert "FIXING1081" in note["note"]
+    assert "enter a unit rate" not in note["note"].lower()
+
+
+def test_an_ordinary_unpriced_line_is_still_asked_for():
+    """The narrowness matters as much as the rule: excuse one row too many and the list stops
+    being a list."""
+    real = {"part_number": "MAG CATCH", "description": "HAFELE 246.41.745"}
+    assert ei.canonical_pricing_status(real, 0.0) == ei.UNPRICED
+    assert ei.input_note_for_line(real)["kind"] == ei.MATERIAL_UNPRICED
 
 
 if __name__ == "__main__":                                            # pragma: no cover

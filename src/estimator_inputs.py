@@ -30,6 +30,7 @@ __all__ = [
     "PLACEHOLDER_UNPRICED",
     "ASSUMPTION_UNCONFIRMED",
     "MARGIN_UNSET",
+    "DUPLICATE_ARTICLE",
     "section_summary",
     "material_input_note",
     "input_note_for_line",
@@ -44,12 +45,17 @@ PLACEHOLDER_UNPRICED = "placeholder_unpriced"
 ASSUMPTION_UNCONFIRMED = "assumption_unconfirmed"
 MARGIN_UNSET = "margin_unset"
 
-# The four things a price column can mean. "Blank" is three of them, and telling them apart
-# is the whole difference between a checklist somebody works and one they stop reading.
+# The things a price column can mean. "Blank" is most of them, and telling them apart is the
+# whole difference between a checklist somebody works and one they stop reading.
 PRICED = "priced"
 COSTED_IN_MATERIAL_BLOCK = "costed_in_material_block"
 NOT_APPLICABLE = "not_applicable"
 UNPRICED = "unpriced"
+# The drawing named one article on two BOM lines. The money sits on the other line, so this
+# one is blank on purpose and there is nothing here for anybody to price. Asking for a rate
+# would be asking for the double-count back -- exactly the failure canonical_pricing_status
+# was written for, arriving through a different door.
+DUPLICATE_ARTICLE = "duplicate_article"
 
 
 def _num(value: Any) -> Optional[float]:
@@ -133,6 +139,11 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
     if not isinstance(part, Mapping):
         return {"kind": MATERIAL_UNPRICED, "note": "MATERIAL UNPRICED"}
     description = str(part.get("description") or "")
+    if part.get("_duplicate_of"):
+        return {"kind": DUPLICATE_ARTICLE,
+                "note": (f"SAME ARTICLE AS {part['_duplicate_of']} — costed there, not here. "
+                         f"Nothing to price on this line; check the quantity on "
+                         f"{part['_duplicate_of']} covers both.")}
     if part.get("_price_explicitly_withheld") or "estimator to price" in description.lower():
         return {"kind": PLACEHOLDER_UNPRICED,
                 "note": "NOT YET PRICED: enter the per-unit figure for this line"}
@@ -162,6 +173,8 @@ def canonical_pricing_status(part: Mapping[str, Any], price: Any) -> str:
         return UNPRICED
     if part.get("_bom_cross_reference"):
         return COSTED_IN_MATERIAL_BLOCK
+    if part.get("_duplicate_of"):
+        return NOT_APPLICABLE
     if str(part.get("_canonical_kind") or "").strip().lower() == "assembly":
         return NOT_APPLICABLE
     numeric = _num(price)

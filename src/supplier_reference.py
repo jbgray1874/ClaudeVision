@@ -48,6 +48,8 @@ __all__ = [
     "lookup_keys",
     "describe_keys",
     "attach_references",
+    "identity_keys",
+    "same_article_groups",
 ]
 
 REFERENCE_SCHEMA = "supplier_reference.v1"
@@ -183,6 +185,25 @@ def _is_measurement_context(text: str, start: int, end: int) -> bool:
     return bool(re.search(r"[£$€]\s*$", text[max(0, start - 4):start]))
 
 
+# A WORD GLUED ONTO A CODE BY THE TEXT EXTRACTOR. 11650's BOM cell reads
+# "KSM6----N5--5A0Knob Diameter 19.1 mm" — the code and the next word arrive with no space
+# between them, which is ordinary in extracted PDF text where a cell wraps. Every other
+# convention here is a whole-token match and is immune; the configured form is recognised by
+# SEARCHING for a double dash, so it happily swallows the tail.
+#
+# Only a trailing ALPHABETIC run following a DIGIT is trimmed. An option group ending in a
+# digit is where these codes stop, and three letters is long enough that a real trailing
+# option is not mistaken for a word. The raw token is kept on the record either way, so if
+# the trim is ever wrong the original is still readable — and because every lookup is exact,
+# a wrongly trimmed key costs a query that misses, exactly as the glued one would have.
+_GLUED_WORD = re.compile(r"(?<=\d)([A-Z]{3,})$")
+
+
+def _unglue(token: str) -> str:
+    """A configured code with the following word stripped off it."""
+    return _GLUED_WORD.sub("", token)
+
+
 def _could_be_a_code(token: str) -> bool:
     """The floor for a token the DRAWING has already labelled a reference.
 
@@ -279,16 +300,20 @@ def find_references(
                     continue
                 if declared:
                     conv = DECLARED
-                if cand in seen:
+                cleaned = _unglue(cand) if _DOUBLE_DASH.search(cand) else cand
+                if cleaned in seen:
                     continue
-                seen.add(cand)
-                found.append({
+                seen.add(cleaned)
+                entry = {
                     "schema": REFERENCE_SCHEMA,
-                    "reference": cand,
+                    "reference": cleaned,
                     "convention": conv,
                     "rank": CONVENTION_RANK[conv],
                     "found_in": str(raw),
-                })
+                }
+                if cleaned != cand:
+                    entry["raw_token"] = cand      # nothing is hidden by the trim
+                found.append(entry)
 
     found.sort(key=lambda r: (-r["rank"], r["reference"]))
     return found
@@ -330,6 +355,85 @@ def describe_keys(part: Dict[str, Any]) -> str:
         return ("no manufacturer reference was found on the drawing — the lookup key "
                 f"{code} was synthesised from the description")
     return f"looked up on {code}" if code else "no lookup key of any kind"
+
+
+# ── TWO LINES, ONE ARTICLE ──────────────────────────────────────────────────────────
+# 11650's cabinet BOM carries the same Essentra levelling foot twice:
+#
+#   ESSENTRA FOOT-466122   "FIXING1081-M8, 25MM FOOT, 25MM THREAD"    GBP 0.00   qty 2
+#   FIXING1081             "Essentra Ref. 466122 - Levelling Foot..."  GBP 0.22   qty 2
+#
+# One line is priced from UDEF and one is not, and each line's description names the OTHER
+# line's key. That is survivable only for as long as the second line stays at zero: the
+# moment the reference makes it priceable, the job books four feet and pays for two it does
+# not buy. So the join and this rule are one change, not two — pricing first would turn a
+# visible GBP 0.46 gap into a hidden GBP 0.46 over-charge, which is strictly worse.
+#
+# AN ARTICLE NUMBER IS AN IDENTITY, WHICH IS WHY THIS IS SAFE. Two lines quoting the same
+# manufacturer reference are the same manufactured article by definition — that is what the
+# number means. Nothing here merges on description, on family or on supplier: the M4 knob
+# (KSM4----N3--5A0) and the M6 knob (KSM6----N5--5A0) sit beside each other on this very
+# sheet, same supplier, same words, GBP 0.00 and GBP 0.27, and they are different parts.
+
+
+def identity_keys(part: Dict[str, Any]) -> Set[str]:
+    """The manufacturer references that identify this line.
+
+    Falls back to reading the part's own text when nothing has been attached yet. A BOM row
+    built by a reader that predates the capture would otherwise present as having no identity
+    at all — and "no identity" is exactly what makes two lines look like two parts.
+    """
+    refs = part.get("supplier_references")
+    if not refs:
+        refs = find_references(part.get("description"), part.get("part_number"))
+    keys = {str((r or {}).get("reference") or "").strip().upper() for r in refs}
+    keys.discard("")
+    return keys
+
+
+def same_article_groups(parts: Any) -> List[List[int]]:
+    """Indices of the lines that name the same article, grouped. Singletons omitted.
+
+    Corroborated ONLY by shared manufacturer reference, and by one line naming another's part
+    number as a WHOLE TOKEN. Whole-token matters more than it looks: "FIXING1081-M8" contains
+    the characters of FIXING1081 and also the characters of FIXING, which is a different part
+    on the same sheet — a nylon washer at GBP 0.66. Substring matching would merge every
+    FIXING line on every job into one.
+    """
+    rows = [p for p in (parts or []) if isinstance(p, dict)]
+    codes = {str(p.get("part_number") or "").strip().upper(): i
+             for i, p in enumerate(rows) if str(p.get("part_number") or "").strip()}
+    parent = list(range(len(rows)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    by_ref: Dict[str, int] = {}
+    for i, p in enumerate(rows):
+        for key in identity_keys(p):
+            if key in by_ref:
+                union(by_ref[key], i)
+            else:
+                by_ref[key] = i
+        # A line whose description names another line's part number outright.
+        for token in re.findall(r"[A-Z0-9]+(?:[.\-][A-Z0-9]+)*",
+                                str(p.get("description") or "").upper()):
+            j = codes.get(token)
+            if j is not None and j != i:
+                union(i, j)
+
+    groups: Dict[int, List[int]] = {}
+    for i in range(len(rows)):
+        groups.setdefault(find(i), []).append(i)
+    return [sorted(g) for _root, g in sorted(groups.items()) if len(g) > 1]
 
 
 def attach_references(part: Dict[str, Any],

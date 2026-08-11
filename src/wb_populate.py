@@ -2833,6 +2833,43 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
               f"'BOM Overflow' sheet and consolidated (£{_ov_total:.2f}) on the last BOM "
               f"row — no lines dropped.", flags)
 
+    # ── THE SAME ARTICLE, NAMED TWICE ──────────────────────────────────────────────
+    # 11650's cabinet BOM lists the Essentra levelling foot as both "ESSENTRA FOOT-466122"
+    # (GBP 0.00) and "FIXING1081" (GBP 0.22), qty 2 on each — one part, counted twice. It is
+    # survivable only while the second line stays at zero; the moment the manufacturer
+    # reference makes it priceable, the job buys four feet and pays for two it never orders.
+    #
+    # SO THE MONEY GOES ON ONE LINE AND THE OTHER SAYS WHERE IT WENT. Not deleted: the
+    # drawing really does name the part twice, and a line that vanishes between the BOM an
+    # estimator reads and the sheet they check is how trust in the sheet goes. Grouped on
+    # shared MANUFACTURER REFERENCE, which is an identity — never on description, family or
+    # supplier, because the M4 and M6 knurled knobs on this same sheet are the same words,
+    # the same supplier and different parts.
+    try:
+        import supplier_reference as _sref
+        for _grp in _sref.same_article_groups(bom_parts):
+            _priced = [i for i in _grp if _bom_line_price(bom_parts[i]) not in (None, 0)]
+            _keep = _priced[0] if _priced else _grp[0]
+            _kept_pn = str(bom_parts[_keep].get("part_number") or "?")
+            for _i in _grp:
+                if _i == _keep:
+                    continue
+                _dup = bom_parts[_i] = dict(bom_parts[_i])
+                _dup["unit_cost_gbp"] = 0.0
+                _dup["_duplicate_of"] = _kept_pn
+                _dup["_no_price_reason"] = (
+                    f"the same article as {_kept_pn} — counted there, not here")
+                _flag(f"BOM {_dup.get('part_number')} and {_kept_pn} are the SAME ARTICLE "
+                      f"(both name manufacturer reference "
+                      f"{', '.join(sorted(_sref.identity_keys(_dup)))}). The quantity is "
+                      f"costed once, on {_kept_pn}; this line is shown at GBP 0.00 because "
+                      f"the drawing names the part twice. CHECK THE QUANTITY — if the two "
+                      f"lines are genuinely different fittings, one of them is mis-numbered.",
+                      flags)
+    except Exception as _dedup_exc:                                   # pragma: no cover
+        _flag(f"BOM duplicate-article check did not run ({_dedup_exc}); a part named twice "
+              f"would be costed twice.", flags)
+
     row = b["first_row"]
     # WHAT IS ACTUALLY ABOUT TO BE WRITTEN, AND FROM WHERE. The sheet has shown codes that
     # are in none of the three saved pools -- SCREW where part_estimates holds BI-SCREW --

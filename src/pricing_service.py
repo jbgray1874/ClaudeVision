@@ -234,6 +234,47 @@ class PricingService:
                     anchor["provenance"] += f" | matched on manufacturer reference {key}"
                     return anchor
 
+        # ── AND UDEF IS NOT KEYED ON THE MANUFACTURER'S NUMBER ──────────────────────
+        # [Part code] holds SDI's own code — FIXING1081, VINYL76 — so the exact arm above can
+        # only fire once somebody loads a supplier price file on their article numbers. That
+        # is the point of it. But the reference is already IN this table, in the description:
+        # FIXING1081 reads "Essentra Ref. 466122 - Levelling Foot", and 466122 is exactly what
+        # 11650's unpriced "ESSENTRA FOOT-466122" line carries. GBP 0.22 a foot, sitting in
+        # the catalogue, unreachable because nobody looked in the text.
+        #
+        # LIKE, AND SAFE, FOR ONE REASON ONLY: EXACTLY ONE ROW MAY MATCH. A six-digit article
+        # number inside a description is specific — but "specific" is a judgement and
+        # "unique" is a fact, so the fact is what decides. Two matches is an ambiguity nobody
+        # here can resolve, and this engine's existing rule for that (see the vinyl SKU
+        # lookup) is to price nothing and say so rather than pick the dearer. Short keys are
+        # refused outright: a three-character string appears inside a thousand descriptions.
+        for key in supplier_reference.lookup_keys(part):
+            if len(key) < 5 or supplier_reference.is_synthesised_key(key):
+                continue
+            rows = self._fetch_all_with_retry(
+                """
+                SELECT TOP 2
+                    u.[Part code], u.[Description], u.[Supplier name],
+                    CAST(u.[System cost per] AS decimal(18,4)), u.[UOM],
+                    u.[WO Est lab cost], u.[WO Est mat cost],
+                    u.[WO Actual lab cost], u.[WO Actual mat cost]
+                FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+                WHERE u.[Description] LIKE '%' + LTRIM(RTRIM(?)) + '%'
+                  AND u.[System cost per] > 0
+                ORDER BY u.[Part code] ASC
+                """,
+                [key],
+            ) or []
+            if len(rows) != 1:
+                continue
+            anchor = self._udef_row_to_anchor(rows[0], exact=True)
+            if anchor:
+                anchor["matched_on"] = key
+                anchor["provenance"] += (
+                    f" | matched on manufacturer reference {key} found in the catalogue "
+                    f"description (sole match)")
+                return anchor
+
         row = self._fetch_one_with_retry(
             """
             SELECT TOP 1
