@@ -978,8 +978,80 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
                  f"provisional items for estimator review.")
     return f"""<h2>7 &nbsp;Verdict</h2>
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
+{_bom_provenance_section(summary)}
 {_route_decisions_section(summary)}
 {_invariants_section(summary)}"""
+
+
+def _bom_provenance_section(summary: Dict[str, Any]) -> str:
+    """Where each PART's costing facts came from -- the BOM half of the same question.
+
+    Section 8 explains the ROUTE. This explains the BILL OF MATERIALS, and the two are
+    asked for together every time: an estimator looking at a line wants to know whether the
+    material, the thickness and the quantity behind it were measured off a model, read off
+    a DXF, taken from the title block, or produced by a language model. Until now the report
+    named none of them, so a figure derived from a model and one derived from Grok looked
+    identical on the page.
+
+    READ THROUGH source_precedence, which is where each datum's source is actually stamped.
+    Deriving it here from filenames or geometry hints -- which is what other parts of this
+    codebase used to do -- produces a second opinion about provenance, and a report that
+    disagrees with the record it is reporting on is worse than no report.
+    """
+    try:
+        from source_precedence import source_of, display_name, was_measured, rank
+    except Exception:
+        return ""
+    parts = _extract_parts(summary) or []
+    if not parts:
+        return ""
+
+    _FIELDS = (("normalized_material", "Material"),
+               ("normalized_thickness_mm", "Thickness"),
+               ("quantity", "Quantity"),
+               ("blank_length_mm", "Blank size"))
+    rows, reasoned_n, unstamped_n = [], 0, 0
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        cells, worst, any_reasoned, any_missing = [], 999, False, False
+        for field, _label in _FIELDS:
+            src = ""
+            try:
+                src = str(source_of(p, field) or "")
+            except Exception:
+                src = ""
+            if not src:
+                cells.append('<td class="mini"><i>not stamped</i></td>')
+                any_missing = True
+                continue
+            measured = was_measured(src)
+            any_reasoned = any_reasoned or not measured
+            worst = min(worst, rank(src))
+            cells.append(f'<td class="mini">{"" if measured else "&#9889; "}'
+                         f'{_esc(display_name(src))}</td>')
+        reasoned_n += 1 if any_reasoned else 0
+        unstamped_n += 1 if any_missing else 0
+        rows.append((worst, str(p.get("part_number") or ""),
+                     f'<tr class="{"over" if any_reasoned else ""}">'
+                     f'<td class="pn">{_esc(p.get("part_number"))}</td>'
+                     + "".join(cells) + "</tr>"))
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: (r[0], r[1]))          # weakest provenance first
+    _heads = "".join(f"<th>{h}</th>" for _f, h in _FIELDS)
+    _note = (f'<p class="mini"><b>{reasoned_n} of {len(rows)} part(s)</b> rest on at least one '
+             f'reasoned value (&#9889;) rather than a measurement, and are listed first. '
+             f'{unstamped_n} part(s) carry a field with no recorded source at all -- an '
+             f'unstamped datum is not a measured one.</p>' if (reasoned_n or unstamped_n)
+             else '<p class="mini">Every costing datum on every part was measured and '
+                  'carries a recorded source.</p>')
+    return ('<h2>8 &nbsp;Where the bill of materials came from</h2>'
+            '<p class="mini">The source recorded against each costing datum, weakest first. '
+            '&#9889; marks a value that was reasoned rather than measured: it can be right, '
+            'but it cannot be held against the drawing.</p>' + _note +
+            f'<table><thead><tr><th>Part</th>{_heads}</tr></thead><tbody>'
+            + "".join(r[2] for r in rows) + '</tbody></table>')
 
 
 def _route_decisions_section(summary: Dict[str, Any]) -> str:
@@ -1005,7 +1077,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
     if not isinstance(decisions, list) or not decisions:
         # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
         # arbitrated at all, and a missing section reads as "nothing to report".
-        return ('<h2>8 &nbsp;How each operation was decided</h2>'
+        return ('<h2>9 &nbsp;How each operation was decided</h2>'
                 '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
                 'was arbitrated, so nothing here can say what decided it. The labour below '
                 'came from the legacy path.</div>')
@@ -1037,7 +1109,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
              f'The losing claim is named so it can be checked.</p>' if contested_n else
              '<p class="mini">No decision was contested — every operation had a single '
              'strongest source and nothing at that rank disagreed with it.</p>')
-    return ('<h2>8 &nbsp;How each operation was decided</h2>'
+    return ('<h2>9 &nbsp;How each operation was decided</h2>'
             '<p class="mini">Every operation on this job, the source that decided it and the '
             'rank that source carries. "Nothing quoted" means no claim carried the drawing\'s '
             'own words, so the decision cannot be held against the sheet.</p>'
@@ -1062,7 +1134,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('<h2>9 &nbsp;Consistency checks</h2>'
+        return ('<h2>10 &nbsp;Consistency checks</h2>'
                 '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
                 'Nothing here has been verified against the workbook: rows have not been '
                 'reconciled to their totals, priced rows have not been joined to the parts that '
@@ -1071,7 +1143,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
     _n = len(inv.get("checks_run") or [])
     if inv.get("may_quote_firm") and not _v:
-        return (f'<h2>9 &nbsp;Consistency checks</h2>'
+        return (f'<h2>10 &nbsp;Consistency checks</h2>'
                 f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
                 f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
                 f'the unit price, every priced row joins to exactly one route, and no report '
@@ -1122,7 +1194,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
              f'is not a pass.</div>' if not inv.get("may_quote_firm") else
              '<div class="callout info">No check failed. The advisories below are worth '
              'reading but do not affect whether the price can be released.</div>')
-    return (f'<h2>9 &nbsp;Consistency checks</h2>{_head}'
+    return (f'<h2>10 &nbsp;Consistency checks</h2>{_head}'
             f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>')
 

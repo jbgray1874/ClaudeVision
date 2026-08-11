@@ -142,3 +142,96 @@ def test_all_three_reports_read_the_shared_names():
 
 if __name__ == "__main__":                                          # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── the BOM half of the same question ───────────────────────────────────────────────
+# Section 9 explains the ROUTE; this explains the BILL OF MATERIALS. An estimator asks both
+# at once: was the material, thickness and quantity behind this line measured off a model,
+# read off a DXF, or produced by a language model? The report named none of them, so a
+# figure from a SolidWorks model and one from Grok looked identical on the page.
+def _part(pn="11650-04-01A", **stamps):
+    p = {"part_number": pn, "normalized_material": "PETG",
+         "normalized_thickness_mm": 3.0, "quantity": 2}
+    p.update(stamps)
+    return p
+
+
+def _psummary(parts):
+    return {"estimate_summary": {"part_estimates": list(parts)}, "parts": list(parts)}
+
+
+def test_the_bom_section_names_where_each_datum_came_from():
+    html = jrh._bom_provenance_section(_psummary([
+        _part(material_source="solidworks_api", thickness_source="dxf_flat_pattern")]))
+    assert "the SolidWorks model" in html and "the DXF flat pattern" in html
+    assert "11650-04-01A" in html
+
+
+def test_a_reasoned_datum_is_marked_and_a_measured_one_is_not():
+    """The distinction the whole waterfall exists for. A reasoned value can be right and
+    still cannot be held against the drawing."""
+    html = jrh._bom_provenance_section(_psummary([
+        _part(material_source="llm_full_extract", thickness_source="solidworks_api")]))
+    assert "Grok (xAI)" in html
+    assert "rest on at least one reasoned value" in html
+    # IN THE CELL, NOT MERELY ON THE PAGE. The first version asserted the marker appeared
+    # anywhere in the HTML and passed with the cell marker deleted -- the legend explaining
+    # the symbol contains the symbol, so the note masked its absence from every row. A
+    # mutation showed it. Assert it sits immediately before the reasoned source's name and
+    # NOT before the measured one.
+    assert "&#9889; Grok (xAI)" in html, \
+        "the reasoned datum's own cell is not marked"
+    assert "&#9889; the SolidWorks model" not in html, \
+        "a measured datum has been marked as reasoned"
+
+
+def test_an_unstamped_field_says_so_rather_than_reading_as_measured():
+    """A blank in a provenance column reads as 'fine'. It means nobody recorded who
+    decided, which is not the same fact at all."""
+    html = jrh._bom_provenance_section(_psummary([_part()]))
+    assert "not stamped" in html
+
+
+def test_the_weakest_provenance_is_listed_first():
+    strong = _part("AAA-1", material_source="solidworks_api",
+                   thickness_source="solidworks_api", quantity_source="solidworks_api")
+    weak = _part("ZZZ-9", material_source="llm_full_extract",
+                 thickness_source="llm_full_extract", quantity_source="llm_full_extract")
+    html = jrh._bom_provenance_section(_psummary([strong, weak]))
+    assert html.index("ZZZ-9") < html.index("AAA-1"), \
+        "the line most in need of a person must not be buried below the safe ones"
+
+
+def test_a_fully_measured_job_says_so_positively():
+    html = jrh._bom_provenance_section(_psummary([
+        _part(material_source="solidworks_api", thickness_source="solidworks_api",
+              quantity_source="solidworks_api", blank_length_mm=400.0,
+              blank_length_mm_source="dxf_flat_pattern")]))
+    assert "Every costing datum" in html
+
+
+def test_the_bom_section_reads_the_recorded_stamp_not_a_second_opinion():
+    """Deriving provenance from filenames or geometry hints -- which other parts of this
+    codebase used to do -- produces a report that can disagree with the record it reports
+    on, which is worse than no report."""
+    src = Path(jrh.__file__).read_text(encoding="utf-8")
+    block = src[src.index("def _bom_provenance_section"):src.index("def _route_decisions_section")]
+    assert "source_of(" in block, "provenance is not read from where it is stamped"
+    assert "dxf_source_file" not in block, "the report is re-deriving provenance from a filename"
+
+
+def test_both_provenance_sections_render_on_a_job_with_no_parity_workbook():
+    """The whole ask: the report must explain itself with or without a spreadsheet to run
+    parity against."""
+    s = _psummary([_part(material_source="dxf")])
+    s["estimate_summary"]["canonical_route_shadow"] = {"decisions": [_d()]}
+    assert "<table" in jrh._bom_provenance_section(s)
+    assert "<table" in jrh._route_decisions_section(s)
+
+
+def test_the_section_numbers_do_not_collide():
+    src = Path(jrh.__file__).read_text(encoding="utf-8")
+    for n, title in ((8, "Where the bill of materials came from"),
+                     (9, "How each operation was decided"),
+                     (10, "Consistency checks")):
+        assert f"<h2>{n} &nbsp;{title}</h2>" in src, f"section {n} ({title}) is misnumbered"
