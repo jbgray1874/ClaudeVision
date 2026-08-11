@@ -40,6 +40,7 @@ from typing import Any, Dict, Optional
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
     "SOURCE_DISPLAY_NAME", "MEASURED_SOURCES", "display_name", "was_measured",
+    "SOURCE_TIEBREAK", "tiebreak_priority",
 ]
 
 
@@ -141,8 +142,53 @@ SOURCE_RANK: Dict[str, int] = {
     "geometry_inference": 20,
 }
 
-# Where a datum's source is recorded. Falling back to a per-field convention
-# ("<field>_source") keeps this usable for fields that have no dedicated key yet.
+# ── WHICH OF TWO EQUALLY-RANKED SOURCES WINS ────────────────────────────────────────
+# Only ever consulted WITHIN a rank. Across ranks the waterfall has already decided, and
+# this must never be able to reach across one.
+#
+# WHAT THIS CAN AND CANNOT SETTLE, because it is easy to expect too much of it. Only six
+# pairs share a rank at all, and they are the pairs below. "SolidWorks beats the LLM" is
+# not in here and never should be — that is the RANK (90 against 40), and writing it here
+# too would be a second copy of the waterfall that could drift out of step with the first.
+#
+# It also cannot break the commonest tie, which is ONE SOURCE DISAGREEING WITH ITSELF: two
+# DXF claims about the same fold, two LLM claims about the same weld. Nothing about the
+# source name separates those, which is why this is the first key and not the only one.
+#
+# Higher wins. A source absent from this table scores 0 and falls through to the next key,
+# which is the honest default — an ordering nobody can justify is worse than none.
+SOURCE_TIEBREAK: Dict[str, int] = {
+    # A person in the room beats a stored default. The knowledge base is what we believed
+    # before anybody looked at this job.
+    "estimator_confirmed": 2,
+    "knowledge_base": 1,
+    # A FLAT PATTERN IS THE BLANK ITSELF. The model and the generic DXF describe the
+    # finished part and may be a view of it; the flat pattern is the thing that goes on the
+    # bed. For every question this arbiter actually settles — folds, cut length, blank size
+    # — the flat pattern is the more direct measurement of the two.
+    "solidworks_flat_pattern": 2,
+    "solidworks_api": 1,
+    "dxf_flat_pattern": 2,
+    "dxf": 1,
+    # The title block is a controlled field on the sheet. "Deterministic" covers anything
+    # else read off the drawing by rule, including body text, which is looser.
+    "title_block": 2,
+    "drawing_deterministic": 1,
+    # The whole-job pass has seen the pack and can hold one sheet against another; the
+    # per-part pass has seen one page. Same model, more context.
+    "llm_full_extract": 2,
+    "llm_extract": 1,
+    # Inference FROM measured geometry rests on something; inference in general does not.
+    "geometry_inference": 2,
+    "inference": 1,
+}
+
+
+def tiebreak_priority(source: Any) -> int:
+    """Within-rank precedence. 0 means "no published ordering" — fall through."""
+    return SOURCE_TIEBREAK.get(str(source or "").strip().lower(), 0)
+
+
 # ── WHERE A DECISION WAS TAKEN, IN THE ESTIMATOR'S WORDS ────────────────────────────
 # The rank keys above are internal join fields. An estimator reading a report needs the
 # thing that actually decided it — the model, the flat pattern, the title block, the AI —
@@ -198,6 +244,8 @@ def was_measured(source: Any) -> bool:
     return str(source or "").strip().lower() in MEASURED_SOURCES
 
 
+# Where a datum's source is recorded. Falling back to a per-field convention
+# ("<field>_source") keeps this usable for fields that have no dedicated key yet.
 _SOURCE_FIELDS = {
     "normalized_material": "material_source",
     "quantity": "quantity_source",

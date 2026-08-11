@@ -1461,22 +1461,43 @@ def _ruling_source(part: Mapping[str, Any], operation: str, reason: str) -> str:
     return "unknown"
 
 
+def _tiebreak_priority(source: Any) -> int:
+    """Within-rank source precedence, from the module that owns the ranks."""
+    try:
+        from source_precedence import tiebreak_priority
+        return tiebreak_priority(source)
+    except Exception:
+        return 0
+
+
 def _resolution_key(claim: OperationClaim):
     """The order that settles a tie between equally-ranked claims.
 
     ONE ORDERING, USED BY STATUS AND BY EVERY METADATA FIELD, so the decision and its
     metadata cannot be settled by different rules and end up describing different claims.
 
-        1. confidence            — the claim's own stated certainty
-        2. quotes the drawing    — a claim carrying the sheet's own words can be held
+        1. within-rank source    — a published ordering: the flat pattern over the model,
+                                   the title block over loose drawing text, the whole-job
+                                   pass over the per-part one, a person over a stored
+                                   default. Deterministic and explainable in a report,
+                                   which is what an estimator needs from a contested line.
+        2. confidence            — the claim's own stated certainty
+        3. quotes the drawing    — a claim carrying the sheet's own words can be held
                                    AGAINST the sheet; one that does not cannot be argued
-                                   with at all. Between two equal sources this is the only
-                                   thing that makes one more checkable than the other.
-        3. claim_id              — not decoration. It is what makes the same job compile to
+                                   with at all. This is what settles the commonest tie of
+                                   all, which key 1 cannot touch: ONE SOURCE DISAGREEING
+                                   WITH ITSELF — two DXF claims about the same fold.
+        4. claim_id              — not decoration. It is what makes the same job compile to
                                    the same route twice, and reproducibility is the property
                                    the whole parallel run rests on. Never remove it.
+
+    WHAT IS DELIBERATELY NOT A KEY: preferring "required" over "ruled_out". It sounds
+    prudent and it is a systematic bias toward charging for work that was ruled out on
+    evidence — it would have kept the powder line on 11650's PETG panels, which is the
+    exact failure this month's work removed.
     """
     return (
+        _tiebreak_priority(claim.source),
         claim.confidence if claim.confidence is not None else -1.0,
         1 if str(getattr(claim, "evidence", "") or "").strip() else 0,
         claim.claim_id,

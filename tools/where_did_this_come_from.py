@@ -58,6 +58,19 @@ def _pools(doc):
     )
 
 
+# WHERE A DECISION WAS TAKEN, named by the module that owns the ranks — never a private
+# copy here. A provenance report that cannot name a source cannot explain a decision.
+try:
+    from source_precedence import display_name as _display, was_measured as _was_measured
+except Exception:                                                   # pragma: no cover
+    def _display(s):
+        return str(s or "").replace("_", " ")
+
+    def _was_measured(s):
+        return bool(s) and str(s) not in ("llm_extract", "llm_full_extract",
+                                          "inference", "geometry_inference")
+
+
 def _attributed(record, prefix=""):
     """(field, value, source) for every field in this record that records a source.
 
@@ -125,7 +138,14 @@ def main() -> int:
         if not fields:
             print("    no attributed field on this record\n")
         for field, value, src in sorted(fields):
-            print(f"    {field:34} {str(value)[:26]:28} <- {src} (rank {_rank(src)})")
+            # WHERE THE DECISION WAS TAKEN, in the estimator's words as well as the join
+            # key. This printed the raw key alone, so a report written to answer "where did
+            # this come from" answered "solidworks_flat_pattern" — correct, and not an
+            # answer anybody outside this codebase can read. The name comes from the module
+            # that owns the ranks, so a name and a rank cannot disagree about a source.
+            _mark = "measured" if _was_measured(src) else "reasoned"
+            print(f"    {field:34} {str(value)[:26]:28} <- {_display(src)} "
+                  f"[{src}, rank {_rank(src)}, {_mark}]")
             seen.setdefault(field, {})[label] = src
         print()
 

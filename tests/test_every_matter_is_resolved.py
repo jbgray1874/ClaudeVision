@@ -206,3 +206,65 @@ def test_no_module_keeps_a_private_source_name_table():
 
 if __name__ == "__main__":                                          # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── the secondary key: within-rank source priority ──────────────────────────────────
+# OPTION 1, AND WHY IT IS THE FIRST KEY RATHER THAN THE ONLY ONE.
+#
+# "SolidWorks beats xAI" is not this rule — that is the RANK, 90 against 40, and putting
+# it here as well would be a second copy of the waterfall free to drift out of step with
+# the first. Only six pairs share a rank at all, and this orders those. It cannot touch
+# the commonest tie of all, which is one source disagreeing with ITSELF.
+@pytest.mark.parametrize("winner,loser", [
+    ("estimator_confirmed", "knowledge_base"),      # a person beats a stored default
+    ("solidworks_flat_pattern", "solidworks_api"),  # the blank beats the finished part
+    ("dxf_flat_pattern", "dxf"),
+    ("title_block", "drawing_deterministic"),       # a controlled field beats body text
+    ("llm_full_extract", "llm_extract"),            # the pack beats one page
+    ("geometry_inference", "inference"),            # resting on something beats resting on nothing
+])
+def test_within_rank_source_priority_settles_the_pair(winner, loser):
+    assert sp.SOURCE_RANK[winner] == sp.SOURCE_RANK[loser], \
+        "these do not share a rank, so this pair proves nothing about the tiebreak"
+    d = arbitrate_event("d1", [_claim(RULED_OUT, loser), _claim(REQUIRED, winner)])
+    assert d.status == REQUIRED and d.source == winner
+
+
+def test_the_tiebreak_never_reaches_across_a_rank():
+    """The one thing it must never do. A within-rank ordering that could outrank the
+    waterfall would quietly become a second, competing precedence table."""
+    d = arbitrate_event("d1", [_claim(REQUIRED, "llm_full_extract"),   # priority 2, rank 40
+                               _claim(RULED_OUT, "dxf")])              # priority 1, rank 80
+    assert d.status == RULED_OUT, "a within-rank preference outranked the waterfall"
+
+
+def test_an_unlisted_source_falls_through_rather_than_scoring_high():
+    """An ordering nobody can justify is worse than none. A new source must not win ties
+    by accident simply because it is missing from the table."""
+    assert sp.tiebreak_priority("some_new_reader") == 0
+    assert sp.tiebreak_priority("") == 0
+
+
+def test_the_tiebreak_table_only_contains_sources_that_share_a_rank():
+    """An entry for a source with a rank to itself can never fire, and reads as a rule
+    that is doing something when it is not."""
+    from collections import Counter
+    shared = {s for s, n in Counter(sp.SOURCE_RANK.values()).items() if n > 1}
+    for source in sp.SOURCE_TIEBREAK:
+        assert sp.SOURCE_RANK.get(source) in shared, \
+            f"{source} has its own rank, so its tiebreak entry can never fire"
+
+
+def test_required_is_deliberately_not_preferred_over_ruled_out():
+    """THE OPTION THAT WAS REJECTED, guarded so it cannot be added back by instinct.
+
+    Preferring 'required' sounds prudent and is a systematic bias toward charging for work
+    that was ruled out on evidence. It would have kept the powder line on 11650's PETG
+    panels -- the exact failure this month's work removed. Here two claims are identical
+    but for their status and their source priority, and the LOW-priority source says
+    required: if status were a key, required would win.
+    """
+    d = arbitrate_event("d1", [_claim(REQUIRED, "dxf"),                 # priority 1
+                               _claim(RULED_OUT, "dxf_flat_pattern")])  # priority 2
+    assert d.status == RULED_OUT, \
+        "status is being used as a tiebreak -- that is a bias toward charging"

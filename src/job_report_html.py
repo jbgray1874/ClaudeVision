@@ -978,7 +978,73 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
                  f"provisional items for estimator review.")
     return f"""<h2>7 &nbsp;Verdict</h2>
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
+{_route_decisions_section(summary)}
 {_invariants_section(summary)}"""
+
+
+def _route_decisions_section(summary: Dict[str, Any]) -> str:
+    """Where every route decision was taken, and which of them were contested.
+
+    THIS RENDERS ON EVERY JOB. The only route detail the report carried before came from
+    parity_report_html and appeared solely when a manual workbook was passed with
+    --parity-workbook -- so on an ordinary run, the document an estimator works from could
+    not say what decided a single operation. "Where did this come from" is the first
+    question asked of any estimate this engine produces, and the report had no answer.
+
+    CONTESTED LINES COME FIRST, and say what the other source claimed. A decision taken
+    over an objection is the one worth reading, and the table that buries it among fifty
+    unanimous rows has hidden the only line that needed a person.
+    """
+    payload = {}
+    try:
+        payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+                   or summary.get("canonical_route_shadow") or {})
+    except Exception:
+        payload = {}
+    decisions = payload.get("decisions") if isinstance(payload, dict) else None
+    if not isinstance(decisions, list) or not decisions:
+        # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
+        # arbitrated at all, and a missing section reads as "nothing to report".
+        return ('<h2>8 &nbsp;How each operation was decided</h2>'
+                '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
+                'was arbitrated, so nothing here can say what decided it. The labour below '
+                'came from the legacy path.</div>')
+
+    rows, contested_n = [], 0
+    for d in decisions:
+        if not isinstance(d, dict):
+            continue
+        _contested = bool(d.get("contested"))
+        contested_n += 1 if _contested else 0
+        _losing = ", ".join(str(x) for x in (d.get("losing_statuses") or []))
+        _ev = str(d.get("evidence") or "")
+        rows.append((
+            0 if _contested else 1,                       # contested first
+            str(d.get("target_id") or ""),
+            f'<tr class="{"over" if _contested else ""}">'
+            f'<td class="pn">{_esc(d.get("target_id"))}</td>'
+            f'<td>{_esc(str(d.get("operation") or "").replace("_", " "))}</td>'
+            f'<td>{_esc(d.get("status"))}</td>'
+            f'<td>{_esc(d.get("decided_by") or d.get("source") or "not recorded")}</td>'
+            f'<td class="num">{_esc(d.get("source_rank"))}</td>'
+            f'<td>{"<b>resolved over " + _esc(_losing) + "</b>" if _contested else "—"}</td>'
+            f'<td class="mini">{_esc(_ev[:70]) if _ev else "<i>nothing quoted</i>"}</td></tr>'))
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: (r[0], r[1]))
+    _note = (f'<p class="mini"><b>{contested_n} decision(s) were contested</b> and are listed '
+             f'first: two equally-ranked sources disagreed and the arbiter settled it. '
+             f'The losing claim is named so it can be checked.</p>' if contested_n else
+             '<p class="mini">No decision was contested — every operation had a single '
+             'strongest source and nothing at that rank disagreed with it.</p>')
+    return ('<h2>8 &nbsp;How each operation was decided</h2>'
+            '<p class="mini">Every operation on this job, the source that decided it and the '
+            'rank that source carries. "Nothing quoted" means no claim carried the drawing\'s '
+            'own words, so the decision cannot be held against the sheet.</p>'
+            + _note +
+            '<table><thead><tr><th>Part</th><th>Operation</th><th>Status</th>'
+            '<th>Decided by</th><th>Rank</th><th>Contested</th><th>Drawing says</th>'
+            '</tr></thead><tbody>' + "".join(r[2] for r in rows) + '</tbody></table>')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -996,7 +1062,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('<h2>8 &nbsp;Consistency checks</h2>'
+        return ('<h2>9 &nbsp;Consistency checks</h2>'
                 '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
                 'Nothing here has been verified against the workbook: rows have not been '
                 'reconciled to their totals, priced rows have not been joined to the parts that '
@@ -1005,7 +1071,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
     _n = len(inv.get("checks_run") or [])
     if inv.get("may_quote_firm") and not _v:
-        return (f'<h2>8 &nbsp;Consistency checks</h2>'
+        return (f'<h2>9 &nbsp;Consistency checks</h2>'
                 f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
                 f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
                 f'the unit price, every priced row joins to exactly one route, and no report '
@@ -1056,7 +1122,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
              f'is not a pass.</div>' if not inv.get("may_quote_firm") else
              '<div class="callout info">No check failed. The advisories below are worth '
              'reading but do not affect whether the price can be released.</div>')
-    return (f'<h2>8 &nbsp;Consistency checks</h2>{_head}'
+    return (f'<h2>9 &nbsp;Consistency checks</h2>{_head}'
             f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>')
 
