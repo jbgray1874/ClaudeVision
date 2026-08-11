@@ -259,8 +259,17 @@ engage the same confidentiality clauses as design data.
 It also sits, unavoidably, in every place the repository has been: the hosting provider, the
 managed development container, and any working copy.
 
-**Recommended actions.** (1) Decide with the solicitors whether this corpus may remain in
-source control at all. (2) If not, it must be removed from the working tree **and from
+**Position at 10 August 2026.** The corpus files have been **removed from source control**
+and the `.gitignore` exception that re-admitted them deleted; the working copies remain on
+the internal machine, where the system of record already lives. Nothing read them at
+estimate time, so nothing broke.
+
+**This does not remove them from the repository's HISTORY**, which is where the exposure
+actually sits. Anyone with read access can still recover them from any commit since
+16 July 2026. Closing that requires a history rewrite and a force-push, which is a
+decision for the solicitors and IT together.
+
+**Recommended actions.** (1) Decide whether the history must be rewritten as well. (2) If not, it must be removed from the working tree **and from
 history** — removing it from the current commit leaves it fully readable in the history.
 (3) In the meantime, treat repository access as equivalent to access to the quotation
 archive, and restrict it accordingly. (4) The `prepared_by` names make this personal data
@@ -436,31 +445,7 @@ checkable, and a statement that blurred it would not survive scrutiny.
 
 ---
 
-## 9. Outstanding actions
-
-| # | Action | Owner | Priority |
-|---|---|---|---|
-| 1 | **Rotate the database password and the HR client secret**, then remove the file from tracking | Developer / IT | **Now** |
-| 2 | **Set the portal access key and confirm the gate is active**, or bind to loopback behind authentication | Developer / IT | **Now** |
-| 3 | Decide with the solicitors whether the quotation corpus may remain in source control; if not, remove it from the working tree **and from history** | Solicitors → Developer | **High** |
-| 4 | Establish what commercial terms xAI offers — no-training, retention, DPA | IT / procurement | **High** |
-| 5 | Have the solicitors review client contracts for confidentiality and sub-processor clauses | Solicitors | High |
-| 6 | Confirm the OpenAI Business DPA is accepted | IT / procurement | High |
-| 7 | Move Anthropic to a commercial agreement with zero-retention terms | IT / procurement | Medium |
-| 8 | Keep the Anthropic training setting off and Cursor Privacy Mode on; re-check periodically | IT | Medium (ongoing) |
-| 9 | Transfer all three repositories to an SDI-owned organisation with a second administrator; enforce two-factor authentication and branch protection | IT | Medium |
-| 10 | Confirm repository visibility (private) directly with the hosting provider for all three | IT | Medium |
-| 11 | Confirm whether external IT support has system or backup access; put an agreement in place if so | IT | Medium |
-| 12 | Obtain the SOLIDWORKS and Document Manager licence and reseller agreements; confirm telemetry settings | Finance / IT | Medium |
-| 13 | Separate the Document Manager code repository from live client job folders | Developer | Medium |
-| 14 | Confirm the Hatz AI engagement from commercial records — it is invisible to all three systems | Matthew / Finance | Medium |
-| 15 | Confirm the PyMuPDF licence position before any distribution or hosted offering of the estimating tool | Solicitors | Low now, high if commercialised |
-| 16 | Adopt a policy: no general AI coding tool pointed at live client job folders; use anonymised fixtures | Design lead | Medium |
-| 17 | Confirm whether the OneDrive / SharePoint holding live enquiry drawings is covered by an existing Microsoft agreement | IT | Medium |
-
----
-
-## 10. Basis and confirmation
+## 9. Basis and confirmation
 
 The technical findings in sections 2 to 6 were established by reading source code,
 configuration, dependency manifests, documentation and complete version-control history for

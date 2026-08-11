@@ -605,55 +605,8 @@ A(callout("The defensible statement is narrower, and should not be stretched", [
     "real, it is checkable, and a statement that blurred it would not survive scrutiny.",
 ]))
 
-# ── 9. ACTIONS ──────────────────────────────────────────────────────────────────────
-A(p("9.  Outstanding actions", H1))
-rows = [["#", "Action", "Owner", "Priority"]]
-acts = [
-    ("Rotate the database password and the HR client secret, then remove the file from "
-     "tracking", "Developer / IT", "Now"),
-    ("Set the portal access key and confirm the gate is active, or bind to loopback behind "
-     "authentication", "Developer / IT", "Now"),
-    ("Decide whether the quotation corpus may remain in source control; if not, remove it "
-     "from the working tree and from history", "Solicitors → Developer", "High"),
-    ("Establish what commercial terms xAI offers — no-training, retention, DPA",
-     "IT / procurement", "High"),
-    ("Review client contracts for confidentiality and sub-processor clauses", "Solicitors",
-     "High"),
-    ("Confirm the OpenAI Business DPA is accepted", "IT / procurement", "High"),
-    ("Move Anthropic to a commercial agreement with zero-retention terms",
-     "IT / procurement", "Medium"),
-    ("Keep the Anthropic training setting off and Cursor Privacy Mode on; re-check "
-     "periodically", "IT", "Ongoing"),
-    ("Transfer all three repositories to an SDI-owned organisation with a second "
-     "administrator; enforce two-factor authentication and branch protection", "IT",
-     "Medium"),
-    ("Confirm repository visibility (private) directly with the hosting provider for all "
-     "three", "IT", "Medium"),
-    ("Confirm whether external IT support has system or backup access; put an agreement in "
-     "place if so", "IT", "Medium"),
-    ("Obtain the SOLIDWORKS and Document Manager licence and reseller agreements; confirm "
-     "telemetry settings", "Finance / IT", "Medium"),
-    ("Separate the Document Manager code repository from live client job folders",
-     "Developer", "Medium"),
-    ("Confirm the Hatz AI engagement from commercial records — it is invisible to all "
-     "three systems", "Matthew / Finance", "Medium"),
-    ("Confirm the PyMuPDF licence position before any distribution or hosted offering",
-     "Solicitors", "Low now, high if commercialised"),
-    ("Adopt a policy: no general AI coding tool pointed at live client job folders; use "
-     "anonymised fixtures", "Design lead", "Medium"),
-    ("Confirm whether the OneDrive / SharePoint holding live enquiry drawings is covered by "
-     "an existing Microsoft agreement", "IT", "Medium"),
-]
-for i, (a, o, pr) in enumerate(acts, 1):
-    bold = pr == "Now"
-    rows.append([f"<b>{i}</b>" if bold else str(i),
-                 f"<b>{a}</b>" if bold else a, o,
-                 f"<b>{pr}</b>" if bold else pr])
-A(table(rows, [8 * mm, CONTENT_W - 8 * mm - 34 * mm - 30 * mm, 34 * mm, 30 * mm],
-        small=True))
-
 # ── 10. BASIS ───────────────────────────────────────────────────────────────────────
-A(p("10.  Basis and confirmation", H1))
+A(p("9.  Basis and confirmation", H1))
 A(p("The technical findings in sections 2 to 6 were established by reading source code, "
     "configuration, dependency manifests, documentation and complete version-control "
     "history for all three tools. Every count, date and “none found” in this "
