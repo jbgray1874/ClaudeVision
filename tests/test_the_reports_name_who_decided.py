@@ -16,6 +16,7 @@ disagree about what a source is.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -312,9 +313,25 @@ def test_a_job_with_no_costed_parts_says_so_loudly():
 
 
 def test_the_section_numbers_are_still_unique_and_ordered():
+    """Section 10 was inserted for the purchased-part lookup keys and the two below it moved
+    up. This guard is what noticed -- which is the whole reason it enumerates titles against
+    numbers rather than merely counting headings."""
     src = Path(jrh.__file__).read_text(encoding="utf-8")
     for n, title in ((8, "How far to trust this number"),
                      (9, "Where the bill of materials came from"),
-                     (10, "How each operation was decided"),
-                     (11, "Consistency checks")):
+                     (10, "What each purchased part was looked up by"),
+                     (11, "How each operation was decided"),
+                     (12, "Consistency checks")):
         assert f"<h2>{n} &nbsp;{title}</h2>" in src, f"section {n} ({title}) is misnumbered"
+
+
+def test_no_two_sections_claim_the_same_number():
+    """The check above would pass a report with TWO section 10s, because it only asks whether
+    each expected heading is present. Inserting a section is exactly when a duplicate appears,
+    so the question has to be asked from the other side as well."""
+    src = Path(jrh.__file__).read_text(encoding="utf-8")
+    seen = {}
+    for m in re.finditer(r"<h2>(\d+[a-z]?) &nbsp;([^<]+)</h2>", src):
+        seen.setdefault(m.group(1), set()).add(m.group(2))
+    dupes = {n: t for n, t in seen.items() if len(t) > 1}
+    assert not dupes, f"section number(s) used for more than one heading: {dupes}"

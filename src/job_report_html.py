@@ -980,6 +980,7 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
 {_provenance_strip(summary)}
 {_bom_provenance_section(summary)}
+{_purchased_key_section(summary)}
 {_route_decisions_section(summary)}
 {_invariants_section(summary)}"""
 
@@ -1124,6 +1125,63 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
             + "".join(r[2] for r in rows) + '</tbody></table>')
 
 
+def _purchased_key_section(summary: Dict[str, Any]) -> str:
+    """What each purchased part was looked up BY, and whether we had a real key to use.
+
+    "No price found" is two different problems wearing one face. Either the manufacturer's
+    number was tried and nobody had it -- which an estimator can act on, by asking the
+    supplier -- or there was never a number to try, because the drawing named the part in
+    prose and the engine minted BI-BINDINGSCREW to stand in for it. Only the second is ours,
+    and it is invisible unless the report says which happened.
+
+    CAPTURING THE REFERENCE WITHOUT SHOWING IT WOULD BE THE SAME DEFECT IN A NEW PLACE. This
+    engine's recurring failure is correct evidence with no reader; a supplier_references field
+    that appears only in the JSON is exactly that.
+    """
+    try:
+        import supplier_reference as _sr
+    except Exception:
+        return ""
+    parts = [p for p in (_extract_parts(summary) or [])
+             if isinstance(p, dict) and (p.get("supplier_references")
+                                         or _sr.is_synthesised_key(p.get("part_number")))]
+    if not parts:
+        return ""
+    rows, keyless = [], 0
+    for p in parts:
+        refs = p.get("supplier_references") or []
+        minted = _sr.is_synthesised_key(p.get("part_number"))
+        if not refs:
+            keyless += 1
+        keys = ", ".join(str(r.get("reference")) for r in refs[:3]) or "&mdash;"
+        conv = ", ".join(sorted({str(r.get("convention") or "") for r in refs})) or (
+            "none found on the drawing")
+        rows.append((0 if not refs else 1, str(p.get("part_number") or ""),
+                     f'<tr class="{"over" if not refs else ""}">'
+                     f'<td class="pn">{_esc(p.get("part_number"))}</td>'
+                     f'<td class="mini">{_esc(p.get("description") or "")}</td>'
+                     f'<td class="mini">{keys}</td>'
+                     f'<td class="mini">{_esc(conv)}</td>'
+                     f'<td class="mini">{"minted here" if minted else "read off the drawing"}</td>'
+                     f'</tr>'))
+    rows.sort(key=lambda r: (r[0], r[1]))          # the ones with no real key first
+    _note = (f'<p class="mini"><b>{keyless} of {len(rows)} purchased line(s)</b> carry no '
+             f'manufacturer reference at all, so the only key available was one this engine '
+             f'minted from the description. Nothing in any catalogue, price file or supplier '
+             f'system has ever heard of that key, so those lines cannot be priced by lookup '
+             f'however good the catalogue gets &mdash; they need the number off the drawing '
+             f'or off the estimator.</p>' if keyless else
+             '<p class="mini">Every purchased line carries a manufacturer reference, so every '
+             'one of them can be priced by lookup against a catalogue or a supplier price '
+             'file that uses the same key.</p>')
+    return ('<h2>10 &nbsp;What each purchased part was looked up by</h2>'
+            '<p class="mini">A price lookup can only find what it asks for. These are the '
+            'keys used for the bought-in lines, lines with no real key first.</p>' + _note +
+            '<table><thead><tr><th>Part</th><th>Description</th>'
+            '<th>Manufacturer reference</th><th>Convention</th><th>Part number</th>'
+            '</tr></thead><tbody>' + "".join(r[2] for r in rows) + '</tbody></table>')
+
+
 def _route_decisions_section(summary: Dict[str, Any]) -> str:
     """Where every route decision was taken, and which of them were contested.
 
@@ -1147,7 +1205,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
     if not isinstance(decisions, list) or not decisions:
         # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
         # arbitrated at all, and a missing section reads as "nothing to report".
-        return ('<h2>10 &nbsp;How each operation was decided</h2>'
+        return ('<h2>11 &nbsp;How each operation was decided</h2>'
                 '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
                 'was arbitrated, so nothing here can say what decided it. The labour below '
                 'came from the legacy path.</div>')
@@ -1179,7 +1237,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
              f'The losing claim is named so it can be checked.</p>' if contested_n else
              '<p class="mini">No decision was contested — every operation had a single '
              'strongest source and nothing at that rank disagreed with it.</p>')
-    return ('<h2>10 &nbsp;How each operation was decided</h2>'
+    return ('<h2>11 &nbsp;How each operation was decided</h2>'
             '<p class="mini">Every operation on this job, the source that decided it and the '
             'rank that source carries. "Nothing quoted" means no claim carried the drawing\'s '
             'own words, so the decision cannot be held against the sheet.</p>'
@@ -1204,7 +1262,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('<h2>11 &nbsp;Consistency checks</h2>'
+        return ('<h2>12 &nbsp;Consistency checks</h2>'
                 '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
                 'Nothing here has been verified against the workbook: rows have not been '
                 'reconciled to their totals, priced rows have not been joined to the parts that '
@@ -1213,7 +1271,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
     _n = len(inv.get("checks_run") or [])
     if inv.get("may_quote_firm") and not _v:
-        return (f'<h2>11 &nbsp;Consistency checks</h2>'
+        return (f'<h2>12 &nbsp;Consistency checks</h2>'
                 f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
                 f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
                 f'the unit price, every priced row joins to exactly one route, and no report '
@@ -1264,7 +1322,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
              f'is not a pass.</div>' if not inv.get("may_quote_firm") else
              '<div class="callout info">No check failed. The advisories below are worth '
              'reading but do not affect whether the price can be released.</div>')
-    return (f'<h2>11 &nbsp;Consistency checks</h2>{_head}'
+    return (f'<h2>12 &nbsp;Consistency checks</h2>{_head}'
             f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>')
 

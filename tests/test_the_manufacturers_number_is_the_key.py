@@ -311,5 +311,61 @@ def test_the_reference_arm_matches_exactly_and_never_loosely():
     assert "[Part code] = LTRIM(RTRIM(?))" in arm
 
 
+# ── and the estimator can SEE which of the two kinds of nothing they have ───────────
+# A supplier_references field that appears only in the JSON is the same defect this engine
+# keeps repeating: correct evidence with no reader.
+import job_report_html as jrh                                        # noqa: E402
+
+
+def _job(parts):
+    return {"estimate_summary": {"part_estimates": [
+        sr.attach_references({"part_number": pn, "description": d, "quantity": 1})
+        for pn, d in parts]}}
+
+
+def test_the_report_names_the_key_each_purchased_line_was_looked_up_by():
+    html = jrh._purchased_key_section(_job([
+        (sr.synthesise_key("essentra foot"), "ESSENTRA FOOT-466122"),
+        (sr.synthesise_key("hafele catch"), "CATCH 246.41.745")]))
+    assert "466122" in html and "246.41.745" in html
+    assert "dotted_catalogue" in html
+
+
+def test_a_line_with_no_reference_is_listed_first_and_named_as_ours():
+    """The one an estimator must act on, and the one no catalogue can ever fix. A minted key
+    is not in any supplier's system, so that line cannot be priced by lookup however good the
+    catalogue gets -- and a report that buries it below the ones that worked hides the only
+    finding on the page that requires a person."""
+    html = jrh._purchased_key_section(_job([
+        (sr.synthesise_key("essentra foot"), "ESSENTRA FOOT-466122"),
+        (sr.synthesise_key("binding screw"), "BINDING SCREW BZP")]))
+    assert html.index("BI-BINDINGSCREW") < html.index("BI-ESSENTRAFOOT"), \
+        "the line with no real key is not listed first"
+    assert "1 of 2 purchased line(s)" in html
+    assert "minted here" in html
+
+
+def test_the_section_says_so_when_every_line_has_a_real_key():
+    """Not silence. A section that vanishes when everything is fine reads as a section that
+    failed to run, and this repository has been caught by that distinction repeatedly."""
+    html = jrh._purchased_key_section(_job([
+        (sr.synthesise_key("essentra foot"), "ESSENTRA FOOT-466122")]))
+    assert "Every purchased line carries a manufacturer reference" in html
+
+
+def test_a_job_with_no_purchased_parts_renders_nothing():
+    """Distinct from the case above: there is genuinely no question to answer here, and a
+    heading over an empty table on a fabrication-only job is noise."""
+    assert jrh._purchased_key_section(_job([("11650-01-01M", "SIDE PANEL")])) == ""
+
+
+def test_the_section_is_wired_into_the_report_and_not_merely_defined():
+    body = ast.unparse(next(n for n in ast.walk(ast.parse(
+        Path(jrh.__file__).read_text(encoding="utf-8")))
+        if isinstance(n, ast.FunctionDef) and n.name == "_render_verdict"))
+    assert "_purchased_key_section" in body, \
+        "the section is defined and never called -- built is not wired, again"
+
+
 if __name__ == "__main__":                                            # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
