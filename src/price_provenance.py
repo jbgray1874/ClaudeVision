@@ -145,6 +145,82 @@ SOURCE_CLASS_RULES = {
     UNPRICED:         (True,  False, False),
 }
 
+
+# ── WHY A LINE CARRIES NO PRICE ─────────────────────────────────────────────────────
+#
+# The other half of the ledger, and the half that was missing. A line with a price says
+# where the price came from; a line WITHOUT one said nothing at all, so every unpriced
+# line looked identical -- and they are not remotely the same thing. On 11650-05 five BOM
+# lines carried no price for four different reasons, and only one of them was a reason an
+# estimator should have to act on.
+#
+# THE CATEGORY SAYS WHOSE PROBLEM IT IS. That is the whole point. "Not priced" hides the
+# difference between work the estimator must supply and work the engine is failing to
+# charge for, and the second silently under-quotes every job it touches.
+NOT_MEASURED = "not_measured"        # the datum is absent. The estimator supplies it.
+POLICY_WITHHELD = "policy_withheld"  # a figure exists and we deliberately do not use it.
+NO_VOCABULARY = "no_vocabulary"      # no operation or rate exists for this work. OURS.
+MISREAD = "misread"                  # the datum exists and was read wrong. OURS.
+ORDER_LEVEL = "order_level"          # not a per-unit price by design (haulage, packaging).
+NOT_APPLICABLE = "not_applicable"    # correctly nil -- an assembly parent, a mirror.
+UNEXPLAINED = "unexplained"          # nothing recorded. The one that must never survive.
+
+# Who has to act. An estimator scanning a sheet needs to know which blanks are theirs.
+UNPRICED_OWNER = {
+    NOT_MEASURED:    "estimator",
+    POLICY_WITHHELD: "estimator",
+    ORDER_LEVEL:     "estimator",
+    NO_VOCABULARY:   "engine",
+    MISREAD:         "engine",
+    NOT_APPLICABLE:  "nobody",
+    UNEXPLAINED:     "engine",
+}
+
+# Categories that mean the job is being UNDER-CHARGED rather than merely incomplete. These
+# are the ones worth a person's time: the work is real, the customer will be invoiced for
+# it, and nothing on the sheet is asking for it.
+UNDERCHARGING_REASONS = frozenset({NO_VOCABULARY, MISREAD, UNEXPLAINED})
+
+_UNPRICED_REASON_TEXT = {
+    NOT_MEASURED: "the dimension or quantity it needs was never measured",
+    POLICY_WITHHELD: "a figure exists but is not reproducible enough to stand behind",
+    NO_VOCABULARY: "this engine has no operation or rate for this work",
+    MISREAD: "the data exists on the drawing and was read incorrectly",
+    ORDER_LEVEL: "it is an order-level cost, not a per-unit price",
+    NOT_APPLICABLE: "there is correctly nothing to charge here",
+    UNEXPLAINED: "NO REASON WAS RECORDED",
+}
+
+
+def unpriced_reason(category: Any, detail: Any = "") -> Dict[str, Any]:
+    """A structured, readable statement of why a line carries no price.
+
+    Every unpriced line must carry one. A blank on an estimate reads as "free", and the
+    only defence against that is a sentence saying which kind of nothing it is.
+    """
+    key = str(category or "").strip().lower()
+    if key not in _UNPRICED_REASON_TEXT:
+        key = UNEXPLAINED
+    return {
+        "schema": "unpriced_reason.v1",
+        "category": key,
+        "owner": UNPRICED_OWNER.get(key, "engine"),
+        "undercharging": key in UNDERCHARGING_REASONS,
+        "why": _UNPRICED_REASON_TEXT[key],
+        "detail": str(detail or ""),
+    }
+
+
+def describe_unpriced(category: Any, detail: Any = "") -> str:
+    """One line for a sheet cell or a report row."""
+    r = unpriced_reason(category, detail)
+    who = {"estimator": "ESTIMATOR TO PRICE",
+           "engine": "ENGINE GAP - THIS JOB IS UNDER-CHARGED",
+           "nobody": "nothing to charge"}[r["owner"]]
+    tail = f" ({r['detail']})" if r["detail"] else ""
+    return f"NOT PRICED - {r['why']}{tail}. {who}."
+
+
 # Internal, agreed prices. These are SDI's own record of what a thing costs under agreement.
 _CONTRACT_SOURCES = ("udef", "sqlserver", "access", "spreadsheet", "bought_in_parts",
                      "pma_tbl", "labour_rates", "material_prices")

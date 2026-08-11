@@ -2320,7 +2320,75 @@ def check_a_finish_field_holds_drawing_text(summary: Any) -> List[Dict[str, Any]
         count=len(hits), parts=hits[:20])]
 
 
+
+def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
+    """A line with no price must say which kind of nothing it is.
+
+    A price says where it came from. A BLANK said nothing at all, so every unpriced line
+    looked identical -- and on 11650-05 five BOM lines carried no price for four different
+    reasons. Only one of those was a reason an estimator should have to act on.
+
+    THE CATEGORY SAYS WHOSE PROBLEM IT IS, and that is the point. "Not priced" hides the
+    difference between work the estimator must supply (a dimension nobody measured) and
+    work the ENGINE is failing to charge for (a vinyl finish it has no rate for). The
+    second silently under-quotes every job it touches, and looks exactly like the first.
+
+    Two findings, deliberately separate:
+      * lines with NO recorded reason -- a blank that reads as free, which is the failure
+        this check exists to make impossible;
+      * lines whose reason is an ENGINE gap -- real work, really invoiced, that nothing on
+        the sheet is asking anybody to price.
+    """
+    try:
+        rows = ((summary.get("estimate_summary") or {}).get("final_estimate") or {}
+                ).get("material_rows") or []
+    except AttributeError:
+        return [_violation("unpriced_line_says_why", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    if not rows:
+        return []
+
+    silent, gaps = [], []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        price = row.get("price_gbp", row.get("price"))
+        try:
+            has_price = price is not None and float(price) != 0
+        except (TypeError, ValueError):
+            has_price = False
+        if has_price:
+            continue
+        reason = row.get("unpriced_reason")
+        code = str(row.get("part_number") or row.get("code") or "?")
+        if not isinstance(reason, dict) or not reason.get("category") or \
+                reason.get("category") == price_provenance.UNEXPLAINED:
+            silent.append(code)
+        elif reason.get("undercharging"):
+            gaps.append(f"{code} ({reason.get('why')})")
+
+    out = []
+    if silent:
+        out.append(_violation(
+            "unpriced_line_says_why", WARNING,
+            f"{len(silent)} line(s) carry no price and no reason: {', '.join(silent[:6])}. "
+            f"A blank on an estimate reads as free. Every unpriced line must say which kind "
+            f"of nothing it is -- not measured, withheld by policy, no rate in the engine, "
+            f"misread, or correctly nil -- because those need different people to act.",
+            count=len(silent), lines=silent[:20]))
+    if gaps:
+        out.append(_violation(
+            "unpriced_because_the_engine_cannot", WARNING,
+            f"{len(gaps)} line(s) are unpriced because the ENGINE has no way to price them, "
+            f"not because anything is missing from the drawings: {'; '.join(gaps[:4])}. "
+            f"This work will be done and invoiced. THE JOB IS UNDER-CHARGED BY THIS AMOUNT, "
+            f"and no estimator input can fix it -- it needs a rate in the engine.",
+            count=len(gaps), lines=gaps[:20]))
+    return out
+
+
 CHECKS = (
+    check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,
     check_schemas,
