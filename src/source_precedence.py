@@ -39,6 +39,7 @@ from typing import Any, Dict, Optional
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
+    "SOURCE_DISPLAY_NAME", "MEASURED_SOURCES", "display_name", "was_measured",
 ]
 
 
@@ -142,6 +143,61 @@ SOURCE_RANK: Dict[str, int] = {
 
 # Where a datum's source is recorded. Falling back to a per-field convention
 # ("<field>_source") keeps this usable for fields that have no dedicated key yet.
+# ── WHERE A DECISION WAS TAKEN, IN THE ESTIMATOR'S WORDS ────────────────────────────
+# The rank keys above are internal join fields. An estimator reading a report needs the
+# thing that actually decided it — the model, the flat pattern, the title block, the AI —
+# and needs to be able to tell a measurement from a language model at a glance.
+#
+# ONE OWNER. job_decision_report kept its own eight-entry version of this dict, which is
+# how a source the waterfall knows about ("mirror_of_measured", "pdf_overall_dims") renders
+# as a blank in the one document written to explain the decision. Anything not named here
+# falls back to the raw key rather than to silence — an unfamiliar source is still a source,
+# and printing nothing is the failure this exists to prevent.
+SOURCE_DISPLAY_NAME: Dict[str, str] = {
+    "estimator_confirmed":    "an estimator",
+    "knowledge_base":         "SDI's knowledge base",
+    "solidworks_api":         "the SolidWorks model",
+    "solidworks_flat_pattern": "the SolidWorks flat pattern",
+    "dxf":                    "the DXF",
+    "dxf_flat_pattern":       "the DXF flat pattern",
+    "mirror_of_measured":     "the measured opposite hand",
+    "drawing_deterministic":  "the drawing",
+    "title_block":            "the title block",
+    "pdf_overall_dims":       "the drawing's overall dimensions",
+    "bom_tree":               "the bill of materials",
+    "override_rule":          "an SDI override rule",
+    "llm_extract":            "Grok (xAI)",
+    "llm_full_extract":       "Grok (xAI)",
+    "llm_full_job":           "Grok (xAI)",
+    "inference":              "engine inference",
+    "geometry_inference":     "engine inference from geometry",
+    "compiler_default":       "an engine default",
+    "unknown":                "an unrecorded source",
+}
+
+# Sources that MEASURED the part rather than reasoned about it. Reports mark these
+# differently because the distinction is the whole point of the waterfall: a number off a
+# model can be held against the model, and a number off a language model cannot.
+MEASURED_SOURCES = frozenset({
+    "estimator_confirmed", "knowledge_base", "solidworks_api", "solidworks_flat_pattern",
+    "dxf", "dxf_flat_pattern", "mirror_of_measured", "drawing_deterministic",
+    "title_block", "pdf_overall_dims", "bom_tree",
+})
+
+
+def display_name(source: Any) -> str:
+    """What to print for `source`. Never empty for a non-empty source."""
+    key = str(source or "").strip().lower()
+    if not key:
+        return ""
+    return SOURCE_DISPLAY_NAME.get(key, key.replace("_", " "))
+
+
+def was_measured(source: Any) -> bool:
+    """True when this source read the part rather than reasoned about it."""
+    return str(source or "").strip().lower() in MEASURED_SOURCES
+
+
 _SOURCE_FIELDS = {
     "normalized_material": "material_source",
     "quantity": "quantity_source",

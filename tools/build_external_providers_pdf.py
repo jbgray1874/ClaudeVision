@@ -165,15 +165,6 @@ A(table([
                      "the Estimating Intelligence codebase carried out on the same basis"],
     ["Date", "10 August 2026"],
 ], [30 * mm, CONTENT_W - 30 * mm], header=False, zebra=True))
-A(Spacer(1, 9 * mm))
-A(callout("Two deliberate omissions", [
-    "This document contains <b>no credential values</b> and <b>no repository names, "
-    "hosting account names or URLs</b>. Both are available separately to whoever needs "
-    "them. Items marked <b>[to confirm]</b> are outside what a code review can establish "
-    "— subscription tiers, signed agreements, repository visibility settings, IT "
-    "access arrangements and licence terms — and must be sourced from commercial and "
-    "IT records before being presented as confirmed.",
-], tone="ok"))
 A(PageBreak())
 
 # ── 1. EXECUTIVE SUMMARY ────────────────────────────────────────────────────────────

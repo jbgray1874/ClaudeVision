@@ -21,6 +21,18 @@ from typing import Dict, Any, List, Optional
 
 from geometry_inference import _has_geometry as _has_real_dxf_geometry
 
+# WHERE A DECISION WAS TAKEN, named by the module that owns the ranks. This report exists
+# to explain the costing; a source it cannot name is a decision it cannot explain.
+try:
+    from source_precedence import display_name as _display_source, was_measured as _was_measured
+except Exception:                                                   # pragma: no cover
+    def _display_source(s):                                         # type: ignore[misc]
+        return str(s or "").replace("_", " ")
+
+    def _was_measured(s):                                           # type: ignore[misc]
+        return bool(s) and str(s) not in ("llm_extract", "llm_full_extract",
+                                          "inference", "geometry_inference")
+
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -290,16 +302,12 @@ def _thk_source_explanation(part: Dict) -> str:
             _src = str(source_of(part, "normalized_thickness_mm") or "")
         except Exception:
             _src = ""
-        _pretty = {
-            "solidworks_api": "the SolidWorks model",
-            "solidworks_flat_pattern": "the SolidWorks flat pattern",
-            "dxf": "the DXF", "dxf_flat_pattern": "the DXF flat pattern",
-            "drawing_deterministic": "the drawing", "title_block": "the title block",
-            "bom_tree": "the BOM", "estimator_confirmed": "an estimator",
-            "knowledge_base": "the knowledge base",
-        }.get(_src, _src)
-        _mark = "✅" if _src and _src not in ("llm_extract", "inference",
-                                             "geometry_inference", "") else "⚡"
+        # NAMED BY THE MODULE THAT OWNS THE RANKS, not by a copy kept here. This was a
+        # private eight-entry table, so a source the waterfall knows about but the table
+        # did not — mirror_of_measured, pdf_overall_dims, override_rule — rendered as a
+        # bare internal key in the one document written to explain the decision.
+        _pretty = _display_source(_src)
+        _mark = "✅" if _was_measured(_src) else "⚡"
         return (f"{_mark} {_costed:g}mm — the thickness this job was COSTED at"
                 + (f", from {_pretty}" if _pretty else " (source not recorded)"))
 

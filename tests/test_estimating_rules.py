@@ -9826,14 +9826,43 @@ def test_route_arbitration_is_ranked_but_metadata_is_gap_filled():
     eq(_decision.participants, ["02M", "03M"],
        "participants describe work without multiplying it")
 
+    # EVERY MATTER IS RESOLVED. This used to assert UNVERIFIED on an equal-rank
+    # disagreement. That was the absence of a decision, not a decision: nothing prices an
+    # UNVERIFIED operation, so an unsettled tie left the shop doing work nobody charged
+    # for. The arbiter has more to go on than any downstream reader, so it decides — and
+    # carries the disagreement with it so a report can say "resolved over an objection".
     _yes = make_claim("folding", REQUIRED, "dxf", "04M", "04M", scope="part")
     _no = make_claim("folding", RULED_OUT, "dxf", "04M", "04M", scope="part",
                      reason="zero measured bend lines")
     _conflict = arbitrate_event("decision:fold-04m", [_yes, _no])
-    eq(_conflict.status, UNVERIFIED, "equal-rank disagreement must be explicit")
-    eq(_conflict.qty_per_unit, None, "unverified work receives no invented quantity")
+    ok(_conflict.status in (REQUIRED, RULED_OUT),
+       "an equal-rank disagreement must be SETTLED, not left as an absence")
+    ok(_conflict.contested, "a resolved tie must still say it was a tie")
+    ok(_conflict.losing_statuses, "what the other source claimed must survive")
     ok(any(c.get("field") == "status" for c in _conflict.conflicts),
        "the conflict remains auditable")
+    ok(any(c.get("resolution") for c in _conflict.conflicts),
+       "the record must say HOW it was settled, not merely that it was")
+    ok("resolved over a disagreement" in (_conflict.reason or ""),
+       "the reason an estimator reads must name the disagreement")
+
+    # REPRODUCIBLE. The same claims must settle the same way twice, or the parallel run's
+    # 'same code, same pack, same answer' property dies at the arbiter.
+    eq(arbitrate_event("decision:fold-04m", [_no, _yes]).status, _conflict.status,
+       "the resolution must not depend on the order the claims arrived in")
+
+    # THE TIEBREAK IS NOT A COIN FLIP. Between two equal sources, the claim that quotes
+    # the drawing wins — it is the only one that can be held against the drawing.
+    _bare = make_claim("folding", REQUIRED, "dxf", "05M", "05M", scope="part")
+    _quoted = make_claim("folding", RULED_OUT, "dxf", "05M", "05M", scope="part",
+                         evidence="NO BEND LINES ON FLAT PATTERN",
+                         evidence_where="sheet 2 note")
+    eq(arbitrate_event("decision:fold-05m", [_bare, _quoted]).status, RULED_OUT,
+       "the claim carrying the drawing's own words must win an equal-rank tie")
+
+    # AND WHERE IT WAS DECIDED, in the estimator's words rather than ours.
+    eq(_decision.decided_by, "the SolidWorks model",
+       "a decision must name where it was taken, readably")
 
     _weak_yes = make_claim("folding", REQUIRED, "inference", "04M", "04M")
     _measured_no = make_claim("folding", RULED_OUT, "dxf", "04M", "04M",

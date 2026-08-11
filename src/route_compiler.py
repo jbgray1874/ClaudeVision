@@ -211,6 +211,23 @@ class OperationDecision:
     # reasoning it from the job. False is not a fault — it is a fact an estimator is
     # entitled to see, and what check_uncorroborated_route_operations weighs.
     corroborated: bool = True
+    # ── EVERY MATTER IS RESOLVED ────────────────────────────────────────────────────
+    # A disagreement between two equally-ranked sources used to leave the operation
+    # UNVERIFIED, which is not a decision — it is the absence of one, handed downstream to
+    # a reader that has less to go on than the arbiter did. Nothing costs an UNVERIFIED
+    # operation, so an unsettled tie silently priced as zero.
+    #
+    # So the tie is now BROKEN and the operation carries a status. What must not be lost is
+    # that it WAS a tie: `contested` says a real disagreement was resolved rather than
+    # absent, `losing_statuses` says what the other side claimed, and `conflicts` still
+    # carries the full record. Resolved is not the same as unanimous, and the report has to
+    # be able to tell them apart.
+    contested: bool = False
+    losing_statuses: List[str] = field(default_factory=list)
+    # WHERE THE DECISION WAS TAKEN, in the estimator's vocabulary rather than ours:
+    # "the SolidWorks model", "the DXF flat pattern", "Grok (xAI)". `source` is the
+    # internal key and stays the join field; this is what a person reads.
+    decided_by: str = ""
 
 
 def make_claim(
@@ -1444,6 +1461,42 @@ def _ruling_source(part: Mapping[str, Any], operation: str, reason: str) -> str:
     return "unknown"
 
 
+def _resolution_key(claim: OperationClaim):
+    """The order that settles a tie between equally-ranked claims.
+
+    ONE ORDERING, USED BY STATUS AND BY EVERY METADATA FIELD, so the decision and its
+    metadata cannot be settled by different rules and end up describing different claims.
+
+        1. confidence            — the claim's own stated certainty
+        2. quotes the drawing    — a claim carrying the sheet's own words can be held
+                                   AGAINST the sheet; one that does not cannot be argued
+                                   with at all. Between two equal sources this is the only
+                                   thing that makes one more checkable than the other.
+        3. claim_id              — not decoration. It is what makes the same job compile to
+                                   the same route twice, and reproducibility is the property
+                                   the whole parallel run rests on. Never remove it.
+    """
+    return (
+        claim.confidence if claim.confidence is not None else -1.0,
+        1 if str(getattr(claim, "evidence", "") or "").strip() else 0,
+        claim.claim_id,
+    )
+
+
+def _display_source(source: Any) -> str:
+    """WHERE THE DECISION WAS TAKEN, in the estimator's words — "the SolidWorks model",
+    "the DXF flat pattern", "Grok (xAI)".
+
+    Read from source_precedence, which owns the ranks, so the name and the rank cannot
+    disagree about what a source is. Best-effort: a display name is never worth failing a
+    compile over, and the raw key is a usable answer if the import is unavailable."""
+    try:
+        from source_precedence import display_name
+        return display_name(source)
+    except Exception:
+        return str(source or "").replace("_", " ")
+
+
 def _metadata_value(claim: OperationClaim, field_name: str) -> Any:
     return getattr(claim, field_name)
 
@@ -1473,23 +1526,25 @@ def _pick_metadata(
         _normalise_metadata_value(field_name, item[1])
         for item in strongest
     }
+    conflict = None
     if len(values) > 1:
-        return None, None, {
+        # RESOLVED, NOT ABANDONED. Returning None here left the field absent, and an absent
+        # qty_per_unit then took the compiler's default of 1.0 — so a disagreement about
+        # how many times an operation happens was settled by a constant that had read
+        # neither claim. Taking the strongest claim's value is worse than unanimity and
+        # better than a default, and the disagreement still travels with the decision.
+        conflict = {
             "field": field_name,
             "rank": best_rank,
             "values": [repr(value) for value in sorted(values, key=repr)],
             "sources": sorted({item[0].source for item in strongest}),
+            "resolution": "highest confidence at the top rank; claim_id breaks a "
+                          "confidence tie so the job compiles the same way twice",
         }
-    winner, value = max(
-        strongest,
-        key=lambda item: (
-            item[0].confidence if item[0].confidence is not None else -1.0,
-            item[0].claim_id,
-        ),
-    )
+    winner, value = max(strongest, key=lambda item: _resolution_key(item[0]))
     if field_name == "participants":
         value = list(value)
-    return value, winner.source, None
+    return value, winner.source, conflict
 
 
 def arbitrate_event(
@@ -1507,33 +1562,43 @@ def arbitrate_event(
     statuses = {claim.status for claim in strongest_status_claims}
     conflicts: List[Dict[str, Any]] = []
 
+    # ── EVERY MATTER IS RESOLVED ────────────────────────────────────────────────────
+    # A tie between two equally-ranked sources used to yield UNVERIFIED. That is not a
+    # decision, it is the absence of one — and it was handed to a reader with less to go
+    # on than the arbiter had. Nothing prices an UNVERIFIED operation, so an unsettled
+    # disagreement left the shop doing work nobody charged for.
+    #
+    # So the tie is broken here, deterministically: highest confidence, then claim_id. The
+    # claim_id fallback is not arbitrary decoration — it is what makes the same job compile
+    # to the same route twice, and reproducibility is the property the whole parallel run
+    # rests on.
+    #
+    # WHAT MUST NOT BE LOST IS THAT IT WAS A TIE. The conflict record, `contested` and
+    # `losing_statuses` all survive, so a report can say "resolved, and here is what the
+    # other source claimed". Resolved is not unanimous, and the two must stay tellable
+    # apart — a decision taken over an objection is exactly the one an estimator should
+    # look at first.
+    contested = False
+    losing_statuses: List[str] = []
     if len(statuses) > 1:
-        status = UNVERIFIED
+        contested = True
         conflicts.append({
             "field": "status",
             "rank": strongest_rank,
             "values": sorted(statuses),
             "sources": sorted({claim.source for claim in strongest_status_claims}),
+            "resolution": "highest confidence at the top rank; claim_id breaks a "
+                          "confidence tie so the job compiles the same way twice",
         })
-        status_winner = max(
-            strongest_status_claims,
-            key=lambda claim: (
-                claim.confidence if claim.confidence is not None else -1.0,
-                claim.claim_id,
-            ),
-        )
+        status_winner = max(strongest_status_claims, key=_resolution_key)
+        status = status_winner.status
+        losing_statuses = sorted(statuses - {status})
     else:
         status = next(iter(statuses))
         same_status = [
             claim for claim in strongest_status_claims if claim.status == status
         ]
-        status_winner = max(
-            same_status,
-            key=lambda claim: (
-                claim.confidence if claim.confidence is not None else -1.0,
-                claim.claim_id,
-            ),
-        )
+        status_winner = max(same_status, key=_resolution_key)
 
     metadata: Dict[str, Any] = {}
     provenance: Dict[str, str] = {}
@@ -1542,13 +1607,16 @@ def arbitrate_event(
         value, source, conflict = _pick_metadata(claims, field_name)
         if conflict:
             conflicts.append(conflict)
-            continue
+            contested = True
         metadata[field_name] = value
         if source:
             provenance[field_name] = source
 
-    if conflicts:
-        status = UNVERIFIED
+    # A CONTESTED FIELD NO LONGER BLANKS THE STATUS. It used to: any metadata disagreement
+    # — a sequence number, a participant list — demoted the whole operation to UNVERIFIED
+    # and it stopped being priced. An argument about WHEN an operation happens is not
+    # doubt about WHETHER it happens, and answering the second question with the first is
+    # how a real operation came off the sheet over a disagreement about its ordering.
 
     # ── WHETHER ANYTHING READ THIS, OR WE ONLY REASONED IT ──────────────────────────
     #
@@ -1582,7 +1650,9 @@ def arbitrate_event(
     operation = claims[0].operation
     reason = status_winner.reason
     if conflicts:
-        reason = "conflicting claims require estimator resolution"
+        _fields = sorted({str(c.get("field") or "?") for c in conflicts})
+        reason = (f"{reason or status_winner.status} — resolved over a disagreement on "
+                  f"{', '.join(_fields)}; see conflicts")
 
     # THE EVIDENCE OF THE STRONGEST CLAIM THAT HAS ANY. A decision assembled from several
     # claims should quote the drawing where any of them could, not only where the winner
@@ -1611,6 +1681,9 @@ def arbitrate_event(
         evidence=_ev,
         evidence_where=_ev_where,
         corroborated=_corroborated,
+        contested=contested,
+        losing_statuses=losing_statuses,
+        decided_by=_display_source(status_winner.source),
         confidence=status_winner.confidence,
         reason=reason,
         field_provenance=provenance,
