@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 # pricing service so a writer and a checker cannot reach different verdicts about the same
 # source — which is how an AI market estimate came to be stamped, and read, as "external".
 # Dependency-free by design: no config, no database, no connectors.
+import re
 import price_provenance
 
 SCHEMA = "invariants.v1"
@@ -2172,6 +2173,35 @@ _FINISH_PROCESS_WORDS = (
 # process-word requirement is what does the work.
 
 
+
+# A FINISH FIELD HOLDING RAW DRAWING TEXT IS A FAILED READ, NOT A FINISH.
+#
+# 11650-04-03A's finish came back as "TO MATCH THE MAIN PANEL A A B B MAKE AS HANDED PAIR
+# FILM SIDE DENOTES WHICH HAND C C 4 X 6.2 THRU 30 211 164 D D E E". That is the drawing's
+# text, scraped whole: a note, the view labels down both margins, a hole callout, and three
+# bare dimensions. It is not a statement of finish and must not be read as one.
+#
+# It matters twice over. It made check_a_stated_finish_is_costed fire on "FILM" -- from
+# "FILM SIDE DENOTES WHICH HAND", which is about the protective film's orientation -- and a
+# check that cries wolf on garbled text is a check estimators learn to ignore. And the
+# numbers in it are the more interesting half: see check_a_finish_field_holds_drawing_text.
+_DIM_CALLOUT = re.compile(r"\d+\s*[Xx]\s*\d|\bTHRU\b|\bR\d|\bDIA\b|\u00f8")
+_VIEW_LABEL = re.compile(r"(?:\b[A-E]\b[\s]+){4,}")
+
+
+def _looks_like_raw_drawing_text(text: str) -> bool:
+    """True when a finish field holds scraped drawing text rather than a finish."""
+    t = str(text or "").upper()
+    if not t.strip():
+        return False
+    if _DIM_CALLOUT.search(t):
+        return True
+    if _VIEW_LABEL.search(t):
+        return True
+    # Three or more bare numbers in a finish field is a dimension list, not a finish.
+    return len(re.findall(r"\b\d{2,4}\b", t)) >= 3
+
+
 def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     """A finish the drawing states and the sheet charges nothing for.
 
@@ -2220,6 +2250,10 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
                                  # which then reads as the finish being called None
         if not text.strip():
             continue
+        if _looks_like_raw_drawing_text(text):
+            continue        # not a finish statement; check_a_finish_field_holds_drawing_text
+                            # reports it, and claiming an uncosted finish here would be a
+                            # warning raised on a word that is not a finish at all
         named = [w for w in _FINISH_PROCESS_WORDS if w in text]
         if named and not finish_is_costed:
             uncosted.append({"part_number": part.get("part_number"),
@@ -2237,7 +2271,57 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         count=len(uncosted), parts=uncosted[:20])]
 
 
+
+def check_a_finish_field_holds_drawing_text(summary: Any) -> List[Dict[str, Any]]:
+    """A finish field full of drawing text means the finish was never read -- and the
+    numbers in it are usually the part's own dimensions.
+
+    11650-04-03A is the case. Its finish reads "... FILM SIDE DENOTES WHICH HAND C C
+    4 X 6.2 THRU 30 211 164 D D E E" -- a note, view labels, a hole callout and three bare
+    numbers. The same job carries DIMS REQUIRED on that panel because the blank reader took
+    6.2 x 4 (the hole) and correctly rejected it as a feature dimension.
+
+    So the panel is marked unmeasurable while 211 and 164 sit in a field two lines away.
+    That is not missing data, it is MISREAD data, and the difference decides what to do
+    about it: an unmeasurable part is for the estimator, a misread one is for us. This
+    check exists to stop the first being reported when it is really the second.
+
+    IT DOES NOT USE THE NUMBERS. Reading a blank size out of scraped text is exactly the
+    guess that put 6.2 x 4 on the sheet in the first place. It reports that a readable
+    source appears to exist so a person can look, and nothing more.
+    """
+    try:
+        parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    except AttributeError:
+        return [_violation("finish_field_holds_drawing_text", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    hits = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = " ".join(str(x) for x in (
+            part.get("normalized_finish"), part.get("surface_finish")) if x)
+        if not _looks_like_raw_drawing_text(text):
+            continue
+        numbers = [n for n in re.findall(r"\b\d{2,4}\b", text.upper())]
+        hits.append({"part_number": part.get("part_number"),
+                     "text": text[:90], "numbers_seen": numbers[:6]})
+    if not hits:
+        return []
+    listed = "; ".join(f"{h['part_number']} (numbers seen: {', '.join(h['numbers_seen'])})"
+                       for h in hits[:4])
+    return [_violation(
+        "finish_field_holds_drawing_text", WARNING,
+        f"{len(hits)} part(s) have a finish field holding raw drawing text rather than a "
+        f"finish: {listed}. The finish was not read on those parts. The numbers in that "
+        f"text are frequently the part's own dimensions -- if the same part is marked DIMS "
+        f"REQUIRED, the size is probably MISREAD rather than missing, and is worth a look "
+        f"before it is handed back to the estimator.",
+        count=len(hits), parts=hits[:20])]
+
+
 CHECKS = (
+    check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,
     check_schemas,
     check_workbook_adapters_read_everything,

@@ -118,3 +118,90 @@ def test_powder_specifically_is_still_ruled_out(material):
 
 if __name__ == "__main__":                                          # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── a finish field full of drawing text is a FAILED READ, not a finish ──────────────
+# THE FALSE POSITIVE MY OWN CHECK SHIPPED WITH. 11650-04-03A's finish came back as
+# "TO MATCH THE MAIN PANEL A A B B MAKE AS HANDED PAIR FILM SIDE DENOTES WHICH HAND C C
+# 4 X 6.2 THRU 30 211 164 D D E E" -- the drawing's text scraped whole. The uncosted-finish
+# check matched FILM, from "FILM SIDE DENOTES WHICH HAND", which is about the protective
+# film's orientation. A check that cries wolf on garbled text is one estimators learn to
+# scroll past, which would have cost the real vinyl finding on the part next to it.
+from invariants import (check_a_finish_field_holds_drawing_text as drawing_text,  # noqa: E402
+                        _looks_like_raw_drawing_text as is_noise)
+
+_GARBLED = ("TO MATCH THE MAIN PANEL A A B B MAKE AS HANDED PAIR FILM SIDE DENOTES "
+            "WHICH HAND C C 4 X 6.2 THRU 30 211 164 D D E E")
+
+
+def test_garbled_drawing_text_does_not_raise_an_uncosted_finish_warning():
+    out = check(_job(_GARBLED, pn="11650-04-03A"))
+    assert out == [], "the uncosted-finish check fired on a note about protective film"
+
+
+def test_a_real_finish_beside_a_garbled_one_is_still_reported():
+    """The garbled row must not suppress its neighbour. Both panels are on one job and only
+    one of them states a finish."""
+    job = {"manufacturing_writeup": {"parts": [
+            {"part_number": "11650-04-03A", "normalized_finish": _GARBLED},
+            {"part_number": "11650-04-01A",
+             "normalized_finish": "1/2 INCH REEDED VINYL + UV OR CLEAR VINYL"}]},
+           "estimate_summary": {"workbook_route_rows": [{"operation": "Laser (Acrylic)"}]}}
+    out = check(job)
+    assert len(out) == 1
+    assert "11650-04-01A" in out[0]["message"]
+    assert "11650-04-03A" not in out[0]["message"]
+
+
+@pytest.mark.parametrize("text", [
+    _GARBLED,
+    "4 X 6.2 THRU ALL",
+    "R35 TYP",
+    "A A B B C C D D E E",
+    "30 211 164",
+    "2 x 4.3 THRU ALL 9 X 90 DEG",
+])
+def test_scraped_drawing_text_is_recognised_as_noise(text):
+    assert is_noise(text)
+
+
+@pytest.mark.parametrize("text", [
+    "POWDER COATED - FINE TEXTURE", "RAW", "1/2 INCH REEDED VINYL + UV OR CLEAR VINYL",
+    "ANTHRACITE GREY RAL 7016", "SEE ASSEMBLY DRAWING", "DIAMOND POLISHED EDGES",
+    "2 PACK PAINT", "LAMINATED BOTH FACES",
+])
+def test_a_real_finish_statement_is_not_mistaken_for_noise(text):
+    """The expensive direction. Over-broad noise detection would silence every genuine
+    finish, including the RAL number that is the most precise finish a drawing carries."""
+    assert not is_noise(text)
+
+
+def test_the_misread_is_reported_with_the_numbers_it_found():
+    """The valuable half. The panel is marked DIMS REQUIRED while 211 and 164 sit in a
+    field two lines away -- that is MISREAD data, not missing data, and the difference
+    decides whether it is ours to fix or the estimator's."""
+    out = drawing_text({"manufacturing_writeup": {"parts": [
+        {"part_number": "11650-04-03A", "normalized_finish": _GARBLED}]}})
+    assert len(out) == 1 and out[0]["severity"] == WARNING
+    assert "211" in out[0]["message"] and "164" in out[0]["message"]
+    assert "MISREAD rather than missing" in out[0]["message"]
+
+
+def test_the_misread_check_does_not_use_the_numbers_it_finds():
+    """Reading a blank size out of scraped text is exactly the guess that put 6.2 x 4 on
+    the sheet in the first place. This reports that a readable source appears to exist."""
+    src = (ROOT / "src" / "invariants.py").read_text(encoding="utf-8")
+    body = src[src.index("def check_a_finish_field_holds_drawing_text"):]
+    body = body[:body.index("\ndef ")]
+    for writer in ("blank_length_mm", "blank_width_mm", "apply_field", "normalized_geometry"):
+        assert writer not in body, f"the check is writing {writer} from scraped text"
+
+
+def test_a_clean_job_reports_nothing():
+    assert drawing_text({"manufacturing_writeup": {"parts": [
+        {"part_number": "A", "normalized_finish": "POWDER COATED"}]}}) == []
+    assert drawing_text({}) == []
+
+
+def test_the_misread_check_is_registered():
+    assert drawing_text in invariants.CHECKS
