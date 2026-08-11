@@ -268,3 +268,54 @@ def test_required_is_deliberately_not_preferred_over_ruled_out():
                                _claim(RULED_OUT, "dxf_flat_pattern")])  # priority 2
     assert d.status == RULED_OUT, \
         "status is being used as a tiebreak -- that is a bias toward charging"
+
+
+# ── which key settled it ────────────────────────────────────────────────────────────
+# THE AUDIT TRAIL FOR THE EVERY-MATTER-RESOLVED RULE. "Resolved" alone does not say whether
+# the drawing's own words decided it or a reproducibility backstop did, and those deserve
+# very different amounts of trust from an estimator tuning the engine.
+#
+# This test exists because a mutation showed the gap: the HTML report's own tests fed
+# settled_by_key in as fixture data, so blanking it in the compiler broke nothing. A field
+# asserted only where it is handed to the renderer is not asserted at all.
+def test_a_contested_decision_names_the_key_that_settled_it():
+    d = arbitrate_event("d1", [_claim(REQUIRED, "dxf"), _claim(RULED_OUT, "dxf")])
+    assert d.contested and d.settled_by_key, \
+        "a contested decision does not say which key settled it"
+    assert d.settled_by_key in rc.RESOLUTION_KEYS
+    conflict = next(c for c in d.conflicts if c.get("field") == "status")
+    assert conflict.get("settled_by") == d.settled_by_key, \
+        "the decision and its conflict record disagree about how it was settled"
+
+
+def test_an_uncontested_decision_names_no_key():
+    """The field has to mean something. A key on every decision would say nothing about
+    which ones the arbiter actually had to choose in."""
+    d = arbitrate_event("d1", [_claim(REQUIRED, "dxf"), _claim(REQUIRED, "dxf")])
+    assert d.settled_by_key == ""
+
+
+@pytest.mark.parametrize("winner,loser,expected", [
+    # separated by the source itself
+    (_claim(REQUIRED, "dxf_flat_pattern"), _claim(RULED_OUT, "dxf"),
+     "within-rank source priority"),
+    # same source, separated by stated certainty
+    (_claim(REQUIRED, "dxf", confidence="high"), _claim(RULED_OUT, "dxf"),
+     "confidence"),
+    # same source, same certainty, separated by the drawing's own words
+    (_claim(REQUIRED, "dxf", evidence="4 BEND LINES"), _claim(RULED_OUT, "dxf"),
+     "quotes the drawing"),
+])
+def test_the_named_key_is_the_one_that_actually_separated_them(winner, loser, expected):
+    d = arbitrate_event("d1", [loser, winner])
+    assert d.settled_by_key == expected, \
+        f"reported {d.settled_by_key!r}, but {expected!r} is what separated the claims"
+
+
+def test_a_pure_coin_flip_admits_to_being_one():
+    """Two identical claims differing only in status are settled by claim_id, and the
+    report must say so rather than implying evidence decided it. This is the case an
+    estimator most needs to see, because it means the engine had nothing to go on."""
+    d = arbitrate_event("d1", [_claim(REQUIRED, "dxf"), _claim(RULED_OUT, "dxf")])
+    assert "claim id" in d.settled_by_key, \
+        "a decision with no distinguishing evidence is claiming a reason it did not have"

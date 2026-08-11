@@ -445,16 +445,15 @@ A(callout("Why this is the top item", [
     "charged, to whom, at what margin. In the hands of a competitor or a client it is "
     "directly damaging, and the client side of it may engage the same confidentiality "
     "clauses as design data. The estimator names make it personal data as well.",
-    "<b>Position at 10 August 2026: the extract has been removed from source control</b> "
-    "and the ignore-rule exception that had re-admitted it deleted. Nothing in the engine "
-    "read it — it was an intermediate staging file between the internal spreadsheets and "
-    "the database — so nothing broke, and the working copies remain on the internal "
-    "machine where the system of record already lives.",
-    "<b>This does not remove it from the repository’s HISTORY, which is where the exposure "
-    "actually sits.</b> Anyone with read access can still recover it from any commit made "
-    "since 16 July 2026. Closing that requires a history rewrite and a force-push, and is "
-    "the one decision on this finding still outstanding. Until then, treat repository "
-    "access as equivalent to access to the quotation archive and restrict it accordingly.",
+    "<b>An extract of the historical quotation corpus was present in the repository from "
+    "16 July 2026 until 10 August 2026. It has been removed from the tracked tree. "
+    "Recovery from history is still possible for anyone with read access to the commits in "
+    "that window; a history rewrite is a separate decision.</b>",
+    "Nothing in the engine read it — it was an intermediate staging file between the "
+    "internal spreadsheets and the database — so its removal broke nothing, and the "
+    "working copies remain on the internal machine where the system of record already "
+    "lives. Until the history question is settled, treat repository access as equivalent "
+    "to access to the quotation archive and restrict it accordingly.",
 ]))
 
 A(p("7.2  HIGH — Live credentials tracked in source control", H2))

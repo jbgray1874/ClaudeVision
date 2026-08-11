@@ -229,9 +229,92 @@ def test_both_provenance_sections_render_on_a_job_with_no_parity_workbook():
     assert "<table" in jrh._route_decisions_section(s)
 
 
-def test_the_section_numbers_do_not_collide():
+# The section-number guard lives once, at the end of this file, against the CURRENT
+# layout. Two copies asserting different numberings is how a renumbering passes half the
+# suite and fails the other half with no way to tell which one is right.
+
+
+# ── the four-line trust strip ───────────────────────────────────────────────────────
+# What a reviewer needs before the long tables: whether to trust the number at all.
+def _full(decisions=None, parts=None, truth="populated_xlsx_excel_com"):
+    s = {"estimate_summary": {"part_estimates": list(parts or []),
+                              "canonical_route_shadow": {"decisions": list(decisions or [])}},
+         "parts": list(parts or []),
+         }
+    s["estimate_summary"]["workbook_equivalent_pricing"] = {"source_of_truth": truth}
+    return s
+
+
+def test_the_strip_says_where_the_totals_came_from():
+    """A reader cannot otherwise tell a figure the workbook calculated from one this report
+    worked out for itself, and only the first can be checked by opening the sheet."""
+    html = jrh._provenance_strip(_full([_d()]))
+    assert "workbook's own calculated cells" in html and "not re-computed here" in html
+
+
+def test_an_unrecorded_source_of_truth_is_called_out_not_assumed():
+    html = jrh._provenance_strip(_full([_d()], truth=""))
+    assert "not recorded" in html and "unverified" in html
+
+
+def test_the_strip_names_the_best_source_that_contributed():
+    html = jrh._provenance_strip(_full([
+        _d(source="llm_full_extract", source_rank=40),
+        _d(source="solidworks_api", source_rank=90)]))
+    assert "the SolidWorks model" in html and "rank 90" in html
+
+
+def test_the_strip_counts_contested_decisions_and_names_the_key():
+    html = jrh._provenance_strip(_full([
+        _d(contested=True, losing_statuses=["ruled_out"],
+           settled_by_key="quotes the drawing")]))
+    assert "1" in html and "quotes the drawing" in html
+
+
+def test_the_strip_names_the_powder_authority():
+    """Powder is on this strip because it is the one figure that has twice been produced by
+    a mechanism nobody could name from the sheet."""
+    coated = jrh._provenance_strip(_full([_d(operation="powder_coating", status="required")]))
+    assert "route compiler" in coated and "1 part(s) decided coated" in coated
+
+    none = jrh._provenance_strip(_full([_d(operation="powder_coating", status="ruled_out")]))
+    assert "nothing coated on this job" in none
+
+    silent = jrh._provenance_strip(_full([_d(operation="welding")]))
+    assert "no powder decision" in silent and "geometry" in silent
+
+    legacy = jrh._provenance_strip(_full([]))
+    assert "legacy finish gate" in legacy
+
+
+# ── cross-links and the secondary-key marker ────────────────────────────────────────
+def test_a_part_links_between_the_two_provenance_sections():
+    """An estimator reading a material line wants that part's operations, and vice versa."""
+    bom = jrh._bom_provenance_section(_psummary([_part("11650-04-01A", material_source="dxf")]))
+    route = jrh._route_decisions_section(_summary([_d(target_id="11650-04-01A")]))
+    assert 'id="bom-11650-04-01A"' in bom and 'href="#route-11650-04-01A"' in bom
+    assert 'id="route-11650-04-01A"' in route and 'href="#bom-11650-04-01A"' in route
+
+
+def test_the_route_table_names_which_key_settled_a_contest():
+    """'Resolved' alone does not say whether the drawing's own words decided it or a
+    reproducibility backstop did, and those deserve different amounts of trust."""
+    html = jrh._route_decisions_section(_summary([
+        _d(contested=True, losing_statuses=["ruled_out"],
+           settled_by_key="claim id (reproducibility backstop)")]))
+    assert "by claim id (reproducibility backstop)" in html
+
+
+def test_a_job_with_no_costed_parts_says_so_loudly():
+    """Section 10 already knows silence is not a clean bill; section 9 does now too."""
+    html = jrh._bom_provenance_section(_psummary([]))
+    assert "No costed parts" in html and "warn" in html
+
+
+def test_the_section_numbers_are_still_unique_and_ordered():
     src = Path(jrh.__file__).read_text(encoding="utf-8")
-    for n, title in ((8, "Where the bill of materials came from"),
-                     (9, "How each operation was decided"),
-                     (10, "Consistency checks")):
+    for n, title in ((8, "How far to trust this number"),
+                     (9, "Where the bill of materials came from"),
+                     (10, "How each operation was decided"),
+                     (11, "Consistency checks")):
         assert f"<h2>{n} &nbsp;{title}</h2>" in src, f"section {n} ({title}) is misnumbered"

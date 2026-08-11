@@ -98,7 +98,10 @@ def _is_bought_in(part: Dict) -> bool:
 def _c(ws, row, col, value="", bold=False, bg=None, fg="000000",
        align="left", wrap=False, size=10, italic=False,
        num_fmt=None, border=False):
-    cell = ws.cell(row=row, column=col, value=value)
+    cell = _writable(ws, row, col)
+    if cell is None:
+        return None
+    cell.value = value
     cell.font = Font(name="Arial", bold=bold, color=fg,
                      size=size, italic=italic)
     if bg:
@@ -111,6 +114,29 @@ def _c(ws, row, col, value="", bold=False, bg=None, fg="000000",
         s = Side(style="thin", color="CCCCCC")
         cell.border = Border(left=s, right=s, top=s, bottom=s)
     return cell
+
+
+
+def _writable(ws, row: int, col: int):
+    """The cell at (row, col), or its merged-range ANCHOR.
+
+    openpyxl exposes every cell of a merged range but only the top-left one accepts a
+    value; the rest raise "'MergedCell' object attribute 'value' is read-only". wb_populate
+    learned this on 11350, where it killed an entire estimator-input block after the
+    heading. This tab appends below a totals row whose footer the template merges, so the
+    same trap sits directly under the new block. Returns None when the range cannot be
+    resolved, so the caller skips rather than raising: a report that dies explains nothing.
+    """
+    try:
+        cell = ws.cell(row=row, column=col)
+        if cell.__class__.__name__ != "MergedCell":
+            return cell
+        for rng in getattr(ws, "merged_cells", []).ranges:
+            if (rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col):
+                return ws.cell(row=rng.min_row, column=rng.min_col)
+        return None
+    except Exception:
+        return None
 
 
 def replace_generated_sheet(wb, title: str):
@@ -437,6 +463,70 @@ def _ops_explanation(part: Dict, est: Optional[Dict] = None,
            f"{_lead}: {', '.join(ops)}"
 
 
+
+def decisions_that_required_resolution(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The operations where two equally-ranked sources disagreed and the arbiter chose.
+
+    THE FIRST THING AN ESTIMATOR SHOULD READ, and the reason it gets its own block at the
+    top of the sheet rather than a column halfway down a hundred rows. Every other line on
+    this tab describes a decision that made itself: one strongest source, nothing at that
+    rank contradicting it. These are the lines where the engine had to pick, and they are
+    where fine-tuning feedback is worth most.
+
+    Ordered weakest-resolution first: a contest settled by the claim-id backstop had no
+    distinguishing evidence at all and is a coin flip made reproducible, which deserves a
+    person's attention before one settled by the drawing's own words.
+    """
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    out = []
+    for d in (payload.get("decisions") or []):
+        if isinstance(d, dict) and d.get("contested"):
+            out.append(d)
+    def _worst_first(d):
+        key = str(d.get("settled_by_key") or "")
+        # later in RESOLUTION_KEYS == weaker ground for the choice
+        try:
+            from route_compiler import RESOLUTION_KEYS
+            return (-RESOLUTION_KEYS.index(key) if key in RESOLUTION_KEYS else 1,
+                    str(d.get("target_id") or ""))
+        except Exception:
+            return (0, str(d.get("target_id") or ""))
+    out.sort(key=_worst_first)
+    return out
+
+
+def powder_authority(summary: Dict[str, Any]) -> str:
+    """Who decided powder on this job, in one sentence, naming source and rank.
+
+    Never a silent zero and never a competing gate. Powder has twice this month produced a
+    figure on a sheet that no reader could trace to a decision -- once as phantom mass from
+    a misclassified plastic, once from a geometry sum that had never consulted the route.
+    A cell that says who decided makes both failures visible the moment they recur.
+    """
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    decisions = [d for d in (payload.get("decisions") or []) if isinstance(d, dict)]
+    powder = [d for d in decisions
+              if str(d.get("operation") or "").strip().lower() in
+              ("powder_coating", "powder_coat", "powder", "p_coat", "pcoat")]
+    if not decisions:
+        return ("Powder: decided by the LEGACY FINISH GATE - no compiled route on this job. "
+                "Not arbitrated, and not traceable to a ranked source.")
+    if not powder:
+        return ("Powder: NO DECISION on this route. Any powder mass came from geometry, "
+                "not from an arbitrated decision - treat it as unverified.")
+    required = [d for d in powder if str(d.get("status") or "").lower() == "required"]
+    if not required:
+        return ("Powder: decided by the route compiler - NOTHING COATED on this job. "
+                "A powder figure on this sheet would contradict the route.")
+    best = max(required, key=lambda d: int(d.get("source_rank") or 0))
+    return ("Powder: decided by the route compiler ({} part(s) coated; strongest source "
+            "{}, rank {}).".format(len(required),
+                                   best.get("decided_by") or best.get("source") or "unrecorded",
+                                   best.get("source_rank") or "?"))
+
+
 def add_decision_report_sheet(wb, summary: Dict[str, Any],
                                scan_meta: Dict[str, Any] = None) -> None:
     """Add a 'Decision Report' sheet to an existing workbook."""
@@ -558,6 +648,22 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
         f"Unit £{_money_basis}", f"Ext £{_money_basis}", "Confidence",
         "Priced by — sheet row / decision",
     ]
+    # ── ROW 4: WHAT AN ESTIMATOR SHOULD READ BEFORE THE TABLE ──────────────────
+    # Two facts that decide how much of the rest to trust, on the sheet itself rather than
+    # in a log nobody opens: who owns powder, and how many decisions the engine had to
+    # settle rather than simply read. Powder is here because it has twice this month put a
+    # figure on a sheet that no reader could trace to a decision.
+    _contested = decisions_that_required_resolution(summary)
+    _banner = powder_authority(summary)
+    if _contested:
+        _banner += (f"   |   {len(_contested)} decision(s) required resolution "
+                    f"— see the block below the table.")
+    else:
+        _banner += "   |   No decision required resolution: no two equal sources disagreed."
+    _c(ws, 4, 1, _banner, bold=True, size=9,
+       bg=(C_LOW if _contested else C_LIGHT),
+       fg=(C_LOW_TXT if _contested else "000000"), wrap=False)
+
     for ci, hdr in enumerate(headers, 1):
         _c(ws, 5, ci, hdr, bold=True, bg=C_NAVY, fg=C_WHITE,
            align="center", size=9, border=True)
@@ -671,6 +777,7 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     _total_label = ("SELL PRICE (from Estimate sheet)" if _sell_ref
                     else "UNIT COST (calculated by the Estimate sheet)" if _wb_unit is not None
                     else "TOTAL ESTIMATE (engine part-sum — no workbook)")
+    _resolution_row = row + 2                  # written after the total, see below
     _c(ws, row, 1, _total_label, bold=True, bg=C_NAVY, fg=C_WHITE,
        align="right", size=12)
     _c(ws, row, 9, "", bg=C_NAVY)
@@ -883,6 +990,37 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
        f"Estimates based on SolidWorks drawings + SDILive knowledge base  |  "
        f"Subject to estimator review before quoting",
        size=8, italic=True, fg="888888", align="center")
+    # ── DECISIONS THAT REQUIRED RESOLUTION ─────────────────────────────────────
+    # Every other line on this tab describes a decision that made itself: one strongest
+    # source, nothing at that rank contradicting it. These are the lines where the engine
+    # had to choose between sources the waterfall calls equal, and they are where an
+    # estimator's feedback is worth most. Weakest resolution first -- a contest settled by
+    # the claim-id backstop had no distinguishing evidence at all.
+    if _contested:
+        # BELOW EVERYTHING ALREADY ON THE SHEET. A fixed offset from the
+        # totals row lands inside the template's merged footer.
+        _r = max(_resolution_row, ws.max_row + 2)
+        _c(ws, _r, 1, "DECISIONS THAT REQUIRED RESOLUTION", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        _r += 1
+        for _ci, _h in enumerate(("Part", "Operation", "Settled as", "Decided by",
+                                  "Rank", "Other source claimed", "Settled by"), 1):
+            _c(ws, _r, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        _r += 1
+        for _d in _contested:
+            _c(ws, _r, 1, str(_d.get("target_id") or ""), size=9, border=True)
+            _c(ws, _r, 2, str(_d.get("operation") or "").replace("_", " "),
+               size=9, border=True)
+            _c(ws, _r, 3, str(_d.get("status") or ""), size=9, border=True)
+            _c(ws, _r, 4, str(_d.get("decided_by") or _d.get("source") or "unrecorded"),
+               size=9, border=True)
+            _c(ws, _r, 5, _d.get("source_rank") or "", align="center", size=9, border=True)
+            _c(ws, _r, 6, ", ".join(str(x) for x in (_d.get("losing_statuses") or [])),
+               size=9, border=True)
+            _c(ws, _r, 7, str(_d.get("settled_by_key") or "rank"), size=9, border=True,
+               wrap=True)
+            _r += 1
+
     ws.freeze_panes = "A6"
 
 

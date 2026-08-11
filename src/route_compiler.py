@@ -228,6 +228,11 @@ class OperationDecision:
     # "the SolidWorks model", "the DXF flat pattern", "Grok (xAI)". `source` is the
     # internal key and stays the join field; this is what a person reads.
     decided_by: str = ""
+    # WHICH KEY SETTLED A CONTEST, when there was one. Empty on an uncontested decision.
+    # "rank" never appears here: rank is the waterfall deciding, and this field exists to
+    # expose the cases where the waterfall called two sources equal and the arbiter had to
+    # choose. That is the line an estimator should look at when tuning the engine.
+    settled_by_key: str = ""
 
 
 def make_claim(
@@ -1470,6 +1475,33 @@ def _tiebreak_priority(source: Any) -> int:
         return 0
 
 
+# The keys of _resolution_key, in order, so a resolution can name the one that settled it.
+# WHICH key decided is the audit trail for the every-matter-resolved rule: "rank" is the
+# waterfall doing its job, and anything below it is the arbiter choosing between sources the
+# waterfall calls equal. An estimator fine-tuning the engine needs to see which.
+RESOLUTION_KEYS = ("within-rank source priority", "confidence",
+                   "quotes the drawing", "claim id (reproducibility backstop)")
+
+
+def settled_by(winner: OperationClaim, others: Sequence[OperationClaim]) -> str:
+    """Which key first separated `winner` from every other claim.
+
+    Returns the FIRST key on which the winner strictly beats them all -- that is the one
+    doing the work. A resolution that reaches "claim id" is a coin flip made reproducible,
+    and it should look different in a report from one settled by the drawing's own words.
+    """
+    win = _resolution_key(winner)
+    rivals = [_resolution_key(c) for c in others if c.claim_id != winner.claim_id]
+    if not rivals:
+        return ""
+    for i, name in enumerate(RESOLUTION_KEYS):
+        if all(win[i] > r[i] for r in rivals):
+            return name
+        if any(win[i] < r[i] for r in rivals):
+            return name          # cannot happen for a winner, but never lie about it
+    return RESOLUTION_KEYS[-1]
+
+
 def _resolution_key(claim: OperationClaim):
     """The order that settles a tie between equally-ranked claims.
 
@@ -1614,6 +1646,8 @@ def arbitrate_event(
         status_winner = max(strongest_status_claims, key=_resolution_key)
         status = status_winner.status
         losing_statuses = sorted(statuses - {status})
+        settled = settled_by(status_winner, strongest_status_claims)
+        conflicts[-1]["settled_by"] = settled
     else:
         status = next(iter(statuses))
         same_status = [
@@ -1705,6 +1739,7 @@ def arbitrate_event(
         contested=contested,
         losing_statuses=losing_statuses,
         decided_by=_display_source(status_winner.source),
+        settled_by_key=(conflicts[0].get("settled_by", "") if conflicts else ""),
         confidence=status_winner.confidence,
         reason=reason,
         field_provenance=provenance,

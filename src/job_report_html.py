@@ -978,9 +978,74 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
                  f"provisional items for estimator review.")
     return f"""<h2>7 &nbsp;Verdict</h2>
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
+{_provenance_strip(summary)}
 {_bom_provenance_section(summary)}
 {_route_decisions_section(summary)}
 {_invariants_section(summary)}"""
+
+
+def _provenance_strip(summary: Dict[str, Any]) -> str:
+    """Four lines an estimator reads before anything else.
+
+    The two provenance tables below are long by design. What a reviewer needs first is
+    whether to trust the number at all, and that is four facts: where the totals came from,
+    the best source that contributed anything, how many decisions had to be settled rather
+    than simply read, and who owns powder. Powder is on this strip because it is the one
+    figure that has twice been produced by a mechanism nobody could name from the sheet.
+    """
+    try:
+        from source_precedence import display_name, rank
+    except Exception:
+        return ""
+    hl = _extract_headline(summary) or {}
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    decisions = [d for d in (payload.get("decisions") or []) if isinstance(d, dict)]
+
+    # WHERE THE TOTALS CAME FROM, said rather than implied. A reader cannot otherwise tell
+    # a figure the workbook calculated from one this report worked out for itself, and only
+    # the first can be checked by opening the sheet.
+    if hl.get("source_of_truth") == "populated_xlsx_excel_com":
+        truth = ("the workbook's own calculated cells, read back after Excel recalculated "
+                 "&mdash; not re-computed here")
+    elif hl.get("source_of_truth"):
+        truth = f"{_esc(hl.get('source_of_truth'))} &mdash; <b>not</b> the workbook's own cells"
+    else:
+        truth = "<b>not recorded</b> &mdash; treat every total below as unverified"
+
+    best = ""
+    for d in decisions:
+        nm = str(d.get("source") or "")
+        if nm and (not best or rank(nm) > rank(best)):
+            best = nm
+    best_txt = (f"{_esc(display_name(best))} (rank {rank(best)})" if best
+                else "<b>none &mdash; no operation was arbitrated</b>")
+
+    contested = [d for d in decisions if d.get("contested")]
+    keys = sorted({str(d.get("settled_by_key") or "") for d in contested if d.get("settled_by_key")})
+    con_txt = ("none &mdash; every decision had a single strongest source" if not contested
+               else f"<b>{len(contested)}</b>" + (f", settled by {_esc(', '.join(keys))}" if keys else ""))
+
+    powder = [d for d in decisions
+              if str(d.get("operation") or "").lower() in
+              ("powder_coating", "powder_coat", "powder", "p_coat", "pcoat")]
+    if powder:
+        req = [d for d in powder if str(d.get("status")) == "required"]
+        pow_txt = (f"the route compiler &mdash; {len(req)} part(s) decided coated"
+                   if req else "the route compiler &mdash; <b>nothing coated on this job</b>")
+    elif decisions:
+        pow_txt = ("<b>no powder decision on this route.</b> Mass, if any, came from "
+                   "geometry, not from an arbitrated decision")
+    else:
+        pow_txt = "<b>the legacy finish gate</b> &mdash; no compiled route on this job"
+
+    return ('<h2>8 &nbsp;How far to trust this number</h2>'
+            '<table><tbody>'
+            f'<tr><td><b>Totals came from</b></td><td>{truth}</td></tr>'
+            f'<tr><td><b>Best source used</b></td><td>{best_txt}</td></tr>'
+            f'<tr><td><b>Decisions needing resolution</b></td><td>{con_txt}</td></tr>'
+            f'<tr><td><b>Powder decided by</b></td><td>{pow_txt}</td></tr>'
+            '</tbody></table>')
 
 
 def _bom_provenance_section(summary: Dict[str, Any]) -> str:
@@ -1004,7 +1069,12 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
         return ""
     parts = _extract_parts(summary) or []
     if not parts:
-        return ""
+        # SILENCE IS NOT A CLEAN BILL, and section 10 already knows it. A missing section
+        # reads as nothing-to-report; here it means no part reached the costed pool at all.
+        return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
+                '<div class="callout warn"><b>No costed parts on this job.</b> Nothing '
+                'reached the costed pool, so no material provenance can be shown &mdash; '
+                'this is not a job whose provenance is clean.</div>')
 
     _FIELDS = (("normalized_material", "Material"),
                ("normalized_thickness_mm", "Thickness"),
@@ -1034,7 +1104,7 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
         unstamped_n += 1 if any_missing else 0
         rows.append((worst, str(p.get("part_number") or ""),
                      f'<tr class="{"over" if any_reasoned else ""}">'
-                     f'<td class="pn">{_esc(p.get("part_number"))}</td>'
+                     f'<td class="pn"><a id="bom-{_esc(p.get("part_number"))}" href="#route-{_esc(p.get("part_number"))}">{_esc(p.get("part_number"))}</a></td>'
                      + "".join(cells) + "</tr>"))
     if not rows:
         return ""
@@ -1046,7 +1116,7 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
              f'unstamped datum is not a measured one.</p>' if (reasoned_n or unstamped_n)
              else '<p class="mini">Every costing datum on every part was measured and '
                   'carries a recorded source.</p>')
-    return ('<h2>8 &nbsp;Where the bill of materials came from</h2>'
+    return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
             '<p class="mini">The source recorded against each costing datum, weakest first. '
             '&#9889; marks a value that was reasoned rather than measured: it can be right, '
             'but it cannot be held against the drawing.</p>' + _note +
@@ -1077,7 +1147,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
     if not isinstance(decisions, list) or not decisions:
         # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
         # arbitrated at all, and a missing section reads as "nothing to report".
-        return ('<h2>9 &nbsp;How each operation was decided</h2>'
+        return ('<h2>10 &nbsp;How each operation was decided</h2>'
                 '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
                 'was arbitrated, so nothing here can say what decided it. The labour below '
                 'came from the legacy path.</div>')
@@ -1094,12 +1164,12 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
             0 if _contested else 1,                       # contested first
             str(d.get("target_id") or ""),
             f'<tr class="{"over" if _contested else ""}">'
-            f'<td class="pn">{_esc(d.get("target_id"))}</td>'
+            f'<td class="pn"><a id="route-{_esc(d.get("target_id"))}" href="#bom-{_esc(d.get("target_id"))}">{_esc(d.get("target_id"))}</a></td>'
             f'<td>{_esc(str(d.get("operation") or "").replace("_", " "))}</td>'
             f'<td>{_esc(d.get("status"))}</td>'
             f'<td>{_esc(d.get("decided_by") or d.get("source") or "not recorded")}</td>'
             f'<td class="num">{_esc(d.get("source_rank"))}</td>'
-            f'<td>{"<b>resolved over " + _esc(_losing) + "</b>" if _contested else "—"}</td>'
+            f'<td>{("<b>resolved over " + _esc(_losing) + "</b> &#8226; by " + _esc(d.get("settled_by_key") or "rank")) if _contested else "—"}</td>'
             f'<td class="mini">{_esc(_ev[:70]) if _ev else "<i>nothing quoted</i>"}</td></tr>'))
     if not rows:
         return ""
@@ -1109,7 +1179,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
              f'The losing claim is named so it can be checked.</p>' if contested_n else
              '<p class="mini">No decision was contested — every operation had a single '
              'strongest source and nothing at that rank disagreed with it.</p>')
-    return ('<h2>9 &nbsp;How each operation was decided</h2>'
+    return ('<h2>10 &nbsp;How each operation was decided</h2>'
             '<p class="mini">Every operation on this job, the source that decided it and the '
             'rank that source carries. "Nothing quoted" means no claim carried the drawing\'s '
             'own words, so the decision cannot be held against the sheet.</p>'
@@ -1134,7 +1204,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('<h2>10 &nbsp;Consistency checks</h2>'
+        return ('<h2>11 &nbsp;Consistency checks</h2>'
                 '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
                 'Nothing here has been verified against the workbook: rows have not been '
                 'reconciled to their totals, priced rows have not been joined to the parts that '
@@ -1143,7 +1213,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
     _n = len(inv.get("checks_run") or [])
     if inv.get("may_quote_firm") and not _v:
-        return (f'<h2>10 &nbsp;Consistency checks</h2>'
+        return (f'<h2>11 &nbsp;Consistency checks</h2>'
                 f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
                 f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
                 f'the unit price, every priced row joins to exactly one route, and no report '
@@ -1194,7 +1264,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
              f'is not a pass.</div>' if not inv.get("may_quote_firm") else
              '<div class="callout info">No check failed. The advisories below are worth '
              'reading but do not affect whether the price can be released.</div>')
-    return (f'<h2>10 &nbsp;Consistency checks</h2>{_head}'
+    return (f'<h2>11 &nbsp;Consistency checks</h2>{_head}'
             f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>')
 

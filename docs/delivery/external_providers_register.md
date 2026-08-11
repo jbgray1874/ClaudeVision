@@ -30,16 +30,19 @@ AI coding assistants used to build them. That is a strong, defensible position.
 
 **Estimating Intelligence is different by design.** It is an AI system. It transmits
 customer drawing content to an external AI provider at runtime, as its normal operation,
-because that is what it is for. It also holds SDI's historical quotation corpus, calls
+because that is what it is for. Its repository also held an extract of SDI's historical
+quotation corpus until 10 August 2026, and it calls
 supplier and search websites, and integrates with the HR platform. Its external-provider
 footprint is therefore a *product* question, not only a development-hygiene one.
 
 Three findings on Estimating Intelligence need decisions before the solicitors settle a
 position. All three are stated in full at §7.1–§7.3:
 
-1. **SDI's historical quotation corpus is committed to source control** — approximately
-   104,000 records including customer names, job numbers, sell prices, cost breakdowns,
-   rebate fractions, overhead divisors and the names of the estimators who prepared them.
+1. **An extract of SDI's historical quotation corpus was committed to source control** —
+   approximately 104,000 records including customer names, job numbers, sell prices, cost
+   breakdowns, rebate fractions, overhead divisors and the names of the estimators who
+   prepared them. **Removed from the tracked tree on 10 August 2026; still recoverable from
+   the repository's history.** The system of record is and always was internal.
 2. **A configuration file carrying live credentials is tracked in source control** — the
    production database password and the HR platform client secret.
 3. **The portal binds to all network interfaces with its access key unset**, so on that
@@ -78,7 +81,7 @@ ships automatically.
 | CAD / drawing files ever committed | **None** — verified across full history | **None** (two generic, non-client bracket templates only) | **None** — client job folders sit in the working folder but are excluded and were never tracked |
 | Customer PDFs ever committed | **None** | None | None |
 | Credentials in history | **Yes — still tracked (§7.2)** | None found | None found |
-| Client names in tracked files | **Yes, extensively (§7.1)** | None — only the committer's SDI email | Previously present; **remediated**, verified clean |
+| Client names in tracked files | **Yes (§7.1)** — reduced by the 10 August corpus removal, still present in code and documentation | None — only the committer's SDI email | Previously present; **remediated**, verified clean |
 
 **Verification method.** For every "none" above: a full-history file-type scan
 (`--diff-filter=A` across all refs), a name scan for the client roster, and a credential
@@ -233,7 +236,7 @@ full version-control history of all three tools.
 
 ## 7. Risks to SDI — ordered by materiality
 
-### 7.1 HIGH — SDI's quotation history and client commercial data are in source control
+### 7.1 HIGH — SDI's quotation history and client commercial data were in source control
 
 **Estimating Intelligence only.** Three client corpus files and a general corpus file are
 tracked in the repository, totalling approximately **104,000 records**. They carry, per
@@ -259,15 +262,16 @@ engage the same confidentiality clauses as design data.
 It also sits, unavoidably, in every place the repository has been: the hosting provider, the
 managed development container, and any working copy.
 
-**Position at 10 August 2026.** The corpus files have been **removed from source control**
-and the `.gitignore` exception that re-admitted them deleted; the working copies remain on
-the internal machine, where the system of record already lives. Nothing read them at
-estimate time, so nothing broke.
+An extract of the historical quotation corpus was present in the repository from **16 July
+2026 until 10 August 2026**. It has been removed from the tracked tree. **Recovery from
+history is still possible for anyone with read access to the commits in that window; a
+history rewrite is a separate decision.**
 
-**This does not remove them from the repository's HISTORY**, which is where the exposure
-actually sits. Anyone with read access can still recover them from any commit since
-16 July 2026. Closing that requires a history rewrite and a force-push, which is a
-decision for the solicitors and IT together.
+Nothing in the engine read it — it was an intermediate staging file between the internal
+spreadsheets and the database — so its removal broke nothing, and the working copies
+remain on the internal machine where the system of record already lives. Until the history
+question is settled, treat repository access as equivalent to access to the quotation
+archive and restrict it accordingly.
 
 **Recommended actions.** (1) Decide whether the history must be rewritten as well. (2) If not, it must be removed from the working tree **and from
 history** — removing it from the current commit leaves it fully readable in the history.
