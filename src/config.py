@@ -255,6 +255,28 @@ STANDARD_SHEET_SIZES_MM = {
     "HIGH IMPACT ACRYLIC": [(2050, 1520), (3050, 2050)],
     "PERSPEX": [(2050, 1520), (3050, 2050)],
     "POLYCARBONATE": [(2050, 1520), (3050, 2050)],
+    # THE PLASTICS THE ENGINE RECOGNISES BUT COULD NOT PRICE. _is_board classifies PETG,
+    # HIPS, ABS, PVC and the rest as plastic sheet and routes them to Other Sheet Material
+    # — and none of them existed in this table, in the density table, or in the price
+    # table. 11650's PETG side panels were reported as "DIMS REQUIRED" when the real
+    # blocker was that PETG is not a material this engine has ever been able to cost:
+    # perfect dimensions would still have produced GBP 0.00.
+    #
+    # Sheet size and density are physical/stock facts and are stated here. THE PRICE IS
+    # NOT — see MATERIAL_PRICE_GBP_PER_KG.
+    "PETG": [(2050, 1520), (3050, 2050)],
+    "HIPS": [(2050, 1520), (3050, 2050)],
+    "ABS": [(2050, 1520), (3050, 2050)],
+    "PVC": [(2050, 1520), (3050, 2050)],
+    "FOAMEX": [(3050, 2030)],
+    "POLYPROPYLENE": [(2050, 1520)],
+    "POLYSTYRENE": [(2050, 1520)],
+    "PMMA": [(2050, 1520), (3050, 2050)],
+    "ACETAL": [(2000, 1000)],
+    "DELRIN": [(2000, 1000)],
+    "NYLON": [(2000, 1000)],
+    "PET": [(2050, 1520)],
+    "UHMW": [(2000, 1000)],
     # Timber-based sheet materials — standard UK board sizes
     "MDF": [(2440, 1220), (3050, 1525)],
     "MDF_BOARD": [(2440, 1220), (3050, 1525)],
@@ -302,6 +324,22 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "ACRYLIC": 1190,
     "PERSPEX": 1190,
     "POLYCARBONATE": 1200,
+    # Physical constants, checkable against any materials datasheet.
+    "PETG": 1270,
+    "HIPS": 1050,
+    "ABS": 1040,
+    "PVC": 1400,
+    "FOAMEX": 550,
+    "POLYPROPYLENE": 905,
+    "POLYSTYRENE": 1050,
+    "PMMA": 1190,
+    # Found by test_every_plastic_the_router_recognises_has_a_density on its first run:
+    # five more materials _is_board routes confidently and nothing could cost.
+    "ACETAL": 1410,
+    "DELRIN": 1410,
+    "NYLON": 1140,
+    "PET": 1380,
+    "UHMW": 940,
 }
 
 MATERIAL_PRICE_GBP_PER_KG = {
@@ -327,6 +365,18 @@ MATERIAL_PRICE_GBP_PER_KG = {
     "ACRYLIC": 3.26,
     "PERSPEX": 3.26,
     "POLYCARBONATE": 3.80,
+    # ── PLASTICS THE ENGINE RECOGNISES AND STILL CANNOT PRICE ───────────────────────
+    # PETG, HIPS, ABS, PVC, FOAMEX, PP and PS have a sheet size and a density above but
+    # DELIBERATELY NO RATE HERE. A price is a commercial fact and SDI owns it; inventing
+    # one would put a number on a quote that nobody has agreed to and that no supplier
+    # would honour, which is worse than the gap it fills.
+    #
+    # The gap is not silent: a recognised plastic with no rate is reported as an ENGINE
+    # gap (price_provenance.NO_VOCABULARY), which says the job is UNDER-CHARGED and that
+    # no estimator input can fix it — it needs a rate here. Add one line each and every
+    # job carrying that material prices itself from then on.
+    #
+    #   "PETG": <GBP per kg>,
 }
 
 WELD_TIME_POLICY = {
