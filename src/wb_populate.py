@@ -1140,6 +1140,25 @@ def canonical_route_cutover_enabled(summary: Dict[str, Any]) -> bool:
     return True
 
 
+
+def _no_material_was_costed(part) -> bool:
+    """True when this record carries no material of its own to coat.
+
+    A part with no stock form and no material is one every material block skips as
+    unclassifiable -- typically a record derived from an assembly page rather than a detail
+    drawing, which describes a thing that ships but not a piece of stock that was bought.
+    It cannot contribute coated area, because there is no material there to coat.
+
+    Deliberately narrow: it asks whether BOTH are absent. A sheet part whose blank has not
+    been measured yet is still a real piece of material and still gets coated; that is a
+    missing dimension, not a missing part, and the two must not resolve the same way.
+    """
+    me = (part or {}).get("material_estimate") or {}
+    stock_form = str(me.get("stock_form") or "").strip()
+    material = str((part or {}).get("normalized_material") or me.get("material") or "").strip()
+    return not stock_form and not material
+
+
 def parts_the_route_says_are_coated(summary: Dict[str, Any]) -> Optional[Set[str]]:
     """Which parts the compiler decided go through the powder booth, or None.
 
@@ -1180,10 +1199,24 @@ def parts_the_route_says_are_coated(summary: Dict[str, Any]) -> Optional[Set[str
             name = str(item or "").strip().upper()
             if name:
                 coated.add(name)
-    # A COMPILED ROUTE THAT NEVER CONSIDERED POWDER HAS NOT DECIDED AGAINST IT. Treating
-    # silence as a ruling would delete the powder line on every job whose route was built
-    # before the operation existed, which is a large, quiet under-charge.
-    return coated if saw_powder_decision else None
+    # SILENCE FROM A COMPLETE ROUTE IS A RULING. Under the canonical cutover the compiler
+    # is the authority on every operation, powder included -- it considers powder_coating
+    # for each part and emits a decision when anything supports one. So on a cutover job,
+    # NO powder decision means NOT COATED, and returning None here instead was the bug:
+    # 11650-05 re-ran after the Option 3 wiring landed and still booked GBP 0.97 of powder,
+    # because nothing on the job says POWDER, so the compiler emitted no powder decision, so
+    # this returned None, so the geometry path ran exactly as before. The safety valve
+    # swallowed the fix it was guarding.
+    #
+    # The valve is still needed, but it belongs on the RIGHT question. What it protects
+    # against is a route compiled by something that did not know about powder at all -- and
+    # that is precisely what "the cutover is not active" means. Asked that way it protects
+    # legacy jobs and stops protecting phantom mass.
+    if saw_powder_decision:
+        return coated
+    if canonical_route_cutover_enabled(summary):
+        return set()          # a complete route considered powder and required none
+    return None               # no authority on this job: the geometry path stands
 
 
 _POWDER_OPERATIONS = frozenset({"powder_coating", "powder_coat", "powder",
@@ -2573,6 +2606,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             continue   # acrylic is not powder coated — contributes zero coated area
         if not _route_says_coated(_sp):
             continue   # the route decided this part does not go through the booth
+        if _no_material_was_costed(_sp):
+            # YOU CANNOT COAT WHAT YOU DID NOT BUY MATERIAL FOR. 11650-05's two -HANDED
+            # records are derived from assembly pages, carry no stock form and no material,
+            # and every material block skips them as unclassifiable -- and they still
+            # contributed 0.48 m2 of coated area between them, which was the whole of the
+            # phantom powder line. A part absent from every material block is absent from
+            # the booth too.
+            continue
         # A part named TUBE is a hollow section, NOT a flat coated sheet: its blank (if any) is
         # garbled view geometry, and its true coated area is a thin cylinder surface, not L×W×2.
         # Without this guard a tube the LLM missed (e.g. 10M read as a 2431×2431 blank) injects
@@ -2629,6 +2670,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _fsf = str((_fp.get("material_estimate") or {}).get("stock_form") or "").lower()
         if _is_acrylic_pw(_fp):
             continue   # acrylic is not coated — must not count toward the per-piece powder floor
+        if _no_material_was_costed(_fp):
+            continue   # not costed for material, so not an object on the booth line
         if not _route_says_coated(_fp):
             # THE FLOOR IS PER COATED OBJECT, and an object the route excluded is not one.
             # Without this the floor re-invents the mass the area sum just declined to

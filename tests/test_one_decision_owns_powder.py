@@ -14,12 +14,20 @@ printing its conclusions regardless. A gate nobody asks reports nothing; this on
 anyway, and credible-looking evidence with no authority behind it is worse than silence --
 it made a classification bug look like a policy dispute to two readers.
 
-THREE FACTS THIS FILE KEEPS APART:
-  * "the route says this part is not coated"  -- a decision. Obey it.
-  * "the route said nothing about powder"     -- not a decision. Do not delete a line over
-                                                 it, or every job compiled before the
-                                                 operation existed loses its powder.
-  * "there is no compiled route"              -- legacy. Unchanged behaviour, entirely.
+THREE FACTS THIS FILE KEEPS APART, and the middle one was got WRONG the first time:
+  * "the route says this part is not coated"     -- a decision. Obey it.
+  * "a COMPLETE route required no powder"        -- also a decision. Under the canonical
+                                                    cutover the compiler considers powder
+                                                    for every part, so its silence rules.
+  * "there is no compiled route / no cutover"    -- no authority. Geometry path unchanged.
+
+The middle line originally read "not a decision, do not delete a line over it", keyed on
+whether any powder decision appeared. 11650-05 re-ran with that logic and STILL booked
+GBP 0.97: nothing on the job says POWDER, so the compiler emitted no powder decision, so the
+helper returned None, so the geometry path ran exactly as before. The safety valve swallowed
+the fix it was guarding. It was asking the wrong question -- what needs protecting is a
+route compiled by something that never knew about powder, and that is precisely what "the
+cutover is not active" means.
 """
 from __future__ import annotations
 
@@ -78,16 +86,25 @@ def test_every_spelling_of_the_operation_is_recognised(spelling):
 
 
 def test_other_operations_do_not_coat_anything():
+    """A cutover route full of welding and folding and no powder has RULED: nothing coated.
+    This asserted None before the 11650-05 re-run showed that None let the phantom through."""
     out = coated(_summary([_decision("welding", "required", "A1"),
                            _decision("folding", "required", "A2")]))
-    assert out is None, "a route that never considered powder has not ruled on it"
+    assert out == set(), "a complete route requiring no powder must coat nothing"
 
 
 # ── silence is not a ruling ─────────────────────────────────────────────────────────
-def test_a_route_that_never_considered_powder_returns_none():
-    """None and empty-set are different facts and only one of them may delete a line.
-    Treating silence as a ruling would strip powder from every job whose route was built
-    before the operation existed -- a large, quiet under-charge."""
+def test_a_route_without_the_cutover_returns_none(monkeypatch):
+    """None and empty-set are different facts and only one of them may delete a line. The
+    distinction is now keyed on whether the CUTOVER is active -- i.e. whether the compiler
+    was the authority on this job -- rather than on whether a powder decision happens to
+    appear, which is the same question asked properly.
+
+    The cutover is a GLOBAL config flag, not a property of the payload, so "legacy" can
+    only be expressed by turning it off. A test that tried to express it by omitting a key
+    from the payload proved nothing, because the flag was still on."""
+    import config
+    monkeypatch.setattr(config, "CANONICAL_ROUTE_WORKBOOK_CUTOVER", False, raising=False)
     assert coated(_summary([_decision("welding", "required", "A1")])) is None
 
 
@@ -102,12 +119,14 @@ def test_a_decision_list_that_is_not_a_list_returns_none():
                                         {"decisions": "broken"}}}) is None
 
 
-def test_none_and_empty_set_are_distinguishable():
+def test_none_and_empty_set_are_distinguishable(monkeypatch):
     """The whole safety of this change rests on the caller being able to tell them apart."""
-    ruled_none = coated(_summary([_decision("powder_coating", "ruled_out", "A1")]))
-    no_ruling = coated(_summary([_decision("welding", "required", "A1")]))
-    assert ruled_none == set() and no_ruling is None
-    assert ruled_none is not None
+    import config
+    ruled = coated(_summary([_decision("powder_coating", "ruled_out", "A1")]))
+    monkeypatch.setattr(config, "CANONICAL_ROUTE_WORKBOOK_CUTOVER", False, raising=False)
+    no_authority = coated(_summary([_decision("welding", "required", "A1")]))
+    assert ruled == set() and no_authority is None
+    assert ruled is not None
 
 
 # ── every accumulator asks, not just one ────────────────────────────────────────────
@@ -154,3 +173,76 @@ def test_the_run_says_which_authority_decided_powder():
 
 if __name__ == "__main__":                                          # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── the safety valve that swallowed the fix ─────────────────────────────────────────
+# THE RE-RUN THAT PROVED THE FIRST FIX DID NOT FIRE. 11650-05 ran again after the Option 3
+# wiring landed and still booked GBP 0.97 of powder. Nothing on that job says POWDER, so
+# the compiler emitted no powder decision, so parts_the_route_says_are_coated returned None
+# ("no ruling"), so the geometry path ran exactly as it had before. The valve I added to
+# protect legacy routes swallowed the fix it was meant to guard.
+#
+# It was asking the wrong question. What needs protecting is a route compiled by something
+# that did not know about powder -- and that is exactly what "the cutover is not active"
+# means. Under cutover the compiler considers powder for every part, so its silence is a
+# ruling, not an absence.
+def _cutover(decisions):
+    return {"estimate_summary": {"canonical_route_shadow": {
+        "cutover": True, "decisions": list(decisions), "nodes": []}}}
+
+
+def test_a_complete_route_with_no_powder_decision_means_not_coated():
+    """The live failure, as a test. Under cutover, silence is a ruling."""
+    out = coated(_cutover([_decision("welding", "required", "A1")]))
+    assert out == set(), \
+        "a cutover route that required no powder still let the geometry path book mass"
+
+
+def test_a_job_with_no_cutover_still_falls_through_to_geometry(monkeypatch):
+    """The valve is still needed -- just on the right question. A route compiled by
+    something that never knew about powder has not ruled against it, and stripping powder
+    from those jobs would be a large, quiet under-charge."""
+    import config
+    monkeypatch.setattr(config, "CANONICAL_ROUTE_WORKBOOK_CUTOVER", False, raising=False)
+    assert coated(_summary([_decision("welding", "required", "A1")])) is None, \
+        "legacy behaviour was removed along with the bug"
+
+
+def test_a_cutover_route_that_requires_powder_still_names_its_parts():
+    out = coated(_cutover([_decision("powder_coating", "required", "A1"),
+                           _decision("welding", "required", "A2")]))
+    assert out == {"A1"}
+
+
+# ── you cannot coat what you did not buy material for ───────────────────────────────
+# The other half of the same GBP 0.97. 11650-05's two -HANDED records are derived from
+# assembly pages, carry no stock form and no material, and every material block skips them
+# as unclassifiable -- and they still contributed 0.48 m2 of coated area between them,
+# which was the whole of the phantom line.
+from wb_populate import _no_material_was_costed                      # noqa: E402
+
+
+def test_a_record_with_no_stock_form_and_no_material_is_not_coatable():
+    assert _no_material_was_costed(
+        {"part_number": "11650-04-01A-HANDED",
+         "material_estimate": {"stock_form": ""}, "normalized_material": ""})
+
+
+def test_an_unmeasured_sheet_part_is_still_coatable():
+    """DELIBERATELY NARROW. A sheet part whose blank has not been measured yet is real
+    material and still gets coated -- that is a missing dimension, not a missing part, and
+    resolving the two the same way would silently drop powder from every job awaiting
+    dimensions."""
+    assert not _no_material_was_costed(
+        {"material_estimate": {"stock_form": "sheet"}, "normalized_material": "MILD STEEL"})
+    assert not _no_material_was_costed(
+        {"material_estimate": {"stock_form": "sheet"}, "normalized_material": ""})
+    assert not _no_material_was_costed(
+        {"material_estimate": {"stock_form": ""}, "normalized_material": "MILD STEEL"})
+
+
+def test_the_guard_is_applied_to_the_area_sum_and_the_floor():
+    """The floor needs no geometry at all to produce a number, so a guard on the area sum
+    alone leaves the phantom intact by another route."""
+    assert _SRC.count("_no_material_was_costed(") >= 3, \
+        "the guard is not applied to both the coated-area sum and the per-piece floor"
