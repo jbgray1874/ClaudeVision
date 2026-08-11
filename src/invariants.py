@@ -2163,8 +2163,19 @@ _COSTABLE_FINISH_OPS = ("p.coat", "powder", "diamond polish", "polish", "peel")
 _FINISH_PROCESS_WORDS = (
     "VINYL", "PAINT", "SPRAY", "LACQUER", "LAMINATE", "VENEER", "FOIL", "PRINT",
     "ANODIS", "ANODIZ", "PLATE", "PLATED", "GALVANIS", "CHROME", "BRUSHED",
-    "ETCH", "WRAP", "FILM", "GLOSS", "MATT", "SATIN", "SILK",
+    "ETCH", "WRAP", "FILM",
 )
+# SHEENS ARE NOT PROCESSES. GLOSS, MATT, SATIN and SILK were in the list above and every
+# powder finish SDI writes says "POWDER COATED - MATT". 11650's cabinet fired this check on
+# ten powder-coated steel parts whose P.Coat row was costed on the same sheet -- the exact
+# cry-wolf failure this check was written to avoid. A sheen qualifies a finish; it is never
+# the finish.
+_FINISH_SHEEN_WORDS = ("GLOSS", "MATT", "SATIN", "SILK", "TEXTURE", "TEXTURED")
+
+# The list above must never name a finish the engine CAN cost, or a correctly-costed powder
+# job reports itself as supplied free. Asserted at import so it cannot drift quietly.
+assert not any(w in _FINISH_PROCESS_WORDS for w in ("POWDER", "DIAMOND", "POLISH", "PEEL")), \
+    "a costable finish is in the uncostable list -- powder jobs will report as free"
 # NO "_NO_FINISH_WORDS" LIST. There was one -- RAW, SELF COLOUR, MILL FINISH, AS ROLLED --
 # and a mutation proved it never fired: none of those strings contains a finish PROCESS
 # word, so requiring a process word already excludes every one of them. A second rule that
@@ -2227,7 +2238,14 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     """
     try:
         parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
-        priced = (summary.get("estimate_summary") or {}).get("workbook_route_rows") or []
+        # THE KEY THIS READS MUST BE ONE SOMETHING WRITES. The first version asked for
+        # "workbook_route_rows", which nothing in the engine produces -- so `priced` was
+        # ALWAYS empty, finish_is_costed was ALWAYS False, and the check fired on every
+        # stated finish whether or not the sheet charged for it. Built is not wired, in the
+        # check written to catch exactly that. The readback stamps the priced route at
+        # final_estimate.labour_rows, which is where the unpriced-line check already looks.
+        priced = (((summary.get("estimate_summary") or {}).get("final_estimate") or {})
+                  .get("labour_rows") or [])
     except AttributeError:
         return [_violation(
             "stated_finish_not_costed", UNVERIFIED,
@@ -2235,8 +2253,10 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     if not parts:
         return []
 
-    costed_ops = " ".join(str(r.get("operation") or "") for r in priced
-                          if isinstance(r, dict)).lower()
+    costed_ops = " ".join(
+        str(r.get("operation") or r.get("op") or r.get("operation_name")
+            or r.get("description") or "")
+        for r in priced if isinstance(r, dict)).lower()
     finish_is_costed = any(op in costed_ops for op in _COSTABLE_FINISH_OPS)
 
     uncosted = []
@@ -2255,7 +2275,17 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
                             # reports it, and claiming an uncosted finish here would be a
                             # warning raised on a word that is not a finish at all
         named = [w for w in _FINISH_PROCESS_WORDS if w in text]
-        if named and not finish_is_costed:
+        if not named and any(w in text for w in _FINISH_SHEEN_WORDS):
+            continue        # a sheen with no process word names no work of its own
+        # PER PART, NOT PER JOB. This asked "is ANY costable finish on this route?" and
+        # went silent for the whole job if one was. 11650's cabinet costs P.Coat on its
+        # steel, so the vinyl on its PETG panels got a free pass -- the under-charge this
+        # check exists to find, hidden by a different part being finished properly.
+        #
+        # _FINISH_PROCESS_WORDS is already the set of processes this engine has NO rate
+        # for; powder and diamond polish are deliberately absent. So naming one is
+        # sufficient on its own and the job-level flag is not consulted.
+        if named:
             uncosted.append({"part_number": part.get("part_number"),
                              "finish": text[:80], "words": named[:3]})
     if not uncosted:

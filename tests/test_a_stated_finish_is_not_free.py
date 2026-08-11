@@ -205,3 +205,64 @@ def test_a_clean_job_reports_nothing():
 
 def test_the_misread_check_is_registered():
     assert drawing_text in invariants.CHECKS
+
+
+# ── the cry-wolf failure the 11650 cabinet exposed ──────────────────────────────────
+# The cabinet run fired this check on TEN powder-coated steel parts whose P.Coat row was
+# costed on the same sheet. Two bugs, both mine, both shipped:
+#
+#   1. MATT was in the process-word list. Every powder finish SDI writes says "POWDER
+#      COATED - MATT". A sheen qualifies a finish; it is never the finish.
+#   2. The costed-route lookup asked for "workbook_route_rows", a key nothing in the engine
+#      writes -- so the priced list was ALWAYS empty. Built is not wired, inside the check
+#      written to catch exactly that.
+#
+# And fixing those exposed a third: the costed test was JOB-level, so a cabinet that costs
+# P.Coat on its steel silenced the uncosted vinyl on its PETG panels -- hiding the very
+# under-charge this check exists to find.
+@pytest.mark.parametrize("finish", [
+    "POWDER COATED - MATT - EPOXY BASED POWDER",
+    "POWDER COATED - MATT",
+    "POWDER COATED - FINE TEXTURE",
+    "GLOSS WHITE POWDER",
+    "SATIN BLACK POWDER COAT",
+])
+def test_a_sheen_on_a_costed_powder_finish_is_not_reported_as_free(finish):
+    assert check(_job(finish, ops=("P.Coat",))) == [], \
+        "a correctly powder-coated part is being reported as supplied free"
+
+
+def test_an_uncostable_finish_still_fires_when_another_finish_is_costed():
+    """PER PART, NOT PER JOB. The cabinet costs P.Coat on its steel and cannot cost the
+    vinyl on its PETG panels; the second must not be excused by the first."""
+    job = {"manufacturing_writeup": {"parts": [
+            {"part_number": "STEEL-1", "normalized_finish": "POWDER COATED - MATT"},
+            {"part_number": "PETG-1",
+             "normalized_finish": "1/2 INCH REEDED VINYL + UV OR CLEAR VINYL"}]},
+           "estimate_summary": {"final_estimate": {"labour_rows": [{"operation": "P.Coat"}]}}}
+    out = check(job)
+    assert len(out) == 1
+    assert "PETG-1" in out[0]["message"] and "STEEL-1" not in out[0]["message"]
+
+
+def test_the_uncostable_list_never_names_a_finish_the_engine_can_cost():
+    """Asserted at import too, because this is the failure mode that makes the check
+    worthless: one costable process in the list and every correct powder job reports
+    itself as free."""
+    for costable in ("POWDER", "DIAMOND", "POLISH", "PEEL"):
+        assert costable not in invariants._FINISH_PROCESS_WORDS
+
+
+def test_the_priced_route_is_read_from_a_key_something_actually_writes():
+    """The invented-key bug. A reader pointed at a key no writer produces cannot fail
+    loudly -- it just always sees nothing, which reads as a real answer."""
+    src = (ROOT / "src" / "invariants.py").read_text(encoding="utf-8")
+    # THE KEY BEING READ, not the comment explaining why it was removed. Searching the raw
+    # text failed on the comment that names the old key -- the fourth time this codebase
+    # has hit that trap, and the fix is always the same: assert on code, not on prose.
+    assert 'get("workbook_route_rows")' not in src, "the invented key is being read again"
+    engine = "".join(
+        (ROOT / "src" / m).read_text(encoding="utf-8", errors="replace")
+        for m in ("wep_readback_from_xlsx.py", "costed_facts.py"))
+    assert '"labour_rows"' in engine, \
+        "the key this check reads is no longer written by the engine"
