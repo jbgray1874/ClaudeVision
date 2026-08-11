@@ -2151,7 +2151,94 @@ def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict
     return out
 
 
+
+# Finishes the engine can actually cost. Anything else a drawing states is real work with
+# no rate behind it, and the sheet charges nothing for it.
+_COSTABLE_FINISH_OPS = ("p.coat", "powder", "diamond polish", "polish", "peel")
+
+# Words that name a finish PROCESS on a drawing. Deliberately not "any finish text": a
+# finish field reading RAW or SELF COLOUR states that there is no finish, and flagging
+# those would put a warning on every bare-metal job in the system.
+_FINISH_PROCESS_WORDS = (
+    "VINYL", "PAINT", "SPRAY", "LACQUER", "LAMINATE", "VENEER", "FOIL", "PRINT",
+    "ANODIS", "ANODIZ", "PLATE", "PLATED", "GALVANIS", "CHROME", "BRUSHED",
+    "ETCH", "WRAP", "FILM", "GLOSS", "MATT", "SATIN", "SILK",
+)
+# NO "_NO_FINISH_WORDS" LIST. There was one -- RAW, SELF COLOUR, MILL FINISH, AS ROLLED --
+# and a mutation proved it never fired: none of those strings contains a finish PROCESS
+# word, so requiring a process word already excludes every one of them. A second rule that
+# can only agree with the first is not a safety net, it is a thing to keep in step with no
+# way to notice when it drifts. The tests for RAW and SELF COLOUR stay, and now prove the
+# process-word requirement is what does the work.
+
+
+def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
+    """A finish the drawing states and the sheet charges nothing for.
+
+    POWDER IS THE ONLY FINISH THIS ENGINE CAN COST. That is fine for steel and wrong for
+    everything else, and the gap is invisible because the two halves look correct
+    separately: the non-metal rule correctly refuses to powder-coat a plastic, and the
+    route correctly contains no powder operation -- so nothing is flagged, and a stated
+    finish is silently free.
+
+    11650-05 is the live case. Its side panels state "1/2 INCH REEDED VINYL + UV OR CLEAR
+    VINYL". The engine read that, printed it as an observation, and costed Laser, Manual
+    labour and Assemble/pack. There is no vinyl operation in the vocabulary, no rate for
+    one, and no line on the sheet. The vinyl is free.
+
+    THIS IS THE SHAPE THAT MATTERS FOR BOARD AND PLASTIC GENERALLY. Powder coating is an
+    oven process and metals only; paint, vinyl, laminate, print and foil are applied to
+    wood, MDF, acrylic and PETG every day. Ruling powder out on a non-metal is right;
+    leaving nothing in its place is an under-charge that grows with every non-metal job.
+
+    NOT AN INVENTED RATE. This check does not guess what the finish costs -- there is no
+    measured rate for it, and inventing one would be worse than the gap. It says the work
+    was named and not charged, and puts it in front of the estimator.
+    """
+    try:
+        parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+        priced = (summary.get("estimate_summary") or {}).get("workbook_route_rows") or []
+    except AttributeError:
+        return [_violation(
+            "stated_finish_not_costed", UNVERIFIED,
+            "the summary could not be read, so this check verified nothing")]
+    if not parts:
+        return []
+
+    costed_ops = " ".join(str(r.get("operation") or "") for r in priced
+                          if isinstance(r, dict)).lower()
+    finish_is_costed = any(op in costed_ops for op in _COSTABLE_FINISH_OPS)
+
+    uncosted = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = " ".join(str(x) for x in (
+            part.get("normalized_finish"), part.get("surface_finish"),
+            " ".join(str(v) for v in (part.get("surface_finishes") or []))
+        ) if x).upper()          # skip absent fields: str(None) puts "NONE" in the message,
+                                 # which then reads as the finish being called None
+        if not text.strip():
+            continue
+        named = [w for w in _FINISH_PROCESS_WORDS if w in text]
+        if named and not finish_is_costed:
+            uncosted.append({"part_number": part.get("part_number"),
+                             "finish": text[:80], "words": named[:3]})
+    if not uncosted:
+        return []
+
+    listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in uncosted[:4])
+    return [_violation(
+        "stated_finish_not_costed", WARNING,
+        f"{len(uncosted)} part(s) state a finish the sheet charges nothing for: {listed}. "
+        f"Powder is the only finish this engine can cost, and no powder operation is on "
+        f"this route. Paint, vinyl, laminate, print and foil are real work on board and "
+        f"plastic and are being supplied free. ESTIMATOR TO PRICE THE FINISH.",
+        count=len(uncosted), parts=uncosted[:20])]
+
+
 CHECKS = (
+    check_a_stated_finish_is_costed,
     check_schemas,
     check_workbook_adapters_read_everything,
     check_material_rows_reconcile,
