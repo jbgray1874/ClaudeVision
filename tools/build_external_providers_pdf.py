@@ -186,11 +186,13 @@ A(Spacer(1, 3 * mm))
 A(p("Three findings need a decision before a position is settled", H3))
 A(table([
     ["#", "Finding", "Why it matters", "Status"],
-    ["1", "<b>SDI’s historical quotation corpus is committed to source control</b> "
-          "— approximately 104,000 records",
+    ["1", "<b>An extract of SDI’s historical quotation corpus was committed to source "
+          "control</b> — approximately 104,000 records. <b>Removed 10 August 2026; still "
+          "present in the repository’s history</b>",
      "Customer names, job numbers, sell prices, cost breakdowns, rebate fractions, "
-     "overhead divisors, and the names of the estimators who prepared them",
-     "<b>Decision needed</b>"],
+     "overhead divisors, and the names of the estimators who prepared them. The system of "
+     "record is internal; what was in the repository was a 66 MB extract of it",
+     "<b>Decision needed on history</b>"],
     ["2", "<b>A configuration file carrying live credentials is tracked in source "
           "control</b>",
      "The production database password and the HR platform client secret. Anyone with "
@@ -254,7 +256,8 @@ A(table([
     ["Customer PDFs ever committed", "<b>None</b>", "None", "None"],
     ["Credentials in history", "<b>Yes — still tracked (§7.2)</b>", "None found",
      "None found"],
-    ["Client names in tracked files", "<b>Yes, extensively (§7.1)</b>",
+    ["Client names in tracked files", "<b>Yes (§7.1)</b> — reduced by the 10 August "
+     "corpus removal, and still present in code and documentation",
      "None — only the committer’s SDI email",
      "Previously present; <b>remediated</b>, verified clean"],
 ], [34 * mm, (CONTENT_W - 34 * mm) / 3, (CONTENT_W - 34 * mm) / 3,
@@ -423,9 +426,11 @@ A(table([
 # ── 7. RISKS ────────────────────────────────────────────────────────────────────────
 A(p("7.  Risks to SDI, ordered by materiality", H1))
 
-A(p("7.1  HIGH — SDI’s quotation history is in source control", H2))
-A(p("<i>Estimating Intelligence only.</i> Three client corpus files and a general corpus "
-    "file are tracked in the repository, totalling approximately <b>104,000 records</b>. "
+A(p("7.1  HIGH — SDI’s quotation history was in source control", H2))
+A(p("<i>Estimating Intelligence only.</i> <b>The system of record is internal — the Access "
+    "database and the estimating spreadsheets. What was in the repository was a 66 MB "
+    "EXTRACT of it</b>, committed on 16 July 2026: three client corpus files and a general "
+    "corpus file, totalling approximately <b>104,000 records</b>. "
     "They carry, per record: customer name, job number, description and revision; sell "
     "price, unit cost, material cost and labour cost; bought-in cost breakdown, part counts "
     "and quantities; <b>rebate fraction and derived overhead divisor</b> — SDI’s "
@@ -440,11 +445,16 @@ A(callout("Why this is the top item", [
     "charged, to whom, at what margin. In the hands of a competitor or a client it is "
     "directly damaging, and the client side of it may engage the same confidentiality "
     "clauses as design data. The estimator names make it personal data as well.",
-    "<b>Recommended:</b> decide with the solicitors whether this corpus may remain in "
-    "source control at all. If not, it must be removed from the working tree <b>and from "
-    "history</b> — removing it from the current version leaves it fully readable in "
-    "the history. In the meantime, treat repository access as equivalent to access to the "
-    "quotation archive, and restrict it accordingly.",
+    "<b>Position at 10 August 2026: the extract has been removed from source control</b> "
+    "and the ignore-rule exception that had re-admitted it deleted. Nothing in the engine "
+    "read it — it was an intermediate staging file between the internal spreadsheets and "
+    "the database — so nothing broke, and the working copies remain on the internal "
+    "machine where the system of record already lives.",
+    "<b>This does not remove it from the repository’s HISTORY, which is where the exposure "
+    "actually sits.</b> Anyone with read access can still recover it from any commit made "
+    "since 16 July 2026. Closing that requires a history rewrite and a force-push, and is "
+    "the one decision on this finding still outstanding. Until then, treat repository "
+    "access as equivalent to access to the quotation archive and restrict it accordingly.",
 ]))
 
 A(p("7.2  HIGH — Live credentials tracked in source control", H2))
