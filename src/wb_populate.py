@@ -2857,8 +2857,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _dup = bom_parts[_i] = dict(bom_parts[_i])
                 _dup["unit_cost_gbp"] = 0.0
                 _dup["_duplicate_of"] = _kept_pn
-                _dup["_no_price_reason"] = (
-                    f"the same article as {_kept_pn} — counted there, not here")
+                # THE LINE EXPLAINS ITSELF IN ITS OWN DESCRIPTION, which is how the
+                # cross-reference rows above already do it. The first attempt put the
+                # sentence in input_note_for_line, and that function is only reached for rows
+                # whose status is UNPRICED — a duplicate is NOT_APPLICABLE, precisely so it
+                # stays off the estimator's checklist, so the explanation was written into a
+                # branch this row can never enter. A blank cell reads as a free part; a blank
+                # cell whose reason lives in an unreachable function reads exactly the same.
+                _dup["description"] = (
+                    f"{str(_dup.get('description') or '')[:110]} — SAME ARTICLE AS "
+                    f"{_kept_pn}: costed there, not here")
                 _flag(f"BOM {_dup.get('part_number')} and {_kept_pn} are the SAME ARTICLE "
                       f"(both name manufacturer reference "
                       f"{', '.join(sorted(_sref.identity_keys(_dup)))}). The quantity is "

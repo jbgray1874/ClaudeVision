@@ -25,6 +25,7 @@ yet must be read correctly on the first job that names them.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -485,7 +486,7 @@ def test_the_duplicate_line_survives_at_zero_rather_than_disappearing():
     stays, at zero, naming where its money went."""
     block = _WB[_WB.index("same_article_groups(bom_parts)"):_WB.index('row = b["first_row"]')]
     assert '_dup["unit_cost_gbp"] = 0.0' in block
-    assert "_duplicate_of" in block and "_no_price_reason" in block
+    assert "_duplicate_of" in block
     assert "del " not in block and ".pop(" not in block and ".remove(" not in block, \
         "the duplicate line is being removed rather than zeroed"
 
@@ -549,10 +550,6 @@ def test_a_duplicate_line_is_not_an_outstanding_estimator_input():
     dup = {"part_number": "ESSENTRA FOOT-466122", "description": "FOOT",
            "_duplicate_of": "FIXING1081"}
     assert ei.canonical_pricing_status(dup, 0.0) == ei.NOT_APPLICABLE
-    note = ei.input_note_for_line(dup)
-    assert note["kind"] == ei.DUPLICATE_ARTICLE
-    assert "FIXING1081" in note["note"]
-    assert "enter a unit rate" not in note["note"].lower()
 
 
 def test_an_ordinary_unpriced_line_is_still_asked_for():
@@ -561,6 +558,40 @@ def test_an_ordinary_unpriced_line_is_still_asked_for():
     real = {"part_number": "MAG CATCH", "description": "HAFELE 246.41.745"}
     assert ei.canonical_pricing_status(real, 0.0) == ei.UNPRICED
     assert ei.input_note_for_line(real)["kind"] == ei.MATERIAL_UNPRICED
+
+
+def test_the_duplicate_explains_itself_on_the_row_the_sheet_actually_prints():
+    """WRITTEN WHERE THIS ROW CAN REACH, AND THE FIRST ATTEMPT WAS NOT.
+
+    The sentence went into input_note_for_line to begin with, and that function is only
+    called for rows whose status is UNPRICED. A duplicate is NOT_APPLICABLE -- deliberately,
+    so it stays off the checklist -- so the explanation sat in a branch this row can never
+    enter. The unit test passed, because it called the function directly and proved only that
+    the function worked.
+
+    A blank cell reads as a free part. A blank cell whose reason lives somewhere unreachable
+    reads exactly the same. So the assertion is on the DESCRIPTION the writer mutates, which
+    is the field the sheet prints, and it is taken from the source of the dedup block itself.
+    """
+    block = _WB[_WB.index("same_article_groups(bom_parts)"):_WB.index('row = b["first_row"]')]
+    assert '_dup["description"]' in block, \
+        "the duplicate's explanation is not on the field the sheet prints"
+    assert "SAME ARTICLE AS" in block
+
+
+def test_the_writer_records_no_field_that_nothing_reads():
+    """_no_price_reason was set here and read by no consumer on any path -- the same
+    built-is-not-wired shape as the note above, in the same eight lines. A field written for
+    a reader that does not exist is indistinguishable, in a JSON dump, from one that is being
+    honoured."""
+    block = _WB[_WB.index("same_article_groups(bom_parts)"):_WB.index('row = b["first_row"]')]
+    written = set(re.findall(r'_dup\["(_[a-z_]+)"\]', block))
+    src = "\n".join(Path(sr.__file__).with_name(m).read_text(encoding="utf-8")
+                    for m in ("wb_populate.py", "estimator_inputs.py", "job_report_html.py",
+                              "invariants.py", "estimator.py"))
+    for field in written:
+        readers = len(re.findall(rf'get\(\s*["\']{field}["\']', src))
+        assert readers >= 1, f'{field} is written by the dedup block and read by nothing'
 
 
 if __name__ == "__main__":                                            # pragma: no cover
