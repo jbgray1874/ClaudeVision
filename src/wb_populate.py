@@ -82,7 +82,7 @@ try:
     from config import MATERIAL_TOTAL_ERROR_TOLERANT as _MATERIAL_TOTAL_ERROR_TOLERANT
 except Exception:
     _MATERIAL_TOTAL_ERROR_TOLERANT = True
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # The one module that answers "do we make this or buy it". Identity-only and
 # dependency-free, so it is safe to ask anywhere — including inside the finish gate,
@@ -1138,6 +1138,56 @@ def canonical_route_cutover_enabled(summary: Dict[str, Any]) -> bool:
         raise CanonicalRouteUnavailable(
             "canonical route cutover is enabled but decisions are missing")
     return True
+
+
+def parts_the_route_says_are_coated(summary: Dict[str, Any]) -> Optional[Set[str]]:
+    """Which parts the compiler decided go through the powder booth, or None.
+
+    THE POWDER MASS AND THE POWDER OPERATION MUST COME FROM ONE DECISION.
+
+    They did not. The compiler arbitrates powder_coating as a first-class operation --
+    ranked, evidenced, conflicts recorded -- and the coated-area sum that produces the
+    POWDER bill-of-materials line consulted it not at all. It summed every sheet part it
+    could measure and applied a per-piece floor, so a job the route had decided is not
+    coated still carried powder mass, and 11650's side panels shipped GBP 0.97 of it on a
+    sheet whose own log line said nothing in the job is coated.
+
+    Scope matters here. A finish belongs to the object that goes through the booth, and
+    that object is often an ASSEMBLY: you form raw, weld, then coat. So a decision's
+    PARTICIPANTS are coated as surely as its target -- reading target_id alone would drop
+    the coating off every weldment's components and under-charge exactly the jobs where
+    powder is largest.
+
+    Returns None -- not an empty set -- when the compiler has not ruled on this job at all.
+    Those are different facts: "the route says nothing is coated" is a decision, and "there
+    is no route" is the absence of one. Only the first may delete a powder line.
+    """
+    payload = canonical_route_payload(summary)
+    decisions = payload.get("decisions")
+    if not isinstance(decisions, list) or not decisions:
+        return None
+    saw_powder_decision = False
+    coated: Set[str] = set()
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            continue
+        if str(decision.get("operation") or "").strip().lower() not in _POWDER_OPERATIONS:
+            continue
+        saw_powder_decision = True
+        if str(decision.get("status") or "").strip().lower() != "required":
+            continue
+        for item in [decision.get("target_id")] + list(decision.get("participants") or []):
+            name = str(item or "").strip().upper()
+            if name:
+                coated.add(name)
+    # A COMPILED ROUTE THAT NEVER CONSIDERED POWDER HAS NOT DECIDED AGAINST IT. Treating
+    # silence as a ruling would delete the powder line on every job whose route was built
+    # before the operation existed, which is a large, quiet under-charge.
+    return coated if saw_powder_decision else None
+
+
+_POWDER_OPERATIONS = frozenset({"powder_coating", "powder_coat", "powder",
+                                "p_coat", "pcoat"})
 
 
 def canonical_part_kinds(summary: Dict[str, Any]) -> Dict[str, str]:
@@ -2469,9 +2519,30 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _wire_powder_diag = []
     _all_pes_pw = ((summary.get("estimate_summary") or {}).get("part_estimates")
                    or summary.get("parts") or [])
+
+    # ── ONE DECISION OWNS POWDER ────────────────────────────────────────────────────
+    # The route compiler arbitrates powder_coating: ranked, evidenced, conflicts recorded.
+    # Everything below used to ignore it and measure area instead, so the mass and the
+    # operation were two readers of one job answering separately -- and the mass had no
+    # way of knowing the route had ruled powder out.
+    #
+    # None means the compiler has not ruled on this job, and the geometry path stands
+    # unchanged. A SET, including an empty one, is a decision and is obeyed.
+    _route_coated = parts_the_route_says_are_coated(summary)
+
+    def _route_says_coated(_part) -> bool:
+        if _route_coated is None:
+            return True                      # no ruling: the old behaviour, unchanged
+        return str(_part.get("part_number") or "").strip().upper() in _route_coated
+
+    if _route_coated is not None:
+        _flag(f"powder follows the compiled route: {len(_route_coated)} part(s) decided "
+              f"coated. Mass and operation now come from one decision.", flags)
     for _wp in _all_pes_pw:
         _wme = _wp.get("material_estimate") or {}
         if str(_wme.get("stock_form") or "").lower() not in ("wire", "bar"):
+            continue
+        if not _route_says_coated(_wp):
             continue
         _wg = _safe(_wme.get("wire_gauge_mm") or _wp.get("wire_gauge_mm"))
         _wl = _safe(_wme.get("wire_length_mm") or _wp.get("wire_length_mm"))
@@ -2500,6 +2571,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             continue
         if _is_acrylic_pw(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area
+        if not _route_says_coated(_sp):
+            continue   # the route decided this part does not go through the booth
         # A part named TUBE is a hollow section, NOT a flat coated sheet: its blank (if any) is
         # garbled view geometry, and its true coated area is a thin cylinder surface, not L×W×2.
         # Without this guard a tube the LLM missed (e.g. 10M read as a 2431×2431 blank) injects
@@ -2526,6 +2599,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _section_powder_area_m2 = 0.0
     _section_powder_diag = []
     for _cp in _all_pes_pw:
+        if not _route_says_coated(_cp):
+            continue   # a section the route excluded is not on the booth line either
         _ca = section_coated_area_m2(_cp)
         if _ca > 0:
             _section_powder_area_m2 += _ca
@@ -2554,6 +2629,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _fsf = str((_fp.get("material_estimate") or {}).get("stock_form") or "").lower()
         if _is_acrylic_pw(_fp):
             continue   # acrylic is not coated — must not count toward the per-piece powder floor
+        if not _route_says_coated(_fp):
+            # THE FLOOR IS PER COATED OBJECT, and an object the route excluded is not one.
+            # Without this the floor re-invents the mass the area sum just declined to
+            # book, which is exactly how a job with nothing coated still carried powder.
+            continue
         if _fsf in ("sheet", "plate", "wire", "bar", "board"):
             _fab_pieces += int(_safe(_fp.get("quantity"), 1) or 1)
     # powder_floor_zero_when_no_coated (2026-07-15): a job with ZERO coatable pieces gets
@@ -3261,6 +3341,29 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _t += " " + str(_pg[_k])
         return _t.upper()
 
+    # ── THIS GATE ONLY SPEAKS WHERE IT DECIDES ──────────────────────────────────────
+    # Everything from here to the finish map below is the LEGACY finish gate. Every one of
+    # its consumers sits inside `for pe in ([] if _canonical_cutover else labour_parts)`,
+    # so under the canonical route it decides nothing at all -- and it went on printing its
+    # conclusions anyway. On 11650's side panels it announced "nothing in this job carries
+    # a POWDER finish" while a powder line sat on the sheet, and that log line, which had no
+    # reader and no authority, is what made a classification bug look like a policy dispute.
+    #
+    # NOT DELETED, BECAUSE IT IS NOT DEAD EVERYWHERE. A job with no compiled route still
+    # runs this path and still needs it. What is removed is its VOICE where it has no vote:
+    # under cutover the route compiler owns powder, the arbitrated decision is what the
+    # mass and the operation both read, and a second opinion printed beside it is noise
+    # that has already misled two readers of this codebase once.
+    def _gate_flag(_msg, _fl):
+        if _canonical_cutover:
+            return
+        _flag(_msg, _fl)
+
+    if _canonical_cutover:
+        _flag("finish/powder decided by the compiled route (arbitrated, with provenance); "
+              "the legacy finish gate is not consulted on this job.", flags)
+
+
     _assembly_is_powder = False
     _assembly_finish_seen = False
     for _pg in (summary.get("pages") or []):
@@ -3323,10 +3426,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         elif any(_h in _fin_u for _h in _POWDER_POINTER_HINTS):
             _powder_ok[_pn] = _assembly_is_powder
             if _assembly_is_powder:
-                _flag(f"{_pn}: finish is a POINTER ('{_fin[:38]}') — resolved to POWDER "
+                _gate_flag(f"{_pn}: finish is a POINTER ('{_fin[:38]}') — resolved to POWDER "
                       f"from the assembly drawing.", flags)
             else:
-                _flag(f"{_pn}: finish points to the assembly drawing, but NO assembly page "
+                _gate_flag(f"{_pn}: finish points to the assembly drawing, but NO assembly page "
                       f"states a finish. DRAWING DEFECT — not coated, and not invented. "
                       f"Raise with Design.", flags)
         elif _fin_u:
@@ -3355,7 +3458,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _assembly_level_powder = False
     if not any(_powder_ok.values()):
         if not _assembly_is_powder:
-            _flag("nothing in this job carries a POWDER finish, and no assembly page states "
+            _gate_flag("nothing in this job carries a POWDER finish, and no assembly page states "
                   "one either. If the product IS coated, the drawing does not say so — raise "
                   "with Design. NOT coating anything, and not guessing.", flags)
         else:
@@ -3370,13 +3473,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _assembly_level_powder = True
                 for _pn2 in _raw_components:
                     _powder_ok[_pn2] = True
-                _flag(f"ASSEMBLY-LEVEL FINISH: every detail says RAW, the assembly drawing "
+                _gate_flag(f"ASSEMBLY-LEVEL FINISH: every detail says RAW, the assembly drawing "
                       f"says POWDER. The components are formed raw, welded, and the ASSEMBLY "
                       f"is coated ({', '.join(_raw_components)}). P.Coat applied ONCE, to one "
                       f"object — not once per component.", flags)
             else:
                 # Loud, specific, and it prints what it actually saw. No third blind attempt.
-                _flag(f"assembly drawing says POWDER and nothing else in the job qualifies, "
+                _gate_flag(f"assembly drawing says POWDER and nothing else in the job qualifies, "
                       f"but no part's finish reads RAW. Finishes seen: "
                       f"{ {k: (v[:24] or '<empty>') for k, v in _fin_by_pn.items()} }. "
                       f"NOT coating anything. Check the drawing finish fields.", flags)
@@ -3413,14 +3516,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if _all_point_at_assembly and _job_welds:
             _weldment_is_one_object = True
             _assembly_level_powder = True          # the P.Coat qty already reads this flag
-            _flag(f"WELDMENT IS ONE OBJECT: no part carries its own finish — every one points "
+            _gate_flag(f"WELDMENT IS ONE OBJECT: no part carries its own finish — every one points "
                   f"at the assembly ({', '.join(_fab_pns)}) — and the job welds. They are "
                   f"joined into a single object, and a single object hangs on the booth line "
                   f"ONCE. P.Coat qty 1, not one per component.", flags)
         elif _all_point_at_assembly and not _job_welds:
             # Do NOT guess. Pointing at the assembly does not by itself mean welded — the
             # parts could be coated separately and then bolted. Say why we did not fire.
-            _flag(f"every part points at the assembly for its finish "
+            _gate_flag(f"every part points at the assembly for its finish "
                   f"({', '.join(_fab_pns)}) but NOTHING WELDS on this job. They may be one "
                   f"object, or coated separately and bolted. NOT collapsing P.Coat to qty 1 "
                   f"— charging one coat per part. Estimator to check.", flags)
