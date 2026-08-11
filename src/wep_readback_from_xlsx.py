@@ -156,17 +156,38 @@ def _scan_total_cell(com_ws, label_needles: Tuple[str, ...], max_row: int,
                 break
         if not _has:
             continue
-        best = None
+        # A TOTAL OF EXACTLY ZERO IS A TOTAL. This read `f is not None and f != 0` and
+        # returned None for a genuinely nil subtotal, so the caller stamped material=None
+        # and two reconciliation checks reported "verified nothing" on a job whose material
+        # really was zero. 11650-05 hit it the moment the phantom powder line was removed:
+        # every material row became estimator-to-price, the subtotal computed 0.00, and the
+        # sheet's own correct answer was read back as an absence.
+        #
+        # Zero and missing are different facts everywhere else in this codebase -- it is
+        # what the MISSING sentinel exists for -- and they must not resolve the same way
+        # here either. An EMPTY cell still reads as no value: Excel returns None for empty
+        # and 0.0 for a zero, so the two are distinguishable at the source.
+        best = best_zero = None
         for c in range(1, max_col + 1):
             try:
                 v = com_ws.Cells(r, c).Value
             except Exception:
                 continue
             f = _safe_float(v)
-            if f is not None and f != 0:
+            if f is None:
+                continue
+            if f != 0:
                 best = (r, c)
-        if best:
-            return best
+            else:
+                # A CELL HOLDING ZERO. No "and v is not None" guard: _safe_float already
+                # returns None for None and for an empty string, so anything reaching here
+                # with f == 0 really did hold a zero. A mutation proved the extra check
+                # could only ever agree with the one above it and never fired -- the second
+                # such redundancy found this week, and both were removed rather than kept
+                # as a thing to hold in step with no way to notice when it drifts.
+                best_zero = (r, c)
+        if best or best_zero:
+            return best or best_zero
     return None
 
 
