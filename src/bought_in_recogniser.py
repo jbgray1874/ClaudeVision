@@ -29,6 +29,8 @@ This module reads the DB read-only. It never writes. It never sends DXF geometry
 from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+from supplier_reference import synthesise_key
 # ---------------------------------------------------------------------------
 # HEAD-WORDS: the generic nouns that name a physical PURCHASED component. A prose
 # phrase only counts as a bought-in item if it is multi-word AND anchored on one of
@@ -562,7 +564,12 @@ def recognise_bought_in_in_prose(
         if any(len(dts & _sig_token_set(x)) >= max(2, int(0.6 * len(dts)))
                for x in existing_descriptions if x):
             continue
-        code_guess = "BI-" + re.sub(r"[^A-Z0-9]", "", phrase.upper())[:18]
+        # MINTED HERE, AND SAID SO. The prefix used to be written inline, which made it a
+        # spelling rather than a fact: nothing downstream could ask whether a part number had
+        # been read off a drawing or invented in this loop, so BI-BINDINGSCREW went to every
+        # catalogue lookup looking exactly like a code a supplier might recognise. It is now
+        # minted by the module that also answers the question.
+        code_guess = synthesise_key(phrase)
         if code_guess in existing_pns:
             continue
         # DOUBLE-COUNT GUARD: if this phrase matches something already counted as a

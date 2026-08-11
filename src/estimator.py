@@ -25,6 +25,7 @@ from config import (
 from estimate_source_extract import build_estimate_source_extract
 import price_provenance
 from price_provenance import classify_price_source
+import supplier_reference as _supplier_reference
 from price_sources import PriceRequest, get_best_price
 from unit_parsing import is_per_kg_unit, is_per_hour_unit
 
@@ -4097,8 +4098,14 @@ def _page_text_for_bought_in_scan(page: Dict[str, Any]) -> str:
 
 
 def _bought_in_part_stub(part_number: str, description: str, quantity: Any) -> Dict[str, Any]:
-    """Minimal shape compatible with document_builder + estimate_part."""
-    return {
+    """Minimal shape compatible with document_builder + estimate_part.
+
+    THE ONE PLACE A PURCHASED PART IS BORN. Every reader that finds a bought-in — the
+    catalogue layer, the prose recogniser, the note scan, the BOM rows — comes through here,
+    which is why the manufacturer reference is captured here and not in any of them. Capturing
+    it per reader is how three of the four would have gone on discarding it.
+    """
+    stub = {
         "part_number": part_number,
         "description": description,
         "quantity": quantity,
@@ -4155,6 +4162,7 @@ def _bought_in_part_stub(part_number: str, description: str, quantity: Any) -> D
         "normalized_thickness_mm": None,
         "_bought_in_from_text_scan": True,
     }
+    return _supplier_reference.attach_references(stub)
 
 
 def _lookup_udef_exact_code(code: str) -> Optional[Dict[str, Any]]:

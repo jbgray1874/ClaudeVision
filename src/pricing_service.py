@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 import config
 from estimator import estimate_document, generate_client_quote_pack
 from json_normaliser import normalise_json
+import supplier_reference
 
 try:
     import pyodbc  # type: ignore
@@ -198,6 +199,41 @@ class PricingService:
         if not part_code and len(desc) < 8:
             return None
 
+        # ── THE MANUFACTURER'S OWN NUMBER IS TRIED FIRST ────────────────────────────
+        # The exact arm below can only ever match a code somebody typed into UDEF. When the
+        # part number is one this engine minted — BI-BINDINGSCREW — that arm misses by
+        # construction on every run, and the line falls to the description LIKE arm or to
+        # nothing. 11650's feet, knobs and catches came out at GBP 0.00 that way while their
+        # real references (466122, 246.41.745) sat unread in the descriptions they were
+        # printed in.
+        #
+        # EXACT ONLY, AND THAT IS WHAT MAKES IT SAFE. A reference recovered from a description
+        # is a guess about which characters are the key; matched loosely it could attach a
+        # hinge's price to a foot. Matched exactly it either finds the row that carries that
+        # article number or finds nothing, so a wrong guess costs one query and never a price.
+        for key in supplier_reference.lookup_keys(part):
+            if key == part_code:
+                continue                      # the query below already tries the part's own code
+            hit = self._fetch_one_with_retry(
+                """
+                SELECT TOP 1
+                    u.[Part code], u.[Description], u.[Supplier name],
+                    CAST(u.[System cost per] AS decimal(18,4)), u.[UOM],
+                    u.[WO Est lab cost], u.[WO Est mat cost],
+                    u.[WO Actual lab cost], u.[WO Actual mat cost]
+                FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+                WHERE u.[Part code] = LTRIM(RTRIM(?)) AND u.[System cost per] > 0
+                ORDER BY u.[Part code] ASC
+                """,
+                [key],
+            )
+            if hit:
+                anchor = self._udef_row_to_anchor(hit, exact=True)
+                if anchor:
+                    anchor["matched_on"] = key
+                    anchor["provenance"] += f" | matched on manufacturer reference {key}"
+                    return anchor
+
         row = self._fetch_one_with_retry(
             """
             SELECT TOP 1
@@ -248,7 +284,15 @@ class PricingService:
             if _match_score < 0.45:
                 return None
 
-        base_confidence = 0.95 if is_exact_code else 0.82
+        return self._udef_row_to_anchor(row, exact=is_exact_code)
+
+    def _udef_row_to_anchor(self, row: Any, *, exact: bool) -> Dict[str, Any] | None:
+        """One UDEF row, as a priced anchor. Shared so the reference arm and the code arm
+        cannot describe the same table differently."""
+        price = float(row[3] or 0.0)
+        if price <= 0:
+            return None
+        base_confidence = 0.95 if exact else 0.82
         freshness = self._freshness_adjustment(None)  # UDEF has no effective_date column
 
         wo_parity: Dict[str, Any] = {}
