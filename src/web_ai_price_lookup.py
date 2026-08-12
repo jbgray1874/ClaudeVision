@@ -799,6 +799,70 @@ def lookup_web_ai_price(
 
 # ─────────────────── plain-English JSON summary ─────────────────────────────
 
+def market_sheet_rate_indication(material: Any, thickness_mm: Any,
+                                 sheet_l_mm: Any = None, sheet_w_mm: Any = None,
+                                 ) -> Optional[Dict[str, Any]]:
+    """What a full sheet of this material costs on the open market. An INDICATION, never a rate.
+
+    THE ENGINE MUST NOT BE THE REASON A NUMBER DOES NOT EXIST. config deliberately carries no
+    rate for ABS, PETG, PVC, FOAMEX, PP or PS -- and it is right to: "a price is a commercial
+    fact and SDI owns it; inventing one would put a number on a quote that nobody has agreed
+    to". But refusing to INVENT a rate is not the same as refusing to LOOK ONE UP, and the
+    consequence of conflating those was 11650-01-05A DOOR at GBP 0.00 with nobody told why.
+
+    So this asks the same web/LLM lookup the bought-in fallback already uses, about a SHEET
+    rather than a part: material, thickness, and the standard sheet size. What comes back is
+    stamped exactly for what it is -- non-reproducible, an AI estimate, not firm -- and this
+    module has a whole vocabulary for that. It goes IN FRONT OF AN ESTIMATOR, not into a
+    total. price_provenance.AI_ESTIMATE is neither reproducible nor firm, and a figure that
+    changes between runs must never be the difference between winning and losing a job.
+
+    Returns {gbp_per_sheet, gbp_per_m2, sheet_mm, confidence, source} or None. Never raises:
+    a lookup that fails leaves the material exactly as unpriceable as it was.
+    """
+    name = str(material or "").strip()
+    if not name:
+        return None
+    try:
+        thickness = float(thickness_mm) if thickness_mm is not None else None
+    except (TypeError, ValueError):
+        thickness = None
+    if not thickness or thickness <= 0:
+        return None                      # a sheet price without a gauge is not a sheet price
+    sheet_l = float(sheet_l_mm or 3050.0)
+    sheet_w = float(sheet_w_mm or 2050.0)
+    spec = {
+        "material": name,
+        "description": (f"{name} sheet {thickness:g}mm, {sheet_l:.0f} x {sheet_w:.0f}mm, "
+                        f"full sheet, trade price"),
+        "thickness_mm": thickness,
+        "length_mm": sheet_l,
+        "width_mm": sheet_w,
+        "quantity": 1,
+    }
+    try:
+        result = lookup_web_ai_price(spec, enable_web_search=True, enable_llm_estimate=True)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if not result or not result.get("found"):
+        return None
+    try:
+        per_sheet = float(result.get("price_gbp") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if per_sheet <= 0:
+        return None
+    area_m2 = (sheet_l * sheet_w) / 1_000_000.0
+    return {
+        "gbp_per_sheet": round(per_sheet, 2),
+        "gbp_per_m2": round(per_sheet / area_m2, 2) if area_m2 else None,
+        "sheet_mm": [sheet_l, sheet_w],
+        "thickness_mm": thickness,
+        "confidence": result.get("confidence"),
+        "source": result.get("source_type") or "web_ai_fallback",
+    }
+
+
 def summarise_estimate_json(summary: Dict[str, Any], *, verbose: bool = False) -> str:
     """
     Produce a plain-English text summary of what the AI found in a drawing scan.

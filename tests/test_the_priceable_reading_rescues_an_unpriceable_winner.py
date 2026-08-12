@@ -199,3 +199,113 @@ def test_an_unreadable_summary_is_unverified_not_a_pass():
 
 def test_the_check_runs_on_every_job():
     assert inv.check_a_material_we_cannot_price_is_declared in inv.CHECKS
+
+
+# ── the engine must not be the reason a number does not exist ───────────────────────
+# config carries no rate for ABS, PETG, PVC, FOAMEX, PP or PS, and its comment says why:
+# "a price is a commercial fact and SDI owns it; inventing one would put a number on a quote
+# that nobody has agreed to." That is right. But declining to INVENT a rate is not the same
+# as declining to LOOK ONE UP, and treating them as the same thing is what left the door at
+# GBP 0.00 with nobody told why. The same web/LLM lookup the bought-in fallback already uses
+# can be asked about a SHEET -- and what it returns is an AI estimate, so it goes in front of
+# an estimator and never into a total.
+def test_the_indication_never_reaches_a_total(monkeypatch):
+    from estimator import estimate_material
+    import estimator as _est
+    monkeypatch.setattr(_est, "market_indication_for",
+                        lambda part, material: {"gbp_per_sheet": 180.0, "gbp_per_m2": 28.8,
+                                                "sheet_mm": [3050, 2050], "thickness_mm": 6,
+                                                "confidence": 0.5, "source": "llm_market_estimate"})
+    part = _real_door()
+    me = estimate_material(part)
+    assert part["material_market_indication"]["gbp_per_m2"] == 28.8
+    assert me["unit_material_cost_gbp"] == pytest.approx(18.69, abs=0.01), (
+        "the AI indication changed the priced figure. It is not reproducible and must never "
+        "be the difference between winning and losing a job -- it is shown, not summed.")
+
+
+def test_the_indication_is_asked_for_even_when_a_substitution_rescued_the_price(monkeypatch):
+    """It is how an estimator judges whether the substitution matters. If ABS and
+    POLYCARBONATE come back at similar money the conflict is commercially small and the
+    ruling is easy; if they are far apart, it is the whole question."""
+    import estimator as _est
+    asked = []
+    monkeypatch.setattr(_est, "market_indication_for",
+                        lambda part, material: asked.append(material) or None)
+    _est.estimate_material(_real_door())
+    assert asked == ["ABS"], "asked about the wrong material, or not asked at all"
+
+
+def test_a_priceable_material_is_never_looked_up(monkeypatch):
+    """One network call per unpriceable material is the budget. Asking about MILD STEEL,
+    which config prices, spends money and time for an answer we already hold."""
+    import estimator as _est
+    asked = []
+    monkeypatch.setattr(_est, "market_indication_for",
+                        lambda part, material: asked.append(material) or None)
+    _est.estimate_material({"part_number": "S", "normalized_material": "MILD STEEL",
+                            "quantity": 1, "normalized_thickness_mm": 2,
+                            "normalized_geometry": {"blank_length_mm": 300,
+                                                    "blank_width_mm": 200}})
+    assert asked == []
+
+
+def test_offline_asks_nothing(monkeypatch):
+    """SDI_OFFLINE means offline. The rules suite must never dial a provider.
+
+    ASSERTED BY COUNTING CALLS, NOT BY THE RETURN VALUE. Deleting this guard left the test
+    passing, because lookup_web_ai_price has its own offline check and returns found=False --
+    so the outer guard could vanish and nothing would notice until the day the inner one
+    moved. Defence in depth is only depth if each layer is tested for itself.
+    """
+    import estimator as _est, web_ai_price_lookup as _w
+    _est._MARKET_INDICATION_CACHE.clear()
+    calls = []
+    monkeypatch.setattr(_w, "market_sheet_rate_indication",
+                        lambda *a, **k: calls.append(a) or {"gbp_per_m2": 1.0})
+    monkeypatch.setenv("SDI_OFFLINE", "1")
+    assert _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS") is None
+    assert calls == [], "the offline guard did not short-circuit; a provider was dialled"
+    _est._MARKET_INDICATION_CACHE.clear()
+
+
+def test_the_indication_is_written_but_never_read_by_anything_that_costs():
+    """The guarantee stated structurally, because the behavioural version could not fail: a
+    mutant that assigned the indication onto the part still left the priced figure alone,
+    since the cost is built from locals. So assert the shape instead -- the key is WRITTEN by
+    the estimator and READ only where things are reported, never where money is computed.
+    """
+    import ast
+    KEY = "material_market_indication"
+    writers, readers = set(), set()
+    for path in sorted((ROOT / "src").glob("*.py")):
+        if not path.is_file() or path.name.startswith("_") or ".baclkup" in path.name:
+            continue
+        try:
+            body = ast.unparse(ast.parse(path.read_text(encoding="utf-8-sig", errors="replace")))
+        except SyntaxError:
+            continue
+        if KEY not in body:
+            continue
+        (writers if f"['{KEY}'] =" in body else readers).add(path.name)
+    assert writers == {"estimator.py"}, f"unexpected writer(s) of {KEY}: {writers}"
+    costing = {"wb_populate.py", "pricing_service.py", "bay_rollup.py", "bought_in_pricing.py"}
+    assert not (readers & costing), (
+        f"{KEY} is read by a module that computes money: {readers & costing}. It is an AI "
+        f"estimate -- not reproducible, not firm -- and must never be summed.")
+
+
+def test_the_lookup_is_cached_per_material_and_gauge(monkeypatch):
+    """A job with six ABS panels asked six times for one answer -- six round trips, and six
+    chances to return six different numbers for the same material."""
+    import estimator as _est, web_ai_price_lookup as _w
+    _est._MARKET_INDICATION_CACHE.clear()
+    calls = []
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_w, "market_sheet_rate_indication",
+                        lambda *a, **k: calls.append(a) or {"gbp_per_sheet": 180.0,
+                                                            "gbp_per_m2": 28.8})
+    for _ in range(6):
+        _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")
+    assert len(calls) == 1, f"asked {len(calls)} times for one material and gauge"
+    _est._MARKET_INDICATION_CACHE.clear()

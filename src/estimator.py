@@ -2023,6 +2023,51 @@ def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tupl
     return material, None
 
 
+_MARKET_INDICATION_CACHE: Dict[Tuple[str, Any], Any] = {}
+
+
+def market_indication_for(part: Dict[str, Any], material: Any) -> Optional[Dict[str, Any]]:
+    """A market sheet price for a material this engine holds no rate for. NEVER a rate.
+
+    THE ENGINE MUST NOT BE THE REASON A NUMBER DOES NOT EXIST. config carries no rate for
+    ABS, PETG, PVC, FOAMEX, PP or PS, and is right not to: "a price is a commercial fact and
+    SDI owns it; inventing one would put a number on a quote that nobody has agreed to."
+    But declining to INVENT a rate is not the same as declining to LOOK ONE UP, and treating
+    those as the same thing is why 11650-01-05A DOOR showed GBP 0.00 with nobody told why.
+
+    What comes back is an AI/web estimate: not reproducible, not firm, and it does not enter
+    a total on any path. It exists so the line an estimator has to rule on carries a number
+    and a source instead of a blank -- the same standard as every other candidate this engine
+    surfaces. Off by the same switch as the bought-in fallback, and bounded by the same
+    per-job budget, because it is the same lookup.
+    """
+    if os.environ.get("SDI_OFFLINE"):
+        return None
+    policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+    if not policy.get("enable_web_ai_fallback"):
+        return None
+    try:
+        from web_ai_price_lookup import market_sheet_rate_indication
+    except Exception:                                        # noqa: BLE001
+        return None
+    sheet = (getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}).get(
+        str(material or "").strip().upper())
+    sheet_l, sheet_w = (sheet[-1] if sheet else (None, None))
+    # ONE CALL PER MATERIAL AND GAUGE, NOT PER PART. A job with six ABS panels asked six
+    # times for the same sheet rate, six network round trips for one answer, and could return
+    # six different numbers for the same material -- which is worse than slow.
+    key = (str(material or "").strip().upper(), _safe_thickness_mm(part))
+    if key in _MARKET_INDICATION_CACHE:
+        return _MARKET_INDICATION_CACHE[key]
+    try:
+        found = market_sheet_rate_indication(
+            material, _safe_thickness_mm(part), sheet_l, sheet_w)
+    except Exception:                                        # noqa: BLE001
+        found = None
+    _MARKET_INDICATION_CACHE[key] = found
+    return found
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     material = part.get("normalized_material") or _first(part.get("materials", []))
     material = _canonical_material_family(material)
@@ -2039,7 +2084,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # material was written to normalized_material as well, so the arbitration's answer was
     # silently replaced by the reading that merely happened to have a rate -- exactly what
     # this rule promises not to do. From here on `material` is the PRICING material only.
+    _arbitrated_material = material
     material, _material_conflict = _material_we_can_actually_price(part, material)
+    # ASKED WHETHER OR NOT A SUBSTITUTION RESCUED THE PRICE. Where nothing rescued it, this
+    # is the only number on the line. Where something did, it is how an estimator judges
+    # whether the substitution matters: if ABS and POLYCARBONATE come back at similar money,
+    # the conflict is commercially small and the ruling is easy. It never enters a total on
+    # either path -- it is an AI/web estimate, and this engine does not sum those.
+    if not config.material_has_a_rate(_arbitrated_material):
+        _indication = market_indication_for(part, _arbitrated_material)
+        if _indication:
+            part["material_market_indication"] = dict(_indication,
+                                                      material=_arbitrated_material)
+            print(f"   [material] {part.get('part_number')}: no rate for "
+                  f"{_arbitrated_material}; market indication "
+                  f"£{_indication['gbp_per_m2']:.2f}/m2 "
+                  f"(£{_indication['gbp_per_sheet']:.2f}/sheet, {_indication['source']}) "
+                  f"— NOT USED IN THE TOTAL, for the estimator to confirm.", flush=True)
     if _material_conflict:
         part["material_priced_as"] = _material_conflict
         part.setdefault("review_flags", []).append({

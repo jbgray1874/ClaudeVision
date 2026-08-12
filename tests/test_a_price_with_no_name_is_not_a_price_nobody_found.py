@@ -143,7 +143,13 @@ def _hand_rolled_source_name_chains():
                         and call.args[0].value in keys:
                     seen.setdefault(ast.unparse(call.func.value), set()).add(call.args[0].value)
             if any(len(k) >= 2 for k in seen.values()):
-                offenders.append(f"{path.name}:{node.lineno}")
+                # IDENTIFIED BY WHAT IT SAYS, NOT WHERE IT SITS. Keyed on line number, this
+                # list went stale the moment anything was inserted ABOVE a known offender --
+                # two untouched chains in web_ai_price_lookup moved from 862/909 to 926/973
+                # when a function was added, and the guard reported them as new violations
+                # while claiming the real ones had been fixed. A guard that cries wolf on
+                # unrelated edits gets its assertion deleted, not its findings fixed.
+                offenders.append(f"{path.name}: {ast.unparse(node)[:70]}")
     return sorted(set(offenders))
 
 
@@ -154,15 +160,15 @@ def _hand_rolled_source_name_chains():
 # regression cancel out.
 _KNOWN_HAND_ROLLED = {
     # source_name or source            -- misses a stamp that records only source_type
-    "check_tiers.py:20", "check_tiers.py:26",
-    "generate_estimate_report.py:50",
+    "check_tiers.py: ps.get('source_name') or ps.get('source') or 'unknown'",
+    "generate_estimate_report.py: ps.get('source_name') or ps.get('source') or ps.get('source_type') or ",
     # source or source_type            -- prefers the generic key over the dedicated one, so
-    "parity_tab.py:280",               #    it disagrees with the three above on the same stamp
-    "estimate_parity_pretty_report.py:203", "estimate_parity_pretty_report.py:419",
-    "estimate_parity_pretty_report.py:711",
+    "parity_tab.py: ps.get('source') or ps.get('source_type') or '\u2014'",
+    "estimate_parity_pretty_report.py: ps.get('source') or ps.get('source_type') or ps.get('source_name') or ",
+    "estimate_parity_pretty_report.py: ps.get('source_type') or ps.get('source') or ''",
     # source_type or source_name       -- a third ordering again
-    "web_ai_price_lookup.py:862", "web_ai_price_lookup.py:909",
-    "estimator.py:1108",
+    "web_ai_price_lookup.py: ps.get('source_type') or ps.get('source_name') or 'config'",
+    "estimator.py: anchor.get('source_type') or anchor.get('source')",
 }
 
 
