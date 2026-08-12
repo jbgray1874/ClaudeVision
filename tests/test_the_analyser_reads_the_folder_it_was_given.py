@@ -189,3 +189,51 @@ def test_the_connector_records_it_and_the_scan_reports_it():
         encoding="utf-8")
     assert 'job.meta["native_folder_unreachable"]' in conn
     assert 'native_folder_unreachable' in scan and "COULD NOT LOOK" in scan
+
+
+# ── the exit code is the only thing a script reads ──────────────────────────────────
+# Every per-file failure is caught, recorded and written, and the process then exited ZERO.
+# So an extraction in which SolidWorks opened nothing at all reported SUCCESS to its caller,
+# wrote a well-formed extract full of error-only records, and left "did the analyser work?"
+# answerable only by a human reading scrollback. The manifest has always carried files_read;
+# nothing that runs this tool was ever told.
+def _main_src():
+    src = _TOOL.read_text(encoding="utf-8")
+    return src[src.index("def main():"):]
+
+
+def test_a_run_that_read_nothing_exits_non_zero():
+    body = _main_src()
+    assert "if all_results and not _ok:" in body, \
+        "a run where every file failed still reports success to its caller"
+    assert body.count("sys.exit(1)") >= 2
+
+
+def test_a_partial_run_still_exits_zero():
+    """Some files failing is normal -- a model open in a designer's session, a corrupt
+    fixture -- and the extract is worth having: the consumer already weighs coverage and
+    blocks when the failures touch the priced assembly. Exiting non-zero on any failure would
+    train whoever runs this to ignore the exit code, which is how it came to be ignored."""
+    body = _main_src()
+    assert "if all_results and not _ok:" in body
+    assert "if _errors and not _ok" not in body and "if _errors:\n        sys.exit" not in body
+
+
+def test_an_extract_taken_while_the_models_moved_is_a_failed_run():
+    """The results describe the files as they were when each was opened, which is no longer
+    what is on disk. It is already printed as a warning and marked in the manifest; the exit
+    code has to agree, or a script re-uses it as a valid snapshot."""
+    body = _main_src()
+    # rindex, not index: _fp_changed is tested TWICE -- once to print the warning, long
+    # before the write, and once at the end to set the exit code. Asserting on the first
+    # occurrence passes whether or not the second one exists, which is the whole thing
+    # being checked here.
+    assert body.count("if _fp_changed:") == 2
+    assert body.rindex("if _fp_changed:") > body.index("EXTRACT_PATH")
+
+
+def test_the_extract_is_still_written_before_the_failure_exit():
+    """Minutes of SolidWorks document opens, and the error records are the diagnostic. Exiting
+    before the write would throw away the evidence of what failed."""
+    body = _main_src()
+    assert body.index("_write(out_json)") < body.index("if all_results and not _ok:")

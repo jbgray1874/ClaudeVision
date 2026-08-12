@@ -2000,6 +2000,30 @@ def main():
         print(f"COVERAGE: {len(_ok)} of {len(all_results)} file(s) read, "
               f"{len(_errors)} failed")
 
+    # ── THE EXIT CODE IS THE ONLY THING A SCRIPT READS ──────────────────────────────
+    # Every per-file failure is caught, recorded and written, and the process then exited
+    # ZERO — so an extraction in which SolidWorks opened nothing at all reported success to
+    # its caller, wrote a well-formed extract full of error-only records, and left "did the
+    # analyser work?" answerable only by a human reading scrollback. The manifest has always
+    # carried files_read; nothing that runs this tool was ever told.
+    #
+    # A PARTIAL RUN STILL EXITS ZERO. Some files failing is normal — a model open in a
+    # designer's session, a corrupt fixture — and the extract is worth having: the consumer
+    # already weighs coverage and blocks when the failures touch the priced assembly. Only a
+    # run that read NOTHING is a failed run, and that is the one this now says out loud.
+    if all_results and not _ok:
+        print(f"\nERROR: {len(all_results)} file(s) were opened and NONE could be read. The "
+              f"extract written above contains no usable model data.")
+        print("  Common causes: SolidWorks could not start or attach; every model is open in "
+              "another session; the files are a newer SolidWorks version than this machine.")
+        print("  The estimate will treat this as models-present-but-unread, which is correct "
+              "— but do not read the written file as a successful extraction.")
+        sys.exit(1)
+    if _fp_changed:
+        # Already printed as a warning above, and it is also a failed run: the extract does
+        # not describe the files on disk, so nothing downstream may treat it as a snapshot.
+        sys.exit(1)
+
 
 def _fingerprint_scope(target: str) -> str:
     """The folder a fingerprint covers. A file target is analysed on its own but fingerprinted
