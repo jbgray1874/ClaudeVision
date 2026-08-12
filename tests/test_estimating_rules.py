@@ -1115,26 +1115,31 @@ def test_source_and_confidence_move_together():
        "but nothing was replaced, so the source is unchanged")
 
 
-def test_automatic_com_execution_is_opt_in():
-    """SAFETY, not caution. The analyser calls Dispatch("SldWorks.Application"), which
-    ATTACHES to a SolidWorks already running on the machine.
+def test_automatic_com_execution_runs_by_default_and_can_be_turned_off():
+    """THE DEFAULT WAS RESTORED, AND THIS TEST HELD THE REGRESSION IN PLACE.
 
-    THIS DOCSTRING USED TO SAY THE ANALYSER CLOSES EVERY TITLE IT TOUCHED, TAKING UNSAVED
-    WORK WITH IT. That stopped being true when it learned ownership — it asks what is
-    already open before opening anything, records those as borrowed, and closes only what it
-    opened (test_the_analyser_never_closes_a_document_it_did_not_open holds that). A stale
-    hazard note is not harmless: this one was read as current and produced advice telling
-    somebody not to run a tool that is now safe to run. A comment describing a fixed defect
-    in the present tense is a defect of its own.
+    b1f501b made native acquisition automatic, because "the pipeline CONSUMED an extract but
+    never produced one, so on a machine with SolidWorks the strongest source available was
+    used or skipped depending on whether somebody had remembered to run a separate script —
+    and skipping it looked exactly like a job with no models."
 
-    What remains is real and different: a borrowed document is read in the state the
-    designer has it in, unsaved changes included, so the extract can describe a model that
-    is not what is on disk — and the freshness fingerprint compares against disk, so it
-    cannot see that.
+    fd2d6c8 turned it off the same day for a reason that was correct THEN: the analyser closed
+    every title it touched, so on a designer's workstation it closed their work, unsaved
+    changes included. No costing run is worth that.
 
-    The RULE is unchanged and the reason is now the honest one: attaching to somebody's
-    session mid-estimate is a decision for whoever owns the machine, not for a costing run.
-    Enabled only where SolidWorks belongs to this process."""
+    That reason is gone. The analyser learned ownership — it asks what is already open before
+    opening anything, records those as borrowed, and closes only what it opened
+    (test_the_analyser_never_closes_a_document_it_did_not_open holds that, and is the guard
+    that now carries the safety). The opt-out was never lifted, so every job for weeks
+    afterwards was quietly costed from PDF+DXF while forty models sat unread beside it —
+    the exact failure b1f501b was written to end, reinstated by inaction. This test asserted
+    the polarity and so pinned it there.
+
+    WHAT REMAINS IS SMALLER AND IS NOT A REASON TO READ NOTHING. A borrowed document is read
+    in the state the designer has it in, so an extract can describe unsaved work that is not
+    on disk, and the fingerprint cannot see it because it hashes the file. The manifest
+    records which documents were borrowed, so the caveat travels with the extract instead of
+    being used to justify skipping the strongest evidence in the building."""
     import ast
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(encoding="utf-8")
@@ -1144,11 +1149,38 @@ def test_automatic_com_execution_is_opt_in():
                and any(getattr(t, "id", "") == "_sw_run" for t in n.targets)]
     ok(assigns, "file_scan must decide whether to run the analyser explicitly")
     src_txt = ast.unparse(assigns[0].value)
-    # Opt-IN reads "flag in {truthy}". Opt-OUT reads "flag not in {falsy}" and would run by
-    # default on a designer's workstation.
-    ok(" not in " not in src_txt,
-       f"automatic COM execution must be opt-in, not opt-out: {src_txt}")
-    ok("SDI_SW_RUN_ANALYSER" in src_txt, "and gated on the documented switch")
+    # Opt-OUT reads "flag not in {falsy}": absent any setting, it runs.
+    ok(" not in " in src_txt,
+       f"native acquisition must run by default, not wait to be asked: {src_txt}")
+    ok("SDI_SW_RUN_ANALYSER" in src_txt, "and remain switchable off for a shared workstation")
+    for _off in ("'0'", "'false'", "'no'", "'off'"):
+        ok(_off in src_txt, f"the documented opt-out value {_off} must still turn it off")
+
+
+def test_a_borrowed_document_is_recorded_where_the_estimate_can_see_it():
+    """The one caveat left once the tool stopped closing anyone's work — and it survived only
+    as a console line, which is the shape of every other defect found this week."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "tools" / "solidworks"
+           / "sw_native_analyse.py").read_text(encoding="utf-8")
+    ok('"read_from_open_documents"' in src,
+       "the manifest must record which models were read out of somebody's open session")
+    # INITIALISED IN __init__, CHECKED STRUCTURALLY. Asserting the NAME appears in the file
+    # passed against a mutant that deleted the initialiser and left the two uses behind — the
+    # attribute would then raise AttributeError on the first borrowed document, which is the
+    # only run where any of this matters. A text match cannot tell a live attribute from a
+    # name that merely occurs.
+    import ast as _ast
+    _init = next(n for n in _ast.walk(_ast.parse(src))
+                 if isinstance(n, _ast.FunctionDef) and n.name == "__init__")
+    _set_here = {t.attr for st in _ast.walk(_init) if isinstance(st, _ast.Assign)
+                 for t in st.targets if isinstance(t, _ast.Attribute)} | {
+                 st.target.attr for st in _ast.walk(_init)
+                 if isinstance(st, _ast.AnnAssign) and isinstance(st.target, _ast.Attribute)}
+    ok("borrowed_seen" in _set_here,
+       "the run-long borrowed list must be initialised, or the first borrowed document raises")
+    ok("self.borrowed_seen" in src,
+       "and it must survive close_all(), which clears the per-file list")
 
 
 def test_the_analyser_never_closes_a_document_it_did_not_open():

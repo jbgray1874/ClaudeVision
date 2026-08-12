@@ -2293,8 +2293,34 @@ def _finalize_scan_summary(
             # with SDI_SW_RUN_ANALYSER=1. Everywhere else the pipeline consumes an extract
             # someone else produced, and says so loudly when models are present and no
             # extract is.
+            # DEFAULT ON AGAIN, AND THIS IS A RESTORATION RATHER THAN A NEW POLICY.
+            #
+            # b1f501b made acquisition automatic: "the pipeline CONSUMED an extract but never
+            # produced one, so on a machine with SolidWorks the strongest source available was
+            # used or skipped depending on whether somebody had remembered to run a separate
+            # script — and skipping it looked exactly like a job with no models."
+            #
+            # fd2d6c8 turned it off the SAME DAY, for a reason that was correct at the time:
+            # the analyser closed every title it touched, so on a designer's workstation it
+            # closed their work, unsaved changes included. That is a data-loss risk and no
+            # costing run is worth it.
+            #
+            # THAT REASON NO LONGER EXISTS. sw_native_analyse learned document ownership: it
+            # asks what is already open BEFORE opening anything, records those as borrowed,
+            # and close_all() closes only the documents this process opened. The comment above
+            # this block already says so. The opt-out was never lifted, so every job since has
+            # quietly been PDF+DXF unless a person set an environment variable — which is
+            # exactly the failure b1f501b was written to end, restored by inaction.
+            #
+            # WHAT REMAINS IS SMALLER AND IS NOT A REASON TO SKIP. A borrowed document is read
+            # in the state the designer has it in, so the extract can describe unsaved work
+            # that is not on disk, and the fingerprint cannot see it because it hashes the
+            # file. The manifest now records which documents were borrowed, so that caveat
+            # reaches the estimate instead of being used to justify reading nothing at all.
+            #
+            #   SDI_SW_RUN_ANALYSER=0   consume an existing extract only; never invoke COM
             _sw_run = os.getenv("SDI_SW_RUN_ANALYSER", "").strip().lower() \
-                in {"1", "true", "yes", "on"}
+                not in {"0", "false", "no", "off"}
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
                                              run=_sw_run) \
                 if (_sw_folder or _sw_json) else None

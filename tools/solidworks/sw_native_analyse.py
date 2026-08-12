@@ -245,6 +245,11 @@ class SolidWorksSession:
         # close them. Closing a designer's open document is the one irreversible thing this
         # tool could do, and it would take their unsaved work with it.
         self._borrowed_titles: List[str] = []
+        # KEPT FOR THE MANIFEST. close_all() clears the per-file list, so the
+        # fact that a model was read out of somebody's open session survived
+        # only as a console line — and that is the one caveat this extract
+        # carries that a freshness fingerprint cannot see.
+        self.borrowed_seen: List[str] = []
 
     def open(self, path: str):
         path = os.path.abspath(path) if not path.startswith("\\\\") else path
@@ -415,6 +420,9 @@ class SolidWorksSession:
                 pass
         self._open_titles.clear()
         if self._borrowed_titles:
+            for _b in self._borrowed_titles:
+                if _b not in self.borrowed_seen:
+                    self.borrowed_seen.append(_b)
             print(f"[ownership] left {len(self._borrowed_titles)} document(s) open that "
                   f"were already open before this run: "
                   f"{', '.join(self._borrowed_titles[:5])}")
@@ -1966,6 +1974,13 @@ def main():
             "generated_from": _fingerprint_scope(target),
             "solidworks_version": _sw_version,
             "extractor_schema": "sw_native_extract.v2",
+            # READ OUT OF SOMEBODY'S OPEN SESSION. A borrowed document is read in the state
+            # the designer has it in, which may include unsaved changes — so the extract can
+            # describe a model that is not what is on disk, and the fingerprint cannot see
+            # that: it hashes the FILE. This is the whole residual risk of running the
+            # analyser automatically now that it no longer closes anyone's work, so it
+            # travels with the extract instead of scrolling past in a console.
+            "read_from_open_documents": list(getattr(session, "borrowed_seen", []) or []),
             "files_seen": len(all_results),
             "files_read": len(_ok),
             "files_failed": len(_errors),
