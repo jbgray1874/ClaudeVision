@@ -159,3 +159,32 @@ def test_an_extract_for_another_job_entirely_does_not_hijack_the_choice():
     amb = {}
     _pick_top_assembly(recs, amb, job_codes=set(_JOB))
     assert "the drawings name" not in (amb.get("top_assembly_chosen_by") or "")
+
+
+def test_both_sides_of_the_comparison_are_normalised_the_same_way():
+    """THE FIX SHIPPED INERT AND THE LOG LOOKED IDENTICAL TO NOT HAVING IT.
+
+    file_scan normalised the job's part numbers with part_code_conventions.bare_code, which
+    strips separators, while the extract side uses the connector's _clean_pn, which keeps
+    them. "11650-01-01M" became "116500101M" on one side and stayed "11650-01-01M" on the
+    other, so the intersection was empty on every job, the overlap path never ran, and the
+    picker fell back to largest-BOM — printing the fallback message, which is exactly what a
+    build without the fix prints.
+
+    Every behavioural test in this file passed throughout, because they hand the picker raw
+    codes on both sides and never exercise the normalisation that file_scan applies.
+
+    Two normalisers either side of one comparison is the same defect as two copies of an
+    exclusion list, and invisible for the same reason: nothing fails, a set is simply always
+    empty."""
+    from source_connectors.solidworks import _clean_pn
+    scan = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "from source_connectors.solidworks import _clean_pn as _norm_code" in scan, \
+        "file_scan must normalise with the same function the extract side uses"
+    assert "bare_code as _bare" not in scan.split("_job_codes = ")[0][-600:], \
+        "the separator-stripping normaliser is back on the job side"
+    # And the property itself, so a future rename cannot quietly reintroduce the mismatch.
+    for code in ("11650-01-01M", "11650-02-01M", "11650-01-05A"):
+        assert _clean_pn(code) == _clean_pn(code.upper()), "normalisation must be stable"
+        assert "-" in _clean_pn(code), \
+            "the extract keeps separators; a job-side normaliser that strips them cannot match"

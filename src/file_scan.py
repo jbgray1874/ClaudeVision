@@ -2324,8 +2324,18 @@ def _finalize_scan_summary(
             # THE PART NUMBERS THE DRAWINGS ALREADY GAVE US, handed to the extract so it can
             # tell which of several assemblies is this job. Without them the picker ranks by
             # BOM size, and on 11650 that made a test rig the top of the tree.
-            from part_code_conventions import bare_code as _bare
-            _job_codes = {_bare(str(p.get("part_number") or ""))
+            # ONE NORMALISER, BOTH SIDES. This first used part_code_conventions.bare_code
+            # here and the connector's _clean_pn on the extract — "11650-01-01M" became
+            # "116500101M" on one side and stayed "11650-01-01M" on the other, so the
+            # intersection was EMPTY on every job, the overlap path never fired, and the
+            # picker fell silently back to largest-BOM. The run printed the fallback message
+            # and looked exactly like a build that did not have the fix at all.
+            #
+            # Two normalisers on the two sides of one comparison is the same defect as two
+            # copies of an exclusion list, and it is invisible for the same reason: nothing
+            # fails, a set is just always empty.
+            from source_connectors.solidworks import _clean_pn as _norm_code
+            _job_codes = {_norm_code(str(p.get("part_number") or ""))
                           for p in (_pre_estimate_parts or [])
                           if isinstance(p, dict) and p.get("part_number")} - {""}
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
