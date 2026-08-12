@@ -1,6 +1,26 @@
 from typing import Any, Dict, List
 
 
+def no_detail_drawing_was_read(part: Any) -> bool:
+    """True when this part is known only from assembly / GA pages.
+
+    THE PER-PART FORM OF "THE PACK DOES NOT CONTAIN THIS DRAWING". The invariant that reports
+    missing drawings runs at the very end of a job, after the workbook has been written, so
+    nothing on the sheet can be marked by it. This test needs only the part's own page roles,
+    so it is available from the moment the parts are built -- to the workbook, to the reports,
+    and to anything that must not assert the fact without checking it.
+
+    ONE RULE. It was written inline here, in build_document_validation, and the sentence the
+    workbook prints on a declined line asserted the same fact without consulting anything at
+    all. Two statements of one thing, one of them a guess. Now both ask this.
+    """
+    if not isinstance(part, dict):
+        return False
+    roles = part.get("page_roles") or []
+    roles = [str(r).lower() for r in roles] if isinstance(roles, list) else [str(roles).lower()]
+    return bool(roles) and "assembly" in roles and "detail" not in roles
+
+
 def build_document_validation(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> Dict[str, Any]:
     issues: List[Dict[str, Any]] = []
     if not parts:
@@ -16,7 +36,7 @@ def build_document_validation(summary: Dict[str, Any], parts: List[Dict[str, Any
             issues.append({"severity": "warning", "code": "mixed_materials", "part_number": part.get("part_number"), "reason": "Part accumulated multiple materials, suggesting assembly contamination."})
         if len(part.get("surface_finishes", [])) > 2:
             issues.append({"severity": "warning", "code": "mixed_finishes", "part_number": part.get("part_number"), "reason": "Part accumulated multiple finishes, suggesting assembly contamination."})
-        if part.get("page_roles") and "assembly" in part.get("page_roles", []) and "detail" not in part.get("page_roles", []):
+        if no_detail_drawing_was_read(part):
             issues.append({"severity": "info", "code": "assembly_only_part_record", "part_number": part.get("part_number"), "reason": "Part record is derived from assembly pages only."})
         if not part.get("normalized_material") and part.get("manufacturing_features", {}).get("laser_required"):
             issues.append({"severity": "warning", "code": "missing_material_for_fabrication", "part_number": part.get("part_number"), "reason": "Fabrication cues exist but no reliable material was extracted."})

@@ -236,3 +236,36 @@ def test_the_public_helper_and_the_traced_one_never_disagree():
     for pe in (_part(applied_to_total=False), _part(applied_to_total=True),
                _part(applied_to_total=None), {"quantity": 1}):
         assert _bom_line_price(pe) == _bom_line_price_traced(pe)[0]
+
+
+# ── the note must be true of the line it is written on ──────────────────────────────
+from document_validation import no_detail_drawing_was_read   # noqa: E402
+
+
+@pytest.mark.parametrize("roles,claims_missing_drawing", [
+    (["assembly"], True),
+    (["detail"], False),
+    (["assembly", "detail"], False),   # it HAS a detail page; the drawing is in the pack
+    ([], False),                       # nothing known about its pages -- assert nothing
+])
+def test_the_note_only_claims_a_missing_drawing_when_one_is_missing(roles, claims_missing_drawing):
+    """IT SAID SO ON EVERY DECLINED LINE. The sentence ended "...and its detail drawing is not
+    in the pack" whether or not the pack was missing anything -- a fact stated because it
+    happened to be true of the part that prompted the feature. An estimator asked to rule on
+    a note learns quickly whether its sentences are true, and stops reading it if they are not.
+    """
+    pe = _part(applied_to_total=False)
+    pe["page_roles"] = roles
+    note = input_note_for_line(pe)["note"]
+    assert ("detail drawing is not in the pack" in note) is claims_missing_drawing, note
+    # Either way the figure and the instruction survive -- that is the useful part.
+    assert "9.73" in note and "CONFIRM OR REPLACE" in note
+
+
+def test_the_note_and_the_validation_issue_read_one_rule():
+    """document_validation raises assembly_only_part_record from the same predicate. Two
+    statements of one fact, one of them previously a guess."""
+    pe = _part(applied_to_total=False)
+    pe["page_roles"] = ["assembly"]
+    assert no_detail_drawing_was_read(pe) is True
+    assert "detail drawing is not in the pack" in input_note_for_line(pe)["note"]

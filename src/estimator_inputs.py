@@ -161,10 +161,21 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
     if _declined:
         _where = _declined["source"].replace("_", " ")
         _code = f" (matched {_declined['matched_code']})" if _declined["matched_code"] else ""
+        # DO NOT ASSERT WHAT HAS NOT BEEN CHECKED. This sentence used to end "...this part is
+        # not a bought-in and its detail drawing is not in the pack" on EVERY declined line,
+        # whether or not the pack was missing anything -- a fact stated because it happened to
+        # be true of the part that prompted the feature. A note an estimator is asked to rule
+        # on has to be true of the line it is written on, or it teaches them not to read it.
+        try:
+            from document_validation import no_detail_drawing_was_read as _no_detail
+            _undrawn = _no_detail(part)
+        except Exception:                                    # noqa: BLE001
+            _undrawn = False
+        _why = ("this part is not a bought-in and its detail drawing is not in the pack"
+                if _undrawn else "the engine did not classify this part as a bought-in")
         return {"kind": PLACEHOLDER_UNPRICED,
                 "note": (f"NOT YET PRICED — but {_where}{_code} gives £{_declined['gbp']:.2f} "
-                         f"each. NOT APPLIED: this part is not a bought-in and its detail "
-                         f"drawing is not in the pack, so the engine will not total it. "
+                         f"each. NOT APPLIED: {_why}, so the engine will not total it. "
                          f"CONFIRM OR REPLACE")}
 
     if part.get("_price_explicitly_withheld") or "estimator to price" in description.lower():
