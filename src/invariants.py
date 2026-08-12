@@ -2432,15 +2432,10 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        price = row.get("price_gbp", row.get("price"))
-        try:
-            has_price = price is not None and float(price) != 0
-        except (TypeError, ValueError):
-            has_price = False
-        if has_price:
+        if not price_provenance.row_is_unpriced(row):
             continue
         reason = row.get("unpriced_reason")
-        code = str(row.get("part_number") or row.get("code") or "?")
+        code = price_provenance.row_label(row)
         if not isinstance(reason, dict) or not reason.get("category") or \
                 reason.get("category") == price_provenance.UNEXPLAINED:
             silent.append(code)

@@ -202,6 +202,51 @@ _UNPRICED_REASON_TEXT = {
 }
 
 
+# ── ONE RULE FOR "WHAT DID THIS ROW COST", AND ONE FOR WHAT IT IS CALLED ────────────
+# The read-back names its columns after the SHEET's headers -- total_value_gbp from "Total
+# Value", unit_price_gbp from "Price" -- and the checks that read those rows were written
+# against price_gbp. Neither field exists on a real row, so every priced line came back as
+# None, every line looked unpriced, and the check reported twenty-nine explained rows as
+# blanks with no reason. The labels printed as "?" for the same reason: the name lookup was
+# reading part_number on rows that carry part_code.
+#
+# Both halves are the same mistake -- a private guess at the shape of somebody else's record.
+# There is now one place to be wrong, and it is checked against the header map.
+ROW_PRICE_KEYS = ("price_gbp", "price", "total_value_gbp", "unit_price_gbp")
+ROW_NAME_KEYS = ("part_number", "part_code", "code", "description")
+
+
+def row_price(row: Dict[str, Any]) -> Optional[float]:
+    """What this material row cost, from whichever column the reader happened to name it."""
+    if not isinstance(row, dict):
+        return None
+    for key in ROW_PRICE_KEYS:
+        if key in row:
+            try:
+                return float(row[key])
+            except (TypeError, ValueError):
+                continue                 # an Excel error carries through as None, not zero
+    return None
+
+
+def row_is_unpriced(row: Dict[str, Any]) -> bool:
+    """True when this row carries no money. A genuine zero counts as unpriced; so does a
+    cell that failed to calculate, because neither is a price anybody can stand behind."""
+    value = row_price(row)
+    return value is None or value == 0
+
+
+def row_label(row: Dict[str, Any]) -> str:
+    """What to call this row in a message. "?" tells a reader nothing they can act on."""
+    if not isinstance(row, dict):
+        return "?"
+    for key in ROW_NAME_KEYS:
+        text = str(row.get(key) or "").strip()
+        if text:
+            return text.split("  ")[0][:60]
+    return "?"
+
+
 def unpriced_reason(category: Any, detail: Any = "") -> Dict[str, Any]:
     """A structured, readable statement of why a line carries no price.
 

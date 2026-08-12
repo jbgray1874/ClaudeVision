@@ -370,3 +370,47 @@ def test_the_html_report_says_it_at_the_top_not_only_in_section_eleven():
     quiet = jrh._provenance_strip(
         {"estimate_summary": {"final_estimate": {"material_rows": [{"a": 1}]}}})
     assert "never read back" not in quiet
+
+
+# ── the writer and the reader must agree what a price IS ────────────────────────────
+# LIVE FAILURE, 12 August. The run stamped "26 unpriced material row(s) explained" and the
+# invariant then reported "29 line(s) carry no price and no reason: ?, ?, ?, ?, ?, ?".
+#
+# The read-back names its columns after the SHEET's headers -- total_value_gbp from "Total
+# Value", unit_price_gbp from "Price". The check was written against price_gbp. Neither field
+# exists on a real row, so every PRICED line came back as None and read as an unexplained
+# blank; the labels printed "?" because the name lookup read part_number on rows that carry
+# part_code. Two halves of one mistake: a private guess at the shape of somebody else's
+# record, made twice, in code I wrote a day apart.
+_SHEET_ROW = {"part_code": "FIXING1081", "description": "foot", "total_value_gbp": 0.46}
+_BLANK_ROW = {"part_code": "MAG CATCH", "description": "HAFELE", "total_value_gbp": 0}
+
+
+def test_a_row_priced_in_the_sheets_own_column_is_not_called_a_blank():
+    assert not pp.row_is_unpriced(_SHEET_ROW)
+    assert pp.row_is_unpriced(_BLANK_ROW)
+
+
+def test_the_invariant_and_the_writer_agree_on_the_same_rows():
+    """They disagreed on a live job, and the disagreement was invisible until an estimator
+    read the two numbers side by side."""
+    rows = [dict(_SHEET_ROW), dict(_BLANK_ROW)]
+    wep._explain_unpriced_rows(rows, {"part_estimates": []})
+    assert check(_job(rows)) and rows[0].get("unpriced_reason") is None
+    codes = check(_job(rows))[0]["detail"]["lines"]
+    assert codes == ["MAG CATCH"], f"the priced row is still being reported: {codes}"
+
+
+def test_a_row_is_named_by_whatever_field_carries_its_code():
+    """"?" tells a reader nothing they can act on, and six of them tells them the check is
+    broken -- which is how a real finding gets ignored."""
+    assert pp.row_label(_SHEET_ROW) == "FIXING1081"
+    assert pp.row_label({"description": "11650-01-01M  LH UPRIGHT"}) == "11650-01-01M"
+    assert pp.row_label({}) == "?"
+
+
+def test_an_excel_error_is_not_a_price():
+    """A cell that failed to calculate is not a zero and not a number. Casting it would stamp
+    an error sentinel as money -- which this pipeline has done once already."""
+    assert pp.row_price({"total_value_gbp": "#VALUE!"}) is None
+    assert pp.row_is_unpriced({"total_value_gbp": "#VALUE!"})

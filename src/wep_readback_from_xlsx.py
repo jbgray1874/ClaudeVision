@@ -617,12 +617,8 @@ def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> in
     for row in rows:
         if not isinstance(row, dict):
             continue
-        value = row.get("total_value_gbp", row.get("unit_price_gbp"))
-        try:
-            if value is not None and float(value) != 0:
-                continue
-        except (TypeError, ValueError):
-            pass
+        if not _pp.row_is_unpriced(row):
+            continue
         part = by_key.get(_row_key(row))
         row["unpriced_reason"] = (unpriced_reason_for_row(part) if part is not None
                                   else _pp.unpriced_reason(
