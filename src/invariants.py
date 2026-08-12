@@ -1333,9 +1333,32 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         return []
 
     impossible: List[Dict[str, Any]] = []
+    conflicting: List[Dict[str, Any]] = []
     for part in parts:
-        length = _blank_num(part, "blank_length_mm", "overall_length_mm")
-        width = _blank_num(part, "blank_width_mm", "overall_width_mm")
+        # THE BLANK THAT PRICED THE JOB, NOT WHICHEVER ONE THIS READER FINDS FIRST.
+        #
+        # _blank_num looks in part, normalized_geometry and geometry_rollup -- never in
+        # material_estimate, which is what the costing writes and the workbook reads. On
+        # 11650-01-05A DOOR that is the difference between 1202 x 689, the size that
+        # actually produced the money (confirmed by the run's own "largest part 0.8282 m2",
+        # which is 1.202 x 0.689), and 5 x 3.5, which priced nothing. This check blocked the
+        # job over a blank the estimate had never used, and two separate diagnoses went
+        # after a costing fault that did not exist.
+        #
+        # costed_facts.blank_dimensions is the one reader. It prefers material_estimate
+        # because that is the record the money came from, and it REPORTS a disagreement
+        # rather than resolving it out of sight -- two blanks on one part is a real defect
+        # and it is reported below as itself, not as a cut path that does not fit.
+        import costed_facts as _cf
+        _blank = _cf.blank_dimensions(part)
+        length = _blank["length_mm"] or 0.0
+        width = _blank["width_mm"] or 0.0
+        if _blank["conflict"]:
+            conflicting.append({
+                "part_number": part.get("part_number"),
+                "readings": _blank["readings"],
+                "priced_from": _blank["holder"],
+            })
         cut = _blank_num(part, "cut_length_mm", "dxf_measured_cut_length",
                          "estimated_cut_length_mm", "total_cut_length_mm")
         # ONE DEFINITION OF IMPOSSIBLE, shared with the estimator that prices from the
@@ -1358,10 +1381,27 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
             "times_too_long": round(cut / room, 1) if room else None,
             "implied_cut_spacing_mm": round(area / cut, 4) if cut else None,
         })
+    out: List[Dict[str, Any]] = []
+    if conflicting:
+        # TWO BLANKS ON ONE PART, SAID PLAINLY. Whichever is right, the record holds a
+        # second size that some other reader will believe -- and did.
+        _names = ", ".join(
+            f"{c['part_number']} ("
+            + " vs ".join(f"{r['length_mm']:g}x{r['width_mm']:g} in {r['holder']}"
+                          for r in c["readings"][:3]) + ")"
+            for c in conflicting[:4])
+        out.append(_violation(
+            "part_carries_two_different_blanks", BLOCKING,
+            f"{len(conflicting)} part(s) have more than one blank size recorded, and the "
+            f"readers of that record do not all look in the same place: {_names}. The money "
+            f"was priced from the first named holder. A second size sitting on the same part "
+            f"will be believed by whichever reader finds it first -- which is how a blocking "
+            f"flag came to describe a blank this estimate never used.",
+            count=len(conflicting), parts=conflicting[:20]))
     if not impossible:
-        return []
+        return out
 
-    return [_violation(
+    out.append(_violation(
         "blank_and_cut_path_disagree", BLOCKING,
         f"{len(impossible)} part(s) carry a cut path that will not fit inside the blank "
         f"recorded for them, so one of the two is wrong and the material is priced from the "
@@ -1373,7 +1413,8 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
                     for p in impossible[:6])
         + ". A blank in the wrong unit prices the metal at a fraction of its cost and puts "
           "an impossible number of parts on a sheet.",
-        parts=impossible[:10], count=len(impossible))]
+        parts=impossible[:10], count=len(impossible)))
+    return out
 
 
 def check_an_assembly_is_not_charged_as_a_blank(summary: Any) -> List[Dict[str, Any]]:

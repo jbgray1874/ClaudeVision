@@ -3260,8 +3260,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   "(no gauge, no geometry, no DXF) - detail/callout artefact, "
                   "estimator to verify", flags)
             continue
-        length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
-        width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
+        # ONE READER. See costed_facts.blank_dimensions: this looked in two holders and
+        # invariants looked in three different ones, so the sheet and the checks could be
+        # costed from and blocked over two different sizes of the same part.
+        import costed_facts as _cf_blank
+        _bd = _cf_blank.blank_dimensions(pe)
+        length = _safe(_bd["length_mm"])
+        width  = _safe(_bd["width_mm"])
         gauge  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
         ws.cell(row=row, column=s["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
         ws.cell(row=row, column=s["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
@@ -3308,8 +3313,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             break
         me = pe.get("material_estimate") or {}
         ng = pe.get("normalized_geometry") or {}
-        length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
-        width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
+        # ONE READER. See costed_facts.blank_dimensions: this looked in two holders and
+        # invariants looked in three different ones, so the sheet and the checks could be
+        # costed from and blocked over two different sizes of the same part.
+        import costed_facts as _cf_blank
+        _bd = _cf_blank.blank_dimensions(pe)
+        length = _safe(_bd["length_mm"])
+        width  = _safe(_bd["width_mm"])
         thick  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
         ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
         ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))

@@ -33,7 +33,7 @@ equally the authority on the route, which is why (1) exists.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 __all__ = [
     "costed_operations",
@@ -747,4 +747,75 @@ def reconcile_risk_flags(summary: Any) -> Dict[str, int]:
                 p.setdefault("superseded_risk_flags", []).extend(gone)
                 out["superseded"] += len(gone)
             out["kept"] += len(kept)
+    return out
+
+
+# ── ONE ANSWER TO "WHAT BLANK IS THIS PART?" ────────────────────────────────────────
+# A part's blank is written to as many as four places, and the readers disagreed about
+# which to believe:
+#
+#   wb_populate (and the cost)   material_estimate -> normalized_geometry
+#   invariants._blank_num        part -> normalized_geometry -> geometry_rollup
+#
+# _blank_num never looks at material_estimate. On 11650-01-05A DOOR that is the difference
+# between 1202 x 689 -- the size that actually priced the job, confirmed by the run's own
+# "largest part 0.8282 m2" throughput flag, which is 1.202 x 0.689 -- and 5 x 3.5, which
+# priced nothing. The blocking blank_and_cut_path_disagree therefore described a blank the
+# estimate had never used, and sent two separate diagnoses after a costing fault that did
+# not exist.
+#
+# _blank_num's own docstring records being widened once already after a false positive from
+# looking in too few places. It was still one holder short. So the fix is not a fourth
+# holder in a fourth reader: it is one reader, and a DISAGREEMENT REPORTED RATHER THAN
+# SILENTLY RESOLVED. Two blanks on one part is a real defect; picking one quietly is how it
+# stayed invisible while its symptom was blamed on something else.
+_BLANK_HOLDERS = ("material_estimate", "normalized_geometry", "geometry_rollup")
+
+# Two readings of one blank are the same reading if they agree to a millimetre. Below that
+# is rounding between a flat-pattern extractor and a title block, not a conflict.
+_BLANK_SAME_MM = 1.0
+
+
+def _blank_pair(holder: Any) -> Optional[Tuple[float, float]]:
+    if not isinstance(holder, Mapping):
+        return None
+    for lk, wk in (("blank_length_mm", "blank_width_mm"),
+                   ("overall_length_mm", "overall_width_mm")):
+        length, width = _num(holder.get(lk)), _num(holder.get(wk))
+        if length and width:
+            return (float(length), float(width))
+    return None
+
+
+def blank_dimensions(part: Any) -> Dict[str, Any]:
+    """The blank this part was COSTED from, plus every other blank recorded for it.
+
+    Precedence is material_estimate first because that is the record the costing wrote and
+    the sheet was built from -- the operative blank is the one that produced the money, not
+    the one a later reader happens to find first.
+
+    Returns {length_mm, width_mm, holder, readings, conflict}. `readings` lists every holder
+    that carries a blank, so a caller can NAME the disagreement instead of resolving it out
+    of sight.
+    """
+    out: Dict[str, Any] = {"length_mm": None, "width_mm": None, "holder": None,
+                           "readings": [], "conflict": False}
+    if not isinstance(part, Mapping):
+        return out
+    for name in _BLANK_HOLDERS:
+        pair = _blank_pair(part.get(name))
+        if pair:
+            out["readings"].append({"holder": name, "length_mm": pair[0], "width_mm": pair[1]})
+    root = _blank_pair(part)
+    if root:
+        out["readings"].append({"holder": "part", "length_mm": root[0], "width_mm": root[1]})
+    if not out["readings"]:
+        return out
+    first = out["readings"][0]
+    out.update({"length_mm": first["length_mm"], "width_mm": first["width_mm"],
+                "holder": first["holder"]})
+    out["conflict"] = any(
+        abs(r["length_mm"] - first["length_mm"]) > _BLANK_SAME_MM
+        or abs(r["width_mm"] - first["width_mm"]) > _BLANK_SAME_MM
+        for r in out["readings"][1:])
     return out
