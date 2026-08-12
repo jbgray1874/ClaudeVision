@@ -48,7 +48,43 @@ _NON_REPRODUCIBLE_TOKENS = (
 )
 
 # A price nobody found. Distinct from a guessed one: an unpriced line is honestly empty.
-_UNPRICED_SOURCES = frozenset({"fallback", "system_cost_not_found", "no_price_found", ""})
+#
+# THE EMPTY STRING IS NOT ONE OF THESE, AND USED TO BE. "no_price_found" is a source SAYING
+# it looked and found nothing; "" is nobody having written a name down. Those are the two
+# facts this whole module exists to keep apart, and conflating them here classified an
+# APPLIED price with no recorded name as "unpriced" -- a line reported as costing nothing
+# while its money sat in the total.
+#
+# It also made two branches unreachable. classify_price_source ends
+#     if n in _UNPRICED_SOURCES: return "unpriced"
+#     if not n:                  return "config"
+# and with "" in the set the second line could never run, so the documented behaviour for a
+# rate written into this repository -- "config" -- had never once been returned. Same shape
+# at line ~301: `return UNPRICED if n in _UNPRICED_SOURCES else CATALOGUE` under a guard of
+# `not n or n in _UNPRICED_SOURCES`, where the CATALOGUE half was equally dead.
+_UNPRICED_SOURCES = frozenset({"fallback", "system_cost_not_found", "no_price_found"})
+
+# WHERE A STAMP KEEPS ITS SOURCE NAME, asked once. Five readers in this codebase each had
+# their own ordering -- confidence.py and estimation_report.py read source_name ALONE, while
+# estimate_parity_pretty_report and apply_pretty_report read source, then source_type, then
+# source_name -- so the same stamp was named three different things depending on which report
+# you opened, and a stamp written with `source` was invisible to the two that only knew
+# `source_name`. One accessor, so every reader gets the same answer.
+_SOURCE_NAME_KEYS = ("source_name", "source", "source_type")
+
+
+def stamp_source_name(block: Any) -> str:
+    """The name of whatever produced this price, from wherever the stamp recorded it."""
+    if not isinstance(block, dict):
+        return ""
+    for key in _SOURCE_NAME_KEYS:
+        value = block.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    selected = block.get("selected")
+    if isinstance(selected, dict):
+        return stamp_source_name(selected)
+    return ""
 
 
 def _norm(value: Any) -> str:
@@ -512,7 +548,7 @@ def stamp_source_class(block: Dict[str, Any]) -> str:
         return declared
     _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
     return classify_price_source(
-        block.get("source_name") or _sel.get("source"),
+        stamp_source_name(block),
         source_type=block.get("source_type"),
         pricing_mode=block.get("pricing_mode"),
         priced=_sel.get("price") is not None or block.get("applied") is True,
