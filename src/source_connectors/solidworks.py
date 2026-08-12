@@ -1568,6 +1568,19 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                         out["material_conflict"] += 1
 
         # ── GEOMETRY: the sheet-metal cut list ───────────────────────────────────
+        # A BLANK THE MODEL GAVE US AND WE REFUSED. has_flat() holds the sanity window, and
+        # the comment beside that window has always said an out-of-range value is "not used
+        # (and is flagged)" — it was not flagged anywhere. So the strongest measurement in the
+        # building could be discarded with no trace, and the part fell back to a DXF or a
+        # drawing while the sheet said nothing had been overruled. 2500mm is the long edge of
+        # a standard sheet, so anything longer is usually a unit error or a multi-sheet
+        # weldment, and either is worth a person's eye rather than silence.
+        if (not nat.has_flat()) and (nat.flat_length_mm or nat.flat_width_mm):
+            flags.append(
+                f"the model's flat blank {nat.flat_length_mm}x{nat.flat_width_mm}mm falls "
+                f"outside the plausible window ({_MIN_BLANK_MM:g}-{_MAX_BLANK_MM:g}mm) and "
+                f"was NOT used — this part is costed from a weaker source. Check for a unit "
+                f"error in the cut list, or a blank that genuinely spans more than one sheet.")
         if nat.has_flat():
             fl, fw = float(nat.flat_length_mm), float(nat.flat_width_mm)
             if _dxf_backed(part):

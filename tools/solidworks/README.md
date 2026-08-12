@@ -126,3 +126,85 @@ in the JSON. High material / cut-list / surface-area coverage means Phase 1
 (metadata + weldment cut lists) and area-based powder/acrylic pricing are worth
 building now. Low saved flat-pattern / hole coverage means those need the
 full-API compute path (Phase 2). Bring the report back here and we'll scope from it.
+
+## What the SolidWorks path can and cannot do
+
+Measured from the code, not from the API documentation — these are this engine's limits, and
+several of them are ours rather than SolidWorks'.
+
+| Limit | Value | Consequence |
+|---|---|---|
+| Analyser timeout, in-pipeline | **30 minutes** | A folder large enough to exceed it is killed and reported as a failed run. 41 models is comfortable; several hundred is not. |
+| COM attach | same integrity level only | An elevated console cannot take a SolidWorks a designer already has open. With SolidWorks **closed**, an elevated run starts its own instance and works. |
+| Instances | one | The analyser never `Quit()`s SolidWorks and never closes a document it did not open. |
+| Flat-blank window | **1 – 2500 mm** | Outside it the model's blank is refused and the part falls back to DXF or drawing. Now flagged; it used to be silent. |
+| Thickness window | **0.3 – 50 mm** | Same treatment. |
+| Flatten | **off unless `--flatten`** | A formed part with no cut-list blank is *not* flattened in memory by an automatic run. Hand runs can ask for it. |
+| `.DWG` | not read | Convert with the ODA File Converter first; the geometry is the same, the container is not. |
+| `.IGES` / `.STEP` | geometry only | Never a BOM source: no part numbers, no quantities, no material. |
+| Bent tube | envelope only | The bounding box is the envelope, not the developed length. |
+
+**Precedence, strongest first.** `.SLDASM` for part numbers, quantities, material and
+configuration; `.SLDPRT` for material, thickness, mass and sheet-metal features; `.SLDDRW`
+for released BOM tables and callouts; then DXF flat patterns, then PDF notes.
+
+## Commands
+
+Everything below is a normal PowerShell prompt at `C:\ClaudeVision`.
+
+**Normal path — nothing to type.** With models in the job folder and no fresh extract, the
+estimate runs the analyser itself:
+
+```powershell
+$pack = "K:\Estimating\Completed\AI Estimating\Live Enquiry\11650-00-GAFragranceCoffret"
+Test-Path $pack
+.\run-packs.ps1 "${pack}:45" -Deliverables
+```
+
+**By hand, to diagnose.** Quote the paths — the folders contain spaces:
+
+```powershell
+$pack    = "K:\Estimating\Completed\AI Estimating\Live Enquiry\11650-00-GAFragranceCoffret"
+$extract = "C:\ClaudeVision\work\11650_sw_native_extract.json"
+New-Item -ItemType Directory -Force -Path (Split-Path $extract) | Out-Null
+
+.\.venv\Scripts\python.exe tools\solidworks\sw_native_analyse.py "$pack" --out "$extract"
+"exit=$LASTEXITCODE"
+Get-Item $extract | Select-Object FullName, Length, LastWriteTime
+```
+
+**Feed a hand-made extract to an estimate:**
+
+```powershell
+$env:SDI_SW_EXTRACT_JSON = $extract
+.\run-packs.ps1 "${pack}:45" -Deliverables
+Remove-Item Env:\SDI_SW_EXTRACT_JSON     # or it follows you onto the next job
+```
+
+**Flatten formed parts that have no cut-list blank** (slower; opens and restores each model
+in memory, saving nothing):
+
+```powershell
+.\.venv\Scripts\python.exe tools\solidworks\sw_native_analyse.py "$pack" --out "$extract" --flatten
+```
+
+**Turn native acquisition off** on a shared designer workstation:
+
+```powershell
+$env:SDI_SW_RUN_ANALYSER = "0"
+```
+
+### Reading the exit code
+
+| `$LASTEXITCODE` | Meaning |
+|---|---|
+| `0` | At least one model was read. Check `COVERAGE:` for how many failed. |
+| `1` | Every file failed, **or** the models changed on disk mid-run. The written extract is not usable — read the console. |
+| `2` | Bad command line — usually an unset `$pack` or `$extract`, or a missing `--out` value. SolidWorks was never reached. |
+
+### When it reads nothing
+
+The message names which kind of nothing it found. `No SolidWorks files ANALYSED under:`
+followed by an exclusion list means the models are in a folder whose name contains `archive`,
+`old`, `wip`, `temp`, `prev`, `bak` or similar — move them, or point the analyser at the
+subfolder that holds them.

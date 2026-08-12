@@ -82,5 +82,27 @@ def test_the_tool_readme_says_it_is_not_a_routine_manual_step():
     assert "do not normally run this tool by hand" in doc.lower()
 
 
+def test_the_operator_has_the_exact_commands_not_a_description():
+    """A runbook that says "run the analyser on the job folder" is how three sessions were
+    lost to unset variables and unquoted paths. The folders contain spaces; the commands have
+    to be copyable."""
+    doc = (_ROOT / "tools" / "solidworks" / "README.md").read_text(encoding="utf-8")
+    assert "sw_native_analyse.py \"$pack\" --out \"$extract\"" in doc, \
+        "the hand-run command must be quoted and copyable"
+    assert "$LASTEXITCODE" in doc, "and the exit code must be readable without guessing"
+    for code in ("| `0` |", "| `1` |", "| `2` |"):
+        assert code in doc, f"exit code {code} is not explained"
+    assert "Remove-Item Env:\\SDI_SW_EXTRACT_JSON" in doc, \
+        "an extract path left in the environment follows the operator onto the next job"
+
+
+def test_the_limits_are_written_down_with_their_numbers():
+    """"There are limits" helps nobody. The numbers are what let somebody tell a folder that
+    is too big from a model that is out of window from a licence that is not there."""
+    doc = (_ROOT / "tools" / "solidworks" / "README.md").read_text(encoding="utf-8")
+    for fact in ("30 minutes", "1 \u2013 2500 mm", "0.3 \u2013 50 mm", "off unless `--flatten`"):
+        assert fact in doc, f"the limit {fact!r} is not documented"
+
+
 if __name__ == "__main__":                                              # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
