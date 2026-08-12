@@ -423,8 +423,32 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
     if _canonical_kind == "leaf":
         _p = _safe(_me.get("unit_material_cost_gbp") or _me.get("cost_per_part_gbp"))
     else:
-        _p = _safe(_pe.get("unit_cost_gbp") or _pe.get("unit_material_cost_gbp")
-                   or _me.get("unit_material_cost_gbp"))
+        # A PRICE THE ENGINE FOUND AND DECIDED NOT TO APPLY IS NOT A PRICE FOR THIS LINE.
+        #
+        # estimator stamps  applied_to_total = bought_in_candidate and system_unit_cost is
+        # not None  — so False here with a price present means a figure was resolved and
+        # DELIBERATELY not added, because the part is not a bought-in. stamp_affects_total's
+        # docstring says exactly this: "a bought-in unit cost can be resolved and then not
+        # added, because the part was costed as a fabrication instead."
+        #
+        # Nothing asked. This read unit_cost_gbp straight off the part, so 11650-05-02M
+        # SLIDER — page_roles ['assembly'], no detail drawing in the pack, applied_to_total
+        # FALSE — was charged at GBP 9.73 x 2 = GBP 20.24, which is 38% of that job's entire
+        # material cost. The same run's invariants said "Nothing read those parts, so nothing
+        # costed them". Both cannot be true, and the sheet followed the component that had
+        # decided not to decide.
+        #
+        # Only an EXPLICIT False refuses. A record written before the flag existed has no
+        # opinion, and treating a missing flag as a refusal would zero every bought-in on
+        # every older job.
+        _sc = (_pe.get("cost_breakdown") or {}).get("system_cost") or {}
+        _sc_declined = _sc.get("applied_to_total") is False
+        _whole_part = _safe(_pe.get("unit_cost_gbp"))
+        if _sc_declined and _whole_part is not None \
+                and _whole_part == _safe(_sc.get("unit_cost_gbp")):
+            _whole_part = None
+        _p = _whole_part if _whole_part is not None else \
+            _safe(_pe.get("unit_material_cost_gbp") or _me.get("unit_material_cost_gbp"))
     if _p is None:
         # THE BOM PRICE COLUMN IS A MATERIAL COLUMN.
         #
