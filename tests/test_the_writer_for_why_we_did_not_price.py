@@ -159,5 +159,62 @@ def test_the_writer_is_called_on_the_real_readback_path():
         "rows are stamped into final_estimate before they carry their reasons"
 
 
+# ── and the report says it, ordered by who has to act ───────────────────────────────
+import job_report_html as jrh                                        # noqa: E402
+
+
+def _report(rows):
+    return jrh._unpriced_section(
+        {"estimate_summary": {"final_estimate": {"material_rows": rows}}})
+
+
+def test_the_engine_gap_leads_because_it_is_the_only_one_worth_interrupting_for():
+    """An engine gap is work that will be done and invoiced with nothing on the sheet asking
+    anyone to price it. No estimator input can fix it. Everything else on this table is
+    either somebody's task or correctly nil, so the one that under-charges the job leads."""
+    html = _report([
+        {"part_number": "NIL-1", "price_gbp": 0,
+         "unpriced_reason": pp.unpriced_reason(pp.NOT_APPLICABLE, "costed in Sheet Steel")},
+        {"part_number": "ASK-1", "price_gbp": 0,
+         "unpriced_reason": pp.unpriced_reason(pp.NO_PRICE_SOURCE, "HAFELE 246.41.745")},
+        {"part_number": "GAP-1", "price_gbp": 0,
+         "unpriced_reason": pp.unpriced_reason(pp.NO_VOCABULARY, "REEDED VINYL")}])
+    assert html.index("GAP-1") < html.index("ASK-1") < html.index("NIL-1")
+    assert "under-charged" in html
+
+
+def test_the_three_owners_are_counted_separately():
+    html = _report([
+        {"part_number": "A", "price_gbp": 0,
+         "unpriced_reason": pp.unpriced_reason(pp.NOT_APPLICABLE)},
+        {"part_number": "B", "price_gbp": 0,
+         "unpriced_reason": pp.unpriced_reason(pp.NOT_APPLICABLE)},
+        {"part_number": "C", "price_gbp": 0,
+         "unpriced_reason": pp.unpriced_reason(pp.NO_PRICE_SOURCE)}])
+    assert "<b>1</b> waiting on the estimator" in html
+    assert "<b>2</b> correctly nil" in html
+
+
+def test_a_priced_row_is_not_listed_as_a_blank():
+    html = _report([{"part_number": "PRICED", "price_gbp": 0.46}])
+    assert "PRICED" not in html and "carries a price" in html
+
+
+def test_blanks_with_no_reasons_are_a_warning_not_an_empty_table():
+    """The vocabulary existed for months with no writer and the check stayed green throughout.
+    A report that quietly shows an empty table when the stamping did not run would let exactly
+    that happen again, one layer up."""
+    html = _report([{"part_number": "X", "price_gbp": 0}])
+    assert "warn" in html and "no recorded reason" in html
+
+
+def test_the_section_is_wired_into_the_report():
+    src = Path(jrh.__file__).read_text(encoding="utf-8")
+    import ast
+    body = ast.unparse(next(n for n in ast.walk(ast.parse(src))
+                            if isinstance(n, ast.FunctionDef) and n.name == "_render_verdict"))
+    assert "_unpriced_section" in body, "the section is defined and never called"
+
+
 if __name__ == "__main__":                                            # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

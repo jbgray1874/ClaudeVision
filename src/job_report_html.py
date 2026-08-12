@@ -981,6 +981,7 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
 {_provenance_strip(summary)}
 {_bom_provenance_section(summary)}
 {_purchased_key_section(summary)}
+{_unpriced_section(summary)}
 {_route_decisions_section(summary)}
 {_invariants_section(summary)}"""
 
@@ -1182,6 +1183,85 @@ def _purchased_key_section(summary: Dict[str, Any]) -> str:
             '</tr></thead><tbody>' + "".join(r[2] for r in rows) + '</tbody></table>')
 
 
+def _unpriced_section(summary: Dict[str, Any]) -> str:
+    """Every line the sheet priced at nothing, and WHOSE nothing it is.
+
+    A blank in a price column reads as free. On this pack sixteen fabricated lines sit at
+    GBP 0.00 because their material is costed in the Sheet Steel block -- pricing them again
+    would double the material total -- beside a lock and a mag catch that genuinely are not
+    priced at all. Identical on the sheet, opposite actions, and until the reasons were
+    written nothing anywhere could tell them apart.
+
+    ORDERED BY WHO HAS TO ACT, WORST FIRST. An engine gap is work that will be done and
+    invoiced with nothing on the sheet asking anyone to price it, so the job is under-charged
+    by that amount and no estimator input can fix it. That is the only category here worth
+    interrupting somebody for, so it leads.
+    """
+    try:
+        import price_provenance as _pp
+        rows = ((summary.get("estimate_summary") or {}).get("final_estimate") or {}
+                ).get("material_rows") or []
+    except AttributeError:
+        return ""
+    if not rows:
+        return ""
+    blanks = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        value = r.get("price_gbp", r.get("total_value_gbp", r.get("unit_price_gbp")))
+        try:
+            if value is not None and float(value) != 0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        blanks.append(r)
+    if not blanks:
+        return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
+                '<p class="mini">Every material line on this job carries a price.</p>')
+    # A SHEET FULL OF BLANKS AND NO REASONS IS THE DEFECT, NOT AN EMPTY SECTION. The
+    # vocabulary existed for months with no writer and the check stayed green throughout;
+    # a report that quietly shows an empty table when the stamping did not run would let
+    # exactly that happen again, one layer up.
+    if not any(isinstance(r.get("unpriced_reason"), dict) for r in blanks):
+        return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
+                f'<div class="callout warn"><b>{len(blanks)} line(s) carry no price and no '
+                f'recorded reason.</b> A blank in a price column reads as free. Nothing on '
+                f'this job says which of them are correctly nil, which are waiting on an '
+                f'estimator, and which are work this engine cannot charge for.</div>')
+    _RANK = {"engine": 0, "estimator": 1, "nobody": 2}
+    out, tally = [], {"engine": 0, "estimator": 0, "nobody": 0}
+    for r in blanks:
+        reason = r.get("unpriced_reason")
+        reason = reason if isinstance(reason, dict) else _pp.unpriced_reason(_pp.UNEXPLAINED)
+        owner = reason.get("owner") or "engine"
+        tally[owner] = tally.get(owner, 0) + 1
+        code = str(r.get("part_number") or r.get("part_code") or r.get("description") or "?")
+        out.append((_RANK.get(owner, 0), code,
+                    f'<tr class="{"over" if reason.get("undercharging") else ""}">'
+                    f'<td class="pn">{_esc(code[:40])}</td>'
+                    f'<td class="mini">{_esc(reason.get("category"))}</td>'
+                    f'<td class="mini">{_esc(reason.get("why"))}'
+                    + (f' &mdash; {_esc(reason.get("detail"))}' if reason.get("detail") else "")
+                    + f'</td><td class="mini">{_esc(owner)}</td></tr>'))
+    out.sort(key=lambda t: (t[0], t[1]))
+    gaps = tally.get("engine", 0)
+    _lead = (f'<div class="callout warn"><b>{gaps} line(s) are unpriced because this ENGINE '
+             f'has no way to price them</b>, not because anything is missing from the '
+             f'drawings. That work will be done and invoiced. The job is under-charged by '
+             f'that amount and no estimator input can fix it.</div>' if gaps else
+             '<p class="mini">No line is unpriced because of a gap in the engine.</p>')
+    return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
+            f'<p class="mini">{len(blanks)} blank line(s): <b>{tally.get("estimator", 0)}</b> '
+            f'waiting on the estimator, <b>{tally.get("nobody", 0)}</b> correctly nil '
+            f'(costed elsewhere, a duplicate article, or an assembly whose material is its '
+            f'children\'s), <b>{gaps}</b> the engine cannot price. Worst first.</p>'
+            + _lead +
+            '<table><thead><tr><th>Line</th><th>Kind of nothing</th><th>Why</th>'
+            '<th>Who acts</th></tr></thead><tbody>'
+            + "".join(r[2] for r in out) + '</tbody></table>')
+
+
 def _route_decisions_section(summary: Dict[str, Any]) -> str:
     """Where every route decision was taken, and which of them were contested.
 
@@ -1205,7 +1285,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
     if not isinstance(decisions, list) or not decisions:
         # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
         # arbitrated at all, and a missing section reads as "nothing to report".
-        return ('<h2>11 &nbsp;How each operation was decided</h2>'
+        return ('<h2>12 &nbsp;How each operation was decided</h2>'
                 '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
                 'was arbitrated, so nothing here can say what decided it. The labour below '
                 'came from the legacy path.</div>')
@@ -1237,7 +1317,7 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
              f'The losing claim is named so it can be checked.</p>' if contested_n else
              '<p class="mini">No decision was contested — every operation had a single '
              'strongest source and nothing at that rank disagreed with it.</p>')
-    return ('<h2>11 &nbsp;How each operation was decided</h2>'
+    return ('<h2>12 &nbsp;How each operation was decided</h2>'
             '<p class="mini">Every operation on this job, the source that decided it and the '
             'rank that source carries. "Nothing quoted" means no claim carried the drawing\'s '
             'own words, so the decision cannot be held against the sheet.</p>'
@@ -1262,7 +1342,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('<h2>12 &nbsp;Consistency checks</h2>'
+        return ('<h2>13 &nbsp;Consistency checks</h2>'
                 '<div class="callout warn"><b>The consistency checks did not run on this job.</b> '
                 'Nothing here has been verified against the workbook: rows have not been '
                 'reconciled to their totals, priced rows have not been joined to the parts that '
@@ -1271,7 +1351,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
     _v = [x for x in (inv.get("violations") or []) if isinstance(x, dict)]
     _n = len(inv.get("checks_run") or [])
     if inv.get("may_quote_firm") and not _v:
-        return (f'<h2>12 &nbsp;Consistency checks</h2>'
+        return (f'<h2>13 &nbsp;Consistency checks</h2>'
                 f'<div class="callout good"><b>All {_n} checks passed.</b> Material and labour '
                 f'rows each reconcile to the workbook\'s own totals, those totals reconcile to '
                 f'the unit price, every priced row joins to exactly one route, and no report '
@@ -1322,7 +1402,7 @@ def _invariants_section(summary: Dict[str, Any]) -> str:
              f'is not a pass.</div>' if not inv.get("may_quote_firm") else
              '<div class="callout info">No check failed. The advisories below are worth '
              'reading but do not affect whether the price can be released.</div>')
-    return (f'<h2>12 &nbsp;Consistency checks</h2>{_head}'
+    return (f'<h2>13 &nbsp;Consistency checks</h2>{_head}'
             f'<table><thead><tr><th>Status</th><th>Check</th><th>What it found</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>')
 

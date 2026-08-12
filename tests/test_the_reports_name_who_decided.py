@@ -320,8 +320,9 @@ def test_the_section_numbers_are_still_unique_and_ordered():
     for n, title in ((8, "How far to trust this number"),
                      (9, "Where the bill of materials came from"),
                      (10, "What each purchased part was looked up by"),
-                     (11, "How each operation was decided"),
-                     (12, "Consistency checks")):
+                     (11, "Why these lines carry no price"),
+                     (12, "How each operation was decided"),
+                     (13, "Consistency checks")):
         assert f"<h2>{n} &nbsp;{title}</h2>" in src, f"section {n} ({title}) is misnumbered"
 
 
