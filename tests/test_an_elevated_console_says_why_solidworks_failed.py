@@ -1,18 +1,20 @@
-"""An elevated console cannot reach SolidWorks at all, and the failure should say so.
+"""An elevated console can fail to reach SolidWorks, and the failure should offer that.
 
-Windows will not hand an elevated process a COM server running at normal integrity. The
-running-object table an admin process can see is not the one a designer's SolidWorks
-registered itself in, so Dispatch("SldWorks.Application") cannot ATTACH to the SolidWorks
-already open on the machine -- it tries to start a second, elevated instance instead, which on
-a single-seat licence fails or hangs.
+Windows will not hand an elevated process a COM server registered by a normal-integrity one,
+so Dispatch("SldWorks.Application") from an admin console cannot ATTACH to a SolidWorks a
+designer already has open. It tries to start a second, elevated instance, which a single-seat
+licence refuses or hangs on.
 
-THIS IS NOT THE EXCEL CAVEAT. run-job.ps1 has always warned that Excel COM is UNRELIABLE from
-an elevated shell. SolidWorks is not unreliable there, it is unavailable -- and the note said
-nothing about it, so the estimating PC ran elevated all week with forty-one models beside it
-and the obvious suspects were the licence, the share and the models.
+THE FIRST VERSION OF THIS FILE SAID AN ELEVATED RUN CANNOT WORK AT ALL. That is wrong, and
+the user had run it successfully that way. With SolidWorks CLOSED there is nothing to attach
+to and the analyser starts its own instance quite happily. Shipping the stronger claim would
+have sent somebody to reconfigure a machine that was fine -- the same shape as the stale
+hazard note that kept native extraction switched off for weeks, and written into the product
+by the person who had just finished removing that one.
 
-A failure that says only "the analyser exited 1" sends somebody to check all three. When the
-cause is the window they typed into, the message should lead with that.
+So the hint is a CANDIDATE offered beside the real error, never a verdict. It earns its place
+because "the analyser exited 1" otherwise sends somebody to check their licence, their share
+and their models, when the answer may be that a colleague has the assembly open.
 """
 from __future__ import annotations
 
@@ -45,6 +47,8 @@ def test_a_failed_analyser_run_names_elevation_when_we_are_elevated(monkeypatch)
     monkeypatch.setattr(sw.subprocess, "run", lambda *a, **k: _R())
     msg = sw._run_analyser("/tmp/models")
     assert "ELEVATED" in msg and "NORMAL PowerShell" in msg
+    assert "does not stop the analyser on its own" in msg, \
+        "the hint must stay a candidate cause, not a verdict about a machine that may be fine"
     assert "exited 1" in msg, "the underlying failure must still be reported"
 
 
@@ -75,8 +79,10 @@ def test_the_console_note_warns_about_solidworks_and_not_only_excel():
     """The note the estimating PC printed all week listed drive mappings and Excel. Nothing
     said the one thing that made native extraction impossible from that window."""
     note = (_ROOT / "run-job.ps1").read_text(encoding="utf-8")
-    block = note[note.index("NOTE: this console is ELEVATED."):][:1400]
-    assert "SOLIDWORKS CANNOT BE ATTACHED TO AT ALL" in block
+    block = note[note.index("NOTE: this console is ELEVATED."):][:1600]
+    assert "SolidWorks can only be ATTACHED TO" in block
+    assert "elevated run starts its own instance and works" in block, \
+        "the note must not tell somebody their working setup is broken"
     assert "Excel COM" in block, "the older Excel caveat must survive alongside it"
 
 

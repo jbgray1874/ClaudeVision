@@ -109,12 +109,13 @@ try {
         Write-Host '    a share mapped normally is invisible here;'
         Write-Host '  - Excel COM automation is unreliable from an elevated process, so'
         Write-Host '    the workbook may not be written even when the estimate succeeds;'
-        Write-Host '  - SOLIDWORKS CANNOT BE ATTACHED TO AT ALL from here. Windows refuses to'
-        Write-Host '    hand an elevated process a COM server running at normal integrity, so'
-        Write-Host '    Dispatch(SldWorks.Application) cannot take a SolidWorks somebody is'
-        Write-Host '    already using - it tries to start a second, elevated one. Native model'
-        Write-Host '    extraction will fail here even when SolidWorks is open and licensed.'
-        Write-Host '  A normal PowerShell with a UNC path avoids all three.' -ForegroundColor Yellow
+        Write-Host '  - SolidWorks can only be ATTACHED TO from a console at the same'
+        Write-Host '    integrity level. Windows will not hand an elevated process a COM'
+        Write-Host '    server registered by a normal one, so if a designer already has these'
+        Write-Host '    models open, the analyser cannot take that session - it tries to start'
+        Write-Host '    a SECOND, elevated instance instead. With SolidWorks closed, an'
+        Write-Host '    elevated run starts its own instance and works.'
+        Write-Host '  A normal PowerShell with a UNC path avoids the drive and Excel issues.' -ForegroundColor Yellow
         Write-Host ''
     }
 } catch { }

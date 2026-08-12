@@ -708,22 +708,27 @@ def running_elevated() -> Optional[bool]:
         return None
 
 
-# WHY AN ELEVATED CONSOLE CANNOT DO THIS AT ALL.
+# WHAT ELEVATION ACTUALLY DOES TO THIS, WHICH IS NARROWER THAN IT FIRST LOOKS.
 #
-# Windows will not hand an elevated process a COM server running at normal integrity. The
-# running-object table an admin process can see is not the one a designer's SolidWorks
-# registered itself in, so Dispatch("SldWorks.Application") cannot ATTACH to the SolidWorks
-# already open on the machine — it tries to start a second, elevated instance instead, which
-# on a single-seat licence fails or hangs.
+# Windows will not hand an elevated process a COM server registered by a normal-integrity one.
+# So Dispatch("SldWorks.Application") from an admin console cannot ATTACH to a SolidWorks a
+# designer already has open — it tries to start a second, elevated instance, which a
+# single-seat licence refuses or hangs on.
 #
-# This is not the same as the Excel caveat run-job.ps1 has always printed. Excel is unreliable
-# from an elevated shell; SolidWorks is unavailable. A failure that says only "the analyser
-# exited 1" sends somebody to check their licence and their models, when the cause is the
-# window they typed into — so when we know we are elevated, the failure says so first.
+# IT IS NOT TRUE THAT AN ELEVATED RUN CANNOT WORK, and this comment said so for an hour.
+# With SolidWorks closed there is nothing to attach to and the analyser starts its own
+# instance quite happily, which is how this was run successfully before. Writing the stronger
+# claim into the product would have sent somebody to reconfigure a machine that was fine —
+# the same shape as the stale hazard note that kept native extraction switched off for weeks.
+#
+# So the hint is a CANDIDATE cause offered beside the real error, never a verdict. It is worth
+# offering because "the analyser exited 1" otherwise sends somebody to check their licence,
+# their share and their models, and the answer may be that a colleague has the assembly open.
 _ELEVATED_HINT = (
-    "This console is ELEVATED, and that is very likely the whole cause: Windows will not let "
-    "an elevated process attach to a SolidWorks running at normal integrity, so the analyser "
-    "cannot take the session already open on this machine. Re-run from a NORMAL PowerShell."
+    "This console is ELEVATED. That does not stop the analyser on its own — with SolidWorks "
+    "closed it starts its own instance — but an elevated process CANNOT attach to a SolidWorks "
+    "someone already has open at normal integrity. If these models are open on this machine, "
+    "close them or re-run from a NORMAL PowerShell."
 )
 
 
