@@ -702,6 +702,22 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             "has changed since. This estimate is built on older geometry, materials and "
             "quantities than the models now hold.",
             native_files_present=sw.get("native_files_present")))
+    if sw.get("top_assembly_candidates"):
+        # WHICH ASSEMBLY IS THE JOB. Its full-depth BOM becomes the job's component list at
+        # rank 90, so choosing the wrong one replaces every quantity on the sheet. The extract
+        # can rule out anything that is somebody else's child; it cannot tell a released GA
+        # from a scratch assembly that nothing includes, and a folder of fifteen assemblies
+        # usually holds both. A warning rather than a block: the chosen BOM is probably right
+        # and is certainly better than none, but nobody should read it as having been read.
+        _cands = sw.get("top_assembly_candidates") or []
+        out.append(_violation(
+            "native_top_assembly_ambiguous", WARNING,
+            f"{len(_cands)} assemblies in this extract could each be the top of the job, and "
+            f"'{sw.get('top_assembly') or '?'}' was CHOSEN by {sw.get('top_assembly_chosen_by')}"
+            f" — not read from the models. Its full-depth BOM is now the job's component list, "
+            f"so if the wrong one won, every quantity on the sheet came from the wrong "
+            f"assembly. Candidates: {', '.join(str(c) for c in _cands[:8])}.",
+            candidates=_cands[:20], chosen=sw.get("top_assembly")))
     if sw.get("native_folder_unreachable"):
         # "I COULD NOT LOOK" MUST NOT READ AS "THERE IS NOTHING THERE". A count of zero from
         # an unreachable folder is indistinguishable downstream from a genuinely drawings-only

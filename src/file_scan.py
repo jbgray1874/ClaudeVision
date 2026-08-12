@@ -2428,6 +2428,14 @@ def _finalize_scan_summary(
                     "reliability": 1.0,
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),
+                    # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
+                    # becomes the job's component list at rank 90; on a folder of fifteen
+                    # assemblies the extract can rule out anything that is somebody's child
+                    # and cannot tell a released GA from a scratch one. Carried so an
+                    # invariant can say a choice was made, rather than the sheet presenting
+                    # somebody's test rig as the job.
+                    "top_assembly_candidates": _sw_job.meta.get("top_assembly_candidates"),
+                    "top_assembly_chosen_by": _sw_job.meta.get("top_assembly_chosen_by"),
                     "counts": _sw_job.meta.get("counts"),
                     "applied": _swc,
                     # Freshness, carried onto the job so an invariant can act on it.

@@ -285,13 +285,56 @@ def _is_weld_candidate(title: str, description: str) -> bool:
     return any(tok in blob for tok in _WELD_NAME_TOKENS)
 
 
-def _pick_top_assembly(records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The job's top assembly = the assembly record with the largest (full-depth) BOM.
-    Generic — no reliance on a '-GA' naming convention, though that usually wins anyway."""
+def _pick_top_assembly(records: List[Dict[str, Any]],
+                       ambiguity: Optional[Dict[str, Any]] = None
+                       ) -> Optional[Dict[str, Any]]:
+    """The job's top assembly, whose full-depth BOM becomes the job's component list.
+
+    LARGEST BOM WINS was the whole rule, and on a folder of fifteen assemblies that is a
+    coin toss dressed as a decision. 11650 carries test and scratch assemblies beside the
+    released ones; a test rig that happens to contain more components than the GA would have
+    supplied the entire job's BOM, at rank 90, silently.
+
+    THE STRUCTURAL FACT FIRST. Every SLDASM reports its own edges, so an assembly that
+    appears as somebody else's CHILD is by definition not the top of anything. Restricting
+    the candidates to roots is exact, needs no naming convention, and is what stops a
+    sub-assembly winning on size — which is the common half of this failure.
+
+    WHAT IT CANNOT DECIDE, IT SAYS. A scratch assembly is usually a root too, so several
+    roots may remain and nothing in the extract can rank them: that needs the job's own
+    drawing numbers, which this function is not given. Size still breaks the tie, because a
+    guess is better than no BOM at all — but the competing roots are recorded so the run can
+    report that a choice was made rather than presenting it as a reading.
+    """
     asms = [r for r in records if r.get("doctype") == SW_ASM and r.get("bom")]
     if not asms:
         return None
-    return max(asms, key=lambda r: len(r.get("bom") or []))
+    children = set()
+    # WERE THERE ANY EDGES AT ALL. Without this the two cases are indistinguishable: an
+    # extract that recorded no tree makes EVERY assembly trivially "nobody's child", so the
+    # roots test passes vacuously and the run would claim it had ruled the others out. An
+    # older extract with no assembly_edges has ruled out nothing, and must say so.
+    any_edges = False
+    for r in records:
+        if int(r.get("doctype") or SW_PART) != SW_ASM:
+            continue
+        for e in (r.get("assembly_edges") or []):
+            if isinstance(e, dict) and e.get("child"):
+                children.add(_clean_pn(e["child"]))
+                any_edges = True
+    def _own(r):
+        return _clean_pn(r.get("assembly_part_number") or r.get("title") or "")
+    roots = [r for r in asms if _own(r) and _own(r) not in children] if any_edges else []
+    candidates = roots or asms
+    chosen = max(candidates, key=lambda r: len(r.get("bom") or []))
+    if ambiguity is not None and len(candidates) > 1:
+        ambiguity["top_assembly_candidates"] = sorted(
+            str(r.get("title") or "") for r in candidates)
+        ambiguity["top_assembly_chosen_by"] = (
+            f"largest BOM among {len(candidates)} assemblies that are nobody's child"
+            if any_edges else
+            "largest BOM — no assembly edges were recorded, so nothing could be ruled out")
+    return chosen
 
 
 # ── normalisation ────────────────────────────────────────────────────────────
@@ -426,9 +469,11 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
         1 for r in records if int(r.get("doctype") or SW_PART) == SW_ASM)
 
     # BOM = the top assembly's full-depth component list, quantities already rolled up.
-    top = _pick_top_assembly(records)
+    _amb: Dict[str, Any] = {}
+    top = _pick_top_assembly(records, _amb)
     if top:
         job.meta["top_assembly"] = top.get("title")
+        job.meta.update(_amb)
         for line in (top.get("bom") or []):
             pn = _clean_pn(line.get("part_number") or "")
             if not pn:
