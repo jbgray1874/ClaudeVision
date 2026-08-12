@@ -1303,6 +1303,77 @@ _MIN_CREDIBLE_CUT_SPACING_MM = 1.0
 _CUT_PATH_ABSURDITY_MARGIN = 3.0
 
 
+def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str, Any]]:
+    """A part whose material this engine holds no rate for, and what happened about it.
+
+    THE WORST OUTCOME IS THE SILENT ONE. 11650-01-05A DOOR -- 1202 x 689 x 6mm, laser cut,
+    drilled and assembled, all of that costed -- carried GBP 0.00 of material because the
+    arbitration winner was ABS, which has no sheet rate and no GBP/kg. Nothing on the sheet,
+    in the reports or in the checks said so. It read as a door that costs nothing to make.
+
+    An unpriceable material is OURS, not the estimator's: no input they can supply fixes a
+    rate the engine does not have. That is NO_VOCABULARY in the price vocabulary and it is
+    the category that means the job is UNDER-CHARGED by an amount nobody has seen.
+
+    Two outcomes, both reported. Where a better-supported reading rescued the price, the
+    substitution is a conflict an estimator must rule on -- the figure is real but the
+    material is unconfirmed. Where nothing rescued it, the line is simply not costed and the
+    engine needs a rate before this job is quoted.
+    """
+    if not isinstance(summary, dict):
+        return [_violation("material_we_cannot_price", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    parts = _parts(summary)
+    if not parts:
+        return []
+    substituted, unpriceable = [], []
+    for part in parts:
+        conflict = part.get("material_priced_as")
+        if isinstance(conflict, dict) and conflict.get("priced_material"):
+            substituted.append({
+                "part_number": part.get("part_number"),
+                "arbitrated": conflict.get("arbitrated_material"),
+                "priced_as": conflict.get("priced_material"),
+                "from": conflict.get("priced_material_source"),
+            })
+            continue
+        material = str(part.get("normalized_material") or "").strip()
+        if not material:
+            continue                      # absence of a material is a different check
+        try:
+            import config as _cfg
+            if _cfg.material_has_a_rate(material):
+                continue
+        except Exception:                                    # noqa: BLE001
+            continue
+        unpriceable.append({"part_number": part.get("part_number"), "material": material})
+
+    out: List[Dict[str, Any]] = []
+    if unpriceable:
+        out.append(_violation(
+            "material_has_no_rate_in_this_engine", BLOCKING,
+            f"{len(unpriceable)} part(s) are made of a material this engine holds no rate "
+            f"for, so their material costs NOTHING on the sheet: "
+            + "; ".join(f"{u['part_number']} ({u['material']})" for u in unpriceable[:6])
+            + ". No estimator input fixes this -- there is no rate to enter against, and a "
+              "line at zero reads as a part that is free to make. THE JOB IS UNDER-CHARGED "
+              "BY THIS MATERIAL. Add a rate for the material, or confirm the part is "
+              "something we can already price.",
+            count=len(unpriceable), parts=unpriceable[:20]))
+    if substituted:
+        out.append(_violation(
+            "material_priced_from_a_lower_ranked_reading", WARNING,
+            f"{len(substituted)} part(s) were priced from a material other than the one "
+            f"arbitration chose, because the chosen one has no rate: "
+            + "; ".join(f"{s['part_number']} is recorded as {s['arbitrated']} and priced as "
+                        f"{s['priced_as']} (from {s['from']})" for s in substituted[:4])
+            + ". The figure is real and the MATERIAL IS UNCONFIRMED. An estimator must rule "
+              "on which it is: if the recorded material is right, the price is wrong and the "
+              "engine needs a rate for it.",
+            count=len(substituted), parts=substituted[:20]))
+    return out
+
+
 def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[str, Any]]:
     """The cut path must fit inside the blank it was cut from.
 
@@ -2536,6 +2607,7 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
 
 CHECKS = (
     check_the_price_source_was_reached,
+    check_a_material_we_cannot_price_is_declared,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,

@@ -451,6 +451,43 @@ ACRYLIC_SHEET_PRICE_GBP = {
 # anti-reflective run ~1.5-2x higher and are NAMED on the drawing (separate tier, later).
 # Used as: cost = blank_area_m2 × rate × (1+scrap), expressed through the WB's L/J. PROVISIONAL
 # until estimating signs off these figures.
+# ── WHICH MATERIALS THIS ENGINE CAN ACTUALLY PRICE ──────────────────────────────────
+# The sheet-priced plastics. estimator's material branch tests membership of this set before
+# taking the area x GBP/m2 path, and that path always resolves -- ACRYLIC_PRICE_GBP_PER_M2
+# carries a "default" -- so a material IN this set always gets a rate.
+#
+# It lived as a set literal inside estimate_material, where nothing else could ask it. ABS is
+# not in it and POLYCARBONATE is, so when SolidWorks (rank 90) beat the drawing text (rank 70)
+# on 11650-01-05A DOOR, the winning material had no rate by ANY route -- not here, and no
+# entry in MATERIAL_PRICE_GBP_PER_KG either -- while the losing one had both. The door costed
+# GBP 0.00 material on a 1202 x 689 x 6mm panel and nothing said why.
+#
+# The tables live here, so the question "can we price this material at all" is answered here
+# too. A second copy anywhere else would drift from the tables it describes.
+PLASTIC_SHEET_PRICED_MATERIALS = frozenset({
+    "ACRYLIC", "HIGH IMPACT ACRYLIC", "HIPS", "PERSPEX", "PMMA", "POLYCARBONATE",
+})
+
+
+def material_has_a_rate(material) -> bool:
+    """Can this engine put a price on this material by any route it has?
+
+    Not "is it a sensible material" and not "did we price this part" -- only whether a rate
+    exists to be found. Used by the costing to know when to look for a better-supported
+    reading, and by the invariants to say that an unpriceable material is OUR gap and not
+    the estimator's.
+    """
+    name = str(material or "").strip().upper().replace("_", " ")
+    if not name:
+        return False
+    if name in PLASTIC_SHEET_PRICED_MATERIALS:
+        return True
+    for key in (name, name.replace(" ", "_")):
+        if (MATERIAL_PRICE_GBP_PER_KG or {}).get(key) is not None:
+            return True
+    return False
+
+
 ACRYLIC_PRICE_GBP_PER_M2 = {
     1.5: 8.2,    # 1 line (full sheet clear XT) — single-source
     1.8: 7.8,    # 3 lines (blanks), £6.4-8.3 — STRONG

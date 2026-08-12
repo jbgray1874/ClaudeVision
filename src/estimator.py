@@ -1969,6 +1969,60 @@ def _blank_that_could_have_been_cut(
     return None, None
 
 
+def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tuple[Any, Optional[Dict[str, Any]]]:
+    """The material to PRICE from, and the conflict record if it is not the arbitrated one.
+
+    THE RANK-WINNING VALUE IS NOT ALWAYS THE COSTABLE ONE. Arbitration ranks sources by how
+    well they know what a part IS. It says nothing about whether this engine holds a rate for
+    the answer, and on 11650-01-05A DOOR those came apart: SolidWorks (rank 90) said ABS,
+    which has no entry in the plastic sheet gate and none in MATERIAL_PRICE_GBP_PER_KG; the
+    drawing text (rank 70) said POLYCARBONATE, which has both. A 1202 x 689 x 6mm door
+    costed GBP 0.00 of material, and the estimate was silently short by about GBP 18.69.
+
+    THREE THINGS THIS MUST NOT DO.
+
+    It must not change normalized_material. What the part IS remains the arbitration's
+    answer -- a lower-ranked source does not win a datum by being convenient, and the
+    reports must keep showing what the model said.
+
+    It must not improve a total quietly. The substitution is recorded on the part and
+    reported as a conflict an estimator has to rule on; a number that appears with no
+    explanation is the failure this whole layer exists to stop.
+
+    It must not fire when the winner is priceable. A rate that exists is used, whatever else
+    was read. This is a rescue for an unpriceable winner, not a preference for cheap answers.
+    """
+    if config.material_has_a_rate(material):
+        return material, None
+    # Everything else this part was read as, best-evidenced first: what arbitration displaced,
+    # then the raw tokens off the drawing.
+    seen, candidates = set(), []
+    for entry in (part.get("_displaced") or {}).get("normalized_material") or []:
+        if isinstance(entry, dict) and entry.get("value"):
+            candidates.append((entry["value"], entry.get("source") or "an earlier pass"))
+    for token in (part.get("materials") or []):
+        candidates.append((token, "drawing text"))
+    for value, source in candidates:
+        family = _canonical_material_family(value)
+        key = str(family or "").upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if str(family).upper() == str(material or "").upper():
+            continue
+        if config.material_has_a_rate(family):
+            return family, {
+                "arbitrated_material": material,
+                "priced_material": family,
+                "priced_material_source": source,
+                "why": (f"{material} is not priceable by this engine -- no sheet rate and no "
+                        f"GBP/kg -- and {family}, read from {source}, is. Priced from "
+                        f"{family}. THE MATERIAL IS UNCONFIRMED: if the part really is "
+                        f"{material}, this figure is wrong and the engine needs a rate for it."),
+            }
+    return material, None
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     material = part.get("normalized_material") or _first(part.get("materials", []))
     material = _canonical_material_family(material)
@@ -1980,6 +2034,19 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # supplied it, so the recorded source is carried through unchanged rather than
         # re-stamped as if the estimator had observed something.
         part["normalized_material"] = material   # precedence: direct-write ok — canonicalises the part's own value, source unchanged
+    # AFTER THE CANONICAL WRITE-BACK, DELIBERATELY. That line propagates the part's OWN
+    # material to wb_populate's block routing. Substituting before it meant the rescue
+    # material was written to normalized_material as well, so the arbitration's answer was
+    # silently replaced by the reading that merely happened to have a rate -- exactly what
+    # this rule promises not to do. From here on `material` is the PRICING material only.
+    material, _material_conflict = _material_we_can_actually_price(part, material)
+    if _material_conflict:
+        part["material_priced_as"] = _material_conflict
+        part.setdefault("review_flags", []).append({
+            "severity": "warning", "flag": "material_unpriceable_substituted",
+            "detail": _material_conflict["why"],
+        })
+        print(f"   [material] {part.get('part_number')}: {_material_conflict['why']}", flush=True)
     thickness = _safe_thickness_mm(part)
     quantity = _safe_int(part.get("quantity")) or 1
     dims = infer_primary_dimensions(part)
@@ -2096,7 +2163,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # using the existing nesting formula with the acrylic sheet size. Gated strictly to
     # acrylic-like materials, so steel / wire / MDF / 1282 are untouched.
     _mat_acr = str(material or "").upper().replace("_", " ")
-    if _mat_acr in {"ACRYLIC", "HIGH IMPACT ACRYLIC", "HIPS", "PERSPEX", "PMMA", "POLYCARBONATE"} and blank_length and blank_width:
+    if _mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS and blank_length and blank_width:
         _acr_area_m2 = (float(blank_length) * float(blank_width)) / 1_000_000.0
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
 
