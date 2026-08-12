@@ -1803,15 +1803,36 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
     }
     for decision in decisions.values():
         if decision.get("status") == "unverified":
+            # SAY WHICH KIND OF UNVERIFIED, BECAUSE THEY NEED DIFFERENT ACTIONS.
+            #
+            # This asserted "contains conflicts" for EVERY unverified decision. The predicate
+            # above is status alone; the conflicts list is attached as detail and is often
+            # empty. route_compiler sets UNVERIFIED in two places that involve no conflict at
+            # all (~2063, ~2073): a leaf whose finish says SEE ASSEMBLY and no extracted route
+            # owns it, and an unattributed operation stranded on an assembly record. Both mean
+            # NOBODY IN THIS PACK CLAIMS TO PERFORM THE WORK -- which is a question for the
+            # drawing office, not a tie between competing readings for us to settle.
+            #
+            # All six of 11650's blockers are the second kind. An estimator told "conflicts"
+            # goes looking for two claims to choose between and finds none.
+            _conflicts = decision.get("conflicts") or []
+            _why = (
+                (f"has {len(_conflicts)} conflicting claim(s) at equal rank and cannot be "
+                 f"priced automatically.")
+                if _conflicts else
+                ("is UNOWNED: nothing in this pack says who performs it. The drawing names "
+                 "the work and no route claims it, so pricing it would be a guess about "
+                 "which assembly does the job -- and could charge it twice. NOT a tie "
+                 "between readings: there is no second reading. ASK WHO PERFORMS THIS.")
+            ) if cutover else (
+                f"has {len(_conflicts)} equal-ranked or metadata conflict(s). Legacy pricing "
+                f"still stands." if _conflicts else
+                "is UNOWNED -- nothing claims to perform it. Legacy pricing still stands."
+            )
             out.append(_violation(
                 "canonical_route_decision_unverified", severity,
                 f"Route decision {decision.get('decision_id')} for "
-                f"{decision.get('operation')} on {decision.get('target_id')} contains "
-                + (
-                    "conflicts and cannot be priced automatically."
-                    if cutover else
-                    "equal-ranked or metadata conflicts. Legacy pricing still stands."
-                ),
+                f"{decision.get('operation')} on {decision.get('target_id')} " + _why,
                 decision_id=decision.get("decision_id"),
                 operation=decision.get("operation"),
                 target_id=decision.get("target_id"),
