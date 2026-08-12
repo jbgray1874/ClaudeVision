@@ -629,6 +629,32 @@ def extract_pdf_summary(pdf_path: Path) -> Dict[str, Any]:
     return summary
 
 
+def _weight_would_be_someone_elses(part) -> bool:
+    """True when a WEIGHT read off this part's pages would not be this part's weight.
+
+    A detail drawing describes ONE part, so every weight on it is that part's and taking the
+    largest is a sensible way to pick between a title-block figure and a repeat of it. An
+    assembly or GA sheet describes MANY, so the largest weight on it is the assembly's own or
+    its heaviest child -- and attributing that to a part named only on that sheet inflates it
+    by whatever the biggest thing on the page happens to be.
+
+    ONE PREDICATE, BOTH READERS. This test already existed, inline, in the pass that clears
+    stated_weight_g on assembly-only records. The text-scan that sets it ran AFTERWARDS and
+    asked nothing, so the guard was dead on every weight the scan found. Two places deciding
+    one question, and only one of them consulted -- so the question is asked here, once.
+    """
+    if not isinstance(part, dict):
+        return False
+    roles = part.get("page_roles") or []
+    pages = part.get("pages") or []
+    has_description = bool(str(part.get("description") or "").strip())
+    return bool(
+        "assembly" in str(roles).lower()
+        or (len(pages) > 1 and not has_description)
+        or not has_description
+    )
+
+
 def scan_folder_job(
     job_folder: Path,
     pdf_paths: Sequence[Path],
@@ -2082,15 +2108,7 @@ def _finalize_scan_summary(
         # Suppress stated_weight_g on assembly/overview pages to prevent
         # double-counting sub-part weights into parent assembly material cost.
         for _part in _pre_estimate_parts:
-            _page_roles = _part.get("page_roles") or []
-            _pages = _part.get("pages") or []
-            _has_desc = bool(str(_part.get("description") or "").strip())
-            _is_assembly_page = (
-                "assembly" in str(_page_roles).lower()
-                or (len(_pages) > 1 and not _has_desc)
-                or not _has_desc
-            )
-            if _part.get("stated_weight_g") and _is_assembly_page:
+            if _part.get("stated_weight_g") and _weight_would_be_someone_elses(_part):
                 _part["stated_weight_g"] = None
                 _part["weights"] = []
 
@@ -2202,6 +2220,26 @@ def _finalize_scan_summary(
                     r"WEIGHT\s*(?:\([^)]*\))?\s*[:\s]+([0-9]+(?:\.[0-9]+)?)\s*(KG|G)\b",
                     _all_page_text.upper(),
                 )
+                # THE SAME RULE THE SUPPRESSION PASS USES, ASKED HERE TOO.
+                #
+                # That pass runs EARLIER in this function and clears stated_weight_g on
+                # assembly-only records "to prevent double-counting sub-part weights into
+                # parent assembly material cost". Then this block ran and put one back, so
+                # the guard was dead for every weight the text scan found -- a gate that
+                # runs before the thing it gates.
+                #
+                # 11650-05-02M SLIDER is the cost. Named only on a GA page, no detail
+                # drawing, no blank, no thickness -- and it came out at 11.694 kg, because
+                # "the largest weight found on the part's pages" on an assembly sheet is
+                # the assembly's own weight or its heaviest child, never this part's.
+                # 11.694 kg x GBP 0.80/kg x 1.04 scrap = GBP 9.73, x2 = GBP 20.24, which was
+                # 38% of that job's material.
+                #
+                # Taking the MAX is right on a detail drawing, where the candidates are one
+                # part's weight written more than once. It is exactly wrong on a sheet that
+                # describes many parts.
+                if _weight_matches and _weight_would_be_someone_elses(_part):
+                    _weight_matches = []
                 if _weight_matches:
                     # Take the largest weight found on the part's pages
                     _best = max(
