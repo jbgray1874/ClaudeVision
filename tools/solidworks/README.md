@@ -150,7 +150,11 @@ for released BOM tables and callouts; then DXF flat patterns, then PDF notes.
 
 ## Commands
 
-Everything below is a normal PowerShell prompt at `C:\ClaudeVision`.
+Everything below runs at `C:\ClaudeVision`. **Elevated or not does not matter** provided
+SolidWorks is closed and the job share is visible from whichever console you use — check with
+`Test-Path`. Do not switch consoles to fix something: a drive mapped in one token is invisible
+from the other, so moving from a working prompt is how a path that plainly exists stops being
+readable.
 
 **Normal path — nothing to type.** With models in the job folder and no fresh extract, the
 estimate runs the analyser itself:
