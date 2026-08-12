@@ -1041,7 +1041,22 @@ def _provenance_strip(summary: Dict[str, Any]) -> str:
     else:
         pow_txt = "<b>the legacy finish gate</b> &mdash; no compiled route on this job"
 
+    # THE FIRST THING TO SAY, WHEN IT APPLIES. Every figure above this strip is presented as
+    # the workbook's; when the Excel read-back did not run they are the engine's PRE-Excel
+    # numbers instead, which is a different total. Section 11 says so too, but an estimator
+    # reading top-down has already formed a view of the number by the time they reach it.
+    _fe = summary.get("final_estimate")
+    if not isinstance(_fe, dict):
+        _fe = (summary.get("estimate_summary") or {}).get("final_estimate")
+    _no_readback = (
+        '<div class="callout warn"><b>The calculated sheet was never read back.</b> Excel did '
+        'not return this workbook\'s computed totals, so the figures above are the engine\'s '
+        'own, not what the Estimate sheet calculates &mdash; two different numbers. Nothing '
+        'below has been reconciled against the workbook.</div>'
+        if not isinstance(_fe, dict) or not _fe else '')
+
     return ('<h2>8 &nbsp;How far to trust this number</h2>'
+            + _no_readback +
             '<table><tbody>'
             f'<tr><td><b>Totals came from</b></td><td>{truth}</td></tr>'
             f'<tr><td><b>Best source used</b></td><td>{best_txt}</td></tr>'

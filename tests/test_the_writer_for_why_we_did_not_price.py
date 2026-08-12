@@ -275,3 +275,92 @@ def test_the_report_reads_final_estimate_from_either_shape():
     for job in ({"final_estimate": {"material_rows": rows}},
                 {"estimate_summary": {"final_estimate": {"material_rows": rows}}}):
         assert "waiting on the estimator" in jrh._unpriced_section(job)
+
+
+# ── and on the two surfaces an estimator actually opens ─────────────────────────────
+import estimation_report as er                                       # noqa: E402
+
+
+def _wb_job(parts, final_estimate=None):
+    job = {"manufacturing_writeup": {"parts": parts}}
+    if final_estimate is not None:
+        job["final_estimate"] = final_estimate
+    return job
+
+
+def test_the_provenance_sheet_carries_a_reason_for_every_blank_line():
+    """A blank in a money column reads as free on this tab exactly as it does on the Estimate
+    tab, and this one is the tab an estimator opens to ask why."""
+    rows = er.build_provenance(_wb_job([
+        {"part_number": "MAG CATCH", "description": "HAFELE 246.41.745", "quantity": 2},
+        {"part_number": "11650-01-01M", "description": "LH UPRIGHT", "quantity": 1,
+         "_bom_cross_reference": True}]))
+    by = {r["part_number"]: (r.get("unpriced_reason") or {}) for r in rows}
+    assert by["MAG CATCH"]["owner"] == "estimator"
+    assert by["11650-01-01M"]["owner"] == "nobody"
+
+
+def test_the_sheet_uses_the_same_classifier_as_the_report_and_the_invariant():
+    """A private second opinion here is how two documents describing one job come to disagree
+    about which blanks are somebody's job."""
+    src = Path(er.__file__).read_text(encoding="utf-8")
+    assert "from estimator_inputs import unpriced_reason_for_row" in src
+
+
+def test_the_sheet_reason_is_computed_from_the_record_not_the_read_back():
+    """Joining back through final_estimate.material_rows would explain the blanks only on runs
+    where the read-back worked -- and the read-back is precisely what fails on an elevated
+    console or a busy Excel. The sheet must explain itself on the runs that needed it most."""
+    rows = er.build_provenance(_wb_job(
+        [{"part_number": "MAG CATCH", "description": "H", "quantity": 1}]))
+    assert (rows[0].get("unpriced_reason") or {}).get("category") == pp.NO_PRICE_SOURCE
+
+
+def test_a_priced_line_carries_no_reason():
+    rows = er.build_provenance({
+        "manufacturing_writeup": {"parts": [
+            {"part_number": "FIXING1081", "description": "foot", "quantity": 2}]},
+        "estimate_summary": {"part_estimates": [
+            {"part_number": "FIXING1081", "unit_cost_gbp": 0.22,
+             "extended_total_cost_gbp": 0.46}]}})
+    assert rows[0].get("unpriced_reason") is None
+
+
+def _sheet(job):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    er.add_provenance_sheet(wb, job, {"pdf_name": "x", "job_number": "11650"})
+    return wb["AI Provenance"]
+
+
+def test_the_sheet_has_a_column_for_it_and_fills_it():
+    ws = _sheet(_wb_job([{"part_number": "MAG CATCH", "description": "H", "quantity": 1}],
+                        final_estimate={"material_rows": []}))
+    assert ws["P5"].value == "Not priced — why / who"
+    assert "ESTIMATOR TO PRICE" in str(ws["P6"].value)
+
+
+def test_the_sheet_says_when_the_calculated_sheet_was_never_read_back():
+    """The money columns on this tab are then the ENGINE's pre-Excel figures rather than what
+    the Estimate sheet computes -- two different totals -- and without this the tab looks
+    exactly as it does on a run that reconciled perfectly."""
+    ws = _sheet(_wb_job([{"part_number": "X", "description": "d", "quantity": 1}]))
+    assert "NOT READ BACK" in str(ws["A4"].value)
+    assert "normal PowerShell" in str(ws["A4"].value)
+
+
+def test_the_sheet_is_quiet_about_the_read_back_when_it_ran():
+    ws = _sheet(_wb_job([{"part_number": "X", "description": "d", "quantity": 1}],
+                        final_estimate={"material_rows": [{"description": "d"}]}))
+    assert "NOT READ BACK" not in str(ws["A4"].value or "")
+
+
+def test_the_html_report_says_it_at_the_top_not_only_in_section_eleven():
+    """An estimator reading top-down has formed a view of the number long before section 11.
+    Every figure above that point is presented as the workbook's, and on a run with no
+    read-back it is not."""
+    strip = jrh._provenance_strip({"estimate_summary": {}})
+    assert "never read back" in strip and "warn" in strip
+    quiet = jrh._provenance_strip(
+        {"estimate_summary": {"final_estimate": {"material_rows": [{"a": 1}]}}})
+    assert "never read back" not in quiet

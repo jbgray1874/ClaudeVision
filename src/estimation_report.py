@@ -394,8 +394,25 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "flags":             flags,
             "overrides_fired":   overrides_fired,
             "historical_match":  hist_match,
+            # WHY THIS LINE CARRIES NO MONEY. Computed from the part record by the SAME
+            # classifier the workbook read-back and the HTML report use, rather than joined
+            # back through final_estimate.material_rows — because the read-back is exactly
+            # what fails on an elevated console or a busy Excel, and a sheet that explains
+            # its blanks only when everything worked explains nothing on the runs that
+            # needed it. A private second opinion here is also how two documents describing
+            # one job come to disagree about which blanks are somebody's job.
+            "unpriced_reason":   (_unpriced_reason_for(part)
+                                  if not (unit or ext) else None),
         })
     return provenance
+
+
+def _unpriced_reason_for(part: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        from estimator_inputs import unpriced_reason_for_row
+        return unpriced_reason_for_row(part)
+    except Exception:                                    # pragma: no cover
+        return {}
 def add_provenance_sheet(wb, summary: Dict[str, Any],
                           scan_meta: Dict[str, Any] = None) -> None:
     """
@@ -443,11 +460,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
             c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
         return c
     # ── Title block ────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:O1")
+    ws.merge_cells("A1:P1")
     cell(1, 1, "SDI Intelligence — Estimate Provenance Report",
          bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG, align="center", size=13)
     ws.row_dimensions[1].height = 28
-    ws.merge_cells("A2:O2")
+    ws.merge_cells("A2:P2")
     pdf_name = scan_meta.get("pdf_name") or summary.get("source_file") or "—"
     job_no   = scan_meta.get("job_number") or "—"
     scan_dt  = scan_meta.get("scan_date") or datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -463,7 +480,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
          bg="2F5496", fg=C_HEADER_FG, align="center", size=10)
     ws.row_dimensions[2].height = 18
     # ── Legend ─────────────────────────────────────────────────────────────────
-    ws.merge_cells("A3:O3")
+    ws.merge_cells("A3:P3")
     cell(3, 1,
          "STATUS — the WEAKEST field decides the line, never an average:   "
          "CONFIRMED/MEASURED — read from a model, a DXF or the estimators' own calculator   "
@@ -473,7 +490,26 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
          "N/A — that field does not exist for this line",
          bg="F0F0F0", align="left", size=9)
     ws.row_dimensions[3].height = 16
-    ws.row_dimensions[4].height = 6  # spacer
+    # ── THE SHEET SAYS WHEN IT COULD NOT BE CHECKED ────────────────────────────
+    # The Excel read-back fails for reasons nothing to do with the estimate — an elevated
+    # console, a workbook that will not open, Excel busy — and when it does, the figures on
+    # this tab are the engine's PRE-Excel numbers rather than the ones the Estimate sheet
+    # calculated. Those are different totals. Silence there is the worst case: the tab looks
+    # exactly as it does on a run that reconciled perfectly.
+    _fe = summary.get("final_estimate")
+    if not isinstance(_fe, dict):
+        _fe = (summary.get("estimate_summary") or {}).get("final_estimate")
+    if not isinstance(_fe, dict) or not _fe:
+        ws.merge_cells("A4:P4")
+        cell(4, 1,
+             "THE CALCULATED SHEET WAS NOT READ BACK — Excel did not return this workbook's "
+             "computed totals (an elevated console, a workbook that would not open, or Excel "
+             "busy). The money columns below are the ENGINE's figures, not what the Estimate "
+             "sheet calculates. Re-run from a normal PowerShell before using these numbers.",
+             bg=C_LOW, align="left", size=9, wrap=True)
+        ws.row_dimensions[4].height = 30
+    else:
+        ws.row_dimensions[4].height = 6  # spacer
     # ── Column headers ─────────────────────────────────────────────────────────
     # The money columns are the ENGINE's per-part figures. Once Excel has calculated the
     # sheet they are not what the job is charged, and a column headed plainly "Unit £" next
@@ -487,6 +523,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         ("Cut (mm)",          10), ("Ops",              22),
         (f"Unit £{_money_basis}",  11), (f"Ext £{_money_basis}", 11),
         ("Rate / source",     34), ("Priced by — sheet row / decision", 26),
+        # A BLANK IN A MONEY COLUMN READS AS FREE, on this sheet as much as on the Estimate
+        # tab. The three kinds of nothing need different people: one must NOT be priced
+        # (its material is costed in another block), one is waiting on the estimator, and
+        # one is work this engine cannot charge for at all.
+        ("Not priced — why / who", 46),
     ]
     for ci, (hdr, width) in enumerate(headers, 1):
         c = cell(5, ci, hdr, bold=True, bg=C_SECTION, fg=C_HEADER_FG,
@@ -526,19 +567,35 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         cell(row, 14, _rb, bg=(C_LOW if _rb.startswith("⚠") else bg),
              border=True, size=9, wrap=True)
         cell(row, 15, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
+        # WHOSE BLANK THIS IS. Coloured by owner, not by severity of the number: an engine
+        # gap is work that will be done and invoiced with nothing on the sheet asking anyone
+        # to price it, so it is the one an estimator cannot fix and the one that gets the
+        # warning fill. A line that is correctly nil is left plain — it needs no action, and
+        # colouring it would teach people to ignore the colour.
+        _ur = p.get("unpriced_reason") or {}
+        if _ur:
+            _owner = {"estimator": "ESTIMATOR TO PRICE",
+                      "engine": "ENGINE GAP — THIS JOB IS UNDER-CHARGED",
+                      "nobody": "nothing to charge here"}.get(_ur.get("owner"), "")
+            _txt = f"{_ur.get('why')}" + (f" — {_ur['detail']}" if _ur.get("detail") else "")
+            cell(row, 16, f"{_owner}: {_txt}",
+                 bg=(C_LOW if _ur.get("undercharging") else bg),
+                 border=True, size=8, wrap=True)
+        else:
+            cell(row, 16, "—", bg=bg, border=True, size=8, align="center")
         ws.row_dimensions[row].height = 28
         row += 1
         # ── Flags / warnings ───────────────────────────────────────────────────
         if p["flags"]:
             for flag in p["flags"]:
-                ws.merge_cells(f"B{row}:O{row}")
+                ws.merge_cells(f"B{row}:P{row}")
                 cell(row, 1, "⚠",              bg=C_LOW, align="center", size=9)
                 cell(row, 2, f"REVIEW: {flag}", bg=C_LOW, size=9, wrap=True)
                 ws.row_dimensions[row].height = 16
                 row += 1
         # ── Override rules that fired ──────────────────────────────────────────
         if p["overrides_fired"]:
-            ws.merge_cells(f"B{row}:O{row}")
+            ws.merge_cells(f"B{row}:P{row}")
             cell(row, 1, "🧠",                  bg=C_RULE, align="center", size=9)
             cell(row, 2, "Learning: " + " | ".join(p["overrides_fired"]),
                  bg=C_RULE, size=9)
@@ -550,7 +607,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 avg  = hm.get("AvgCost") or hm.get("avg_cost") or 0
                 cnt  = hm.get("SampleCount") or hm.get("sample_count") or 0
                 hmat = hm.get("Material") or hm.get("material") or "?"
-                ws.merge_cells(f"B{row}:O{row}")
+                ws.merge_cells(f"B{row}:P{row}")
                 cell(row, 1, "📚",              bg=C_HIST, align="center", size=9)
                 cell(row, 2,
                      f"Historical: {cnt} SDI estimate(s) for this part as "
@@ -580,7 +637,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # purpose is to be checkable.
     if _totals["source"] == "excel_calculated":
         row += 1
-        ws.merge_cells(f"A{row}:O{row}")
+        ws.merge_cells(f"A{row}:P{row}")
         # Same basis as the Decision Report: reconcile the MATERIAL column against the
         # sheet's material total, and state labour as what it is — a department-row charge
         # with no per-part figure. The engine part-sum is an obsolete labour-inclusive
@@ -599,7 +656,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
              bg=C_KB, size=9, wrap=True)
         ws.row_dimensions[row].height = 32
     row += 2
-    ws.merge_cells(f"A{row}:O{row}")
+    ws.merge_cells(f"A{row}:P{row}")
     # COUNTED BY STATUS, and a placeholder is not a confident line.
     #
     # This counted "HIGH: 3 parts" on 2085 when only one part was high: PACKAGING and
