@@ -2707,6 +2707,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 else (external_price.get("applied_basis") if applied_price_per_kg is not None
                       else "config_fallback_GBP_per_kg")
             ),
+            # `applied` HERE MEANS "AN EXTERNAL LOOKUP SUPPLIED THE RATE", NOT "THIS LINE HAS
+            # A PRICE". A part priced from MATERIAL_PRICE_GBP_PER_KG has applied=False and a
+            # real cost, and stamp_affects_total falls back to `applied` when nothing else is
+            # recorded -- so every config-priced material line reported "reached the total:
+            # False" while its money sat in the total. It sent this investigation down the
+            # wrong path twice: the diagnostic correctly printed what the stamp said, and what
+            # the stamp said was not true.
+            #
+            # Two questions, two fields. Whether a figure exists for this line is
+            # material_cost is not None; where the RATE came from stays `applied`.
+            affects_total=material_cost is not None,
         ),
     }
 

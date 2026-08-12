@@ -126,6 +126,30 @@ def _report(pe: Dict[str, Any]) -> None:
             continue
         print(f"  {key:<28} {str(value)[:70]}")
 
+    # HOW THE MATERIAL FIGURE WAS ARRIVED AT. Knowing WHICH FIELD supplied a price is half
+    # the answer; the other half is where the number in that field came from. 11650-05-02M's
+    # GBP 9.73 was traced to material_estimate.unit_material_cost_gbp and then guessed at
+    # twice, because nothing showed the mass, the rate, the area or the method behind it.
+    me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    if me:
+        print("\n  MATERIAL ESTIMATE")
+        for key in ("cost_method", "material", "unit_material_mass_kg", "blank_area_m2",
+                    "blank_length_mm", "blank_width_mm", "thickness_mm",
+                    "unit_material_cost_gbp", "cost_per_part_gbp",
+                    "extended_material_cost_gbp", "extended_sheet_material_cost_gbp"):
+            if key in me:
+                print(f"    {key:<32} {me[key]!r}")
+        pc = me.get("powder_consumable")
+        if isinstance(pc, dict):
+            # POWDER IS COMBINED INTO extended_material_cost_gbp, so it can appear in a
+            # material figure without appearing in any material field.
+            print(f"    powder_consumable                "
+                  + ", ".join(f"{k}={v!r}" for k, v in list(pc.items())[:6]))
+        se = me.get("stock_estimate")
+        if isinstance(se, dict):
+            print(f"    stock_estimate                   "
+                  + ", ".join(f"{k}={v!r}" for k, v in list(se.items())[:6]))
+
     # THE PRICE CHAIN, FROM THE FUNCTION THAT DECIDES IT.
     #
     # Not re-implemented here. A second copy of the waterfall would be a second rule for one
