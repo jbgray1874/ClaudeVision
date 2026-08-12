@@ -346,7 +346,13 @@ def test_the_sheet_says_when_the_calculated_sheet_was_never_read_back():
     exactly as it does on a run that reconciled perfectly."""
     ws = _sheet(_wb_job([{"part_number": "X", "description": "d", "quantity": 1}]))
     assert "NOT READ BACK" in str(ws["A4"].value)
-    assert "normal PowerShell" in str(ws["A4"].value)
+    # NOT "re-run from a normal PowerShell". That advice was built on a claim about Excel and
+    # elevation that turned out to be wrong three times over -- the workbook is written by
+    # openpyxl and needs no COM, and the read-back uses DispatchEx, which starts its own
+    # instance rather than attaching to one. Telling somebody to change console for a reason
+    # that does not exist sends them to fix a machine that is fine.
+    assert "Excel busy or absent" in str(ws["A4"].value)
+    assert "normal PowerShell" not in str(ws["A4"].value)
 
 
 def test_the_sheet_is_quiet_about_the_read_back_when_it_ran():

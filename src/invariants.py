@@ -2410,7 +2410,7 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
                            "the summary could not be read, so this check verified nothing")]
     _fe = _node(summary, "final_estimate")
     # NO READ-BACK IS NOT A CLEAN SHEET, and this check said it was. The Excel COM read-back
-    # fails for reasons that have nothing to do with the estimate -- an elevated console, a
+    # fails for reasons that have nothing to do with the estimate -- Excel busy or absent, a
     # workbook that will not open, Excel busy -- and it leaves no final_estimate at all. Every
     # reconciliation check in this module already fails CLOSED on that, by the rule stated at
     # the top of the file; this one, added later, returned [] and read on a console exactly

@@ -1223,7 +1223,7 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
     except AttributeError:
         return ""
     # THE SECTION DISAPPEARING IS THE SAME LIE THE TABLE WOULD TELL. When the Excel read-back
-    # fails -- an elevated console, a workbook that will not open -- there is no
+    # fails -- Excel busy or absent, a workbook that will not open -- there is no
     # final_estimate, so there are no rows, so this section rendered nothing at all and the
     # report read as a job with no unpriced lines. The estimate on that page is then built
     # from the PRE-Excel numbers, which is a different total, and nothing on the page says so.

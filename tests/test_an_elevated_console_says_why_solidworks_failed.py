@@ -75,15 +75,48 @@ def test_an_exception_path_names_it_too(monkeypatch):
     assert "ELEVATED" in sw._run_analyser("/tmp/models")
 
 
-def test_the_console_note_warns_about_solidworks_and_not_only_excel():
-    """The note the estimating PC printed all week listed drive mappings and Excel. Nothing
-    said the one thing that made native extraction impossible from that window."""
+def test_the_console_note_warns_about_solidworks():
     note = (_ROOT / "run-job.ps1").read_text(encoding="utf-8")
-    block = note[note.index("NOTE: this console is ELEVATED."):][:1600]
-    assert "SolidWorks can only be ATTACHED TO" in block
+    block = note[note.index("NOTE: this console is ELEVATED."):][:1800]
+    assert "SolidWorks IS affected" in block
     assert "elevated run starts its own instance and works" in block, \
         "the note must not tell somebody their working setup is broken"
-    assert "Excel COM" in block, "the older Excel caveat must survive alongside it"
+
+
+def test_the_note_no_longer_claims_excel_is_affected():
+    """IT NEVER WAS, AND THE CLAIM WAS MINE. Written on 9 August with no observed failure:
+    the drive-mapping half of that commit had real evidence behind it and the Excel half was
+    received wisdom stated as fact. It is wrong three times over.
+
+      * the workbook is written by openpyxl -- wb.save() -- and needs no COM at all, so
+        "the workbook may not be written" cannot happen for this reason;
+      * the one thing that does use Excel COM, the read-back, calls DispatchEx, which always
+        creates a NEW instance and never attaches to a running one;
+      * so the integrity-level rule that genuinely bites SolidWorks cannot reach Excel here.
+
+    SolidWorks uses plain Dispatch and therefore DOES attach, which is the whole difference,
+    and the note now says which is which. Somebody had been running this way for months
+    without a single failure and being told every time that their workbook might not be
+    written."""
+    note = (_ROOT / "run-job.ps1").read_text(encoding="utf-8")
+    block = note[note.index("NOTE: this console is ELEVATED."):][:1800]
+    assert "unreliable from an elevated process" not in block
+    assert "the workbook may not be written" not in block
+    assert "Excel is NOT affected" in block
+    assert "openpyxl" in block and "DispatchEx" in block, \
+        "the correction must say WHY, or it reads as an opinion swapped for another"
+
+
+def test_the_two_com_calls_are_still_the_ones_the_note_describes():
+    """The note now makes a claim about HOW each library is dispatched. If the read-back ever
+    switches to plain Dispatch, or the analyser to DispatchEx, the note becomes wrong in the
+    same way it was wrong before -- and nothing else would notice."""
+    readback = (_ROOT / "src" / "wep_readback_from_xlsx.py").read_text(encoding="utf-8")
+    analyser = (_ROOT / "tools" / "solidworks" / "sw_native_analyse.py").read_text(
+        encoding="utf-8")
+    assert 'DispatchEx("Excel.Application")' in readback
+    assert 'Dispatch("SldWorks.Application")' in analyser
+    assert 'DispatchEx("SldWorks.Application")' not in analyser
 
 
 if __name__ == "__main__":                                              # pragma: no cover

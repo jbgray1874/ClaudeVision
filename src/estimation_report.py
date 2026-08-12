@@ -397,7 +397,7 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             # WHY THIS LINE CARRIES NO MONEY. Computed from the part record by the SAME
             # classifier the workbook read-back and the HTML report use, rather than joined
             # back through final_estimate.material_rows — because the read-back is exactly
-            # what fails on an elevated console or a busy Excel, and a sheet that explains
+            # what fails when Excel is busy or a workbook will not open, and a sheet that explains
             # its blanks only when everything worked explains nothing on the runs that
             # needed it. A private second opinion here is also how two documents describing
             # one job come to disagree about which blanks are somebody's job.
@@ -503,9 +503,9 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         ws.merge_cells("A4:P4")
         cell(4, 1,
              "THE CALCULATED SHEET WAS NOT READ BACK — Excel did not return this workbook's "
-             "computed totals (an elevated console, a workbook that would not open, or Excel "
-             "busy). The money columns below are the ENGINE's figures, not what the Estimate "
-             "sheet calculates. Re-run from a normal PowerShell before using these numbers.",
+             "computed totals (Excel busy or absent, or a workbook that would not open). "
+             "The money columns below are the ENGINE's figures, not what the Estimate sheet "
+             "calculates. Re-run once Excel can be driven before using these numbers.",
              bg=C_LOW, align="left", size=9, wrap=True)
         ws.row_dimensions[4].height = 30
     else:

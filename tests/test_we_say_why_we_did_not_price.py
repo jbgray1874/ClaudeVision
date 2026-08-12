@@ -124,7 +124,7 @@ def test_a_job_with_no_material_rows_says_nothing():
 
     A job with NO final_estimate is not. This asserted `check({}) == []` — encoding the
     silent pass — and the Excel COM read-back fails for reasons nothing to do with the
-    estimate: an elevated console, a workbook that will not open, Excel busy. On exactly the
+    estimate: Excel busy or absent, a workbook that will not open. On exactly the
     runs where least is known, the check reported a clean sheet."""
     assert check(_job([])) == []
     assert [v["severity"] for v in check({})] == ["unverified"]
