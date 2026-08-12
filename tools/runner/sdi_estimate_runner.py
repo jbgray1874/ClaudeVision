@@ -32,10 +32,46 @@ import os
 import platform
 import shutil
 import subprocess
+
+# ── THE RUNNER READS .env TOO ───────────────────────────────────────────────────────
+# main.py loads C:\ClaudeVision\.env before anything reads os.environ, so the ENGINE's
+# switches -- XAI_API_KEY, SDI_SW_RUN_ANALYSER, SDI_OFFLINE -- come from a file that is the
+# same for every run however it was started. The runner did not, so SDI_ENGINE_ROOT,
+# SDI_SERVER, SDI_API_KEY and SDI_ENGINE_PYTHON came from whichever PowerShell window
+# happened to launch it.
+#
+# That is the fragility this project has already paid for twice: a run whose behaviour
+# depends on the shell it was started from is a run nobody can reproduce, and the difference
+# only shows up as a wrong number days later. SDI_ENGINE_ROOT is the worst of them -- point
+# it at a stale checkout and the page silently estimates with code nobody has pulled.
+#
+# Loaded from the runner's own location, not the working directory, so it is the same file
+# whatever directory the window was in. Shell variables still WIN, because load_dotenv does
+# not override by default and a deliberately-set variable must keep working; what changes is
+# that the default now comes from a file rather than from nothing.
+def _load_engine_env() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return                      # same posture as main.py: not installed is not fatal
+    here = Path(__file__).resolve()
+    for candidate in (here.parents[2] / ".env", Path(os.getenv("SDI_ENGINE_ROOT",
+                                                               r"C:\ClaudeVision")) / ".env"):
+        try:
+            if candidate.exists():
+                load_dotenv(candidate)
+                print(f"[env] runner loaded {candidate}", flush=True)
+                return
+        except OSError:
+            continue
+
+
 import sys
 import time
 import uuid
 from pathlib import Path
+
+_load_engine_env()          # before anything reads os.getenv for a default
 from typing import Any, Dict, List, Optional
 
 # ── things a test can reach without the network ──────────────────────────────
