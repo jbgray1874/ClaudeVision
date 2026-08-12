@@ -2,10 +2,11 @@
 the REAL column names, code format, and description. Run on the laptop:
   C:\ClaudeVision\.venv\Scripts\python.exe _udef_dump.py
 """
-import pyodbc, config
+import config
 
-cs = config.SQL_CONNECTION_STRING
-cn = pyodbc.connect(cs, timeout=10)
+# config.get_connection() IS THE ENTRY POINT. This read config.SQL_CONNECTION_STRING, a name
+# config has never defined, so the script died on its third line every time it was run.
+cn = config.get_connection(timeout=10)
 cur = cn.cursor()
 
 # First: confirm the real column names of the table

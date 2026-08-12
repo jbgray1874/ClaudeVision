@@ -70,11 +70,25 @@ def main() -> int:
     args = ap.parse_args()
 
     import config
-    import pyodbc
     from supplier_reference import find_references
 
-    cn = pyodbc.connect(config.SQL_CONNECTION_STRING, timeout=30)
+    # config.get_connection() IS THE ENTRY POINT. This asked for config.SQL_CONNECTION_STRING,
+    # which has never existed on any branch, and died on the estimating machine with
+    # AttributeError before reading a row. Thirteen tracked scripts hand-roll their own
+    # DRIVER={...};UID=...;PWD=... string instead of calling it, so there was no single
+    # obvious answer to "how does a tool reach UDEF" to copy -- which is how a name that
+    # exists nowhere got written down as if it did. One connector, called by everything.
+    cn = config.get_connection()
     try:
+        # THE WHOLE TABLE, NOT A PAGE OF IT. get_connection bounds query execution at
+        # sql_query_timeout_s (30s) so a locked query cannot hang an estimate -- correct for
+        # the engine, wrong here: this is one deliberate full scan by a person at a prompt,
+        # and being cut off at 30 seconds would report a partial catalogue as the catalogue.
+        # A supplier ranking that silently omits suppliers is worse than no ranking.
+        try:
+            cn.timeout = 0          # pyodbc: no query timeout
+        except Exception:
+            pass
         cur = cn.cursor()
         lines = defaultdict(int)
         spend = defaultdict(float)

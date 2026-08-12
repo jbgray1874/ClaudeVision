@@ -270,6 +270,58 @@ _TUBE_SECTION_RE = re.compile(
 )
 
 
+# ── reaching UDEF ───────────────────────────────────────────────────────────────────
+# BOTH LOOKUPS BELOW HAVE NEVER RETURNED A PRICE. They opened with
+#     cs = _cfg.SQL_CONNECTION_STRING
+# and config has never defined that name on any branch, so the first statement inside each
+# try raised AttributeError, `except Exception: pass` swallowed it, and both returned None.
+# From the caller that is indistinguishable from "UDEF holds no match for this line" — so
+# every bought-in and every tube that came through bay_rollup went unpriced, on every job,
+# for as long as the code has existed, and the console said nothing.
+#
+# Two changes, and the second matters more than the first: the connection now comes from
+# config.get_connection(), the one place that knows how to reach SDILive; and a failure SAYS
+# SO instead of passing. A pricing source that is switched off must never be indistinguishable
+# from a pricing source that was asked and had no answer.
+_UDEF_SAID = set()
+
+
+def _udef_unreachable(what: str, exc: BaseException) -> None:
+    """Say it once per kind of lookup. Per-part would print thousands of times on one job."""
+    key = (what, type(exc).__name__)
+    if key in _UDEF_SAID:
+        return
+    _UDEF_SAID.add(key)
+    print(f"   [bay-rollup] UDEF {what} unavailable ({type(exc).__name__}: {exc}) — "
+          f"lines it would have priced are left for the estimator, not priced at zero.",
+          flush=True)
+
+
+class _udef_connection:
+    """config.get_connection() as a context manager that CLOSES.
+
+    pyodbc's own `with` manages the transaction and leaves the connection open, which is what
+    the previous code used; on a folder job with many bought-in lines that is one live SQL
+    connection per line held until garbage collection.
+    """
+
+    def __init__(self, cfg):
+        self._cfg = cfg
+        self._cn = None
+
+    def __enter__(self):
+        timeout = int(getattr(self._cfg, "SQL_TIMEOUT_UDEF_SEC", 6))
+        self._cn = self._cfg.get_connection(timeout=timeout)
+        return self._cn
+
+    def __exit__(self, *_exc):
+        try:
+            self._cn.close()
+        except Exception:
+            pass
+        return False
+
+
 def _udef_fuzzy_lookup(full_line: str, code_hint: str) -> Optional[Dict[str, Any]]:
     """Find a UDEF row for a loosely-identified bought-in line.
 
@@ -283,13 +335,11 @@ def _udef_fuzzy_lookup(full_line: str, code_hint: str) -> Optional[Dict[str, Any
     decide a line is PROBABLY bought-in. Returns {code, description,
     unit_cost_gbp, supplier_name} or None."""
     try:
-        import pyodbc, config as _cfg
-        cs = _cfg.SQL_CONNECTION_STRING
-        timeout = int(getattr(_cfg, "SQL_TIMEOUT_UDEF_SEC", 6))
+        import config as _cfg
         line_u = str(full_line or "").upper()
         code_u = str(code_hint or "").upper().strip()
 
-        with pyodbc.connect(cs, timeout=timeout) as cn:
+        with _udef_connection(_cfg) as cn:
             cur = cn.cursor()
 
             # 1. Exact code match
@@ -344,8 +394,8 @@ def _udef_fuzzy_lookup(full_line: str, code_hint: str) -> Optional[Dict[str, Any
                 if row:
                     return {"code": (row[0] or "").strip(), "description": (row[1] or "").strip(),
                             "unit_cost_gbp": float(row[2] or 0.0), "supplier_name": (row[3] or "").strip()}
-    except Exception:
-        pass
+    except Exception as exc:
+        _udef_unreachable("bought-in lookup", exc)
     return None
 
 
@@ -353,9 +403,8 @@ def _lookup_tube_udef(w_mm: float, h_mm: float, t_mm: float, length_mm: int) -> 
     """Query UDEF for a slotted tube matching section (w×h×t) and length.
     Returns {code, description, unit_cost_gbp, supplier_name} or None."""
     try:
-        import pyodbc, config as _cfg
-        cs = _cfg.SQL_CONNECTION_STRING
-        with pyodbc.connect(cs, timeout=int(getattr(__import__('config'), 'SQL_TIMEOUT_UDEF_SEC', 6))) as cn:
+        import config as _cfg
+        with _udef_connection(_cfg) as cn:
             cur = cn.cursor()
             # Tube stock in UDEF is keyed by SECTION (e.g. 60x30x1.5), not cut length —
             # length is a cut spec, so do NOT require it in the description. Match on the
@@ -392,8 +441,8 @@ def _lookup_tube_udef(w_mm: float, h_mm: float, t_mm: float, length_mm: int) -> 
                     "unit_cost_gbp": float(row[2] or 0.0),
                     "supplier_name": (row[3] or "").strip(),
                 }
-    except Exception:
-        pass
+    except Exception as exc:
+        _udef_unreachable("tube lookup", exc)
     return None
 
 

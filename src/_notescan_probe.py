@@ -6,7 +6,18 @@ import os, json, traceback
 
 print("=== 1. config gate ===")
 import config
-print("  NOTE_SCAN_POLICY:", config.NOTE_SCAN_POLICY)
+# THE ANSWER THIS PROBE EXISTS TO GIVE. config defines no NOTE_SCAN_POLICY at all, so
+# note_scan's gate -- getattr(cfg, "NOTE_SCAN_POLICY", {}).get("enable", False) -- has read
+# False on every job since the module was written, and harvest_bought_ins_from_note_text has
+# returned [] without making a single call. Reading the attribute directly made this probe
+# die with AttributeError on its own line 9, so the one tool built to explain the silence
+# could not run. Say it instead.
+_policy = getattr(config, "NOTE_SCAN_POLICY", None)
+if _policy is None:
+    print("  NOTE_SCAN_POLICY: NOT DEFINED IN config — the note scan is OFF on every job.")
+else:
+    print("  NOTE_SCAN_POLICY:", _policy,
+          "" if (_policy or {}).get("enable") else "  <- enable is FALSE, scan is OFF")
 print("  XAI_API_KEY present:", bool(os.environ.get("XAI_API_KEY", "").strip()))
 
 print("\n=== 2. can we import the xAI helper the scan relies on? ===")
