@@ -23,6 +23,7 @@ so, in the places a person actually looks.
 """
 from __future__ import annotations
 
+import price_provenance
 from typing import Any, Dict, List, Mapping, Optional
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "indicative_price_to_withhold",
     "indicative_price_note",
     "banner_text",
+    "unpriced_reason_for_row",
 ]
 
 MATERIAL_UNPRICED = "material_unpriced"
@@ -174,6 +176,51 @@ def canonical_pricing_status(part: Mapping[str, Any], price: Any) -> str:
         return NOT_APPLICABLE
     numeric = _num(price)
     return PRICED if numeric is not None and numeric > 0 else UNPRICED
+
+
+def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
+    """Which kind of nothing this line's blank price is.
+
+    THE READER EXISTED AND THE WRITER DID NOT. price_provenance has carried the vocabulary
+    since the day it was written and invariants has read `row["unpriced_reason"]` for as long
+    -- and nothing anywhere set it, so the check that exists to stop a blank reading as free
+    reported on no line of any job. Built is not wired, pointing the other way for once.
+
+    Everything below is decided from the RECORD, never from a part number or a description.
+    The three not-applicable cases are the ones that matter most, because they are the
+    majority: 11650's cabinet BOM carries sixteen fabricated lines at GBP 0.00 whose material
+    is costed in the Sheet Steel block, and to a reader they look exactly like the lock and
+    the mag catch that nobody has priced at all.
+    """
+    if not isinstance(part, Mapping):
+        return price_provenance.unpriced_reason(price_provenance.UNEXPLAINED)
+    if part.get("_bom_cross_reference"):
+        return price_provenance.unpriced_reason(
+            price_provenance.NOT_APPLICABLE,
+            "the material is costed in the Sheet Steel / Other Sheet / Wire block; "
+            "pricing it here as well would double it")
+    if part.get("_duplicate_of"):
+        return price_provenance.unpriced_reason(
+            price_provenance.NOT_APPLICABLE,
+            f"the same article as {part['_duplicate_of']}, and costed on that line")
+    if str(part.get("_canonical_kind") or "").strip().lower() == "assembly":
+        return price_provenance.unpriced_reason(
+            price_provenance.NOT_APPLICABLE,
+            "an assembly has no material of its own; its material is its children's")
+    # A REPRODUCIBLE GUESS IS KEPT OFF THE COLUMN ON PURPOSE. A figure exists and we have
+    # decided not to stand behind it, which is the one category where the blank is a policy.
+    if part.get("_ai_indicative_gbp"):
+        return price_provenance.unpriced_reason(
+            price_provenance.POLICY_WITHHELD,
+            f"an AI market estimate of £{float(part['_ai_indicative_gbp']):,.2f} was kept "
+            f"off the price column because it is not a catalogue rate")
+    if part.get("_consumable_qty_unknown"):
+        return price_provenance.unpriced_reason(
+            price_provenance.NOT_MEASURED,
+            "the quantity is not stated on the drawing and cannot be inferred")
+    return price_provenance.unpriced_reason(
+        price_provenance.NO_PRICE_SOURCE,
+        "no catalogue row, price file or quote was found for this item")
 
 
 def indicative_price_to_withhold(part: Mapping[str, Any], is_indicative: bool,

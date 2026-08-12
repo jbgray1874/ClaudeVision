@@ -163,11 +163,20 @@ NO_VOCABULARY = "no_vocabulary"      # no operation or rate exists for this work
 MISREAD = "misread"                  # the datum exists and was read wrong. OURS.
 ORDER_LEVEL = "order_level"          # not a per-unit price by design (haulage, packaging).
 NOT_APPLICABLE = "not_applicable"    # correctly nil -- an assembly parent, a mirror.
+NO_PRICE_SOURCE = "no_price_source"  # nothing we can query holds this item. The estimator's.
 UNEXPLAINED = "unexplained"          # nothing recorded. The one that must never survive.
+
+# WHY NO_PRICE_SOURCE IS NOT NOT_MEASURED. Both send the line to the estimator, and forcing
+# the second to carry the first would print "the dimension or quantity it needs was never
+# measured" against a fitting whose dimensions are perfectly well known and whose problem is
+# that no catalogue, price file or quote covers it. That is a different action -- ask the
+# supplier, load a price file -- and a checklist that describes it wrongly is one people stop
+# trusting. It is the commonest reason on an SDI sheet, so it is the one worth naming.
 
 # Who has to act. An estimator scanning a sheet needs to know which blanks are theirs.
 UNPRICED_OWNER = {
     NOT_MEASURED:    "estimator",
+    NO_PRICE_SOURCE: "estimator",
     POLICY_WITHHELD: "estimator",
     ORDER_LEVEL:     "estimator",
     NO_VOCABULARY:   "engine",
@@ -183,6 +192,7 @@ UNDERCHARGING_REASONS = frozenset({NO_VOCABULARY, MISREAD, UNEXPLAINED})
 
 _UNPRICED_REASON_TEXT = {
     NOT_MEASURED: "the dimension or quantity it needs was never measured",
+    NO_PRICE_SOURCE: "no catalogue, price file or quote we can query holds this item",
     POLICY_WITHHELD: "a figure exists but is not reproducible enough to stand behind",
     NO_VOCABULARY: "this engine has no operation or rate for this work",
     MISREAD: "the data exists on the drawing and was read incorrectly",

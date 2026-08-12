@@ -581,6 +581,65 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
 
 
 # ---- write the real totals into the JSON's WEP + cost_breakdown ----
+def _row_key(row: Dict[str, Any]) -> str:
+    """The identity a read-back row can be joined on.
+
+    The BOM block has a Part code column; the fabricated blocks do not, and write the part
+    number as the first word of the description ("11650-01-01M  LH UPRIGHT — costed in Sheet
+    Steel below"). Reading only the code column joins the BOM and silently leaves every
+    fabricated line unexplained — which is the majority of them.
+    """
+    code = str(row.get("part_code") or "").strip()
+    if code:
+        return code.upper()
+    return str(row.get("description") or "").strip().split(" ")[0].upper()
+
+
+def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> int:
+    """Stamp a reason on every material row the sheet priced at nothing. Returns how many.
+
+    A ROW NOBODY CAN MATCH STILL GETS A REASON. Falling silent for a row whose part record
+    cannot be found reproduces exactly the failure this exists to end — a blank that says
+    nothing — so an unmatched row is recorded as UNEXPLAINED, which the invariant reports
+    loudly. That is the honest answer: we did not price it and we cannot say why.
+    """
+    try:
+        from estimator_inputs import unpriced_reason_for_row
+        import price_provenance as _pp
+    except Exception:
+        return 0
+    parts = es.get("part_estimates")
+    by_key: Dict[str, Any] = {}
+    for p in (parts if isinstance(parts, list) else []):
+        if isinstance(p, dict) and str(p.get("part_number") or "").strip():
+            by_key.setdefault(str(p["part_number"]).strip().upper(), p)
+    stamped = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("total_value_gbp", row.get("unit_price_gbp"))
+        try:
+            if value is not None and float(value) != 0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        part = by_key.get(_row_key(row))
+        row["unpriced_reason"] = (unpriced_reason_for_row(part) if part is not None
+                                  else _pp.unpriced_reason(
+                                      _pp.UNEXPLAINED,
+                                      "no part record on this job matches this row, so "
+                                      "nothing can say why it carries no price"))
+        stamped += 1
+    if stamped:
+        _owed = sum(1 for r in rows
+                    if isinstance(r.get("unpriced_reason"), dict)
+                    and r["unpriced_reason"].get("owner") == "estimator")
+        print(f"   [wep-readback] {stamped} unpriced material row(s) explained "
+              f"({_owed} for the estimator, {stamped - _owed} correctly nil or ours)",
+              flush=True)
+    return stamped
+
+
 def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str = "Estimate") -> Optional[Dict[str, Any]]:
     xp, jp = Path(xlsx_path), Path(json_path)
     if not xp.exists():
@@ -619,6 +678,18 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     # rather than what was handed to it. wb_populate's workbook_labour remains as the
     # accepted INPUT grouping — useful for provenance, but it has no hours, rates or values
     # and must not be mistaken for the result.
+    # ── EVERY BLANK PRICE SAYS WHICH KIND OF NOTHING IT IS ──────────────────────────
+    # price_provenance has carried this vocabulary since it was written and invariants has
+    # read row["unpriced_reason"] for as long, and NOTHING ANYWHERE SET IT — so the check
+    # that exists to stop a blank reading as free reported on no line of any job. Built is
+    # not wired, pointing the other way for once.
+    #
+    # Stamped here because this is where the rows exist: they are read back off the
+    # calculated sheet, so the reason has to be joined to them from the records the engine
+    # holds. Joined on the row's part code, or on the leading token of its description where
+    # the fabricated blocks carry no code column.
+    _explain_unpriced_rows(_final_rows.get("material_rows") or [], es)
+
     if should_stamp_final_estimate(_final_rows):
         summary["final_estimate"] = {
             "schema": "final_estimate.v2",
