@@ -692,6 +692,41 @@ def _should_run(extract_path: Path, folder: str | Path) -> bool:
         return False
 
 
+def running_elevated() -> Optional[bool]:
+    """True when this process is elevated, False when it is not, None when unknowable.
+
+    Three-valued on purpose. On anything but Windows the question does not arise, and
+    guessing False there would put a confident sentence about UAC in front of somebody
+    running Linux.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())     # type: ignore[attr-defined]
+    except Exception:
+        return None
+
+
+# WHY AN ELEVATED CONSOLE CANNOT DO THIS AT ALL.
+#
+# Windows will not hand an elevated process a COM server running at normal integrity. The
+# running-object table an admin process can see is not the one a designer's SolidWorks
+# registered itself in, so Dispatch("SldWorks.Application") cannot ATTACH to the SolidWorks
+# already open on the machine — it tries to start a second, elevated instance instead, which
+# on a single-seat licence fails or hangs.
+#
+# This is not the same as the Excel caveat run-job.ps1 has always printed. Excel is unreliable
+# from an elevated shell; SolidWorks is unavailable. A failure that says only "the analyser
+# exited 1" sends somebody to check their licence and their models, when the cause is the
+# window they typed into — so when we know we are elevated, the failure says so first.
+_ELEVATED_HINT = (
+    "This console is ELEVATED, and that is very likely the whole cause: Windows will not let "
+    "an elevated process attach to a SolidWorks running at normal integrity, so the analyser "
+    "cannot take the session already open on this machine. Re-run from a NORMAL PowerShell."
+)
+
+
 def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
                   python_exe: Optional[str] = None,
                   out_path: Optional[str | Path] = None,
@@ -723,14 +758,16 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
         if r.returncode != 0:
             _tail = (r.stderr or r.stdout or "").strip().splitlines()
             return (f"the SolidWorks analyser exited {r.returncode}"
-                    + (f": {_tail[-1][:300]}" if _tail else ""))
+                    + (f": {_tail[-1][:300]}" if _tail else "")
+                    + (f" — {_ELEVATED_HINT}" if running_elevated() else ""))
         return None
     except FileNotFoundError:
         return f"could not start the SolidWorks analyser — python executable {exe!r} not found"
     except subprocess.TimeoutExpired:
         return "the SolidWorks analyser timed out after 30 minutes"
     except Exception as exc:
-        return f"the SolidWorks analyser could not be run: {exc}"
+        return (f"the SolidWorks analyser could not be run: {exc}"
+                + (f" — {_ELEVATED_HINT}" if running_elevated() else ""))
 
 
 # ── material normalisation ───────────────────────────────────────────────────
