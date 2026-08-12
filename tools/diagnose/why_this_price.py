@@ -126,6 +126,21 @@ def _report(pe: Dict[str, Any]) -> None:
             continue
         print(f"  {key:<28} {str(value)[:70]}")
 
+    # THE PRICE CHAIN, FROM THE FUNCTION THAT DECIDES IT.
+    #
+    # Not re-implemented here. A second copy of the waterfall would be a second rule for one
+    # question and would drift from the sheet -- and the whole reason this section exists is
+    # that GBP 9.73 was refused at one field and walked back in at the next, with nothing
+    # able to say which of five fields had supplied it.
+    try:
+        from wb_populate import _bom_line_price_traced
+        price, chain = _bom_line_price_traced(pe)
+        print(f"\n  BOM PRICE  {'£%.4f' % price if price is not None else 'UNPRICED'}")
+        for step in chain:
+            print(f"    {step}")
+    except Exception as exc:                                 # noqa: BLE001
+        print(f"\n  BOM PRICE  could not be traced ({type(exc).__name__}: {exc})")
+
     stamps = list(pp.iter_price_stamps(pe))
     if not stamps:
         print("\n  NO PRICE STAMP ANYWHERE UNDER THIS PART.")

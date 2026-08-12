@@ -175,3 +175,64 @@ def test_nothing_is_offered_where_there_is_no_figure(bad):
     """A zero, a missing cost and a malformed record are not candidates. Offering GBP 0.00
     'to confirm' is worse than saying nothing."""
     assert pp.declined_whole_part_price(bad) is None
+
+
+# ── the refusal is a verdict on the FIGURE, not on one field ────────────────────────
+# THE FIX THAT DID NOT CHANGE THE SHEET. The first version nulled unit_cost_gbp and stopped.
+# The waterfall's next field held the same GBP 9.73, so the line priced at exactly the amount
+# just refused and 11650 came back byte-identical -- reading, from the console, like no fix
+# at all. A refusal that one field respects and the next ignores is not a refusal.
+@pytest.mark.parametrize("where,extra", [
+    ("part.unit_material_cost_gbp",     {"unit_material_cost_gbp": 9.73}),
+    ("material_estimate",               {"material_estimate": {"unit_material_cost_gbp": 9.73}}),
+    ("extended_material_cost_gbp",      {"extended_material_cost_gbp": 19.46}),
+])
+def test_the_declined_figure_cannot_return_by_another_field(where, extra):
+    pe = _part(applied_to_total=False)
+    pe.pop("unit_cost_gbp")
+    pe.update(extra)
+    assert _bom_line_price(pe) is None, (
+        f"the engine declined GBP 9.73 and it came back through {where}. Plugging one route "
+        f"and leaving the others open prices the line at exactly the refused amount.")
+
+
+def test_a_different_figure_from_the_same_field_is_still_taken():
+    """The refusal must not become a blanket ban on the field. A part with a real, different
+    material cost keeps it -- otherwise one declined lookup silences every price on the part."""
+    pe = _part(applied_to_total=False)
+    pe["unit_material_cost_gbp"] = 1.25
+    assert _bom_line_price(pe) == 1.25
+
+
+# ── and the chain explains itself, so the next one takes minutes not a day ──────────
+def test_the_chain_says_which_field_supplied_the_price():
+    """Diagnosing the above took a guess, because nothing could say which of five fields had
+    priced the line. The function that DECIDES now explains itself and the diagnostic asks
+    it -- so the explanation cannot drift from the decision, because it is the decision."""
+    from wb_populate import _bom_line_price_traced
+    pe = _part(applied_to_total=False)
+    pe["unit_material_cost_gbp"] = 1.25
+    price, chain = _bom_line_price_traced(pe)
+    assert price == 1.25
+    joined = "\n".join(chain)
+    assert "DECLINED" in joined, "the trace does not say the whole-part figure was declined"
+    assert "unit_material_cost_gbp=1.25 -> taken" in joined, \
+        "the trace does not name the field that actually supplied the price"
+
+
+def test_the_chain_says_when_nothing_priced_it():
+    from wb_populate import _bom_line_price_traced
+    price, chain = _bom_line_price_traced(_part(applied_to_total=False))
+    assert price is None
+    assert any("UNPRICED" in s for s in chain), \
+        "a line with no price must say so in its own trace, not end silently"
+
+
+def test_the_public_helper_and_the_traced_one_never_disagree():
+    """_bom_line_price delegates. If it grew its own copy of the chain there would be two
+    rules for one question -- which is how the per-row writer and this helper diverged before,
+    and the comment at the call site records that lesson."""
+    from wb_populate import _bom_line_price_traced
+    for pe in (_part(applied_to_total=False), _part(applied_to_total=True),
+               _part(applied_to_total=None), {"quantity": 1}):
+        assert _bom_line_price(pe) == _bom_line_price_traced(pe)[0]

@@ -406,10 +406,31 @@ _TUBE_OP_REMAP = {
 
 
 def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
-    """Best-available unit price for a BOM line (mirrors the per-row logic below).
-    Used to sum consolidated overflow value. Withheld/unpriced -> None."""
+    """Best-available unit price for a BOM line. Withheld/unpriced -> None.
+
+    THE ONE PRICE CHAIN. The per-row writer calls this; so does the overflow sum. See
+    _bom_line_price_traced for why it also has to be able to EXPLAIN itself.
+    """
+    return _bom_line_price_traced(_pe)[0]
+
+
+def _bom_line_price_traced(_pe: Dict[str, Any]) -> Tuple[Optional[float], List[str]]:
+    """The price, and every field consulted on the way to it.
+
+    WHY A TRACE. 11650-05-02M SLIDER came back at GBP 9.73 after a fix that refused exactly
+    that figure. The refusal DID fire -- it nulled the whole-part number the engine had
+    declined -- and the same GBP 9.73 walked back in through the next field in the waterfall.
+    Diagnosing that took a guess, because nothing could say WHICH of five fields supplied a
+    price, and the diagnostic tool re-implementing the chain would have been a second rule
+    for one question: the very defect this codebase keeps paying for.
+
+    So the function that decides explains itself, and the tool asks it. The explanation
+    cannot drift from the decision because it IS the decision.
+    """
+    _t: List[str] = []
     if _pe.get("_price_explicitly_withheld"):
-        return None
+        _t.append("_price_explicitly_withheld -> withheld, no price")
+        return None, _t
     _me = _pe.get("material_estimate") or {}
     # WHAT THE PART IS DECIDES WHICH FIELDS CAN PRICE IT.
     #
@@ -419,9 +440,13 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
     # AI market estimate became the right arm's "material" at 97% of the job.
     _canonical_kind = str(_pe.get("_canonical_kind") or "").strip().lower()
     if _canonical_kind == "assembly":
-        return None
+        _t.append("_canonical_kind=assembly -> priced by its children, no line of its own")
+        return None, _t
     if _canonical_kind == "leaf":
         _p = _safe(_me.get("unit_material_cost_gbp") or _me.get("cost_per_part_gbp"))
+        _t.append(f"leaf: material_estimate.unit_material_cost_gbp="
+                  f"{_me.get('unit_material_cost_gbp')!r} / cost_per_part_gbp="
+                  f"{_me.get('cost_per_part_gbp')!r} -> {_p!r}")
     else:
         # A PRICE THE ENGINE FOUND AND DECIDED NOT TO APPLY IS NOT A PRICE FOR THIS LINE.
         #
@@ -448,10 +473,31 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
         import price_provenance as _pp_decl
         _declined = _pp_decl.declined_whole_part_price(_pe)
         _whole_part = _safe(_pe.get("unit_cost_gbp"))
+        _t.append(f"unit_cost_gbp={_whole_part!r}"
+                  + (f"  DECLINED by the engine (£{_declined['gbp']:.2f} from "
+                     f"{_declined['source']})" if _declined else ""))
         if _declined and _whole_part is not None and _whole_part == _declined["gbp"]:
             _whole_part = None
-        _p = _whole_part if _whole_part is not None else \
-            _safe(_pe.get("unit_material_cost_gbp") or _me.get("unit_material_cost_gbp"))
+        # THE SAME FIGURE MUST NOT WALK BACK IN BY THE NEXT DOOR. Refusing the whole-part
+        # number and then accepting an identical one from a material field prices the line
+        # at exactly the amount that was just refused -- which is what happened on
+        # 11650-05-02M after the first fix, and read on the sheet as no fix at all. The
+        # refusal is a verdict on the FIGURE, so it holds wherever that figure appears.
+        _fallbacks = [("part.unit_material_cost_gbp", _pe.get("unit_material_cost_gbp")),
+                      ("material_estimate.unit_material_cost_gbp",
+                       _me.get("unit_material_cost_gbp"))]
+        _alt = None
+        for _name, _raw in _fallbacks:
+            _v = _safe(_raw)
+            if _v is None:
+                continue
+            if _declined and _v == _declined["gbp"]:
+                _t.append(f"{_name}={_v!r}  REFUSED: same figure the engine declined")
+                continue
+            _t.append(f"{_name}={_v!r} -> taken")
+            _alt = _v
+            break
+        _p = _whole_part if _whole_part is not None else _alt
     if _p is None:
         # THE BOM PRICE COLUMN IS A MATERIAL COLUMN.
         #
@@ -472,7 +518,13 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
                          or _me.get("extended_material_cost_gbp"))
         _q = int(_safe(_pe.get("quantity"), 1) or 1)
         if _ext_mat is not None and _q > 0:
-            _p = round(_ext_mat / _q, 4)
+            _cand = round(_ext_mat / _q, 4)
+            if _declined_here(_pe) and _cand == _declined_here(_pe)["gbp"]:
+                _t.append(f"extended_material_cost_gbp/{_q}={_cand!r}  REFUSED: same figure "
+                          f"the engine declined")
+            else:
+                _p = _cand
+                _t.append(f"extended_material_cost_gbp={_ext_mat!r} / qty {_q} -> {_p!r}")
         elif _canonical_kind != "leaf":
             # "HAS NO LABOUR" IS NOT THE SAME CONDITION AS "IS A BOUGHT-IN".
             #
@@ -497,8 +549,27 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
                 _material = _unit_total - _lab_total
                 # A rounding tail is not a price. At or below a penny, the arithmetic is
                 # saying there was no material here.
-                _p = round(_material, 4) if _material > 0.01 else None
-    return _p
+                _cand = round(_material, 4) if _material > 0.01 else None
+                _d = _declined_here(_pe)
+                if _cand is not None and _d and _cand == _d["gbp"]:
+                    _t.append(f"unit_total - labour = {_cand!r}  REFUSED: same figure the "
+                              f"engine declined")
+                else:
+                    _p = _cand
+                    _t.append(f"unit_total {_unit_total!r} - labour {_lab_total!r} -> {_p!r}")
+    if _p is None:
+        _t.append("no field supplied a material price -> UNPRICED")
+    return _p, _t
+
+
+def _declined_here(_pe: Dict[str, Any]):
+    """The figure this part's own record says was found and not applied. See
+    price_provenance.declined_whole_part_price -- one rule, every reader."""
+    try:
+        import price_provenance as _pp
+        return _pp.declined_whole_part_price(_pe)
+    except Exception:                                        # noqa: BLE001
+        return None
 
 
 def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
