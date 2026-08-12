@@ -414,3 +414,32 @@ def test_an_excel_error_is_not_a_price():
     an error sentinel as money -- which this pipeline has done once already."""
     assert pp.row_price({"total_value_gbp": "#VALUE!"}) is None
     assert pp.row_is_unpriced({"total_value_gbp": "#VALUE!"})
+
+
+# ── measured everything and still could not cost it ─────────────────────────────────
+def test_a_measured_blank_with_no_rate_is_an_engine_gap_not_an_estimator_job():
+    """11650's door. The model gave ABS, outranking a drawing and a DXF filename that both
+    said POLYCARBONATE; config carries a sheet size and a density for ABS and no rate. A part
+    with a measured 1202 x 689 blank went from GBP 35.28 to GBP 0.00 and showed a blank cell.
+
+    Nothing is missing from the drawings, so this is not the estimator's to fill -- filing it
+    beside the mag catch would put a phone call to a supplier and a missing number in this
+    repository on the same list. And unlike the mag catch, it silently under-charges every
+    job that touches that material."""
+    r = ei.unpriced_reason_for_row({"normalized_material": "ABS",
+                                    "blank_length_mm": 1202, "blank_width_mm": 689})
+    assert r["category"] == pp.NO_VOCABULARY
+    assert r["owner"] == "engine" and r["undercharging"] is True
+    assert "ABS" in r["detail"] and "MATERIAL_PRICE_GBP_PER_KG" in r["detail"]
+
+
+def test_an_unmeasured_bought_in_is_still_the_estimators():
+    """The narrowing matters: a fitting nobody has a price for is a supplier question, and
+    calling it an engine gap would bury the one finding a person must act on."""
+    r = ei.unpriced_reason_for_row({"part_number": "MAG CATCH"})
+    assert r["category"] == pp.NO_PRICE_SOURCE and r["owner"] == "estimator"
+
+
+def test_a_material_with_no_measured_blank_is_not_claimed_as_an_engine_gap():
+    r = ei.unpriced_reason_for_row({"normalized_material": "MILD_STEEL"})
+    assert r["category"] == pp.NO_PRICE_SOURCE

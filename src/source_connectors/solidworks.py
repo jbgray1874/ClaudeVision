@@ -285,8 +285,14 @@ def _is_weld_candidate(title: str, description: str) -> bool:
     return any(tok in blob for tok in _WELD_NAME_TOKENS)
 
 
+def _bom_codes(record: Dict[str, Any]) -> set:
+    return {_clean_pn(l.get("part_number") or "")
+            for l in (record.get("bom") or []) if isinstance(l, dict)} - {""}
+
+
 def _pick_top_assembly(records: List[Dict[str, Any]],
-                       ambiguity: Optional[Dict[str, Any]] = None
+                       ambiguity: Optional[Dict[str, Any]] = None,
+                       job_codes: Optional[set] = None
                        ) -> Optional[Dict[str, Any]]:
     """The job's top assembly, whose full-depth BOM becomes the job's component list.
 
@@ -309,6 +315,44 @@ def _pick_top_assembly(records: List[Dict[str, Any]],
     asms = [r for r in records if r.get("doctype") == SW_ASM and r.get("bom")]
     if not asms:
         return None
+
+    # ── THE DRAWINGS ALREADY SAY WHICH ASSEMBLY THIS IS ─────────────────────────────
+    # 11650 proved the roots rule insufficient on its own. Only two assemblies were nobody's
+    # child -- "11650-test assy" and "Lock Assembly" -- and the released 11650-00-GA was
+    # neither, because the test assembly PARENTS it. So the rule that was written to stop a
+    # sub-assembly winning excluded the right answer outright, size picked the test rig, and
+    # its component list became the job at rank 90: TOP PANEL went from 1 to 3, SIDE CHANNEL
+    # from 2 to 6, on a sheet an estimator would have read as a measurement.
+    #
+    # The released drawings are the commercial truth and the engine has already read them, so
+    # the assembly that matches them IS the job. JACCARD, not raw overlap, because all three
+    # wrong shapes fail it in different directions and only intersection-over-union catches
+    # all of them: a sub-assembly shares too few of the job's parts, a test rig that contains
+    # the GA shares them all and carries extra scaffolding the drawings never mention, and the
+    # GA itself matches closely on both sides. No naming convention, and nothing about "test".
+    if job_codes:
+        scored = []
+        for r in asms:
+            codes = _bom_codes(r)
+            if not codes:
+                continue
+            union = codes | job_codes
+            scored.append((len(codes & job_codes) / len(union) if union else 0.0, r))
+        scored.sort(key=lambda t: (-t[0], str(t[1].get("title") or "")))
+        if scored and scored[0][0] > 0:
+            best, chosen = scored[0]
+            if ambiguity is not None:
+                ambiguity["top_assembly_chosen_by"] = (
+                    f"closest match to the {len(job_codes)} part(s) the drawings name "
+                    f"({best:.0%} of the combined list)")
+                # A near-tie is still a choice somebody should see.
+                _close = [t for t in scored[1:] if best - t[0] < 0.10]
+                if _close:
+                    ambiguity["top_assembly_candidates"] = sorted(
+                        [str(chosen.get("title") or "")]
+                        + [str(r.get("title") or "") for _sc, r in _close])
+            return chosen
+
     children = set()
     # WERE THERE ANY EDGES AT ALL. Without this the two cases are indistinguishable: an
     # extract that recorded no tree makes EVERY assembly trivially "nobody's child", so the
@@ -338,7 +382,8 @@ def _pick_top_assembly(records: List[Dict[str, Any]],
 
 
 # ── normalisation ────────────────────────────────────────────────────────────
-def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
+def normalize_native_extract(records: List[Dict[str, Any]],
+                             job_codes: Optional[set] = None) -> NativeJob:
     job = NativeJob()
     if not records:
         return job
@@ -470,7 +515,7 @@ def normalize_native_extract(records: List[Dict[str, Any]]) -> NativeJob:
 
     # BOM = the top assembly's full-depth component list, quantities already rolled up.
     _amb: Dict[str, Any] = {}
-    top = _pick_top_assembly(records, _amb)
+    top = _pick_top_assembly(records, _amb, job_codes=job_codes)
     if top:
         job.meta["top_assembly"] = top.get("title")
         job.meta.update(_amb)
@@ -533,6 +578,7 @@ def native_extract_for_job(
     run: bool = False,
     analyser: Optional[str | Path] = None,
     python_exe: Optional[str] = None,
+    job_codes: Optional[set] = None,
 ) -> Optional[NativeJob]:
     """Resolve + normalise the native extract for a job.
 
@@ -563,7 +609,7 @@ def native_extract_for_job(
             jp = Path(_produced[0])
 
     records = load_native_extract(jp) if jp else []
-    job = normalize_native_extract(records)
+    job = normalize_native_extract(records, job_codes=job_codes)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
 
     if folder is not None or jp is not None:

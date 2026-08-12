@@ -2321,8 +2321,15 @@ def _finalize_scan_summary(
             #   SDI_SW_RUN_ANALYSER=0   consume an existing extract only; never invoke COM
             _sw_run = os.getenv("SDI_SW_RUN_ANALYSER", "").strip().lower() \
                 not in {"0", "false", "no", "off"}
+            # THE PART NUMBERS THE DRAWINGS ALREADY GAVE US, handed to the extract so it can
+            # tell which of several assemblies is this job. Without them the picker ranks by
+            # BOM size, and on 11650 that made a test rig the top of the tree.
+            from part_code_conventions import bare_code as _bare
+            _job_codes = {_bare(str(p.get("part_number") or ""))
+                          for p in (_pre_estimate_parts or [])
+                          if isinstance(p, dict) and p.get("part_number")} - {""}
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
-                                             run=_sw_run) \
+                                             run=_sw_run, job_codes=_job_codes) \
                 if (_sw_folder or _sw_json) else None
             if not (_sw_folder or _sw_json):
                 _sw_why = ("no job folder and no SDI_SW_EXTRACT_JSON — nowhere to look for "

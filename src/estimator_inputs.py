@@ -214,6 +214,24 @@ def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
             price_provenance.POLICY_WITHHELD,
             f"an AI market estimate of £{float(part['_ai_indicative_gbp']):,.2f} was kept "
             f"off the price column because it is not a catalogue rate")
+    # MEASURED EVERYTHING AND STILL COULD NOT COST IT. 11650's door is the case: the model
+    # gave its material as ABS, which outranked a drawing and a DXF filename that both said
+    # POLYCARBONATE, and config carries a sheet size and a density for ABS but no rate. So a
+    # part with a measured 1202 x 689 blank went from GBP 35.28 to GBP 0.00 and the sheet
+    # simply showed a blank cell.
+    #
+    # That is not the estimator's to fill. Nothing is missing from the drawings — the engine
+    # has the size, the material and the density, and lacks only a price per kilo. Filing it
+    # as NO_PRICE_SOURCE would put it on somebody's list beside the mag catch, which is a
+    # different job: one is a phone call to a supplier, the other is a number this repository
+    # is missing. And this one silently under-charges every job that touches that material.
+    _mat = str(part.get("normalized_material") or "").strip()
+    _has_blank = bool(_num(part.get("blank_length_mm")) and _num(part.get("blank_width_mm")))
+    if _mat and _has_blank:
+        return price_provenance.unpriced_reason(
+            price_provenance.NO_VOCABULARY,
+            f"the blank is measured and the material is {_mat}, but this engine has no "
+            f"rate for it (config.MATERIAL_PRICE_GBP_PER_KG)")
     if part.get("_consumable_qty_unknown"):
         return price_provenance.unpriced_reason(
             price_provenance.NOT_MEASURED,
