@@ -486,6 +486,29 @@ def main() -> None:
 
     print(f"Found {len(files)} drawing file(s).\n")
 
+    # ── ASK THE PRICE SOURCE NOW, NOT AT THE FIRST PART THAT NEEDS IT ──────────────
+    # PricingService is built lazily, so an unreachable SDILive was discovered somewhere
+    # in the middle of costing -- after every drawing had been parsed, which on a pack of
+    # this size is twenty minutes. Worse, it was discovered only if something asked for a
+    # price at all, so a job could finish having never established whether the source it
+    # was meant to price from was there.
+    #
+    # It also settles a question no banner can. run-job.ps1 warns that an elevated console
+    # affects SOLIDWORKS and not Excel; it said nothing about the database, and 11650 was
+    # run all week from an elevated console where TCP to the SQL server timed out while the
+    # same test from a normal console succeeded immediately. A predicted list of what
+    # elevation affects is a guess. This is the question itself, asked from the console
+    # that is actually going to do the costing, in the first seconds of the run.
+    try:
+        from estimator import _get_pricing_service as _probe_price_source
+        if _probe_price_source() is not None:
+            print("   [pricing] price source reached.\n", flush=True)
+    except Exception as _probe_exc:
+        # _get_pricing_service does not raise -- it reports and returns None. Anything
+        # arriving here is a defect in the probe, and must not take the run with it.
+        print(f"   [pricing] the price source could not be tested ({_probe_exc}) — this job "
+              f"is UNVERIFIED on pricing.\n", flush=True)
+
     _apply_web_ai_pricing_fallback_from_args(args)
 
     auto_discover_dxf = not args.no_dxf_augment

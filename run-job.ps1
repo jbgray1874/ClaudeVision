@@ -117,7 +117,19 @@ try {
         Write-Host '    models open, the analyser cannot take that session - it tries to start'
         Write-Host '    a SECOND, elevated instance instead. With SolidWorks closed, an'
         Write-Host '    elevated run starts its own instance and works.'
-        Write-Host '  A normal PowerShell with a UNC path avoids the drive issue.' -ForegroundColor Yellow
+        # THIS LIST IS NOT CLOSED, AND SAYING IT WAS COST A WEEK.
+        # It used to run Excel-then-SolidWorks and stop, which reads as "those are the
+        # two things, and one of them is fine". The DATABASE was never mentioned. 11650
+        # was run all week from an elevated console in which TCP to the SQL server timed
+        # out, while the identical test from a normal console succeeded instantly - so
+        # every catalogue and purchase-history price on those runs may have been missing
+        # rather than absent from the catalogue, and the reassuring banner is part of why
+        # nobody looked. The engine now TESTS the price source in the first seconds of a
+        # run and says which it got; a prediction here would be the same mistake again.
+        Write-Host '  - THE DATABASE MAY BE AFFECTED TOO. Do not assume. The run reports'  -ForegroundColor Yellow
+        Write-Host '    "price source reached" or names the failure before it costs'      -ForegroundColor Yellow
+        Write-Host '    anything - read that line before trusting the prices.'            -ForegroundColor Yellow
+        Write-Host '  A normal PowerShell with a UNC path is the safe way to run a pack.' -ForegroundColor Yellow
         Write-Host ''
     }
 } catch { }

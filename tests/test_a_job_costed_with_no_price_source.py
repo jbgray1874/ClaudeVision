@@ -166,6 +166,37 @@ def test_an_unwritable_json_still_leaves_the_summary_stamped(estimator_with_no_s
     assert "could not be written" in capsys.readouterr().out
 
 
+def test_the_price_source_is_tested_before_any_drawing_is_parsed():
+    """TWENTY MINUTES, AND A QUESTION THAT MIGHT NEVER BE ASKED.
+
+    PricingService is built lazily, so an unreachable SDILive surfaced somewhere in the
+    middle of costing -- after every drawing had been parsed -- and only if something asked
+    for a price at all. A job could finish having never established whether the source it
+    was meant to price from was even there. Probe first, fail in seconds.
+    """
+    import ast
+    body = ast.unparse(ast.parse((ROOT / "src" / "main.py").read_text(encoding="utf-8")))
+    assert "_probe_price_source" in body, "main never tests the price source up front"
+    assert body.index("_probe_price_source") < body.index("scan_folder_job("), (
+        "the price source is probed after the job has been scanned, which is the twenty "
+        "minutes this exists to save")
+
+
+def test_the_elevation_banner_does_not_promise_a_closed_list():
+    """run-job.ps1 warned that elevation affects SOLIDWORKS and not Excel, and stopped --
+    which reads as "those are the two things". It never mentioned the database, and 11650
+    was run all week from an elevated console where TCP to SQL timed out while the same test
+    from a normal console succeeded instantly. The banner is part of why nobody looked."""
+    body = (ROOT / "run-job.ps1").read_text(encoding="utf-8-sig", errors="replace")
+    start = body.index("this console is ELEVATED")
+    banner = body[start:start + 3000]
+    assert "DATABASE MAY BE AFFECTED" in banner, (
+        "the elevation banner still enumerates Excel and SOLIDWORKS as though that were the "
+        "whole list. It is not, and the omission was the database.")
+    assert "Do not assume" in banner, \
+        "the banner should send the reader to the run's own report, not to another prediction"
+
+
 def test_main_stamps_the_outage_before_the_checks_read_it():
     """Ordering is the whole mechanism: PricingService is built lazily during costing, so the
     answer does not exist until estimating has finished -- and the checks read the stamped
