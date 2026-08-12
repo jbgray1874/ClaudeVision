@@ -112,6 +112,36 @@ def test_a_row_no_record_matches_is_loudly_unexplained_not_silently_skipped():
     assert rows[0]["unpriced_reason"]["category"] == pp.UNEXPLAINED
 
 
+def test_the_console_does_not_file_an_unexplained_row_under_correctly_nil(capsys):
+    """THE SENTENCE THAT MADE THE FAILURE LOOK LIKE A RESULT.
+
+    The tally printed "(N for the estimator, M correctly nil or ours)" -- two buckets for
+    three owners. UNEXPLAINED means NO REASON WAS RECORDED and is owned by the engine, so on
+    11650 four bought-in lines nobody could explain printed as "4 correctly nil or ours".
+    Console lines are read on every run and the invariant report is not; a tally that folds
+    the failure into the same words as a correct nil is how a gap survives a live run.
+    """
+    rows = [{"part_code": "GHOST", "description": "?", "total_value_gbp": 0},
+            {"part_code": "MAG CATCH", "description": "HAFELE", "total_value_gbp": 0},
+            {"part_code": "", "description": "11650-01-01M LH UPRIGHT — costed in Sheet Steel",
+             "total_value_gbp": 0}]
+    wep._explain_unpriced_rows(rows, _es())
+    said = capsys.readouterr().out
+    # One count per owner, each named for the person who has to act.
+    assert "1 for the estimator" in said and "1 ours to fix" in said and "1 correctly nil" in said
+    # And the one with nothing behind it is called out, not counted quietly.
+    assert "NO REASON AT ALL" in said
+
+
+def test_a_sheet_with_every_blank_explained_says_nothing_alarming(capsys):
+    """The loud line must be earned. If it prints on a clean sheet it stops being read, and
+    the next real unexplained blank goes past on a console nobody trusts."""
+    wep._explain_unpriced_rows(_rows(), _es())
+    said = capsys.readouterr().out
+    assert "NO REASON AT ALL" not in said
+    assert "ours to fix" not in said
+
+
 def test_an_empty_job_does_not_raise():
     assert wep._explain_unpriced_rows([], {}) == 0
     assert wep._explain_unpriced_rows([{"total_value_gbp": 0}], {}) == 1

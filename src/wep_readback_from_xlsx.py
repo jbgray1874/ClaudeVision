@@ -649,22 +649,40 @@ def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> in
         if isinstance(p, dict) and str(p.get("part_number") or "").strip():
             by_key.setdefault(str(p["part_number"]).strip().upper(), p)
     stamped = 0
+    by_owner: Dict[str, int] = {}
+    unexplained = 0
     for row in rows:
         if not isinstance(row, dict):
             continue
         if not _pp.row_is_unpriced(row):
             continue
         part = by_key.get(_row_key(row))
-        row["unpriced_reason"] = (unpriced_reason_for_row(part) if part is not None
-                                  else _reason_from_the_row_itself(row))
+        reason = (unpriced_reason_for_row(part) if part is not None
+                  else _reason_from_the_row_itself(row))
+        row["unpriced_reason"] = reason
         stamped += 1
+        if isinstance(reason, dict):
+            owner = str(reason.get("owner") or "engine")
+            by_owner[owner] = by_owner.get(owner, 0) + 1
+            if reason.get("category") == _pp.UNEXPLAINED:
+                unexplained += 1
     if stamped:
-        _owed = sum(1 for r in rows
-                    if isinstance(r.get("unpriced_reason"), dict)
-                    and r["unpriced_reason"].get("owner") == "estimator")
-        print(f"   [wep-readback] {stamped} unpriced material row(s) explained "
-              f"({_owed} for the estimator, {stamped - _owed} correctly nil or ours)",
-              flush=True)
+        # THREE OWNERS, THREE COUNTS. This line used to read "(N for the estimator, M
+        # correctly nil or ours)", which merged the two remaining owners into one bucket --
+        # and UNEXPLAINED, the category that means NO REASON WAS RECORDED, is owned by the
+        # engine and so landed inside the words "correctly nil". On 11650 that printed
+        # "4 correctly nil or ours" for four bought-in lines nobody had explained at all.
+        # A console sentence is read far more often than the invariant report, and this one
+        # dressed the failure it exists to expose as a clean result.
+        _bits = ", ".join(f"{by_owner[o]} {label}"
+                          for o, label in (("estimator", "for the estimator"),
+                                           ("engine", "ours to fix"),
+                                           ("nobody", "correctly nil"))
+                          if by_owner.get(o))
+        print(f"   [wep-readback] {stamped} unpriced material row(s): {_bits}", flush=True)
+        if unexplained:
+            print(f"   [wep-readback] {unexplained} of those carry NO REASON AT ALL — "
+                  f"a blank with nothing behind it reads as free.", flush=True)
     return stamped
 
 
