@@ -595,6 +595,41 @@ def _row_key(row: Dict[str, Any]) -> str:
     return str(row.get("description") or "").strip().split(" ")[0].upper()
 
 
+# WHAT THE SHEET ALREADY SAYS ABOUT ITSELF. Four rows on 11650 came back UNEXPLAINED —
+# STD PART, FIXINGTBC, MAG CATCH, YIREE LOCK ASSEMBLY — because no part record matched them:
+# they are bought-in stubs minted late and they never reach part_estimates under those codes.
+#
+# But the row is not silent. wb_populate has already written the reason into its DESCRIPTION,
+# from input_note_for_line, and that sentence is the engine's own statement rather than a
+# guess about it. Reading it back is not inference — it is the same fact, from the only place
+# on this row that still carries it.
+_ROW_SAYS = (
+    # The engine refused to price it because the drawing does not state a quantity.
+    ("NOT YET PRICED", "not_measured",
+     "the quantity is not stated on the drawing, so the engine withheld a price"),
+    # A rate nobody holds. The estimator's, and a supplier question.
+    ("MATERIAL UNPRICED", "no_price_source",
+     "no catalogue row, price file or quote was found for this item"),
+    # Blank on purpose: the money is on another line.
+    ("SAME ARTICLE AS", "not_applicable", "the same article is costed on another line"),
+    ("COSTED IN ", "not_applicable",
+     "the material is costed in the Sheet Steel / Other Sheet / Wire block"),
+)
+
+
+def _reason_from_the_row_itself(row: Dict[str, Any]) -> Dict[str, Any]:
+    """The row's own description, read back. UNEXPLAINED only when it really says nothing."""
+    import price_provenance as _pp
+    text = str(row.get("description") or "").upper()
+    for marker, category, detail in _ROW_SAYS:
+        if marker in text:
+            return _pp.unpriced_reason(category, detail)
+    return _pp.unpriced_reason(
+        _pp.UNEXPLAINED,
+        "no part record on this job matches this row and its description says nothing "
+        "about why it carries no price")
+
+
 def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> int:
     """Stamp a reason on every material row the sheet priced at nothing. Returns how many.
 
@@ -621,10 +656,7 @@ def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> in
             continue
         part = by_key.get(_row_key(row))
         row["unpriced_reason"] = (unpriced_reason_for_row(part) if part is not None
-                                  else _pp.unpriced_reason(
-                                      _pp.UNEXPLAINED,
-                                      "no part record on this job matches this row, so "
-                                      "nothing can say why it carries no price"))
+                                  else _reason_from_the_row_itself(row))
         stamped += 1
     if stamped:
         _owed = sum(1 for r in rows

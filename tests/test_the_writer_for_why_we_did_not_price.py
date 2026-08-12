@@ -443,3 +443,50 @@ def test_an_unmeasured_bought_in_is_still_the_estimators():
 def test_a_material_with_no_measured_blank_is_not_claimed_as_an_engine_gap():
     r = ei.unpriced_reason_for_row({"normalized_material": "MILD_STEEL"})
     assert r["category"] == pp.NO_PRICE_SOURCE
+
+
+# ── the sheet already says why, even when no part record matches ────────────────────
+# 11650, 12 August: four rows came back UNEXPLAINED -- STD PART, FIXINGTBC, MAG CATCH,
+# YIREE LOCK ASSEMBLY -- because no part record matched them. They are bought-in stubs minted
+# late and never reach part_estimates under those codes.
+#
+# But the row is not silent. wb_populate has already written the reason into its DESCRIPTION,
+# from input_note_for_line, and that sentence is the engine's own statement rather than a
+# guess about it. Reading it back is the same fact from the only place on the row that still
+# carries it -- not inference.
+@pytest.mark.parametrize("description,category,owner", [
+    ("MAG CATCH  HAFELE 246.41.745  —  NOT YET PRICED: enter the per-unit figure",
+     pp.NOT_MEASURED, "estimator"),
+    ("STD PART  M4 PEM STUD  —  MATERIAL UNPRICED: enter a unit rate for this item",
+     pp.NO_PRICE_SOURCE, "estimator"),
+    ("ESSENTRA FOOT-466122 — SAME ARTICLE AS FIXING1081: costed there, not here",
+     pp.NOT_APPLICABLE, "nobody"),
+    ("11650-01-01M  LH UPRIGHT — costed in Sheet Steel below",
+     pp.NOT_APPLICABLE, "nobody"),
+])
+def test_a_row_with_no_part_record_is_read_from_its_own_description(
+        description, category, owner):
+    reason = wep._reason_from_the_row_itself({"description": description})
+    assert reason["category"] == category and reason["owner"] == owner
+
+
+def test_a_row_that_really_says_nothing_is_still_unexplained():
+    """The fallback must stay honest. Inventing a category for a row that states no reason
+    would remove the only signal that the join is failing somewhere it should not."""
+    r = wep._reason_from_the_row_itself({"description": "SOME ROW"})
+    assert r["category"] == pp.UNEXPLAINED
+    assert "says nothing" in r["detail"]
+
+
+def test_the_four_live_rows_are_no_longer_unexplained():
+    """The exact set from the run, through the real entry point."""
+    rows = [{"part_code": c, "description": d, "total_value_gbp": 0} for c, d in [
+        ("STD PART", "STD PART  M4 PEM STUD  —  MATERIAL UNPRICED: enter a unit rate"),
+        ("FIXINGTBC", "FIXINGTBC  M4 KNOB  —  NOT YET PRICED: enter the per-unit figure"),
+        ("MAG CATCH", "MAG CATCH  HAFELE  —  NOT YET PRICED: enter the per-unit figure"),
+        ("YIREE LOCK ASSEMBLY", "LOCK AND KEY  —  NOT YET PRICED: enter the per-unit figure"),
+    ]]
+    wep._explain_unpriced_rows(rows, {"part_estimates": []})
+    for r in rows:
+        r["price_gbp"] = 0
+    assert check(_job(rows)) == [], "these four still report as blanks with no reason"
