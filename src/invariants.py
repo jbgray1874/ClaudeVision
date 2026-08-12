@@ -2381,6 +2381,37 @@ def check_a_finish_field_holds_drawing_text(summary: Any) -> List[Dict[str, Any]
 
 
 
+def check_the_price_source_was_reached(summary: Any) -> List[Dict[str, Any]]:
+    """Was SDILive/UDEF reachable while this job was costed?
+
+    A JOB PRICED WITH NO PRICE SOURCE IS NOT A CHEAP JOB. PricingService connects in its
+    constructor, so a dropped VPN, a stopped SQL service or a rotated login raises there --
+    and estimator._get_pricing_service caught it, set a flag and returned None WITHOUT A
+    WORD. Every catalogue and history lookup then took the None branch and returned no
+    price. The run finished, the workbook calculated, the reports were written, and the unit
+    cost came out LOW with nothing anywhere saying the primary source had never been asked.
+
+    That estimate is indistinguishable from a correct one, which makes it the most expensive
+    thing this engine can do quietly -- exactly the shape as native_folder_unreachable above,
+    where "I could not look" read as "there is nothing there". Same answer: BLOCKING, and
+    say to re-run rather than trust the number.
+    """
+    if not isinstance(summary, dict):
+        return [_violation("price_source_reached", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    why = summary.get("price_source_unreachable")
+    if not why:
+        return []
+    return [_violation(
+        "price_source_unreachable", BLOCKING,
+        f"The price source (SDILive/UDEF) could not be reached while this job was costed: "
+        f"{why}. Every catalogue and purchase-history price on this estimate is MISSING, not "
+        f"nil -- the lines were costed from fallbacks or left blank, so the unit cost is LOW "
+        f"by an unknown amount. This is not a job with cheap parts. Restore the connection "
+        f"and re-run before this figure goes to estimating.",
+        reason=str(why))]
+
+
 def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
     """A line with no price must say which kind of nothing it is.
 
@@ -2463,6 +2494,7 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
 
 
 CHECKS = (
+    check_the_price_source_was_reached,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,

@@ -1031,6 +1031,20 @@ def main() -> None:
         # mode, not the fix. It marks the job, so a consumer can say "provisional" instead of
         # quoting a figure nobody stands behind.
         _canon_json3 = (summary.get("saved_output_paths") or {}).get("json")
+
+        # WHETHER THE PRICE SOURCE WAS EVER REACHED IS A FACT ABOUT THIS ESTIMATE.
+        # Stamped HERE because PricingService is constructed lazily during costing, so the
+        # answer does not exist until the estimating is finished; and stamped BEFORE the
+        # invariants because a job costed with no price source has to fail a check rather
+        # than merely have failed quietly. Written to the summary AND to the saved JSON,
+        # since the checks below read the stamped document.
+        try:
+            from estimator import stamp_price_source_status as _stamp_price_status
+            _stamp_price_status(summary, _canon_json3)
+        except Exception as _pexc:
+            print(f"   [pricing] could not determine whether the price source was reached "
+                  f"({_pexc}) — treat this job as unverified.", flush=True)
+
         try:
             from invariants import check_job as _check_job, format_report as _fmt_inv
             # CHECK THE DOCUMENT THAT HAS EVERYTHING, ONCE.

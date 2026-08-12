@@ -39,6 +39,7 @@ from unit_parsing import is_per_kg_unit, is_per_hour_unit
 # than the £0.42 floor or a static manual JSON.
 _PRICING_SERVICE_SINGLETON = None
 _PRICING_SERVICE_FAILED = False
+_PRICING_SERVICE_ERROR = None      # why, when it could not be reached. See _get_pricing_service.
 
 def _get_pricing_service():
     """Return a shared PricingService, or None if it can't be constructed
@@ -72,9 +73,73 @@ def _get_pricing_service():
         from pricing_service import PricingService
         _PRICING_SERVICE_SINGLETON = PricingService()
         return _PRICING_SERVICE_SINGLETON
-    except Exception:
+    except Exception as exc:
+        # A JOB PRICED WITH NO PRICE SOURCE MUST NOT LOOK LIKE A CHEAP JOB.
+        #
+        # PricingService connects in __init__, so an unreachable SDILive -- a dropped VPN,
+        # a stopped service, a rotated login -- raises here. This said NOTHING, set a flag,
+        # and returned None; every caller then took the None branch and costed from
+        # fallbacks. The run completed, the workbook calculated, the reports were written
+        # and the unit price came out LOW, with no line anywhere on the console, in the
+        # sheet or in the invariants saying that the primary price source had never been
+        # reached. That estimate is indistinguishable from a correct one and it is the
+        # single most expensive thing this engine could do quietly.
+        #
+        # Two changes: say it once, with the reason; and RECORD it, so the fact survives to
+        # the reports and the checks rather than living in scrollback the runner discards.
+        global _PRICING_SERVICE_ERROR
         _PRICING_SERVICE_FAILED = True
+        _PRICING_SERVICE_ERROR = f"{type(exc).__name__}: {exc}"
+        print(f"\n   *** UDEF/SDILive COULD NOT BE REACHED — {_PRICING_SERVICE_ERROR}\n"
+              f"   *** Every catalogue and history price on this job is MISSING, not zero.\n"
+              f"   *** The unit cost below is costed from fallbacks only. DO NOT SEND IT "
+              f"TO ESTIMATING.", flush=True)
         return None
+
+
+def pricing_source_failure() -> Optional[str]:
+    """Why the price source could not be reached, or None if it was.
+
+    Read by file_scan so the job record carries it, and by the invariants so a job priced
+    with no price source fails a check instead of merely having failed quietly.
+    """
+    return _PRICING_SERVICE_ERROR
+
+
+def stamp_price_source_status(summary: Dict[str, Any], json_path: Any = None) -> Optional[str]:
+    """Record on the job whether the price source was ever reached. Returns the reason, or None.
+
+    BOTH THE SUMMARY AND THE SAVED JSON, deliberately. The invariants prefer the stamped
+    document on disk -- it is the one with final_estimate on it -- and fall back to the
+    in-memory summary when the JSON cannot be read. Stamping only one leaves the other
+    reporting a clean job, and two views of one estimate that disagree is the exact defect
+    that layer exists to stop.
+
+    A function rather than a block inside main so it can be exercised. The first version was
+    inline and the only test that could reach it grepped main.py for a string, which is not
+    a test: deleting the summary stamp left the string in place on the JSON line and the
+    grep stayed green.
+    """
+    why = pricing_source_failure()
+    if not why:
+        return None
+    summary["price_source_unreachable"] = why
+    if json_path:
+        from pathlib import Path as _P
+        p = _P(str(json_path))
+        if p.exists():
+            try:
+                doc = json.loads(p.read_text(encoding="utf-8"))
+                doc["price_source_unreachable"] = why
+                p.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")
+            except Exception as exc:
+                # SAY IT, do not raise. Losing the estimate because the outage could not be
+                # written down would be a worse outcome than the outage; but a silent failure
+                # here puts the job back to looking clean, so it has to be spoken.
+                print(f"   [pricing] the price-source outage could not be written to the JSON "
+                      f"({type(exc).__name__}: {exc}) — the in-memory summary carries it and "
+                      f"the console line above is the other record.", flush=True)
+    return why
 
 
 def record_operation(part: Dict[str, Any], op: str, source: str,
