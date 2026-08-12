@@ -35,7 +35,7 @@ signal that carries knowledge the drawing does not.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
@@ -357,6 +357,54 @@ def may_overwrite(part: Dict[str, Any], field: str, new_source: Any,
     return False
 
 
+def displaced_values(part: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
+    """What a stronger source overwrote on this field, oldest first.
+
+    THE ARBITER KEPT ONLY THE LOSER OF A REFUSAL. When an incoming value was refused the
+    disagreement was flagged with both sides; when it WON, whatever it replaced was
+    overwritten and nothing recorded that anything had been. So a datum that arrived from
+    three sources looked identical to one that arrived from a single source that nobody
+    contradicted.
+
+    11650's door is what that costs. The model said ABS, a DXF filename said POLYCARBONATE
+    and the drawing text said POLYCARBONATE; the model outranked both and the part went from
+    GBP 35.28 to GBP 0.00, because ABS has a sheet size and a density in config and no rate.
+    Asking afterwards whether two independent sources had agreed against the winner was
+    impossible: the answer had been thrown away at the moment it was needed.
+
+    Recording it changes no outcome. It is the prerequisite for any rule that would.
+    """
+    if not isinstance(part, dict):
+        return []
+    record = part.get("_displaced")
+    return list((record or {}).get(field) or []) if isinstance(record, dict) else []
+
+
+def corroboration_against(part: Dict[str, Any], field: str) -> Dict[str, Any]:
+    """How many DISTINCT sources named a value other than the one now held, and which.
+
+    Distinct sources, not distinct readings: two passes of the same reader agreeing with
+    itself is one observation seen twice, and counting it as two is how a single stale
+    filename would come to outvote a model.
+    """
+    current = value_of(part, field)
+    against: Dict[str, set] = {}
+    for entry in displaced_values(part, field):
+        val, src = entry.get("value"), str(entry.get("source") or "")
+        if src and not (current is not MISSING and _same_value(current, val)):
+            against.setdefault(_norm_value_key(val), set()).add(src)
+    if not against:
+        return {"count": 0, "value": None, "sources": []}
+    _val_key, _srcs = max(against.items(), key=lambda kv: (len(kv[1]), kv[0]))
+    _value = next(e["value"] for e in displaced_values(part, field)
+                  if _norm_value_key(e.get("value")) == _val_key)
+    return {"count": len(_srcs), "value": _value, "sources": sorted(_srcs)}
+
+
+def _norm_value_key(value: Any) -> str:
+    return str(value).strip().upper().replace("_", " ")
+
+
 def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
                 note: Optional[str] = None, confidence: Optional[float] = None) -> bool:
     """Set a datum if this source is entitled to, and record where it came from.
@@ -414,6 +462,17 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         node = _walk(part, path, create=True)
         if node is None:
             return False
+        # WHAT THIS REPLACED, KEPT. A refusal has always been flagged with both sides; a
+        # SUCCESSFUL replacement recorded nothing, so a datum three sources argued over
+        # looked exactly like one nobody contradicted. Asking afterwards whether two
+        # independent sources had agreed against the winner was impossible — the answer was
+        # discarded at the moment it became worth having.
+        #
+        # Nothing here changes an outcome. It is the prerequisite for any rule that would.
+        if _cur is not MISSING and not _same_value(_cur, value):
+            part.setdefault("_displaced", {}).setdefault(field, []).append(
+                {"value": _cur, "source": _cur_src or "an earlier pass",
+                 "displaced_by": source})
         node[leaf] = value
         node[key] = source
         if confidence is not None:
