@@ -187,8 +187,14 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `VISION_MAX_SIDE` | Max rendered image edge in px (default 4000) |
 | `SDI_ENABLE_PART_DESC_SCAN=1` | Re-enable the description `LIKE` catalogue scan (default **off** — see *Performance*) |
 | `ESTIMATE_DEFAULT_JOB_QUANTITY` | Default order quantity when not supplied |
-| `SDI_APPLY_SOLIDWORKS=0` / `=1` | Force the native extract off / on. Default: applies when `_sw_native_extract.json` is present in the job folder, otherwise silent |
+| `SDI_APPLY_SOLIDWORKS=0` / `=1` | Force the native extract off / on. Default: **on**. Models present and unread, or a job folder that cannot be opened, are BLOCKING findings — never silence |
 | `SDI_SW_EXTRACT_JSON` | Read the native extract from an explicit path (models on a CAD share, job folder elsewhere) |
+| `SDI_SW_RUN_ANALYSER=0` | Never invoke SolidWorks COM; consume an existing extract only. Default: **the analyser runs** when models are present and no fresh extract exists. Set this on a shared designer workstation |
+| `SDI_CANONICAL_ROUTE_WORKBOOK=0` | Fall back to the legacy per-part labour loop instead of the compiled route (default **on**) |
+| `SDI_DUALPATH_BOM=0` | Read the BOM with the deterministic reader only, without the vision cross-check (default **on**) |
+| `SDI_ORDER_QTY` | Order quantity for the run, when it is not given on the command line |
+| `SDI_OUTPUT_ROOT` | Where reports and estimates are written (default `C:\ClaudeVision\output`) |
+| `SDI_WELD_DEBUG=1` | Per-weld diagnostics from the document builder |
 
 ## Quick health check
 

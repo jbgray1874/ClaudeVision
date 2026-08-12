@@ -32,6 +32,18 @@ on PDF + DXF exactly as before.
 | `SDI_APPLY_SOLIDWORKS=0` | force off |
 | `SDI_APPLY_SOLIDWORKS=1` | force on; says so loudly if the extract is missing |
 | `SDI_SW_EXTRACT_JSON=<path>` | read the extract from an explicit path (models on a CAD share, job folder elsewhere) |
+| `SDI_SW_RUN_ANALYSER=0` | never invoke COM; consume an existing extract only |
+
+**You do not normally run this tool by hand.** When a job folder holds `.SLDPRT` / `.SLDASM`
+and there is no extract — or the extract is older than the models — the estimate invokes the
+analyser itself. It closes only the documents it opened; anything a designer already had open
+is read in place, left open, and recorded in the manifest as `read_from_open_documents`.
+
+That was not always so. The in-pipeline call was turned off in July to protect open documents
+from a `close_all()` that closed everything it touched. The ownership fix removed that hazard
+and the default was not restored, so jobs with models beside them were costed from PDF + DXF
+for weeks. Run it by hand to diagnose, or on a machine where the estimate cannot reach
+SolidWorks — not as a routine step.
 
 **What it sets, and the rule for each** — all keyed on document type, stock form or
 drawing convention, so every rule inherits to the next job:
