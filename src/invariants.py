@@ -2327,6 +2327,7 @@ def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict
 # Finishes the engine can actually cost. Anything else a drawing states is real work with
 # no rate behind it, and the sheet charges nothing for it.
 _COSTABLE_FINISH_OPS = ("p.coat", "powder", "diamond polish", "polish", "peel")
+_COSTABLE_FINISH_OPS_UPPER = tuple(w.upper() for w in _COSTABLE_FINISH_OPS)
 
 # Words that name a finish PROCESS on a drawing. Deliberately not "any finish text": a
 # finish field reading RAW or SELF COLOUR states that there is no finish, and flagging
@@ -2343,10 +2344,38 @@ _FINISH_PROCESS_WORDS = (
 # the finish.
 _FINISH_SHEEN_WORDS = ("GLOSS", "MATT", "SATIN", "SILK", "TEXTURE", "TEXTURED")
 
+# A FINISH FIELD THAT POINTS SOMEWHERE ELSE NAMES NO WORK. "SEE ASSEMBLY DRAWING" is on ten
+# parts of 11650 and is a cross-reference, not a process; whether the thing it points at was
+# followed is a different check's question.
+_FINISH_POINTER_WORDS = ("SEE ", "AS PER", "REFER", "PER DRAWING", "PER DWG", "AS DRAWING")
+
+# A finish field stating there is NO finish. These carry no process word either, so the
+# process-word requirement already excluded them from the uncostable list -- but the
+# UNRECOGNISED bucket below has no such requirement by design, and would flag every bare
+# steel part in the system without them.
+_NO_FINISH_WORDS = ("RAW", "SELF COLOUR", "SELF-COLOUR", "MILL FINISH", "AS ROLLED",
+                    "NONE", "N/A", "UNSPECIFIED", "FINISH-UNSPECIFIED", "UNFINISHED",
+                    "BARE", "PLAIN")
+
+
+def _states_no_finish(text: str) -> bool:
+    """True when the finish field says there ISN'T one.
+
+    WHOLE WORDS. A substring test made "SEE ASSEMBLY DRAWING" state that it has no finish,
+    because RAW is inside DRAWING -- so ten parts of 11650 were filtered by the right verdict
+    for a completely wrong reason, and a mutation that deleted the rule which SHOULD have
+    caught them changed nothing. An accidental match is worse than a miss: it hides the miss.
+    """
+    return any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in _NO_FINISH_WORDS)
+
 # The list above must never name a finish the engine CAN cost, or a correctly-costed powder
 # job reports itself as supplied free. Asserted at import so it cannot drift quietly.
 assert not any(w in _FINISH_PROCESS_WORDS for w in ("POWDER", "DIAMOND", "POLISH", "PEEL")), \
     "a costable finish is in the uncostable list -- powder jobs will report as free"
+# And the two lists that decide the UNRECOGNISED bucket must not overlap each other, or a
+# finish would be simultaneously "no finish at all" and "a process we cannot cost".
+assert not (set(_NO_FINISH_WORDS) & set(_FINISH_PROCESS_WORDS)), \
+    "a word means both 'no finish' and 'an uncostable process'"
 # NO "_NO_FINISH_WORDS" LIST. There was one -- RAW, SELF COLOUR, MILL FINISH, AS ROLLED --
 # and a mutation proved it never fired: none of those strings contains a finish PROCESS
 # word, so requiring a process word already excludes every one of them. A second rule that
@@ -2430,7 +2459,7 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         for r in priced if isinstance(r, dict)).lower()
     finish_is_costed = any(op in costed_ops for op in _COSTABLE_FINISH_OPS)
 
-    uncosted = []
+    uncosted, unrecognised = [], []
     for part in parts:
         if not isinstance(part, dict):
             continue
@@ -2459,17 +2488,55 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         if named:
             uncosted.append({"part_number": part.get("part_number"),
                              "finish": text[:80], "words": named[:3]})
-    if not uncosted:
+            continue
+        # A FINISH THIS ENGINE HAS NEVER HEARD OF IS NOT A FINISH THAT IS FREE.
+        #
+        # Everything above is a WHITELIST: costable ops, uncostable processes we already know
+        # about, sheens. A finish matching none of them produced no cost AND no flag, so the
+        # vocabulary's own gaps were invisible. 11650-01-05A DOOR states "UV HARDCOAT ALL
+        # SIDES" -- not powder, not vinyl, not a sheen -- and it went through this check, the
+        # route and the sheet without one word about it.
+        #
+        # Naming it does not decide what it is, and deliberately so. An unrecognised finish
+        # may be a shop process nobody has costed, or a property of the sheet we BUY -- UV
+        # hardcoat arrives on polycarbonate from the mill, so it belongs in the material rate
+        # and not in the route, and adding a labour line for it would invent work SDI does
+        # not do. The engine cannot tell those apart. An estimator can, in seconds, once it
+        # is in front of them.
+        if any(w in text for w in _FINISH_POINTER_WORDS):
+            continue
+        if _states_no_finish(text):
+            continue
+        if any(w in text for w in _COSTABLE_FINISH_OPS_UPPER):
+            continue                    # costable and costed, or costable and caught above
+        unrecognised.append({"part_number": part.get("part_number"), "finish": text[:80]})
+    if not uncosted and not unrecognised:
         return []
 
-    listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in uncosted[:4])
-    return [_violation(
-        "stated_finish_not_costed", WARNING,
-        f"{len(uncosted)} part(s) state a finish the sheet charges nothing for: {listed}. "
-        f"Powder is the only finish this engine can cost, and no powder operation is on "
-        f"this route. Paint, vinyl, laminate, print and foil are real work on board and "
-        f"plastic and are being supplied free. ESTIMATOR TO PRICE THE FINISH.",
-        count=len(uncosted), parts=uncosted[:20])]
+    out: List[Dict[str, Any]] = []
+    if uncosted:
+        listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in uncosted[:4])
+        out.append(_violation(
+            "stated_finish_not_costed", WARNING,
+            f"{len(uncosted)} part(s) state a finish the sheet charges nothing for: {listed}. "
+            f"Powder is the only finish this engine can cost, and no powder operation is on "
+            f"this route. Paint, vinyl, laminate, print and foil are real work on board and "
+            f"plastic and are being supplied free. ESTIMATOR TO PRICE THE FINISH.",
+            count=len(uncosted), parts=uncosted[:20]))
+    if unrecognised:
+        listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in unrecognised[:4])
+        out.append(_violation(
+            "stated_finish_not_recognised", WARNING,
+            f"{len(unrecognised)} part(s) state a finish this engine has no vocabulary for, "
+            f"so it was neither costed nor questioned: {listed}. It is one of two things and "
+            f"the engine cannot tell which. A SHOP PROCESS nobody has a rate for -- in which "
+            f"case the work is being supplied free. Or a PROPERTY OF THE SHEET WE BUY, like "
+            f"a UV-hardcoated or pre-laminated grade, which costs more per square metre and "
+            f"belongs in the material rate rather than as an operation. Adding a labour line "
+            f"for the second kind would invent work that is not done. AN ESTIMATOR CAN TELL "
+            f"THESE APART IN SECONDS; this engine cannot, and until now said nothing.",
+            count=len(unrecognised), parts=unrecognised[:20]))
+    return out
 
 
 
