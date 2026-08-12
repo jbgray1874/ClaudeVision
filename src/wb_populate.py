@@ -2971,9 +2971,25 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # rate is.
                 price = _cat_rate
                 qty = _powder_kg_total
-                _flag(f"POWDER computed from WIRE geometry: {_wire_powder_area_m2:.5f} m2 of "
-                      f"coated surface (pi x dia x length) x {_POWDER_KG_PER_M2} kg/m2 = "
-                      f"{_wire_powder_kg} kg @ £{_cat_rate:.2f}/kg. "
+                # SAY WHERE THE KILOS ACTUALLY CAME FROM. This read "POWDER computed from
+                # WIRE geometry: {_wire_powder_area_m2} m2 ... = {_wire_powder_kg} kg" for
+                # every job that reached it, and on 11650 -- which has NO WIRE AT ALL, an
+                # empty Wire block and 0 wire/bar parts -- it printed "0.00000 m2 of coated
+                # surface (pi x dia x length) x 0.2 kg/m2 = 0.08314 kg". Nought times a fifth
+                # is not 0.08314. The KILOS are right: they are _powder_kg_total, the seven
+                # coated SHEET parts at 0.4157 m2. The sentence named a geometry the job does
+                # not have, so the one line explaining the powder cost could not be checked
+                # against anything -- and a number nobody can check is a number nobody can
+                # defend when Tim asks where it came from.
+                #
+                # Wire is one CONTRIBUTOR to the total, not the source of it. Report the
+                # total, then name the wire share only when there is one.
+                _wire_share = (f" ({_wire_powder_area_m2:.5f} m2 of that is wire, pi x dia x "
+                               f"length, which the sheet-only calculator cannot see)"
+                               if _wire_powder_area_m2 > 0 else "")
+                _flag(f"POWDER: {_powder_area_m2:.4f} m2 of coated surface x "
+                      f"{_POWDER_KG_PER_M2} kg/m2 = {_powder_kg_total:.5f} kg @ "
+                      f"£{_cat_rate:.2f}/kg{_wire_share}. "
                       f"COVERAGE RATE IS THE TEMPLATE'S {_POWDER_KG_PER_M2} kg/m2 = 100% "
                       f"TRANSFER EFFICIENCY, which nothing achieves. Tim's sheet for THIS job "
                       f"implies 1.70 kg/m2 (an open wire frame lets most of the cloud "
