@@ -450,6 +450,42 @@ def test_a_bare_stem_does_not_swallow_every_line_that_starts_with_it():
         assert "FIXING" not in [rows[i]["part_number"] for i in g]
 
 
+def test_a_part_number_that_is_an_english_word_is_not_hunted_for_in_prose():
+    """THE DIRECTION THAT DELETES MONEY. This rule zeroes a line, so a false merge removes
+    real cost rather than merely adding noise -- and SDI's own BOM carries POWDER, PACKAGING,
+    DELIVERY and FIXING as part numbers. A description reading "PACKAGING FOAM INSERT 50MM"
+    contains the word PACKAGING for reasons that have nothing to do with identity; merged on
+    it, the foam insert and the packaging share become one line and GBP 1.20 disappears.
+
+    A digit is what separates a code from a word. FIXING1081 is a key; FIXING is a noun."""
+    rows = [{"part_number": "PACKAGING", "description": "Packaging (box / pallet share)"},
+            {"part_number": "FIXING2000", "description": "PACKAGING FOAM INSERT 50MM"},
+            {"part_number": "POWDER", "description": "Powder - from coated surface area"},
+            {"part_number": "DELIVERY", "description": "Delivery share of order haulage"}]
+    assert sr.same_article_groups(rows) == []
+
+
+def test_a_real_code_inside_a_description_still_groups():
+    """The narrowing must not take the case it was built for with it.
+
+    AND THIS IS THE CASE THAT EXPOSED THE RULE AS DECORATIVE. "FIXING1081-M8, 25MM FOOT"
+    tokenises greedily to FIXING1081-M8, which matches no part number anywhere -- so this
+    rule had never once fired. It looked correct because the real BOM pair ALSO shares the
+    reference 466122, and the shared-reference path was quietly doing all the work."""
+    rows = [{"part_number": "FIXING1081", "description": "Levelling foot M8"},
+            {"part_number": "ESSENTRA FOOT", "description": "FIXING1081-M8, 25MM FOOT"}]
+    assert sr.same_article_groups(rows) == [[0, 1]]
+
+
+def test_a_part_number_that_is_a_bare_number_is_not_hunted_for_either():
+    """A five-digit part number searched through prose finds every dimension on the sheet --
+    and, worse, finds its own job number inside every drawing code that starts with it. The
+    letter is what makes a string a code rather than a quantity."""
+    rows = [{"part_number": "11650", "description": "JOB"},
+            {"part_number": "X9", "description": "SEE 11650-01-01M FOR DETAIL"}]
+    assert sr.same_article_groups(rows) == []
+
+
 def test_lines_with_no_reference_never_group():
     """Two lines that say nothing about their identity are not thereby the same part. This is
     the direction that silently deletes money, so it is asserted rather than assumed."""

@@ -376,6 +376,39 @@ def describe_keys(part: Dict[str, Any]) -> str:
 # sheet, same supplier, same words, GBP 0.00 and GBP 0.27, and they are different parts.
 
 
+def _is_a_code_not_a_word(text: str) -> bool:
+    """Whether this string may be hunted for inside another line's prose.
+
+    BOTH A LETTER AND A DIGIT, AND AT LEAST FIVE CHARACTERS. SDI's own BOM carries POWDER,
+    PACKAGING, DELIVERY and FIXING as part numbers, and a description reading "PACKAGING FOAM
+    INSERT 50MM" contains the word PACKAGING for reasons that have nothing to do with
+    identity. The digit is what separates a code from a noun. The letter keeps a bare number
+    out: a five-digit part number hunted through prose finds every dimension on the sheet.
+    """
+    return (len(text) >= 5 and any(c.isdigit() for c in text)
+            and any(c.isalpha() for c in text))
+
+
+def _code_candidates(text: Any) -> Set[str]:
+    """Every substring of a description that could be somebody's part number.
+
+    THE SEGMENTS, NOT ONLY THE WHOLE TOKEN. A BOM description reads "FIXING1081-M8, 25MM
+    FOOT" and tokenises greedily to FIXING1081-M8, which matches no part number anywhere —
+    so this rule looked correct, passed its test through the SHARED-REFERENCE path that was
+    doing the work, and had in fact never once fired. Splitting a token on its separators is
+    what makes the code inside a phrase reachable.
+
+    A segment still has to look like a code, which is what stops "11650-01-01M" contributing
+    the bare 11650 and matching a job whose part number happens to be five digits.
+    """
+    out: Set[str] = set()
+    for token in re.findall(r"[A-Z0-9]+(?:[.\-][A-Z0-9]+)*", str(text or "").upper()):
+        for cand in (token, *re.split(r"[.\-]", token)):
+            if _is_a_code_not_a_word(cand):
+                out.add(cand)
+    return out
+
+
 def identity_keys(part: Dict[str, Any]) -> Set[str]:
     """The manufacturer references that identify this line.
 
@@ -401,8 +434,17 @@ def same_article_groups(parts: Any) -> List[List[int]]:
     FIXING line on every job into one.
     """
     rows = [p for p in (parts or []) if isinstance(p, dict)]
+    # A PART NUMBER THAT IS ALSO AN ENGLISH WORD CANNOT BE LOOKED FOR IN PROSE. SDI's own BOM
+    # carries POWDER, PACKAGING, DELIVERY and FIXING as part numbers, and a description
+    # reading "PACKAGING FOAM INSERT 50MM" contains the word PACKAGING for reasons that have
+    # nothing to do with identity. Merged on that, the foam insert and the packaging share is
+    # one line and one of them loses its money — and this rule ZEROES a line, so a false
+    # merge deletes real cost rather than merely adding noise.
+    #
+    # A digit is what separates a code from a word. FIXING1081 is a key; FIXING is a noun.
     codes = {str(p.get("part_number") or "").strip().upper(): i
-             for i, p in enumerate(rows) if str(p.get("part_number") or "").strip()}
+             for i, p in enumerate(rows)
+             if _is_a_code_not_a_word(str(p.get("part_number") or "").strip())}
     parent = list(range(len(rows)))
 
     def find(i):
@@ -424,9 +466,8 @@ def same_article_groups(parts: Any) -> List[List[int]]:
             else:
                 by_ref[key] = i
         # A line whose description names another line's part number outright.
-        for token in re.findall(r"[A-Z0-9]+(?:[.\-][A-Z0-9]+)*",
-                                str(p.get("description") or "").upper()):
-            j = codes.get(token)
+        for cand in _code_candidates(p.get("description")):
+            j = codes.get(cand)
             if j is not None and j != i:
                 union(i, j)
 
