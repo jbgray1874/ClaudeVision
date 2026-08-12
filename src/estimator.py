@@ -588,7 +588,17 @@ def _build_price_source_metadata(
                      or selected.get("pricing_mode"))
     _source_class = classify_price_source(
         source_name, source_type=src_type, pricing_mode=_pricing_mode,
-        priced=selected.get("price") is not None,
+        # `selected` IS ONLY FILLED BY AN EXTERNAL LOOKUP. Reading it alone meant every
+        # INTERNALLY computed price -- the acrylic area rate, the workbook sheet-steel
+        # formula, config's GBP/kg fallback -- was classified "unpriced" while its money sat
+        # in the total. price_firmness then explained a real, applied figure as "a unpriced
+        # price carries no commitment", which is true of nothing on that line, and the
+        # documented "config" class was unreachable for the writers that produce it.
+        #
+        # The caller already states the fact: `applied` means a price was applied. Third
+        # instance today of one field being asked a question it does not answer -- after
+        # stamp_affects_total falling back to `applied`, and _UNPRICED_SOURCES holding "".
+        priced=selected.get("price") is not None or bool(applied),
     )
     if _source_class == "ai_estimate" and src_type == "external":
         src_type = "web_ai_fallback"      # never let a generated price read as a catalogue hit
@@ -2026,6 +2036,21 @@ def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tupl
 _MARKET_INDICATION_CACHE: Dict[Tuple[str, Any], Any] = {}
 
 
+def _market_cache_path(key: Tuple[str, Any]):
+    """Where a looked-up sheet rate is kept between runs. None if nowhere is writable."""
+    material, thickness = key
+    safe = re.sub(r"[^A-Z0-9]+", "_", str(material).upper()).strip("_") or "UNKNOWN"
+    try:
+        gauge = f"{float(thickness):g}" if thickness else "nogauge"
+    except (TypeError, ValueError):
+        gauge = "nogauge"
+    try:
+        base = Path(getattr(config, "BASE_DIR", None) or Path(__file__).resolve().parents[1])
+    except Exception:                                        # noqa: BLE001
+        return None
+    return base / "cache" / "market_sheet_rates" / f"{safe}__{gauge}mm.json"
+
+
 def market_indication_for(part: Dict[str, Any], material: Any) -> Optional[Dict[str, Any]]:
     """A market sheet price for a material this engine holds no rate for. NEVER a rate.
 
@@ -2053,18 +2078,41 @@ def market_indication_for(part: Dict[str, Any], material: Any) -> Optional[Dict[
     sheet = (getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}).get(
         str(material or "").strip().upper())
     sheet_l, sheet_w = (sheet[-1] if sheet else (None, None))
-    # ONE CALL PER MATERIAL AND GAUGE, NOT PER PART. A job with six ABS panels asked six
-    # times for the same sheet rate, six network round trips for one answer, and could return
-    # six different numbers for the same material -- which is worse than slow.
+    # ONE CALL PER MATERIAL AND GAUGE, ACROSS JOBS AND NOT JUST WITHIN ONE. A job with six
+    # ABS panels asked six times for the same sheet rate -- six round trips for one answer,
+    # and six chances to return six different numbers for the same material. In-process
+    # memoisation fixes that for one run; the next run pays again, and can disagree with the
+    # last one about what a job's material costs. A sheet rate is not a per-run fact.
+    #
+    # On disk beside the vision-BOM cache, under config.BASE_DIR, for the reason written
+    # there: a hardcoded path means every re-run on another machine pays again and silently
+    # gets nothing when the drive is absent.
     key = (str(material or "").strip().upper(), _safe_thickness_mm(part))
     if key in _MARKET_INDICATION_CACHE:
         return _MARKET_INDICATION_CACHE[key]
+    _disk = _market_cache_path(key)
+    if _disk is not None and _disk.exists():
+        try:
+            _held = json.loads(_disk.read_text(encoding="utf-8"))
+            _MARKET_INDICATION_CACHE[key] = _held or None
+            return _MARKET_INDICATION_CACHE[key]
+        except Exception:                                    # noqa: BLE001
+            pass                                             # a corrupt cache is not an answer
     try:
         found = market_sheet_rate_indication(
             material, _safe_thickness_mm(part), sheet_l, sheet_w)
     except Exception:                                        # noqa: BLE001
         found = None
     _MARKET_INDICATION_CACHE[key] = found
+    # A MISS IS NOT CACHED. A failed lookup is usually a network or credit problem, not a
+    # fact about the material -- writing it down would make one bad afternoon permanent.
+    if found and _disk is not None:
+        try:
+            _disk.parent.mkdir(parents=True, exist_ok=True)
+            _disk.write_text(json.dumps(dict(found, material=key[0], cached_on=str(
+                __import__("datetime").date.today())), indent=1), encoding="utf-8")
+        except Exception:                                    # noqa: BLE001
+            pass
     return found
 
 
@@ -2096,11 +2144,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         if _indication:
             part["material_market_indication"] = dict(_indication,
                                                       material=_arbitrated_material)
+            # .get, NOT [..]. A lookup that returns a partial dict must not take the run
+            # down inside the line that explains it -- and it did, on a dict with no
+            # "source" key. The message is the least important thing in this function and
+            # was the only thing that could raise.
             print(f"   [material] {part.get('part_number')}: no rate for "
                   f"{_arbitrated_material}; market indication "
-                  f"£{_indication['gbp_per_m2']:.2f}/m2 "
-                  f"(£{_indication['gbp_per_sheet']:.2f}/sheet, {_indication['source']}) "
-                  f"— NOT USED IN THE TOTAL, for the estimator to confirm.", flush=True)
+                  f"£{_safe_float(_indication.get('gbp_per_m2')) or 0.0:.2f}/m2 "
+                  f"(£{_safe_float(_indication.get('gbp_per_sheet')) or 0.0:.2f}/sheet, "
+                  f"{_indication.get('source') or 'llm'}) "
+                  f"— PRICED FROM IT, marked as an LLM estimate. Not a supplier quote; "
+                  f"this job cannot go out firm on it.", flush=True)
     if _material_conflict:
         part["material_priced_as"] = _material_conflict
         part.setdefault("review_flags", []).append({
@@ -2224,7 +2278,20 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # using the existing nesting formula with the acrylic sheet size. Gated strictly to
     # acrylic-like materials, so steel / wire / MDF / 1282 are untouched.
     _mat_acr = str(material or "").upper().replace("_", " ")
-    if _mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS and blank_length and blank_width:
+    # A MATERIAL WITH NO RATE IS NOT A MATERIAL WITH NO COST. Where config holds no rate and
+    # the market lookup returned a sheet price, that price goes through the SAME area x GBP/m2
+    # arithmetic the acrylic family uses -- one calculation, not a second copy of it. The
+    # figure is stamped as an LLM market estimate, so check_prices_are_firm sees it, the job
+    # can never be released as firm on it, and it is visible for what it is on every report.
+    _llm_ind = part.get("material_market_indication") or {}
+    _llm_rate_m2 = None
+    if not config.material_has_a_rate(material):
+        try:
+            _llm_rate_m2 = float(_llm_ind.get("gbp_per_m2") or 0.0) or None
+        except (TypeError, ValueError):
+            _llm_rate_m2 = None
+    if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2)
+            and blank_length and blank_width):
         _acr_area_m2 = (float(blank_length) * float(blank_width)) / 1_000_000.0
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
 
@@ -2282,6 +2349,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 _acr_rate_m2 = None
         if _acr_rate_m2 is None:
             _acr_rate_m2 = float(_acr_m2.get("default", 8.0))
+        # An LLM rate is used ONLY where config holds none -- it never displaces a real one.
+        if _llm_rate_m2:
+            _acr_rate_m2 = _llm_rate_m2
         _acr_rate_m2 = float(_acr_rate_m2)
 
         _acr_sheet_est = select_sheet_size(material, blank_length, blank_width)
@@ -2320,14 +2390,30 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # and qty-per-sheet (J) itself, so we expose the sheet price, NOT the per-part cost.
             "sheet_price_gbp": round(float(_sheet_price), 2),
             "parts_per_sheet": int(_acr_pps),
-            "cost_method": "acrylic_area_per_m2_provisional",
+            "cost_method": ("llm_market_sheet_rate" if _llm_rate_m2
+                            else "acrylic_area_per_m2_provisional"),
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "reliability_flags": [getattr(config, "ACRYLIC_PROVISIONAL_FLAG", "acrylic_provisional_pending_estimating")],
-            "note": "Acrylic sheet-nested cost (PROVISIONAL) — £%.2f/sheet ÷ %s parts/sheet; swap for canonical on estimating confirmation." % (_sheet_price, _acr_pps),
+            "reliability_flags": (["llm_market_rate_not_a_supplier_price"] if _llm_rate_m2 else
+                                  [getattr(config, "ACRYLIC_PROVISIONAL_FLAG",
+                                           "acrylic_provisional_pending_estimating")]),
+            "note": (("%s has no rate in this engine. Priced at an LLM MARKET INDICATION of "
+                      "£%.2f/m2 (£%.2f/sheet, %s) — NOT a supplier quote and not firm; "
+                      "confirm with Purchasing." % (material, _acr_rate_m2, _sheet_price,
+                                                    _llm_ind.get("source") or "llm"))
+                     if _llm_rate_m2 else
+                     "Acrylic sheet-nested cost (PROVISIONAL) — £%.2f/sheet ÷ %s parts/sheet; "
+                     "swap for canonical on estimating confirmation." % (_sheet_price, _acr_pps)),
             "price_source": _build_price_source_metadata(
-                {}, fallback_source="acrylic_area_per_m2_provisional",
-                applied=True, applied_basis="acrylic_area_per_m2_provisional",
+                {},
+                # "llm_" so is_non_reproducible_source recognises it without a new rule:
+                # check_prices_are_firm then reports the job as not firm, automatically.
+                fallback_source=("llm_market_sheet_rate" if _llm_rate_m2
+                                 else "acrylic_area_per_m2_provisional"),
+                applied=True,
+                applied_basis=("llm_market_GBP_per_m2" if _llm_rate_m2
+                               else "acrylic_area_per_m2_provisional"),
+                affects_total=True,
             ),
         }
     external_price = _resolve_material_price(material, thickness, quantity, part=part)

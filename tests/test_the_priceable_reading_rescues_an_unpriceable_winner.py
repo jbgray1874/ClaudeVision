@@ -302,10 +302,213 @@ def test_the_lookup_is_cached_per_material_and_gauge(monkeypatch):
     _est._MARKET_INDICATION_CACHE.clear()
     calls = []
     monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_est, "_market_cache_path", lambda key: None)   # disk tested below
     monkeypatch.setattr(_w, "market_sheet_rate_indication",
                         lambda *a, **k: calls.append(a) or {"gbp_per_sheet": 180.0,
                                                             "gbp_per_m2": 28.8})
     for _ in range(6):
         _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")
     assert len(calls) == 1, f"asked {len(calls)} times for one material and gauge"
+    _est._MARKET_INDICATION_CACHE.clear()
+
+
+def test_the_rate_survives_between_runs(monkeypatch, tmp_path):
+    """A SHEET RATE IS NOT A PER-RUN FACT. In-process memoisation fixes one run; the next run
+    pays again and can disagree with the last one about what a job's material costs. Two runs
+    of the same pack must not return two different material totals because a model answered
+    differently on a Tuesday."""
+    import estimator as _est, web_ai_price_lookup as _w
+    calls = []
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_est, "_market_cache_path",
+                        lambda key: tmp_path / f"{key[0]}_{key[1]}.json")
+    monkeypatch.setattr(_w, "market_sheet_rate_indication",
+                        lambda *a, **k: calls.append(a) or {"gbp_per_sheet": 180.0,
+                                                            "gbp_per_m2": 28.8})
+    _est._MARKET_INDICATION_CACHE.clear()
+    first = _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")
+    _est._MARKET_INDICATION_CACHE.clear()          # a fresh process
+    second = _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")
+    assert len(calls) == 1, "the second run paid for an answer the first run already had"
+    assert second["gbp_per_m2"] == first["gbp_per_m2"]
+    _est._MARKET_INDICATION_CACHE.clear()
+
+
+def test_a_failed_lookup_is_not_written_down(monkeypatch, tmp_path):
+    """A miss is usually a network or credit problem, not a fact about the material. Caching
+    it would make one bad afternoon permanent -- and SerpAPI being out of credit today would
+    silently price ABS at nothing for every future job."""
+    import estimator as _est, web_ai_price_lookup as _w
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_est, "_market_cache_path", lambda key: tmp_path / "abs.json")
+    monkeypatch.setattr(_w, "market_sheet_rate_indication", lambda *a, **k: None)
+    _est._MARKET_INDICATION_CACHE.clear()
+    assert _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS") is None
+    assert not (tmp_path / "abs.json").exists(), "a failed lookup was cached to disk"
+    _est._MARKET_INDICATION_CACHE.clear()
+
+
+# ── it prices the line, and the job can never go out firm on it ─────────────────────
+# THE UNDER-CHARGE IS WORSE THAN A MARKED PROVISIONAL FIGURE. Leaving material at GBP 0.00
+# because no rate exists means the job is short by an invisible amount. Pricing it from a
+# market lookup means the job is complete and one line is explicitly a model's reading rather
+# than a supplier's commitment -- which the firm/provisional gate already knows how to carry.
+def _llm_door(monkeypatch, rate_m2=26.87, sheet=168.0):
+    import estimator as _est, web_ai_price_lookup as _w
+    _est._MARKET_INDICATION_CACHE.clear()
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_est, "_market_cache_path", lambda key: None)
+    monkeypatch.setattr(_w, "market_sheet_rate_indication", lambda *a, **k: {
+        "gbp_per_sheet": sheet, "gbp_per_m2": rate_m2, "sheet_mm": [3050, 2050],
+        "thickness_mm": 6, "confidence": 0.5, "source": "llm_market_estimate"})
+    part = {"part_number": "11650-01-05A", "normalized_material": "ABS", "materials": [],
+            "quantity": 1, "normalized_thickness_mm": 6,
+            "normalized_geometry": {"blank_length_mm": 1202, "blank_width_mm": 689}}
+    return part, _est.estimate_material(part)
+
+
+def test_an_unpriceable_material_is_costed_from_the_market_rate(monkeypatch):
+    part, me = _llm_door(monkeypatch)
+    assert me["cost_method"] == "llm_market_sheet_rate"
+    # 0.8282 m2 x GBP 26.87/m2 x 1.04 scrap
+    assert me["unit_material_cost_gbp"] == pytest.approx(23.14, abs=0.05)
+    assert me["unit_material_cost_gbp"] > 0, "the silent GBP 0.00 under-charge is back"
+
+
+def test_the_arbitrated_material_still_survives_it(monkeypatch):
+    part, _ = _llm_door(monkeypatch)
+    assert part["normalized_material"] == "ABS"
+
+
+def test_the_line_is_stamped_as_a_model_estimate_not_a_catalogue_hit(monkeypatch):
+    import price_provenance as _pp
+    _, me = _llm_door(monkeypatch)
+    stamp = me["price_source"]
+    assert _pp.stamp_source_class(stamp) == "ai_estimate", (
+        "an LLM sheet rate must not read as a catalogue price; every reader downstream "
+        "decides what it may be used for from this one word")
+    assert _pp.stamp_affects_total(stamp) is True, "it IS in the total, and must say so"
+    assert _pp.price_firmness(stamp)["firm"] is False
+
+
+def test_a_real_rate_is_never_displaced_by_a_market_lookup(monkeypatch):
+    """The lookup fires only where config holds nothing. A material we can price is priced
+    from what we hold, whatever a model would have said about it."""
+    import estimator as _est, web_ai_price_lookup as _w
+    _est._MARKET_INDICATION_CACHE.clear()
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_w, "market_sheet_rate_indication",
+                        lambda *a, **k: {"gbp_per_m2": 999.0, "gbp_per_sheet": 6245.0,
+                                         "source": "llm_market_estimate"})
+    me = _est.estimate_material({"part_number": "P", "normalized_material": "POLYCARBONATE",
+                                 "quantity": 1, "normalized_thickness_mm": 6,
+                                 "normalized_geometry": {"blank_length_mm": 1202,
+                                                         "blank_width_mm": 689}})
+    assert me["cost_method"] == "acrylic_area_per_m2_provisional"
+    assert me["unit_material_cost_gbp"] == pytest.approx(18.69, abs=0.05)
+    _est._MARKET_INDICATION_CACHE.clear()
+
+
+def test_the_console_line_does_not_claim_it_is_unused(monkeypatch, capsys):
+    """It said "NOT USED IN THE TOTAL" for a figure that is now in the total. A sentence that
+    was true when written and false after the next change is how a reader stops trusting the
+    console -- and this one was three edits old."""
+    _llm_door(monkeypatch)
+    said = capsys.readouterr().out
+    assert "NOT USED IN THE TOTAL" not in said
+    assert "PRICED FROM IT" in said and "cannot go out firm" in said
+
+
+def test_an_internally_priced_line_is_not_classified_as_unpriced():
+    """THE THIRD TIME TODAY one field was asked a question it does not answer. `selected` is
+    filled only by an EXTERNAL lookup, so every internally computed price -- the acrylic
+    rate, the workbook sheet-steel formula, config's GBP/kg -- classified as "unpriced" with
+    its money in the total, and price_firmness explained a real figure as "a unpriced price
+    carries no commitment"."""
+    import estimator as _est, price_provenance as _pp
+    for name in ("acrylic_area_per_m2_provisional", "config_default_material_rates",
+                 "workbook_sheet_steel_formula"):
+        stamp = _est._build_price_source_metadata({}, fallback_source=name, applied=True)
+        assert _pp.stamp_source_class(stamp) != "unpriced", name
+    # and a price that genuinely was not applied keeps its honest answer
+    assert _est._build_price_source_metadata(
+        {}, fallback_source="system_cost_not_found", applied=False)["source_class"] == "unpriced"
+
+
+def test_a_partial_lookup_result_cannot_take_the_run_down(monkeypatch, capsys):
+    """The message is the least important thing in that function and was the only thing that
+    could raise: a hard subscript on a key the lookup is not obliged to return. A model that
+    answers with a price and no source name must not kill an estimate."""
+    import estimator as _est, web_ai_price_lookup as _w
+    _est._MARKET_INDICATION_CACHE.clear()
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_est, "_market_cache_path", lambda key: None)
+    monkeypatch.setattr(_w, "market_sheet_rate_indication",
+                        lambda *a, **k: {"gbp_per_m2": 26.87})     # no source, no sheet price
+    me = _est.estimate_material({"part_number": "D", "normalized_material": "ABS",
+                                 "quantity": 1, "normalized_thickness_mm": 6,
+                                 "normalized_geometry": {"blank_length_mm": 1202,
+                                                         "blank_width_mm": 689}})
+    assert me["unit_material_cost_gbp"] > 0
+    assert "market indication" in capsys.readouterr().out
+    _est._MARKET_INDICATION_CACHE.clear()
+
+
+def test_the_suite_never_writes_into_the_repository_cache():
+    """A test wrote a real ABS rate into cache/market_sheet_rates and three unrelated tests
+    then failed against it. A cache that survives between runs is the point of the feature and
+    a hazard in a suite: every test that reaches this path must supply its own location."""
+    live = ROOT / "cache" / "market_sheet_rates"
+    assert not live.exists() or not any(live.iterdir()), (
+        f"{live} holds cached rates written during a test run. Patch _market_cache_path in "
+        f"any test that can reach market_indication_for.")
+
+
+def test_an_llm_priced_line_is_reported_as_not_a_supplier_price():
+    """The line carries money, so the under-charge is closed -- and nobody has agreed to it.
+    That has to reach an estimator as its own finding, not be inferred from a source string
+    in a provenance tab."""
+    part = {"part_number": "11650-01-05A",
+            "material_market_indication": {"material": "ABS", "gbp_per_m2": 26.87,
+                                           "source": "llm_market_estimate"},
+            "material_estimate": {"cost_method": "llm_market_sheet_rate"}}
+    found = inv.check_a_material_we_cannot_price_is_declared(_job(part))
+    assert [v["severity"] for v in found] == [WARNING], \
+        "an LLM-priced material raises nothing; the figure looks like any other price"
+    msg = found[0]["message"]
+    assert "NOBODY HAS AGREED TO THIS PRICE" in msg
+    assert "cannot be released as firm" in msg
+    assert "26.87" in msg and "ABS" in msg
+
+
+def test_an_llm_priced_line_is_no_longer_reported_as_having_no_rate():
+    """Two findings for one line is how a checklist stops being worked. Once it is priced it
+    is not the blocking 'this material costs nothing' case any more."""
+    part = {"part_number": "X", "normalized_material": "ABS",
+            "material_market_indication": {"material": "ABS", "gbp_per_m2": 26.87,
+                                           "source": "llm"},
+            "material_estimate": {"cost_method": "llm_market_sheet_rate"}}
+    codes = [v.get("code") or v.get("name") or v["message"][:40]
+             for v in inv.check_a_material_we_cannot_price_is_declared(_job(part))]
+    assert len(codes) == 1, f"the same line raised {len(codes)} findings: {codes}"
+
+
+def test_a_miss_written_as_an_empty_record_is_still_not_a_cached_answer(monkeypatch, tmp_path):
+    """The first version of this mutant was self-masking -- dict(None) raises and the write
+    fails anyway. This is the version that would really happen: a tidy-minded change writing
+    `found or {}` and turning one failed afternoon into a permanent zero for that material."""
+    import estimator as _est, web_ai_price_lookup as _w
+    monkeypatch.delenv("SDI_OFFLINE", raising=False)
+    monkeypatch.setattr(_est, "_market_cache_path", lambda key: tmp_path / "abs.json")
+    monkeypatch.setattr(_w, "market_sheet_rate_indication", lambda *a, **k: None)
+    _est._MARKET_INDICATION_CACHE.clear()
+    _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")
+    assert not (tmp_path / "abs.json").exists()
+    # and the next run must be free to ask again rather than inherit the failure
+    _est._MARKET_INDICATION_CACHE.clear()
+    calls = []
+    monkeypatch.setattr(_w, "market_sheet_rate_indication",
+                        lambda *a, **k: calls.append(a) or {"gbp_per_m2": 26.87})
+    assert _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")["gbp_per_m2"] == 26.87
+    assert calls, "a failed lookup was remembered and the material stayed unpriced forever"
     _est._MARKET_INDICATION_CACHE.clear()

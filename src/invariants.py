@@ -1326,8 +1326,24 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
     parts = _parts(summary)
     if not parts:
         return []
-    substituted, unpriceable = [], []
+    substituted, unpriceable, indicated = [], [], []
     for part in parts:
+        # PRICED FROM A MARKET LOOKUP IS NOT UNPRICED, and it is not a rate either. The line
+        # carries money, so the under-charge is closed; the money is an LLM estimate, so the
+        # job cannot go out firm on it -- check_prices_are_firm sees the stamp and says so.
+        # What remains is the thing an estimator has to know: this figure is not a supplier
+        # price and nobody has agreed to it.
+        indication = part.get("material_market_indication")
+        if isinstance(indication, dict) and indication.get("gbp_per_m2") and \
+                str((part.get("material_estimate") or {}).get("cost_method") or "") == \
+                "llm_market_sheet_rate":
+            indicated.append({
+                "part_number": part.get("part_number"),
+                "material": indication.get("material"),
+                "gbp_per_m2": indication.get("gbp_per_m2"),
+                "source": indication.get("source"),
+            })
+            continue
         conflict = part.get("material_priced_as")
         if isinstance(conflict, dict) and conflict.get("priced_material"):
             substituted.append({
@@ -1360,6 +1376,19 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
               "BY THIS MATERIAL. Add a rate for the material, or confirm the part is "
               "something we can already price.",
             count=len(unpriceable), parts=unpriceable[:20]))
+    if indicated:
+        out.append(_violation(
+            "material_priced_from_a_market_lookup", WARNING,
+            f"{len(indicated)} part(s) are made of a material this engine holds no rate for, "
+            f"and were priced from a MARKET LOOKUP rather than a supplier price: "
+            + "; ".join(f"{i['part_number']} ({i['material']}) at £{i['gbp_per_m2']:.2f}/m2 "
+                        f"from {i['source']}" for i in indicated[:4])
+            + ". The line is costed, so the job is no longer under-charged by an invisible "
+              "gap -- but NOBODY HAS AGREED TO THIS PRICE. It is a model's reading of the "
+              "market, it may differ on the next run, and this job cannot be released as "
+              "firm while it stands. Get a trade rate from Purchasing and it takes "
+              "precedence automatically.",
+            count=len(indicated), parts=indicated[:20]))
     if substituted:
         out.append(_violation(
             "material_priced_from_a_lower_ranked_reading", WARNING,
