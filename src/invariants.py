@@ -702,6 +702,20 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             "has changed since. This estimate is built on older geometry, materials and "
             "quantities than the models now hold.",
             native_files_present=sw.get("native_files_present")))
+    if sw.get("native_folder_unreachable"):
+        # "I COULD NOT LOOK" MUST NOT READ AS "THERE IS NOTHING THERE". A count of zero from
+        # an unreachable folder is indistinguishable downstream from a genuinely drawings-only
+        # job, and that case is silent by design -- so a dropped VPN removed the native-models
+        # blocker instead of raising one, and the estimate looked more complete than the one
+        # taken while the drive was up.
+        out.append(_violation(
+            "native_folder_unreachable", BLOCKING,
+            f"The folder that should hold this job's SolidWorks models could not be opened "
+            f"from this machine: {sw.get('native_folder_unreachable')}. Nothing was read and "
+            f"nothing can be concluded -- this is NOT evidence that the job has no models. "
+            f"Reconnect the VPN or map the drive and re-run before treating this estimate as "
+            f"drawings-only.",
+            folder=sw.get("native_folder_unreachable")))
     if sw.get("native_present_but_unread"):
         out.append(_violation(
             "native_models_not_read", BLOCKING,

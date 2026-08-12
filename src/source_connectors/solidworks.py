@@ -534,7 +534,8 @@ def native_extract_for_job(
             _man_early = (load_native_payload(jp) or {}).get("_manifest")
         _fp_folder = (_man_early or {}).get("generated_from") or folder
         _state = native_files_state(_fp_folder) if _fp_folder else {
-            "count": 0, "fingerprint": "", "newest_mtime": 0.0, "files": []}
+            "count": 0, "fingerprint": "", "newest_mtime": 0.0, "files": [],
+            "folder_reachable": False}
         job.meta["fingerprint_folder"] = str(_fp_folder) if _fp_folder else None
         # An extract generated from somewhere else, with no manifest to say where: nothing
         # can be verified about its freshness at all, and that must not read as a pass.
@@ -589,6 +590,13 @@ def native_extract_for_job(
         # NATIVE MODELS PRESENT BUT NO EXTRACT. The strongest source in the building is
         # sitting in the folder unread, and until now that was indistinguishable from a job
         # that simply has no models.
+        # A FOLDER WE COULD NOT OPEN AT ALL. Reported separately from "models present and
+        # unread", because the actions are different -- reconnect the VPN or map the drive,
+        # versus run the analyser -- and because this one has no count to report. Left silent
+        # it is the more dangerous of the two: an unreachable share produces a job that says
+        # nothing whatsoever about SolidWorks and looks exactly like a job that has no models.
+        if _fp_folder and not _state.get("folder_reachable"):
+            job.meta["native_folder_unreachable"] = str(_fp_folder)
         if _state["count"] and not records:
             job.meta["native_present_but_unread"] = True
             job.meta["native_unread_reason"] = _run_error or (
@@ -633,11 +641,18 @@ def native_files_state(folder: str | Path) -> Dict[str, Any]:
     Size+mtime rather than a content hash — a hash of a folder of 80MB assemblies costs
     seconds per run and buys nothing here, because the question is only "have these files
     changed since the extract was taken", not "are they byte-identical to a known good"."""
-    out: Dict[str, Any] = {"count": 0, "fingerprint": "", "newest_mtime": 0.0, "files": []}
+    # "I COULD NOT LOOK" IS NOT "THERE IS NOTHING THERE". A count of zero from a folder that
+    # does not exist -- a VPN down, a drive unmapped, a job running from a local copy of the
+    # drawings while the models sit on the share -- is indistinguishable downstream from a
+    # genuinely drawings-only job, and the second is silent by design. So the reachability is
+    # recorded beside the count and the caller must decide which of the two it has.
+    out: Dict[str, Any] = {"count": 0, "fingerprint": "", "newest_mtime": 0.0, "files": [],
+                           "folder_reachable": False}
     try:
         root = Path(folder)
         if not root.exists():
             return out
+        out["folder_reachable"] = True
         found = []
         for p in sorted(root.rglob("*")):
             if not p.is_file() or p.suffix.lower() not in _NATIVE_EXTS:

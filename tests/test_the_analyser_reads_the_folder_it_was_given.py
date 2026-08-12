@@ -152,3 +152,40 @@ def test_the_diagnostic_is_printed_when_nothing_is_analysed():
 
 if __name__ == "__main__":                                              # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── "I could not look" is not "there is nothing there" ──────────────────────────────
+# The VPN goes down, or the drive is not mapped, or the job runs from a local copy of the
+# drawings while the models sit on the share. native_files_state returned count 0 and the
+# consumer's "models present but unread" branch is keyed on a NON-ZERO count, so the whole
+# SolidWorks story went silent -- and a job that says nothing about models reads exactly like
+# a job that has none. A dropped connection REMOVED a blocker instead of raising one, and the
+# estimate looked more complete than the one taken while the drive was up.
+def test_a_reachable_folder_with_no_models_and_an_unreachable_one_are_different(tmp_path):
+    from source_connectors.solidworks import native_files_state
+    empty = tmp_path / "drawings-only"
+    empty.mkdir()
+    assert native_files_state(empty) == {**native_files_state(empty),
+                                         "count": 0, "folder_reachable": True}
+    gone = native_files_state(tmp_path / "K-drive-is-down")
+    assert gone["count"] == 0 and gone["folder_reachable"] is False
+
+
+def test_an_unreachable_folder_blocks_rather_than_going_quiet():
+    """A blocker, not a warning, and its own code. The action is different from every other
+    SolidWorks finding -- reconnect the drive, not run the analyser -- and until it is done
+    nothing whatsoever can be concluded about this job's models."""
+    src = (Path(__file__).resolve().parents[1] / "src" / "invariants.py").read_text(
+        encoding="utf-8")
+    assert '"native_folder_unreachable", BLOCKING' in src
+    assert "NOT evidence that the job has no models" in src
+
+
+def test_the_connector_records_it_and_the_scan_reports_it():
+    """Built is not wired. A reachability flag nothing reads restores the silence exactly."""
+    conn = (Path(__file__).resolve().parents[1] / "src" / "source_connectors"
+            / "solidworks.py").read_text(encoding="utf-8")
+    scan = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    assert 'job.meta["native_folder_unreachable"]' in conn
+    assert 'native_folder_unreachable' in scan and "COULD NOT LOOK" in scan

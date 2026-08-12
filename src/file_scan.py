@@ -2306,6 +2306,19 @@ def _finalize_scan_summary(
                            f"(run tools/solidworks/sw_native_analyse.py on the model folder)")
             else:
                 _sw_why = ""
+            if _sw_job is not None and _sw_job.meta.get("native_folder_unreachable"):
+                # THE FOLDER COULD NOT BE OPENED. Distinct from "no models here", which is
+                # silent by design — a VPN down or an unmapped drive produces a job that says
+                # nothing at all about SolidWorks and reads exactly like a drawings-only one.
+                _unreach = _sw_job.meta.get("native_folder_unreachable")
+                summary.setdefault("solidworks_native", {}).update({
+                    "source": "solidworks_api", "found": False,
+                    "native_folder_unreachable": _unreach,
+                })
+                print(f"   [solidworks] COULD NOT LOOK for native models — the folder is not "
+                      f"reachable from this machine: {_unreach}. That is not the same as a job "
+                      f"with no models: reconnect the VPN or map the drive and re-run before "
+                      f"treating this estimate as drawings-only.", flush=True)
             if _sw_job is not None and _sw_job.meta.get("native_present_but_unread"):
                 summary["solidworks_native"] = {
                     "source": "solidworks_api",

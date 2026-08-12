@@ -13451,8 +13451,13 @@ def test_a_successful_extract_says_so_in_the_same_word_a_refusal_uses():
     _tail = _fs[_accept:_accept + 700]
     ok('"found": True' in _tail,
        "an accepted extract records that it was found, beside the fields it filled")
-    eq(_fs.count('"found": False'), 3,
+    eq(_fs.count('"found": False'), 4,
        "and every refusal path still says so too — the field answers in all states")
+    # FOUR, NOT THREE, SINCE THE FOLDER ITSELF CAN BE UNREACHABLE. A VPN down or an unmapped
+    # drive is a fourth way to end up with no extract, and it used to be the silent one: a
+    # count of zero from a folder nobody could open read downstream exactly like a job that
+    # genuinely has no models. Raising the count here is the point of a count-based guard —
+    # a new path that forgot to answer would have left it at three.
 
 
 def test_an_operation_charged_on_a_parent_and_its_child_is_surfaced():
