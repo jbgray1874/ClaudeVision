@@ -512,3 +512,30 @@ def test_a_miss_written_as_an_empty_record_is_still_not_a_cached_answer(monkeypa
     assert _est.market_indication_for({"normalized_thickness_mm": 6}, "ABS")["gbp_per_m2"] == 26.87
     assert calls, "a failed lookup was remembered and the material stayed unpriced forever"
     _est._MARKET_INDICATION_CACHE.clear()
+
+
+# ── the check must not cry wolf on lines that carry money ───────────────────────────
+# INTRODUCED AND CAUGHT IN ONE DAY. The first version read normalized_material alone and
+# assumed that field always holds a material. On 11650's bought-in fixings it holds the
+# pointer text "SEE INDIVIDUAL DRAWINGS", which no rate table knows -- so four fixings priced
+# at GBP 0.10, GBP 0.08 and GBP 0.02 ON THE SAME SHEET were reported as BLOCKING
+# under-charges, taking the job from 11 blockers to 12 for no reason. A check that cries wolf
+# on priced lines gets ignored on the day it is right.
+@pytest.mark.parametrize("part,expected,why", [
+    ({"part_number": "FIXING1399", "normalized_material": "SEE INDIVIDUAL DRAWINGS",
+      "material_estimate": {"unit_material_cost_gbp": 0.02}}, [],
+     "a priced bought-in is not an under-charge, whatever its material string says"),
+    ({"part_number": "X", "normalized_material": "SEE INDIVIDUAL DRAWINGS"}, [],
+     "a pointer names no substance; demanding a rate for it asks the impossible"),
+    ({"part_number": "Z", "normalized_material": "ABS",
+      "material_estimate": {"unit_material_cost_gbp": 23.14}}, [],
+     "ABS priced from the market lookup is costed, so nothing is missing"),
+    ({"part_number": "Y", "normalized_material": "ABS"}, [inv.BLOCKING],
+     "the real case must survive the fix: a real material, no rate, no cost"),
+    ({"part_number": "W", "normalized_material": "ABS",
+      "material_estimate": {"unit_material_cost_gbp": 0}}, [inv.BLOCKING],
+     "a recorded ZERO is exactly the under-charge this check exists to find"),
+])
+def test_only_a_line_that_really_costs_nothing_is_reported(part, expected, why):
+    found = inv.check_a_material_we_cannot_price_is_declared(_job(part))
+    assert [v["severity"] for v in found] == expected, why

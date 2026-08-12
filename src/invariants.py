@@ -1356,6 +1356,29 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         material = str(part.get("normalized_material") or "").strip()
         if not material:
             continue                      # absence of a material is a different check
+        # A LINE THAT COSTS SOMETHING IS NOT A LINE THAT COSTS NOTHING.
+        #
+        # This check exists to catch material priced at GBP 0.00 for want of a rate. It read
+        # normalized_material alone and assumed that field always holds a material -- on
+        # 11650's bought-in fixings it holds the pointer text "SEE INDIVIDUAL DRAWINGS", which
+        # no rate table knows, so four fixings priced at GBP 0.10, GBP 0.08 and GBP 0.02 on
+        # the same sheet were reported as BLOCKING under-charges. A check that cries wolf on
+        # priced lines gets ignored on the day it is right, and this one was introduced today.
+        #
+        # The claim is about MONEY, so ask about money: if the line carries a material cost,
+        # whatever its material string says, there is no under-charge to report here.
+        _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+        _cost = _me.get("unit_material_cost_gbp") or _me.get("cost_per_part_gbp") \
+            or part.get("unit_material_cost_gbp")
+        try:
+            if _cost is not None and float(_cost) > 0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        # And a pointer is not a material. "SEE INDIVIDUAL DRAWINGS" names no substance for
+        # anyone to find a rate for, so demanding one is asking for the impossible.
+        if any(w in material.upper() for w in _FINISH_POINTER_WORDS):
+            continue
         try:
             import config as _cfg
             if _cfg.material_has_a_rate(material):
