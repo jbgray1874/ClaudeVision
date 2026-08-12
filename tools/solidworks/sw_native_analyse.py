@@ -1757,14 +1757,35 @@ ARCHIVE_FOLDER_TOKENS = _EXCLUDED_DIR_TOKENS
 
 
 def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
+    """The models under `root` this analyser will open.
+
+    THE EXCLUSION IS RELATIVE TO THE ROOT, AND WAS ABSOLUTE. `Path(dirpath).parts` names every
+    ancestor of the walked directory — including the components of the folder the operator
+    typed on the command line. Because `dirs[:]` already prunes archive folders BELOW the
+    root, that test could never fire on a descendant: its only reachable effect was to refuse
+    the target itself. Point this tool at a job that happens to live under a folder called WIP
+    — which is exactly where live models sit — and every file was skipped, the tool printed
+    "No SolidWorks files under", exited 1, and wrote no extract.
+
+    Meanwhile the CONSUMER counts the same folder with `p.relative_to(root).parts[:-1]`, finds
+    the models, and raises native_models_not_read. Two halves of one system giving opposite
+    answers about the same directory, with the half that could clear the blocker refusing to
+    run. The consumer's rule is the correct one and this is now the same rule, which is what
+    native_files_state's own comment has always demanded.
+    """
     exts = {".sldprt", ".sldasm", ".slddrw"}
+    root_path = Path(root)
     found = []
     for dirpath, dirs, files in os.walk(root):
         if skip_archive:
             # Prune archive/superseded subfolders so os.walk does not descend into them.
-            # ONE RULE, shared with the fingerprint — see _is_excluded_dir.
+            # ONE RULE, shared with the fingerprint and the consumer — see _is_excluded_dir.
             dirs[:] = [d for d in dirs if not _is_excluded_dir(d)]
-            if any(_is_excluded_dir(part) for part in Path(dirpath).parts):
+            try:
+                _rel = Path(dirpath).relative_to(root_path).parts
+            except ValueError:                      # pragma: no cover — os.walk stays inside
+                _rel = ()
+            if any(_is_excluded_dir(part) for part in _rel):
                 continue
         for f in files:
             if os.path.splitext(f)[1].lower() in exts:
@@ -1776,6 +1797,40 @@ def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
                     continue
                 found.append(os.path.join(dirpath, f))
     return sorted(found)
+
+
+def explain_no_files(root: str) -> str:
+    """Why a folder that has models yielded none, in words an operator can act on.
+
+    "No SolidWorks files under: K:\\..." is true and useless: it does not distinguish a folder
+    with no models from a folder whose models were every one of them excluded, and those need
+    opposite responses. This walks again with the exclusions OFF and reports the difference,
+    naming the folders that did the excluding — because the answer is nearly always one
+    directory name.
+    """
+    everything = find_sw_files(root, skip_archive=False)
+    if not everything:
+        return ("There are no .SLDPRT/.SLDASM/.SLDDRW files anywhere under that folder. A "
+                "job's *-Technical folder is often 2D only (DXF/PDF) — the native models "
+                "usually live elsewhere under the job root.")
+    kept = set(find_sw_files(root, skip_archive=True))
+    dropped = [p for p in everything if p not in kept]
+    if not dropped:                                  # pragma: no cover — caller checked
+        return ""
+    blamed = sorted({part for p in dropped
+                     for part in Path(p).relative_to(Path(root)).parts[:-1]
+                     if _is_excluded_dir(part)})
+    lines = [f"{len(dropped)} of {len(everything)} model file(s) were EXCLUDED, which is why "
+             f"nothing was analysed."]
+    if blamed:
+        lines.append(f"  Excluded by folder name: {', '.join(blamed)}")
+        lines.append(f"  A folder is skipped when its name contains any of: "
+                     f"{', '.join(_EXCLUDED_DIR_TOKENS)}.")
+        lines.append("  If those really are the live models, move them out of that folder or "
+                     "point me directly at the subfolder that holds them.")
+    else:
+        lines.append("  Excluded by FILE name (' old version', '(old)', ' test.').")
+    return "\n".join(lines)
 
 
 def main():
@@ -1819,9 +1874,12 @@ def main():
 
     paths = find_sw_files(target) if os.path.isdir(target) else [target]
     if not paths:
-        print(f"No SolidWorks files under: {target}")
-        print("Note: a job's *-Technical folder is often 2D only (DXF/PDF). The native "
-              "models live elsewhere under the job root — point me at that folder.")
+        print(f"No SolidWorks files ANALYSED under: {target}")
+        # WHICH KIND OF NOTHING. An empty folder and a folder whose every model was excluded
+        # need opposite responses, and the old message could not tell them apart — so an
+        # operator whose models sat one directory name away from being read was told to go
+        # and look for models somewhere else.
+        print(explain_no_files(target))
         sys.exit(1)
     session = SolidWorksSession(visible=False)
     # Before the first document is opened, so a mid-run save is detectable.
