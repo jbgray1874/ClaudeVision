@@ -218,3 +218,60 @@ def test_the_section_is_wired_into_the_report():
 
 if __name__ == "__main__":                                            # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── a check with nothing to look at is not a pass ───────────────────────────────────
+# invariants.py states this rule at the top of the file and every reconciliation check obeys
+# it. This one, added later, did not: `if not rows: return []`. The Excel COM read-back fails
+# for reasons that have nothing to do with the estimate -- an ELEVATED console, a workbook
+# that will not open, Excel busy -- and it leaves no final_estimate at all. So on exactly the
+# runs where least is known, the newest guard reported a clean sheet.
+def test_no_read_back_is_unverified_not_a_pass():
+    """A guard that goes green when its input vanishes is worse than no guard, because it
+    gets quoted as evidence."""
+    out = check({"estimate_summary": {}})
+    assert [v["severity"] for v in out] == ["unverified"]
+    assert "no material row was read back" in out[0]["message"]
+
+
+def test_material_rows_of_the_wrong_shape_are_unverified_too():
+    out = check({"estimate_summary": {"final_estimate": {"material_rows": "broken"}}})
+    assert [v["severity"] for v in out] == ["unverified"]
+
+
+def test_a_read_back_that_genuinely_found_no_material_rows_is_a_pass():
+    """The distinction the fix turns on. An empty list from a sheet that WAS read is a real
+    answer; the absence of the sheet is not."""
+    assert check({"estimate_summary": {"final_estimate": {"material_rows": []}}}) == []
+
+
+def test_the_report_says_the_sheet_was_never_read_rather_than_vanishing():
+    """The section disappearing tells the same lie the empty table would. The figures on that
+    page then come from BEFORE Excel calculated -- a different total -- and nothing else on
+    the page says so."""
+    html = jrh._unpriced_section({"estimate_summary": {}})
+    assert "warn" in html and "never read back" in html
+    assert "before Excel calculated" in html
+
+
+def test_the_check_reads_final_estimate_from_either_shape():
+    """Some writers stamp final_estimate on the summary ROOT and some inside estimate_summary,
+    which is why invariants keeps a shared resolver -- whose docstring says exactly what a
+    private path does: "a check that looks in one place only reports a clean pass on a job it
+    never examined." This check reached into estimate_summary directly and was doing that on
+    every job of the other shape, silently, from the day it was written. It only surfaced when
+    failing closed turned a silent pass into a visible unverified."""
+    rows = [{"part_number": "MAG CATCH", "price_gbp": 0}]
+    assert [v["code"] for v in check({"final_estimate": {"material_rows": rows}})] \
+        == ["unpriced_line_says_why"]
+    assert [v["code"] for v in check({"estimate_summary":
+                                      {"final_estimate": {"material_rows": rows}}})] \
+        == ["unpriced_line_says_why"]
+
+
+def test_the_report_reads_final_estimate_from_either_shape():
+    rows = [{"part_number": "X", "price_gbp": 0,
+             "unpriced_reason": pp.unpriced_reason(pp.NO_PRICE_SOURCE)}]
+    for job in ({"final_estimate": {"material_rows": rows}},
+                {"estimate_summary": {"final_estimate": {"material_rows": rows}}}):
+        assert "waiting on the estimator" in jrh._unpriced_section(job)

@@ -120,8 +120,14 @@ def test_a_reason_stamped_as_unexplained_counts_as_silent():
 
 
 def test_a_job_with_no_material_rows_says_nothing():
+    """A read-back that found no material rows is a real answer and reports nothing.
+
+    A job with NO final_estimate is not. This asserted `check({}) == []` — encoding the
+    silent pass — and the Excel COM read-back fails for reasons nothing to do with the
+    estimate: an elevated console, a workbook that will not open, Excel busy. On exactly the
+    runs where least is known, the check reported a clean sheet."""
     assert check(_job([])) == []
-    assert check({}) == []
+    assert [v["severity"] for v in check({})] == ["unverified"]
 
 
 def test_an_unreadable_summary_is_unevaluated_not_clean():

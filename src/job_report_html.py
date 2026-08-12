@@ -1199,10 +1199,27 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
     """
     try:
         import price_provenance as _pp
-        rows = ((summary.get("estimate_summary") or {}).get("final_estimate") or {}
-                ).get("material_rows") or []
+        # EITHER SHAPE. Some writers stamp final_estimate on the summary root and some inside
+        # estimate_summary. Reading one place only renders an empty section on every job of
+        # the other shape — which here means a report that silently claims nothing is unpriced.
+        _fe = summary.get("final_estimate")
+        if not isinstance(_fe, dict):
+            _fe = (summary.get("estimate_summary") or {}).get("final_estimate") or {}
     except AttributeError:
         return ""
+    # THE SECTION DISAPPEARING IS THE SAME LIE THE TABLE WOULD TELL. When the Excel read-back
+    # fails -- an elevated console, a workbook that will not open -- there is no
+    # final_estimate, so there are no rows, so this section rendered nothing at all and the
+    # report read as a job with no unpriced lines. The estimate on that page is then built
+    # from the PRE-Excel numbers, which is a different total, and nothing on the page says so.
+    if not _fe:
+        return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
+                '<div class="callout warn"><b>The calculated sheet was never read back, so '
+                'this could not be checked.</b> No material row reached this report, which is '
+                'not the same as a job with nothing unpriced &mdash; the figures above come '
+                'from before Excel calculated, and no blank on the sheet has been examined.'
+                '</div>')
+    rows = _fe.get("material_rows") or []
     if not rows:
         return ""
     blanks = []

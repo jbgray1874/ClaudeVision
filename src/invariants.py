@@ -2383,12 +2383,32 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
       * lines whose reason is an ENGINE gap -- real work, really invoiced, that nothing on
         the sheet is asking anybody to price.
     """
-    try:
-        rows = ((summary.get("estimate_summary") or {}).get("final_estimate") or {}
-                ).get("material_rows") or []
-    except AttributeError:
+    # READ THROUGH _node, LIKE EVERY OTHER CHECK IN THIS FILE. Some writers stamp
+    # final_estimate on the summary root and some inside estimate_summary, which is the whole
+    # reason that helper exists -- and its docstring says what a private path does: "a check
+    # that looks in one place only reports a clean pass on a job it never examined." This one
+    # reached into estimate_summary directly and was doing exactly that on every job of the
+    # other shape, silently, from the day it was written.
+    if not isinstance(summary, dict):
         return [_violation("unpriced_line_says_why", UNVERIFIED,
                            "the summary could not be read, so this check verified nothing")]
+    _fe = _node(summary, "final_estimate")
+    # NO READ-BACK IS NOT A CLEAN SHEET, and this check said it was. The Excel COM read-back
+    # fails for reasons that have nothing to do with the estimate -- an elevated console, a
+    # workbook that will not open, Excel busy -- and it leaves no final_estimate at all. Every
+    # reconciliation check in this module already fails CLOSED on that, by the rule stated at
+    # the top of the file; this one, added later, returned [] and read on a console exactly
+    # like a job whose every blank was explained. A guard that goes green when its input
+    # vanishes is worse than no guard, because it is quoted as evidence.
+    if not _fe:
+        return _unevaluated("unpriced_line_says_why",
+                            "No final_estimate on this job, so no material row was read back "
+                            "from the calculated sheet and no blank price could be examined.")
+    rows = _fe.get("material_rows")
+    if not isinstance(rows, list):
+        return _unevaluated("unpriced_line_says_why",
+                            "final_estimate carries no material_rows, so nothing could be "
+                            "checked for an unexplained blank.")
     if not rows:
         return []
 
