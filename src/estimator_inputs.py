@@ -141,6 +141,32 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
     if not isinstance(part, Mapping):
         return {"kind": MATERIAL_UNPRICED, "note": "MATERIAL UNPRICED"}
     description = str(part.get("description") or "")
+
+    # A FIGURE WE FOUND AND DECLINED IS THE MOST USEFUL THING ON THIS LINE.
+    #
+    # A blank asks an estimator to research a price. A blank that says "a historical quote
+    # line for this description shows GBP 9.73 each, not applied because the part is not a
+    # bought-in" asks them to RULE on one, which is seconds instead of minutes and is the
+    # whole difference between validating and rebuilding. The figure must not reach the
+    # total -- the job's own provenance rejects it -- but withholding it from the person
+    # whose job is to decide would be failing closed into silence.
+    #
+    # Read through the same function _bom_line_price refuses on, so the line that refuses and
+    # the line that explains can never disagree about which prices were declined.
+    try:
+        import price_provenance as _pp
+        _declined = _pp.declined_whole_part_price(part)
+    except Exception:                                        # noqa: BLE001
+        _declined = None
+    if _declined:
+        _where = _declined["source"].replace("_", " ")
+        _code = f" (matched {_declined['matched_code']})" if _declined["matched_code"] else ""
+        return {"kind": PLACEHOLDER_UNPRICED,
+                "note": (f"NOT YET PRICED — but {_where}{_code} gives £{_declined['gbp']:.2f} "
+                         f"each. NOT APPLIED: this part is not a bought-in and its detail "
+                         f"drawing is not in the pack, so the engine will not total it. "
+                         f"CONFIRM OR REPLACE")}
+
     if part.get("_price_explicitly_withheld") or "estimator to price" in description.lower():
         return {"kind": PLACEHOLDER_UNPRICED,
                 "note": "NOT YET PRICED: enter the per-unit figure for this line"}

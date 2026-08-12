@@ -441,11 +441,14 @@ def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
         # Only an EXPLICIT False refuses. A record written before the flag existed has no
         # opinion, and treating a missing flag as a refusal would zero every bought-in on
         # every older job.
-        _sc = (_pe.get("cost_breakdown") or {}).get("system_cost") or {}
-        _sc_declined = _sc.get("applied_to_total") is False
+        # The figure is refused here and OFFERED in the row's note, from the one reader:
+        # price_provenance.declined_whole_part_price. A missing detail drawing is the normal
+        # case and must not cost us evidence we hold -- see that function for why silently
+        # dropping it is the same fault as charging it.
+        import price_provenance as _pp_decl
+        _declined = _pp_decl.declined_whole_part_price(_pe)
         _whole_part = _safe(_pe.get("unit_cost_gbp"))
-        if _sc_declined and _whole_part is not None \
-                and _whole_part == _safe(_sc.get("unit_cost_gbp")):
+        if _declined and _whole_part is not None and _whole_part == _declined["gbp"]:
             _whole_part = None
         _p = _whole_part if _whole_part is not None else \
             _safe(_pe.get("unit_material_cost_gbp") or _me.get("unit_material_cost_gbp"))

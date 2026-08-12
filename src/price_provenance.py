@@ -597,6 +597,44 @@ def iter_price_stamps(node: Any, _path: str = "") -> Iterator[Tuple[str, Dict[st
         yield path, block
 
 
+def declined_whole_part_price(part: Any) -> Optional[Dict[str, Any]]:
+    """A figure this engine FOUND for the part and deliberately did not apply. Or None.
+
+    A MISSING DRAWING IS THE NORMAL CASE AND MUST NOT COST US THE EVIDENCE WE DO HAVE.
+
+    estimator writes applied_to_total = bought_in_candidate and system_unit_cost is not None.
+    A price present with the flag False means a real lookup succeeded and the engine declined
+    it, because the part is not a bought-in. 11650-05-02M SLIDER is the case: no detail
+    drawing in the pack, page_roles ['assembly'], and a historical quote line offering
+    GBP 9.73 each.
+
+    Two wrong answers, and this exists so neither is taken. Charging it puts GBP 20.24 of
+    firm-looking money on the sheet that the job's own provenance rejects. SILENTLY dropping
+    it leaves a blank where we hold a real, sourced figure an estimator could rule on in
+    seconds -- failing closed into silence, which is the other half of the same fault.
+
+    So the figure is neither used nor lost: it is offered. Read by _bom_line_price, which
+    refuses to total it, and by input_note_for_line, which puts it in front of the estimator
+    with where it came from. ONE RULE, TWO READERS -- the alternative is the two disagreeing
+    about which prices were declined, which is how this defect existed at all.
+    """
+    if not isinstance(part, dict):
+        return None
+    sc = (part.get("cost_breakdown") or {}).get("system_cost")
+    if not isinstance(sc, dict) or sc.get("applied_to_total") is not False:
+        return None
+    try:
+        gbp = float(sc.get("unit_cost_gbp"))
+    except (TypeError, ValueError):
+        return None
+    if gbp <= 0:
+        return None
+    stamp = sc.get("source") if isinstance(sc.get("source"), dict) else {}
+    return {"gbp": gbp,
+            "source": stamp_source_name(stamp) or "an unnamed lookup",
+            "matched_code": sc.get("matched_part_code") or ""}
+
+
 def stamp_affects_total(block: Dict[str, Any]) -> bool:
     """Did this price actually reach the estimate's total?
 

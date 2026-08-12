@@ -114,3 +114,64 @@ def test_a_leaf_never_reads_the_whole_part_figure():
 def test_an_explicitly_withheld_line_is_unaffected(withheld):
     pe = _part(applied_to_total=True, _price_explicitly_withheld=withheld)
     assert (_bom_line_price(pe) is None) is withheld
+
+
+# ── refused from the total, OFFERED to the estimator ────────────────────────────────
+# A MISSING DRAWING IS THE NORMAL CASE. The standard is not "a complete pack or no price":
+# it is best evidence plus explicit uncertainty. Charging the GBP 9.73 puts firm-looking
+# money on the sheet that the job's own provenance rejects; silently dropping it leaves a
+# blank where we hold a real, sourced figure an estimator could rule on in seconds. Those
+# are two halves of one fault -- failing open into fake money, failing closed into silence --
+# and this half is the one the fix above could easily have introduced.
+from estimator_inputs import input_note_for_line, PLACEHOLDER_UNPRICED   # noqa: E402
+import price_provenance as pp                                            # noqa: E402
+
+
+def _declined_part():
+    pe = _part(applied_to_total=False)
+    pe["cost_breakdown"]["system_cost"]["matched_part_code"] = "SLIDER-TS15"
+    return pe
+
+
+def test_the_declined_figure_is_put_in_front_of_the_estimator():
+    note = input_note_for_line(_declined_part())["note"]
+    assert "9.73" in note, (
+        "the engine found a real, sourced figure and the line that asks an estimator to "
+        "price it does not mention it. A blank asks them to RESEARCH a price; a blank "
+        "carrying the candidate asks them to RULE on one.")
+    assert "historical quote" in note, "say where it came from or it cannot be judged"
+    assert "NOT APPLIED" in note and "CONFIRM OR REPLACE" in note, (
+        "the note must be unambiguous that this is not money on the sheet")
+
+
+def test_the_offered_line_lands_on_the_estimator_input_list():
+    """PLACEHOLDER_UNPRICED is the kind that shades the cell and lists the row from 233. As
+    MATERIAL_UNPRICED it would read as 'look up a rate', which is the wrong job."""
+    assert input_note_for_line(_declined_part())["kind"] == PLACEHOLDER_UNPRICED
+
+
+def test_the_refusal_and_the_offer_read_the_same_rule():
+    """Two readers, one function. If they could disagree about which prices were declined,
+    a line could be refused by one and unexplained by the other -- which is the shape of the
+    original defect, where the refusal was recorded and nothing asked."""
+    pe = _declined_part()
+    assert pp.declined_whole_part_price(pe)["gbp"] == 9.73
+    assert _bom_line_price(pe) is None
+    assert "9.73" in input_note_for_line(pe)["note"]
+
+
+def test_a_part_with_nothing_declined_gets_the_ordinary_note():
+    """The offer must be earned. Printed on every unpriced line it would be noise, and the
+    lines that genuinely have a candidate would stop standing out."""
+    note = input_note_for_line(_part(applied_to_total=True))["note"]
+    assert "CONFIRM OR REPLACE" not in note
+
+
+@pytest.mark.parametrize("bad", [None, {}, {"cost_breakdown": {}},
+                                 {"cost_breakdown": {"system_cost": {"applied_to_total": False}}},
+                                 {"cost_breakdown": {"system_cost": {
+                                     "applied_to_total": False, "unit_cost_gbp": 0}}}])
+def test_nothing_is_offered_where_there_is_no_figure(bad):
+    """A zero, a missing cost and a malformed record are not candidates. Offering GBP 0.00
+    'to confirm' is worse than saying nothing."""
+    assert pp.declined_whole_part_price(bad) is None
