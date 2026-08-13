@@ -26,6 +26,8 @@ no network and no server anywhere near it.
 from __future__ import annotations
 
 import os
+import re
+import sys
 import time
 from pathlib import Path
 
@@ -504,3 +506,113 @@ def test_the_silence_is_measured_from_the_last_line_not_the_start_of_the_run(eng
     assert max(reported) <= gap + 0.3, (
         f"reported a silence of {max(reported)}s when no gap in this run exceeded {gap}s — "
         f"it is timing from the start of the run, not from the last line")
+
+
+# ── a death that leaves evidence ────────────────────────────────────────────
+def test_everything_the_runner_says_goes_to_a_file_as_well(engine, capsys):
+    """"IT JUST SEEMS TO RANDOMLY DIE" IS WHAT NO LOG LOOKS LIKE.
+
+    Every time this runner has gone, the account of why went with the window. Nothing here
+    makes it more reliable — it makes the NEXT failure answerable, which is the thing that
+    has been missing every time somebody asked why it stopped.
+    """
+    runner, root = engine
+    real_out, real_err = sys.stdout, sys.stderr
+    try:
+        path = runner.start_logging(root)
+        print("hello from the runner")
+        print("something went wrong", file=sys.stderr)
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err
+    text = path.read_text(encoding="utf-8")
+    assert "runner starting" in text and "hello from the runner" in text
+    assert "something went wrong" in text, "stderr is where the reason goes, and it is lost"
+
+
+def test_the_log_is_flushed_not_buffered(engine):
+    """A buffered crash log is no log at all — the interesting lines are exactly the ones
+    still in the buffer when the process dies."""
+    runner, root = engine
+    real_out, real_err = sys.stdout, sys.stderr
+    try:
+        path = runner.start_logging(root)
+        print("written before any crash")
+        on_disk = path.read_text(encoding="utf-8")     # read WITHOUT closing anything
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err
+    assert "written before any crash" in on_disk
+
+
+def test_logging_never_breaks_the_thing_it_is_logging(engine, monkeypatch):
+    """A full disk or a locked file costs the log, not the run."""
+    runner, root = engine
+
+    def _no(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr("builtins.open", _no)
+    real_out, real_err = sys.stdout, sys.stderr
+    try:
+        runner.start_logging(root)          # must not raise
+        print("still running")
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err
+
+
+def test_the_loop_gives_up_rather_than_spinning_for_ever():
+    """A process looping on the same exception for ever looks alive to the service and does
+    no work — worse than being restarted. And giving up on the FIRST error would end the
+    day's runner over one blip, which is the failure this is meant to stop."""
+    RUNNER_DIR_ = Path(__file__).resolve().parents[1] / "tools" / "runner"
+    src = (RUNNER_DIR_ / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    assert "_GIVE_UP_AFTER = 5" in src
+    assert "consecutive >= _GIVE_UP_AFTER" in src
+    # THREE, NOT "AT LEAST ONE". The initialiser before the loop is one of them, so
+    # `"consecutive = 0" in src` stays true after both resets INSIDE the loop are deleted —
+    # and a counter that only ever goes up ends the day's runner on five unrelated blips
+    # spread across eight hours. Counting is what tells those apart.
+    assert src.count("consecutive = 0") >= 3, (
+        "the counter is not reset after successful work, so unrelated blips accumulate")
+
+
+def test_an_unexpected_error_is_caught_with_its_traceback():
+    """The reason has to survive. A caught exception with no traceback answers "it died"
+    and not "why", which is where every one of these investigations has stopped."""
+    RUNNER_DIR_ = Path(__file__).resolve().parents[1] / "tools" / "runner"
+    src = (RUNNER_DIR_ / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    assert "traceback.print_exc()" in src
+    # ASKED OF THE TREE, not of the text. Ctrl+C is an exception too: without its own
+    # handler, stopping the runner deliberately prints a traceback, counts toward giving up,
+    # and exits 3 — which a scheduled task would treat as a crash and restart. "Stop it"
+    # would not stop it.
+    import ast as _ast
+    tree = _ast.parse(src)
+    fn = next(n for n in tree.body
+              if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    caught = {_ast.unparse(h.type) for n in _ast.walk(fn) if isinstance(n, _ast.Try)
+              for h in n.handlers if h.type is not None}
+    assert "KeyboardInterrupt" in caught, (
+        f"the polling loop catches {sorted(caught)} — Ctrl+C would be reported as a crash "
+        f"and restarted by the scheduled task")
+
+
+def test_the_task_installer_runs_the_runner_in_a_desktop_session():
+    """THE ONE THING THAT WOULD LOOK RIGHT AND FAIL FOR A WEEK.
+
+    COM to SOLIDWORKS needs an interactive desktop. A Windows service — or NSSM — installs
+    cleanly, starts cleanly, reports itself healthy, and then fails on every estimate. Only
+    a task running as the logged-on user has a session to drive.
+    """
+    ps1 = (Path(__file__).resolve().parents[1] / "tools" / "start"
+           / "install-runner-task.ps1").read_text(encoding="utf-8-sig")
+    assert "-LogonType Interactive" in ps1, "the runner would have no desktop, so no SOLIDWORKS"
+    assert "-RestartCount" in ps1, "it would not restart itself, which is the whole point"
+    assert "ExecutionTimeLimit (New-TimeSpan -Seconds 0)" in ps1, (
+        "a task that kills its own hour-long estimate is worse than no task")
+    # THE CODE, NOT THE PROSE. The first version grepped the whole file for "nssm" and
+    # failed on the comment explaining why NSSM is the wrong answer here — a guard tripping
+    # over its own reasoning, which this project has now done seven times. Strip the block
+    # comment and look at what the script actually RUNS.
+    body = re.sub(r"<#.*?#>", "", ps1, flags=re.S)
+    for wrong in ("nssm", "New-Service", "sc.exe"):
+        assert wrong.lower() not in body.lower(), (
+            f"{wrong} would put the runner in session 0, where there is no SOLIDWORKS")

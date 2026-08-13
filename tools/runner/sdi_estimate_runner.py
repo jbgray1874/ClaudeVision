@@ -343,6 +343,66 @@ def _refuse(who: str):
         f"      Remove-Item C:\\ClaudeVision\\output\\.runner.lock\n")
 
 
+# ── a death that leaves evidence ─────────────────────────────────────────────
+class _Tee:
+    """Console AND a file, because a console is not a record.
+
+    "IT JUST SEEMS TO RANDOMLY DIE" IS WHAT NO LOG LOOKS LIKE. Every time this runner has
+    gone, the only account of why went with the window: whatever it printed on the way out
+    scrolled past, or the window closed, and the next question could only be answered by
+    guessing. Nothing here makes the runner more reliable — it makes the NEXT failure
+    answerable, which is the prerequisite for making it reliable.
+
+    Never lets logging break the thing being logged. A full disk or a locked file costs the
+    log, not the run.
+    """
+
+    def __init__(self, stream, path: Path):
+        self._stream = stream
+        self._file = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._file = open(path, "a", encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+
+    def write(self, text):
+        self._stream.write(text)
+        if self._file is not None:
+            try:
+                self._file.write(text)
+                self._file.flush()          # a buffered crash log is no log at all
+            except (OSError, ValueError):
+                self._file = None
+        return len(text)
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except (OSError, ValueError):
+            pass
+
+    def isatty(self):
+        return getattr(self._stream, "isatty", lambda: False)()
+
+
+def start_logging(engine_root: Path) -> Optional[Path]:
+    """Send everything this runner says to output/logs/runner-YYYY-MM-DD.log as well."""
+    path = Path(engine_root) / "output" / "logs" / f"runner-{time.strftime('%Y-%m-%d')}.log"
+    sys.stdout = _Tee(sys.stdout, path)
+    sys.stderr = _Tee(sys.stderr, path)
+    print(f"\n{'=' * 70}\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] runner starting "
+          f"(pid {os.getpid()})\n{'=' * 70}", flush=True)
+    return path
+
+
+# How many unexpected errors in a row before this gives up and lets whatever started it
+# start it again. Not one -- a single blip must not end the day's runner. Not never either:
+# a process that loops on the same exception for ever looks alive to the service and does
+# no work, which is the worst of both.
+_GIVE_UP_AFTER = 5
+
+
 # ── the polling loop ─────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(description="SDI Estimating Intelligence runner")
@@ -362,6 +422,7 @@ def main() -> int:
         return 2
 
     engine_root = Path(a.engine_root)
+    log_path = start_logging(engine_root)
     _lock = claim_the_machine(engine_root)          # noqa: F841 — held, not used
     engine_python = Path(a.engine_python) if a.engine_python else \
         engine_root / ".venv" / "Scripts" / "python.exe"
@@ -377,10 +438,24 @@ def main() -> int:
     print(f"  engine   {engine_root}")
     print(f"  python   {engine_python}{'' if engine_python.is_file() else '   (NOT FOUND — will fall back to python on PATH)'}")
     print(f"  runner   {runner_id}  ({platform.node()})")
-    print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop\n")
+    print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop")
+    print(f"  log      {log_path}\n")
 
     complained = None
+    consecutive = 0
     while True:
+      # AN UNEXPECTED ERROR MUST NOT END THE DAY'S RUNNER SILENTLY.
+      #
+      # Everything below handles the failures somebody thought of -- unreachable, 404, 401,
+      # a reply that will not parse. Anything else fell out of main() and the process
+      # stopped, with the reason going to a console that was about to be closed. That is
+      # what "it randomly dies" is made of: not randomness, an unhandled exception and no
+      # record of it.
+      #
+      # So: log it with the traceback, keep polling, and give up after a handful in a row.
+      # Giving up is deliberate — a process looping on the same exception for ever looks
+      # alive to the service and does no work, which is worse than being restarted.
+      try:
         try:
             r = requests.post(f"{base}/runner/claim", json={
                 "runner_id": runner_id, "hostname": platform.node()},
@@ -426,10 +501,27 @@ def main() -> int:
         complained = None
 
         if not job:
+            consecutive = 0
             time.sleep(a.poll_seconds)
             continue
 
         _execute(requests, base, headers, job, engine_root, engine_python, runner_id)
+        consecutive = 0
+      except KeyboardInterrupt:
+        print("\nstopped.")
+        return 0
+      except Exception:                              # noqa: BLE001 — the whole point
+        import traceback
+        consecutive += 1
+        print(f"\n[{time.strftime('%H:%M:%S')}] UNEXPECTED ERROR in the polling loop "
+              f"({consecutive} in a row):", file=sys.stderr)
+        traceback.print_exc()
+        if consecutive >= _GIVE_UP_AFTER:
+            print(f"\n{_GIVE_UP_AFTER} unexpected errors in a row — stopping so whatever "
+                  f"started this runner can start it again cleanly. The traceback above is "
+                  f"also in {log_path}.", file=sys.stderr)
+            return 3
+        time.sleep(a.poll_seconds)
 
 
 def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:
