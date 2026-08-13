@@ -430,3 +430,77 @@ def test_the_beat_cannot_be_configured_slower_than_the_lease(engine):
     assert runner._BEAT_SECONDS * 2 < lease, (
         f"beat every {runner._BEAT_SECONDS}s against a {lease}s lease leaves no margin "
         f"for a slow post and a retry")
+
+
+def test_the_engine_is_run_unbuffered(engine):
+    """PYTHON BLOCK-BUFFERS STDOUT WHEN IT IS NOT A TERMINAL, and this output goes down a
+    pipe. Without -u the engine's progress reached the runner in multi-kilobyte bursts
+    minutes apart: on 11650 the page sat silent through the whole of the PDF extraction and
+    then got it in one lump. An estimator watching a page that does nothing for four
+    minutes concludes it has hung, and nothing on that page distinguishes buffering from a
+    dead run.
+
+    Caught only because the heartbeat's own proof harness passed -u in its fake command
+    while the real one did not — the test was kinder to the code than production is.
+    """
+    runner, root = engine
+    cmd = runner.engine_command(root, Path("python.exe"), root / "job", 45, "Boots")
+    assert "-u" in cmd, "the engine is run buffered, so the page updates in bursts"
+    assert cmd.index("-u") < cmd.index(str(Path(root) / "src" / "main.py")), (
+        "-u is an interpreter option and must come before the script, or it is an argument "
+        "to main.py and does nothing")
+
+
+class _TalksThenPauses:
+    """Speaks, pauses, speaks again — so the reported silence can be checked against the
+    LAST line rather than against the start of the run."""
+
+    def __init__(self, gap):
+        self._gap = gap
+        self._alive = True
+
+    @property
+    def stdout(self):
+        def _lines():
+            yield "   [bom] first\n"
+            time.sleep(self._gap)
+            yield "   [bom] second\n"
+            time.sleep(self._gap)
+            self._alive = False
+            yield "  done\n"
+        return _lines()
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def wait(self):
+        self._alive = False
+        return 0
+
+
+def test_the_silence_is_measured_from_the_last_line_not_the_start_of_the_run(engine,
+                                                                             monkeypatch):
+    """The beat inferred "is the engine talking" from `pending` being non-empty, and
+    flush() drains pending on the very next line — so the beat almost never saw anything
+    there and measured silence from the START OF THE RUN. 11650 reported "no output for
+    645s" with engine output ten seconds above it.
+
+    A console that is wrong about how long it has been quiet is no better than one that
+    says nothing: the number is the whole reason to trust it.
+    """
+    monkeypatch.setattr(runner_mod := __import__("sdi_estimate_runner"), "_BEAT_SECONDS", 0.02)
+    monkeypatch.setattr(runner_mod, "_SAY_QUIET_AFTER", 0.15)
+    gap = 0.6
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _TalksThenPauses(gap))
+    req = _FakeRequests()
+    root = engine[1]
+    job = {"run_id": "r1", "client": "Boots", "units": 45, "drawing_number": "11650-00",
+           "job_folder": str(root), "output_path": str(root / "share" / "Boots")}
+    runner_mod._execute(req, "http://x/api/estimate", {}, job, root, Path("python"), "rnr-1")
+
+    reported = [int(m) for post in req.progress for line in (post.get("lines") or [])
+                for m in __import__("re").findall(r"no output for (\d+)s", line)]
+    assert reported, "the runner never reported the silence at all"
+    assert max(reported) <= gap + 0.3, (
+        f"reported a silence of {max(reported)}s when no gap in this run exceeded {gap}s — "
+        f"it is timing from the start of the run, not from the last line")

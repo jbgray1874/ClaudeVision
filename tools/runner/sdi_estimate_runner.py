@@ -39,9 +39,8 @@ import subprocess
 # come from a file that is the same for every run however it was started, and by whichever
 # entry point. (It lived in main.py once, which meant only a run through main.py got it.)
 # The runner is a separate process and imports no engine module, so it still needs its own
-# read of the same file: SDI_ENGINE_ROOT, SDI_SERVER,
-# SDI_SERVER, SDI_API_KEY and SDI_ENGINE_PYTHON came from whichever PowerShell window
-# happened to launch it.
+# read of the same file. Without it, SDI_ENGINE_ROOT, SDI_SERVER, SDI_API_KEY and
+# SDI_ENGINE_PYTHON came from whichever PowerShell window happened to launch it.
 #
 # That is the fragility this project has already paid for twice: a run whose behaviour
 # depends on the shell it was started from is a run nobody can reproduce, and the difference
@@ -85,12 +84,10 @@ from typing import Any, Dict, List, Optional
 
 DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
 
-# HOW OFTEN THE LEASE IS RENEWED WHILE THE ENGINE IS QUIET. Well inside the service's
-# SDI_RUNNER_LEASE_SECONDS (180 by default), because the margin has to survive a slow post
-# and a retry -- a heartbeat that only just fits is a heartbeat that fails under the network
-# conditions it exists to tolerate. Read from the same name the service uses so the two
-# cannot be configured apart: a runner beating slower than the lease it is renewing is the
-# original defect with different numbers.
+# HOW OFTEN THE LEASE IS RENEWED WHILE THE ENGINE IS QUIET. Read from the same name the
+# service uses, so the two cannot be configured apart -- a runner beating slower than the
+# lease it renews is the original defect with different numbers, arriving silently.
+#
 # CAPPED AT 30s, not simply lease/6. A 900s lease would put the first renewal 150 seconds
 # in -- inside the old lease's margin, and a long time to sit watching a window with no
 # idea whether anything is alive. The post is a few hundred bytes; there is no reason to be
@@ -182,6 +179,14 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
     promises a complete set every time, so it is not a flag the caller can forget."""
     return [
         str(engine_python) if Path(engine_python).is_file() else "python",
+        # -u, BECAUSE THIS OUTPUT IS GOING DOWN A PIPE.
+        # Python block-buffers stdout when it is not a terminal, so the engine's progress
+        # reached the runner in multi-kilobyte bursts minutes apart: on 11650 the page sat
+        # silent through the whole of the PDF extraction and then received it in one lump.
+        # Estimators watching a page that does nothing for four minutes conclude it has
+        # hung, and they are not wrong to — nothing there distinguishes buffering from a
+        # dead run. The engine is the same; only when it speaks changes.
+        "-u",
         str(Path(engine_root) / "src" / "main.py"),
         "--job", str(job),
         "--order-qty", str(units),
@@ -444,12 +449,20 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     log: List[str] = []
     pending: List[str] = []
     last_sent = 0.0
+    # WHEN THE ENGINE LAST SPOKE. The beat used to infer this from `pending` being
+    # non-empty, and flush() drains pending on the very next line -- so the beat almost
+    # never saw anything there and measured silence from the START OF THE RUN. 11650
+    # reported "no output for 645s" with engine output ten seconds above it. A console that
+    # is wrong about how long it has been quiet is no better than one that says nothing.
+    last_said = time.time()
     _post_lock = threading.Lock()
 
     def say(text: str) -> None:
+        nonlocal last_said
         text = text.rstrip("\n")
         log.append(text)
         pending.append(text)
+        last_said = time.time()
         print(text)
 
     def flush(force: bool = False) -> None:
@@ -492,17 +505,17 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         healthy three-minute estimate is the worse error of the two, and the quiet one is
         the one nobody could see.
         """
-        quiet_since = time.time()
         said_at = 0.0
+        spoke_at = last_said
         while proc.poll() is None:
             time.sleep(_BEAT_SECONDS)
             if proc.poll() is not None:
                 break
-            if pending:                                # the engine is talking; nothing to do
-                quiet_since = time.time()
+            if last_said != spoke_at:                  # the engine spoke since the last beat
+                spoke_at = last_said
                 said_at = 0.0
                 continue
-            quiet = time.time() - quiet_since
+            quiet = time.time() - last_said
             if quiet >= _SAY_QUIET_AFTER and (time.time() - said_at) >= _SAY_QUIET_AFTER:
                 said_at = time.time()
                 say(f"Still running — no output for {int(quiet)}s. The engine is driving "
