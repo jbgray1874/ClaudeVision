@@ -873,7 +873,101 @@ def _lookup_catalogue_tube_price(
 
 # Cache the HIPS rate table per-thickness for the duration of one run so we don't
 # re-query UDEF for every HIPS part. Keyed by rounded thickness; value is £/m².
-_HIPS_RATE_CACHE: Dict[float, Optional[float]] = {}
+_SHEET_RATE_CACHE: Dict[Tuple[str, float], Optional[float]] = {}
+
+# Words that qualify a sheet rather than name it. "3MM CLEAR PETG SHEET" is PETG; searching
+# the catalogue for CLEAR or SHEET would match half of it.
+_NOT_A_MATERIAL_WORD = frozenset({
+    "SHEET", "SHEETS", "PLATE", "PANEL", "BOARD", "STOCK", "MATERIAL", "GRADE",
+    "CLEAR", "OPAL", "WHITE", "BLACK", "GREY", "GRAY", "MATT", "GLOSS", "SATIN",
+    "TEXTURED", "SMOOTH", "MR", "FR", "EXT", "INT", "STD", "THK", "NOM",
+})
+
+
+# Premium / finished items. A rate built from printed, mirrored or vac-formed stock is a
+# graphics price, not a sheet price.
+_SHEET_RATE_EXCLUDE = ("PRINT", "MIRROR", "FLOCK", "VAC", "GOLD", "SILVER", "FOIL",
+                       "GRAPHIC", "DIGITALLY", "SCREEN")
+_SHEET_DIM_RE = re.compile(
+    r"(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d(?:\.\d+)?)\s*mm",
+    re.IGNORECASE)
+_SHEET_RATE_MAX_GBP_PER_M2 = 60.0
+_SHEET_RATE_MIN_AREA_M2 = 0.05
+
+
+def _plain_stock_rates_gbp_per_m2(rows: Iterable[Any], token: str,
+                                  thickness_key: float) -> List[float]:
+    """Every catalogue row that is plain stock of THIS material at THIS gauge, as GBP/m2.
+
+    A SEPARATE FUNCTION SO THE FILTER CAN BE TESTED. It used to be a loop inside a function
+    whose first act is to open a database connection, so nothing could reach it without one --
+    and a guard nothing can exercise is a guard nobody knows is working. A mutant that deleted
+    the whole-word check survived every test in this file for exactly that reason.
+    """
+    # THE TOKEN AS A WHOLE WORD. SQL LIKE cannot say "word boundary", so '%ABS%' comes back
+    # with every ABSORBER, ABSOLUTE and GLASSBOARD in the catalogue -- and a median built from
+    # those is not wrong-looking, it is simply wrong, with nothing on the sheet to say so.
+    word_re = re.compile(rf"\b{re.escape(token)}\b")
+    rates: List[float] = []
+    for r in rows or ():
+        try:
+            desc = str(r[1] or "")
+            cost_raw = r[2]
+        except (IndexError, TypeError):
+            continue
+        du = desc.upper()
+        if not word_re.search(du):
+            continue
+        if any(bad in du for bad in _SHEET_RATE_EXCLUDE):
+            continue
+        m = _SHEET_DIM_RE.search(desc)
+        if not m:
+            continue
+        try:
+            L, W, T = float(m.group(1)), float(m.group(2)), float(m.group(3))
+            cost = float(cost_raw)
+        except (TypeError, ValueError):
+            continue
+        if round(T, 1) != thickness_key:
+            continue
+        area_m2 = (L * W) / 1_000_000.0
+        if area_m2 < _SHEET_RATE_MIN_AREA_M2:      # tiny offcuts carry an inflated GBP/m2
+            continue
+        rate = cost / area_m2
+        if rate <= 0 or rate > _SHEET_RATE_MAX_GBP_PER_M2:
+            continue
+        rates.append(rate)
+    return rates
+
+
+def _sheet_catalogue_token(material: Any) -> Optional[str]:
+    """The word to look this material up by in the parts catalogue, or None.
+
+    ASKED OF THE MATERIAL, NOT OF A LIST OF MATERIALS. A token list here would be a second
+    classifier beside costed_facts.is_other_sheet_material, and those two disagreeing about
+    one part is the defect family this codebase keeps finding. So: is it costed in the Other
+    Sheet block at all, and if so what is it CALLED -- the longest word in its own name that
+    is not a size, a colour or a finish.
+
+    Length floor of three because a two-letter fragment matches everything. Word boundaries
+    are enforced on the results in Python; SQL LIKE cannot, so '%ABS%' would otherwise pull in
+    every ABSORBER and ABSOLUTE in the catalogue.
+    """
+    text = str(material or "").upper().replace("_", " ")
+    if not text.strip():
+        return None
+    try:
+        import costed_facts as _cf
+        if not _cf.is_other_sheet_material(text):
+            return None
+    except Exception:
+        return None
+    words = [w for w in re.findall(r"[A-Z]{3,}", text) if w not in _NOT_A_MATERIAL_WORD]
+    if not words:
+        return None
+    # Longest wins: "CLEAR POLYCARBONATE" looks itself up as POLYCARBONATE, not POLY, so the
+    # catalogue is not asked a question that also matches polypropylene and polystyrene.
+    return max(words, key=len)
 
 
 def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[float]) -> Optional[Dict[str, Any]]:
@@ -889,35 +983,53 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     Returns {rate_gbp_per_m2, sample_count, thickness_mm, basis} or None (never raises,
     never invents a price). Consistent with the tube resolver: real catalogue rows only.
     """
-    _mat_u = str(material or "").upper()
-    # Only HIPS is sourced this way for now; other boards keep their existing path.
-    if "HIPS" not in _mat_u:
-        return None
-    if thickness_mm is None:
+    # ANY SHEET PLASTIC OR BOARD, NOT ONE OF THEM.
+    #
+    # This read "if 'HIPS' not in material: return None", with a comment saying other boards
+    # keep their existing path. Their existing path is an LLM market guess, and 11650-04 is
+    # what that costs: four ABS/PETG panels the engine holds no rate for, priced at GBP
+    # 175.01, 244.97 and 114.98 a sheet for the same nominal material, two BLOCKING invariants
+    # (material_has_no_rate_in_this_engine, price_not_reproducible) and a handed pair that
+    # cannot agree because the guess is keyed per gauge.
+    #
+    # The rate was in the customer's own purchasing system the whole time. Everything below --
+    # the plain-stock filter, the dimension parse, the median, the outlier caps -- is material-
+    # agnostic already. One `if` was the whole gate, and a rule that names a material is the
+    # thing this engine is not supposed to contain.
+    _token = _sheet_catalogue_token(material)
+    if not _token or thickness_mm is None:
         return None
     try:
         _t_key = round(float(thickness_mm), 1)
     except (TypeError, ValueError):
         return None
-    if _t_key in _HIPS_RATE_CACHE:
-        _cached = _HIPS_RATE_CACHE[_t_key]
+    # KEYED ON MATERIAL AND GAUGE, NOT GAUGE ALONE. The cache held thickness only, which was
+    # correct while exactly one material could reach it and silently wrong the moment a second
+    # could: 2mm ABS would have been handed the 2mm HIPS rate, from a cache hit, with a basis
+    # string naming the wrong material. One key for two questions.
+    _cache_key = (_token, _t_key)
+    if _cache_key in _SHEET_RATE_CACHE:
+        _cached = _SHEET_RATE_CACHE[_cache_key]
         return None if _cached is None else {
-            "rate_gbp_per_m2": _cached, "thickness_mm": _t_key,
-            "sample_count": None, "basis": "udef_hips_median_cached",
+            "rate_gbp_per_m2": _cached, "thickness_mm": _t_key, "material_token": _token,
+            "sample_count": None, "basis": f"udef_{_token.lower()}_median_cached",
         }
 
     try:
         import config as _cfg
         cn = _cfg.get_connection(timeout=20)
     except Exception:
-        _HIPS_RATE_CACHE[_t_key] = None
+        _SHEET_RATE_CACHE[_cache_key] = None
         return None
     try:
         cur = cn.cursor()
+        # PARAMETERISED, not formatted in. The token comes from a material string read off a
+        # drawing, and a drawing is external input like any other.
         cur.execute(
             """SELECT [Part code],[Description],[System cost per]
                FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
-               WHERE [System cost per] > 0 AND [Description] LIKE '%HIPS%'"""
+               WHERE [System cost per] > 0 AND [Description] LIKE ?""",
+            (f"%{_token}%",),
         )
         rows = cur.fetchall()
     except Exception:
@@ -928,47 +1040,20 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
         except Exception:
             pass
 
-    # Exclude premium / finished items — we want plain sheet stock rate only.
-    _EXCLUDE = ("PRINT", "MIRROR", "FLOCK", "VAC", "GOLD", "SILVER", "FOIL",
-                "GRAPHIC", "DIGITALLY", "SCREEN")
-    _dim_re = re.compile(
-        r"(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d(?:\.\d+)?)\s*mm",
-        re.IGNORECASE)
-    rates: List[float] = []
-    for r in rows:
-        desc = str(r[1] or "")
-        du = desc.upper()
-        if any(bad in du for bad in _EXCLUDE):
-            continue
-        m = _dim_re.search(desc)
-        if not m:
-            continue
-        try:
-            L, W, T = float(m.group(1)), float(m.group(2)), float(m.group(3))
-            cost = float(r[2])
-        except (TypeError, ValueError):
-            continue
-        if round(T, 1) != _t_key:
-            continue
-        area_m2 = (L * W) / 1_000_000.0
-        if area_m2 < 0.05:          # skip tiny offcuts (inflated £/m²)
-            continue
-        rate = cost / area_m2
-        if rate <= 0 or rate > 60:  # skip zero/anomalies and premium outliers
-            continue
-        rates.append(rate)
+    rates = _plain_stock_rates_gbp_per_m2(rows, _token, _t_key)
 
     if not rates:
-        _HIPS_RATE_CACHE[_t_key] = None
+        _SHEET_RATE_CACHE[_cache_key] = None
         return None
     import statistics as _stats
     _median = round(_stats.median(rates), 2)
-    _HIPS_RATE_CACHE[_t_key] = _median
+    _SHEET_RATE_CACHE[_cache_key] = _median
     return {
         "rate_gbp_per_m2": _median,
         "thickness_mm": _t_key,
+        "material_token": _token,
         "sample_count": len(rates),
-        "basis": "udef_hips_median_live",
+        "basis": f"udef_{_token.lower()}_median_live",
     }
 
 
