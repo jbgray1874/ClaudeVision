@@ -2745,9 +2745,93 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
     return out
 
 
+
+# ONE THRESHOLD, A RATIO. Below this it is not worth an estimator's attention: material
+# scales linearly with gauge and the cut rate steps with it, so a 25% disagreement is real
+# money on every part cut from that sheet, while a check that fires on every hairline
+# difference gets ignored on the day it is right. That has already happened here once today.
+#
+# An absolute "same gauge" tolerance was written beside this and then removed: no mutant
+# could kill it, because a 1.25x ratio on the thinnest sheet this engine will accept
+# (0.3mm) is already a 0.075mm gap. Two guards where one decides everything is not
+# belt-and-braces, it is a claim that something is being checked when it is not.
+_GAUGE_WORTH_SAYING = 1.25
+
+
+def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, Any]]:
+    """A part whose thickness two sources read differently, by enough to move the money.
+
+    ARBITRATION PICKED A WINNER AND THREW THE ARGUMENT AWAY. 11650-01-05A DOOR is a 6mm
+    polycarbonate panel by its flat pattern -- 11650-01-05A_6MM POLYCARB_REVC.DXF, the file
+    the router is actually set from -- and its detail drawing reads 3. The DXF outranks
+    drawing text, so 6mm won and 6mm is almost certainly right. Nothing anywhere said that
+    something on the drawing says half that.
+
+    Gauge is the most leveraged number on a sheet part. Material cost scales with it
+    directly and the cut rate steps with it, so being wrong by a factor of two is being
+    wrong about the part twice over. When the winner is a flat pattern the disagreement is
+    usually a stale revision or a misread callout and the estimator wants to know which;
+    when the winner is an inference and a MEASUREMENT disagrees with it, the estimate is
+    standing on the weaker of two answers and that is worth saying out loud.
+
+    Not blocking. The engine's precedence is sound and the number still stands -- what is
+    missing is that anybody was told there was an argument.
+    """
+    if not isinstance(summary, dict):
+        return [_violation("gauge_disagreement", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    parts = _parts(summary)
+    if not parts:
+        return []
+    disputed = []
+    for part in parts:
+        won = part.get("normalized_thickness_mm")
+        try:
+            won = float(won)
+        except (TypeError, ValueError):
+            continue
+        if won <= 0:
+            continue
+        for entry in ((part.get("_displaced") or {}).get("normalized_thickness_mm") or []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                other = float(entry.get("value"))
+            except (TypeError, ValueError):
+                continue
+            if other <= 0:
+                continue
+            ratio = max(won, other) / min(won, other)
+            if ratio < _GAUGE_WORTH_SAYING:
+                continue
+            disputed.append({
+                "part_number": part.get("part_number"),
+                "costed_mm": won,
+                "costed_from": part.get("thickness_source") or "the winning source",
+                "other_mm": other,
+                "other_from": entry.get("source") or "an earlier pass",
+                "ratio": round(ratio, 2),
+            })
+    if not disputed:
+        return []
+    _worst = max(d["ratio"] for d in disputed)
+    return [_violation(
+        "two_sources_disagree_about_the_gauge", WARNING,
+        f"{len(disputed)} part(s) have two different thicknesses read from two different "
+        f"sources, the widest disagreeing by {_worst:.2f}x: "
+        + "; ".join(f"{d['part_number']} costed at {d['costed_mm']}mm from "
+                    f"{d['costed_from']}, but {d['other_from']} says {d['other_mm']}mm"
+                    for d in disputed[:6])
+        + ". Gauge drives material directly and steps the cut rate, so a part costed at the "
+          "wrong one is wrong twice. The higher-ranked source has been used and the figure "
+          "stands -- confirm which gauge the part is actually made from.",
+        parts=disputed)]
+
+
 CHECKS = (
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,
+    check_two_sources_disagree_about_the_gauge,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,
