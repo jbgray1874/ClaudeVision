@@ -180,6 +180,39 @@
     <ul class="out" id="out"></ul>
   </section>
 
+  <!-- ══ MULTI-DRAWING ENQUIRY ══════════════════════════════════════
+       A SEPARATE SECTION BECAUSE IT IS A DIFFERENT QUESTION, not a bulk version of the
+       one above. The Job panel asks "what does this pack cost", pooling every drawing in
+       it into one BOM and one estimate — that is 11650. This asks "what does each of
+       these cost", one estimate per drawing, which is what arrives when a customer sends
+       a hundred unrelated PDFs. Putting them in one control would make the difference a
+       checkbox, and getting a checkbox wrong here does not fail: it returns a confident
+       estimate of a question nobody asked. -->
+  <section class="card" style="margin-top:18px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">Multi-drawing enquiry</h2>
+      <div class="status"><span class="dot" id="bDot"></span><span id="bStatus">Idle</span></div>
+    </div>
+    <p class="hint">One estimate per PDF, priced one at a time. Each drawing files into its
+      own folder under the client — <span class="mono" id="bWhere">…/AISheets/&lt;client&gt;/&lt;drawing&gt;/</span>.
+      Uses the client and number of units from the Job panel above.</p>
+
+    <ul class="files" id="bList"></ul>
+    <p class="empty" id="bEmpty">No drawings added yet.</p>
+
+    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:10px">
+      <button id="bAdd">Add PDFs…</button>
+      <button id="bClear">Clear</button>
+      <button class="btn-run" id="bRun" style="margin-left:auto" disabled>Estimate every drawing</button>
+      <button id="bStop" hidden>Stop the rest</button>
+    </div>
+
+    <div id="bProgress" hidden>
+      <p class="hint" id="bCount"></p>
+      <ul class="out" id="bRows"></ul>
+    </div>
+  </section>
+
   <!-- ══ COMPLETED ESTIMATES ════════════════════════════════════════ -->
   <section class="card" style="margin-top:18px">
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
@@ -239,6 +272,12 @@ const runBtn=$("run"), destPath=$("destPath"), req=$("req");
 const runnerBox=$("runnerBox"), runnerText=$("runnerText");
 const fileList=$("fileList"), fileEmpty=$("fileEmpty");
 const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
+// BOUND EXPLICITLY, not leaned on. A browser exposes elements with an id as globals, so
+// this file would work without these lines -- right up until a variable name collides with
+// one and the failure is a silent wrong element rather than an error.
+const bList=$("bList"), bEmpty=$("bEmpty"), bWhere=$("bWhere"), bRun=$("bRun"),
+      bStop=$("bStop"), bProgress=$("bProgress"), bCount=$("bCount"), bRows=$("bRows"),
+      bDot=$("bDot"), bStatus=$("bStatus");
 
 let drawings = [];      // {path, name, is_dir}
 let running  = false;
@@ -280,6 +319,9 @@ function destination(){
    added, and disabled again for the whole of a run. A second click on a
    job already running is how two estimates end up writing one folder. */
 function refresh(){
+  // The enquiry panel reads the same client and quantity, so whatever changes one changes
+  // the other's gate. Asking here is how they cannot get out of step.
+  if(typeof renderBatch === "function") renderBatch();
   const missing = [];
   if(!(parseInt(units.value,10) > 0)) missing.push("number of units");
   if(!safe(client.value))             missing.push("client");
@@ -413,10 +455,12 @@ async function openBrowser(m){
   mode = m; selected = null;
   dTitle.textContent = m==="folder" ? "Select a job folder"
                      : m==="files"  ? "Select drawing files"
+                     : m==="batch"  ? "Select the drawings in this enquiry"
                      : "Completed estimates";
   dChoose.style.display = (m==="output") ? "none" : "";
-  dAll.style.display = (m==="files") ? "" : "none";
-  dHelp.textContent = m==="files" ? "Click files to select. Click a folder to open it."
+  dAll.style.display = (m==="files" || m==="batch") ? "" : "none";
+  dHelp.textContent = (m==="files" || m==="batch")
+                    ? "Click files to select. Click a folder to open it."
                     : m==="folder" ? "Open a folder, then Use this folder."
                     : "Click a file to open it. Reports open in a tab; workbooks download.";
   if(!roots.length){
@@ -585,13 +629,17 @@ async function navigate(path){
         window.open("/api/file?path="+encodeURIComponent(it.path), "_blank", "noopener");
         return;
       }
-      if(mode!=="files") return;
+      if(mode!=="files" && mode!=="batch") return;
+      /* ONE PICKER, TWO LISTS. The multi-drawing enquiry selects files exactly as the
+         Job panel does — same shares, same containment rule, same server-resolved paths.
+         A second copy of this browser would be a second place for the path rules to
+         drift, and the paths are the one thing that must mean the same to the engine. */
       const on = li.getAttribute("aria-selected")==="true";
       li.setAttribute("aria-selected", on ? "false" : "true");
-      if(on) drawings = drawings.filter(d => d.path !== it.path);
-      else if(!drawings.some(d => d.path===it.path))
-        drawings.push({path:it.path, name:it.name, is_dir:false});
-      renderFiles(); refresh(); refreshAddAll();
+      if(on) pickSet(pickList().filter(d => d.path !== it.path));
+      else if(!pickList().some(d => d.path===it.path))
+        pickList().push({path:it.path, name:it.name, is_dir:false});
+      pickRender(); refreshAddAll();
     };
     listing.appendChild(li);
   });
@@ -599,21 +647,21 @@ async function navigate(path){
 function refreshAddAll(){
   // NAMES THE NUMBER, so nobody presses it wondering what it will do. A folder of
   // twelve DXFs is the ordinary case and clicking twelve times is not a workflow.
-  const pending = shown.filter(it => !drawings.some(d => d.path === it.path));
+  const pending = shown.filter(it => !pickList().some(d => d.path === it.path));
   dAll.textContent = pending.length ? `Add all ${pending.length}` : "Add all";
   dAll.disabled = !pending.length;
 }
 
 dAll.onclick = () => {
   shown.forEach(it => {
-    if(drawings.some(d => d.path === it.path)) return;
-    drawings.push({path: it.path, name: it.name, is_dir: false});
+    if(pickList().some(d => d.path === it.path)) return;
+    pickList().push({path: it.path, name: it.name, is_dir: false});
   });
   // The rows already on screen must agree with what was just added.
   [...listing.children].forEach(li => {
     if(!li.classList.contains("dir")) li.setAttribute("aria-selected","true");
   });
-  renderFiles(); refresh(); refreshAddAll();
+  pickRender(); refreshAddAll();
 };
 
 dChoose.onclick = () => {
@@ -628,6 +676,139 @@ $("dClose").onclick = () => dlg.close();
 $("addFolder").onclick = () => openBrowser("folder");
 $("addFiles").onclick  = () => openBrowser("files");
 $("openRoot").onclick  = () => openBrowser("output");
+
+/* ══ MULTI-DRAWING ENQUIRY ════════════════════════════════════════════
+   A HUNDRED PDFs THAT ARE A HUNDRED QUESTIONS, not one pack. Every drawing becomes an
+   ordinary queued run — the same queue, the same runner, the same engine — so nothing
+   here decides anything about an estimate. The server queues one run per drawing and
+   hands them out one at a time, because two Excel automations against one desktop is not
+   a supported thing to do. This screen is a list and a progress table. */
+let batchFiles = [], batchId = null, batchPoll = null;
+
+function pickList(){ return mode === "batch" ? batchFiles : drawings; }
+function pickSet(list){ if(mode === "batch") batchFiles = list; else drawings = list; }
+function pickRender(){
+  if(mode === "batch"){ renderBatch(); } else { renderFiles(); refresh(); }
+}
+
+function renderBatch(){
+  bList.innerHTML = "";
+  batchFiles.forEach((f,i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="kind">${(f.name.split(".").pop()||"file").toUpperCase()}</span>`
+                 + `<span class="nm" title="${f.path}">${f.name}</span>`;
+    const x = document.createElement("button");
+    x.className="x"; x.textContent="✕"; x.title="Remove";
+    x.onclick = () => { batchFiles.splice(i,1); renderBatch(); };
+    li.appendChild(x); bList.appendChild(li);
+  });
+  bEmpty.style.display = batchFiles.length ? "none" : "";
+  bWhere.textContent = `…\\AISheets\\${safe(client.value) || "<client>"}\\<drawing>\\`;
+  /* THE SAME GATE AS THE JOB BUTTON, and for the same reason. A hundred jobs queued
+     against a client nobody typed files a hundred estimates under a folder called
+     nothing, and un-filing them is manual. */
+  const why = [];
+  if(!safe(client.value))              why.push("client");
+  if(!(parseInt(units.value,10) > 0))  why.push("number of units");
+  if(!batchFiles.length)               why.push("at least one drawing");
+  if(!runnersOnline)                   why.push("a connected runner");
+  bRun.disabled = why.length > 0 || batchId !== null;
+  bRun.title = why.length ? "Still needed: " + why.join(", ") : "";
+}
+
+function bSet(cls, text){ bDot.className = "dot " + cls; bStatus.textContent = text; }
+
+$("bAdd").onclick   = () => openBrowser("batch");
+$("bClear").onclick = () => { batchFiles = []; renderBatch(); };
+
+$("bRun").onclick = async () => {
+  if(bRun.disabled) return;
+  bRun.disabled = true;
+  bSet("run","Queueing");
+  bProgress.hidden = false; bRows.innerHTML = "";
+  try{
+    const r = await api("/api/estimate/batch", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({client: safe(client.value), units: parseInt(units.value,10),
+                            files: batchFiles.map(f => f.path), output_root: OUTPUT_ROOT})});
+    if(!r.ok) throw new Error((await r.text()).slice(0,300));
+    const started = await r.json();
+    batchId = started.batch_id;
+    bWhere.textContent = started.client_folder;
+    /* REFUSED DRAWINGS ARE NAMED, not silently dropped. A hundred submitted and
+       ninety-seven queued is a fact the estimator has to be told at the moment it
+       happens — three missing answers are invisible in a list of ninety-seven. */
+    (started.refused||[]).forEach(f =>
+      bCount.textContent = `${(started.refused||[]).length} drawing(s) could NOT be queued — `
+                         + started.refused.map(x => x.file.split("\\").pop()+" ("+x.why+")").join("; "));
+    bStop.hidden = false;
+    watchBatch();
+  }catch(e){
+    bSet("err","Failed to queue"); bCount.textContent = String(e.message||e);
+    batchId = null; renderBatch();
+  }
+};
+
+$("bStop").onclick = async () => {
+  if(!batchId) return;
+  if(!confirm("Stop the drawings that have not finished?\n\nFinished estimates are kept. "
+            + "If one is running now, this does NOT stop the engine — its result will be "
+            + "refused when it reports.")) return;
+  await api(`/api/estimate/batch/${batchId}/abandon`, {method:"POST"});
+};
+
+function watchBatch(){
+  clearInterval(batchPoll);
+  batchPoll = setInterval(async () => {
+    let s, r;
+    try{ r = await api("/api/estimate/batch/"+batchId); s = await r.json(); }
+    catch(e){ return; }                      /* a dropped poll is not a failed enquiry */
+    if(r.status === 404){
+      clearInterval(batchPoll); batchPoll = null; batchId = null; bStop.hidden = true;
+      bSet("warn","Lost track of this enquiry");
+      bCount.textContent = "The service restarted and no longer holds this enquiry. Estimates "
+                         + "that had finished are still filed — look under Completed estimates.";
+      renderBatch(); return;
+    }
+    if(!s || !s.runs) return;
+
+    bRows.innerHTML = "";
+    s.runs.forEach(row => {
+      const li = document.createElement("li");
+      const mark = row.status === "done" ? "✓" : row.status === "error" ? "✕"
+                 : row.status === "running" ? "▸" : "·";
+      const colour = row.status === "done" ? "var(--ok)" : row.status === "error" ? "var(--bad)"
+                   : row.status === "running" ? "var(--brand)" : "var(--dim)";
+      li.style.cssText = "display:block;width:100%;font-family:var(--mono);font-size:11.5px;"
+                       + "padding:4px 0;color:var(--muted)";
+      li.innerHTML = `<span style="color:${colour}">${mark}</span> `
+                   + `<span style="color:var(--ink)">${row.drawing_number}</span> `
+                   + `<span style="color:var(--dim)">${row.status}`
+                   + (row.status === "running" ? ` ${Math.round(row.seconds)}s` : "")
+                   + `</span>`;
+      if(row.error) li.innerHTML += ` <span style="color:var(--bad)">${row.error}</span>`;
+      (row.deliverables||[]).forEach(d => {
+        const a = document.createElement("a");
+        a.href = "/api/file?path=" + encodeURIComponent(d.path);
+        a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        a.style.cssText = "margin-left:8px;font-size:11px";
+        li.appendChild(a);
+      });
+      bRows.appendChild(li);
+    });
+    bCount.textContent = `${s.finished} of ${s.total} finished`
+                       + (s.failed ? `, ${s.failed} failed` : "");
+
+    if(s.finished >= s.total){
+      clearInterval(batchPoll); batchPoll = null; batchId = null; bStop.hidden = true;
+      bSet(s.failed ? "err" : "ok",
+           s.failed ? `${s.total - s.failed} of ${s.total} estimated` : "All estimated");
+      renderBatch();
+    }else{
+      bSet("run", `${s.finished} of ${s.total}`);
+    }
+  }, 2000);
+}
 
 /* ══ RUN ══════════════════════════════════════════════════════════════ */
 function line(t){
@@ -742,7 +923,7 @@ runBtn.onclick = async () => {
   }, 2000);
 };
 
-renderFiles(); refresh(); setStatus("","Idle");
+renderFiles(); refresh(); setStatus("","Idle"); renderBatch(); bSet("","Idle");
 </script>
 </body>
 </html>

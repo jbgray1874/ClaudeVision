@@ -161,6 +161,12 @@ class Run:
     started_at: Optional[float] = None      # when a runner claimed it
     finished_at: Optional[float] = None
     runner: str = ""                        # which runner is doing it
+    # ONE PDF, NOT A PACK. An M&S-style enquiry is a hundred unrelated drawings that each
+    # want their own estimate, which is main.py's --pdf mode; a job FOLDER is the 11650
+    # case, where every drawing in it contributes to one BOM. The two are different
+    # questions about the same files, and the runner has to be told which was asked.
+    pdf_path: str = ""
+    batch_id: str = ""                      # which enquiry this drawing came in with
     lease_until: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
@@ -178,6 +184,7 @@ class Run:
             "client": self.client, "drawing_number": self.drawing_number,
             "units": self.units, "output_path": self.output_path,
             "job_folder": self.job_folder, "runner": self.runner,
+            "pdf_path": self.pdf_path, "batch_id": self.batch_id,
             "log": self.log, "deliverables": self.deliverables,
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -251,6 +258,14 @@ class EstimateRequest(BaseModel):
     files: List[str] = []
     output_root: Optional[str] = None
     deliverables: bool = True
+
+
+class BatchRequest(BaseModel):
+    """A hundred drawings that are a hundred enquiries, not one pack."""
+    client: str
+    units: int
+    files: List[str] = []
+    output_root: Optional[str] = None
 
 
 class ClaimRequest(BaseModel):
@@ -331,6 +346,10 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "run_id": run.run_id, "client": run.client, "units": run.units,
         "drawing_number": run.drawing_number, "job_folder": run.job_folder,
         "output_path": run.output_path,
+        # WHICH QUESTION WAS ASKED OF THESE FILES. Empty means the job folder is the job
+        # and every drawing in it pools into one estimate; set means this one drawing is
+        # the job. The runner cannot infer it -- both arrive as paths under the same share.
+        "pdf_path": run.pdf_path,
     }}
 
 
@@ -427,14 +446,19 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                 503, "No estimating runner is connected, so there is nothing to run "
                      "this job. Start the runner on a machine with SOLIDWORKS and "
                      "Excel, then try again.")
+        # A QUEUE THAT REFUSES WORK WHILE IT IS WORKING IS NOT A QUEUE.
+        #
+        # This raised 409 whenever anything was RUNNING, which made a hundred-drawing M&S
+        # enquiry impossible to submit: the first drawing would be claimed within five
+        # seconds and the other ninety-nine would all be refused. It also refused a second
+        # ordinary job that could perfectly well have waited.
+        #
+        # The one-at-a-time rule is real -- two concurrent COM automations against one
+        # desktop is not a supported thing to do -- but it is a rule about EXECUTION, and
+        # claim() is where it is enforced: a runner is handed nothing while another run is
+        # in progress. Queueing is not executing. The guard was in the wrong place, and the
+        # cost of it being there was that the queue could only ever hold one thing.
         busy = _busy_runner()
-        if busy is not None:
-            raise HTTPException(
-                409, f"An estimate is already running — {busy.drawing_number} for "
-                     f"{busy.client}, started {int(time.time() - (busy.started_at or 0))}s "
-                     f"ago. SOLIDWORKS and Excel are driven on one desktop, so "
-                     f"estimates run one after another. If you know that run is dead, "
-                     f"release it: POST /api/estimate/{busy.run_id}/abandon.")
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out),
                   queued_at=queued_at)
@@ -443,9 +467,159 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     run.line(f"{drawing} · {client} · {run.units} off")
     run.line(f"Reading   {job}")
     run.line(f"Filing to {out}")
-    run.line("Queued — waiting for a runner to pick it up.")
+    if busy is not None:
+        run.line(f"Queued behind {busy.drawing_number} for {busy.client}, which has been "
+                 f"running {int(time.time() - (busy.started_at or 0))}s. SOLIDWORKS and "
+                 f"Excel are driven on one desktop, so estimates run one after another.")
+    else:
+        run.line("Queued — waiting for a runner to pick it up.")
     return {"run_id": run.run_id, "output_path": str(out),
-            "drawing_folder": str(drawing_folder)}
+            "drawing_folder": str(drawing_folder),
+            "waiting_behind": busy.run_id if busy is not None else None}
+
+
+@router.post("/batch")
+def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """An enquiry that is many drawings, each wanting its own estimate.
+
+    THE M&S SHAPE. A customer sends a hundred PDFs and asks what each one costs. That is a
+    hundred estimates, not one: the drawings are unrelated, they do not share a BOM, and
+    pooling them would produce a single meaningless total. It is the opposite of the 11650
+    shape, where four drawings ARE one cabinet and pooling them is the whole point.
+
+    Both shapes already exist in the engine -- main.py --pdf reads one drawing as one job,
+    main.py --job pools a folder -- and both already exist in this queue. So this adds no
+    execution path and no new way for an estimate to be produced. It queues one ordinary
+    run per drawing and lets the queue do what a queue does: one at a time, in order,
+    each filing into its own folder under the client.
+
+    Filed as  <root>/<client>/<drawing>/<dated run>  which is the existing convention with
+    the drawing taken from the PDF's own filename. The filename is used deliberately: it is
+    knowable BEFORE the run, so a drawing that fails still has a named folder and the
+    estimator can match it to the file they were sent. The title-block number is read
+    during the run and appears in the outputs.
+    """
+    _check_key(x_sdi_key)
+    client = safe_segment(req.client)
+    if not client:
+        raise HTTPException(400, "A client is required — it names the folder every one of "
+                                 "these estimates is filed under.")
+    if not isinstance(req.units, int) or req.units < 1:
+        raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
+    if not req.files:
+        raise HTTPException(400, "Add the drawings to estimate.")
+
+    root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
+    batch_id = uuid.uuid4().hex[:12]
+    queued_at = time.time()
+    accepted, refused = [], []
+
+    with _LOCK:
+        _expire_dead_claims()
+        if not _online_runners():
+            raise HTTPException(
+                503, "No estimating runner is connected, so there is nothing to run these "
+                     "jobs. Start the runner on a machine with SOLIDWORKS and Excel, then "
+                     "try again.")
+        # ORDER IS THE ORDER THEY WERE GIVEN IN. An estimator working down a customer's
+        # list wants the answers to arrive in that list's order, not in whatever order a
+        # file dialog happened to hand them over.
+        for raw in req.files:
+            path = _within_a_root(raw)
+            if path is None:
+                refused.append({"file": raw, "why": "outside the shares this service may read"})
+                continue
+            drawing = safe_segment(Path(raw).stem)
+            if not drawing:
+                refused.append({"file": raw, "why": "its name leaves nothing to call a folder"})
+                continue
+            out = root / client / drawing / run_folder_name(queued_at, req.units)
+            run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
+                      units=int(req.units), job_folder=str(Path(raw).parent),
+                      output_path=str(out), queued_at=queued_at,
+                      pdf_path=str(path), batch_id=batch_id)
+            _RUNS[run.run_id] = run
+            accepted.append(run)
+            queued_at += 0.001          # keeps the queue order stable and the sort total
+
+    for i, run in enumerate(accepted, start=1):
+        run.line(f"{run.drawing_number} · {client} · {run.units} off")
+        run.line(f"Reading   {run.pdf_path}")
+        run.line(f"Filing to {run.output_path}")
+        run.line(f"Queued — drawing {i} of {len(accepted)} in this enquiry.")
+
+    if not accepted:
+        # AN ENQUIRY THAT QUEUED NOTHING IS NOT AN ENQUIRY THAT WAS ACCEPTED. Returning 200
+        # with an empty list would read on the page as "submitted", and the estimator would
+        # wait for a hundred answers that nobody is producing.
+        raise HTTPException(400, "None of those drawings could be queued: "
+                            + "; ".join(f"{Path(r['file']).name} — {r['why']}"
+                                        for r in refused[:6]))
+    return {"batch_id": batch_id, "client": client, "units": int(req.units),
+            "client_folder": str(root / client),
+            "queued": [r.run_id for r in accepted], "refused": refused}
+
+
+@router.get("/batch/{batch_id}")
+def batch_status(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Every drawing in one enquiry, in the order it was queued.
+
+    ONE REQUEST, NOT A HUNDRED. The page polls this every couple of seconds; asking after
+    each run separately would be a hundred requests per tick, and the log lines that make a
+    single run readable are noise when what you want is a list of a hundred answers.
+    """
+    _check_key(x_sdi_key)
+    with _LOCK:
+        _expire_dead_claims()
+        runs = sorted((r for r in _RUNS.values() if r.batch_id == batch_id),
+                      key=lambda r: r.queued_at)
+    if not runs:
+        raise HTTPException(404, "No such enquiry. The service may have restarted.")
+    done = [r for r in runs if r.status in {"done", "error"}]
+    return {
+        "batch_id": batch_id, "client": runs[0].client, "units": runs[0].units,
+        "total": len(runs), "finished": len(done),
+        "failed": sum(1 for r in done if r.status == "error"),
+        "runs": [{"run_id": r.run_id, "drawing_number": r.drawing_number,
+                  "status": r.status, "error": r.error,
+                  "seconds": round((r.finished_at or time.time())
+                                   - (r.started_at or r.queued_at), 1),
+                  "output_path": r.output_path,
+                  "deliverables": r.deliverables} for r in runs],
+    }
+
+
+@router.post("/batch/{batch_id}/abandon")
+def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Stop the rest of an enquiry. Finished drawings keep their estimates.
+
+    A hundred queued drawings is the one case where changing your mind is expensive to act
+    on one row at a time, and an estimator who has spotted that the wrong folder was picked
+    should not have to click ninety-nine times to say so.
+    """
+    _check_key(x_sdi_key)
+    released = 0
+    with _LOCK:
+        runs = [r for r in _RUNS.values() if r.batch_id == batch_id]
+        if not runs:
+            raise HTTPException(404, "No such enquiry. The service may have restarted.")
+        for run in runs:
+            if run.status not in {"queued", "running"}:
+                continue
+            was = run.status
+            run.status = "error"
+            run.error = ("Released with the rest of this enquiry. "
+                         + ("It had not started." if was == "queued" else
+                            "It was running; if the runner was still working, its result "
+                            "will be refused when it reports."))
+            run.line(run.error)
+            run.finished_at = time.time()
+            run.lease_until = 0.0
+            r = _RUNNERS.get(run.runner)
+            if r is not None and r.run_id == run.run_id:
+                r.run_id = ""
+            released += 1
+    return {"ok": True, "released": released}
 
 
 @router.post("/{run_id}/abandon")

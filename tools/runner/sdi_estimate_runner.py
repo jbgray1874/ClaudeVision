@@ -174,9 +174,15 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
 
 
 def engine_command(engine_root: Path, engine_python: Path, job: Path,
-                   units: int, client: str) -> List[str]:
+                   units: int, client: str, pdf: Optional[Path] = None) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
-    promises a complete set every time, so it is not a flag the caller can forget."""
+    promises a complete set every time, so it is not a flag the caller can forget.
+
+    TWO QUESTIONS, TWO FLAGS, AND THE CALLER DOES NOT GET TO GUESS. --job pools every
+    drawing in a folder into one estimate, which is what 11650 is; --pdf reads one drawing
+    as one job, which is what each drawing of a hundred-drawing M&S enquiry is. Passing the
+    wrong one does not fail -- it produces a confident estimate of a different question,
+    which is the worst kind of wrong this system can be.""" 
     return [
         str(engine_python) if Path(engine_python).is_file() else "python",
         # -u, BECAUSE THIS OUTPUT IS GOING DOWN A PIPE.
@@ -188,7 +194,7 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         # dead run. The engine is the same; only when it speaks changes.
         "-u",
         str(Path(engine_root) / "src" / "main.py"),
-        "--job", str(job),
+    ] + (["--pdf", str(pdf)] if pdf else ["--job", str(job)]) + [
         "--order-qty", str(units),
         "--deliverables",
         "--customer", client,
@@ -525,13 +531,24 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     print(f"\n--- {job['drawing_number']} · {job['client']} · {job['units']} off")
     say(f"Runner picked up the job on {os.environ.get('COMPUTERNAME', 'this machine')}.")
 
-    if not folder.is_dir():
+    # WHAT HAS TO BE READABLE DEPENDS ON WHICH QUESTION WAS ASKED. For a pooled pack it is
+    # the folder; for one drawing of an enquiry it is that drawing. Checking the folder in
+    # both cases passed a run whose PDF had been moved or renamed, and the engine then
+    # reported "no drawing files found" as an ordinary exit -- a failure phrased as an
+    # absence, three layers away from the fact that the file simply is not there.
+    pdf = Path(job["pdf_path"]) if job.get("pdf_path") else None
+    if pdf is not None and not pdf.is_file():
+        _finish(requests, base, headers, run_id, runner_id, "error",
+                f"The drawing is not readable from this runner: {pdf}", log)
+        return
+    if pdf is None and not folder.is_dir():
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The job folder is not readable from this runner: {folder}", log)
         return
 
     before = snapshot(engine_root)
-    cmd = engine_command(engine_root, engine_python, folder, int(job["units"]), job["client"])
+    cmd = engine_command(engine_root, engine_python, folder, int(job["units"]),
+                         job["client"], pdf=pdf)
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 

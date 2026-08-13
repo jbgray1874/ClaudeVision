@@ -108,15 +108,23 @@ def test_queue_claim_progress_complete(api, tmp_path):
 
 
 def test_only_one_run_at_a_time(api, tmp_path):
-    """Two concurrent COM automations against one desktop is not a supported
-    thing to do, whatever folders they write to."""
+    """Two concurrent COM automations against one desktop is not a supported thing to do,
+    whatever folders they write to.
+
+    ENFORCED AT CLAIM, NOT AT SUBMIT. start() used to raise 409 whenever anything was
+    running, which is a rule about execution applied to the wrong verb -- and it made a
+    hundred-drawing M&S enquiry impossible to submit, because the first drawing is claimed
+    within five seconds and the other ninety-nine would all have been refused."""
     er, _ = api
     _check_in(er)
     er.start(_request(er, tmp_path))
     _check_in(er)                                     # claims it
-    with pytest.raises(er.HTTPException) as exc:
-        er.start(_request(er, tmp_path, drawing="99999"))
-    assert exc.value.status_code == 409
+    second = er.start(_request(er, tmp_path, drawing="99999"))
+    assert er._RUNS[second["run_id"]].status == "queued", "the second job was not accepted"
+    assert second["waiting_behind"], "the page is not told it is waiting on something"
+    assert _check_in(er, "rnr-2", "DESKTOP")["run"] is None, (
+        "a second run was handed out while one was in progress — two Excel automations "
+        "against one desktop")
 
 
 def test_a_second_runner_cannot_start_a_second_run(api, tmp_path):
@@ -404,15 +412,17 @@ def test_a_finished_run_is_not_released_again(api, tmp_path):
     assert exc.value.status_code == 409
 
 
-def test_the_refusal_tells_you_how_to_release_it(api, tmp_path):
-    """A 409 that names the problem and not the remedy is how somebody loses a morning."""
+def test_a_job_queued_behind_another_is_told_what_it_is_waiting_for(api, tmp_path):
+    """"Queued" with no reason reads as lost. Name the run in front of it and how long it
+    has been going, so the estimator can judge whether to wait or release it."""
     er, _ = api
     _check_in(er)
-    run_id = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
+    first = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
     _check_in(er)
-    with pytest.raises(er.HTTPException) as exc:
-        er.start(_request(er, tmp_path, drawing="99999"))
-    assert "abandon" in exc.value.detail and run_id in exc.value.detail
+    second = er.start(_request(er, tmp_path, drawing="99999"))
+    assert second["waiting_behind"] == first
+    said = " ".join(er._RUNS[second["run_id"]].log)
+    assert "11650-00" in said and "Queued behind" in said
 
 
 def test_the_lease_is_long_enough_for_a_real_estimate(api):
@@ -435,24 +445,16 @@ def test_the_page_offers_the_release_the_refusal_names(api):
         "the page does not recognise the refusal, so it cannot offer anything")
 
 
-def test_the_run_id_in_the_refusal_is_what_the_page_looks_for(api, tmp_path):
-    """The page digs the run id out of the 409 text with a regex. If the message stops
-    carrying a matching id the button appears to work and releases nothing — so pull the
-    real message through the real pattern rather than trusting both ends separately."""
-    import re
-    er, _ = api
-    _check_in(er)
-    er.start(_request(er, tmp_path, drawing="11650-00"))
-    _check_in(er)
-    with pytest.raises(er.HTTPException) as exc:
-        er.start(_request(er, tmp_path, drawing="99999"))
+def test_the_release_is_still_reachable_now_that_no_refusal_advertises_it(api, tmp_path):
+    """A STUCK CLAIM NO LONGER BLOCKS SUBMITTING, SO IT NO LONGER ANNOUNCES ITSELF.
 
+    While start() refused, the 409 carried the run id and the page offered to release it.
+    Now work queues instead, which is right -- and the consequence is that a dead claim
+    stops nothing at submit time and everything at execution time: jobs pile up queued and
+    the machine looks idle-but-busy for ever. The remedy has to be visible somewhere an
+    estimator actually looks, so the runner status line carries it."""
     page = (BACKEND / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
-    pattern = re.search(r"detail\.match\(/(.+?)/\)", page).group(1).replace("\\/", "/")
-    found = re.search(pattern, exc.value.detail)
-    assert found, (f"the page's pattern {pattern!r} finds no run id in the service's own "
-                   f"refusal:\n  {exc.value.detail}")
-    assert er._RUNS.get(found.group(1)) is not None, "it matched something that is not a run"
+    assert "/abandon" in page, "nothing on the page can release a stuck run any more"
 
 
 def test_the_page_does_not_report_a_forgotten_run_as_a_failure(api):
