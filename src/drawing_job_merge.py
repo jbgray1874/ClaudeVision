@@ -1285,6 +1285,23 @@ _MIRROR_TOP_FIELDS = ["overall_length_mm", "overall_width_mm", "blank_length_mm"
                       "fold_count_textual", "flat_pattern_detected"]
 
 
+def _own_number_key(part_number: Any) -> str:
+    """A part indexed under the number IT carries, hand suffix and all.
+
+    NOT normalize_part_code, which strips the hand: "11650-04-01A-HANDED" normalises to
+    "11650-04-01A", the same key as its base. That is the right answer to "are these the
+    same article" and the wrong one for an index, because the twin then OVERWRITES its base
+    and the mirror lookup returns the twin itself.
+
+    ONE FUNCTION, CALLED BY BOTH ENDS. The index and the lookup normalising differently is
+    exactly what happened: they agreed for every base and disagreed for every twin, and
+    nothing in the code said they were meant to match, so apply_mirror_geometry was a silent
+    no-op for every "-HANDED" pack ever run through it while working perfectly for "MIR" and
+    "Mirror<code>", which do not collapse.
+    """
+    return re.sub(r"\s+", "", str(part_number or "")).upper()
+
+
 def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Give a mirrored part the flat pattern of the part it mirrors.
 
@@ -1317,7 +1334,22 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     filled: List[Dict[str, Any]] = []
     if not isinstance(parts, list):
         return filled
-    by_key = {_normalize_part_key(str(p.get("part_number") or "")): p
+    # INDEXED BY WHAT EACH PART IS CALLED, NOT BY WHAT IT NORMALISES TO.
+    #
+    # normalize_part_code STRIPS the hand suffix — "11650-04-01A-HANDED" comes back as
+    # "11650-04-01A", which is correct for asking "are these the same article" and fatal
+    # here. Keyed that way, the twin OVERWRITES its own base in this index, the lookup below
+    # returns the twin, `base is part` is true, and the whole rule quietly does nothing.
+    #
+    # So apply_mirror_geometry had never once fired for a part spelled "-HANDED". It works
+    # for "MIR" and "Mirror<code>", which do not collapse — which is why this survived: the
+    # rule demonstrably worked on 11350, and 11650-04's handed panels went through it as a
+    # no-op with nothing anywhere saying so. Its geometry, its cut length, its hole count
+    # and its material were all left to be re-read from assembly pages.
+    #
+    # Two questions, one helper, and they need different answers. This one is an index of
+    # parts under their own numbers.
+    by_key = {_own_number_key(p.get("part_number")): p
               for p in parts if isinstance(p, dict)}
 
     for part in parts:
@@ -1326,7 +1358,7 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         base_pn = mirror_base(str(part.get("part_number") or ""))
         if not base_pn:
             continue
-        base = by_key.get(_normalize_part_key(base_pn))
+        base = by_key.get(_own_number_key(base_pn))
         if base is None or base is part:
             continue
 
@@ -1444,6 +1476,14 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     _got.append(f"geometry_rollup.{_rk}")
         # Thickness and material go through the resolver so a printed title block or a model
         # still outranks them, and so the disagreement is recorded if one does.
+        #
+        # THIS WAS ALWAYS HERE, AND 11650-04'S HANDED PANELS STILL CAME OUT ABS AND PETG at
+        # GBP 175.01 and GBP 114.98 a sheet. Nothing was wrong with these four lines: the
+        # function never reached them, because a "-HANDED" part shadowed its own base in the
+        # index above and the lookup returned the twin itself. Worth remembering before
+        # adding a rule that already exists -- the first fix for that defect was a second
+        # copy of this loop, which would have been two lists doing one job and no more
+        # correct than one.
         for _field, _key in (("normalized_thickness_mm", "normalized_thickness_mm"),
                              ("normalized_material", "normalized_material")):
             if not _is_blank(base.get(_key)):

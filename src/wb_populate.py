@@ -609,10 +609,27 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
     guess = _withhold(part, is_indicative, price_gbp) if _status == UNPRICED else None
     if not guess:
         return {"part": part, "withheld_gbp": None, "note": None, "status": _status}
-    part = dict(part)
+    # A DECISION ABOUT A LINE HAS TO LIVE ON THE LINE.
+    #
+    # These two markers were set on a COPY, and the copy was used to write the spreadsheet
+    # row and then dropped. So the sheet said "an AI market estimate of GBP 3.12 was kept off
+    # the price column" while the record every check and every report reads carried nothing at
+    # all -- and estimator_inputs.unpriced_reason_for_row, which exists to classify exactly
+    # this case as POLICY_WITHHELD, fell through to UNEXPLAINED.
+    #
+    # 11650-04 showed it as a contradiction on one screen: the sheet explaining BI-SCREW, and
+    # the invariants reporting "1 line(s) carry no price and no reason: BI-SCREW". Both were
+    # reading the same line and only one had been told.
+    #
+    # So the original is marked too. Not the price -- the price is deliberately withheld and
+    # stays withheld -- only the fact that a decision was taken and why, which is the thing a
+    # blank cell cannot say for itself.
     part["_price_explicitly_withheld"] = True
     part["_ai_indicative_gbp"] = guess
-    return {"part": part, "withheld_gbp": guess, "status": _status,
+    # The row that goes on the sheet is still a copy, so nothing downstream can edit the
+    # record by editing a spreadsheet row. The two markers above are on both.
+    row = dict(part)
+    return {"part": row, "withheld_gbp": guess, "status": _status,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
