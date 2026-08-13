@@ -974,6 +974,25 @@ def check_every_cad_file_was_used(summary: Any) -> List[Dict[str, Any]]:
                  f"container, which the ODA File Converter turns into something this engine "
                  f"reads. Those parts are being sized from drawing text while their measured "
                  f"outline sits unopened")
+        # WHY THEY WERE NOT CONVERTED, IN THE SAME SENTENCE AS THE FACT THAT THEY WERE NOT.
+        #
+        # convert_dwgs already distinguishes the cases and writes one of them down: the
+        # converter is not installed (a five-minute free download), the converter ran and
+        # produced nothing (3D DWGs, which hold no flat pattern — nothing to do), or it
+        # failed. This check reported none of it, so the only sentence anybody read told them
+        # a tool would fix it without saying whether the tool was even present. Two different
+        # actions, one message, and the one that costs nothing to fix looked like the one that
+        # cannot be fixed at all.
+        _conv = _node(summary, "dwg_conversion") or {}
+        # The reason is a whole sentence of its own and this message gets its full stop added
+        # at the end, so trim the one it already carries rather than print "on PATH..".
+        _why = str(_conv.get("reason") or "").strip().rstrip(".")
+        if _why:
+            _msg += f". {_why[0].upper()}{_why[1:]}"
+        elif _conv.get("converted"):
+            _msg += (f". The converter DID run on this job and produced "
+                     f"{len(_conv['converted'])} DXF — these are the files it could not "
+                     f"convert or that were not part flat patterns")
     if _rest:
         _msg += (". The rest carry geometry and none of the things an estimate needs — no "
                  "part numbers, no quantities, no material — so they are skipped by design")

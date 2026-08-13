@@ -553,7 +553,25 @@ def _empty_geometry_rollup() -> Dict[str, Any]:
 
 
 def _empty_part_record(part_number: str, item_number: Any = None, description: Any = None, quantity: Any = 1) -> Dict[str, Any]:
-    return {
+    """A blank part record. The default quantity of ONE is an ASSUMPTION, and it is born
+    saying so.
+
+    Every caller that knows the quantity passes None here and submits the real figure through
+    the resolver immediately afterwards — part_index does it from the BOM row, document_builder
+    does it twice, drawing_job_merge does it for a synthesised part. One caller does not:
+    part_index creates a record for a part it has only seen NAMED on a page, and takes this
+    default. That record then carried a quantity of 1 with no source at all.
+
+    An unattributed datum is invisible to arbitration. The next pass has nothing to weigh
+    itself against, so it either overwrites a real reading or leaves a guess standing, and
+    nothing anywhere says which happened — 11650-04 came back with three parts in exactly that
+    state. `inference` is rank 20, the bottom of the table, so any real observation of the
+    quantity beats it and the assumption survives only where nothing better was ever read.
+
+    Not "the caller should attribute it". The caller that supplies no quantity has no source to
+    supply either; the honest source is the one this line is: an assumption made here.
+    """
+    record = {
         "part_number": part_number,
         "item_number": item_number,
         "description": description,
@@ -610,6 +628,12 @@ def _empty_part_record(part_number: str, item_number: Any = None, description: A
         "normalized_geometry": {},
         "risk_flags": [],
     }
+    # STAMPED ONLY WHERE THIS FUNCTION SUPPLIED THE NUMBER. A caller that passes None is about
+    # to submit the real quantity through the resolver and must not find a source already
+    # sitting there — apply_field would then be arbitrating against a claim nobody made.
+    if quantity is not None:
+        record["quantity_source"] = "inference"
+    return record
 
 
 def _rollup_geometry(target: Dict[str, Any], geometry: Dict[str, Any]) -> None:
