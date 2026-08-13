@@ -347,9 +347,25 @@ async function checkRunners(){
     runnersOnline = d.online || 0;
     const live = (d.runners||[]).filter(x => x.online);
     if(runnersOnline){
-      runnerBox.style.borderLeftColor = "var(--ok)";
-      runnerText.textContent = live.map(x => x.hostname || x.runner_id).join(", ")
-        + (d.queued ? `  ·  ${d.queued} queued` : "  ·  ready");
+      /* "READY" IS A CLAIM ABOUT THE MACHINE, AND IT HAS TO BE TRUE.
+         This said "ready" whenever a runner was online and nothing was QUEUED — it never
+         looked at run_id, which the API already returns and which is precisely "this
+         runner is mid-estimate". So a runner 67 seconds into 11650-00 read "ready", the
+         button was pressed, and the service refused with "An estimate is already running".
+         The page and the service disagreeing about one fact leaves the operator to work
+         out which of them is lying, and the answer is not obvious from either screen. */
+      const busy = live.filter(x => x.running);
+      runnerBox.style.borderLeftColor = busy.length ? "var(--warn)" : "var(--ok)";
+      const who = live.map(x => x.hostname || x.runner_id).join(", ");
+      let state;
+      if(busy.length){
+        const b = busy[0].running;
+        state = `  ·  busy — ${b.drawing_number} for ${b.client}, ${b.seconds}s in`
+              + (d.queued ? `, ${d.queued} queued behind it` : "");
+      }else{
+        state = d.queued ? `  ·  ${d.queued} queued` : "  ·  ready";
+      }
+      runnerText.textContent = who + state;
     }else{
       runnerBox.style.borderLeftColor = "var(--bad)";
       runnerText.innerHTML = '<span style="color:var(--bad)">No runner connected — '

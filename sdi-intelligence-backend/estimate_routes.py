@@ -269,9 +269,20 @@ def runners(x_sdi_key: Optional[str] = Header(default=None)):
         _expire_dead_claims()
         listed = [r.as_json() for r in sorted(_RUNNERS.values(),
                                               key=lambda r: r.last_seen, reverse=True)]
+        # WHAT IT IS BUSY WITH, not merely that it holds a run id. The page has to be able
+        # to say "busy — 11650-00 for Boots, 67s in" in the same words the 409 uses when it
+        # refuses a second estimate, or the two disagree about one fact and the operator is
+        # left to guess which is right.
+        for entry in listed:
+            run = _RUNS.get(entry.get("run_id") or "")
+            entry["running"] = None if run is None or run.status != "running" else {
+                "drawing_number": run.drawing_number, "client": run.client,
+                "seconds": round(time.time() - (run.started_at or time.time())),
+            }
         online = [r for r in listed if r["online"]]
         queued = sum(1 for run in _RUNS.values() if run.status == "queued")
-    return {"runners": listed, "online": len(online), "queued": queued}
+    return {"runners": listed, "online": len(online), "queued": queued,
+            "busy": sum(1 for r in online if r.get("running"))}
 
 
 @router.post("/runner/claim")

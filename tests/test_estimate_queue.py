@@ -257,3 +257,92 @@ def test_only_the_quiet_poll_is_hidden_from_the_log(monkeypatch):
     # a record that is not an access log is not ours to judge
     other = logging.LogRecord("uvicorn.error", logging.ERROR, "", 0, "boom", None, None)
     assert f.filter(other)
+
+
+# ── the page and the service must agree about one fact ───────────────────────
+def test_the_runner_listing_says_what_it_is_busy_with(api, tmp_path):
+    """A RUNNER MID-ESTIMATE MUST NOT READ "READY".
+
+    The page rendered "· ready" whenever a runner was online and nothing was QUEUED. It
+    never looked at run_id, which this endpoint already returned and which is precisely
+    "this runner is mid-estimate". So a runner 67 seconds into 11650-00 said ready, the
+    button was pressed, and the service refused with "An estimate is already running".
+
+    Two screens disagreeing about one fact leaves whoever is standing there to work out
+    which one is lying. The listing now carries what the run IS, in the same words the 409
+    uses, so the page can say it without inventing anything.
+    """
+    er, _ = api
+    _check_in(er)
+    er.start(_request(er, tmp_path, drawing="11650-00"))
+    _check_in(er)                                     # claims it — now running
+
+    listed = er.runners()
+    entry = listed["runners"][0]
+    assert entry["running"], "a runner driving a live estimate is reported as idle"
+    assert entry["running"]["drawing_number"] == "11650-00"
+    assert entry["running"]["client"] == "Boots"
+    assert entry["running"]["seconds"] >= 0
+    assert listed["busy"] == 1
+
+
+def test_an_idle_runner_is_not_reported_as_busy(api, tmp_path):
+    """The other direction. Reporting a free machine as busy would stop work being sent
+    to a runner that is sitting there, and the fix for that looks like a broken queue."""
+    er, _ = api
+    _check_in(er)
+    listed = er.runners()
+    assert listed["runners"][0]["running"] is None
+    assert listed["busy"] == 0
+
+
+def test_a_finished_run_frees_the_listing_too(api, tmp_path):
+    """The stale-lock shape: a run that completed while the listing still names it would
+    read busy for ever, and nobody would press the button again."""
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
+    _check_in(er)
+    er.complete(run_id, er.CompleteRequest(runner_id="rnr-1", status="done"))
+    listed = er.runners()
+    assert listed["busy"] == 0 and listed["runners"][0]["running"] is None
+
+
+def test_a_runner_that_died_mid_run_is_not_reported_busy_for_ever(api, tmp_path):
+    """A lease that ran out means the machine stopped talking. The run is failed with a
+    reason, and the listing must stop claiming it is working on something."""
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
+    _check_in(er)
+    er._RUNS[run_id].lease_until = time.time() - 1
+    listed = er.runners()
+    assert er._RUNS[run_id].status == "error"
+    assert listed["busy"] == 0 and listed["runners"][0]["running"] is None
+
+
+def test_the_page_reads_running_and_not_just_online(api):
+    """THE PAGE, NOT THE ENDPOINT. Serving the fact and never rendering it is the defect
+    this replaced -- run_id was in the payload the whole time and the page ignored it."""
+    page = (BACKEND / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+    assert "x.running" in page, (
+        "the page still decides 'ready' without asking what the runner is running")
+    assert "busy —" in page, "there is no wording for a busy runner to render"
+
+
+def test_a_dangling_run_id_is_not_described_as_a_live_estimate(api, tmp_path):
+    """Every terminal path clears the runner's run_id today, so this state cannot be
+    reached through the endpoints — which is exactly why it is constructed here. The
+    listing describes what a runner is DOING, and a stale id pointing at a finished run
+    would have it describing an estimate that ended. Remove the status check and this is
+    the only thing that notices."""
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
+    _check_in(er)
+    er.complete(run_id, er.CompleteRequest(runner_id="rnr-1", status="done"))
+    er._RUNNERS["rnr-1"].run_id = run_id              # the dangling pointer
+    listed = er.runners()
+    assert listed["runners"][0]["running"] is None, (
+        "the listing reported a finished run as a live estimate")
+    assert listed["busy"] == 0
