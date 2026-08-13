@@ -34,9 +34,12 @@ import shutil
 import subprocess
 
 # ── THE RUNNER READS .env TOO ───────────────────────────────────────────────────────
-# main.py loads C:\ClaudeVision\.env before anything reads os.environ, so the ENGINE's
-# switches -- XAI_API_KEY, SDI_SW_RUN_ANALYSER, SDI_OFFLINE -- come from a file that is the
-# same for every run however it was started. The runner did not, so SDI_ENGINE_ROOT,
+# config.load_dot_env() loads C:\ClaudeVision\.env at config import, before anything reads
+# os.environ, so the ENGINE's switches -- XAI_API_KEY, SDI_SW_RUN_ANALYSER, SDI_OFFLINE --
+# come from a file that is the same for every run however it was started, and by whichever
+# entry point. (It lived in main.py once, which meant only a run through main.py got it.)
+# The runner is a separate process and imports no engine module, so it still needs its own
+# read of the same file: SDI_ENGINE_ROOT, SDI_SERVER,
 # SDI_SERVER, SDI_API_KEY and SDI_ENGINE_PYTHON came from whichever PowerShell window
 # happened to launch it.
 #
