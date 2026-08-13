@@ -97,6 +97,41 @@ def resolve_search_provider(explicit: Optional[str] = None) -> str:
     return "none"
 
 
+# ── an answer about the ACCOUNT is not an answer about the query ────────────────────
+# 429 (out of quota / rate limited), 401 and 403 (key rejected) are the provider talking
+# about the subscription, not about what was asked. Trying a different material cannot change
+# any of them, so asking again is time spent to be told the same thing -- one 11650 run put
+# seven identical "HTTP Error 429: Too Many Requests" lines through the console, each one a
+# network round trip, and the only information in the last six was already in the first.
+#
+# So the refusal is remembered for the run and said ONCE, plainly: web price lookup is off,
+# and every line that would have used it is left for the estimator rather than priced at
+# nothing. Keyed by provider, so a dead SerpAPI key does not silence Google CSE.
+_PROVIDER_REFUSED: Dict[str, str] = {}
+_ACCOUNT_LEVEL = ("429", "401", "403", "Too Many Requests", "quota", "Unauthorized",
+                  "Forbidden")
+
+
+def _account_level_refusal(exc: BaseException) -> bool:
+    text = f"{exc}"
+    return any(t.lower() in text.lower() for t in _ACCOUNT_LEVEL)
+
+
+def _remember_refusal(provider: str, reason: str) -> None:
+    if provider in _PROVIDER_REFUSED:
+        return
+    _PROVIDER_REFUSED[provider] = reason
+    print(f"   [web-price] {provider} refused on the ACCOUNT, not the query ({reason}). "
+          f"Asking again with a different material cannot change that, so web price lookup "
+          f"is off for the rest of this run. Lines that needed it are left for the "
+          f"estimator, not priced at nothing.", flush=True)
+
+
+def forget_provider_refusals() -> None:
+    """Clear the latch. For tests and for a caller that knows the account was topped up."""
+    _PROVIDER_REFUSED.clear()
+
+
 def search_serpapi(
     query: str,
     *,
@@ -105,6 +140,8 @@ def search_serpapi(
     region: str = "uk",
     hl: str = "en",
 ) -> Tuple[List[SearchHit], Optional[str]]:
+    if "serpapi" in _PROVIDER_REFUSED:
+        return [], _PROVIDER_REFUSED["serpapi"]
     key = (api_key or os.environ.get("SERPAPI_API_KEY", "")).strip()
     if not key:
         return [], "SERPAPI_API_KEY not set"
@@ -121,7 +158,10 @@ def search_serpapi(
     try:
         body = _http_get_json(url)
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.warning("SerpAPI search failed: %s", exc)
+        if _account_level_refusal(exc):
+            _remember_refusal("serpapi", str(exc))
+        else:
+            logger.warning("SerpAPI search failed: %s", exc)
         return [], str(exc)
 
     hits: List[SearchHit] = []
@@ -152,6 +192,8 @@ def search_google_cse(
     gl: str = "uk",
     hl: str = "en",
 ) -> Tuple[List[SearchHit], Optional[str]]:
+    if "google_cse" in _PROVIDER_REFUSED:
+        return [], _PROVIDER_REFUSED["google_cse"]
     key = (api_key or os.environ.get("GOOGLE_CSE_API_KEY", "")).strip()
     engine_id = (cx or os.environ.get("GOOGLE_CSE_CX", "")).strip()
     if not key:
@@ -171,7 +213,10 @@ def search_google_cse(
     try:
         body = _http_get_json(url)
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.warning("Google CSE search failed: %s", exc)
+        if _account_level_refusal(exc):
+            _remember_refusal("google_cse", str(exc))
+        else:
+            logger.warning("Google CSE search failed: %s", exc)
         return [], str(exc)
 
     if body.get("error"):

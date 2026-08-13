@@ -2148,13 +2148,28 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # down inside the line that explains it -- and it did, on a dict with no
             # "source" key. The message is the least important thing in this function and
             # was the only thing that could raise.
+            # WHAT ACTUALLY HAPPENED, NOT WHAT THIS BLOCK IS FOR. When a substitution rescued
+            # the price, the line below is NOT what the line was costed from -- the pricing
+            # material has a rate, so _llm_rate_m2 stays None and the market figure never
+            # reaches the arithmetic. Saying "PRICED FROM IT" on both paths put a false
+            # statement on the console directly above the message contradicting it: 11650's
+            # 11650-01-05A read "PRICED FROM IT" and then "Priced from POLYCARBONATE".
+            # A console that asserts a decision the code did not take is worse than a silent
+            # one, because it is believed.
+            _priced_from_it = _material_conflict is None
             print(f"   [material] {part.get('part_number')}: no rate for "
                   f"{_arbitrated_material}; market indication "
                   f"£{_safe_float(_indication.get('gbp_per_m2')) or 0.0:.2f}/m2 "
                   f"(£{_safe_float(_indication.get('gbp_per_sheet')) or 0.0:.2f}/sheet, "
                   f"{_indication.get('source') or 'llm'}) "
-                  f"— PRICED FROM IT, marked as an LLM estimate. Not a supplier quote; "
-                  f"this job cannot go out firm on it.", flush=True)
+                  + (f"— PRICED FROM IT, marked as an LLM estimate. Not a supplier quote; "
+                     f"this job cannot go out firm on it."
+                     if _priced_from_it else
+                     f"— FOR COMPARISON ONLY. This line is costed from "
+                     f"{_material_conflict.get('priced_material') or 'the substitute below'}, not "
+                     f"from this figure. Compare the two: if they are close the substitution "
+                     f"barely matters, if they are far apart it decides the price."),
+                  flush=True)
     if _material_conflict:
         part["material_priced_as"] = _material_conflict
         part.setdefault("review_flags", []).append({
