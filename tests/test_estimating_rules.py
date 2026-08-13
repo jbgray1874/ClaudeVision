@@ -8345,15 +8345,18 @@ def test_the_pipeline_builds_the_record_these_rules_read():
        "so nothing is left without a parent")
 
     # ── THE REAL THING, WHEN ONE IS PRESENT ─────────────────────────────────────────
-    import json
-    from pathlib import Path
-    _jobs = sorted((Path(__file__).resolve().parent / "fixtures" / "jobs").glob("*.json")) \
-        if (Path(__file__).resolve().parent / "fixtures" / "jobs").is_dir() else []
-    for _job_path in _jobs:
-        _doc = json.loads(_job_path.read_text(encoding="utf-8"))
-        _real = [p for p in ((_doc.get("manufacturing_writeup") or {}).get("parts") or [])
-                 if isinstance(p, dict)]
-        ok(_real, f"{_job_path.name} carries parts to replay")
+    # Read through job_corpus, which searches the in-repo folder AND $SDI_JOB_CORPUS, and
+    # which finds the parts wherever the engine that wrote them put them. The glob that used
+    # to be here knew one shape and one folder: an older job would have reported "no parts"
+    # and read as a broken harness rather than a document worth replaying, and older jobs are
+    # the valuable ones precisely because nobody wrote them with today's rules in mind.
+    import job_corpus
+    for _job_path, _doc in job_corpus.jobs():
+        _real = job_corpus.raw_parts(_doc)
+        ok(_real, f"{_job_path.name} carries parts to replay "
+                  f"({job_corpus.what_this_document_holds(_doc)})")
+        if not _real:
+            continue
         _stamp_assembly_parents(_real)
         apply_mirror_geometry(_real)
         _rg = compile_job_route(_real, _doc.get("llm_full_extract") or {})
