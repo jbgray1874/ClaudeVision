@@ -1189,16 +1189,45 @@ def _dxf_geometry_trusted(part: Dict[str, Any], ng: Dict[str, Any]) -> bool:
     return False
 
 
-def _plausible_blank_dimension_mm(value: Optional[float]) -> bool:
+def _plausible_blank_dimension_mm(value: Optional[float], measured: bool = False) -> bool:
+    """Could this number be one side of a blank?
+
+    A GUARD AGAINST MISREAD TEXT, APPLIED TO A MEASUREMENT, THROWS AWAY THE MEASUREMENT.
+
+    Both rules below exist for text. Dates parse as dimensions -- "07/04/2021" arrives as
+    2021.0mm -- so anything in the 1900-2100 band was refused, and 2500 capped a number
+    picked out of a drawing by OCR. Neither risk exists for a DXF flat pattern: that value
+    is the extent of a closed profile in a CAD file, not a string somebody's reader had a
+    go at. Applying the text rules to it cost real parts:
+
+      * a 2000mm panel -- one of the commonest shopfitting heights there is -- was
+        discarded as a calendar year
+      * anything over 2500mm was discarded outright, on a machine whose standard sheet is
+        3050 long, so a part that plainly can be cut was refused as impossible
+
+    In both cases the part then carried no blank, priced no material, and said nothing.
+
+    So `measured` splits them. Text keeps both rules, because a misread there is likely and
+    a wrong blank is worse than none. A measurement keeps only the physical bound -- how big
+    a sheet part can be at all, which blank_credibility already answers, rather than a second
+    number in a second module meaning the same thing.
+    """
     if value is None or value <= 0:
         return False
+    policy = getattr(config, "BLANK_DIMENSION_POLICY", {}) or {}
+    min_mm = float(policy.get("min_single_dim_mm", 1.0))
+    if measured:
+        try:
+            import blank_credibility as _bc
+            max_mm = float(_bc.MAX_SHEET_PART_MM)
+        except Exception:                                    # noqa: BLE001
+            max_mm = 4000.0
+        return min_mm <= value <= max_mm
     # Reject calendar years misread as dimensions.
     # Dates like "07/04/2021" get parsed as 2021.0mm — filter them out.
     if 1900.0 <= value <= 2100.0:
         return False
-    policy = getattr(config, "BLANK_DIMENSION_POLICY", {}) or {}
     max_mm = float(policy.get("max_single_dim_mm", 2500.0))
-    min_mm = float(policy.get("min_single_dim_mm", 1.0))
     return min_mm <= value <= max_mm
 
 
@@ -1405,7 +1434,27 @@ def infer_primary_dimensions(part: Dict[str, Any]) -> Dict[str, Optional[float]]
     # ── Priority 1: DXF exact flat-pattern ────────────────────────────────────
     dxf_l = _safe_float(ng.get("blank_length_mm"))
     dxf_w = _safe_float(ng.get("blank_width_mm"))
-    if dxf_l and dxf_w and _plausible_blank_dimension_mm(dxf_l) and _plausible_blank_dimension_mm(dxf_w):
+    # A MEASUREMENT THROWN AWAY MUST NOT GO QUIETLY. When a flat pattern exists and is
+    # refused, the part falls through to weaker evidence or to nothing at all -- and a part
+    # with no blank prices no material, which reads on the sheet as a part that is free to
+    # make. That is the same silent zero the door cost, arriving by a different door.
+    if dxf_l and dxf_w and not (_plausible_blank_dimension_mm(dxf_l, measured=True)
+                                and _plausible_blank_dimension_mm(dxf_w, measured=True)):
+        _why = "; ".join(
+            f"{_v:g}mm is outside what a sheet part can be" for _v in (dxf_l, dxf_w)
+            if not _plausible_blank_dimension_mm(_v, measured=True))
+        _flags = part.setdefault("review_flags", [])
+        _detail = (f"The flat pattern reads {dxf_l:g} x {dxf_w:g} mm and was refused: "
+                   f"{_why}. This part now has no measured blank, so its material is "
+                   f"costed from weaker evidence or not at all. Either the DXF is not a "
+                   f"flat pattern, or this part is bigger than anything this engine will "
+                   f"nest.")
+        if not any(isinstance(f, dict) and f.get("flag") == "measured_blank_refused"
+                   for f in _flags):
+            _flags.append({"severity": "warning", "flag": "measured_blank_refused",
+                           "detail": _detail})
+    if dxf_l and dxf_w and _plausible_blank_dimension_mm(dxf_l, measured=True) \
+            and _plausible_blank_dimension_mm(dxf_w, measured=True):
         # Only second-guess DXF when a side is implausibly large (e.g. whole-page bbox).
         # Normal flats (500 mm base ~565×542) must keep DXF blank — £/tonne clamp fixes material.
         if max(dxf_l, dxf_w) > 900.0 or min(dxf_l, dxf_w) > 700.0:
@@ -1437,8 +1486,8 @@ def infer_primary_dimensions(part: Dict[str, Any]) -> Dict[str, Optional[float]]
         flat_width = _safe_float(flat_box.get("width"))
         if (
             flat_length and flat_width
-            and _plausible_blank_dimension_mm(flat_length)
-            and _plausible_blank_dimension_mm(flat_width)
+            and _plausible_blank_dimension_mm(flat_length, measured=True)
+            and _plausible_blank_dimension_mm(flat_width, measured=True)
         ):
             return {
                 "overall_length_mm": flat_length,
@@ -2402,16 +2451,40 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         _acr_pps = _costed_facts.other_sheet_parts_per_sheet(
             blank_length, blank_width, _acr_sheet_dims[0], _acr_sheet_dims[1])
         _area_only_part = _acr_area_m2 * _acr_rate_m2 * (1.0 + _scrap)
+        _nest_failed = not _acr_pps
         if _acr_pps:
             # Exactly the template's M = (L/J) x (1+K), so the JSON and the sheet agree.
             _acr_cost_part = (_sheet_price / float(_acr_pps)) * (1.0 + _scrap)
         else:
             # BIGGER THAN THE SHEET, or no usable nest. The template shows "doesn't fit"
-            # and charges nothing, which is the one answer that is certainly wrong. Price
-            # it by area and say the nest failed rather than return a silent zero.
+            # and charges nothing, which is the one answer that is certainly wrong. Price it
+            # by area -- and SAY SO, because this is the one case where the engine and the
+            # workbook cannot agree: the sheet will run J51 over the same dimensions, reach
+            # the same "doesn't fit", and put an error or a zero in the row. A part that
+            # needs a bigger sheet, a different stock size or cutting from two pieces is a
+            # buying decision, and nobody can take it from a number that arrived quietly.
+            #
+            # The comment here used to promise exactly this and the code did not do it.
             _acr_pps = 1
             _acr_cost_part = _area_only_part
         _acr_ext = round(_acr_cost_part * quantity, 2)
+        if _llm_rate_m2:
+            _acr_note = ("%s has no rate in this engine. Priced at an LLM MARKET INDICATION "
+                         "of £%.2f/m2 (£%.2f/sheet, %s) — NOT a supplier quote and not firm; "
+                         "confirm with Purchasing."
+                         % (material, _acr_rate_m2, _sheet_price,
+                            _llm_ind.get("source") or "llm"))
+        else:
+            _acr_note = ("Acrylic sheet-nested cost (PROVISIONAL) — £%.2f/sheet ÷ %s "
+                         "parts/sheet; swap for canonical on estimating confirmation."
+                         % (_sheet_price, _acr_pps))
+        if _nest_failed:
+            _acr_note += (" DOES NOT NEST on a %.0f x %.0f sheet at %.0f x %.0f: priced by "
+                          "AREA instead, and the workbook will show this row as not fitting. "
+                          "It needs a larger sheet, a different stock size, or cutting from "
+                          "two pieces — that is a buying decision, not a rounding."
+                          % (_acr_sheet_dims[0], _acr_sheet_dims[1],
+                             blank_length or 0, blank_width or 0))
         return {
             "material": material,
             "thickness_mm": thickness,
@@ -2443,16 +2516,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                             else "acrylic_area_per_m2_provisional"),
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
-            "reliability_flags": (["llm_market_rate_not_a_supplier_price"] if _llm_rate_m2 else
-                                  [getattr(config, "ACRYLIC_PROVISIONAL_FLAG",
-                                           "acrylic_provisional_pending_estimating")]),
-            "note": (("%s has no rate in this engine. Priced at an LLM MARKET INDICATION of "
-                      "£%.2f/m2 (£%.2f/sheet, %s) — NOT a supplier quote and not firm; "
-                      "confirm with Purchasing." % (material, _acr_rate_m2, _sheet_price,
-                                                    _llm_ind.get("source") or "llm"))
-                     if _llm_rate_m2 else
-                     "Acrylic sheet-nested cost (PROVISIONAL) — £%.2f/sheet ÷ %s parts/sheet; "
-                     "swap for canonical on estimating confirmation." % (_sheet_price, _acr_pps)),
+            "reliability_flags": ((["llm_market_rate_not_a_supplier_price"] if _llm_rate_m2 else
+                                   [getattr(config, "ACRYLIC_PROVISIONAL_FLAG",
+                                            "acrylic_provisional_pending_estimating")])
+                                  + (["does_not_nest_on_the_standard_sheet"] if _nest_failed
+                                     else [])),
+            "note": _acr_note,
             "price_source": _build_price_source_metadata(
                 {},
                 # "llm_" so is_non_reproducible_source recognises it without a new rule:
