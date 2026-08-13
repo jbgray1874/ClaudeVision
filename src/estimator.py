@@ -23,6 +23,7 @@ from config import (
     WORKBOOK_EQUIVALENT_PRICING,
 )
 from estimate_source_extract import build_estimate_source_extract
+import costed_facts as _costed_facts
 import price_provenance
 from price_provenance import classify_price_source
 import supplier_reference as _supplier_reference
@@ -2378,14 +2379,38 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _full_sheet_area_m2 = (3050.0 * 2050.0) / 1_000_000.0
         # L = real full-sheet price at the UDEF £/m2 (verifiable against a supplier invoice)
         _sheet_price = round(_full_sheet_area_m2 * _acr_rate_m2, 2)
-        # J = geometric parts-per-sheet (full area / part area); real nesting yields fewer and
-        # the scrap % covers that waste. Cost is robust to J because full-sheet area cancels in L/J.
+        # ── J: THE WORKBOOK'S RULE, BECAUSE THE WORKBOOK IS WHAT CHARGES THE JOB ──────
+        # This used to be full_sheet_area / part_area, with the reasoning that the sheet
+        # area cancels in L/J and the cost comes out as exactly area x rate. The algebra is
+        # right and the premise is not: wb_populate writes L, the blank L/W and the sheet
+        # L/W into the Other Sheet Material row, and the TEMPLATE recomputes J itself from
+        # those by its own J51 nesting rule. The engine's J is never read. So the
+        # cancellation the comment relied on happens nowhere, and the two artefacts charge
+        # different money for the same part.
+        #
+        # 11650's door, 1202 x 689 on a 3050 x 2050 sheet: the engine said 7.55 parts per
+        # sheet and priced GBP 18.69; the sheet nests 4 and charges GBP 35.28. Every report
+        # reading the JSON disagreed with the workbook the estimator was holding.
+        #
+        # WHICH IS COMMERCIALLY RIGHT IS A REAL QUESTION -- area-basis says you pay for the
+        # material you use and the offcut is someone else's, nested says you buy whole
+        # sheets and get four doors out of one. It is not settled here and it is not settled
+        # quietly: the engine now predicts what the workbook will actually charge, and the
+        # area figure is kept beside it on the record so the assumption is visible and an
+        # estimator can argue with it.
         _part_area_m2 = _acr_area_m2 if _acr_area_m2 and _acr_area_m2 > 0 else (_full_sheet_area_m2 or 1.0)
-        _acr_pps = int(_full_sheet_area_m2 / _part_area_m2) if _part_area_m2 > 0 else 1
-        if not _acr_pps or _acr_pps < 1:
+        _acr_pps = _costed_facts.other_sheet_parts_per_sheet(
+            blank_length, blank_width, _acr_sheet_dims[0], _acr_sheet_dims[1])
+        _area_only_part = _acr_area_m2 * _acr_rate_m2 * (1.0 + _scrap)
+        if _acr_pps:
+            # Exactly the template's M = (L/J) x (1+K), so the JSON and the sheet agree.
+            _acr_cost_part = (_sheet_price / float(_acr_pps)) * (1.0 + _scrap)
+        else:
+            # BIGGER THAN THE SHEET, or no usable nest. The template shows "doesn't fit"
+            # and charges nothing, which is the one answer that is certainly wrong. Price
+            # it by area and say the nest failed rather than return a silent zero.
             _acr_pps = 1
-        # Python's own per-part figure (JSON summary) = the exact area price incl scrap.
-        _acr_cost_part = _acr_area_m2 * _acr_rate_m2 * (1.0 + _scrap)
+            _acr_cost_part = _area_only_part
         _acr_ext = round(_acr_cost_part * quantity, 2)
         return {
             "material": material,
@@ -2405,6 +2430,15 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # and qty-per-sheet (J) itself, so we expose the sheet price, NOT the per-part cost.
             "sheet_price_gbp": round(float(_sheet_price), 2),
             "parts_per_sheet": int(_acr_pps),
+            "nesting_rule": "workbook_other_sheet_J51",
+            # THE OTHER ANSWER, KEPT WHERE IT CAN BE ARGUED WITH. Nested says you buy whole
+            # sheets and get four doors out of one; area says you pay for what you use and
+            # the offcut is someone else's. The engine charges what the workbook charges,
+            # and this is what it would have been on the area basis, so the difference is a
+            # number an estimator can see rather than a decision buried in a formula.
+            "area_only_cost_per_part_gbp": round(_area_only_part, 2),
+            "nesting_uplift_x": (round(_acr_cost_part / _area_only_part, 2)
+                                 if _area_only_part else None),
             "cost_method": ("llm_market_sheet_rate" if _llm_rate_m2
                             else "acrylic_area_per_m2_provisional"),
             "part_confidence_overall": _part_confidence_overall(part),

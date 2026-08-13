@@ -31,7 +31,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import config                                                       # noqa: E402
 import price_provenance as pp                                       # noqa: E402
-from wb_populate import _is_board, _PLASTIC_SHEET_TOKENS            # noqa: E402
+from wb_populate import _is_board                                   # noqa: E402
+from costed_facts import _PLASTIC_SHEET_TOKENS                      # noqa: E402
 
 
 def _norm(name):

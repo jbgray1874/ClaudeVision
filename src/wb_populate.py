@@ -88,6 +88,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 # dependency-free, so it is safe to ask anywhere — including inside the finish gate,
 # which used to answer it privately and disagreed with the rest of the engine.
 import bought_in_policy as _bought_in_policy
+import costed_facts as _costed_facts
 
 # What goes next to a price nobody can reproduce. Short enough for a spreadsheet cell and
 # blunt enough that it cannot be read as a supplier quote.
@@ -1119,30 +1120,22 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
 # total, on a part that is not metal, with a number that looks entirely plausible. Its
 # opposite hand went unpriced. POLYCARBONATE routed correctly the whole time because it
 # happens to contain POLY, which is what made the failure look like a one-off.
-_PLASTIC_SHEET_TOKENS = (
-    "ACRYLIC", "PERSPEX", "POLY",            # POLY catches POLYCARBONATE/PROP/STYRENE/ETHYLENE
-    "PETG", "PET ",                          # PET with a space: "PET" alone matches PETROL, PETG
-    "HIPS", "ABS", "PVC", "FOAM", "NYLON",
-    "ACETAL", "DELRIN", "HDPE", "UHMW", "PMMA",
-)
-
-# Board and timber. A glued-and-pinned timber crate is not sheet metal either, but it is
-# not plastic, and _is_timber below needs to tell them apart to name a department.
-_BOARD_TIMBER_TOKENS = (
-    "MDF", "BOARD", "MELAMINE", "MFC",
-    "TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
-    "SPRUCE", "BEECH", "BIRCH",
-)
+# The token lists moved to costed_facts, so the workbook, the AI spreadsheet and the
+# engine's nester all read one list. Two copies is how "MR MDF" came to be board in
+# one file and not board in another.
 
 
 def _is_board(mat: str) -> bool:
     """Not sheet metal -- so it is costed by area in the Other Sheet Material block.
 
-    The name is historic: this decides the COST STREAM, and everything that is not metal
-    shares one. _is_timber narrows it again where a department has to be named.
+    ONE DEFINITION, in costed_facts. This module's token lists and xlsx_output's exact-match
+    set were two different answers to one question, and they disagreed on every material
+    anybody actually writes on a drawing: "MR MDF" and "6MM ABS" were board here and not
+    board there, so the workbook and the AI spreadsheet could put the same part in
+    different blocks on the same run. _is_timber still narrows it where a department has
+    to be named.
     """
-    m = (mat or "").upper()
-    return any(k in m for k in _PLASTIC_SHEET_TOKENS + _BOARD_TIMBER_TOKENS)
+    return _costed_facts.is_other_sheet_material(mat)
 
 
 _TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",

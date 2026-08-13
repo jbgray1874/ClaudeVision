@@ -198,8 +198,15 @@ def _is_sheet_metal(mat):
         "STAINLESS STEEL","ALUMINIUM","ALUMINUM","ZINTEC","BRIGHT_DRAWN"}
 
 def _is_board(mat):
-    return str(mat or "").upper() in {"MDF","VENEERED_MDF","OAK_VENEER_MDF",
-        "PLYWOOD","BIRCH_PLYWOOD","TIMBER","ACRYLIC","POLYCARBONATE","HDPE_PLASTIC"}
+    """ONE DEFINITION, in costed_facts.
+
+    This was an exact-match set, and wb_populate's was a substring token list. They gave
+    different answers for every material anybody actually writes on a drawing -- "MR MDF",
+    "6MM ABS", "CLEAR POLYCARB" were all board in the workbook and none of them board here
+    -- so the two spreadsheets could stream the same part differently on the same run.
+    """
+    import costed_facts as _cf
+    return _cf.is_other_sheet_material(mat)
 
 def _labour_rates(le: Dict[str, Any]) -> Dict[str, float]:
     """Hourly rates from labour_estimate; fall back to rate_sources (UDEF/sqlserver path)."""

@@ -59,12 +59,12 @@ def test_the_two_vocabularies_are_deliberately_separate():
     """document_builder answers 'does this text mention something non-metal'. wb_populate
     answers 'is this part made of plastic sheet'. Merging them looks like removing a
     duplicate and is how COLD ROLLED STEEL becomes a board part."""
-    import wb_populate
+    import costed_facts
     from document_builder import _NON_METAL_KEYWORDS
 
     assert "LED" in _NON_METAL_KEYWORDS, \
         "the hazard this separation exists for has gone -- re-read before merging"
-    assert not any("LED" == t for t in wb_populate._PLASTIC_SHEET_TOKENS)
+    assert not any("LED" == t for t in costed_facts._PLASTIC_SHEET_TOKENS)
     assert any("LED" in m.upper() for m in ("COLD ROLLED STEEL", "ANNEALED STAINLESS"))
 
 

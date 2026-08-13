@@ -122,13 +122,30 @@ def test_the_substitution_is_recorded_on_the_part():
 
 
 def test_the_door_is_priced_at_the_polycarbonate_rate():
-    """The whole point, in money: a 1202 x 689 x 6mm door at GBP 21.70/m2 plus 4% scrap."""
+    """The whole point, in money: a 1202 x 689 x 6mm door on a 3050 x 2050 polycarbonate
+    sheet at GBP 21.70/m2, nested four to a sheet, plus 4% scrap.
+
+    THE FIGURE MOVED FROM GBP 18.69 AND THAT IS THE FIX, NOT A REGRESSION. 18.69 was the
+    part's AREA times the rate. The engine reached it by dividing full sheet area by part
+    area -- 7.55 parts per sheet -- on the reasoning that the sheet area then cancels in
+    the workbook's L/J. It does not cancel, because wb_populate writes L and the
+    dimensions and the TEMPLATE recomputes J itself by its J51 nesting rule, which yields
+    4. So the sheet charged 35.28 while every report reading this record said 18.69, for
+    the same part on the same run. The engine now predicts what the workbook charges.
+    """
     from estimator import estimate_material
     me = estimate_material(_real_door())
     assert me["material"] == "POLYCARBONATE"
-    assert me["unit_material_cost_gbp"] == pytest.approx(18.69, abs=0.01), (
-        "the door costed GBP 0.00 before this rule; if the figure moves, the rate table or "
-        "the blank changed and the estimate moved with it")
+    assert me["parts_per_sheet"] == 4, (
+        "the door nests four to a 3050 x 2050 sheet by the workbook's J51 rule; a different "
+        "number here means the sheet and the engine are charging different money again")
+    assert me["unit_material_cost_gbp"] == pytest.approx(35.28, abs=0.01), (
+        "the door costed GBP 0.00 before the substitution rule and GBP 18.69 before the "
+        "nesting fix; if the figure moves again, the rate table, the blank or the nest "
+        "changed and the estimate moved with it")
+    assert me["area_only_cost_per_part_gbp"] == pytest.approx(18.69, abs=0.01), (
+        "the area basis is kept beside the charged figure so the nesting assumption stays "
+        "visible and an estimator can argue with it")
 
 
 def test_a_priceable_winner_is_never_second_guessed():
@@ -219,7 +236,7 @@ def test_the_indication_never_reaches_a_total(monkeypatch):
     part = _real_door()
     me = estimate_material(part)
     assert part["material_market_indication"]["gbp_per_m2"] == 28.8
-    assert me["unit_material_cost_gbp"] == pytest.approx(18.69, abs=0.01), (
+    assert me["unit_material_cost_gbp"] == pytest.approx(35.28, abs=0.01), (
         "the AI indication changed the priced figure. It is not reproducible and must never "
         "be the difference between winning and losing a job -- it is shown, not summed.")
 
@@ -370,8 +387,10 @@ def _llm_door(monkeypatch, rate_m2=26.87, sheet=168.0):
 def test_an_unpriceable_material_is_costed_from_the_market_rate(monkeypatch):
     part, me = _llm_door(monkeypatch)
     assert me["cost_method"] == "llm_market_sheet_rate"
-    # 0.8282 m2 x GBP 26.87/m2 x 1.04 scrap
-    assert me["unit_material_cost_gbp"] == pytest.approx(23.14, abs=0.05)
+    # (6.2525 m2 sheet x GBP 26.87/m2) / 4 nested x 1.04 scrap -- the workbook's own sum.
+    assert me["unit_material_cost_gbp"] == pytest.approx(43.68, abs=0.05)
+    # 0.8282 m2 x GBP 26.87/m2 x 1.04, kept for comparison and never charged.
+    assert me["area_only_cost_per_part_gbp"] == pytest.approx(23.14, abs=0.05)
     assert me["unit_material_cost_gbp"] > 0, "the silent GBP 0.00 under-charge is back"
 
 
@@ -405,7 +424,7 @@ def test_a_real_rate_is_never_displaced_by_a_market_lookup(monkeypatch):
                                  "normalized_geometry": {"blank_length_mm": 1202,
                                                          "blank_width_mm": 689}})
     assert me["cost_method"] == "acrylic_area_per_m2_provisional"
-    assert me["unit_material_cost_gbp"] == pytest.approx(18.69, abs=0.05)
+    assert me["unit_material_cost_gbp"] == pytest.approx(35.28, abs=0.05)
     _est._MARKET_INDICATION_CACHE.clear()
 
 

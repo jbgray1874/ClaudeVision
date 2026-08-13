@@ -819,3 +819,87 @@ def blank_dimensions(part: Any) -> Dict[str, Any]:
         or abs(r["width_mm"] - first["width_mm"]) > _BLANK_SAME_MM
         for r in out["readings"][1:])
     return out
+
+
+# ── which cost stream a part belongs to, asked once ──────────────────────────────────
+# THREE ANSWERS TO ONE QUESTION, AND THEY DISAGREED.
+#
+#   wb_populate._is_board   substring tokens  -- "MR MDF" is board, "6MM ABS" is board
+#   xlsx_output._is_board   an exact-match set -- neither of those is board
+#
+# So the workbook put a part in Other Sheet Material and the AI spreadsheet put the same
+# part somewhere else, on the same run, from the same record. The engine had no opinion at
+# all, which is how it came to nest a polycarbonate door by a rule written for steel.
+#
+# The token lists below are wb_populate's, unchanged -- they are the ones that have been
+# reading real drawings. The exact-match set is what goes, because it fails on every
+# material anybody actually writes on a drawing: MR MDF, 6MM ABS, CLEAR POLYCARB.
+_PLASTIC_SHEET_TOKENS = (
+    "ACRYLIC", "PERSPEX", "POLY",            # POLY catches POLYCARBONATE/PROP/STYRENE/ETHYLENE
+    "PETG", "PET ",                          # PET with a space: "PET" alone matches PETROL, PETG
+    "HIPS", "ABS", "PVC", "FOAM", "NYLON",
+    "ACETAL", "DELRIN", "HDPE", "UHMW", "PMMA",
+)
+_BOARD_TIMBER_TOKENS = (
+    "MDF", "BOARD", "MELAMINE", "MFC",
+    "TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+    "SPRUCE", "BEECH", "BIRCH",
+)
+
+
+def is_other_sheet_material(material) -> bool:
+    """True when this material is costed in the workbook's Other Sheet Material block.
+
+    Not sheet metal -- so it is costed by area on a board/plastic sheet rather than by
+    mass on steel. The name follows the WORKBOOK's block, not a guess about the shop:
+    what this decides is which nesting rule and which price stream apply.
+    """
+    m = str(material or "").upper()
+    return any(k in m for k in _PLASTIC_SHEET_TOKENS + _BOARD_TIMBER_TOKENS)
+
+
+# The Other Sheet Material block nests by its own rule, and it is NOT the steel one.
+#
+#   Estimate sheet, Sheet Steel        K38:  INT(I/(F+20)) × INT((J-80)/(G+10))
+#   Estimate sheet, Other Sheet Material J51: INT(I/(F+20)) × INT((J-5)/(G+20))
+#
+# estimator.select_sheet_size implements K38 exactly, and its own docstring says the other
+# block "uses a different rule (-5 margin, +20 both axes); that is handled separately for
+# non-steel materials". It was not handled anywhere. The plastic path divided full sheet
+# area by part area instead -- not nesting at all, just arithmetic that ignores the gaps
+# between parts and the unusable strip down the edge.
+#
+# On 11650's door, 1202 x 689 out of a 3050 x 2050 sheet, that is the difference between
+# 7 parts per sheet and 4. The workbook computes J51 itself from the dimensions written
+# into the row, so the sheet said 4 and the engine's own record said 7 -- for the same
+# part, on the same run. Nearly a factor of two on the material, in the direction of
+# under-charging.
+_OTHER_SHEET_LENGTH_GAP = 20.0    # J51: I/(F+20)
+_OTHER_SHEET_WIDTH_MARGIN = 5.0   # J51: (J-5)
+_OTHER_SHEET_WIDTH_GAP = 20.0     # J51: /(G+20)
+
+
+def other_sheet_parts_per_sheet(part_length_mm, part_width_mm,
+                                sheet_length_mm, sheet_width_mm):
+    """Parts per sheet by the workbook's Other Sheet Material rule (J51). None if it will
+    not fit, which is a fact and not a quantity -- 0 would divide into a cost of infinity
+    and 1 would quietly claim a part fits on a sheet it is bigger than.
+
+    FIXED ORIENTATION, like the template. The workbook does not rotate parts, so an engine
+    that did would produce a number the sheet disagrees with, which is the whole defect.
+    """
+    try:
+        pl, pw = float(part_length_mm), float(part_width_mm)
+        sl, sw = float(sheet_length_mm), float(sheet_width_mm)
+    except (TypeError, ValueError):
+        return None
+    if pl <= 0 or pw <= 0 or sl <= 0 or sw <= 0:
+        return None
+    # NO SEPARATE "DOES IT FIT" GUARD. One was written here and no mutant could kill it:
+    # a part that does not fit gives nx or ny of 0 and falls out as None on its own, because
+    # the gap and margin are subtracted before the division. A branch no input can reach is
+    # not documentation, it is a claim that something is being checked when it is not.
+    nx = int(sl / (pl + _OTHER_SHEET_LENGTH_GAP))
+    ny = int((sw - _OTHER_SHEET_WIDTH_MARGIN) / (pw + _OTHER_SHEET_WIDTH_GAP))
+    qty = max(0, nx) * max(0, ny)
+    return qty or None
