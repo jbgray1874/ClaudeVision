@@ -2501,6 +2501,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # and qty-per-sheet (J) itself, so we expose the sheet price, NOT the per-part cost.
             "sheet_price_gbp": round(float(_sheet_price), 2),
             "parts_per_sheet": int(_acr_pps),
+            # HOW MUCH OF A SHEET THIS PART'S COST IS, recorded by the calculation that
+            # divided it. A checker that worked this out for itself would need a list of the
+            # cost methods that divide a sheet, and a list of spellings is exactly what goes
+            # stale. Area-priced parts record their real fraction, which is smaller still.
+            "sheet_fraction_per_part": (
+                round(_part_area_m2 / _full_sheet_area_m2, 6)
+                if _nest_failed and _full_sheet_area_m2
+                else round(1.0 / float(_acr_pps), 6)),
             # Named from the nest that produced it, not asserted. A line that says J51 while
             # stock_estimate holds a K38 count is the defect this branch already had once.
             "nesting_rule": ((_acr_sheet_est or {}).get("nesting_rule")
@@ -3020,6 +3028,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "powder_consumable": powder_block if powder_block else None,
         "extended_material_cost_gbp": combined_ext,
         "stock_estimate": sheet_estimate,
+        # SET ONLY WHERE A SHEET WAS ACTUALLY DIVIDED. The mass path charges kg at a rate and
+        # never touches parts_per_sheet, so claiming a sheet fraction for it would be an
+        # invented fact -- and the whole reason this is stamped by the calculation rather than
+        # inferred by a reader is that a reader cannot tell those two apart from the record.
+        **({"sheet_fraction_per_part": round(1.0 / float(parts_per_sheet), 6)}
+           if cost_method == "workbook_sheet_steel_formula" and parts_per_sheet else {}),
         "cost_method": cost_method,
         "stock_form": part.get("manufacturing_interpretation", {}).get("stock_form"),
         "requires_flat_blank": part.get("manufacturing_interpretation", {}).get("requires_flat_blank"),

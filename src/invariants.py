@@ -2828,7 +2828,92 @@ def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, A
         parts=disputed)]
 
 
+# How much unbought sheet is worth saying. Below a quarter of a sheet across a whole
+# material, the offcut is ordinary stock-keeping and every job in the system would carry this
+# flag -- which is how a real warning gets ignored.
+_SHEET_REMNANT_WORTH_SAYING = 0.25
+
+
+def check_a_short_run_is_charged_for_the_sheet_it_uses(summary: Any) -> List[Dict[str, Any]]:
+    """A one-off is charged a fraction of a sheet, and a one-off buys a whole sheet.
+
+    Both sheet paths cost a part as sheet_price / parts_per_sheet. Over 180 off that is
+    exactly right: the sheets are used up and the arithmetic is the invoice. Over ONE off it
+    is not -- a panel that nests 6-up is charged a sixth of a sheet, and the other five sixths
+    are bought, paid for and sitting in the rack.
+
+    THE WORKBOOK DOES THE SAME THING, so this is not the engine disagreeing with the sheet and
+    it is not a defect against the template. It is a commercial assumption that is invisible
+    at batch quantities and dominant at short ones, and the Dyson displays are one and two off.
+    Whether the offcut is chargeable is a real question -- it may go into the next job, or it
+    may be a bespoke colour nobody will use again -- and it is the estimator's to answer, not
+    something to settle quietly inside a formula.
+
+    GROUPED BY MATERIAL AND GAUGE, because parts of the same stock share sheets. Five small
+    PETG 2mm parts that together fill a sheet waste nothing; flagging them individually would
+    be crying wolf on exactly the jobs where the nesting is efficient.
+
+    WARNING, not blocking: the number is defensible, it is the assumption behind it that needs
+    stating.
+    """
+    import math
+
+    if not isinstance(summary, dict):
+        return []
+    header = (summary.get("quantity")
+              or summary.get("assumed_job_quantity")
+              or (summary.get("estimate_summary") or {}).get("assumed_job_quantity"))
+    try:
+        order_qty = int(header) if header is not None else None
+    except (TypeError, ValueError):
+        order_qty = None
+    if not order_qty or order_qty < 1:
+        # NOT AN ALL-CLEAR. Without a stated quantity there is no way to know how many sheets
+        # this job buys, and check_the_quantity_costed_is_the_quantity_ordered already reports
+        # a job that states none. Two checks shouting the same thing is noise.
+        return []
+
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for row in ((summary.get("estimate_summary") or {}).get("part_estimates")
+                or summary.get("part_estimates") or []):
+        if not isinstance(row, dict):
+            continue
+        me = row.get("material_estimate") if isinstance(row.get("material_estimate"), dict) else {}
+        fraction = _num(me.get("sheet_fraction_per_part"))
+        if not fraction or fraction <= 0:
+            continue
+        per_unit = _num(row.get("quantity")) or 1.0
+        key = (str(me.get("material") or row.get("normalized_material") or "?").upper(),
+               me.get("thickness_mm") if me.get("thickness_mm") is not None
+               else row.get("normalized_thickness_mm"))
+        g = groups.setdefault(key, {"sheets": 0.0, "parts": []})
+        g["sheets"] += fraction * per_unit * order_qty
+        g["parts"].append(str(row.get("part_number") or "?"))
+
+    out: List[Dict[str, Any]] = []
+    for (material, thickness), g in sorted(groups.items(), key=lambda kv: -kv[1]["sheets"]):
+        charged = g["sheets"]
+        bought = math.ceil(charged - 1e-9)
+        remnant = bought - charged
+        if remnant < _SHEET_REMNANT_WORTH_SAYING:
+            continue
+        out.append(_violation(
+            "short_run_pays_for_sheet_it_does_not_use", WARNING,
+            f"At {order_qty} off, {material}"
+            f"{f' {thickness}mm' if thickness is not None else ''} is charged "
+            f"{charged:.2f} sheet(s) and {bought} whole sheet(s) have to be bought. "
+            f"{remnant:.2f} of a sheet is paid for and not charged. The workbook divides a "
+            f"sheet price by parts-per-sheet the same way, so the figure is not wrong — but "
+            f"at this quantity the offcut is most of the material. Charge it, or decide it "
+            f"goes to stock: {', '.join(sorted(set(g['parts']))[:8])}",
+            material=material, thickness_mm=thickness, order_quantity=order_qty,
+            sheets_charged=round(charged, 3), sheets_bought=bought,
+            sheets_unaccounted=round(remnant, 3), parts=sorted(set(g["parts"]))[:24]))
+    return out
+
+
 CHECKS = (
+    check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,
     check_two_sources_disagree_about_the_gauge,
