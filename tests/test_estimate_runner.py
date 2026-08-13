@@ -616,3 +616,43 @@ def test_the_task_installer_runs_the_runner_in_a_desktop_session():
     for wrong in ("nssm", "New-Service", "sc.exe"):
         assert wrong.lower() not in body.lower(), (
             f"{wrong} would put the runner in session 0, where there is no SOLIDWORKS")
+
+
+def test_no_start_script_builds_a_path_in_a_parameter_default():
+    """$PSScriptRoot IS EMPTY INSIDE param() UNDER SOME INVOCATIONS.
+
+    "$PSScriptRoot\\..\\.." then becomes "\\..\\.." — a root-relative path — and Resolve-Path
+    turns it into C:\\. install-runner-task.ps1 did exactly that and went looking for the
+    virtualenv at C:\\.venv\\Scripts\\python.exe; the error named the wrong path and nothing
+    said why. start-runner.ps1 carried the identical line and survived only because it is
+    always invoked as .\\tools\\start\\start-runner.ps1 rather than `powershell -File`.
+
+    A default that is right depending on how somebody typed the command is not a default.
+    Resolve it in the body, where $PSScriptRoot is reliable and a wrong answer can be
+    checked before it is used.
+    """
+    import re as _re
+    bad = []
+    for ps1 in sorted((Path(__file__).resolve().parents[1] / "tools" / "start").glob("*.ps1")):
+        text = ps1.read_text(encoding="utf-8-sig", errors="replace")
+        block = _re.search(r"param\s*\((.*?)\n\)", text, _re.S)
+        if block and "PSScriptRoot" in block.group(1):
+            bad.append(ps1.name)
+    assert not bad, (
+        "these build a path from $PSScriptRoot inside param(), which is empty under "
+        f"`powershell -File` and resolves to the drive root: {', '.join(bad)}")
+
+
+def test_the_task_installer_refuses_a_root_that_is_not_the_engine():
+    """C:\\ EXISTS. The check that mattered was not "does this folder exist" but "is this the
+    checkout" — the first version tested for the virtualenv, so a wrong root produced an
+    error about a missing venv rather than about a wrong root."""
+    ps1 = (Path(__file__).resolve().parents[1] / "tools" / "start"
+           / "install-runner-task.ps1").read_text(encoding="utf-8-sig")
+    # THE CONDITION, not only the message. A mutant that leaves the throw in place and
+    # changes the test to `if ($false)` keeps every word of the error and checks nothing —
+    # which is precisely the shape of "a gate that reports and does not gate".
+    assert 'if (-not (Test-Path (Join-Path $Root "tools\\runner\\sdi_estimate_runner.py")))' in ps1
+    assert "does not look like the ClaudeVision checkout" in ps1
+    assert "sdi_estimate_runner.py" in ps1.split("$python = Join-Path")[0], (
+        "the root is not verified before it is used to find the interpreter")

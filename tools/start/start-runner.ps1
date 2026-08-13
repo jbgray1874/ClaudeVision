@@ -36,11 +36,53 @@ param(
     # knows the port is believed; then 8071, which is config.py's default and
     # the installed service's port. Never a literal that only this file knows.
     [string] $Server = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8071" })),
-    [string] $Root   = (Resolve-Path "$PSScriptRoot\..\.."),
+    [string] $Root   = "",
     [string] $ApiKey = $env:SDI_API_KEY
 )
 
 $ErrorActionPreference = "Stop"
+
+# -- WHERE THIS SCRIPT IS, ASKED IN THE BODY AND NOT IN A PARAMETER DEFAULT ----------
+#
+# $PSScriptRoot is EMPTY inside param() under `powershell -File`, so "$PSScriptRoot\..\.."
+# becomes "\..\.." - a ROOT-RELATIVE path - and Resolve-Path turns it into C:\. The script
+# then looked for the virtualenv at C:\.venv\Scripts\python.exe and threw. It worked when
+# invoked as .\tools\start\<script>.ps1 and failed under -File, which is a difference
+# nobody should have to know about to start a runner.
+#
+# All three scripts in this folder carried the identical line. Two survived only because
+# nobody had typed them the other way yet.
+#
+# Two fallbacks, then a refusal that names what it resolved to. A path silently one level
+# wrong is exactly how this failed: the error named C:\.venv and nothing said why.
+if (-not $Root) {
+    $here = $PSScriptRoot
+    if (-not $here -and $MyInvocation.MyCommand.Path) {
+        $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $here) {
+        throw "Cannot work out where this script is. Pass -Root C:\ClaudeVision explicitly."
+    }
+    $Root = (Resolve-Path (Join-Path $here "..\..")).Path
+}
+
+
+# -- ASKED IN THE BODY, NOT IN A PARAMETER DEFAULT -----------------------------------
+# $PSScriptRoot is empty inside param() under some invocations, and "$PSScriptRoot\..\.."
+# then becomes "\..\.." - a ROOT-RELATIVE path that resolves to C:\. This script worked
+# because it is always run as .\tools\start\start-runner.ps1; its twin
+# install-runner-task.ps1 was run once as `powershell -File ...` and looked for the
+# virtualenv at C:\.venv\Scripts\python.exe. Same line, same latent fault, and the only
+# difference was how somebody happened to type it.
+if (-not $Root) {
+    $here = $PSScriptRoot
+    if (-not $here -and $MyInvocation.MyCommand.Path) {
+        $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $here) { throw "Cannot work out where this script is. Pass -Root C:\ClaudeVision" }
+    $Root = (Resolve-Path (Join-Path $here "..\..")).Path
+}
+
 $python = Join-Path $Root ".venv\Scripts\python.exe"     # the ENGINE venv - it runs the engine
 $runner = Join-Path $Root "tools\runner\sdi_estimate_runner.py"
 

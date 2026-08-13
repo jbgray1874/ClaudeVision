@@ -21,11 +21,51 @@
 [CmdletBinding()]
 param(
     [int]    $Port = 8072,
-    [string] $Root = (Resolve-Path "$PSScriptRoot\..\.."),
+    [string] $Root = "",
     [switch] $Force
 )
 
 $ErrorActionPreference = "Stop"
+
+# -- WHERE THIS SCRIPT IS, ASKED IN THE BODY AND NOT IN A PARAMETER DEFAULT ----------
+#
+# $PSScriptRoot is EMPTY inside param() under `powershell -File`, so "$PSScriptRoot\..\.."
+# becomes "\..\.." - a ROOT-RELATIVE path - and Resolve-Path turns it into C:\. The script
+# then looked for the virtualenv at C:\.venv\Scripts\python.exe and threw. It worked when
+# invoked as .\tools\start\<script>.ps1 and failed under -File, which is a difference
+# nobody should have to know about to start a runner.
+#
+# All three scripts in this folder carried the identical line. Two survived only because
+# nobody had typed them the other way yet.
+#
+# Two fallbacks, then a refusal that names what it resolved to. A path silently one level
+# wrong is exactly how this failed: the error named C:\.venv and nothing said why.
+if (-not $Root) {
+    $here = $PSScriptRoot
+    if (-not $here -and $MyInvocation.MyCommand.Path) {
+        $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $here) {
+        throw "Cannot work out where this script is. Pass -Root C:\ClaudeVision explicitly."
+    }
+    $Root = (Resolve-Path (Join-Path $here "..\..")).Path
+}
+
+
+# -- ASKED IN THE BODY, NOT IN A PARAMETER DEFAULT -----------------------------------
+# $PSScriptRoot is empty inside param() under `powershell -File`, so "$PSScriptRoot\..\.."
+# becomes "\..\.." - root-relative - and resolves to C:\. All three scripts in this folder
+# carried the same line; install-runner-task.ps1 is the one that was invoked that way and
+# went looking for a virtualenv at C:\.venv. A default that is right depending on how
+# somebody typed the command is not a default.
+if (-not $Root) {
+    $here = $PSScriptRoot
+    if (-not $here -and $MyInvocation.MyCommand.Path) {
+        $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $here) { throw "Cannot work out where this script is. Pass -Root C:\ClaudeVision" }
+    $Root = (Resolve-Path (Join-Path $here "..\..")).Path
+}
 $python = Join-Path $Root "sdi-intelligence-backend\.venv\Scripts\python.exe"
 $app    = Join-Path $Root "sdi-intelligence-backend\app.py"
 
