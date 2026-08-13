@@ -695,9 +695,30 @@ runBtn.onclick = async () => {
 
   let seen = 0;
   poll = setInterval(async () => {
-    let s;
-    try{ s = await (await api("/api/estimate/"+runId)).json(); }
+    let s, r;
+    try{ r = await api("/api/estimate/"+runId); s = await r.json(); }
     catch(e){ return; }                    // a dropped poll is not a failed run
+    /* THE SERVICE FORGETTING A RUN IS NOT THE RUN FAILING.
+       Run history lives in memory, so restarting app.py loses it — and a 404 does not
+       throw here: the body parses, s.status comes back undefined, and the code below fell
+       straight through to "Failed" with no reason attached. Meanwhile the runner is another
+       process on another machine, still working, and it will file a complete estimate to
+       the share. A finished estimate reported to an estimator as a bare failure is the
+       worst answer available: they re-run it, and a SOLIDWORKS seat does the whole job
+       twice. */
+    if(r.status === 404){
+      clearInterval(poll); poll=null; running=false; refresh();
+      setStatus("warn","Lost track of this run");
+      line("The service restarted and no longer holds this run. That is NOT the same as the "
+         + "estimate failing — the runner is a separate process and may well have finished "
+         + "it. Look under Completed estimates before running it again.", "w");
+      return;
+    }
+    if(!s || !s.status){
+      /* An answer nobody can parse is not a verdict either. Keep polling rather than
+         declaring a failure the service never reported. */
+      return;
+    }
     (s.log||[]).slice(seen).forEach(line); seen = (s.log||[]).length;
     // "Queued" is a real state now and the estimator should see it rather than a
     // spinner that means nothing: the job is waiting for a runner to take it.

@@ -453,3 +453,23 @@ def test_the_run_id_in_the_refusal_is_what_the_page_looks_for(api, tmp_path):
     assert found, (f"the page's pattern {pattern!r} finds no run id in the service's own "
                    f"refusal:\n  {exc.value.detail}")
     assert er._RUNS.get(found.group(1)) is not None, "it matched something that is not a run"
+
+
+def test_the_page_does_not_report_a_forgotten_run_as_a_failure(api):
+    """RUN HISTORY IS IN MEMORY, so restarting the service loses it — and a 404 does not
+    throw in the browser: the body parses, status comes back undefined, and the poll fell
+    through to "Failed" with no reason attached.
+
+    Meanwhile the runner is a separate process on another machine, still working, and it
+    files a complete estimate to the share. A finished estimate reported to an estimator as
+    a bare failure is the worst answer available: they re-run it, and a SOLIDWORKS seat
+    does the whole job twice. This matters more the moment estimators are the users, since
+    they have no way to tell the two apart.
+    """
+    page = (BACKEND / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+    assert "r.status === 404" in page, (
+        "the poll no longer distinguishes a forgotten run from a failed one")
+    assert "Completed estimates" in page, (
+        "the message must point at where the estimate probably is, not just say it is gone")
+    assert "if(!s || !s.status){" in page, (
+        "an answer the page cannot parse is being turned into a failure verdict again")
