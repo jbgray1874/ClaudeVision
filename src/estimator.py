@@ -2434,19 +2434,53 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _llm_rate_m2 = float(_llm_ind.get("gbp_per_m2") or 0.0) or None
         except (TypeError, ValueError):
             _llm_rate_m2 = None
-    if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2)
+    # THE CATALOGUE RATE IS RESOLVED BEFORE THE GATE, BECAUSE IT IS PART OF THE GATE.
+    #
+    # This branch was entered only for a handful of named plastics or when an LLM had
+    # already returned a GBP/m2 -- so a material with a REAL rate sitting in UDEF could not
+    # reach the code that would have used it unless a language model happened to guess a
+    # price for it first. On 11650-04 that is exactly what happened: the two base panels got
+    # in on an LLM rate and their handed twins, which got none, fell through to no_price and
+    # were costed at ZERO. Two of four panels free, and the job's material fell from GBP
+    # 76.66 to 9.36.
+    #
+    # A live catalogue rate is the strongest reason to enter this branch that exists. It is
+    # cached per material and gauge, so asking early costs one lookup per pair, not one per
+    # part.
+    _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(material, thickness)
+    if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2 or _live_sheet_rate)
             and blank_length and blank_width):
         _acr_area_m2 = (float(blank_length) * float(blank_width)) / 1_000_000.0
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
 
-        # HIPS: price by area × a LIVE £/m² rate derived from the current UDEF catalogue
-        # (plain stock sheets at this thickness). Tracks price changes automatically —
-        # no stale config table. Falls through to the acrylic-config path if unavailable.
-        _hips_rate = _resolve_board_sheet_rate_gbp_per_m2(material, thickness)
+        # Priced by area x a LIVE GBP/m2 from the current UDEF catalogue (plain stock at this
+        # gauge). Tracks price changes automatically -- no stale config table. Falls through
+        # to the acrylic-config path if the catalogue holds nothing for this material.
+        _hips_rate = _live_sheet_rate
         if _hips_rate and _hips_rate.get("rate_gbp_per_m2"):
             _rate_m2 = float(_hips_rate["rate_gbp_per_m2"])
             _hips_cost_part = round(_acr_area_m2 * _rate_m2 * (1.0 + _scrap), 2)
             _hips_ext = round(_hips_cost_part * quantity, 2)
+            # THE OTHER SHEET BLOCK IS FILLED FROM `sheet_price_gbp` AND `parts_per_sheet`,
+            # AND THIS BRANCH RETURNED NEITHER.
+            #
+            # While HIPS was the only material that could reach it nothing noticed. Opening
+            # the gate to every sheet material sent 11650-04's ABS and PETG panels down here,
+            # and the workbook said what it always would have:
+            #
+            #     Other-sheet 11650-04-01A-HANDED has no sheet price — Cost Per Part will be 0
+            #
+            # Two of four panels at zero, and the job's material fell from GBP 76.66 to 9.36.
+            # The rate was correct; the shape handed to the sheet was not. A branch that
+            # returns a cost the workbook cannot render has not priced anything.
+            #
+            # The sheet price is the RATE across a whole sheet -- the same arithmetic the
+            # acrylic branch does -- and the nest comes from the one function that answers
+            # "how many parts per sheet", so this cannot drift from the block it feeds.
+            _hips_sheet_est = select_sheet_size(material, blank_length, blank_width)
+            _hips_dims = _hips_sheet_est.get("candidate_sheet_size_mm") or [3050.0, 2050.0]
+            _hips_sheet_area_m2 = (float(_hips_dims[0]) * float(_hips_dims[1])) / 1_000_000.0
+            _hips_pps = _hips_sheet_est.get("parts_per_sheet")
             return {
                 "material": material,
                 "thickness_mm": thickness,
@@ -2459,16 +2493,28 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "extended_sheet_material_cost_gbp": _hips_ext,
                 "powder_consumable": None,
                 "extended_material_cost_gbp": _hips_ext,
-                "stock_estimate": None,
-                "cost_method": "hips_sheet_live_udef",
+                "stock_estimate": _hips_sheet_est,
+                # PRICED BY AREA, RENDERED BY THE SHEET. The cost above is area x rate and
+                # does not change; these let the Other Sheet row show the working the
+                # estimators read -- a sheet price and a nest -- instead of a blank.
+                "sheet_price_gbp": round(_rate_m2 * _hips_sheet_area_m2, 2),
+                **({"parts_per_sheet": int(_hips_pps)} if _hips_pps else {}),
+                "sheet_fraction_per_part": (round(_acr_area_m2 / _hips_sheet_area_m2, 6)
+                                            if _hips_sheet_area_m2 else None),
+                "nesting_rule": (_hips_sheet_est.get("nesting_rule")
+                                 or _costed_facts.nesting_rule_for(material)),
+                "cost_method": "sheet_rate_live_udef",
                 "part_confidence_overall": _part_confidence_overall(part),
                 "part_geometry_reliability": _part_geometry_reliability(part),
                 "reliability_flags": [],
-                "note": "HIPS sheet cost from LIVE UDEF rate £%.2f/m² (%s plain-stock sample(s) at %.1fmm) × %.4f m² area."
-                        % (_rate_m2, _hips_rate.get("sample_count"), _hips_rate.get("thickness_mm") or 0.0, _acr_area_m2),
+                "note": "%s sheet cost from LIVE UDEF rate £%.2f/m² (%s plain-stock sample(s) at %.1fmm) × %.4f m² area."
+                        % (_hips_rate.get("material_token") or material, _rate_m2,
+                           _hips_rate.get("sample_count"), _hips_rate.get("thickness_mm") or 0.0,
+                           _acr_area_m2),
                 "price_source": _build_price_source_metadata(
-                    {}, fallback_source="hips_sheet_live_udef",
-                    applied=True, applied_basis="udef_hips_rate_gbp_per_m2_live",
+                    {}, fallback_source="sheet_rate_live_udef",
+                    applied=True, applied_basis=(_hips_rate.get("basis")
+                                                 or "udef_rate_gbp_per_m2_live"),
                 ),
             }
 
