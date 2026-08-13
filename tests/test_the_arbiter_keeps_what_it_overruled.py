@@ -11,8 +11,15 @@ GBP 35.28 to GBP 0.00 because ABS has a sheet size and a density in config and n
 asking afterwards whether independent sources had agreed against the winner was impossible.
 The answer had been discarded at the moment it became worth having.
 
-NOTHING HERE CHANGES AN OUTCOME. Rank still decides, exactly as before. This is the record any
-rule about corroboration would have to read, and it did not exist.
+THAT RECORD NOW HAS A RULE READING IT. When this file was written it ended "nothing here
+changes an outcome; rank still decides" — true then, and no longer true, so it is corrected
+rather than left standing. corroboration_overrules lets a QUORUM of independent sources
+outweigh a SINGLE stronger one, and the record below is what it counts.
+
+The half that was still missing is also fixed: a REFUSED reading was written into review_flags
+as English prose and into the record not at all, so the evidence base held only the readings
+that had won and later lost. On 11650-04 every PETG reading after the first was refused — the
+title block, the options list, six DXF exports — and nothing could count any of them.
 """
 from __future__ import annotations
 
@@ -43,15 +50,30 @@ def test_rank_still_decides_and_nothing_moved():
 
 def test_what_the_winner_replaced_is_still_readable():
     assert displaced_values(_door(), "normalized_material") == [
-        {"value": "POLYCARBONATE", "source": "dxf", "displaced_by": "solidworks_api"}]
+        {"value": "POLYCARBONATE", "source": "dxf", "applied": True,
+         "displaced_by": "solidworks_api"}]
 
 
-def test_a_weaker_source_that_never_landed_leaves_no_displacement():
-    """Only a value that was actually HELD can be displaced. A refusal is already flagged
-    elsewhere with both sides, and recording it here too would count one disagreement twice."""
+def test_a_reading_that_was_refused_is_evidence_too():
+    """THIS FILE USED TO ASSERT THE OPPOSITE, on the reasoning that a refusal is flagged
+    elsewhere and recording it here would count one disagreement twice.
+
+    That reasoning was wrong, and 11650-04 is the proof. The title block says PETG, the
+    options list says PETG or PC, six DXF exports are named 2MM PETG, and the parts catalogue
+    stocks PETG — against ONE SolidWorks property saying ABS. Every one of those readings
+    after the first was refused, so the record held one PETG observation and the honest count
+    was four. A rule asking "did independent sources agree against the winner" cannot be built
+    on a log that keeps only the winners.
+
+    Counted once per source, so the same reader saying the same thing twice is still one.
+    """
     part = _door()
     apply_field(part, "normalized_material", "MILD_STEEL", "pdf_overall_dims")
-    assert len(displaced_values(part, "normalized_material")) == 1
+    log = displaced_values(part, "normalized_material")
+    assert [(e["value"], e["applied"]) for e in log] == [
+        ("POLYCARBONATE", True), ("MILD_STEEL", False)]
+    apply_field(part, "normalized_material", "MILD_STEEL", "pdf_overall_dims")
+    assert len(displaced_values(part, "normalized_material")) == 2
 
 
 def test_agreement_is_not_a_displacement():

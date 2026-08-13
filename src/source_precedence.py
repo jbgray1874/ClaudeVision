@@ -357,8 +357,122 @@ def may_overwrite(part: Dict[str, Any], field: str, new_source: Any,
     return False
 
 
+def _observe(part: Dict[str, Any], field: str, value: Any, source: Any,
+             applied: bool, displaced_by: Any = None) -> None:
+    """Record that a source said this about this field, whatever became of it.
+
+    ONE LIST, ONE QUESTION: what else has been said about this datum. Until now only a
+    SUCCESSFUL replacement was recorded, so the evidence base was exactly backwards — a
+    reading that lost was kept, and a reading that was REFUSED was written into review_flags
+    as English prose and into the record not at all.
+
+    11650-04 is what that costs. The title block says PETG, the options list says PETG or PC,
+    six DXF exports are named 2MM PETG, and the parts catalogue stocks PETG — against one
+    SolidWorks model property saying ABS. Every one of those PETG readings after the first was
+    refused, so nothing could count them, and the question "did independent sources agree
+    against the winner" had no data behind it however the rule was written.
+
+    Duplicates are not evidence. The same source saying the same thing twice is one
+    observation seen twice, and counting it as two is how a single stale filename would come
+    to outvote a model.
+    """
+    if _is_empty(value) or not str(source or "").strip():
+        return
+    entry: Dict[str, Any] = {"value": value, "source": str(source), "applied": bool(applied)}
+    if displaced_by:
+        entry["displaced_by"] = str(displaced_by)
+    log = part.setdefault("_displaced", {}).setdefault(field, [])
+    for seen in log:
+        if str(seen.get("source") or "") == entry["source"] and \
+                _norm_value_key(seen.get("value")) == _norm_value_key(value):
+            return
+    log.append(entry)
+
+
+def _agree(part: Dict[str, Any], field: str, value: Any, source: Any) -> None:
+    """Record that a source CONFIRMED what this field already held.
+
+    Agreement was the one outcome that left no trace. A replacement was logged and (now) a
+    refusal is too, but a source arriving and saying "yes, that" returned early from
+    apply_field as "nothing to change" — so the value's support was permanently undercounted
+    at one, however many readers had confirmed it.
+
+    That is not a bookkeeping detail once a quorum can overrule a singleton: two drawing
+    sources would have outvoted a model that two other sources had independently confirmed,
+    because only one of those confirmations was on the record. My own test caught it.
+    """
+    if _is_empty(value) or not str(source or "").strip():
+        return
+    log = part.setdefault("_agreed", {}).setdefault(field, [])
+    for seen in log:
+        if str(seen.get("source") or "") == str(source) and \
+                _norm_value_key(seen.get("value")) == _norm_value_key(value):
+            return
+    log.append({"value": value, "source": str(source)})
+
+
+def support_for(part: Dict[str, Any], field: str, value: Any) -> List[str]:
+    """The DISTINCT sources that have named this value for this field, from every direction it
+    could have been said: the source currently holding it, sources that confirmed it, and
+    sources whose reading of it was overwritten or refused.
+
+    Distinct sources, not distinct readings: two passes of one reader agreeing with itself is
+    one observation seen twice, and counting it twice is how a single stale filename would
+    come to outvote a model.
+    """
+    want = _norm_value_key(value)
+    sources = {str(e.get("source")) for e in displaced_values(part, field)
+               if str(e.get("source") or "") and _norm_value_key(e.get("value")) == want}
+    for e in ((part.get("_agreed") or {}).get(field) or []) if isinstance(part, dict) else []:
+        if str(e.get("source") or "") and _norm_value_key(e.get("value")) == want:
+            sources.add(str(e["source"]))
+    _cur = value_of(part, field)
+    _cur_src = source_of(part, field)
+    if _cur is not MISSING and _cur_src and _norm_value_key(_cur) == want:
+        sources.add(str(_cur_src))
+    return sorted(sources)
+
+
+# How many INDEPENDENT sources must agree before they outweigh a single stronger one. Two,
+# because that is the smallest number that is not one source seen twice, and because the case
+# this exists for is exactly that shape: a drawing and its DXF export against a model.
+CORROBORATION_QUORUM = 2
+
+
+def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
+                            new_source: Any) -> Optional[Dict[str, Any]]:
+    """Do independent sources agreeing on `new_value` outweigh the single source now held?
+
+    THE RULE, STATED ONCE, FOR EVERY ARBITRATED FIELD. A lone high-ranked reading is evidence;
+    it is not proof, and a model's material property is the least reliable thing a model
+    carries — it is whatever was assigned in CAD, while the title block is what was ISSUED and
+    what the shop buys to.
+
+    It takes a QUORUM against a SINGLETON. Two independent sources beat one; they do not beat
+    two, because then nothing distinguishes the sides and order would decide it. Returns the
+    evidence when the rule fires, so the caller can write down what outvoted what — a
+    precedence rule that silently reverses an earlier decision is worse than the one it
+    replaces.
+    """
+    _cur = value_of(part, field)
+    if _cur is MISSING or _same_value(_cur, new_value):
+        return None
+    against = set(support_for(part, field, new_value)) | {str(new_source or "")}
+    against.discard("")
+    if len(against) < CORROBORATION_QUORUM:
+        return None
+    holding = support_for(part, field, _cur)
+    if len(holding) >= len(against):
+        # NOT A TIE-BREAK. Two against two is a disagreement a person has to settle, and
+        # letting the newcomer win would make the answer depend on the order pages were read.
+        return None
+    return {"value": new_value, "sources": sorted(against),
+            "displaced_value": _cur, "displaced_sources": holding}
+
+
 def displaced_values(part: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
-    """What a stronger source overwrote on this field, oldest first.
+    """Every observation this field does not currently hold, oldest first — refused as well as
+    overwritten. Each entry says which it was, in `applied`.
 
     THE ARBITER KEPT ONLY THE LOSER OF A REFUSAL. When an incoming value was refused the
     disagreement was flagged with both sides; when it WON, whatever it replaced was
@@ -432,6 +546,10 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
     # displace a figure the model had independently confirmed. Submitting agreement is how
     # the strong source's rank actually attaches to the value.
     if _cur is not MISSING and _same_value(_cur, value):
+        # CONFIRMATION IS EVIDENCE AND HAS TO BE COUNTED. Without this the value's support is
+        # stuck at one however many readers confirm it, and a quorum of two would overrule a
+        # figure three sources had independently agreed on.
+        _agree(part, field, value, source)
         _new_rank, _cur_rank = rank(source), rank(_cur_src)
         node = _walk(part, path, create=True)
         if node is not None:
@@ -470,9 +588,8 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         #
         # Nothing here changes an outcome. It is the prerequisite for any rule that would.
         if _cur is not MISSING and not _same_value(_cur, value):
-            part.setdefault("_displaced", {}).setdefault(field, []).append(
-                {"value": _cur, "source": _cur_src or "an earlier pass",
-                 "displaced_by": source})
+            _observe(part, field, _cur, _cur_src or "an earlier pass",
+                     applied=True, displaced_by=source)
         node[leaf] = value
         node[key] = source
         if confidence is not None:
@@ -480,6 +597,37 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         if note:
             part.setdefault("review_flags", []).append(note)
         return True
+
+    # REFUSED, AND ON THE RECORD BEFORE THE RULE IS ASKED. Every reading that loses is still
+    # a reading, and until now the only trace of one was a sentence in review_flags that
+    # nothing could count.
+    _observe(part, field, value, source, applied=False)
+
+    # A QUORUM OVERRULES A SINGLETON. Asked only after ordinary precedence has refused, so a
+    # stronger source still wins on its own merits and this changes nothing where sources
+    # agree. Where they do not, the question stops being "who ranks highest" and becomes "how
+    # many independent readings say each thing" -- which is the question an estimator asks in
+    # front of the drawing.
+    _corr = corroboration_overrules(part, field, value, source)
+    if _corr is not None:
+        node = _walk(part, path, create=True)
+        if node is not None:
+            _observe(part, field, _cur, _cur_src or "an earlier pass",
+                     applied=True, displaced_by=source)
+            node[leaf] = value
+            node[key] = source
+            if confidence is not None:
+                node[f"{leaf}_confidence"] = confidence
+            else:
+                node.pop(f"{leaf}_confidence", None)
+            part.setdefault("review_flags", []).append(
+                f"{field}: '{_corr['displaced_value']}' from "
+                f"{', '.join(_corr['displaced_sources']) or 'an earlier pass'} was OUTVOTED — "
+                f"{len(_corr['sources'])} independent sources say '{value}' "
+                f"({', '.join(_corr['sources'])}). The stronger single source has been set "
+                f"aside because several weaker ones agree against it; confirm which is right")
+            part.setdefault("_corroboration", {})[field] = _corr
+            return True
 
     _cur_src_txt = _cur_src or "an earlier pass"
     if rank(source) == rank(_cur_src):
