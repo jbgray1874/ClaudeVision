@@ -9,6 +9,8 @@ from math import floor, pi as _PI
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import engine_build
+import source_precedence
 from source_precedence import apply_field as _apply_field
 
 import config
@@ -4308,6 +4310,29 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # find them (they read pe.get("normalized_material") directly).
         "normalized_material": part.get("normalized_material") or material.get("material"),
         "normalized_thickness_mm": _safe_thickness_mm(part) or material.get("thickness_mm"),
+        # WHERE THOSE TWO NUMBERS CAME FROM TRAVELS WITH THEM.
+        #
+        # THE THIRD AND FOURTH TIME A FACT STOPPED AT THIS BOUNDARY. geometry_rollup and
+        # page_roles are both above, each with its own note about a reader that asked the
+        # costed record a question the raw record could answer. This is the same defect on
+        # the fields that decide the price: the VALUE was copied here and its SOURCE was not.
+        #
+        # So every reader downstream of costing is provenance-blind. A diagnostic run to
+        # explain why 11650-04's handed side panels disagreed printed "(no source recorded)"
+        # for material, gauge and quantity on all four parts -- while the raw records
+        # carried mirror_of_measured, a dxf reading and a recorded refusal between them. An
+        # absence reported as a clean answer, in the tool built to stop exactly that.
+        #
+        # KEYED OFF THE RESOLVER, not a list typed here. Three of these do not follow the
+        # "<field>_source" convention, and a fourth arbitrated field would otherwise cross
+        # the boundary as a value with no source and look like a guess.
+        **{_k: part.get(_k) for _k in source_precedence._SOURCE_FIELDS.values()
+           if part.get(_k) is not None},
+        # WHAT THE WINNER BEAT. displaced_values is the whole evidence base for asking
+        # whether independent lower-ranked sources agreed against a lone higher-ranked one
+        # -- the door's ABS-over-polycarbonate, the side panel's ABS-over-PETG. Left behind
+        # here, that question can only be asked before costing and never explained after.
+        **({"_displaced": part.get("_displaced")} if part.get("_displaced") else {}),
         "material_estimate": material,
         "process_estimate": process,
         "labour_estimate": labour,
@@ -5722,6 +5747,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         }
 
     out_doc: Dict[str, Any] = {
+        # WHICH BUILD PRODUCED THIS DOCUMENT. Stamped at write time, because a diagnostic
+        # reading the estimate later reports the build of the checkout it is reading FROM,
+        # which may be days of pulls away from the one that wrote it.
+        "engine_build": engine_build.describe(),
         "part_estimates": part_estimates,
         "canonical_route_shadow": canonical_route_shadow,
         "powder_coating_summary": powder_coating_summary,

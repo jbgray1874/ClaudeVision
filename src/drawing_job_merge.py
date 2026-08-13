@@ -1352,6 +1352,26 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_key = {_own_number_key(p.get("part_number")): p
               for p in parts if isinstance(p, dict)}
 
+    def _refuse(part: Dict[str, Any], base_pn: str, why: str) -> None:
+        """A hand this rule recognised and would not fill, and the reason.
+
+        EVERY EXIT BELOW USED TO BE A BARE `continue`. So a handed part the rule declined —
+        correctly, because inheriting from an unmeasured base would launder a guess into
+        geometry at rank 75 — was indistinguishable on the record from a handed part the
+        rule never saw. 11650-04-03A-HANDED came out of a run carrying nothing at all, and
+        the only honest thing that could be said about it was "either it never fired, or it
+        fired and recorded nothing".
+
+        Those two readings lead opposite ways: one is a bug in the index, the other is the
+        rule doing its job on a base nobody measured. Guessing between them cost a round of
+        diagnosis and a wrong prediction. The rule states which, on the record, every time.
+        """
+        part.setdefault("review_flags", []).append(
+            f"MIRROR NOT APPLIED: {part.get('part_number')} reads as the opposite hand of "
+            f"{base_pn}, and its geometry was NOT inherited — {why} This part was costed "
+            f"from whatever else read it, so it may not agree with the hand it pairs with.")
+        part.setdefault("_mirror_refused", {})[str(base_pn)] = why
+
     for part in parts:
         if not isinstance(part, dict):
             continue
@@ -1359,7 +1379,16 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not base_pn:
             continue
         base = by_key.get(_own_number_key(base_pn))
-        if base is None or base is part:
+        if base is None:
+            _refuse(part, base_pn,
+                    f"no part numbered {base_pn} is in this job. Either the base drawing is "
+                    f"missing from the pack, or the two are spelled differently.")
+            continue
+        if base is part:
+            # NOT REPORTED. This is the index defect that made the rule a no-op for every
+            # "-HANDED" pack, and it is now unreachable: _own_number_key keeps the hand, so a
+            # twin cannot resolve to itself. If it ever does again, that is a bug in the key
+            # and not a fact about the drawing — a review flag would blame the pack for it.
             continue
 
         # THE BASE MUST HAVE BEEN MEASURED. Inheriting from a part whose own blank was
@@ -1377,6 +1406,12 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # excludes mirror_of_measured (75), so an inherited flat is still not inheritable.
         from source_precedence import rank as _rank
         if _rank(_base_src) < _rank("dxf"):
+            _refuse(part, base_pn,
+                    f"{base_pn}'s own geometry came from "
+                    f"{_base_src or 'no recorded source'}, which is weaker than a DXF or a "
+                    f"model. Inheriting it would turn a reading of that strength into "
+                    f"measured geometry on this part, which is the one thing this rule must "
+                    f"never do. Measure or export the base and both hands will agree.")
             continue
         # THROUGH THE SHARED RESOLVER, NOT ONE SPELLING OF IT. document_builder writes the
         # flat as bounding_box_flat_mm/developed_*, apply_dxf_geometry_to_part writes
@@ -1385,6 +1420,10 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         from document_builder import flat_blank_mm
         _bl, _bw = flat_blank_mm(base)
         if not (_bl and _bw):
+            _refuse(part, base_pn,
+                    f"{base_pn} has no flat blank of its own to give. Its geometry is "
+                    f"strong enough to inherit from, but the developed size was never "
+                    f"read, so there is nothing to copy.")
             continue
         # ITS OWN MEASUREMENT WINS OUTRIGHT. A mirror with its own export needs nothing.
         #

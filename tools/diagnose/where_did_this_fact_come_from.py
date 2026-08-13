@@ -35,13 +35,13 @@ import argparse
 import glob
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
+import engine_build  # noqa: E402
 import source_precedence as sp  # noqa: E402
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -80,45 +80,75 @@ def _parts(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def _engine_build() -> str:
-    """Which commit this checkout is on, and whether it is dirty.
+def _build_lines(doc: Dict[str, Any]) -> List[str]:
+    """The build that WROTE this estimate, and the one reading it — as two facts, never one.
 
-    THE POINT OF THE WHOLE TOOL, ON ONE LINE. A fix that is not deployed and a fix that does
-    not work produce the same spreadsheet. This is printed even when it cannot be determined,
-    because an unknown build stated is worth more than an assumed one.
+    The first version of this printed the checkout's HEAD and called it "engine build". That
+    is the build the DIAGNOSTIC is running on, which after a pull is not the build that
+    produced the estimate — the exact conflation the tool exists to prevent, committed inside
+    the tool. An estimate written before the pull, read after it, would have been reported
+    under a commit containing fixes it never had.
     """
-    def _git(*args: str) -> Optional[str]:
-        try:
-            out = subprocess.run(["git", "-C", str(_REPO), *args],
-                                 capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return out.stdout.strip() if out.returncode == 0 else None
+    stamped = doc.get("engine_build") if isinstance(doc.get("engine_build"), dict) else None
+    here = engine_build.describe()
+    lines: List[str] = []
+    if stamped:
+        lines.append("WROTE this estimate:  " + engine_build.one_line(stamped))
+        if stamped.get("subject"):
+            lines.append("                      " + str(stamped["subject"]))
+    else:
+        # AN ABSENCE, NAMED. A document with no stamp was written by an engine from before
+        # stamping existed -- which is itself the answer to "was the fix live": it was not.
+        lines.append("WROTE this estimate:  NOT RECORDED. This document carries no build "
+                     "stamp, so it was written")
+        lines.append("                      by an engine from before stamping was added. "
+                     "Re-run to get one.")
+    lines.append("READING it now:       " + engine_build.one_line(here))
+    if stamped and stamped.get("commit") and stamped["commit"] != here.get("commit"):
+        lines.append("                      ^ DIFFERENT BUILDS. Anything fixed between these "
+                     "two is not in the estimate below.")
+    return lines
 
-    sha = _git("rev-parse", "--short", "HEAD")
-    if not sha:
-        return "engine build: UNKNOWN (not a git checkout, or git unavailable)"
-    subject = _git("log", "-1", "--format=%s") or ""
-    branch = _git("rev-parse", "--abbrev-ref", "HEAD") or "?"
-    dirty = _git("status", "--porcelain")
-    state = " + UNCOMMITTED CHANGES" if dirty else ""
-    return f"engine build: {sha} on {branch}{state}\n              {subject}"
+
+# WHERE A COSTED RECORD KEEPS ITS FACTS. estimate_part builds a PROJECTION of the raw part and
+# does not put everything at the top: the blank lives under material_estimate, the geometry
+# under normalized_geometry and geometry_rollup. Reading only the top level reported "-- not
+# set --" for a blank that was plainly on the sheet, which is an absence stated as a fact.
+#
+# Searched in order and the holder is NAMED in the output, so nobody has to trust that this
+# list is complete -- a fact found nowhere says so, and a fact found somewhere says where.
+_HOLDERS = ["", "material_estimate", "normalized_geometry", "geometry_rollup"]
+
+
+def _find(part: Dict[str, Any], field: str):
+    """(value, source, holder) for a field, wherever this record keeps it."""
+    for holder in _HOLDERS:
+        path = f"{holder}.{field}" if holder else field
+        value = sp.value_of(part, path)
+        source = sp.source_of(part, path) or ""
+        if value is not sp.MISSING or source:
+            return value, source, holder
+    return sp.MISSING, "", None
 
 
 def _rows_for(part: Dict[str, Any], fields: List[str]) -> List[str]:
     out: List[str] = []
     for field in fields:
-        value = sp.value_of(part, field)
+        value, source, holder = _find(part, field)
         if value is sp.MISSING:
-            value_txt = "-- not set --"
-        else:
-            value_txt = str(value)
-        source = sp.source_of(part, field) or ""
+            # THREE STATES, NOT TWO. "This record does not carry the field at all" and "it
+            # carries the value and no source" are different findings and lead different
+            # ways: the first is a projection that dropped it, the second is a fact nobody
+            # attributed. Collapsing them into "no source recorded" is how a costed record
+            # that had simply left provenance behind read as an engine that never recorded any.
+            out.append(f"    {field:<28} {'-- not on this record --':<22} ")
+            continue
+        value_txt = str(value)
+        if holder:
+            value_txt = f"{value_txt} ({holder})"
         rank = sp.rank(source) if source else 0
-        # An absent source is not a source named "": say which, because rank 0 from a source
-        # nobody recorded and rank 0 from a source nobody recognises are different bugs.
         if not source:
-            src_txt = "(no source recorded)"
+            src_txt = "(this record carries no source for it)"
         else:
             src_txt = f"{sp.display_name(source)}  rank {rank}"
             if sp.was_measured(source):
@@ -208,9 +238,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     parts = _parts(doc)
 
-    print(_engine_build())
-    print(f"job JSON:     {path}")
-    print(f"parts:        {len(parts)}")
+    for line in _build_lines(doc):
+        print(line)
+    print(f"job JSON:             {path}")
+    print(f"parts:                {len(parts)}")
 
     wanted = [str(p).strip().upper() for p in args.part_numbers]
     if args.mirrors:

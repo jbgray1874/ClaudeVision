@@ -35,6 +35,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools", "diagnose"))
 
+import engine_build  # noqa: E402
 import source_precedence as sp  # noqa: E402
 import where_did_this_fact_come_from as tool  # noqa: E402
 
@@ -90,23 +91,62 @@ ORPHAN = {
 }
 
 
-def test_it_says_which_build_produced_the_answer(tmp_path, capsys):
-    """The whole reason the tool exists. Without this line, "the fix is not live" and "the fix
-    does not work" are the same output."""
+def test_it_says_which_build_is_reading_the_estimate(tmp_path, capsys):
+    """The whole reason the tool exists. Without this, "the fix is not live" and "the fix does
+    not work" are the same output."""
     out = _run(tmp_path, [BASE], "11650-04-01A", capsys=capsys)
     head = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
-    assert "engine build:" in out
+    assert "READING it now:" in out
     assert head and head in out
 
 
+def test_the_build_that_wrote_the_estimate_is_not_the_one_reading_it(tmp_path, capsys):
+    """THE CONFLATION THIS TOOL EXISTS TO PREVENT, once committed inside the tool itself. An
+    estimate written before a pull and read after it would have been reported under a commit
+    containing fixes it never had — which is precisely the wrong answer to the only question
+    being asked."""
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps({
+        "engine_build": {"commit": "deadbee", "branch": "old-branch", "dirty": False,
+                         "subject": "a build from last week", "known": True},
+        "part_estimates": [BASE],
+    }), encoding="utf-8")
+    tool.main(["11650-04-01A", "--json", str(path)])
+    out = capsys.readouterr().out
+    assert "WROTE this estimate:" in out and "deadbee" in out
+    assert "a build from last week" in out
+    assert "DIFFERENT BUILDS" in out
+
+
+def test_an_estimate_with_no_stamp_says_it_has_none(tmp_path, capsys):
+    """An unstamped document is one written before stamping existed — which is itself an
+    answer about which fixes were live. Reporting the reader's build as if it were the
+    writer's would be the lie."""
+    out = _run(tmp_path, [BASE], "11650-04-01A", capsys=capsys)
+    assert "NOT RECORDED" in out
+    assert "DIFFERENT BUILDS" not in out
+
+
 def test_an_uncommitted_engine_says_so():
-    """A dirty checkout is not the commit it claims to be, and a run from one cannot be
-    reproduced from the hash. Saying the hash without saying that is worse than silence."""
-    src = open(os.path.join(os.path.dirname(tool.__file__),
-                            "where_did_this_fact_come_from.py"), encoding="utf-8").read()
-    assert "UNCOMMITTED CHANGES" in src
-    assert '"status", "--porcelain"' in src
+    """A dirty checkout is not the commit it names, and a run from one cannot be reproduced
+    from the hash. Asserted on the OUTPUT of the shared describer, not by grepping the file for
+    the words — a guard that greps prose passes on a comment explaining the rule."""
+    dirty = engine_build.one_line({"commit": "abc1234", "branch": "b", "dirty": True,
+                                   "known": True})
+    clean = engine_build.one_line({"commit": "abc1234", "branch": "b", "dirty": False,
+                                   "known": True})
+    unsure = engine_build.one_line({"commit": "abc1234", "branch": "b", "dirty": None,
+                                    "known": True})
+    assert "UNCOMMITTED" in dirty and "not reproducible" in dirty
+    assert "UNCOMMITTED" not in clean
+    # NOT SILENTLY "CLEAN". Being unable to ask git whether the tree is dirty is not the same
+    # observation as a clean tree, and only one of them supports reproducing the run.
+    assert "could not tell" in unsure
+
+
+def test_an_engine_that_cannot_identify_itself_says_that_and_not_a_hash():
+    assert "UNKNOWN" in engine_build.one_line({"known": False})
 
 
 def test_it_reads_the_source_key_the_engine_actually_writes(tmp_path, capsys):
@@ -115,7 +155,7 @@ def test_it_reads_the_source_key_the_engine_actually_writes(tmp_path, capsys):
     price turns on — and would have shown a correctly-inherited handed part as an orphan."""
     out = _run(tmp_path, [BASE], "11650-04-01A", capsys=capsys)
     material_line = next(l for l in out.splitlines() if "normalized_material" in l)
-    assert "no source recorded" not in material_line
+    assert "no source" not in material_line
     assert "rank 90" in material_line, "the SolidWorks model ranks 90 and the tool must say so"
     thickness_line = next(l for l in out.splitlines() if "normalized_thickness_mm" in l)
     assert "rank 70" in thickness_line
@@ -198,6 +238,33 @@ def test_it_reads_a_job_whose_estimate_lives_under_estimate_summary(tmp_path, ca
     tool.main(["11650-04-01A", "--json", str(path)])
     out = capsys.readouterr().out
     assert "rank 90" in out
+
+
+def test_a_field_the_record_does_not_carry_is_not_a_field_with_no_source(tmp_path, capsys):
+    """THREE STATES, NOT TWO. A costed record that had simply left provenance behind read
+    exactly like an engine that never recorded any — and on 11650-04 that sent the diagnosis
+    after a mirror rule that had, in fact, fired and written its provenance down."""
+    no_source = dict(BASE)
+    no_source.pop("material_source")
+    out = _run(tmp_path, [no_source], "11650-04-01A", capsys=capsys)
+    material_line = next(l for l in out.splitlines() if "normalized_material" in l)
+    assert "carries no source for it" in material_line, (
+        "the value is present and unattributed — that is not the same as absent")
+    absent_line = next(l for l in out.splitlines() if "cut_length_mm" in l)
+    assert "not on this record" in absent_line
+
+
+def test_it_finds_a_fact_the_costed_record_keeps_under_another_key(tmp_path, capsys):
+    """estimate_part builds a PROJECTION: the blank lives under material_estimate, not at the
+    top. Reading only the top level reported '-- not set --' for a blank plainly on the sheet.
+    The holder is named, so nobody has to trust that the search list is complete."""
+    nested = dict(BASE)
+    nested["material_estimate"] = {"blank_length_mm": 1250.0,
+                                   "blank_length_mm_source": "dxf_flat_pattern"}
+    out = _run(tmp_path, [nested], "11650-04-01A", capsys=capsys)
+    blank_line = next(l for l in out.splitlines() if "blank_length_mm " in l)
+    assert "1250.0 (material_estimate)" in blank_line
+    assert "rank 80" in blank_line
 
 
 def test_naming_nothing_is_an_error_not_an_empty_report(tmp_path):
