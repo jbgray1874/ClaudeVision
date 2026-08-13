@@ -878,16 +878,63 @@ _OTHER_SHEET_LENGTH_GAP = 20.0    # J51: I/(F+20)
 _OTHER_SHEET_WIDTH_MARGIN = 5.0   # J51: (J-5)
 _OTHER_SHEET_WIDTH_GAP = 20.0     # J51: /(G+20)
 
+_SHEET_STEEL_LENGTH_GAP = 20.0    # K38: I/(F+20)
+_SHEET_STEEL_WIDTH_MARGIN = 80.0  # K38: (J-80)
+_SHEET_STEEL_WIDTH_GAP = 10.0     # K38: /(G+10)
 
-def other_sheet_parts_per_sheet(part_length_mm, part_width_mm,
-                                sheet_length_mm, sheet_width_mm):
-    """Parts per sheet by the workbook's Other Sheet Material rule (J51). None if it will
-    not fit, which is a fact and not a quantity -- 0 would divide into a cost of infinity
-    and 1 would quietly claim a part fits on a sheet it is bigger than.
+# ── BOTH RULES, IN ONE PLACE, KEYED ON THE MATERIAL ──────────────────────────────────
+# Adding J51 above fixed the money and left the record lying. estimator.select_sheet_size
+# still ran K38 over EVERY material and wrote its answer into stock_estimate, so
+# 11650-04's PETG side panels came back carrying
+#
+#   nesting_formula='INT(3050/(1250+20)) x INT((2050-80)/(525+10)) [template K38, ...]'
+#
+# on a part priced by J51. Two answers to one question on one record, and the one a reader
+# sees is the one that did not charge the job -- which is how a diagnostic run to explain a
+# handed pair reported the steel rule for a plastic panel and nearly sent the next fix in
+# the wrong direction.
+#
+# They agree on 1250 x 525 (6 either way), so nothing was mispriced by it HERE. That is
+# exactly why it survived: a wrong rule that happens to agree on the part in front of you
+# is invisible until the geometry moves.
+#
+# Worse, the LLM-market-rate branch in estimator applies J51 to anything that reaches it,
+# and it is entered whenever an LLM returns a GBP/m2 rate -- including for a steel the
+# engine holds no price for. The rule has to follow the MATERIAL, not the code path that
+# happened to price the line.
+_NESTING_RULES = {
+    "workbook_other_sheet_J51": (_OTHER_SHEET_LENGTH_GAP, _OTHER_SHEET_WIDTH_MARGIN,
+                                 _OTHER_SHEET_WIDTH_GAP, "template J51"),
+    "workbook_sheet_steel_K38": (_SHEET_STEEL_LENGTH_GAP, _SHEET_STEEL_WIDTH_MARGIN,
+                                 _SHEET_STEEL_WIDTH_GAP, "template K38"),
+}
+
+
+def nesting_rule_for(material) -> str:
+    """Which of the workbook's two nesting rules charges this material.
+
+    The same question the block classifier already answers -- a part costed in the Other
+    Sheet Material block is nested by that block's rule. Asking it through
+    is_other_sheet_material means the two can never disagree about one part.
+    """
+    return ("workbook_other_sheet_J51" if is_other_sheet_material(material)
+            else "workbook_sheet_steel_K38")
+
+
+def nest_on_sheet(material, part_length_mm, part_width_mm,
+                  sheet_length_mm, sheet_width_mm):
+    """How this part nests on this sheet, by the rule its material is charged under.
+    None when it will not nest -- a fact, not a quantity of zero.
 
     FIXED ORIENTATION, like the template. The workbook does not rotate parts, so an engine
     that did would produce a number the sheet disagrees with, which is the whole defect.
     """
+    return _nest_by_rule(nesting_rule_for(material), part_length_mm, part_width_mm,
+                         sheet_length_mm, sheet_width_mm)
+
+
+def _nest_by_rule(rule, part_length_mm, part_width_mm, sheet_length_mm, sheet_width_mm):
+    length_gap, width_margin, width_gap, label = _NESTING_RULES[rule]
     try:
         pl, pw = float(part_length_mm), float(part_width_mm)
         sl, sw = float(sheet_length_mm), float(sheet_width_mm)
@@ -899,7 +946,33 @@ def other_sheet_parts_per_sheet(part_length_mm, part_width_mm,
     # a part that does not fit gives nx or ny of 0 and falls out as None on its own, because
     # the gap and margin are subtracted before the division. A branch no input can reach is
     # not documentation, it is a claim that something is being checked when it is not.
-    nx = int(sl / (pl + _OTHER_SHEET_LENGTH_GAP))
-    ny = int((sw - _OTHER_SHEET_WIDTH_MARGIN) / (pw + _OTHER_SHEET_WIDTH_GAP))
+    nx = int(sl / (pl + length_gap))
+    ny = int((sw - width_margin) / (pw + width_gap))
     qty = max(0, nx) * max(0, ny)
-    return qty or None
+    if not qty:
+        return None
+    return {
+        "parts_per_sheet": qty,
+        "nx": nx,
+        "ny": ny,
+        "nesting_rule": rule,
+        "nesting_formula": (f"INT({sl:g}/({pl:g}+{length_gap:.0f})) × "
+                            f"INT(({sw:g}-{width_margin:.0f})/({pw:g}+{width_gap:.0f}))"
+                            f"  [{label}, fixed orientation]"),
+    }
+
+
+def other_sheet_parts_per_sheet(part_length_mm, part_width_mm,
+                                sheet_length_mm, sheet_width_mm):
+    """Parts per sheet by the workbook's Other Sheet Material rule (J51). None if it will
+    not fit, which is a fact and not a quantity -- 0 would divide into a cost of infinity
+    and 1 would quietly claim a part fits on a sheet it is bigger than.
+
+    Named for the BLOCK because callers that know they are in it should not have to name a
+    material to ask. It names the RULE, not a material that happens to classify to it -- an
+    example material here would be a second classifier, and the point of nesting_rule_for is
+    that there is only ever one.
+    """
+    nest = _nest_by_rule("workbook_other_sheet_J51", part_length_mm, part_width_mm,
+                         sheet_length_mm, sheet_width_mm)
+    return (nest or {}).get("parts_per_sheet")

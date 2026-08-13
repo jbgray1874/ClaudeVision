@@ -1759,41 +1759,33 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
     always nests along sheet length, part width along sheet width, exactly as K38 does.
     Template guards: a part dimension of 0, or larger than the sheet in that axis, yields "doesn't fit".
 
-    NOTE: this is the STEEL rule (K38). The 'Other Sheet Material' section (plastic/acrylic, cell J51)
-    uses a different rule (−5 margin, +20 both axes); that is handled separately for non-steel materials.
+    NOTE: K38 is the STEEL rule. The 'Other Sheet Material' section (plastic/board, cell J51) uses
+    a different one (−5 margin, +20 on the width axis). This function used to run K38 over every
+    material and this note used to say the other case was "handled separately for non-steel
+    materials" — it was handled in the plastic COST path only, so every plastic part still carried
+    the steel nest in its stock_estimate while being charged by J51. The rule now follows the
+    MATERIAL, through the same classifier that decides which workbook block the part lands in.
     """
     if blank_length is None or blank_width is None:
         return {"candidate_sheet_size_mm": None, "parts_per_sheet": None, "utilisation_pct": None}
 
     sizes = STANDARD_SHEET_SIZES_MM.get(material or "", STANDARD_SHEET_SIZES_MM["DEFAULT"])
 
-    # Template K38 fixed margins/gaps (do NOT pull from NESTING_RULES symmetric values).
-    LENGTH_MARGIN = 0.0    # template: I38 has no -80 on the length axis
-    LENGTH_GAP    = 20.0   # template: (10*2) on the length axis
-    WIDTH_MARGIN  = 80.0   # template: (J38-80) on the width axis
-    WIDTH_GAP     = 10.0   # template: (5*2) on the width axis
-
     best: Optional[Dict[str, Any]] = None
     for sheet_length, sheet_width in sizes:
-        part_l, part_w = blank_length, blank_width   # FIXED orientation — no rotation (matches K38)
-        # Template guards: IF(part>sheet,"") -> doesn't fit in that axis
-        if part_l <= 0 or part_w <= 0:
+        # FIXED orientation — no rotation, and no separate "bigger than the sheet" guard: a part
+        # that does not fit comes back as no nest at all, because the gap and the margin are
+        # subtracted before the division.
+        nest = _costed_facts.nest_on_sheet(material, blank_length, blank_width,
+                                           sheet_length, sheet_width)
+        if not nest:
             continue
-        if part_l > sheet_length or part_w > sheet_width:
-            continue
-        nx = int(sheet_length / (part_l + LENGTH_GAP)) if (part_l + LENGTH_GAP) > 0 else 0   # I/(F+20)
-        ny = int((sheet_width - WIDTH_MARGIN) / (part_w + WIDTH_GAP)) if (part_w + WIDTH_GAP) > 0 else 0  # (J-80)/(G+10)
-        qty = max(0, nx) * max(0, ny)
-        if qty <= 0:
-            continue
+        qty = nest["parts_per_sheet"]
         utilisation = (qty * blank_length * blank_width) / (sheet_length * sheet_width) * 100.0
         candidate = {
             "candidate_sheet_size_mm": [sheet_length, sheet_width],
-            "parts_per_sheet": qty,
             "utilisation_pct": round(utilisation, 2),
-            "nx": nx,
-            "ny": ny,
-            "nesting_formula": f"INT({sheet_length}/({part_l}+{LENGTH_GAP:.0f})) × INT(({sheet_width}-{WIDTH_MARGIN:.0f})/({part_w}+{WIDTH_GAP:.0f}))  [template K38, fixed orientation]",
+            **nest,
         }
         # Keep the first sheet size that yields parts (sizes are ordered); template uses one sheet size.
         if best is None or qty > best["parts_per_sheet"]:
@@ -2448,8 +2440,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # area figure is kept beside it on the record so the assumption is visible and an
         # estimator can argue with it.
         _part_area_m2 = _acr_area_m2 if _acr_area_m2 and _acr_area_m2 > 0 else (_full_sheet_area_m2 or 1.0)
-        _acr_pps = _costed_facts.other_sheet_parts_per_sheet(
-            blank_length, blank_width, _acr_sheet_dims[0], _acr_sheet_dims[1])
+        # THE NEST THAT PRICES THE LINE IS THE NEST ON THE RECORD. This used to call J51
+        # directly, so the money came from one rule and stock_estimate from another, and this
+        # branch is entered by ANY material an LLM returns a GBP/m2 rate for -- a steel with no
+        # engine price included. select_sheet_size now picks the rule from the material, so a
+        # plastic gets J51 and a steel priced this way still gets K38.
+        _acr_pps = (_acr_sheet_est or {}).get("parts_per_sheet")
         _area_only_part = _acr_area_m2 * _acr_rate_m2 * (1.0 + _scrap)
         _nest_failed = not _acr_pps
         if _acr_pps:
@@ -2503,7 +2499,10 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # and qty-per-sheet (J) itself, so we expose the sheet price, NOT the per-part cost.
             "sheet_price_gbp": round(float(_sheet_price), 2),
             "parts_per_sheet": int(_acr_pps),
-            "nesting_rule": "workbook_other_sheet_J51",
+            # Named from the nest that produced it, not asserted. A line that says J51 while
+            # stock_estimate holds a K38 count is the defect this branch already had once.
+            "nesting_rule": ((_acr_sheet_est or {}).get("nesting_rule")
+                             or _costed_facts.nesting_rule_for(material)),
             # THE OTHER ANSWER, KEPT WHERE IT CAN BE ARGUED WITH. Nested says you buy whole
             # sheets and get four doors out of one; area says you pay for what you use and
             # the offcut is someone else's. The engine charges what the workbook charges,
