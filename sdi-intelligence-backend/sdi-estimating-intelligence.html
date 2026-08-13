@@ -284,7 +284,16 @@ let running  = false;
 let poll     = null;
 
 /* ── a folder name must survive being a folder name ─────────────────── */
-const safe = s => String(s||"").trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").replace(/\s+/g," ").replace(/\.+$/,"");
+/* THE SERVER'S RULE, STEP FOR STEP. estimate_routes.safe_segment decides what the folder
+   is actually called; this only decides what the page SAYS it will be called, and the two
+   drifting apart shows an estimator a destination that is not where their work went.
+   They already had: this trimmed before substituting and the server after, this stripped
+   only trailing dots where the server strips dots AND spaces, and the server capped at 120
+   characters where this did not — so "M & S .." previewed as "M & S " and filed as "M & S".
+   Order, character class and cap all match deliberately; tests/test_the_page_and_the_server
+   _agree_on_a_folder_name.py runs both implementations over the same names. */
+const safe = s => String(s||"").replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").trim()
+                               .replace(/\s+/g," ").replace(/[. ]+$/,"").slice(0,120);
 
 let runDest = null;          // the dated run folder the server stamped, once known
 
