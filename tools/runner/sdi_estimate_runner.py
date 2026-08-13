@@ -70,6 +70,7 @@ def _load_engine_env() -> None:
 
 
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -83,6 +84,16 @@ from typing import Any, Dict, List, Optional
 # be imported and tested on a machine that has neither requests nor a server.
 
 DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
+
+# HOW OFTEN THE LEASE IS RENEWED WHILE THE ENGINE IS QUIET. Well inside the service's
+# SDI_RUNNER_LEASE_SECONDS (180 by default), because the margin has to survive a slow post
+# and a retry -- a heartbeat that only just fits is a heartbeat that fails under the network
+# conditions it exists to tolerate. Read from the same name the service uses so the two
+# cannot be configured apart: a runner beating slower than the lease it is renewing is the
+# original defect with different numbers.
+_BEAT_SECONDS = max(5, int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "180")) // 6)
+# How long the engine may print nothing before the page is told it is still alive.
+_SAY_QUIET_AFTER = max(60, _BEAT_SECONDS * 4)
 
 # The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
 # quote/report, which share a folder); the auditable summary lands in json/.
@@ -427,6 +438,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     log: List[str] = []
     pending: List[str] = []
     last_sent = 0.0
+    _post_lock = threading.Lock()
 
     def say(text: str) -> None:
         text = text.rstrip("\n")
@@ -437,21 +449,59 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     def flush(force: bool = False) -> None:
         nonlocal last_sent, pending
         # Batched, because a chatty engine would otherwise be one HTTP request per
-        # console line. The heartbeat rides along, so the lease is renewed by the
-        # act of working rather than by a separate timer that could outlive a
-        # wedged run and keep it looking alive.
+        # console line.
         if not force and not pending and (time.time() - last_sent) < 20:
             return
         if not force and not pending:
             return
-        batch, pending = pending, []
-        try:
-            requests.post(f"{base}/runner/{run_id}/progress",
-                          json={"runner_id": runner_id, "lines": batch},
-                          headers=headers, timeout=20)
-            last_sent = time.time()
-        except Exception:                              # noqa: BLE001
-            pending = batch + pending                  # keep it for the next try
+        with _post_lock:
+            batch, pending = pending, []
+            try:
+                requests.post(f"{base}/runner/{run_id}/progress",
+                              json={"runner_id": runner_id, "lines": batch},
+                              headers=headers, timeout=20)
+                last_sent = time.time()
+            except Exception:                          # noqa: BLE001
+                pending = batch + pending              # keep it for the next try
+
+    def beat() -> None:
+        """Renew the lease while the ENGINE PROCESS is alive, said or unsaid.
+
+        WORKING IS NOT THE SAME AS TALKING, AND THIS COST TWO RUNS OF 11650.
+
+        The heartbeat used to ride on the progress posts, so the lease was renewed by the
+        act of printing. The reasoning was sound as far as it went -- a separate timer could
+        outlive a wedged run and keep it looking alive -- but it made a silent phase
+        indistinguishable from a dead machine. The engine goes quiet for minutes at a time
+        driving Excel and SOLIDWORKS over COM, which is the most expensive part of the run
+        and prints nothing at all. At 180 seconds of silence the service declared the runner
+        dead, discarded a run that was working perfectly, and told the operator to check
+        whether the machine had gone to sleep. Twice, at 180s and 181s.
+
+        The original worry is answered without a timer that can outlive anything: this beats
+        only while proc.poll() is None. When the engine dies the beat stops with it, so a
+        crashed run still times out on schedule. What it cannot distinguish is a slow phase
+        from a wedged one -- so it does not try to. It SAYS how long the silence has run,
+        every couple of minutes, and lets the person reading the page judge. Killing a
+        healthy three-minute estimate is the worse error of the two, and the quiet one is
+        the one nobody could see.
+        """
+        quiet_since = time.time()
+        said_at = 0.0
+        while proc.poll() is None:
+            time.sleep(_BEAT_SECONDS)
+            if proc.poll() is not None:
+                break
+            if pending:                                # the engine is talking; nothing to do
+                quiet_since = time.time()
+                said_at = 0.0
+                continue
+            quiet = time.time() - quiet_since
+            if quiet >= _SAY_QUIET_AFTER and (time.time() - said_at) >= _SAY_QUIET_AFTER:
+                said_at = time.time()
+                say(f"Still running — no output for {int(quiet)}s. The engine is driving "
+                    f"Excel/SOLIDWORKS, which prints nothing; the process is alive.")
+            flush(force=True)
 
     print(f"\n--- {job['drawing_number']} · {job['client']} · {job['units']} off")
     say(f"Runner picked up the job on {os.environ.get('COMPUTERNAME', 'this machine')}.")
@@ -476,6 +526,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         return
 
     assert proc.stdout is not None
+    threading.Thread(target=beat, name="lease-heartbeat", daemon=True).start()
     for text in proc.stdout:
         say(text)
         flush()

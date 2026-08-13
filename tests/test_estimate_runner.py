@@ -307,3 +307,126 @@ def test_the_refusal_names_the_holder_while_the_lock_is_held(engine):
     assert held is not None
     said = runner._read_identity(root / "output" / ".runner.lock")
     assert f"pid {os.getpid()}" in said, said
+
+
+# ── the lease survives a phase that prints nothing ───────────────────────────
+class _FakeProc:
+    """An engine that says one thing, then works in silence, then finishes.
+
+    That is not a contrived shape — it is the real one. The 11650 pack prints steadily
+    through extraction and BOM reconciliation and then goes quiet for minutes driving
+    Excel and SOLIDWORKS over COM, which is the most expensive part of the run.
+    """
+
+    def __init__(self, quiet_for):
+        self._quiet_for = quiet_for
+        self._alive = True
+        self.returncode = 0
+
+    @property
+    def stdout(self):
+        def _lines():
+            yield "   [bom] 28 line(s)\n"
+            time.sleep(self._quiet_for)          # the silence that killed two runs
+            self._alive = False
+            yield "  Order quantity set to 45\n"
+        return _lines()
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def wait(self):
+        self._alive = False
+        return 0
+
+
+class _FakeRequests:
+    def __init__(self):
+        self.progress = []
+        self.completed = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        (self.completed if url.endswith("/complete") else self.progress).append(json)
+
+        class _R:
+            @staticmethod
+            def raise_for_status():
+                return None
+        return _R()
+
+
+def _run_with_a_quiet_engine(runner, root, monkeypatch, quiet_for=0.45):
+    monkeypatch.setattr(runner, "_BEAT_SECONDS", 0.02)
+    monkeypatch.setattr(runner, "_SAY_QUIET_AFTER", 0.05)
+    monkeypatch.setattr(runner.subprocess, "Popen",
+                        lambda *a, **k: _FakeProc(quiet_for))
+    req = _FakeRequests()
+    job = {"run_id": "r1", "client": "Boots", "units": 45, "drawing_number": "11650-00",
+           "job_folder": str(root), "output_path": str(root / "share" / "Boots")}
+    runner._execute(req, "http://x/api/estimate", {}, job, root,
+                    Path("python"), "rnr-1")
+    return req
+
+
+def test_a_silent_engine_keeps_its_lease(engine, monkeypatch):
+    """THE DEFECT THAT DISCARDED TWO GOOD RUNS OF 11650, AT 180s AND 181s.
+
+    The lease was renewed by the act of PRINTING, so a phase that works hard and says
+    nothing was indistinguishable from a machine that had gone to sleep. The service
+    failed the run, threw away several minutes of correct work, and told the operator to
+    check whether the laptop had closed.
+
+    The engine here emits one line, goes quiet for many beats, then finishes. Every post
+    during that silence is a lease renewal that would not have happened before.
+    """
+    runner, root = engine
+    req = _run_with_a_quiet_engine(runner, root, monkeypatch)
+
+    # POSTS INSIDE THE SILENCE, not posts in total. A bare count passes on the three the
+    # engine's own two lines already produce, so it survived deleting the heartbeat thread
+    # outright -- a test that cannot fail on the defect it names.
+    def _at(needle):
+        for i, post in enumerate(req.progress):
+            if any(needle in line for line in (post.get("lines") or [])):
+                return i
+        raise AssertionError(f"{needle!r} was never posted at all")
+
+    during = _at("Order quantity") - _at("[bom]") - 1
+    assert during >= 2, (
+        f"{during} progress post(s) between the last thing the engine said and the next — "
+        f"the lease is still being renewed by the act of printing, so a quiet phase runs "
+        f"the clock out and a working run is discarded")
+
+
+def test_the_silence_is_reported_rather_than_hidden(engine, monkeypatch):
+    """The original design worried that a timer would keep a WEDGED run looking alive,
+    and that worry is right. It is answered by saying how long the quiet has run, so a
+    wedge is visible on the page instead of being papered over by a heartbeat."""
+    runner, root = engine
+    req = _run_with_a_quiet_engine(runner, root, monkeypatch)
+    said = " ".join(line for post in req.progress for line in (post.get("lines") or []))
+    assert "no output for" in said, (
+        "a run that goes quiet for minutes now holds its lease and says nothing about "
+        "it — that is how a wedged engine would look healthy for ever")
+
+
+def test_the_beat_stops_when_the_engine_does(engine, monkeypatch):
+    """A heartbeat that outlives the process it reports on is the thing the original
+    design was protecting against, and it must stay protected against: the beat is
+    conditional on proc.poll(), so a crashed engine still times out on schedule."""
+    runner, root = engine
+    req = _run_with_a_quiet_engine(runner, root, monkeypatch, quiet_for=0.1)
+    before = len(req.progress)
+    time.sleep(0.2)                                   # many beats, if any were still running
+    assert len(req.progress) == before, "the heartbeat is still beating after the engine ended"
+    assert req.completed, "the run never reported its outcome"
+
+
+def test_the_beat_cannot_be_configured_slower_than_the_lease(engine):
+    """A runner beating less often than the lease it renews is the same defect with
+    different numbers, and it would arrive silently through an env var nobody re-read."""
+    runner, _ = engine
+    lease = int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "180"))
+    assert runner._BEAT_SECONDS * 2 < lease, (
+        f"beat every {runner._BEAT_SECONDS}s against a {lease}s lease leaves no margin "
+        f"for a slow post and a retry")
