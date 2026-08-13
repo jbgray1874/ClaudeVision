@@ -663,6 +663,24 @@ runBtn.onclick = async () => {
   try{
     const r = await api("/api/estimate",{method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    /* A BLOCKED QUEUE WITH NO WAY OUT IS WHAT MADE THE LEASE TOO SHORT.
+       The refusal names the run that is holding the machine; the person reading it is
+       standing in front of that machine and knows whether it is working. Offer them the
+       release here rather than leaving them to wait out a lease or POST by hand. */
+    if(r.status === 409){
+      const detail = (await r.text()).slice(0,400);
+      const stuck = (detail.match(/estimate\/([0-9a-f]{6,})\/abandon/) || [])[1];
+      line(detail, "e");
+      if(stuck && confirm("An estimate is already running on that machine.\n\n" + detail +
+                          "\n\nRelease it and run this job instead? This does NOT stop the "
+                          + "other run — if it is still working it will be refused when it "
+                          + "reports.")){
+        const rel = await api(`/api/estimate/${stuck}/abandon`, {method:"POST"});
+        if(rel.ok){ line("Released the stuck run. Press the button again.", "w"); }
+        else { line("Could not release it: " + (await rel.text()).slice(0,200), "e"); }
+      }
+      throw new Error(detail);
+    }
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;

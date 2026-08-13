@@ -346,3 +346,110 @@ def test_a_dangling_run_id_is_not_described_as_a_live_estimate(api, tmp_path):
     assert listed["runners"][0]["running"] is None, (
         "the listing reported a finished run as a live estimate")
     assert listed["busy"] == 0
+
+
+# ── releasing a claim a human knows is dead ──────────────────────────────────
+def test_a_stuck_claim_can_be_released_without_waiting_out_the_lease(api, tmp_path):
+    """THE REASON THE LEASE WAS TOO SHORT.
+
+    Three minutes was not a judgement about how long a runner can be quiet — it was the
+    only way to unstick a queue, so it had to be short. It was far too short for a job
+    whose expensive phase drives Excel over COM and prints nothing, and it killed four
+    healthy runs of 11650 in one morning at 180s, 181s, 180s and 180s.
+
+    With a release the operator can use, the lease can be as long as real work needs.
+    """
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
+    _check_in(er)
+    assert er._RUNS[run_id].status == "running"
+
+    er.abandon(run_id)
+    assert er._RUNS[run_id].status == "error"
+    assert er._RUNNERS["rnr-1"].run_id == "", "the runner is still holding the claim"
+    assert er._busy_runner() is None, "the queue is still blocked"
+
+    # And the whole point: the next job goes straight through.
+    er.start(_request(er, tmp_path, drawing="11350"))
+
+
+def test_releasing_says_it_did_not_stop_the_engine(api, tmp_path):
+    """The runner is another process on another machine. Claiming to have cancelled it
+    would have somebody walk away from a SOLIDWORKS session that is still running."""
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path))["run_id"]
+    _check_in(er)
+    er.abandon(run_id)
+    assert "still working" in (er._RUNS[run_id].error or "")
+
+
+def test_a_queued_run_can_be_released_too(api, tmp_path):
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path))["run_id"]
+    assert er.abandon(run_id)["was"] == "queued"
+    assert _check_in(er)["run"] is None, "a released job was still handed to a runner"
+
+
+def test_a_finished_run_is_not_released_again(api, tmp_path):
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path))["run_id"]
+    _check_in(er)
+    er.complete(run_id, er.CompleteRequest(runner_id="rnr-1", status="done"))
+    with pytest.raises(er.HTTPException) as exc:
+        er.abandon(run_id)
+    assert exc.value.status_code == 409
+
+
+def test_the_refusal_tells_you_how_to_release_it(api, tmp_path):
+    """A 409 that names the problem and not the remedy is how somebody loses a morning."""
+    er, _ = api
+    _check_in(er)
+    run_id = er.start(_request(er, tmp_path, drawing="11650-00"))["run_id"]
+    _check_in(er)
+    with pytest.raises(er.HTTPException) as exc:
+        er.start(_request(er, tmp_path, drawing="99999"))
+    assert "abandon" in exc.value.detail and run_id in exc.value.detail
+
+
+def test_the_lease_is_long_enough_for_a_real_estimate(api):
+    """A lease is a bet on how long a WORKING runner can be silent. 11650's quiet phase
+    alone exceeded three minutes, and the engine's own runs take several. Expiring early
+    destroys finished work; expiring late blocks a queue that can now be released by hand.
+    The two errors are not symmetric."""
+    er, _ = api
+    assert er.LEASE_SECONDS >= 600, (
+        f"a {er.LEASE_SECONDS}s lease is shorter than the quiet phase of a real pack, and "
+        f"the run it kills is one that was working")
+
+
+def test_the_page_offers_the_release_the_refusal_names(api):
+    """THE PAGE, NOT THE ENDPOINT. A remedy that only exists as a URL in an error string is
+    a remedy nobody uses at nine in the morning with a queue stuck."""
+    page = (BACKEND / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+    assert "/abandon" in page, "the page never offers to release a stuck run"
+    assert "r.status === 409" in page, (
+        "the page does not recognise the refusal, so it cannot offer anything")
+
+
+def test_the_run_id_in_the_refusal_is_what_the_page_looks_for(api, tmp_path):
+    """The page digs the run id out of the 409 text with a regex. If the message stops
+    carrying a matching id the button appears to work and releases nothing — so pull the
+    real message through the real pattern rather than trusting both ends separately."""
+    import re
+    er, _ = api
+    _check_in(er)
+    er.start(_request(er, tmp_path, drawing="11650-00"))
+    _check_in(er)
+    with pytest.raises(er.HTTPException) as exc:
+        er.start(_request(er, tmp_path, drawing="99999"))
+
+    page = (BACKEND / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+    pattern = re.search(r"detail\.match\(/(.+?)/\)", page).group(1).replace("\\/", "/")
+    found = re.search(pattern, exc.value.detail)
+    assert found, (f"the page's pattern {pattern!r} finds no run id in the service's own "
+                   f"refusal:\n  {exc.value.detail}")
+    assert er._RUNS.get(found.group(1)) is not None, "it matched something that is not a run"

@@ -74,7 +74,22 @@ _MAX_LOG_LINES = 4000
 # sleeps mid-estimate must not leave a job "running" for ever while an estimator
 # watches a spinner — the lease expires, the run is failed with a reason, and the
 # queue moves on.
-LEASE_SECONDS = int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "180"))
+#
+# THREE MINUTES WAS A BET THAT LOST FOUR TIMES IN ONE MORNING, ALL OF THEM WRONGLY.
+# 11650 was killed at 180s, 181s, 180s and 180s while the engine was working perfectly:
+# it goes quiet for minutes driving Excel and SOLIDWORKS over COM, and _execute runs
+# INLINE in the poll loop, so during a run the runner does not poll either. Nothing spoke,
+# so the service concluded the machine had died and destroyed a completed piece of work.
+#
+# The two errors are not symmetric. Expiring too early throws away real work and tells the
+# operator to go and check a laptop that was never asleep. Expiring too late leaves a queue
+# blocked — annoying, recoverable, and now recoverable ON PURPOSE: the short lease was
+# compensating for having no way to release a stuck claim, and POST /{run_id}/abandon is
+# that way. The compensation can go.
+#
+# The runner also heartbeats now, every LEASE/6 while the engine process is alive, so a
+# genuinely dead machine is still noticed within a few beats of the truth.
+LEASE_SECONDS = int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "900"))
 
 # A runner that has not polled within this is treated as gone, and the page says
 # so rather than quietly queueing work nobody will pick up.
@@ -418,7 +433,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                 409, f"An estimate is already running — {busy.drawing_number} for "
                      f"{busy.client}, started {int(time.time() - (busy.started_at or 0))}s "
                      f"ago. SOLIDWORKS and Excel are driven on one desktop, so "
-                     f"estimates run one after another.")
+                     f"estimates run one after another. If you know that run is dead, "
+                     f"release it: POST /api/estimate/{busy.run_id}/abandon.")
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out),
                   queued_at=queued_at)
@@ -430,6 +446,40 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     run.line("Queued — waiting for a runner to pick it up.")
     return {"run_id": run.run_id, "output_path": str(out),
             "drawing_folder": str(drawing_folder)}
+
+
+@router.post("/{run_id}/abandon")
+def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Release a claim a HUMAN knows is dead, without waiting out the lease.
+
+    WHY THIS EXISTS AT ALL. The lease was three minutes because there was no other way to
+    unstick a queue, and three minutes is far too short for a job whose expensive phase
+    prints nothing — so it killed four healthy runs of 11650 in one morning. The lease is
+    now generous, which it can be precisely because this exists: the operator standing in
+    front of the machine knows whether it is working, and the service does not.
+
+    It does NOT stop the engine. The runner is a separate process on another machine and
+    may still be working; if it finishes it will try to report and be told the run is no
+    longer its own. That is why this says so plainly rather than pretending to cancel.
+    """
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run. The service may have restarted.")
+        if run.status not in {"queued", "running"}:
+            raise HTTPException(409, f"That run is already {run.status}.")
+        was = run.status
+        run.status = "error"
+        run.error = ("Released by hand from the page. The queue is free; if the runner was "
+                     "in fact still working, its result will be refused when it reports.")
+        run.line(run.error)
+        run.finished_at = time.time()
+        run.lease_until = 0.0
+        r = _RUNNERS.get(run.runner)
+        if r is not None and r.run_id == run.run_id:
+            r.run_id = ""
+    return {"ok": True, "was": was, "run_id": run_id}
 
 
 @router.get("/{run_id}")
