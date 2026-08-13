@@ -329,3 +329,24 @@ def test_no_unverified_preference_ids_are_sent_to_solidworks():
     src = inspect.getsource(cad_inputs._solidworks_dxf_export)
     assert "SetUserPreferenceToggle" not in src
     assert "SetUserPreferenceIntegerValue" not in src
+
+
+def test_solidworks_is_attached_to_and_never_launched():
+    """Dispatch() returns a running SolidWorks if one is registered and STARTS ONE if not —
+    hidden, prone to a licence prompt nobody can see, and a second seat competing with the
+    estimate for the same desktop. GetActiveObject only ever attaches, so "not running" comes
+    back as that sentence rather than as a mysterious new process."""
+    import inspect
+    src = inspect.getsource(cad_inputs._solidworks_dxf_export)
+    assert "GetActiveObject" in src
+    assert 'Dispatch("SldWorks.Application")' not in src
+    assert "is not running on this machine" in src
+
+
+def test_a_faulted_seat_is_not_restarted_behind_the_estimate():
+    """Bringing SolidWorks back up is a large side effect on a machine whose whole job is one
+    interactive seat, and the estimate may be mid-COM-call on it. A converter that reboots the
+    tool the run depends on is a worse failure than four unread drawings."""
+    import inspect
+    src = inspect.getsource(cad_inputs.convert_dwgs_with_solidworks)
+    assert "restart" not in src.lower().replace("restarted automatically", "")

@@ -268,8 +268,23 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
     #
     # A constant nobody has verified is not a guess with a safety net. It is an instruction
     # to a program that will do what it is told.
+    # ATTACH, NEVER LAUNCH. Dispatch() returns a running SolidWorks if one is registered and
+    # STARTS ONE if not -- hidden, unlicensed-prompt-prone, and a second seat competing with
+    # the estimate for the same desktop. GetActiveObject only ever attaches, so "SolidWorks
+    # is not running" comes back as that sentence instead of as a mysterious new process.
+    #
+    # AND NOT RESTARTED AUTOMATICALLY AFTER A FAULT. Bringing SolidWorks back up is a large
+    # side effect on a machine whose whole job is one interactive seat, and the estimate may
+    # be mid-COM-call on it. A converter that reboots the tool the run depends on is a worse
+    # failure than four unread drawings.
     pythoncom.CoInitialize()
-    sw = win32com.client.Dispatch("SldWorks.Application")
+    try:
+        sw = win32com.client.GetActiveObject("SldWorks.Application")
+    except Exception as exc:                               # noqa: BLE001
+        raise RuntimeError(
+            "SolidWorks is not running on this machine, so there is no seat to convert with. "
+            "Start SolidWorks and leave it open on the runner's desktop, or install the ODA "
+            f"File Converter. ({exc})")
     errs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     warns = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     doc = sw.OpenDoc6(str(dwg), SW_DRW, OPEN_SILENT_READONLY, "", errs, warns)
