@@ -713,11 +713,18 @@ def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)
             if run.status not in {"queued", "running"}:
                 continue
             was = run.status
+            # STOPPING A HUNDRED DRAWINGS MEANS THE SAME AS STOPPING ONE. A batch was the
+            # one place where "stop" still only freed the queue: the drawing being worked on
+            # carried on driving SOLIDWORKS and Excel for the fifteen minutes it had left,
+            # on an enquiry the estimator had already given up on. The single-run stop
+            # learned to end the engine; this is the same act, ninety-nine times over, and
+            # it had no reason to mean less.
+            run.cancel_requested = True
             run.status = "error"
             run.error = ("Released with the rest of this enquiry. "
                          + ("It had not started." if was == "queued" else
-                            "It was running; if the runner was still working, its result "
-                            "will be refused when it reports."))
+                            "It was running; the runner ends the engine on its next "
+                            "heartbeat."))
             run.line(run.error)
             run.finished_at = time.time()
             run.lease_until = 0.0

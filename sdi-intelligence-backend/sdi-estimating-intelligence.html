@@ -798,9 +798,16 @@ $("bRun").onclick = async () => {
 $("bStop").onclick = async () => {
   if(!batchId) return;
   if(!confirm("Stop the drawings that have not finished?\n\nFinished estimates are kept. "
-            + "If one is running now, this does NOT stop the engine — its result will be "
-            + "refused when it reports.")) return;
-  await api(`/api/estimate/batch/${batchId}/abandon`, {method:"POST"});
+            + "The one being worked on now is stopped too — the runner ends the engine on "
+            + "its next heartbeat, up to " + BEAT_HINT + " seconds.")) return;
+  const r = await api(`/api/estimate/batch/${batchId}/abandon`, {method:"POST"});
+  if(!r.ok){ bSet("err","Could not stop"); bCount.textContent =
+      "The enquiry could not be stopped: " + (await r.text()).slice(0,200); return; }
+  /* SAID OUT LOUD, LIKE THE SINGLE-RUN STOP. A button that appears to do nothing for half a
+     minute is a button somebody presses three more times. */
+  const done = await r.json();
+  bCount.textContent = `Stopped — ${done.released} drawing(s) released. Anything already `
+                     + `finished is kept.`;
 };
 
 function watchBatch(){

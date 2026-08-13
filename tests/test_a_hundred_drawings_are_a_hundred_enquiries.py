@@ -279,16 +279,59 @@ def test_the_rest_of_an_enquiry_can_be_stopped_in_one_go(api):
     assert _check_in(er)["run"] is None, "a released enquiry was still handed out"
 
 
-def test_stopping_an_enquiry_says_whether_the_engine_was_actually_working(api):
-    """The runner is another process on another machine. Claiming to have cancelled it
-    would have somebody walk away from a live SOLIDWORKS session."""
+def test_stopping_an_enquiry_stops_the_drawing_being_worked_on(api):
+    """THIS TEST USED TO ASSERT THE OPPOSITE, and was right to at the time: the runner is
+    another process on another machine, nothing could reach it, and the message said so --
+    "if the runner was still working, its result will be refused when it reports". Claiming
+    to have cancelled it would have had somebody walk away from a live SOLIDWORKS session.
+
+    The single-run stop then learned to end the engine, by riding the heartbeat the runner
+    already sends. A batch is the same act ninety-nine times over and had no reason to mean
+    less -- otherwise stopping a hundred-drawing enquiry left the one in progress driving
+    SOLIDWORKS and Excel for the fifteen minutes it had left, on work already given up on.
+
+    Queued and running still read differently, because they are different: one had not
+    started and the other has an engine to end.
+    """
     er, tmp_path, enquiry = api
     _check_in(er)
     out = _batch(er, tmp_path, enquiry, n=3)
     running = _check_in(er)["run"]["run_id"]
     er.batch_abandon(out["batch_id"])
-    assert "still working" in er._RUNS[running].error
+
+    live = er._RUNS[running]
+    assert live.cancel_requested is True, "the runner is never told to stop"
+    assert "ends the engine" in live.error
     assert "had not started" in er._RUNS[out["queued"][1]].error
+
+
+def test_a_stopped_enquiry_refuses_the_runner_the_moment_it_speaks(api):
+    """The message that actually arrives. Once the run is not "running", the progress
+    endpoint refuses the post -- and that 409 is what the runner acts on, because the request
+    carrying the cancel flag is the one being rejected."""
+    import pytest as _pytest
+    er, tmp_path, enquiry = api
+    _check_in(er)
+    out = _batch(er, tmp_path, enquiry, n=2)
+    claim = _check_in(er)["run"]
+    er.batch_abandon(out["batch_id"])
+    with _pytest.raises(Exception) as exc:
+        er.progress(claim["run_id"],
+                    er.ProgressRequest(runner_id="rnr-1", lines=[]))
+    assert getattr(exc.value, "status_code", None) == 409
+
+
+def test_a_finished_drawing_keeps_its_estimate_when_the_rest_is_stopped(api):
+    """The whole point of stopping the REST. An estimator who spots the wrong folder after
+    twenty drawings should keep the twenty."""
+    er, tmp_path, enquiry = api
+    _check_in(er)
+    out = _batch(er, tmp_path, enquiry, n=3)
+    first = _check_in(er)["run"]["run_id"]
+    er._RUNS[first].status = "done"
+    er.batch_abandon(out["batch_id"])
+    assert er._RUNS[first].status == "done"
+    assert er._RUNS[first].cancel_requested is False
 
 
 def test_one_enquiry_does_not_release_another(api):

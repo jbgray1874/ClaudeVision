@@ -179,3 +179,43 @@ def test_stopping_asks_first():
     assert "if(!confirm(" in stop
     assert stop.index("if(!confirm(") < stop.index("abandon"), (
         "the run is abandoned before anybody is asked")
+
+
+# ── the same button, on the multi-drawing enquiry ────────────────────────────────────
+
+def test_the_enquiry_stop_no_longer_disclaims_what_it_now_does():
+    """It read "this does NOT stop the engine — its result will be refused when it reports",
+    which was true and honest before the runner could be told anything. Left standing after
+    the single-run stop learned to end the engine, it would talk somebody out of pressing the
+    button that does the thing they want."""
+    stop = PAGE[PAGE.index('$("bStop").onclick'):]
+    stop = stop[:stop.index("function watchBatch")]
+    assert "does NOT stop the engine" not in stop
+    assert "ends the engine" in stop
+
+
+def test_the_enquiry_stop_says_how_long_it_takes():
+    stop = PAGE[PAGE.index('$("bStop").onclick'):]
+    stop = stop[:stop.index("function watchBatch")]
+    assert "BEAT_HINT" in stop
+
+
+def test_the_enquiry_stop_reports_what_it_released(routes):
+    """A button that appears to do nothing for half a minute is a button somebody presses
+    three more times — and on a hundred-drawing enquiry the count is the reassurance."""
+    stop = PAGE[PAGE.index('$("bStop").onclick'):]
+    stop = stop[:stop.index("function watchBatch")]
+    assert "released" in stop
+    # THE GUARD, NOT THE WORDS. Asserting the phrase merely appears passes against
+    # `if(false){ ... "Could not stop" ... }` — a mutant proved exactly that. The check has to
+    # be that a failed response short-circuits BEFORE the success line is written.
+    assert "if(!r.ok){" in stop, "a refusal is not distinguished from a success"
+    assert stop.index("if(!r.ok){") < stop.index("Stopped —"), (
+        "the success message is written before the response is checked")
+
+
+def test_stopping_a_batch_asks_first():
+    stop = PAGE[PAGE.index('$("bStop").onclick'):]
+    stop = stop[:stop.index("function watchBatch")]
+    assert "if(!confirm(" in stop
+    assert stop.index("if(!confirm(") < stop.index("abandon")
