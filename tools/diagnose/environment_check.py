@@ -26,6 +26,7 @@ resolves and reports, and changes nothing.
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import re
 import sys
@@ -80,6 +81,59 @@ def switches_the_code_reads(*trees: str) -> Dict[str, str]:
                 if name and name not in _NOT_OURS:
                     found.setdefault(name, str(path.relative_to(ROOT)))
     return found
+
+
+def _every_name_the_source_mentions() -> Dict[str, str]:
+    """Same scan, but sparing nothing -- probes, patches, diagnostics, tests.
+
+    Used only to tell "nothing reads this" apart from "only a diagnostic reads this". A key
+    in .env that no shipped module reads is dead weight; a key that NOTHING mentions anywhere
+    is almost always a misspelling of one that does, and that is the finding worth shouting.
+    """
+    found: Dict[str, str] = {}
+    for tree in ("src", "tools", "tests"):
+        base = ROOT / tree
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig", errors="ignore")
+            except OSError:
+                continue
+            for a, b in _READS.findall(text):
+                name = a or b
+                if name:
+                    found.setdefault(name, str(path.relative_to(ROOT)))
+    return found
+
+
+def keys_nothing_reads(on_file: Dict[str, str], reads: Dict[str, str],
+                       mentioned: Dict[str, str]) -> Dict[str, Optional[str]]:
+    """.env keys the engine never asks for -> the nearest name it DOES ask for, if any.
+
+    WHY THIS IS A CHECK AND NOT A TIDY-UP. Setting a switch and having it ignored looks
+    identical, from the console, to not setting it: the run proceeds, the default applies,
+    nothing complains. SERPAPI_API_KEY spelt SERP_API_KEY is a working .env, a healthy log,
+    and web price lookup silently off. The whole point of moving settings into .env is that
+    the file decides -- so a line in the file that decides NOTHING has to be said out loud.
+
+    A key mentioned only by a probe or a test is reported separately: it is not a typo, it
+    is just not wired to anything that ships.
+    """
+    out: Dict[str, Optional[str]] = {}
+    for key in on_file:
+        if key in reads or key in _NOT_OURS:
+            continue
+        if key in mentioned:
+            out[key] = mentioned[key]                # read, but only by something unshipped
+            continue
+        # Candidates are the SHIPPED readers only. Suggesting a name that itself is read
+        # solely by a probe would send someone to rename one dead key into another.
+        near = difflib.get_close_matches(key, list(reads), n=1, cutoff=0.75)
+        out[key] = None if not near else f"~{near[0]}"
+    return out
 
 
 def _dotenv_values() -> Tuple[Optional[Path], Dict[str, str]]:
@@ -169,6 +223,27 @@ def main() -> int:
             origin = "unset"
         effective = in_shell if in_shell is not None else in_file
         print(f"{name:<{_w}}{origin:<9}{_show(name, effective):<28}{reads[name]}")
+
+    # ── lines in .env that decide nothing ───────────────────────────────────────────
+    orphans = keys_nothing_reads(on_file, reads, _every_name_the_source_mentions())
+    if orphans:
+        print(f"\n{'IN .env BUT NOT READ BY THE ENGINE':<{_w + 9}}WHY THAT MATTERS")
+        print("-" * (_w + 9 + 60))
+        for key in sorted(orphans):
+            where = orphans[key]
+            if where is None:
+                print(f"{key:<{_w + 9}}nothing anywhere reads this name")
+                problems.append(f"{key} is set in .env and NOTHING reads it. A setting that "
+                                f"is ignored looks exactly like a setting that is absent.")
+            elif where.startswith("~"):
+                print(f"{key:<{_w + 9}}nothing reads it; closest name read is {where[1:]}")
+                problems.append(f"{key} is set in .env, nothing reads it, and the engine "
+                                f"does read {where[1:]}. If that is a misspelling then the "
+                                f"feature behind it is OFF while the file looks correct.")
+            else:
+                print(f"{key:<{_w + 9}}only {where} reads it (not shipped code)")
+                notes.append(f"{key} is read only by {where}, which is a probe or a test — "
+                             f"setting it changes nothing about an estimate")
 
     # ── the ones that have actually bitten ──────────────────────────────────────────
     print()

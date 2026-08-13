@@ -34,16 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 RUNNER = ROOT / "tools" / "runner" / "sdi_estimate_runner.py"
 MAIN = ROOT / "src" / "main.py"
-
-
-def _fn(path: Path, name: str):
-    """Load one function out of a module that is not importable in this environment."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name), None)
-    assert node is not None, f"{name} is gone from {path.name}"
-    ns = {"os": os, "Path": Path, "__file__": str(path)}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), ns)
-    return ns[name]
+CONFIG = ROOT / "src" / "config.py"
 
 
 # ── the runner reads the same file the engine does ──────────────────────────────────
@@ -101,77 +92,88 @@ def test_the_runner_finds_it_from_its_own_location():
     assert "os.getcwd" not in body
 
 
-def test_main_announces_before_it_loads():
+def test_the_announcement_comes_before_the_load():
     """The announcement compares the shell against the file, so it has to run BEFORE
-    load_dotenv -- afterwards there is nothing left to compare. And it must be CALLED:
-    deleting the call left every test below passing, because they exercise the function."""
-    tree = ast.parse(MAIN.read_text(encoding="utf-8"))
-    announce = [n.lineno for n in ast.walk(tree)
-                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                and n.func.id == "_say_what_the_shell_is_overriding"]
-    load = [n.lineno for n in ast.walk(tree)
+    load_dotenv -- afterwards there is nothing left to compare.
+
+    This used to live in main.py. It is now inside config.load_dot_env, the one loader, so
+    every entry point gets it and not just a run through main. See
+    test_settings_come_from_the_file_not_the_window.py for why that moved.
+    """
+    tree = ast.parse(CONFIG.read_text(encoding="utf-8"))
+    fn = next((n for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name == "load_dot_env"), None)
+    assert fn is not None, "config.load_dot_env is gone"
+    announce = [n.lineno for n in ast.walk(fn)
+                if isinstance(n, ast.If) and ast.unparse(n.test) == "announce"]
+    load = [n.lineno for n in ast.walk(fn)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-            and n.func.id == "_load_dotenv"]
-    assert announce, "main.py never announces what the shell is overriding"
-    assert load, "main.py no longer loads .env"
+            and n.func.id == "load_dotenv"]
+    assert announce, "load_dot_env never announces what the shell is overriding"
+    assert load, "load_dot_env no longer loads .env"
     assert min(announce) < min(load), \
         "the announcement runs after load_dotenv, when there is nothing left to compare"
 
 
 # ── and a shell override is announced, not silent ───────────────────────────────────
+# EXERCISED THROUGH THE REAL LOADER, pointed at a temporary directory. The previous version
+# exec'd the announcement function out of main.py in isolation, which is how the call site
+# came to be deleted with every test still green.
 @pytest.fixture
-def announce():
-    return _fn(MAIN, "_say_what_the_shell_is_overriding")
+def load():
+    pytest.importorskip("dotenv")
+    import config
+    return config.load_dot_env
 
 
 def _env_file(tmp_path, **pairs):
-    p = tmp_path / ".env"
-    p.write_text("\n".join(f"{k}={v}" for k, v in pairs.items()), encoding="utf-8")
-    return p
+    (tmp_path / ".env").write_text("\n".join(f"{k}={v}" for k, v in pairs.items()),
+                                   encoding="utf-8")
+    return tmp_path
 
 
-def test_a_shadowed_switch_is_named(announce, tmp_path, monkeypatch, capsys):
+def test_a_shadowed_switch_is_named(load, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SDI_OFFLINE", "1")
-    announce(_env_file(tmp_path, SDI_OFFLINE="0"))
+    load(root=_env_file(tmp_path, SDI_OFFLINE="0"))
     said = capsys.readouterr().out
     assert "SDI_OFFLINE comes from THIS SHELL" in said
     assert "'1' overrides '0'" in said, "say both values or nobody can tell which run they got"
 
 
-def test_a_secret_is_never_printed(announce, tmp_path, monkeypatch, capsys):
+def test_a_secret_is_never_printed(load, tmp_path, monkeypatch, capsys):
     """The whole point is to name the variable. Naming its VALUE would put a live key in
     every console log and in whatever captures them."""
     monkeypatch.setenv("XAI_API_KEY", "xai-real-key-do-not-print")
-    announce(_env_file(tmp_path, XAI_API_KEY="xai-other-key"))
+    load(root=_env_file(tmp_path, XAI_API_KEY="xai-other-key"))
     said = capsys.readouterr().out
     assert "XAI_API_KEY comes from THIS SHELL" in said
     assert "xai-real-key-do-not-print" not in said and "xai-other-key" not in said
     assert "<hidden>" in said
 
 
-def test_agreement_is_not_announced(announce, tmp_path, monkeypatch, capsys):
+def test_agreement_is_not_announced(load, tmp_path, monkeypatch, capsys):
     """A message that prints when nothing is wrong stops being read, and this one has to be
     trusted on the day it matters."""
     monkeypatch.setenv("SDI_OFFLINE", "1")
-    announce(_env_file(tmp_path, SDI_OFFLINE="1"))
-    assert capsys.readouterr().out == ""
+    load(root=_env_file(tmp_path, SDI_OFFLINE="1"))
+    assert "THIS SHELL" not in capsys.readouterr().out
 
 
-def test_a_variable_only_in_the_file_is_not_announced(announce, tmp_path, monkeypatch, capsys):
+def test_a_variable_only_in_the_file_is_not_announced(load, tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("SDI_SW_RUN_ANALYSER", raising=False)
-    announce(_env_file(tmp_path, SDI_SW_RUN_ANALYSER="1"))
-    assert capsys.readouterr().out == ""
+    load(root=_env_file(tmp_path, SDI_SW_RUN_ANALYSER="1"))
+    assert "THIS SHELL" not in capsys.readouterr().out
 
 
-def test_a_missing_or_unreadable_file_is_silent(announce, tmp_path, capsys):
+def test_a_missing_or_unreadable_file_is_silent(load, tmp_path, capsys):
     """Announcing is a courtesy and must never be the thing that stops a run."""
-    announce(tmp_path / "nope.env")
+    assert load(root=tmp_path / "no-such-dir") is False
     assert capsys.readouterr().out == ""
 
 
-def test_precedence_is_unchanged(announce, tmp_path, monkeypatch):
+def test_precedence_is_unchanged(load, tmp_path, monkeypatch):
     """It REPORTS. It must not start winning arguments -- a deliberate SDI_OFFLINE=1 in a
     test harness has to keep working, and this file is proof that was considered."""
     monkeypatch.setenv("SDI_OFFLINE", "1")
-    announce(_env_file(tmp_path, SDI_OFFLINE="0"))
+    load(root=_env_file(tmp_path, SDI_OFFLINE="0"))
     assert os.environ["SDI_OFFLINE"] == "1"

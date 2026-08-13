@@ -6,57 +6,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# Load environment variables from .env file (project root: C:\ClaudeVision\.env)
-# This makes XAI_API_KEY, OPENAI_API_KEY, etc. available without having to set
-# them manually in each shell session. Must happen BEFORE any module that reads
-# os.environ (note_scan, web_ai_price_lookup, etc.).
-def _say_what_the_shell_is_overriding(env_file) -> None:
-    """Name every switch whose value came from the SHELL rather than from .env.
-
-    load_dotenv does not override an existing environment variable, and it should not: a
-    deliberate `SDI_OFFLINE=1 python main.py` has to keep working. But that makes .env the
-    LOSER of any disagreement, silently -- so a variable left set in one PowerShell window
-    changes what the engine does, and nothing anywhere says which value was used.
-
-    This project has already paid for that twice: SDI_SW_RUN_ANALYSER read in one place and
-    set nowhere, and a whole morning on an elevated console. A run whose behaviour depends on
-    the window it was started from is a run nobody can reproduce.
-
-    Precedence unchanged. The shadowing is simply said out loud.
-    """
-    try:
-        from dotenv import dotenv_values
-        on_file = dotenv_values(env_file) or {}
-    except Exception:                                        # noqa: BLE001
-        return
-    shadowed = [
-        (k, v, os.environ[k]) for k, v in on_file.items()
-        if k in os.environ and v is not None and os.environ[k] != v
-    ]
-    for key, in_file, in_shell in shadowed:
-        _mask = key.upper().endswith(("KEY", "SECRET", "PASSWORD", "TOKEN", "PWD"))
-        print(f"   [env] {key} comes from THIS SHELL, not .env "
-              f"({'<hidden>' if _mask else in_shell!r} overrides "
-              f"{'<hidden>' if _mask else in_file!r}). Deliberate overrides are fine; an "
-              f"unnoticed one makes this run unreproducible.", flush=True)
-
-
-try:
-    from dotenv import load_dotenv as _load_dotenv
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-    if _env_path.exists():
-        _say_what_the_shell_is_overriding(_env_path)
-        _load_dotenv(_env_path)
-        print(f"[env] Loaded {_env_path}", flush=True)
-    else:
-        # Also try same directory as main.py (src/.env)
-        _env_src = Path(__file__).resolve().parent / ".env"
-        if _env_src.exists():
-            _say_what_the_shell_is_overriding(_env_src)
-            _load_dotenv(_env_src)
-            print(f"[env] Loaded {_env_src}", flush=True)
-except ImportError:
-    pass  # python-dotenv not installed — env vars must be set manually
+# .env IS NOT LOADED HERE. config.load_dot_env() does it, at config import, and this file
+# used to carry a second copy of that loader. Two loaders with slightly different search
+# orders is a defect waiting to happen, and the asymmetry was worse than the duplication:
+# a RUN through main.py got .env, while why_this_price.py, the supplier profiler, the
+# runner and every test imported config directly and got whatever the shell held. The
+# import of config below is therefore load-bearing -- it must stay the FIRST engine import
+# so nothing reads os.environ before the file has been read.
 
 # Windows consoles default to cp1252, which cannot encode characters like the
 # warning sign (U+26A0). Any such print would raise UnicodeEncodeError and abort

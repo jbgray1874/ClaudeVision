@@ -1,6 +1,67 @@
 import os
 from pathlib import Path
 
+# ── .env IS LOADED HERE, BECAUSE THIS IS WHERE THE SETTINGS ARE READ ────────────────
+# config reads ten environment variables at import time and used to load nothing. main.py
+# loaded .env before importing config, so a RUN was configured correctly -- and every other
+# entry point was not. why_this_price.py, the supplier profiler, check_tiers and every test
+# that imports config got whatever the shell happened to hold, or a silent default.
+#
+# That is how a setting gets applied by accident: not by anyone choosing it, but by which
+# door the code was entered through. Loading it here means one file decides, and every
+# caller of config -- tools, tests, the runner's engine, main -- sees the same values.
+#
+# Resolved from __file__, so the working directory cannot change the answer. Idempotent, so
+# main.py's early call and this one are the same event. Shell variables still WIN, because
+# a deliberate `SDI_OFFLINE=1 python ...` must keep working -- what changes is that the
+# default now comes from a file rather than from nothing, and a shell value that DISAGREES
+# with the file is said out loud instead of quietly deciding the estimate.
+_DOT_ENV_LOADED = False
+
+
+def load_dot_env(announce: bool = True, root=None) -> bool:
+    """Load BASE_DIR/.env into the environment. Returns True if a file was read.
+
+    THE ONE LOADER. A second copy in main.py is what this replaced, and two loaders with
+    slightly different search orders is the shape of defect this codebase keeps paying for.
+
+    `root` exists so a test can point this at a temporary directory. It is NOT a second
+    search order: production callers pass nothing and get BASE_DIR, resolved from __file__.
+    """
+    global _DOT_ENV_LOADED
+    if _DOT_ENV_LOADED and root is None:
+        return True
+    try:
+        from dotenv import load_dotenv, dotenv_values
+    except ImportError:
+        return False                    # not installed: every switch falls back to the shell
+    _places = ((Path(root) / ".env",) if root is not None
+               else (BASE_DIR / ".env", Path(__file__).resolve().parent / ".env"))
+    for candidate in _places:
+        if not candidate.exists():
+            continue
+        if announce:
+            try:
+                for key, in_file in (dotenv_values(candidate) or {}).items():
+                    if in_file is None or key not in os.environ:
+                        continue
+                    if os.environ[key] == in_file:
+                        continue
+                    _mask = key.upper().endswith(("KEY", "SECRET", "PASSWORD", "TOKEN", "PWD"))
+                    print(f"   [env] {key} comes from THIS SHELL, not .env "
+                          f"({'<hidden>' if _mask else os.environ[key]!r} overrides "
+                          f"{'<hidden>' if _mask else in_file!r}). Deliberate overrides are "
+                          f"fine; an unnoticed one makes this run unreproducible.", flush=True)
+            except Exception:                                # noqa: BLE001
+                pass                     # reporting must never stop the settings loading
+        load_dotenv(candidate)
+        if root is None:
+            _DOT_ENV_LOADED = True
+        print(f"[env] Loaded {candidate}", flush=True)
+        return True
+    return False
+
+
 # Canonical hand-edited source for this project lives in this repo's `src/`.
 # After changes here, copy/sync the same files to your runtime tree (e.g. C:\ClaudeVision\src) before running scans.
 
@@ -9,6 +70,8 @@ INPUT_DIR = BASE_DIR / "input"
 DRAWINGS_DIR = INPUT_DIR / "drawings"
 SPREADSHEETS_DIR = INPUT_DIR / "spreadsheets"
 HISTORY_DIR = INPUT_DIR / "history"
+
+load_dot_env()      # before any os.environ read below
 
 OUTPUT_DIR = BASE_DIR / "output"
 JSON_DIR = OUTPUT_DIR / "json"
