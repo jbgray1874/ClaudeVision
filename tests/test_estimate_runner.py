@@ -656,3 +656,72 @@ def test_the_task_installer_refuses_a_root_that_is_not_the_engine():
     assert "does not look like the ClaudeVision checkout" in ps1
     assert "sdi_estimate_runner.py" in ps1.split("$python = Join-Path")[0], (
         "the root is not verified before it is used to find the interpreter")
+
+
+# ── a runner with no console at all ──────────────────────────────────────────────────
+#
+# THE TASK INSTALLED, STARTED, AND NOTHING CONNECTED. install-runner-task.ps1 prefers
+# pythonw.exe, which is right for something meant to run unattended and is also the one
+# environment where sys.stdout and sys.stderr are None. _Tee.write called
+# self._stream.write(text) unconditionally, so the FIRST line the runner printed raised
+# AttributeError before it had polled once. Windows restarted it three times, each dead in
+# milliseconds, and the page said "no runner connected" with nothing anywhere saying why.
+#
+# The log file exists to make a death answerable. Having no window was what stopped it
+# being written.
+
+def test_a_runner_with_no_console_still_starts_and_still_logs(engine, monkeypatch):
+    runner, root = engine
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    path = runner.start_logging(root)
+    print("polling every 5s")                     # goes through the _Tee just installed
+    sys.stdout.flush()
+    assert path is not None and path.is_file()
+    text = path.read_text(encoding="utf-8", errors="replace")
+    assert "runner starting" in text
+    assert "polling every 5s" in text
+
+
+def test_a_console_that_disappears_mid_run_costs_the_console_not_the_run(engine):
+    runner, root = engine
+
+    class Gone:
+        def write(self, text):
+            raise ValueError("The handle is invalid")
+
+        def flush(self):
+            raise ValueError("The handle is invalid")
+
+    tee = runner._Tee(Gone(), root / "output" / "logs" / "t.log")
+    tee.write("first\n")
+    tee.write("second\n")
+    tee.flush()
+    # write() flushes the file on every line, so the log is complete without flush() doing
+    # anything to it -- a file flush was added here and no mutant could kill it.
+    assert "second" in (root / "output" / "logs" / "t.log").read_text(encoding="utf-8")
+
+
+def test_the_log_is_open_before_anything_can_print(engine):
+    """ORDER, NOT PRESENCE. start_logging used to run AFTER the 'this runner needs requests'
+    message — so the one line explaining why the runner would not start was itself printed to
+    a stderr that did not exist."""
+    import ast
+    src = (RUNNER_DIR / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    def _line_of(pred):
+        for node in ast.walk(main):
+            if pred(node):
+                return node.lineno
+        return None
+    first_log = _line_of(lambda n: isinstance(n, ast.Call)
+                         and isinstance(n.func, ast.Name) and n.func.id == "start_logging")
+    first_print = min([n.lineno for n in ast.walk(main)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                       and n.func.id == "print"] or [10 ** 9])
+    assert first_log is not None, "main() no longer starts logging at all"
+    assert first_log < first_print, (
+        "something in main() prints before the log is open; under a windowless start that "
+        "print is what kills the runner")

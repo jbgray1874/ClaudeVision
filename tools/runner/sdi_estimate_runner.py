@@ -357,6 +357,18 @@ class _Tee:
     log, not the run.
     """
 
+    # THERE MAY BE NO CONSOLE, AND THAT IS NORMAL.
+    #
+    # Under pythonw.exe -- which is what a windowless Scheduled Task runs, and what the
+    # installer PREFERS -- sys.stdout and sys.stderr are None. `self._stream.write(text)`
+    # then raises AttributeError on the very first line this runner prints, before it has
+    # polled once. The task starts, the process dies in milliseconds, Windows restarts it
+    # three times, and the page says "no runner connected" with nothing anywhere saying why.
+    #
+    # So the log file existed to make a death answerable, and the absence of a console was
+    # what killed it. A record that depends on a window is the thing this class was written
+    # to stop needing.
+
     def __init__(self, stream, path: Path):
         self._stream = stream
         self._file = None
@@ -367,7 +379,12 @@ class _Tee:
             pass
 
     def write(self, text):
-        self._stream.write(text)
+        if self._stream is not None:
+            try:
+                self._stream.write(text)
+            except (OSError, ValueError, AttributeError):
+                # A console that has gone away mid-run costs the console, not the run.
+                self._stream = None
         if self._file is not None:
             try:
                 self._file.write(text)
@@ -378,16 +395,27 @@ class _Tee:
 
     def flush(self):
         try:
-            self._stream.flush()
-        except (OSError, ValueError):
+            if self._stream is not None:
+                self._stream.flush()
+        except (OSError, ValueError, AttributeError):
             pass
+        # NO FILE FLUSH HERE, AND THAT IS DELIBERATE. One was added on the reasoning that
+        # flush() pushed the console and left the log buffered -- and no mutant could kill
+        # it, because write() above already flushes the file after every line. The reasoning
+        # was simply wrong: a buffered crash log has never been possible on this path. A line
+        # that cannot be distinguished from its absence is not belt and braces, it is a claim
+        # that something is being handled here when it is handled a dozen lines up.
 
     def isatty(self):
         return getattr(self._stream, "isatty", lambda: False)()
 
 
 def start_logging(engine_root: Path) -> Optional[Path]:
-    """Send everything this runner says to output/logs/runner-YYYY-MM-DD.log as well."""
+    """Send everything this runner says to output/logs/runner-YYYY-MM-DD.log as well.
+
+    Works with no console at all -- see _Tee. A windowless start is the normal way this runs
+    unattended, and it must not be the one way it cannot report a failure.
+    """
     path = Path(engine_root) / "output" / "logs" / f"runner-{time.strftime('%Y-%m-%d')}.log"
     sys.stdout = _Tee(sys.stdout, path)
     sys.stderr = _Tee(sys.stderr, path)
@@ -415,14 +443,17 @@ def main() -> int:
     ap.add_argument("--runner-id", default=os.getenv("SDI_RUNNER_ID", ""))
     a = ap.parse_args()
 
+    engine_root = Path(a.engine_root)
+    # BEFORE ANYTHING CAN PRINT. The missing-requests message below went to sys.stderr, which
+    # under a windowless start is None -- so the one line explaining why the runner would not
+    # start was itself the thing that killed it, and the page just said "no runner connected".
+    log_path = start_logging(engine_root)
+
     try:
         import requests
     except ImportError:
         print("This runner needs 'requests'.  pip install requests", file=sys.stderr)
         return 2
-
-    engine_root = Path(a.engine_root)
-    log_path = start_logging(engine_root)
     _lock = claim_the_machine(engine_root)          # noqa: F841 — held, not used
     engine_python = Path(a.engine_python) if a.engine_python else \
         engine_root / ".venv" / "Scripts" / "python.exe"
