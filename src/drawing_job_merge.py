@@ -454,18 +454,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 part["thicknesses_mm"] = [str(flat["thickness_mm"])]
 
         _mat_fn = flat.get("material_from_filename") or material_from_dxf_filename(dxf_path)
-        if _mat_fn:
-            # SUBMITTED ALWAYS, NOT INTO A GAP. This was gap-fill at `inference`, so on a
-            # part that already carried a material it was not recorded anywhere -- and an
-            # observation nobody wrote down cannot corroborate anything. 11650-04's six
-            # exports are all named 2MM PETG and not one of them reached the record, because
-            # the model had already written ABS.
-            #
-            # The resolver decides the outcome, as it does for every other source. A
-            # filename still loses to a measured DXF or a model on its own; what it can now
-            # do is stand beside the title block, and two independent readings are what the
-            # quorum is for.
-            _apply_field(part, "normalized_material", _mat_fn, "dxf_filename")
+        if _mat_fn and (
+            not part.get("normalized_material")
+            or str(part.get("normalized_material") or "").strip().upper() in {"MDF", "NONE", ""}
+        ):
+            # "Authoritative" overstated it: this is the characters in a FILENAME, a naming
+            # convention someone typed, not a measurement. It ranks as inference and must
+            # lose to the model, a measured DXF material and the printed title block.
+            _apply_field(part, "normalized_material", _mat_fn, "inference")
 
         weight_g = float(flat.get("weight_g") or 0.0)
         if weight_g > 0:
@@ -526,12 +522,8 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
 
         thk = thickness_mm_from_dxf_filename(dxf_path)
         if thk is not None:
-            # THE SAME ARGUMENT AS THE MATERIAL. A gauge read from the filename is not the
-            # geometry, and it is not a guess either: it is what the drawing office called
-            # the stock this flat is cut from. 11650-04's panels are costed at 2.2mm from a
-            # model while every export says 2MM and the catalogue stocks 2.0 and 3.0 -- so
-            # the rate lookup misses on exactly the parts that matter.
-            _apply_field(part, "normalized_thickness_mm", thk, "dxf_filename")
+            # A gauge read from the FILENAME, not the geometry — inference, not measurement.
+            _apply_field(part, "normalized_thickness_mm", thk, "inference")
             if not part.get("thicknesses_mm"):
                 part["thicknesses_mm"] = [str(thk)]
 
@@ -928,7 +920,7 @@ def _create_orphan_dxf_part(summary: Dict[str, Any], part_number: str, dxf_path:
     part["dxf_orphan"] = {"path": str(dxf_path.resolve()), "note": "Flat DXF in folder — no detail GA/PDF part record"}
     _mat_fn = material_from_dxf_filename(dxf_path)
     if _mat_fn:
-        _apply_field(part, "normalized_material", _mat_fn, "dxf_filename")
+        _apply_field(part, "normalized_material", _mat_fn, "inference")
     return part
 
 
@@ -1092,9 +1084,12 @@ def _split_parent_flats_to_children(
         if target is not None:
             used.add(id(target))
             _mat_fn = material_from_dxf_filename(chosen)
-            if _mat_fn:
-                # Submitted, not gap-filled — see the note at the flat-application site.
-                _apply_field(target, "normalized_material", _mat_fn, "dxf_filename")
+            if _mat_fn and (
+                not target.get("normalized_material")
+                or str(target.get("normalized_material") or "").strip().upper() in {"MDF", "NONE", ""}
+            ):
+                # Filename, therefore inference — see above.
+                _apply_field(target, "normalized_material", _mat_fn, "inference")
             _apply_and_report(target, chosen, report, matched_keys, reason=bind_reason)
         else:
             pn = _orphan_child_pn(parent, chosen, _ci)

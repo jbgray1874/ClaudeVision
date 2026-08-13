@@ -127,25 +127,6 @@ SOURCE_RANK: Dict[str, int] = {
     "mirror_of_measured": 75,
     "drawing_deterministic": 70,
     "title_block": 70,
-    # WHAT THE DRAWING OFFICE TYPED ON THE EXPORT THAT GOES TO THE LASER.
-    #
-    # "11650-04-01A_2MM PETG_REVG.DXF" is not a guess and never was. It is a deliberate
-    # label, applied by the person who issued the flat, on the file the machine cuts from —
-    # and it was ranked `inference` (20) and applied only into a GAP, which meant that on a
-    # part already carrying a material it was never recorded at all.
-    #
-    # 11650-04 is what that costs. The title block says PETG, an options list says PETG or
-    # PC, SIX exports across five revisions are named 2MM PETG, and the parts catalogue
-    # stocks 37 rows of it. One SolidWorks model property said ABS and won, because the only
-    # other observation the record held was the title block: everything else had been
-    # skipped rather than submitted, so the corroboration rule had one source to count where
-    # the honest answer was two.
-    #
-    # Ranked WITH the drawing text, not above it. A filename is as good as the convention
-    # behind it, which is exactly what a title block is; it must still lose to a measured
-    # DXF or a model on its own. What changes is that it is now an OBSERVATION, and two
-    # independent observations are what the quorum is for.
-    "dxf_filename": 70,
     # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
     # off the drawing, not a guess — but it is one inference away from a measurement: an
     # overall is the finished part, and only a flat one has the same extent as its blank.
@@ -193,10 +174,6 @@ SOURCE_TIEBREAK: Dict[str, int] = {
     # else read off the drawing by rule, including body text, which is looser.
     "title_block": 2,
     "drawing_deterministic": 1,
-    # Below both at the same rank. A filename is a controlled convention like a title block,
-    # but it is a NAME rather than a field on the sheet -- so where the two disagree outright
-    # the printed drawing is the one that was issued.
-    "dxf_filename": 0,
     # The whole-job pass has seen the pack and can hold one sheet against another; the
     # per-part pass has seen one page. Same model, more context.
     "llm_full_extract": 2,
@@ -232,7 +209,6 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "mirror_of_measured":     "the measured opposite hand",
     "drawing_deterministic":  "the drawing",
     "title_block":            "the title block",
-    "dxf_filename":           "the DXF filename the drawing office typed",
     "pdf_overall_dims":       "the drawing's overall dimensions",
     "bom_tree":               "the bill of materials",
     "override_rule":          "an SDI override rule",
