@@ -9,9 +9,19 @@ because nothing was looking.
 
 Two jobs, both about the same question:
 
-  CONVERT   DWG is DXF's binary sibling. The ODA File Converter turns it into DXF offline,
-            in bulk, for free, and the result feeds the reader we already have. A DWG flat
-            pattern is a measured outline we were throwing away.
+  CONVERT   DWG is DXF's binary sibling. Turned into DXF it feeds the reader we already
+            have, so a DWG flat pattern stops being a measured outline we throw away.
+
+            TWO BACKENDS, BECAUSE THE FIRST ONE CAN BE UNREACHABLE. The ODA File Converter
+            is free, batch and offline — and it has to be downloaded from a host that this
+            network blocks, browser and winget alike, so on the machine that needs it the
+            answer to "install the converter" was "you cannot". A capability that depends on
+            a vendor's website being reachable is not a capability.
+
+            SolidWorks is the second backend and it was here all along: the runner must have
+            a licensed interactive seat anyway, because Excel and SOLIDWORKS are driven over
+            COM on a real desktop. A machine that can estimate can convert. It is slower per
+            file and it needs the seat, which is why ODA stays first when present.
 
   DECLARE   Everything else — STEP, IGES, Parasolid, STL — is named in the output as present
             and unread. Not parsed: those formats carry geometry and no part numbers, no
@@ -132,12 +142,117 @@ def find_converter(explicit: Optional[str] = None) -> Optional[str]:
     return None
 
 
+def convert_dwgs_with_solidworks(
+    dwgs: Sequence[Path],
+    out_dir: Path,
+    *,
+    export: Optional[Callable[[Path, Path], bool]] = None,
+) -> Dict[str, Any]:
+    """DWG -> DXF through the SolidWorks seat the runner already has.
+
+    `export` exists so this can be driven without SolidWorks installed: the conversion is one
+    COM call per file, and a function that can only be tested on a machine with a particular
+    CAD package is a function nobody tests. Production passes nothing and gets the real one.
+
+    NEVER RAISES. A seat that is busy, absent or refusing costs the DWGs, not the estimate --
+    the job still runs from the PDFs exactly as it does today, and the output says why.
+
+    ONE DOCUMENT AT A TIME, CLOSED AFTER. This runs on somebody's actual desktop, beside the
+    estimate that is using the same seat. Leaving drawings open would put a modal dialog in
+    front of the next COM call the engine makes, which is the kind of failure that gets
+    blamed on the estimate rather than on this.
+    """
+    out: Dict[str, Any] = {"converted": [], "converted_paths": [], "reason": ""}
+    dwgs = [Path(p) for p in dwgs]
+    if not dwgs:
+        return out
+    try:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        out["reason"] = f"could not create the conversion output folder: {exc}"
+        return out
+
+    _export = export or _solidworks_dxf_export
+    failed: List[str] = []
+    for dwg in dwgs:
+        target = out_dir / (dwg.stem + ".dxf")
+        try:
+            ok = bool(_export(dwg, target))
+        except Exception as exc:                # noqa: BLE001 -- a CAD seat may fail any way
+            failed.append(f"{dwg.name} ({type(exc).__name__}: {exc})")
+            continue
+        if ok and target.is_file():
+            out["converted"].append(target.name)
+            out["converted_paths"].append(str(target))
+        else:
+            failed.append(dwg.name)
+
+    if not out["converted"]:
+        out["reason"] = (
+            f"the ODA File Converter was not found, and SolidWorks could not convert the "
+            f"{len(dwgs)} DWG file(s) either"
+            + (f" ({'; '.join(failed[:3])})" if failed else "")
+            + ". Nothing has read them — if any are part flat patterns, those parts are "
+              "being sized from drawing text instead.")
+    elif failed:
+        out["reason"] = (f"SolidWorks converted {len(out['converted'])} of {len(dwgs)} DWG "
+                         f"file(s); {len(failed)} would not open: {', '.join(failed[:3])}")
+    return out
+
+
+def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
+    """The real COM call. Windows, pywin32 and a licensed seat, or ImportError/RuntimeError.
+
+    A DWG opens as a DRAWING document (swDocDRAWING = 3) and saves straight back out as DXF.
+    The import wizard is what makes this fiddly: shown, it blocks on a desktop nobody is
+    watching, and the toggle that suppresses it is version-dependent. Every toggle below is
+    attempted and none is required -- a SolidWorks that does not recognise one raises, and a
+    conversion that then blocks is caught by the caller as a failure for that file rather
+    than a hang for the run.
+    """
+    import pythoncom                                       # noqa: F401 -- Windows only
+    import win32com.client                                 # noqa: F401
+
+    SW_DRW = 3
+    OPEN_SILENT_READONLY = 1 | 2
+    # swUserPreferenceToggle_e — suppress the DXF/DWG import mapping dialog. Named, tried,
+    # not depended on: the numbers move between releases and a wrong one must not be fatal.
+    _NO_MAPPING_DIALOG = (226, 227)
+
+    pythoncom.CoInitialize()
+    sw = win32com.client.Dispatch("SldWorks.Application")
+    for toggle in _NO_MAPPING_DIALOG:
+        try:
+            sw.SetUserPreferenceToggle(toggle, True)
+        except Exception:                                  # noqa: BLE001
+            pass
+    errs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    warns = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    doc = sw.OpenDoc6(str(dwg), SW_DRW, OPEN_SILENT_READONLY, "", errs, warns)
+    if doc is None:
+        raise RuntimeError(f"OpenDoc6 refused it (errs={errs.value} warns={warns.value})")
+    title = None
+    try:
+        title = doc.GetTitle()
+        return bool(doc.SaveAs(str(dxf)))
+    finally:
+        # CLOSED WHATEVER HAPPENED. An open drawing left on that desktop is a modal dialog
+        # in front of the next estimate.
+        try:
+            if title:
+                sw.CloseDoc(title)
+        except Exception:                                  # noqa: BLE001
+            pass
+
+
 def convert_dwgs(
     folder: Path,
     out_dir: Optional[Path] = None,
     *,
     converter: Optional[str] = None,
     runner: Optional[Callable[[List[str]], int]] = None,
+    solidworks: Any = None,
 ) -> Dict[str, Any]:
     """Convert every DWG in `folder` to DXF, returning what was produced and what was not.
 
@@ -153,11 +268,23 @@ def convert_dwgs(
     dwgs = [p for p in sorted(folder.rglob("*"))
             if p.is_file() and p.suffix.lower() in CONVERTIBLE and not _is_noise(p)]
     result: Dict[str, Any] = {"schema": SCHEMA, "found": [p.name for p in dwgs],
-                              "converted": [], "converted_paths": [], "reason": ""}
+                              "converted": [], "converted_paths": [], "reason": "",
+                              "backend": ""}
     if not dwgs:
         return result
 
     exe = converter or find_converter()
+    if not exe and runner is None and solidworks is not False:
+        # SECOND BACKEND, TRIED BEFORE GIVING UP. Reported with its own basis so a reader can
+        # tell which tool produced these DXFs -- they are not identical in fidelity, and a
+        # geometry question six months from now deserves to know which one drew the outline.
+        _sw = convert_dwgs_with_solidworks(dwgs, out_dir or (folder / "_dxf_from_dwg"),
+                                           export=solidworks)
+        result["backend"] = "solidworks"
+        result["converted"] = _sw["converted"]
+        result["converted_paths"] = _sw["converted_paths"]
+        result["reason"] = _sw["reason"]
+        return result
     if not exe and runner is None:
         # NOT "these flat patterns". A job folder's DWGs are whatever the customer sent, and
         # they are not all part flats — a GA sheet is the DWG equivalent of the PDF, and
@@ -186,6 +313,7 @@ def convert_dwgs(
         return result
 
     produced = [p for p in sorted(out_dir.rglob("*.dxf")) if p.is_file()]
+    result["backend"] = "oda"
     result["converted"] = [p.name for p in produced]
     result["converted_paths"] = [str(p) for p in produced]
     if not produced:
