@@ -50,6 +50,11 @@
   .btn-run{width:100%;background:var(--brand);color:#191900;border-color:var(--brand);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
   .btn-run:hover:not(:disabled){filter:brightness(1.08)}
   .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
+  /* Deliberately not styled like the run button. Stop is destructive and rare; it should
+     not be the thing a hand reaches for by muscle memory. */
+  .btn-stop{width:100%;background:transparent;color:#ff9b9b;border:1px solid #7d3a3a;padding:11px 18px;font-size:14px;font-weight:600;margin-top:9px;border-radius:7px;cursor:pointer}
+  .btn-stop:hover:not(:disabled){background:#3a1f1f}
+  .btn-stop:disabled{opacity:.5;cursor:default}
 
   /* ── drawings list ─────────────────────────────────────────────────── */
   .files{list-style:none;margin:0 0 12px;padding:0;max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel-2)}
@@ -152,6 +157,12 @@
       </div>
 
       <button class="btn-run" id="run" disabled>SDI Intelligence Estimator</button>
+      <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
+           Stopping was possible only by provoking a 409 from a SECOND run and taking the
+           release offered in the refusal, or by POSTing by hand. So an accidental double
+           start meant fifteen minutes of SOLIDWORKS and Excel doing work nobody would read,
+           with a queue behind it, twice in one afternoon. -->
+      <button class="btn-stop" id="stop" hidden>Stop this estimate</button>
     </section>
 
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
@@ -280,7 +291,7 @@ const api = (p,o={}) => fetch(p,{...o,headers:{"X-SDI-Key":API_KEY,...(o.headers
 
 const $ = id => document.getElementById(id);
 const units=$("units"), client=$("client"), drawing=$("drawing");
-const runBtn=$("run"), destPath=$("destPath"), req=$("req");
+const runBtn=$("run"), stopBtn=$("stop"), destPath=$("destPath"), req=$("req");
 const runnerBox=$("runnerBox"), runnerText=$("runnerText");
 const fileList=$("fileList"), fileEmpty=$("fileEmpty");
 const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
@@ -294,6 +305,14 @@ const bList=$("bList"), bEmpty=$("bEmpty"), bWhere=$("bWhere"), bRun=$("bRun"),
 let drawings = [];      // {path, name, is_dir}
 let running  = false;
 let poll     = null;
+/* THE RUN THE STOP BUTTON WOULD STOP. It lived inside the start handler, so the moment that
+   handler returned the page no longer knew what was running — a run id the page cannot name
+   is a run the page cannot stop, however many buttons it grows. */
+let runId    = null;
+/* Named rather than typed as a bare number. The runner beats at lease/6 capped to 30s, so
+   telling somebody "stopping now" when it is up to half a minute away is how a stop that IS
+   working gets pressed three more times. */
+const BEAT_HINT = 30;
 
 /* ── a folder name must survive being a folder name ─────────────────── */
 /* THE SERVER'S RULE, STEP FOR STEP. estimate_routes.safe_segment decides what the folder
@@ -360,6 +379,10 @@ function refresh(){
 
   runBtn.disabled = running || missing.length > 0;
   runBtn.textContent = running ? "Estimating…" : "SDI Intelligence Estimator";
+  // Offered only while there is something to stop, so it cannot be pressed against a run
+  // that has already finished and read as having done something.
+  stopBtn.hidden = !running;
+  stopBtn.disabled = false;
   if(running){
     req.textContent = ""; req.style.color = "";
   }else if(missing.length){
@@ -858,6 +881,31 @@ function line(t){
 }
 function setStatus(cls, text){ dot.className = "dot " + cls; statusText.textContent = text; }
 
+/* STOP MEANS BOTH HALVES. Abandoning frees the queue; the ENGINE is a separate process on
+   another machine and would keep driving SOLIDWORKS and Excel until its runner is told. The
+   service records the cancellation and answers the runner's next heartbeat with it, so one
+   press does what a person means by "stop" rather than only what the service can see. */
+stopBtn.onclick = async () => {
+  if(!runId || stopBtn.disabled) return;
+  if(!confirm("Stop this estimate?\n\nThe run is abandoned and the runner is told to end the "
+            + "engine. Nothing is filed. Anything already written to the output folder stays "
+            + "where it is.")) return;
+  stopBtn.disabled = true;
+  try{
+    const r = await api("/api/estimate/" + runId + "/abandon", {method:"POST"});
+    if(r.ok){
+      line("Stop requested. The runner ends the engine on its next heartbeat — up to "
+         + BEAT_HINT + " seconds, not instantly.", "w");
+    }else{
+      line("Could not stop it: " + (await r.text()).slice(0,200), "e");
+      stopBtn.disabled = false;
+    }
+  }catch(e){
+    line("Could not stop it — " + e.message, "e");
+    stopBtn.disabled = false;
+  }
+};
+
 runBtn.onclick = async () => {
   if(running || runBtn.disabled) return;
   runDest = null;              // the previous run's folder is not this run's
@@ -877,7 +925,6 @@ runBtn.onclick = async () => {
     output_root: OUTPUT_ROOT,
     deliverables: true                    // --deliverables, always
   };
-  let runId;
   try{
     const r = await api("/api/estimate",{method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});

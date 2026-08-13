@@ -590,6 +590,10 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     log: List[str] = []
     pending: List[str] = []
     last_sent = 0.0
+    # WHY A STRING AND NOT A FLAG: the reason reaches the log and the operator. "Stopped from
+    # the page" and "the service says this run is no longer ours" are different events, and a
+    # bare True would make the second look like the first on a morning nobody pressed stop.
+    stop_asked: str = ""
     # WHEN THE ENGINE LAST SPOKE. The beat used to infer this from `pending` being
     # non-empty, and flush() drains pending on the very next line -- so the beat almost
     # never saw anything there and measured silence from the START OF THE RUN. 11650
@@ -614,13 +618,29 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
             return
         if not force and not pending:
             return
+        nonlocal stop_asked
         with _post_lock:
             batch, pending = pending, []
             try:
-                requests.post(f"{base}/runner/{run_id}/progress",
-                              json={"runner_id": runner_id, "lines": batch},
-                              headers=headers, timeout=20)
+                resp = requests.post(f"{base}/runner/{run_id}/progress",
+                                     json={"runner_id": runner_id, "lines": batch},
+                                     headers=headers, timeout=20)
                 last_sent = time.time()
+                # STOP ARRIVES ON THE HEARTBEAT, because nothing else reaches this process.
+                # The runner is on another machine with no inbound port; the only moment the
+                # service can tell it anything is when it calls in, which it already does
+                # every few seconds to renew the lease.
+                #
+                # A 409 IS ALSO A STOP. Abandoning a run sets its status away from "running",
+                # and the progress endpoint then refuses the post — so by the time the cancel
+                # flag could be read, the request carrying it is being rejected. Either
+                # answer means the same thing: this run is no longer ours, and continuing to
+                # drive SOLIDWORKS and Excel for the fifteen minutes it had left is work
+                # nobody will use, in front of a queue waiting for the desktop.
+                if resp.status_code == 409:
+                    stop_asked = "the service says this run is no longer ours"
+                elif resp.ok and (resp.json() or {}).get("cancel"):
+                    stop_asked = "stopped from the page"
             except Exception:                          # noqa: BLE001
                 pending = batch + pending              # keep it for the next try
 
@@ -651,6 +671,21 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         while proc.poll() is None:
             time.sleep(_BEAT_SECONDS)
             if proc.poll() is not None:
+                break
+            if stop_asked:
+                # TERMINATE, THEN KILL. The engine holds COM handles on Excel and SOLIDWORKS;
+                # terminate lets it unwind them, and a desktop left with an orphaned hidden
+                # Excel is how the NEXT run fails for reasons nobody can trace back to here.
+                say(f"STOPPING — {stop_asked}. Ending the engine process.")
+                flush(force=True)
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=30)
+                except Exception:                      # noqa: BLE001
+                    try:
+                        proc.kill()
+                    except Exception:                  # noqa: BLE001
+                        pass
                 break
             if last_said != spoke_at:                  # the engine spoke since the last beat
                 spoke_at = last_said

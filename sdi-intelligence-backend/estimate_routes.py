@@ -179,6 +179,12 @@ class Run:
     # seat and no Excel; queued as an ordinary run it would sit in front of real work for
     # ever, waiting for a machine that has nothing to do with it.
     wants_engine: bool = True
+    # STOP MEANS STOP, NOT "LOOK STOPPED". Abandoning a run frees the queue and leaves the
+    # engine running -- SOLIDWORKS and Excel carry on driving a desktop nobody is watching,
+    # for the fifteen minutes the job had left, and the next run queues behind work that has
+    # already been given up on. The runner cannot be interrupted from here, so it is TOLD, on
+    # the heartbeat it already sends, and it does the killing at its end.
+    cancel_requested: bool = False
     lease_until: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
@@ -396,7 +402,11 @@ def progress(run_id: str, req: ProgressRequest,
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen = now
-    return {"ok": True, "lease_seconds": LEASE_SECONDS}
+        _cancel = run.cancel_requested
+    # THE ANSWER TO A HEARTBEAT IS WHERE A CANCELLATION FITS. The runner is a separate
+    # process on another machine and cannot be reached; it can only be told something the
+    # next time it speaks, and it already speaks every few seconds to renew the lease.
+    return {"ok": True, "lease_seconds": LEASE_SECONDS, "cancel": _cancel}
 
 
 @router.post("/runner/{run_id}/complete")
@@ -740,6 +750,13 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         if run.status not in {"queued", "running"}:
             raise HTTPException(409, f"That run is already {run.status}.")
         was = run.status
+        # SET BEFORE THE STATUS CHANGES. Once the run is no longer "running", the heartbeat
+        # endpoint refuses it with a 409 and the runner never gets to read this flag -- so the
+        # 409 is what actually carries the message, and this records the INTENT for anything
+        # that reads the run afterwards. Both halves matter: the 409 says "not yours any more",
+        # which is also true of a run this runner genuinely lost, and only this says a person
+        # asked for it to stop.
+        run.cancel_requested = True
         run.status = "error"
         run.error = ("Released by hand from the page. The queue is free; if the runner was "
                      "in fact still working, its result will be refused when it reports.")
