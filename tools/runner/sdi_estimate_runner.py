@@ -583,6 +583,60 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
 
 
+# WHERE THE ENGINE PUTS ITS ANSWER. Tried in order; the first that holds a number wins.
+# More than one name because the summary has grown over time and a runner that knows only
+# the newest key reports nothing at all on an older record -- and reporting nothing here
+# looks exactly like an estimate that produced no price.
+_UNIT_COST_KEYS = (
+    ("workbook_equivalent_pricing", "m105_total_unit_cost_gbp"),
+    ("headline_cost_price", "workbook_equivalent_total_unit_cost_gbp"),
+    ("headline_cost_price", "total_unit_cost_gbp"),
+    ("totals", "unit_cost_gbp"),
+)
+
+
+def unit_cost_from(summary: Dict[str, Any]) -> Optional[float]:
+    """The engine's unit cost, out of the summary it just wrote.
+
+    READ HERE BECAUSE THE RUNNER IS THE MACHINE THAT HAS THE FILE. The service has never
+    read an estimate and is not about to start; it only needs the one number so the page can
+    put the engine's answer beside the LLM's. Without it, a hundred-drawing enquiry shows a
+    column of AI figures and nothing to check them against, which is the opposite of the
+    point of running two methods.
+    """
+    if not isinstance(summary, dict):
+        return None
+    for outer, inner in _UNIT_COST_KEYS:
+        node = summary.get(outer)
+        if isinstance(node, dict):
+            try:
+                value = float(node.get(inner))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return round(value, 2)
+    return None
+
+
+def _unit_cost_from_deliverables(deliverables: List[Dict[str, str]]) -> Optional[float]:
+    """The summary among what was just filed. A miss is silent on purpose -- a run that
+    produced no readable JSON is already reported by collect(), and saying it twice in
+    different words helps nobody."""
+    import json as _json
+    for item in deliverables or []:
+        name = str(item.get("name") or "")
+        if not name.lower().endswith(".json"):
+            continue
+        try:
+            with open(item["path"], "r", encoding="utf-8") as fh:
+                found = unit_cost_from(_json.load(fh))
+        except Exception:                                # noqa: BLE001
+            continue
+        if found is not None:
+            return found
+    return None
+
+
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
             status: str, error: str, log: List[str],
             deliverables: Optional[List[Dict[str, str]]] = None) -> None:
@@ -590,7 +644,8 @@ def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id
         log.append(error)
         print(error)
     body = {"runner_id": runner_id, "status": status, "error": error,
-            "lines": [], "deliverables": deliverables or []}
+            "lines": [], "deliverables": deliverables or [],
+            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or [])}
     # The whole log goes with the completion, so a run whose progress posts were
     # lost to a blip still arrives complete rather than half-reported.
     body["lines"] = log

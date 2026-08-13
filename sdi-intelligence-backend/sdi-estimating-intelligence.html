@@ -200,6 +200,18 @@
     <ul class="files" id="bList"></ul>
     <p class="empty" id="bEmpty">No drawings added yet.</p>
 
+    <p class="hint" style="margin:-6px 0 12px">
+      <label style="display:inline;margin-right:14px"><input type="radio" name="bMethod"
+        value="both" checked> Both — LLM scan now, full estimate behind it</label>
+      <label style="display:inline;margin-right:14px"><input type="radio" name="bMethod"
+        value="llm"> LLM scan only</label>
+      <label style="display:inline"><input type="radio" name="bMethod"
+        value="engine"> Full estimate only</label><br>
+      <span style="color:var(--warn)">The LLM figure is a read of the drawing by Grok. It is
+      NOT a quote, not from our rate tables, and not reproducible — it is there to compare
+      against the engine, and a hundred full estimates take days.</span>
+    </p>
+
     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:10px">
       <button id="bAdd">Add PDFs…</button>
       <button id="bClear">Clear</button>
@@ -739,7 +751,9 @@ $("bRun").onclick = async () => {
     const r = await api("/api/estimate/batch", {method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({client: safe(client.value), units: parseInt(units.value,10),
-                            files: batchFiles.map(f => f.path), output_root: OUTPUT_ROOT})});
+                            files: batchFiles.map(f => f.path), output_root: OUTPUT_ROOT,
+                            method: (document.querySelector("input[name=bMethod]:checked")
+                                     || {}).value || "both"})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     batchId = started.batch_id;
@@ -790,11 +804,25 @@ function watchBatch(){
                    : row.status === "running" ? "var(--brand)" : "var(--dim)";
       li.style.cssText = "display:block;width:100%;font-family:var(--mono);font-size:11.5px;"
                        + "padding:4px 0;color:var(--muted)";
+      /* TWO NUMBERS ON ONE ROW, AND WHICH IS WHICH SAID EVERY TIME.
+         The LLM figure is prefixed "AI" and coloured as a warning wherever it appears. A
+         column of bare pound signs, half of them from Grok and half from the engine, is one
+         copy-and-paste away from a quote going out on a number nobody costed. Where both
+         are present the variance is shown, because that gap is the whole reason for
+         running two methods rather than the faster one. */
+      const eng = row.engine_price_gbp;
+      const ai  = row.llm_price_gbp;
+      let money = "";
+      if(ai != null)  money += ` <span style="color:var(--warn)" title="${row.llm_basis||""}">`
+                             + `AI £${ai.toFixed(2)}</span>`;
+      if(eng != null) money += ` <span style="color:var(--ok)">engine £${eng.toFixed(2)}</span>`;
+      if(ai != null && eng != null && ai > 0)
+        money += ` <span style="color:var(--dim)">(${(((eng-ai)/ai)*100).toFixed(0)}% apart)</span>`;
       li.innerHTML = `<span style="color:${colour}">${mark}</span> `
                    + `<span style="color:var(--ink)">${row.drawing_number}</span> `
                    + `<span style="color:var(--dim)">${row.status}`
                    + (row.status === "running" ? ` ${Math.round(row.seconds)}s` : "")
-                   + `</span>`;
+                   + `</span>` + money;
       if(row.error) li.innerHTML += ` <span style="color:var(--bad)">${row.error}</span>`;
       (row.deliverables||[]).forEach(d => {
         const a = document.createElement("a");

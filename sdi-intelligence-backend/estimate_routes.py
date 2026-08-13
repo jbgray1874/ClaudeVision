@@ -167,6 +167,18 @@ class Run:
     # questions about the same files, and the runner has to be told which was asked.
     pdf_path: str = ""
     batch_id: str = ""                      # which enquiry this drawing came in with
+    # THE SECOND OPINION, KEPT BESIDE THE FIRST AND NEVER MIXED INTO IT. An LLM read of the
+    # drawing arrives in seconds; the engine's estimate takes tens of minutes and runs one
+    # at a time. Holding both on the run means the page can show the fast answer now and
+    # the real one when it lands -- and can show where they disagree, which is the entire
+    # reason for having two methods rather than a faster one.
+    llm_price_gbp: Optional[float] = None
+    llm: Dict[str, Any] = field(default_factory=dict)
+    engine_price_gbp: Optional[float] = None
+    # WHETHER A RUNNER SHOULD EVER PICK THIS UP. An LLM-only enquiry needs no SOLIDWORKS
+    # seat and no Excel; queued as an ordinary run it would sit in front of real work for
+    # ever, waiting for a machine that has nothing to do with it.
+    wants_engine: bool = True
     lease_until: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
@@ -185,6 +197,8 @@ class Run:
             "units": self.units, "output_path": self.output_path,
             "job_folder": self.job_folder, "runner": self.runner,
             "pdf_path": self.pdf_path, "batch_id": self.batch_id,
+            "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
+            "engine_price_gbp": self.engine_price_gbp,
             "log": self.log, "deliverables": self.deliverables,
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -266,6 +280,10 @@ class BatchRequest(BaseModel):
     units: int
     files: List[str] = []
     output_root: Optional[str] = None
+    # "both" runs the fast LLM read AND queues the full estimate. "llm" scans only, which is
+    # the only method that finishes a hundred drawings the same day. "engine" is the full
+    # estimate alone. Default both, because the point of two methods is the comparison.
+    method: str = "both"
 
 
 class ClaimRequest(BaseModel):
@@ -284,6 +302,10 @@ class CompleteRequest(BaseModel):
     error: str = ""
     lines: List[str] = []
     deliverables: List[Dict[str, str]] = []
+    # THE ENGINE'S OWN ANSWER, so the page can put it beside the LLM's. Reported by the
+    # runner because the runner is the machine that has the summary JSON; this service has
+    # never read an estimate and is not about to start.
+    unit_cost_gbp: Optional[float] = None
 
 
 # ══ THE RUNNER'S ENDPOINTS ═══════════════════════════════════════════════════
@@ -329,7 +351,8 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         if _busy_runner() is not None:
             return {"run": None, "reason": "another run is in progress"}
 
-        queued = sorted((r for r in _RUNS.values() if r.status == "queued"),
+        queued = sorted((r for r in _RUNS.values()
+                         if r.status == "queued" and r.wants_engine),
                         key=lambda r: r.queued_at)
         if not queued:
             return {"run": None, "reason": "nothing queued"}
@@ -393,6 +416,11 @@ def complete(run_id: str, req: CompleteRequest,
             run.line(text)
         run.status = "done" if req.status == "done" else "error"
         run.error = req.error
+        if req.unit_cost_gbp is not None:
+            try:
+                run.engine_price_gbp = round(float(req.unit_cost_gbp), 2)
+            except (TypeError, ValueError):
+                pass
         run.deliverables = list(req.deliverables)
         run.finished_at = now
         run.lease_until = 0.0
@@ -509,6 +537,10 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
     if not req.files:
         raise HTTPException(400, "Add the drawings to estimate.")
 
+    method = str(req.method or "both").strip().lower()
+    if method not in {"both", "llm", "engine"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
+                                 f"engine.")
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
     batch_id = uuid.uuid4().hex[:12]
     queued_at = time.time()
@@ -516,11 +548,14 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
 
     with _LOCK:
         _expire_dead_claims()
-        if not _online_runners():
+        # ONLY THE METHOD THAT NEEDS A RUNNER IS REFUSED WITHOUT ONE. An LLM scan runs on
+        # this service and needs no seat, so refusing it because a laptop is closed would
+        # withhold the one method that can answer a hundred drawings today.
+        if method != "llm" and not _online_runners():
             raise HTTPException(
                 503, "No estimating runner is connected, so there is nothing to run these "
                      "jobs. Start the runner on a machine with SOLIDWORKS and Excel, then "
-                     "try again.")
+                     "try again — or run this enquiry as an LLM scan, which needs neither.")
         # ORDER IS THE ORDER THEY WERE GIVEN IN. An estimator working down a customer's
         # list wants the answers to arrive in that list's order, not in whatever order a
         # file dialog happened to hand them over.
@@ -537,7 +572,8 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
             run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                       units=int(req.units), job_folder=str(Path(raw).parent),
                       output_path=str(out), queued_at=queued_at,
-                      pdf_path=str(path), batch_id=batch_id)
+                      pdf_path=str(path), batch_id=batch_id,
+                      wants_engine=(method != "llm"))
             _RUNS[run.run_id] = run
             accepted.append(run)
             queued_at += 0.001          # keeps the queue order stable and the sort total
@@ -548,6 +584,13 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.line(f"Filing to {run.output_path}")
         run.line(f"Queued — drawing {i} of {len(accepted)} in this enquiry.")
 
+    # THE SCAN RUNS IN THE BACKGROUND AND THE REQUEST RETURNS NOW. A hundred drawings at a
+    # few seconds each is minutes; holding the HTTP request open for that would time out in
+    # the browser and leave the estimator with no batch id for work that is running anyway.
+    if method in {"both", "llm"}:
+        threading.Thread(target=_scan_batch, args=(list(accepted),),
+                         name=f"llm-scan-{batch_id}", daemon=True).start()
+
     if not accepted:
         # AN ENQUIRY THAT QUEUED NOTHING IS NOT AN ENQUIRY THAT WAS ACCEPTED. Returning 200
         # with an empty list would read on the page as "submitted", and the estimator would
@@ -556,8 +599,57 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                             + "; ".join(f"{Path(r['file']).name} — {r['why']}"
                                         for r in refused[:6]))
     return {"batch_id": batch_id, "client": client, "units": int(req.units),
-            "client_folder": str(root / client),
+            "method": method, "client_folder": str(root / client),
             "queued": [r.run_id for r in accepted], "refused": refused}
+
+
+def _scan_one(run: "Run") -> None:
+    """The fast read, on the service, for one drawing.
+
+    NOT ON THE RUNNER, DELIBERATELY. The runner exists because SOLIDWORKS and Excel need an
+    interactive desktop and can only do one thing at a time; an LLM read needs neither. Put
+    it in that queue and a hundred scans would file in behind a forty-minute estimate and
+    arrive tomorrow, which is the exact problem this method exists to solve.
+
+    Never raises. A hundred-drawing enquiry runs this a hundred times and drawing seven
+    failing must not cost the other ninety-three -- the failure goes on the row.
+    """
+    try:
+        import sys
+        _src = str(Path(__file__).resolve().parents[1] / "src")
+        if _src not in sys.path:
+            sys.path.insert(0, _src)
+        from llm_scan_price import scan_price
+        out = scan_price(run.pdf_path, run.units)
+    except Exception as exc:                                 # noqa: BLE001
+        out = {"found": False,
+               "why": f"the scan could not run ({type(exc).__name__}: {str(exc)[:160]})"}
+    with _LOCK:
+        run.llm = out
+        run.llm_price_gbp = out.get("price_gbp") if out.get("found") else None
+        # AN LLM-ONLY DRAWING IS FINISHED WHEN THE SCAN IS. Left "queued" it would count
+        # for ever against the enquiry's total and the page would never say it was done --
+        # a progress bar that cannot reach the end is worse than none.
+        if not run.wants_engine and run.status == "queued":
+            run.status = "done"
+            run.finished_at = time.time()
+    run.line("LLM scan: " + (
+        f"£{out['price_gbp']:.2f} — {out.get('basis') or 'no basis given'}"
+        if out.get("found") else f"no figure — {out.get('why') or 'no reason given'}"))
+
+
+def _scan_batch(runs: List["Run"]) -> None:
+    """One at a time, in the enquiry's order.
+
+    SEQUENTIAL ON PURPOSE. Firing a hundred concurrent requests at an account is how a key
+    gets rate-limited, and this project has already watched SerpAPI answer 429 seven times
+    in one run. Seconds each, in order, is fast enough to be useful and slow enough to be
+    allowed.
+    """
+    for run in runs:
+        if run.status in {"done", "error"}:
+            continue                     # released or already finished while we worked
+        _scan_one(run)
 
 
 @router.get("/batch/{batch_id}")
@@ -582,6 +674,10 @@ def batch_status(batch_id: str, x_sdi_key: Optional[str] = Header(default=None))
         "failed": sum(1 for r in done if r.status == "error"),
         "runs": [{"run_id": r.run_id, "drawing_number": r.drawing_number,
                   "status": r.status, "error": r.error,
+                  "llm_price_gbp": r.llm_price_gbp,
+                  "engine_price_gbp": r.engine_price_gbp,
+                  "llm_basis": (r.llm or {}).get("basis") or (r.llm or {}).get("why") or "",
+                  "llm_confidence": (r.llm or {}).get("confidence"),
                   "seconds": round((r.finished_at or time.time())
                                    - (r.started_at or r.queued_at), 1),
                   "output_path": r.output_path,
