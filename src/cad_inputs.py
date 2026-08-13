@@ -162,7 +162,7 @@ def convert_dwgs_with_solidworks(
     front of the next COM call the engine makes, which is the kind of failure that gets
     blamed on the estimate rather than on this.
     """
-    out: Dict[str, Any] = {"converted": [], "converted_paths": [], "reason": ""}
+    out: Dict[str, Any] = {"converted": [], "converted_paths": [], "reason": "", "files": []}
     dwgs = [Path(p) for p in dwgs]
     if not dwgs:
         return out
@@ -175,20 +175,47 @@ def convert_dwgs_with_solidworks(
 
     _export = export or _solidworks_dxf_export
     failed: List[str] = []
+    session_lost = ""
     for dwg in dwgs:
         target = out_dir / (dwg.stem + ".dxf")
+        record: Dict[str, Any] = {"dwg": dwg.name, "backend": "solidworks",
+                                  "converted": False, "dxf": None, "reason": ""}
+        if session_lost:
+            record["reason"] = f"not attempted — {session_lost}"
+            out["files"].append(record)
+            continue
         try:
             ok = bool(_export(dwg, target))
         except Exception as exc:                # noqa: BLE001 -- a CAD seat may fail any way
             failed.append(f"{dwg.name} ({type(exc).__name__}: {exc})")
+            record["reason"] = f"{type(exc).__name__}: {exc}"
+            out["files"].append(record)
+            # A FAULTED COM SERVER DOES NOT RECOVER BY BEING ASKED AGAIN. 11650-04 reported
+            # the identical RPC failure four times because the session died on the first file
+            # and the other three were calls into a corpse -- four alarming lines describing
+            # one event. And this is the estimate's OWN SolidWorks session: continuing to
+            # hammer it is how a converter takes down the run it was meant to help.
+            if _is_com_fault(exc):
+                session_lost = ("the SolidWorks COM session faulted on "
+                                f"{dwg.name} ({exc}) and was not asked again")
             continue
         if ok and target.is_file():
             out["converted"].append(target.name)
             out["converted_paths"].append(str(target))
+            record.update(converted=True, dxf=target.name)
         else:
             failed.append(dwg.name)
+            record["reason"] = ("SolidWorks reported success but wrote no DXF" if ok
+                                else "SolidWorks would not open it")
+        out["files"].append(record)
 
-    if not out["converted"]:
+    if session_lost:
+        out["reason"] = (
+            f"the ODA File Converter was not found, and {session_lost}. A COM fault here is "
+            f"usually SolidWorks not running, running as a different user, or busy with a "
+            f"modal dialog — check the SolidWorks window on the runner. The estimate is "
+            f"unaffected; these DWGs were not read.")
+    elif not out["converted"]:
         out["reason"] = (
             f"the ODA File Converter was not found, and SolidWorks could not convert the "
             f"{len(dwgs)} DWG file(s) either"
@@ -199,6 +226,18 @@ def convert_dwgs_with_solidworks(
         out["reason"] = (f"SolidWorks converted {len(out['converted'])} of {len(dwgs)} DWG "
                          f"file(s); {len(failed)} would not open: {', '.join(failed[:3])}")
     return out
+
+
+# COM faults, as opposed to a file SolidWorks simply would not open. -2147023170 is
+# RPC_S_CALL_FAILED: the server went away mid-call, which means the session is gone and the
+# next file will fail the same way for a reason that has nothing to do with it.
+_COM_FAULT_CODES = (-2147023170, -2147417848, -2147023174, -2146959355)
+
+
+def _is_com_fault(exc: Exception) -> bool:
+    args = getattr(exc, "args", ()) or ()
+    code = args[0] if args and isinstance(args[0], int) else None
+    return code in _COM_FAULT_CODES or "remote procedure call" in str(exc).lower()
 
 
 def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
@@ -216,17 +255,21 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
 
     SW_DRW = 3
     OPEN_SILENT_READONLY = 1 | 2
-    # swUserPreferenceToggle_e — suppress the DXF/DWG import mapping dialog. Named, tried,
-    # not depended on: the numbers move between releases and a wrong one must not be fatal.
-    _NO_MAPPING_DIALOG = (226, 227)
 
+    # NO USER-PREFERENCE TOGGLES. There were two here, 226 and 227, guessed at as the
+    # swUserPreferenceToggle_e entries that suppress the DXF/DWG import mapping dialog, and
+    # wrapped in try/except on the assumption that a wrong id would raise cleanly.
+    #
+    # IT DOES NOT RAISE. It faults the COM server: every one of 11650-04's four DWGs came
+    # back -2147023170, RPC_S_CALL_FAILED, identically — the session died on the first call
+    # and the remaining three were made into a corpse. Worse, that is the SAME SolidWorks
+    # session the estimate itself drives, so a guess in a converter could take out the run
+    # that was using it.
+    #
+    # A constant nobody has verified is not a guess with a safety net. It is an instruction
+    # to a program that will do what it is told.
     pythoncom.CoInitialize()
     sw = win32com.client.Dispatch("SldWorks.Application")
-    for toggle in _NO_MAPPING_DIALOG:
-        try:
-            sw.SetUserPreferenceToggle(toggle, True)
-        except Exception:                                  # noqa: BLE001
-            pass
     errs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     warns = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     doc = sw.OpenDoc6(str(dwg), SW_DRW, OPEN_SILENT_READONLY, "", errs, warns)
@@ -267,9 +310,13 @@ def convert_dwgs(
     folder = Path(folder)
     dwgs = [p for p in sorted(folder.rglob("*"))
             if p.is_file() and p.suffix.lower() in CONVERTIBLE and not _is_noise(p)]
+    # PER FILE, NOT PER RUN. "converted 2 of 4" is a number an estimator cannot act on: it
+    # does not say WHICH two, whether the other two failed or were 3D, or whether the ones
+    # that converted were then used. A DWG that silently contributes nothing looks exactly
+    # like one that was never there, which is the whole failure this module exists to end.
     result: Dict[str, Any] = {"schema": SCHEMA, "found": [p.name for p in dwgs],
                               "converted": [], "converted_paths": [], "reason": "",
-                              "backend": ""}
+                              "backend": "", "files": []}
     if not dwgs:
         return result
 
@@ -284,6 +331,7 @@ def convert_dwgs(
         result["converted"] = _sw["converted"]
         result["converted_paths"] = _sw["converted_paths"]
         result["reason"] = _sw["reason"]
+        result["files"] = _sw["files"]
         return result
     if not exe and runner is None:
         # NOT "these flat patterns". A job folder's DWGs are whatever the customer sent, and
@@ -314,6 +362,18 @@ def convert_dwgs(
 
     produced = [p for p in sorted(out_dir.rglob("*.dxf")) if p.is_file()]
     result["backend"] = "oda"
+    # ODA converts a FOLDER, so the per-file account is reconstructed by stem — the only
+    # thing it tells us. A DWG with no DXF of its own name did not convert, whatever the
+    # exit code said.
+    _by_stem = {p.stem.upper(): p for p in produced}
+    result["files"] = [
+        {"dwg": d.name, "backend": "oda",
+         "converted": d.stem.upper() in _by_stem,
+         "dxf": (_by_stem[d.stem.upper()].name if d.stem.upper() in _by_stem else None),
+         "reason": ("" if d.stem.upper() in _by_stem
+                    else "the converter produced no DXF for this file — it may be a 3D DWG, "
+                         "which holds no flat pattern")}
+        for d in dwgs]
     result["converted"] = [p.name for p in produced]
     result["converted_paths"] = [str(p) for p in produced]
     if not produced:

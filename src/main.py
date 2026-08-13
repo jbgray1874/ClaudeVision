@@ -534,8 +534,16 @@ def main() -> None:
             try:
                 import cad_inputs
                 _cad_conv = cad_inputs.convert_dwgs(job_folder)
-                if _cad_conv.get("converted"):
-                    print(f"   [cad] converted {len(_cad_conv['converted'])} DWG(s) to DXF")
+                # PER FILE, BECAUSE "converted 2 DWG(s)" IS NOT SOMETHING TO CHECK. It does
+                # not say which two, nor whether the two that converted were then used for
+                # anything — and a DWG that contributes nothing looks exactly like one that
+                # was never in the folder.
+                for _f in (_cad_conv.get("files") or []):
+                    if _f.get("converted"):
+                        print(f"   [cad] {_f['dwg']} -> {_f['dxf']}  ({_f.get('backend')})")
+                    else:
+                        print(f"   [cad] {_f['dwg']} NOT CONVERTED — "
+                              f"{_f.get('reason') or 'no reason recorded'}")
                 if _cad_conv.get("reason"):
                     print(f"   [cad] {_cad_conv['reason']}")
                 _cad_inv = cad_inputs.inventory(
@@ -562,6 +570,22 @@ def main() -> None:
                 from drawing_job_merge import is_flat_part_dxf
                 _rejected = [p for p in _converted_dxf if not is_flat_part_dxf(p)]
                 _converted_dxf = [p for p in _converted_dxf if is_flat_part_dxf(p)]
+                # AND WHAT BECAME OF EACH ONE. Converting a DWG and then refusing the DXF
+                # as a drawing rather than a flat pattern is the CORRECT outcome for a GA
+                # sheet — and reported only as a count it reads as a failure, or worse, the
+                # conversion reads as a success that fed the estimate when it fed nothing.
+                _rej_names = {p.name for p in _rejected}
+                for _f in (_cad_conv.get("files") or []):
+                    if not _f.get("converted"):
+                        continue
+                    if _f.get("dxf") in _rej_names:
+                        _f["used_for_geometry"] = False
+                        _f["outcome"] = ("converted, then not used as geometry: it is a "
+                                         "drawing sheet, not a part flat pattern")
+                    else:
+                        _f["used_for_geometry"] = True
+                        _f["outcome"] = "converted and offered to the geometry reader"
+                    print(f"   [cad] {_f['dwg']}: {_f['outcome']}")
                 if _rejected:
                     print(f"   [cad] {len(_rejected)} converted DXF(s) are not part flat "
                           f"patterns (GA sheets or no part number in the name) and were not "
