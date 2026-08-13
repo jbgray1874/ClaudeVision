@@ -374,7 +374,19 @@ class _Tee:
         self._file = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # A BYTE-ORDER MARK ON A NEW LOG, BECAUSE THE READER IS Get-Content.
+            #
+            # Windows PowerShell 5.1 reads a file as ANSI unless a BOM says otherwise, so a
+            # UTF-8 log came back as "polling every 5s a??" Ctrl+C to stop". The runner prints
+            # em-dashes, GBP signs and part descriptions off drawings; mojibake in the one
+            # record of a failure is a record somebody has to decode before they can read it.
+            #
+            # Written only when the file is new. utf-8-sig in append mode emits a BOM on every
+            # open, which would drop one into the middle of the log at each restart.
+            _new = not path.exists() or path.stat().st_size == 0
             self._file = open(path, "a", encoding="utf-8", errors="replace")
+            if _new:
+                self._file.write("﻿")
         except OSError:
             pass
 

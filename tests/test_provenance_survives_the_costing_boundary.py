@@ -235,3 +235,103 @@ def test_the_refusal_names_the_part_and_the_base_so_it_reads_alone():
     flag = _refusal(twin)
     assert "11650-04-03A-HANDED" in flag and "11650-04-03A" in flag
     assert "may not agree with the hand it pairs with" in flag
+
+
+# ── (3) a mirrored hand inherits, it does not gap-fill ───────────────────────────────
+#
+# 11650-04-01A-HANDED came out of a run with cut_length_mm 3802.9 while the base it mirrors
+# measured 7582.17 — half the cut, on the same panel, so the twin laser-costed at a different
+# rate from its own mirror image. Its base carried 0 holes and it carried 4.
+#
+# normalized_geometry was GAP-FILLED: copied only where the twin had nothing. The twin had a
+# cut length read off an assembly page, so it was not blank, so the base's measured figure
+# never arrived. Then, because something else HAD been filled, the whole node was stamped
+# geometry_source = mirror_of_measured — claiming inheritance over the very number that had
+# not been inherited.
+#
+# geometry_rollup, forty lines below in the same function, was corrected to submit each value
+# through the resolver, with a comment saying exactly why gap-filling is wrong. The lesson went
+# into one loop and not the other.
+
+def _measured_base(**ng):
+    base_ng = {"geometry_source": "dxf_flat_pattern",
+               "blank_length_mm": 1250.0, "blank_width_mm": 525.0}
+    base_ng.update(ng)
+    return {"part_number": "11650-04-01A", "page_roles": ["detail"],
+            "normalized_geometry": base_ng}
+
+
+def test_a_measured_base_beats_the_twins_assembly_page_reading():
+    base = _measured_base(cut_length_mm=7582.17)
+    twin = {"part_number": "11650-04-01A-HANDED", "page_roles": ["assembly"],
+            "normalized_geometry": {"cut_length_mm": 3802.9}}
+    djm.apply_mirror_geometry([base, twin])
+    assert twin["normalized_geometry"]["cut_length_mm"] == 7582.17, (
+        "the twin kept an assembly reading over its base's measured cut — it lasers at a "
+        "different rate from the part it is a mirror of")
+
+
+def test_the_twins_own_export_still_wins():
+    """The reason to submit rather than overwrite. A hand with its own DXF is not guessing,
+    and mirror_of_measured (75) must lose to dxf (80) — exactly as this pair's 2.0mm gauge
+    survived its base's 2.2mm, with the disagreement written down."""
+    base = _measured_base(cut_length_mm=7582.17)
+    twin = {"part_number": "11650-04-01A-HANDED",
+            "normalized_geometry": {"cut_length_mm": 3802.9,
+                                    "cut_length_mm_source": "dxf_flat_pattern"}}
+    djm.apply_mirror_geometry([base, twin])
+    assert twin["normalized_geometry"]["cut_length_mm"] == 3802.9
+    flags = " ".join(str(f) for f in (twin.get("review_flags") or []))
+    assert "NOT applied" in flags and "disagree" in flags, (
+        "a refused inheritance between two measurements is the estimator's call and has to "
+        "be on the record")
+
+
+def test_the_node_does_not_claim_a_mirror_it_did_not_do():
+    """A node-level source is a claim about every value under it. Stamped on 'something was
+    filled', it said mirror_of_measured over a cut length the mirror had not written — the
+    record and its own per-field sources disagreeing about one part."""
+    base = _measured_base(perimeter_mm=3550.0)
+    twin = {"part_number": "11650-04-01A-HANDED",
+            "normalized_geometry": {"blank_length_mm": 1250.0, "blank_width_mm": 525.0,
+                                    "blank_length_mm_source": "dxf_flat_pattern",
+                                    "blank_width_mm_source": "dxf_flat_pattern"}}
+    djm.apply_mirror_geometry([base, twin])
+    ng = twin["normalized_geometry"]
+    assert ng.get("perimeter_mm") == 3550.0, "the gap was still filled"
+    assert ng.get("geometry_source") != "mirror_of_measured", (
+        "this part kept its own blank — the node is not the base's geometry")
+    assert ng.get("mirrored_from") == "11650-04-01A", (
+        "which part it mirrors is a fact about it, true either way")
+
+
+def test_a_hand_with_nothing_of_its_own_takes_the_whole_flat():
+    base = _measured_base(cut_length_mm=7582.17, perimeter_mm=3550.0)
+    twin = {"part_number": "11650-04-01A-HANDED", "normalized_geometry": {}}
+    djm.apply_mirror_geometry([base, twin])
+    ng = twin["normalized_geometry"]
+    assert ng["blank_length_mm"] == 1250.0 and ng["blank_width_mm"] == 525.0
+    assert ng["cut_length_mm"] == 7582.17
+    assert ng["geometry_source"] == "mirror_of_measured"
+
+
+def test_the_mirror_never_copies_the_bases_provenance_as_if_it_were_its_own():
+    """Copying geometry_source or a per-field <field>_source off the base would relabel this
+    part's numbers as the base's DXF — laundering rank 75 into rank 80 and defeating every
+    later arbitration."""
+    base = _measured_base(cut_length_mm=7582.17, cut_length_mm_source="dxf_flat_pattern")
+    twin = {"part_number": "11650-04-01A-HANDED", "normalized_geometry": {}}
+    djm.apply_mirror_geometry([base, twin])
+    ng = twin["normalized_geometry"]
+    assert ng.get("cut_length_mm_source") == "mirror_of_measured", (
+        "the twin's cut length came from the mirror, not from a DXF of its own")
+    assert sp.rank(ng["cut_length_mm_source"]) < sp.rank("dxf_flat_pattern")
+
+
+def test_a_measured_zero_on_the_base_is_a_value_and_travels():
+    """0 holes is a measurement, not an absence — the fold rule-out is built on exactly that
+    distinction, and treating it as blank gives a flat part its mirror's features."""
+    base = _measured_base(hole_count=0)
+    twin = {"part_number": "11650-04-01A-HANDED", "normalized_geometry": {}}
+    djm.apply_mirror_geometry([base, twin])
+    assert twin["normalized_geometry"]["hole_count"] == 0

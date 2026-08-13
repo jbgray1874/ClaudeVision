@@ -725,3 +725,27 @@ def test_the_log_is_open_before_anything_can_print(engine):
     assert first_log < first_print, (
         "something in main() prints before the log is open; under a windowless start that "
         "print is what kills the runner")
+
+
+def test_the_log_is_readable_by_the_tool_that_reads_it(engine):
+    """Get-Content on Windows PowerShell 5.1 reads a file as ANSI unless a BOM says otherwise,
+    so a UTF-8 log came back as "polling every 5s a??" Ctrl+C to stop". The runner prints
+    em-dashes, GBP signs and descriptions lifted off drawings — mojibake in the one record of
+    a failure is a record somebody has to decode before they can read it."""
+    runner, root = engine
+    log = root / "output" / "logs" / "bom.log"
+    tee = runner._Tee(None, log)
+    tee.write("polling every 5s — Ctrl+C to stop\n")
+    raw = log.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf"), "no BOM: Windows will read this as ANSI"
+    assert "—" in log.read_text(encoding="utf-8-sig")
+
+
+def test_a_restart_does_not_drop_a_marker_into_the_middle_of_the_log(engine):
+    """utf-8-sig in append mode writes a BOM on every open. The task restarts the runner three
+    times an hour, so that is three markers a day landing mid-sentence in the record."""
+    runner, root = engine
+    log = root / "output" / "logs" / "bom2.log"
+    runner._Tee(None, log).write("first run\n")
+    runner._Tee(None, log).write("second run\n")
+    assert log.read_bytes().count(b"\xef\xbb\xbf") == 1

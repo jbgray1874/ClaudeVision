@@ -1464,24 +1464,59 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # EVERY KEY THE BASE CARRIES, not a fixed six. A list of field names is a list of
         # the spellings whoever wrote it happened to know, and this record has three.
         # Provenance keys are set explicitly below and must not be copied.
+        #
+        # THROUGH THE RESOLVER, NOT A GAP-FILL — the same correction already written out for
+        # geometry_rollup forty lines below, and never applied here.
+        #
+        # Gap-filling means "only where this part has nothing". 11650-04-01A-HANDED had a
+        # cut length read off an ASSEMBLY page, so it was not blank, so the base's measured
+        # 7582.17mm never arrived — and the twin was laser-costed at 3802.9mm, half the cut
+        # of the part it is a mirror of. Its base carried 0 holes and it carried 4. Two hands
+        # of one panel, on one run, cut at different rates.
+        #
+        # Then, because SOMETHING had been filled, the whole node was stamped
+        # geometry_source = mirror_of_measured. So the record claimed inheritance over values
+        # that had not been inherited, and a diagnostic reading it — this one did — concluded
+        # the geometry had travelled when the number driving the laser had not.
+        #
+        # Submitted at mirror_of_measured (75) each value beats an assembly reading or an
+        # inference and still loses to this part's OWN dxf (80) or model (90). That is the
+        # whole point of having ranks, and it is why the twin's own 2.0mm gauge survived its
+        # base's 2.2mm — correctly, and with the disagreement written down.
         _got: List[str] = []
         for _f, _v in base_ng.items():
-            if _f in {"geometry_source", "geometry_confidence", "mirrored_from"}:
+            if _f in {"geometry_source", "geometry_confidence", "mirrored_from"} \
+                    or _f.endswith("_source"):
                 continue
-            if _is_blank(_ng.get(_f)) and not _is_blank(_v):
-                import copy as _c
-                _ng[_f] = _c.deepcopy(_v)
+            if _is_blank(_v):
+                continue
+            import copy as _c
+            if _apply_field(part, f"normalized_geometry.{_f}", _c.deepcopy(_v),
+                            "mirror_of_measured",
+                            note=f"mirrored from {base.get('part_number')}"):
                 _got.append(_f)
+        _ng = part.get("normalized_geometry") or _ng
         # NOT "nothing to fill in the geometry record, so nothing to do at all". That is
         # the same conflation one level down: a mirror whose normalized_geometry is complete
         # can still be missing its rollup, and bailing here is what left 11350's right arm
         # with empty hole and internal-cut cells beside a correct blank.
         if _got:
-            _ng["geometry_source"] = "mirror_of_measured"
-            # The confidence of the flat it came from, never higher — and never invented
-            # where the base carried none.
-            if base_ng.get("geometry_confidence") is not None:
-                _ng["geometry_confidence"] = base_ng["geometry_confidence"]
+            # A NODE-LEVEL SOURCE IS A CLAIM ABOUT EVERY VALUE IN THE NODE, so it is only
+            # true when the mirror actually supplied the geometry that defines it. Stamped on
+            # "something was filled", it said mirror_of_measured over a cut length the mirror
+            # had not written — the record and its own per-field sources disagreeing about one
+            # part, which is the family of defect this whole file keeps finding.
+            #
+            # The blank is what makes a flat that flat. If this part kept its own, the node is
+            # not the base's geometry however many gaps were filled around it. `mirrored_from`
+            # is stamped either way, because it is a fact about the part and not a claim about
+            # where each number came from — those are on the fields, written by the resolver.
+            if any(_f in _got for _f in ("blank_length_mm", "blank_width_mm")):
+                _ng["geometry_source"] = "mirror_of_measured"
+                # The confidence of the flat it came from, never higher — and never invented
+                # where the base carried none.
+                if base_ng.get("geometry_confidence") is not None:
+                    _ng["geometry_confidence"] = base_ng["geometry_confidence"]
             _ng["mirrored_from"] = base.get("part_number")
             part["normalized_geometry"] = _ng
         # THROUGH THE RESOLVER, NOT AROUND IT. These are written under a COMPUTED key, so
