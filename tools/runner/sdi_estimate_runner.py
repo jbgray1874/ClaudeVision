@@ -91,9 +91,15 @@ DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
 # conditions it exists to tolerate. Read from the same name the service uses so the two
 # cannot be configured apart: a runner beating slower than the lease it is renewing is the
 # original defect with different numbers.
-_BEAT_SECONDS = max(5, int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "180")) // 6)
-# How long the engine may print nothing before the page is told it is still alive.
-_SAY_QUIET_AFTER = max(60, _BEAT_SECONDS * 4)
+# CAPPED AT 30s, not simply lease/6. A 900s lease would put the first renewal 150 seconds
+# in -- inside the old lease's margin, and a long time to sit watching a window with no
+# idea whether anything is alive. The post is a few hundred bytes; there is no reason to be
+# frugal with it, and every reason to have many renewals inside one lease rather than six.
+_BEAT_SECONDS = max(5, min(30, int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "900")) // 6))
+# How long the engine may print nothing before the page is told it is still alive. Two
+# minutes, because the person watching needs to know it is working well before the lease
+# would have expired -- that uncertainty is most of what made this morning expensive.
+_SAY_QUIET_AFTER = 120
 
 # The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
 # quote/report, which share a folder); the auditable summary lands in json/.
