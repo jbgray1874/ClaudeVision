@@ -4063,11 +4063,20 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # through material/labour/PricingService would assign a spurious handling/web-AI cost and
     # defeat the whole point. Return the stub's £0 intact.
     if part.get("_commercial_placeholder") or str(part.get("source") or "") == "commercial_placeholder":
-        part["material_estimate"] = {"unit_material_cost_gbp": 0.0, "cost_per_part_gbp": 0.0,
-                                     "extended_material_cost_gbp": 0.0, "cost_method": "commercial_placeholder_unpriced"}
+        # A PLACEHOLDER THAT HAS BEEN PRICED IS NO LONGER UNPRICED. This zeroed the line
+        # unconditionally, so a packaging figure the market had just returned was thrown
+        # away one function later — built is not wired, inside the branch whose whole job
+        # is to keep these lines honest. Where nothing was found it is still a clean zero
+        # with an owner.
+        _cp = _safe_float(part.get("unit_material_cost_gbp")) or 0.0
+        part["material_estimate"] = {
+            "unit_material_cost_gbp": _cp, "cost_per_part_gbp": _cp,
+            "extended_material_cost_gbp": round(_cp * max(1, int(quantity or 1)), 2),
+            "cost_method": ("commercial_line_market_indication" if _cp
+                            else "commercial_placeholder_unpriced")}
         part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
-        part["unit_cost_gbp"] = 0.0
-        part["unit_total_cost_gbp"] = 0.0
+        part["unit_cost_gbp"] = _cp
+        part["unit_total_cost_gbp"] = _cp
         part["extended_total_cost_gbp"] = 0.0
         return part
 
@@ -5639,13 +5648,34 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         ):
             if _code in _existing_now:
                 continue
+            # ASKED, NOT DERIVED — AND NOT LEFT AT ZERO. The comment above is right that the
+            # engine cannot DERIVE these from the drawings, and wrong that it therefore has
+            # nothing to say. It holds the assembly size, every blank, the gauges, the
+            # densities and the order quantity: that is a describable shipment, and a
+            # describable shipment is a question the market answers. A zero sums as free and
+            # nobody argues with it; an indicative figure gets checked.
+            try:
+                import commercial_lines as _cl
+                # HOW MANY OF THE ASSEMBLY THIS ORDER IS FOR — the one number both lines
+                # turn on, read from the same place the rest of the document reads it.
+                _oq = ((summary or {}).get("estimating_workbook") or {}).get(
+                    "assumed_job_quantity") or 1
+                _cline = (_cl.packaging_line(parts, _oq) if _code == "PACKAGING"
+                          else _cl.delivery_line(parts, _oq))
+            except Exception:                               # noqa: BLE001
+                _cline = None
+            _unit = (_cline or {}).get("unit_gbp")
+            if _cline and _cline.get("note"):
+                _desc = f"{_desc.split(' — ')[0]} — {_cline['note']}"
             _stub = _bought_in_part_stub(_code, _desc, 1)
             _stub["source"] = "commercial_placeholder"
             _stub["price_verified"] = False
-            _stub["unit_cost_gbp"] = 0.0
-            _stub["unit_material_cost_gbp"] = 0.0
-            _stub["extended_total_cost_gbp"] = 0.0
-            _stub["cost_source"] = "estimator_to_price"
+            _stub["unit_cost_gbp"] = float(_unit or 0.0)
+            _stub["unit_material_cost_gbp"] = float(_unit or 0.0)
+            _stub["extended_total_cost_gbp"] = float(_unit or 0.0)
+            _stub["cost_source"] = ("market_indication" if _unit else "estimator_to_price")
+            if _cline:
+                _stub["commercial_line"] = _cline
             # No operations — these are pure commercial placeholders, not fabricated/handled
             # parts, so they must not accrue handling labour. Keep them genuinely £0.
             _stub["textual_operations"] = []
