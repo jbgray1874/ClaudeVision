@@ -3105,7 +3105,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"parts. THIS LINE UNDER-READS until the rate is measured "
                       f"(config.POWDER_KG_PER_M2). Estimator to check.", flags)
             else:
-                price = None
+                # WE PRICE EVERYTHING WE CAN, HOWEVER WE CAN. A DASH READS AS FREE.
+                #
+                # This wrote None and left the money column blank on a line where a figure
+                # was sitting in hand. That was my policy, not the business's, and it was
+                # wrong twice over: a blank cell reads as FREE — the one error on this sheet
+                # nobody catches — and it overrode a commercial judgement that belongs to the
+                # estimator, namely whether an indicative number beats no number. It does.
+                # Tim can strike GBP 3.12; he cannot strike a blank he never notices.
+                #
+                # NOTHING ABOUT THE PROVENANCE CHANGES, AND THAT IS THE WHOLE POINT. The row
+                # still reads [AI ESTIMATE - INDICATIVE, NOT A QUOTE], the supplier cell still
+                # names the model, and price_not_reproducible is still BLOCKING so this job
+                # cannot leave as a firm quote or an ERP export. Reproducibility is a property
+                # to DECLARE and a gate on FIRMNESS — never a reason to withhold a number.
+                #
+                # The other way into this branch is a quantity nobody could read. There is no
+                # figure there to write, so that one stays blank and stays owned.
+                price = _line["withheld_gbp"] if _line.get("withheld_gbp") else None
                 # AND SAY SO WHERE A CHECKER CAN READ IT, not only in a console flag.
                 # stamp_affects_total already asks the right question — a price can be
                 # resolved and then not added — but it falls back to `applied`, which is
@@ -3115,7 +3132,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # never wrote it down.
                 try:
                     import price_provenance as _pp
-                    _pp.mark_withheld(pe)
+                    # ONLY WHERE NOTHING WAS WRITTEN. This marks a line as carrying no money,
+                    # which is now true of exactly one of the two cases that reach here — the
+                    # unreadable quantity. Marking a line we HAVE just priced would tell every
+                    # downstream check the cell is empty while the sheet shows a figure, which
+                    # is the "one fact, two writers" defect in the ledger itself.
+                    if not _line.get("withheld_gbp"):
+                        _pp.mark_withheld(pe)
                     # AND ON THE LINE, NOT ONLY ON THIS COPY OF IT. A part's price stamp is
                     # written in more than one place — the costed record here and the raw
                     # part record the geometry passes hold — and marking the object in hand
@@ -3124,7 +3147,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     # is a property of the LINE; recorded once, honoured wherever its stamps
                     # live.
                     _code = str(pe.get("part_number") or "").strip().upper()
-                    if _code:
+                    if _code and not _line.get("withheld_gbp"):
                         _wl = summary.setdefault("withheld_price_lines", [])
                         if _code not in _wl:
                             _wl.append(_code)
@@ -3133,10 +3156,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # Two different reasons reach this branch and an estimator needs to know
                 # which: a quantity nobody could read, or a figure nobody could reproduce.
                 if _line["withheld_gbp"]:
-                    _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: an AI market "
-                          f"estimate of £{_line['withheld_gbp']:,.2f} is KEPT OFF the price "
-                          f"column — it changes every run and is not a quote. The figure is "
-                          f"on the line as a hint. ESTIMATOR TO PRICE.", flags)
+                    _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: priced at "
+                          f"£{_line['withheld_gbp']:,.2f} from an AI market estimate — a "
+                          f"number, not a quote. It is on the sheet so the line is not read "
+                          f"as free; the job stays NOT A FIRM PRICE until a catalogue or "
+                          f"supplier rate replaces it. ESTIMATOR TO CONFIRM.", flags)
                 else:
                     _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: price WITHHELD by the "
                           f"engine (quantity not on the drawing and cannot be guessed). Row is on "
