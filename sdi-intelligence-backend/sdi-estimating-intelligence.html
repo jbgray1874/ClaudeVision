@@ -50,6 +50,9 @@
   .btn-run{width:100%;background:var(--brand);color:#191900;border-color:var(--brand);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
   .btn-run:hover:not(:disabled){filter:brightness(1.08)}
   .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
+  /* The second book, sitting under the first rather than beside it — same size, so it reads
+     as the same kind of thing, but it never lights up because nothing is behind it. */
+  .btn-soon{margin-top:9px;cursor:not-allowed}
   /* Deliberately not styled like the run button. Stop is destructive and rare; it should
      not be the thing a hand reaches for by muscle memory. */
   .btn-stop{width:100%;background:transparent;color:#ff9b9b;border:1px solid #7d3a3a;padding:11px 18px;font-size:14px;font-weight:600;margin-top:9px;border-radius:7px;cursor:pointer}
@@ -156,13 +159,29 @@
            never overwrites an earlier estimate.</p>
       </div>
 
-      <button class="btn-run" id="run" disabled>SDI Intelligence Estimator</button>
+      <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
+           button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
+           work placed in China is a different set of numbers, and the two must not be told
+           apart by remembering which one the unlabelled button was. -->
+      <button class="btn-run" id="run" disabled>SDI (UK) Intelligence Estimator</button>
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
            release offered in the refusal, or by POSTing by hand. So an accidental double
            start meant fifteen minutes of SOLIDWORKS and Excel doing work nobody would read,
            with a queue behind it, twice in one afternoon. -->
       <button class="btn-stop" id="stop" hidden>Stop this estimate</button>
+
+      <!-- THE BUTTON IS HERE; THE BOOK BEHIND IT IS NOT. It is deliberately inert and stays
+           inert: there is no China endpoint, no China rate set, no China route. A control
+           that quietly did nothing would be read as a run that produced no file, so it is
+           disabled and it says why in words, not by being greyed out and unexplained. It is
+           NOT wired into refresh() — nothing that enables the UK button may reach it. -->
+      <button class="btn-run btn-soon" id="runChina" disabled aria-disabled="true"
+              title="Not connected yet — there is no China estimating endpoint behind this button">
+        SDI (China) Intelligence Estimator</button>
+      <p class="note" id="chinaNote">Not connected yet. There is no China estimating endpoint,
+         rate set or route behind this button — pressing it would do nothing, so it is held
+         disabled until there is. Use the UK estimator above.</p>
     </section>
 
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
@@ -378,7 +397,7 @@ function refresh(){
   destPath.innerHTML = show ? show : '<span class="pending">Enter a client and drawing number</span>';
 
   runBtn.disabled = running || missing.length > 0;
-  runBtn.textContent = running ? "Estimating…" : "SDI Intelligence Estimator";
+  runBtn.textContent = running ? "Estimating…" : "SDI (UK) Intelligence Estimator";
   // Offered only while there is something to stop, so it cannot be pressed against a run
   // that has already finished and read as having done something.
   stopBtn.hidden = !running;
