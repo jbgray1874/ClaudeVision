@@ -59,12 +59,28 @@ def describe(refresh: bool = False) -> Dict[str, Any]:
                           "git is unavailable. Any question about which fix was live in this "
                           "run has to be answered another way."}
     else:
-        dirty_out = _git("status", "--porcelain")
+        # TRACKED CHANGES ONLY, AND THAT IS THE WHOLE QUESTION THIS FIELD ANSWERS.
+        #
+        # `git status --porcelain` lists untracked files as `??`, so a scratch script, a PDF
+        # dropped in the folder or a notes file made every run report "not reproducible from
+        # the commit". A file git has never tracked cannot change the checkout this engine
+        # imported — the code that ran is exactly the commit — so saying otherwise is a false
+        # alarm, and a warning that cries wolf on a clean checkout is a warning nobody reads
+        # on the day the tree really is modified.
+        #
+        # Untracked files are still COUNTED and reported, because "there is loose material in
+        # the working tree" is worth knowing; it is simply not the same claim as "this run
+        # cannot be reproduced from this commit".
+        dirty_out = _git("status", "--porcelain", "--untracked-files=no")
+        all_out = _git("status", "--porcelain")
+        _untracked = len([ln for ln in (all_out or "").splitlines()
+                          if ln.startswith("??")]) if all_out is not None else None
         _CACHE = {
             "commit": commit,
             "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
             # None, not False, when git could not be asked -- "clean" is a claim.
             "dirty": (bool(dirty_out) if dirty_out is not None else None),
+            "untracked_files": _untracked,
             "subject": _git("log", "-1", "--format=%s"),
             "known": True,
         }
@@ -82,4 +98,9 @@ def one_line(build: Optional[Dict[str, Any]] = None) -> str:
         state = " + UNCOMMITTED CHANGES (this run is not reproducible from the commit)"
     elif b.get("dirty") is None:
         state = " (could not tell whether the checkout was clean)"
+    elif b.get("untracked_files"):
+        # Worth saying, and deliberately not the same sentence. Nothing untracked reached the
+        # import path, so the run IS reproducible from this commit.
+        state = (f" (clean; {b['untracked_files']} untracked file(s) in the tree, none of "
+                 f"which the engine imported)")
     return f"engine build: {b.get('commit')} on {b.get('branch') or '?'}{state}"
