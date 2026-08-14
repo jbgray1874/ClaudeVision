@@ -18,6 +18,13 @@ input/
 *.jpg
 *.jpeg
 
+# Secrets - never commit a populated .env (example files stay tracked)
+.env
+**/.env
+*.env
+!*.example.env
+!config.example.env
+
 # OS
 .DS_Store
 Thumbs.db

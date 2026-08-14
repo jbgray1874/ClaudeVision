@@ -87,3 +87,32 @@ def blip_latest(x_sdi_key: str | None = Header(default=None)):
         return json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return {"error": "blip_latest.json unreadable"}
+
+
+# ── Blip -> InVentry presence load (stage 3) ─────────────────────────────────
+import hr_blip_inventry
+
+
+@router.post("/blip/load")
+def blip_load(force: bool = False, dry_run: bool = False,
+              x_sdi_key: str | None = Header(default=None)):
+    """Write the latest on-site list to the InVentry watched folder.
+
+    dry_run writes the CSV beside the snapshot instead of into the watched
+    folder — use it until InVentry confirm the presence import.
+    """
+    _check_key(x_sdi_key)
+    return hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run)
+
+
+@router.post("/blip/sync")
+def blip_sync(force: bool = False, dry_run: bool = False,
+              x_sdi_key: str | None = Header(default=None)):
+    """Query Blip then load the result into InVentry — the COO's one click."""
+    _check_key(x_sdi_key)
+    blip_summary = hr_blip.run_blip()
+    if blip_summary.get("status") not in ("ok", "degraded"):
+        return {"blip": blip_summary,
+                "load": {"status": "skipped", "reason": "Blip query failed"}}
+    load_summary = hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run)
+    return {"blip": blip_summary, "load": load_summary}

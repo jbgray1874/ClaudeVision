@@ -60,10 +60,16 @@ def _load_active_employees() -> list:
     return json.loads(p.read_text(encoding="utf-8")).get("records") or []
 
 
-def _query_one(token: str, employee_id: str, from_dt: str) -> list:
+def _query_one(token: str, employee_id: str, from_dt: str) -> tuple:
     """
     Query clockings for one employee at a point in time.
-    Returns clockings active at that moment (i.e. still clocked in).
+    Returns (clockings, ok) where clockings are active at that moment (i.e.
+    still clocked in) and ok is False if the query itself failed.
+
+    The distinction matters: a failed query looks identical to "not clocked in"
+    if you only return a list, so a bad token or a BrightHR outage would report
+    an empty building instead of an error — and anything downstream would
+    publish that as the fire roll call.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -75,19 +81,20 @@ def _query_one(token: str, employee_id: str, from_dt: str) -> list:
             r = requests.post(BLIP_URL, json=body, headers=headers,
                               timeout=cfg.BH_TIMEOUT)
             if r.status_code == 404:
-                return []
+                return [], True          # no clockings for this employee
             if r.status_code == 429:
                 wait = 10 * (attempt + 1)
                 _log(f"  [429] employee {employee_id} — backing off {wait}s")
                 time.sleep(wait)
                 continue
             if r.status_code != 200:
-                return []
-            items = r.json().get("items") or []
-            return items
-        except requests.RequestException:
-            return []
-    return []
+                _log(f"  [{r.status_code}] employee {employee_id} — query failed")
+                return [], False
+            return r.json().get("items") or [], True
+        except requests.RequestException as exc:
+            _log(f"  [error] employee {employee_id} — {exc}")
+            return [], False
+    return [], False                     # rate limited on every attempt
 
 
 def _write_output_file(on_site: list, summary: dict):
@@ -142,6 +149,7 @@ def run_blip() -> dict:
 
     on_site = []
     checked = 0
+    failures = 0
     emp_list = [e for e in employees if e.get("id")]
 
     # ── concurrent queries ──
@@ -154,9 +162,11 @@ def run_blip() -> dict:
             emp = futures[future]
             checked += 1
             try:
-                clockings = future.result()
+                clockings, ok = future.result()
             except Exception:
-                clockings = []
+                clockings, ok = [], False
+            if not ok:
+                failures += 1
             if clockings:
                 on_site.append({
                     "id": emp.get("id"),
@@ -170,12 +180,29 @@ def run_blip() -> dict:
 
     on_site.sort(key=lambda x: x.get("first_name", "").lower())
 
+    fail_pct = (failures / len(emp_list) * 100) if emp_list else 0.0
     summary = {
         "timestamp": _now().isoformat(),
         "employees_checked": len(emp_list),
         "on_site": len(on_site),
+        "query_failures": failures,
+        "fail_pct": round(fail_pct, 2),
         "status": "ok",
+        "warnings": [],
     }
+
+    # A snapshot built from failed queries under-reports who is in the building.
+    # Mark it degraded so the InVentry load refuses it rather than publishing an
+    # incomplete evacuation list.
+    if failures and fail_pct > cfg.BLIP_MAX_FAIL_PCT:
+        summary["status"] = "degraded"
+        summary["warnings"].append(
+            f"{failures} of {len(emp_list)} employee queries failed ({fail_pct:.1f}% > "
+            f"BLIP_MAX_FAIL_PCT {cfg.BLIP_MAX_FAIL_PCT}%); on-site list may be incomplete."
+        )
+        _log(f"BLIP DEGRADED: {summary['warnings'][-1]}")
+    elif failures:
+        summary["warnings"].append(f"{failures} employee query(s) failed but within tolerance.")
 
     # ── audit snapshot ──
     snap_path = Path(cfg.HR_SNAPSHOT_DIR) / f"blip_{_stamp()}.json"
@@ -188,7 +215,8 @@ def run_blip() -> dict:
     if out_file:
         summary["output_file"] = out_file
 
-    _log(f"BLIP ok: {len(on_site)} on site of {len(emp_list)} -> {snap_path}")
+    _log(f"BLIP {summary['status']}: {len(on_site)} on site of {len(emp_list)} "
+         f"({failures} query failure(s)) -> {snap_path}")
     return summary
 
 
