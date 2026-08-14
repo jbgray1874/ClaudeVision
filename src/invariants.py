@@ -969,11 +969,33 @@ def check_every_cad_file_was_used(summary: Any) -> List[Dict[str, Any]]:
     _msg = f"{len(unread)} CAD file(s) in the job folder were not read: {', '.join(unread[:8])}"
     if len(unread) > 8:
         _msg += f" (+{len(unread) - 8} more)"
+    # WHAT THOSE DWGs APPEAR TO BE, BECAUSE THE ANSWER DECIDES WHETHER TO CHASE A CONVERTER.
+    # "4 DWG unread" reads as four missing measurements. On 11650-04 it was two general
+    # arrangements of a job already read as PDF plus two sheets the content gate declined —
+    # nothing to gain, and an afternoon spent on an installer before anybody checked.
+    _classes: Dict[str, List[str]] = {}
+    if _dwg:
+        try:
+            from cad_inputs import classify_dwgs
+            _classes = classify_dwgs(_dwg)
+        except Exception:
+            _classes = {}
+    _flats = _classes.get("flat") or []
     if _dwg:
         _msg += (f". {len(_dwg)} of them are DWG — the same geometry as a DXF in a different "
                  f"container, which the ODA File Converter turns into something this engine "
-                 f"reads. Those parts are being sized from drawing text while their measured "
-                 f"outline sits unopened")
+                 f"reads")
+        if _flats:
+            _msg += (f", and {len(_flats)} of those are named as FLAT PATTERNS "
+                     f"({', '.join(_flats[:4])}) — measured outlines for parts now being "
+                     f"sized from drawing text. These are the ones worth converting")
+        elif _classes:
+            _msg += (f", though none is named as a flat pattern: "
+                     + "; ".join(f"{len(v)} {k.replace('_', ' ')}"
+                                 for k, v in sorted(_classes.items()))
+                     + ". A general arrangement converts to the same content as the PDF of "
+                       "the same sheet, which is already read, so converting these would add "
+                       "nothing")
         # WHY THEY WERE NOT CONVERTED, IN THE SAME SENTENCE AS THE FACT THAT THEY WERE NOT.
         #
         # convert_dwgs already distinguishes the cases and writes one of them down: the

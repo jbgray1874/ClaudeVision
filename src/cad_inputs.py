@@ -34,6 +34,7 @@ Nothing here parses geometry. It answers "what was in the folder, and what happe
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -110,6 +111,70 @@ def inventory(folder: Path, *, converted: Optional[Sequence[Path]] = None) -> Di
         else:
             out["unknown"].append(_label(path))
     return {"schema": SCHEMA, "folder": str(folder), "present": True, **out}
+
+
+# ── WHAT AN UNOPENED DWG APPEARS TO BE ───────────────────────────────────────────────
+
+# A general-arrangement sheet says so in its name. Whole words, because "GA" inside a part
+# code is not a statement about the drawing.
+_GA_MARKERS = ("GA", "GENERAL ARRANGEMENT", "ASSY", "ASSEMBLY", "LAYOUT", "ELEVATION")
+_GA_RE = re.compile(r"(?<![A-Z0-9])(?:%s)(?![A-Z0-9])"
+                    % "|".join(m.replace(" ", r"\s+") for m in _GA_MARKERS))
+
+
+def dwg_class(path: Any) -> str:
+    """What a DWG appears to be, from its name alone: "flat", "general_arrangement", "unknown".
+
+    THE COST OF A MISSING CONVERTER IS NOT THE SAME FOR EVERY DWG, AND THE FLAG SAID IT WAS.
+    "4 DWG unread" reads as four missing measurements and sends somebody hunting an installer.
+    On 11650-04 it was two general arrangements of a job we had already read as PDF plus two
+    sheets the content gate declined — the expected value of converting them was nothing, and
+    I spent an afternoon on a converter before checking that.
+
+    THE TWO CLASSES ARE WORTH ENTIRELY DIFFERENT AMOUNTS.
+
+      A FLAT PATTERN is the strongest input this engine can be handed short of a model: it
+      converts to a DXF and lands as measured geometry at rank 80 — blank, cut length, pierce
+      count, bend lines. On a pack with no SolidWorks models it is the difference between
+      costing a part and sizing it from drawing text.
+
+      A GENERAL ARRANGEMENT is worth approximately nothing. It converts to a DXF of viewports,
+      dimensions and title-block text — the same content as the PDF of the same sheet, which
+      is already read. Possibly worth less than nothing, if a viewport rectangle is taken for
+      a blank.
+
+    READ THROUGH THE CONVENTION THAT ALREADY SUPPLIES MATERIAL AND GAUGE, not a second idea of
+    what a filename means. `11650-04-01A_2MM PETG_REVG` names a gauge and a material because
+    the drawing office names flats that way — the same reading that now stands beside the title
+    block as evidence. A name that carries both IS the convention's statement that this is the
+    stock a part is cut from.
+
+    THE GA MARKER IS CHECKED FIRST. A sheet that says GA has said so deliberately; where a name
+    somehow carries both, the explicit word beats the inferred pair.
+
+    Never raises, and answers "unknown" rather than guessing — a pack that names nothing by any
+    convention is a fact about the pack, not a class to invent.
+    """
+    try:
+        stem = Path(path).stem.upper().replace("_", " ").replace("-", " ")
+        if _GA_RE.search(stem):
+            return "general_arrangement"
+        from drawing_job_merge import material_from_dxf_filename, thickness_mm_from_dxf_filename
+        p = Path(path)
+        if material_from_dxf_filename(p) and thickness_mm_from_dxf_filename(p) is not None:
+            return "flat"
+    except Exception:
+        return "unknown"
+    return "unknown"
+
+
+def classify_dwgs(names: Sequence[Any]) -> Dict[str, List[str]]:
+    """The same names, grouped by what each appears to be. Empty groups are omitted so a
+    caller can print only what is there."""
+    out: Dict[str, List[str]] = {}
+    for n in names or ():
+        out.setdefault(dwg_class(n), []).append(str(n))
+    return {k: v for k, v in out.items() if v}
 
 
 # ── DWG -> DXF ───────────────────────────────────────────────────────────────────────

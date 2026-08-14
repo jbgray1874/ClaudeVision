@@ -296,11 +296,42 @@ _DXF_MATERIAL_TOKENS: List[Tuple[str, str]] = [
 
 
 def material_from_dxf_filename(path: Path) -> Optional[str]:
-    """Canonical material from a DXF filename token, or None if no token is present."""
+    """Canonical material from a DXF filename token, or None if no token is present.
+
+    THE LIST ABOVE KNEW HIPS, ACRYLIC, POLYCARBONATE, MDF AND THE STEELS — AND NOT PETG, AND
+    NOT ABS. 11650-04's exports are named `11650-04-01A_2MM PETG_REVG`, and this returned the
+    gauge and no material at all. So the filename evidence promoted in 50682e8 submitted half
+    of what it had read, the quorum was still counting one source against the model's ABS, and
+    the pair-level rule that followed had nothing to settle. Three commits of arbitration
+    resting on a vocabulary that could not say the word.
+
+    A PRIVATE LIST OF MATERIALS BESIDE THE ENGINE'S OWN IS THE DUAL-PATH DEFECT, spelled in
+    nouns instead of numbers. `costed_facts` already holds the vocabulary that decides which
+    materials are costed as sheet at all; a second list here can only ever drift from it, and
+    the drift is silent because a material nobody names reads exactly like a filename that
+    named nothing.
+
+    So the ordered patterns stay for what only they can do — abbreviations and ambiguities
+    where a word boundary or an ordering decides it (MS, SS, PC, ACR, and HIPS before ACRYLIC)
+    — and anything else falls through to the engine's own vocabulary. Adding a material to
+    costed_facts now teaches this reader too, and the guard fails the suite if it does not.
+    """
     stem = path.stem.upper().replace("_", " ")
     for pat, mat in _DXF_MATERIAL_TOKENS:
         if re.search(pat, stem):
             return mat
+    # THE ENGINE'S OWN VOCABULARY, ASKED SECOND, AND WHOLE-WORD. The boundary is what makes
+    # this safe rather than an ordering: PET cannot answer for PETG because the G fails the
+    # lookahead, and ABS cannot answer for ABSORBER. A longest-first sort looked like prudence
+    # and no mutant could kill it — with boundaries enforced there is no prefix collision left
+    # for it to break — so it is gone rather than kept as decoration.
+    import costed_facts as _cf
+    for tok in _cf._PLASTIC_SHEET_TOKENS + _cf._BOARD_TIMBER_TOKENS:
+        _t = tok.strip()
+        if len(_t) < 3:
+            continue
+        if re.search(rf"(?<![A-Z0-9]){re.escape(_t)}(?![A-Z0-9])", stem):
+            return _t
     return None
 
 
