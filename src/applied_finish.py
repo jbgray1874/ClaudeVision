@@ -87,6 +87,66 @@ def finish_codes(text: Any) -> List[str]:
     return out
 
 
+# Roughly how much of a square metre a finish covers per unit of the thing being bought, and
+# what an estimator would ask a supplier for. Used only to word the question; the answer comes
+# back as GBP per square metre either way.
+_FINISH_DESCRIPTION: Dict[str, str] = {
+    "VINYL_REEDED": "1/2 inch reeded self-adhesive vinyl film, applied to a flat panel",
+    "VINYL": "self-adhesive vinyl film, applied to a flat panel",
+    "UV_COAT": "UV hardcoat / UV varnish applied to a flat plastic panel",
+    "LAMINATE": "gloss laminate film applied to a flat panel",
+    "FOIL": "hot foil blocking on a flat panel",
+    "PRINT": "screen or digital print onto a flat panel",
+    "PAINT": "two-pack spray paint, single colour, on a flat panel",
+    "ANODISE": "anodising, clear, on an aluminium panel",
+    "VENEER": "wood veneer applied to a flat board panel",
+}
+
+
+def market_rate_indication(code: str) -> Optional[Dict[str, Any]]:
+    """What the open market charges per square metre for this finish, or None.
+
+    THE ENGINE MUST NOT BE THE REASON A NUMBER DOES NOT EXIST — the same sentence that put
+    sheet materials in front of an estimator instead of at GBP 0.00, applied to the finishes
+    that go on them. Refusing to INVENT a rate is not the same as refusing to LOOK ONE UP, and
+    a stated finish with no config entry was becoming an estimator input when a figure was one
+    lookup away.
+
+    Asked through the same web/LLM path the bought-in fallback and the sheet indication
+    already use, so there is ONE way this engine asks the market what something costs. What
+    comes back is stamped for exactly what it is: an indication, not reproducible, not firm.
+
+    Never raises. A lookup that fails leaves the finish exactly as unpriced as it was, and the
+    estimator-input line says so.
+    """
+    _code = str(code or "").strip().upper()
+    if not _code:
+        return None
+    spec = {
+        "material": _code.replace("_", " ").title(),
+        "description": (_FINISH_DESCRIPTION.get(_code, _code.replace("_", " ").lower())
+                        + ", trade price per square metre, UK"),
+        "length_mm": 1000.0, "width_mm": 1000.0, "quantity": 1,
+    }
+    try:
+        from web_ai_price_lookup import lookup_web_ai_price
+        result = lookup_web_ai_price(spec, enable_web_search=True, enable_llm_estimate=True)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if not result or not result.get("found"):
+        return None
+    try:
+        per_m2 = float(result.get("price_gbp") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if per_m2 <= 0:
+        return None
+    return {"rate_gbp_per_m2": round(per_m2, 2), "source_class": "llm",
+            "source_name": result.get("source_type") or "web_ai_fallback",
+            "reproducible": False, "indicative": True,
+            "confidence": result.get("confidence")}
+
+
 def rate_for(code: str) -> Optional[Dict[str, Any]]:
     """The £/m² we hold for this finish, with where it came from — or None.
 
@@ -99,11 +159,15 @@ def rate_for(code: str) -> Optional[Dict[str, Any]]:
     try:
         rate = float(rates[code])
     except (KeyError, TypeError, ValueError):
-        return None
-    if rate <= 0:
-        return None
-    return {"rate_gbp_per_m2": rate, "source_class": "catalogue",
-            "source_name": "config.APPLIED_FINISH_RATES_GBP_PER_M2", "reproducible": True}
+        rate = 0.0
+    if rate > 0:
+        return {"rate_gbp_per_m2": rate, "source_class": "catalogue",
+                "source_name": "config.APPLIED_FINISH_RATES_GBP_PER_M2", "reproducible": True}
+    # CATALOGUE FIRST, MARKET SECOND, EXPLICIT NIL THIRD — AND NEVER A BLANK. A rate we hold
+    # is firm and repeats; where we hold none, an indication is still a number an estimator
+    # can judge, and a blank is the one thing on a sheet nobody catches. When suppliers and
+    # UDEF cover a finish, the first branch takes it and this one is never reached.
+    return market_rate_indication(code)
 
 
 def applied_finish_estimate(part: Dict[str, Any], blank_length_mm: Optional[float],

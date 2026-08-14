@@ -35,13 +35,29 @@ BOOTS = "1/2 INCH REEDED VINYL + UV OR CLEAR VINYL"
 
 @pytest.fixture()
 def no_rates(monkeypatch):
+    """No catalogue rate AND no market answer — the genuinely unpriceable case. The market
+    lookup is stubbed rather than left live: a test that reaches the internet is a test that
+    fails on a train, and what these assert is the behaviour when nothing comes back."""
     monkeypatch.setattr(config, "APPLIED_FINISH_RATES_GBP_PER_M2", {}, raising=False)
+    monkeypatch.setattr(af, "market_rate_indication", lambda code: None)
+
+
+@pytest.fixture()
+def market_only(monkeypatch):
+    """Nothing in config, but the market answers. This is the common case today and the one
+    the estimator should see a number for."""
+    monkeypatch.setattr(config, "APPLIED_FINISH_RATES_GBP_PER_M2", {}, raising=False)
+    monkeypatch.setattr(af, "market_rate_indication", lambda code: {
+        "rate_gbp_per_m2": 14.50, "source_class": "llm", "source_name": "web_ai_fallback",
+        "reproducible": False, "indicative": True})
 
 
 @pytest.fixture()
 def with_vinyl_rate(monkeypatch):
     monkeypatch.setattr(config, "APPLIED_FINISH_RATES_GBP_PER_M2",
                         {"VINYL_REEDED": 14.50}, raising=False)
+    monkeypatch.setattr(af, "market_rate_indication", lambda code: pytest.fail(
+        "the market was asked for a finish this business already holds a rate for"))
 
 
 def _panel(finish=BOOTS, **kw):
@@ -192,3 +208,42 @@ def test_the_config_seam_exists_and_starts_empty():
     finish codes, so the first rate entered is a line rather than a change of shape."""
     rates = getattr(config, "APPLIED_FINISH_RATES_GBP_PER_M2", None)
     assert isinstance(rates, dict)
+
+
+# ── catalogue first, market second, explicit nil third ───────────────────────────────
+
+def test_a_finish_with_no_catalogue_rate_is_priced_from_the_market(market_only):
+    """THE GAP THAT MATTERED. A stated finish with no config entry became an estimator input
+    when a figure was one lookup away — the same defect as an AI screw price sitting beside a
+    dash. We price what we can, however we can, and say which it was."""
+    line = _panel()["finishes"][0]
+    assert line["unit_finish_cost_gbp"] == pytest.approx(1.250 * 0.525 * 14.50, abs=0.01)
+    assert line["estimator_input_required"] is False
+
+
+def test_a_market_priced_finish_declares_that_it_is_not_reproducible(market_only):
+    """The number appears AND the job cannot be called firm on it. Two statements, and only
+    the first one changed."""
+    ps = _panel()["finishes"][0]["price_source"]
+    assert ps["source_class"] == "llm"
+    assert ps["reproducible"] is False
+    assert ps["indicative"] is True
+
+
+def test_a_market_priced_finish_reaches_the_total(market_only):
+    assert _panel()["extended_finish_cost_gbp"] == pytest.approx(
+        1.250 * 0.525 * 14.50 * 4, abs=0.05)
+
+
+def test_a_rate_the_business_holds_is_never_replaced_by_the_market(with_vinyl_rate):
+    """Catalogue first, always. The fixture fails the test if the lookup is even attempted —
+    asking the market about a finish we already price is both wrong and slow."""
+    assert _panel()["finishes"][0]["price_source"]["source_class"] == "catalogue"
+
+
+def test_a_market_that_answers_nothing_still_leaves_an_owned_gap(no_rates):
+    """The fallback widens the net; it does not guarantee a catch. Where nothing comes back
+    the line is still explicit, still owned, and still not zero."""
+    line = _panel()["finishes"][0]
+    assert line["estimator_input_required"] is True
+    assert line["extended_finish_cost_gbp"] is None
