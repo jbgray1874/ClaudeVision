@@ -242,12 +242,24 @@
       against the engine, and a hundred full estimates take days.</span>
     </p>
 
-    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:10px">
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
       <button id="bAdd">Add PDFs…</button>
       <button id="bClear">Clear</button>
-      <button class="btn-run" id="bRun" style="margin-left:auto" disabled>Estimate every drawing</button>
-      <button id="bStop" hidden>Stop the rest</button>
     </div>
+
+    <!-- THE SAME TWO BOOKS AS THE JOB CARD, laid out the same way, because they are the same
+         choice asked about a hundred drawings instead of one. This is the button that would
+         hurt most if it were the unlabelled one: a hundred estimates arrive at once, filed
+         under a hundred folders, and nothing in the output would say which set of rates
+         somebody was reading. -->
+    <button class="btn-run" id="bRun" disabled>SDI (UK) Intelligence — Estimate every drawing</button>
+    <button class="btn-stop" id="bStop" hidden>Stop the rest</button>
+    <button class="btn-run btn-soon" id="bRunChina" disabled aria-disabled="true"
+            title="Not connected yet — there is no China estimating endpoint behind this button">
+      SDI (China) Intelligence — Estimate every drawing</button>
+    <p class="note" id="bChinaNote">Not connected yet. There is no China estimating endpoint,
+       rate set or route behind this button — pressing it would do nothing, so it is held
+       disabled until there is. Use the UK enquiry above.</p>
 
     <div id="bProgress" hidden>
       <p class="hint" id="bCount"></p>
