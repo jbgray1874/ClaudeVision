@@ -67,14 +67,21 @@ def test_the_rescue_still_fires_for_a_material_nothing_can_price():
     assert priced == "UNOBTAINIUM" or priced != "ACRYLIC"
 
 
-def test_the_gauge_is_part_of_the_question():
+def test_the_gauge_is_part_of_the_question(monkeypatch):
     """A rate is keyed on material AND gauge — nobody stocks PETG at 2.2. Asking about the
     material alone would call a part priceable at a thickness that does not exist, which is
-    how the companion rule's stock key gets undone one layer down."""
-    priced, _ = estimator._material_we_can_actually_price(
-        _part(thickness=2.2), "PETG")
-    assert priced != "PETG" or True   # 2.2 has no row; the rescue is entitled to run
-    assert estimator._resolve_board_sheet_rate_gbp_per_m2("PETG", 2.2) is None
+    how the companion rule's stock key gets undone one layer down.
+
+    MY FIRST VERSION OF THIS ASSERTED `priced != "PETG" or True`, which is true of everything,
+    and a mutant that hard-coded the gauge to 2.0 walked straight past it. I then wrote a
+    commit message saying both mutants were killed. The claim has to be about what was ASKED,
+    so the lookup is watched rather than its outcome guessed at."""
+    seen = []
+    monkeypatch.setattr(estimator, "_resolve_board_sheet_rate_gbp_per_m2",
+                        lambda m, t: (seen.append((m, t)), None)[1])
+    estimator._material_we_can_actually_price(_part(thickness=2.2), "PETG")
+    assert seen == [("PETG", 2.2)], (
+        "the catalogue was asked about a gauge this part is not made from")
 
 
 def test_a_catalogue_failure_does_not_take_the_estimate_with_it():
