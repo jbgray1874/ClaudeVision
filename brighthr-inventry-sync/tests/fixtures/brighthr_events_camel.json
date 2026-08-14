@@ -1,0 +1,23 @@
+{
+  "_comment": "Alternative shape BrightHR may return: camelCase, nested employee object, wrapped in 'data'. Proves field_map.json absorbs the difference without a code change.",
+  "data": {
+    "items": [
+      {
+        "id": "evt-9001",
+        "employee": { "id": "EMP001", "name": "John Smith" },
+        "type": "ClockIn",
+        "occurredAt": "2026-05-29T07:45:00+01:00",
+        "site": "Shepshed",
+        "deviceId": "BLIP_TERMINAL_01"
+      },
+      {
+        "id": "evt-9002",
+        "employee": { "id": "EMP004", "name": "Maria Silva" },
+        "type": "ClockIn",
+        "occurredAt": "2026-05-29T08:10:00+01:00",
+        "site": "Shepshed",
+        "deviceId": "BLIP_TERMINAL_01"
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Only needed once InVentry supply database credentials and INVENTRY_DRIVER is
+# set to "sqlserver". The dry-run driver imports nothing from here.
+pyodbc>=4.0.39
+
+# Tests
+pytest>=7.4.0
