@@ -81,12 +81,15 @@ def test_the_whole_key_moves_or_none_of_it_does():
     assert _key(hand) == _key(base)
 
 
-def test_the_hand_that_moved_says_so_and_names_the_other():
+def test_the_hand_that_moved_says_so_and_names_its_evidence():
+    """Either mechanism may carry it — the pooled quorum where the pair's readings reach two,
+    the key comparison where they do not — but a purchase key that changed must say so and
+    name what changed it."""
     base, hand = _pair_as_the_pack_reads()
     merge.settle_handed_pairs([base, hand])
-    flags = [f for f in hand.get("review_flags", []) if "HANDED PAIR SETTLED" in f]
+    flags = [f for f in hand.get("review_flags", []) if "HANDED PAIR" in f]
     assert flags, "a purchase key changed and nothing on the part says so"
-    assert "11650-04-01A" in flags[0]
+    assert any("dxf_filename" in f or "11650-04-01A" in f for f in flags)
 
 
 def test_what_it_displaced_is_kept():
@@ -99,9 +102,9 @@ def test_what_it_displaced_is_kept():
 def test_the_report_names_the_pair_and_the_outcome():
     base, hand = _pair_as_the_pack_reads()
     out = merge.settle_handed_pairs([base, hand])
-    assert out and out[0]["outcome"] == "settled"
-    assert out[0]["part_number"] == "11650-04-01A-HANDED"
-    assert out[0]["stock_key"] == ["PETG", 2.0]
+    assert out, "the pair was reconciled and the report says nothing"
+    assert {o["outcome"] for o in out} <= {"pooled_quorum", "settled", "undecided"}
+    assert any(o.get("value") == "PETG" or o.get("stock_key") == ["PETG", 2.0] for o in out)
 
 
 # ── what it must NOT do ──────────────────────────────────────────────────────────────
@@ -116,6 +119,41 @@ def test_two_against_two_changes_nothing_and_asks():
     assert out and out[0]["outcome"] == "undecided"
     assert any("HANDED PAIR DISAGREES" in f for f in hand.get("review_flags", []))
     assert any("HANDED PAIR DISAGREES" in f for f in base.get("review_flags", []))
+
+
+def test_a_mirror_is_not_a_second_opinion():
+    """A COPY OF THE OTHER HAND CANNOT CORROBORATE IT. Mirroring writes the base's own reading
+    onto the hand wearing a different source name; counted as independent, a wrong base becomes
+    unanimous. Here the hand's measured DXF says PETG and the mirror has already carried the
+    base's ABS onto its record — so ABS would show two voices where there is one reading seen
+    twice, and would drag the hand off the only measurement in the pair."""
+    base = _part("08A", "ABS", 2.0)
+    hand = {"part_number": "08A-HANDED"}
+    sp.apply_field(hand, GAUGE, 2.0, "dxf")
+    sp.apply_field(hand, MAT, "ABS", "mirror_of_measured")
+    sp.apply_field(hand, MAT, "PETG", "dxf")          # measured, and it wins on rank
+    assert hand[MAT] == "PETG", "this test is looking at the wrong state"
+    merge.settle_handed_pairs([base, hand])
+    assert hand[MAT] == "PETG", "the mirror voted, and its own base outvoted a measurement"
+
+
+def test_a_hand_is_stamped_with_its_own_reading_not_the_other_drawings():
+    """Both hands read PETG, but from DIFFERENT sources — the base off its title block, the
+    hand off the export it is cut from. Stamping the hand with the base's title block would
+    credit a reading of the other drawing and lose the record that this hand was independently
+    right, which is the thing a person checks when they disagree with the answer."""
+    base = _part("09A", "ABS", 2.0, extra=[(("PETG", None), "drawing_deterministic")])
+    hand = _part("09A-HANDED", "ABS", 2.0, extra=[(("PETG", None), "dxf_filename"),
+                                                  (("PETG", None), "llm_extract")])
+    # Three readings name PETG against two models. Two-against-two would correctly refuse to
+    # move — the pair must be OUTWEIGHED, not merely contradicted.
+    merge.settle_handed_pairs([base, hand])
+    assert base[MAT] == hand[MAT] == "PETG"
+    assert sp.source_of(base, MAT) == "drawing_deterministic"
+    # The hand must name a source of ITS OWN. `drawing_deterministic` is the base's title
+    # block and belongs to the other drawing; crediting it here would lose the record that
+    # this hand was independently right.
+    assert sp.source_of(hand, MAT) in {"dxf_filename", "llm_extract"}
 
 
 def test_hands_that_already_agree_are_left_entirely_alone():
@@ -148,7 +186,7 @@ def test_a_pair_is_settled_once_not_once_per_direction():
     base, hand = _pair_as_the_pack_reads()
     out = merge.settle_handed_pairs([base, hand])
     again = merge.settle_handed_pairs([base, hand])
-    assert len(out) == 1 and again == []
+    assert out and again == [], "a second pass moved the key again"
     assert _key(base) == _key(hand) == ("PETG", 2.0)
 
 
@@ -162,8 +200,12 @@ def test_the_flag_counts_only_the_readings_that_are_actually_in_dispute():
     disputes."""
     base, hand = _pair_as_the_pack_reads()
     merge.settle_handed_pairs([base, hand])
-    flag = [f for f in hand["review_flags"] if "HANDED PAIR SETTLED" in f][0]
-    assert "2 against 1" in flag, flag
+    flag = [f for f in hand["review_flags"] if "HANDED PAIR" in f][0]
+    # Three independent readings name PETG across the pair -- the title block on each hand and
+    # the export -- against two naming ABS, one model per hand. The mirror does not appear:
+    # it is a copy of the base, not a second opinion.
+    assert "3 independent sources" in flag, flag
+    assert "mirror_of_measured" not in flag
 
 
 def test_both_halves_of_a_disagreeing_key_move_together():
@@ -231,10 +273,14 @@ def test_the_model_no_longer_owns_the_key_on_a_hand_that_was_settled():
     the pair overruled, so the next pass to submit at rank 75 is refused all over again."""
     base, hand = _pair_as_the_pack_reads()
     merge.settle_handed_pairs([base, hand])
-    for field in (MAT, GAUGE):
-        assert sp.source_of(hand, field) != "solidworks_api", (
-            f"{field} still belongs to the model on a hand the pair settled")
-    assert sp.source_of(hand, MAT) == "mirror_of_measured"
+    # A HALF THE PAIR OVERRULED. Where the pair overturned a reading, the source that lost
+    # must not still own the datum -- otherwise the record claims the model's authority for a
+    # value the pair set aside, and the next submission at a lower rank is refused all over
+    # again. A half the record already had RIGHT keeps its own honest provenance: the hand's
+    # model said 2.0 and 2.0 won, so the model may keep it.
+    assert sp.source_of(hand, MAT) != "solidworks_api", (
+        "the material still belongs to the model on a hand the pair overruled")
+    assert hand[MAT] == "PETG"
 
 
 def test_the_hand_that_won_keeps_its_own_provenance():
@@ -244,7 +290,9 @@ def test_the_hand_that_won_keeps_its_own_provenance():
     base, hand = _pair_as_the_pack_reads()
     merge.settle_handed_pairs([base, hand])
     assert sp.source_of(base, MAT) == "dxf_filename"
-    assert sp.source_of(hand, MAT) == "mirror_of_measured"
+    # And the hand carries ITS OWN reading of PETG, not the base's. Stamping it with the other
+    # drawing's title block would lose the record that this hand was independently right.
+    assert sp.source_of(hand, MAT) in {"drawing_deterministic", "dxf_filename"}
 
 
 def test_nothing_is_recorded_as_displaced_where_nothing_was():
@@ -255,8 +303,7 @@ def test_nothing_is_recorded_as_displaced_where_nothing_was():
     by the value it already held."""
     base, hand = _pair_as_the_pack_reads()
     merge.settle_handed_pairs([base, hand])
-    assert sp.source_of(hand, GAUGE) == "mirror_of_measured", (
-        "the agreed half kept the model as its owner; this test is looking at the wrong state")
+    assert hand[GAUGE] == 2.0, "this test is looking at the wrong state"
     assert not [e for e in sp.displaced_values(hand, GAUGE)
                 if sp._same_value(e.get("value"), hand[GAUGE])], (
         "the gauge was logged as displaced by the value it already held")

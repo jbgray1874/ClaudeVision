@@ -1367,6 +1367,114 @@ def handed_pairs(parts: List[Dict[str, Any]]):
         yield part, base
 
 
+# A COPY OF THE OTHER HAND IS NOT A SECOND OPINION. Mirroring exists to fill what a hand is
+# missing, and what it writes is the base's own reading wearing a different source name. Count
+# it as independent and a wrong base becomes unanimous: 11650-04-01A's model said ABS, the
+# mirror carried ABS onto the hand, and the pair then showed two sources agreeing where there
+# was one reading seen twice.
+_DERIVED_SOURCES = {"mirror_of_measured"}
+
+
+def _independent_support(record: Dict[str, Any], field: str, value: Any) -> set:
+    return {s for s in source_precedence.support_for(record, field, value)
+            if s not in _DERIVED_SOURCES}
+
+
+def _pool_pair_evidence(hand: Dict[str, Any], base: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Ask the quorum again with BOTH hands' readings on the table.
+
+    11650-04 IS WHY THIS EXISTS, AND THE DIAGNOSTIC SPELLED IT OUT.
+
+        11650-04-01A          ABS from the model      AGAINST IT: 1 source said PETG - drawing_deterministic
+        11650-04-01A-HANDED   ABS from the mirror     AGAINST IT: 1 source said PETG - dxf_filename
+
+    One panel. Two records. The title block read PETG on one and the export the laser cuts from
+    read PETG on the other — two independent readings of the SAME article — and each record was
+    left holding a lone dissenter against a model, one short of the quorum, twice.
+
+    The corroboration rule was right and could not see half its own evidence, because a handed
+    pair is one commercial part and arbitration was running per record. So the readings are
+    pooled first and the quorum asked once for the pair; only then are the resolved keys
+    compared, which is what the rest of this function does.
+
+    DERIVED SOURCES DO NOT VOTE. The mirror had already carried the base's ABS onto the hand,
+    so counting `mirror_of_measured` would have shown two sources agreeing where there was one
+    reading seen twice — and it is the base's reading, the very one under challenge.
+
+    Applies to BOTH records or neither. Half a pair moved is the split this file exists to end.
+    """
+    moved: List[Dict[str, Any]] = []
+    for field in _STOCK_KEY:
+        held = {id(r): source_precedence.value_of(r, field) for r in (hand, base)}
+        if any(v is source_precedence.MISSING for v in held.values()):
+            continue
+        # Every value either hand has heard named, and who named it, across the pair.
+        candidates: Dict[str, Any] = {}
+        support: Dict[str, set] = {}
+        for rec, tag in ((hand, "hand"), (base, "base")):
+            seen = [source_precedence.value_of(rec, field)]
+            seen += [e.get("value") for e in source_precedence.displaced_values(rec, field)]
+            seen += [e.get("value") for e in
+                     ((rec.get("_agreed") or {}).get(field) or [])]
+            for v in seen:
+                if v is source_precedence.MISSING or v is None:
+                    continue
+                key = source_precedence._norm_value_key(v)
+                candidates.setdefault(key, v)
+                support.setdefault(key, set()).update(
+                    f"{tag}:{s}" for s in _independent_support(rec, field, v))
+        if not support:
+            continue                        # no independent reading of this field either way
+        ranked = sorted(support.items(), key=lambda kv: -len(kv[1]))
+        top_key, top_srcs = ranked[0]
+        if len(top_srcs) < source_precedence.CORROBORATION_QUORUM:
+            continue                        # a quorum is still a quorum, pooled or not
+        winner = candidates[top_key]
+        losers = [r for r in (hand, base)
+                  if not source_precedence._same_value(held[id(r)], winner)]
+        if not losers:
+            continue                        # both hands already hold it
+        # It must beat what is held, not merely reach two. A key the pair already agrees on
+        # with equal support is not overturned by counting the same readings differently.
+        _held_key = source_precedence._norm_value_key(held[id(losers[0])])
+        if len(support.get(_held_key, set())) >= len(top_srcs):
+            continue
+        for rec in losers:
+            was = held[id(rec)]
+            was_src = source_precedence.source_of(rec, field)
+            source_precedence._observe(rec, field, was, was_src or "an earlier pass",
+                                       applied=True, displaced_by="handed_pair_quorum")
+            path, leaf = source_precedence._split(field)
+            node = source_precedence._walk(rec, path, create=True)
+            if node is None:
+                continue
+            node[leaf] = winner
+            # ITS OWN READING WHERE IT HAS ONE. The hand's export said PETG itself; stamping it
+            # with the base's title block would credit a reading of the other drawing and lose
+            # the record that this hand was independently right.
+            _tag = "hand" if rec is hand else "base"
+            _own = [s.split(":", 1)[1] for s in top_srcs if s.startswith(_tag + ":")]
+            # ITS STRONGEST OWN READING, not the first one alphabetically. Where a hand read
+            # PETG off both the export it is cut from and a language model, the export is what
+            # the record should say it rests on.
+            _pick = max(_own or [s.split(":", 1)[1] for s in top_srcs],
+                        key=source_precedence.rank)
+            node[source_precedence._source_key(leaf)] = _pick
+            node.pop(f"{leaf}_confidence", None)
+            rec.setdefault("review_flags", []).append(
+                f"HANDED PAIR QUORUM: {field} was '{was}' from {was_src or 'an earlier pass'} "
+                f"on this hand. Across the pair, {len(top_srcs)} independent sources say "
+                f"'{winner}' ({', '.join(sorted(top_srcs))}) against "
+                f"{len(support.get(_held_key, set()))} for '{was}'. Two hands are one part, so "
+                f"a reading of either is a reading of both; confirm which is right")
+            rec.setdefault("_handed_pair_quorum", {})[field] = {
+                "value": winner, "sources": sorted(top_srcs), "displaced": was}
+        moved.append({"part_number": (losers[0].get("part_number")), "field": field,
+                      "outcome": "pooled_quorum", "value": winner,
+                      "sources": sorted(top_srcs)})
+    return moved
+
+
 def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """A handed pair is ONE purchase, so it gets one stock key.
 
@@ -1399,6 +1507,10 @@ def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     settled: List[Dict[str, Any]] = []
     for hand, base in handed_pairs(parts):
+        # THE EVIDENCE IS POOLED BEFORE THE ANSWERS ARE COMPARED. Two hands are one article,
+        # so a reading of either is a reading of both — and until this ran first, the pair's
+        # evidence was split across two records while the quorum counted inside one.
+        settled.extend(_pool_pair_evidence(hand, base))
         # Each record's own key is settled first, so the pair is compared on the answers
         # per-part arbitration actually reached rather than on half-resolved ones.
         source_precedence.settle_companion_facts(hand)
