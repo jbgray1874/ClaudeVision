@@ -3050,6 +3050,17 @@ def format_report(result: Dict[str, Any]) -> str:
     for v in result.get("violations") or []:
         lines.append(f"   {_mark.get(v.get('severity'), 'warning   ')}  "
                      f"{v.get('code')}: {v.get('message')}")
+    # AND THE SAME FLAGS SORTED INTO WHAT A PERSON DOES WITH THEM. The raw list above stays:
+    # it is the record, and a developer reading a log wants it whole and in check order. What
+    # follows is the same information ordered by WHOSE it is, because twenty-one flags in one
+    # undifferentiated list is a research project even when every number in it is right.
+    try:
+        import estimating_review as _er
+        _block = _er.format_review(_er.review(result))
+        if _block:
+            lines.append(_block)
+    except Exception:                                        # noqa: BLE001
+        pass
     return "\n".join(lines)
 
 

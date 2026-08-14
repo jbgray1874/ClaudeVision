@@ -1,0 +1,143 @@
+"""
+estimating_review.py — the flags, sorted into what a person actually does with them.
+
+TWENTY-ONE FLAGS IN ONE UNDIFFERENTIATED LIST IS A RESEARCH PROJECT, EVEN WHEN EVERY NUMBER IN
+IT IS RIGHT. An estimator opening 11650-04 got BLOCKING and warning interleaved, a missing
+catalogue rate reading the same as an invented BOM node, and a declared powder assumption
+sitting between them. All true, all in the wrong order, and the honest response to that list is
+to close it.
+
+SEVERITY IS NOT THE SORT. Severity says how bad; it does not say WHOSE. A BLOCKING "this
+material has no rate" is a decision waiting for a person and is perfectly ordinary work. A
+WARNING "this part was invented downstream of the drawing read" is the engine confessing and is
+nobody's work but ours. Ordering by severity puts those next to each other and asks the reader
+to tell them apart.
+
+SO IT SORTS BY WHAT TO DO. Three buckets, in the order a person works:
+
+  CONFIRM OR OVERWRITE   a number is on the sheet and somebody has to stand behind it —
+                         indicative prices, a short-run offcut, a gauge two sources disagree
+                         about. This is estimating, and a good run produces MORE of it.
+
+  MISSING OR BROKEN      the engine could not do something, or did it and cannot defend it.
+                         Ours, and the list that has to shrink.
+
+  FOR INFORMATION        a number the engine chose, said so, and named the lever for. Not a
+                         decision and not a defect — until somebody disagrees, at which point
+                         the lever is right there.
+
+NAMED FOR THE FUNCTION, NOT THE PERSON. "Estimating review" survives Tim being on holiday; a
+tab called Tim goes stale the first day somebody else estimates, and reads as a personal
+to-do rather than a step in the process.
+
+ONE ACTION PER LINE. "What, why it matters, what to do" — because a flag an estimator has to
+interpret is a flag they will skip on the fourth job.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+import engine_discoveries
+
+SCHEMA = "estimating_review.v1"
+
+CONFIRM = "Confirm or overwrite"
+BROKEN = "Missing or broken inputs"
+INFORMATION = "For information — assumptions the engine made"
+
+# The order a person works, not the order the checks happen to run. Decisions first because
+# they are what stops the quote going out; the engine's own list next because it changes what
+# the decisions are worth; assumptions last because they are already answered unless somebody
+# disagrees.
+ORDER = (CONFIRM, BROKEN, INFORMATION)
+
+_BUCKET_FOR = {"drawing": CONFIRM, "engine": BROKEN,
+               "assumption": INFORMATION, "unverified": BROKEN}
+
+# WHAT TO DO, in a sentence, for the codes that carry a standard action. Anything not listed
+# falls back to the bucket's own instruction rather than inventing advice — a made-up action is
+# worse than none, because it gets followed.
+_ACTION = {
+    "price_not_reproducible": "Replace with a catalogue or supplier rate, or accept it and "
+                              "quote this as an estimate rather than a firm price.",
+    "material_has_no_rate_in_this_engine": "Enter a rate for the material, or confirm the part "
+                                           "is something we already price.",
+    "stated_finish_not_costed": "Price the finish, or add a £/m² to "
+                                "config.APPLIED_FINISH_RATES_GBP_PER_M2 so every job carries it.",
+    "short_run_pays_for_sheet_it_does_not_use": "Charge the offcut, or decide it goes to stock.",
+    "two_sources_disagree_about_the_gauge": "Confirm which gauge the part is made from.",
+    "two_sources_disagree_about_the_material": "Confirm which material the part is made from.",
+    "handed_pair_disagrees": "The two hands read differently and the evidence is even. "
+                             "Confirm which is right.",
+    "cad_files_not_read": "If any are flat patterns, ask for a DXF; general arrangements add "
+                          "nothing over the PDF.",
+    "price_not_firm": "Expected on an estimate. Clear it only when quoting firm.",
+}
+
+_BUCKET_ACTION = {
+    CONFIRM: "Confirm the figure or overwrite it.",
+    BROKEN: "Engine or drawing-pack problem — raise it rather than working around it.",
+    INFORMATION: "No action unless you disagree with the assumption.",
+}
+
+
+def _line(violation: Dict[str, Any]) -> Dict[str, Any]:
+    code = str(violation.get("code") or "")
+    bucket = _BUCKET_FOR.get(engine_discoveries.classify(code), BROKEN)
+    return {
+        "bucket": bucket,
+        "code": code,
+        "severity": violation.get("severity"),
+        # WHAT AND WHY, IN THE ENGINE'S OWN WORDS. These messages were written to be read; a
+        # summary of a summary loses the part an estimator needs.
+        "what": str(violation.get("message") or "").strip(),
+        "what_to_do": _ACTION.get(code) or _BUCKET_ACTION[bucket],
+        "blocks_a_firm_quote": violation.get("severity") == "blocking",
+    }
+
+
+def review(result: Any) -> Dict[str, Any]:
+    """The invariant result, re-sorted into what a person does with it.
+
+    BLOCKING STILL MEANS BLOCKING. Re-sorting changes the order and the wording, never the
+    gate: a job with an unconfirmed indicative price is still not a firm quote and still must
+    not reach an ERP export. What changes is that the reader can see WHICH of the twenty-one
+    lines they are able to act on.
+    """
+    violations = (result or {}).get("violations") if isinstance(result, dict) else None
+    lines = [_line(v) for v in (violations or []) if isinstance(v, dict)]
+    buckets: Dict[str, List[Dict[str, Any]]] = {b: [] for b in ORDER}
+    for ln in lines:
+        buckets[ln["bucket"]].append(ln)
+    # Within a bucket, the ones that stop a quote come first. Severity is the wrong TOP-level
+    # sort and the right one inside a group of things the same person is doing.
+    for b in buckets:
+        buckets[b].sort(key=lambda l: (not l["blocks_a_firm_quote"], l["code"]))
+    return {
+        "schema": SCHEMA,
+        "buckets": [{"title": b, "lines": buckets[b]} for b in ORDER if buckets[b]],
+        "counts": {b: len(buckets[b]) for b in ORDER},
+        "may_quote_firm": bool((result or {}).get("may_quote_firm")),
+        "metric": engine_discoveries.count(violations or []),
+    }
+
+
+def format_review(rev: Dict[str, Any]) -> str:
+    """The block that goes on the console, in the report, and beside the outstanding inputs."""
+    if not isinstance(rev, dict) or not rev.get("buckets"):
+        return "[estimating review] nothing outstanding"
+    out: List[str] = ["", "══ ESTIMATING REVIEW ══════════════════════════════════════════"]
+    if not rev.get("may_quote_firm"):
+        out.append("   This is an ESTIMATE, not a firm price. Clear the blocking items "
+                   "below before quoting firm or exporting to an ERP.")
+    for group in rev["buckets"]:
+        out.append("")
+        out.append(f"   {group['title'].upper()}  ({len(group['lines'])})")
+        for ln in group["lines"]:
+            mark = "!" if ln["blocks_a_firm_quote"] else "·"
+            out.append(f"     {mark} {ln['what']}")
+            out.append(f"       -> {ln['what_to_do']}")
+    m = rev.get("metric") or {}
+    out.append("")
+    out.append(f"   [engine] {engine_discoveries.one_line(m)}")
+    return "\n".join(out)
