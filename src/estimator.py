@@ -2134,6 +2134,26 @@ def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tupl
     """
     if config.material_has_a_rate(material):
         return material, None
+    # AND THE LIVE SHEET CATALOGUE IS A RATE. THIS ASKED ONE SOURCE AND SPOKE FOR ALL OF THEM.
+    #
+    # config.material_has_a_rate reads MATERIAL_PRICE_GBP_PER_KG and nothing else. It has
+    # never heard of the customer's own parts catalogue, which is where PETG, ABS and HIPS
+    # sheet prices actually live — so a material with 37 rows of live stock behind it was
+    # judged unpriceable and rescued to ACRYLIC.
+    #
+    # 11650-04 IS WHAT THAT COSTS, AND IT IS THE SPLIT NOBODY COULD EXPLAIN. The two detail
+    # panels were rescued to ACRYLIC and charged GBP 48.89 a sheet from a config figure; their
+    # own handed twins reached the catalogue and were charged GBP 60.21 for the identical
+    # PETG 2.0. One stock key, one purchase, two prices — and the rescue was the writer of the
+    # cheaper one, on a job where PETG was the right answer all along.
+    #
+    # "Can we price this material" is ONE question and must have one answer. Asking a single
+    # table and treating silence as no-rate-anywhere is the dual-path defect in the money.
+    try:
+        if _resolve_board_sheet_rate_gbp_per_m2(material, part.get("normalized_thickness_mm")):
+            return material, None
+    except Exception:                                        # noqa: BLE001
+        pass
     # Everything else this part was read as, best-evidenced first: what arbitration displaced,
     # then the raw tokens off the drawing.
     seen, candidates = set(), []
