@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import source_precedence
 from source_precedence import apply_field as _apply_field
 
 import config
@@ -1307,6 +1308,151 @@ def _own_number_key(part_number: Any) -> str:
     return re.sub(r"\s+", "", str(part_number or "")).upper()
 
 
+_STOCK_KEY = ("normalized_material", "normalized_thickness_mm")
+
+
+def handed_pairs(parts: List[Dict[str, Any]]):
+    """Every (hand, base) this job holds both halves of.
+
+    ONE NOTION OF IDENTITY, EXPRESSED ONCE. `mirror_base` says what a hand is a hand OF and
+    `_own_number_key` says what a part is called; both callers here use those two functions
+    and nothing else. A second way of deciding what pairs with what would be a dual path in
+    the very rule that exists to stop records drifting apart.
+    """
+    if not isinstance(parts, list):
+        return
+    from part_code_conventions import mirror_base
+    by_key = {_own_number_key(p.get("part_number")): p
+              for p in parts if isinstance(p, dict)}
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        base_pn = mirror_base(str(part.get("part_number") or ""))
+        if not base_pn:
+            continue
+        base = by_key.get(_own_number_key(base_pn))
+        if base is None or base is part:
+            continue
+        yield part, base
+
+
+def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A handed pair is ONE purchase, so it gets one stock key.
+
+    11650-04'S PANELS CAME BACK ON TWO DIFFERENT SHEETS. 01A resolved to 2.2mm and
+    01A-HANDED to 2.0mm, each from its own SolidWorks model, and the job then bought a sheet
+    at GBP 84.10 for one hand and GBP 60.21 for the other -- of the same panel, cut from the
+    same material, on the same machine, in the same week.
+
+    THE MIRROR RULE COULD NOT FIX THIS AND WAS RIGHT NOT TO. It submits material and gauge at
+    `mirror_of_measured` (75), which correctly loses to a model at 90. Read as "fill what the
+    hand is missing", that is exactly right. But the hands were not missing anything: they
+    each had an answer, and the answers disagreed. Precedence arbitrates sources within ONE
+    record and has nothing to say about two records that must agree by construction.
+
+    AND THAT IS THE POINT. Two hands of one part are not two facts about two articles. They
+    are ONE fact read twice, and where the readings differ one of them is wrong -- so
+    resolving it per record produces two confident answers and two purchase orders, which is
+    the failure this whole file exists to prevent, one level up.
+
+    DECIDED BY SUPPORT ACROSS THE PAIR, NOT BY RANK. Rank already had its turn inside each
+    record and produced the disagreement. What breaks the tie is the same question the quorum
+    asks: how many distinct readings, across both hands, name each key. A model on each hand
+    is two readings of two files and counts as two; the same source named twice on one record
+    is one. Where neither side has more, nothing moves and a person is asked -- a pair split
+    two-against-two is a drawing problem, and inventing an answer would hide it.
+
+    THE WHOLE KEY MOVES OR NONE OF IT DOES, for the reason `settle_companion_facts` exists:
+    taking the material from one hand and the gauge from the other is how you arrive at a
+    stock item nobody stocks.
+    """
+    settled: List[Dict[str, Any]] = []
+    for hand, base in handed_pairs(parts):
+        # Each record's own key is settled first, so the pair is compared on the answers
+        # per-part arbitration actually reached rather than on half-resolved ones.
+        source_precedence.settle_companion_facts(hand)
+        source_precedence.settle_companion_facts(base)
+        k_hand = tuple(hand.get(f) for f in _STOCK_KEY)
+        k_base = tuple(base.get(f) for f in _STOCK_KEY)
+        if any(v is None for v in k_hand + k_base):
+            continue                      # an absent key is a gap, not a disagreement
+        if all(source_precedence._same_value(a, b) for a, b in zip(k_hand, k_base)):
+            continue
+        # Distinct readings for each side's key, counted across BOTH records. Namespaced by
+        # record: the base's model and the hand's model are two files and two readings, while
+        # one source quoted twice on one record stays one.
+        # ONLY THE FIELDS THAT ACTUALLY DIFFER ARE COUNTED, and this is a REPORTING rule,
+        # not a deciding one -- worth saying plainly, because it looks like a deciding one. An
+        # agreed field holds the same value in both keys, so it contributes the identical
+        # support set to each side and can never change which is larger. What it does change
+        # is the number the flag prints: "3 readings against 1" is a sentence an estimator can
+        # act on, where "5 against 3" buries the disagreement in readings nobody disputes.
+        _disputed = [f for f, a, b in zip(_STOCK_KEY, k_hand, k_base)
+                     if not source_precedence._same_value(a, b)]
+
+        def _support(key) -> set:
+            """A RECORD BACKS ITS OWN ANSWER AND NOTHING ELSE.
+
+            Counting every reading on both records let a record DONATE ITS REJECTS to the
+            opposing key: the base had read ABS 3.0 from its model before its own title block
+            and export overruled it, and that dead reading then turned up as evidence for the
+            hand's ABS — so the hand won 4-3 on the strength of a value the base had already
+            decided against. The richer a record's evidence, the more it armed the other side.
+
+            Each record has already arbitrated its own sources. The pair-level question is
+            between the two ANSWERS, so the evidence for an answer is the evidence on the
+            record that reached it.
+            """
+            out = set()
+            for tag, rec in (("base", base), ("hand", hand)):
+                if not all(source_precedence._same_value(rec.get(f), v)
+                           for f, v in zip(_STOCK_KEY, key)):
+                    continue
+                for field, val in zip(_STOCK_KEY, key):
+                    if field not in _disputed:
+                        continue
+                    for src in source_precedence.support_for(rec, field, val):
+                        out.add(f"{tag}:{src}:{field}")
+            return out
+        s_hand, s_base = _support(k_hand), _support(k_base)
+        if len(s_hand) == len(s_base):
+            for rec in (hand, base):
+                rec.setdefault("review_flags", []).append(
+                    f"HANDED PAIR DISAGREES: {hand.get('part_number')} is "
+                    f"{k_hand[0]} at {k_hand[1]}mm and {base.get('part_number')} is "
+                    f"{k_base[0]} at {k_base[1]}mm, on {len(s_hand)} readings each. One "
+                    f"panel made twice cannot be two purchases — but neither side has more "
+                    f"evidence, so nothing has been changed. Confirm which hand is right")
+            settled.append({"part_number": hand.get("part_number"),
+                            "base": base.get("part_number"), "outcome": "undecided",
+                            "hand_key": list(k_hand), "base_key": list(k_base)})
+            continue
+        keep, drop = ((k_hand, k_base) if len(s_hand) > len(s_base) else (k_base, k_hand))
+        loser = hand if keep is k_base else base
+        winner_name = (base if keep is k_base else hand).get("part_number")
+        for field, val in zip(_STOCK_KEY, keep):
+            was, was_src = loser.get(field), source_precedence.source_of(loser, field)
+            if source_precedence._same_value(was, val):
+                continue
+            source_precedence._observe(loser, field, was, was_src or "an earlier pass",
+                                       applied=True, displaced_by="mirror_of_measured")
+            loser[field] = val
+            loser[source_precedence._source_key(field)] = "mirror_of_measured"
+            loser.pop(f"{field}_confidence", None)
+        loser.setdefault("review_flags", []).append(
+            f"HANDED PAIR SETTLED: this hand read {drop[0]} at {drop[1]}mm and "
+            f"{winner_name} read {keep[0]} at {keep[1]}mm. A handed pair is one purchase, "
+            f"so both now carry {keep[0]} at {keep[1]}mm — the key with more independent "
+            f"readings across the two hands ({max(len(s_hand), len(s_base))} against "
+            f"{min(len(s_hand), len(s_base))}). Confirm if the hands are genuinely "
+            f"different stock")
+        loser.setdefault("_handed_settled", {})["stock_key"] = {
+            "value": list(keep), "displaced": list(drop), "agreed_with": winner_name}
+        settled.append({"part_number": loser.get("part_number"), "base": winner_name,
+                        "outcome": "settled", "stock_key": list(keep)})
+    return settled
+
+
 def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Give a mirrored part the flat pattern of the part it mirrors.
 
@@ -1858,6 +2004,10 @@ def augment_summary_with_dxf(
     # A mirrored part has its own hand's flat only when somebody exported one. Where nobody
     # did, its other hand was measured and is sitting in this same list.
     report["mirror_inherited"] = apply_mirror_geometry(parts)
+    # AFTER THE GEOMETRY, DELIBERATELY. Mirroring fills what a hand is MISSING; this settles
+    # what the two hands each answered and disagreed about, which only has meaning once both
+    # records are as complete as they are going to get.
+    report["handed_pairs_settled"] = settle_handed_pairs(parts)
 
     # Flag sub-assembly parents (e.g. TANK 04 over 04-01/04-02) so estimation
     # suppresses their material + phantom fab labour. Must run before re-estimate.
