@@ -346,10 +346,38 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
     try:
         sw = win32com.client.GetActiveObject("SldWorks.Application")
     except Exception as exc:                               # noqa: BLE001
+        # WHAT WE KNOW IS THAT WE CANNOT SEE IT, WHICH IS NOT THE SAME AS IT NOT BEING THERE.
+        #
+        # This said "SolidWorks is not running on this machine" and sent somebody to start an
+        # application that was already open, twice. GetActiveObject looks in the Running
+        # Object Table, and the ROT is scoped per LOGON SESSION and per INTEGRITY LEVEL — so a
+        # runner launched from an elevated PowerShell cannot see a SolidWorks running as the
+        # ordinary user, however plainly it is on the screen in front of you. Same machine,
+        # same desktop, two tables.
+        #
+        # MK_E_UNAVAILABLE (0x800401E3 / -2147221021) is exactly that answer and nothing more:
+        # not in the table I am allowed to read. Reporting it as a fact about the machine is
+        # the same defect this codebase keeps naming — an inference printed as an observation
+        # — and here it cost real time on a machine that had a licensed seat open all along.
+        _elevated = None
+        try:
+            import ctypes
+            _elevated = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:                                  # noqa: BLE001
+            pass
+        _why = ("This runner is ELEVATED and SolidWorks almost certainly is not: an "
+                "administrator process cannot see an ordinary one in the Running Object "
+                "Table. Start the runner from a NORMAL PowerShell, or install it as the "
+                "scheduled task (tools\\start\\install-runner-task.ps1), which runs "
+                "unelevated in your own desktop session."
+                if _elevated else
+                "SolidWorks is either not running, or is running in a different logon "
+                "session from this runner. Both look identical from here.")
         raise RuntimeError(
-            "SolidWorks is not running on this machine, so there is no seat to convert with. "
-            "Start SolidWorks and leave it open on the runner's desktop, or install the ODA "
-            f"File Converter. ({exc})")
+            "No SolidWorks seat could be attached to, so there is nothing to convert with. "
+            "This does not mean SolidWorks is closed — it means this process could not find "
+            f"it in the Running Object Table it is allowed to read. {_why} "
+            f"({exc})")
     errs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     warns = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     doc = sw.OpenDoc6(str(dwg), SW_DRW, OPEN_SILENT_READONLY, "", errs, warns)
