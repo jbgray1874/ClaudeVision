@@ -98,6 +98,29 @@ def test_a_known_code_gets_its_own_action_not_the_generic_one():
     assert "offcut" in line["what_to_do"]
 
 
+def test_a_broken_join_is_priced_and_the_line_says_so():
+    """WE PRICE WHAT WE CAN AND SAY WHAT WAS WRONG. A broken join is a fault in the drawing
+    pack's structure, not a reason to leave the work off the estimate. 11650-04-02M is costed
+    in the Sheet Steel block and carries P.Coat labour — the earlier wording told an estimator
+    to "raise it rather than working around it", which reads as stop on a line that is already
+    priced, and contradicts the policy applied everywhere else on the sheet.
+
+    What the broken join actually puts in doubt is the QUANTITY, and that is one cell."""
+    line = next(l for g in er.review(RUN)["buckets"] for l in g["lines"]
+                if l["code"] == "canonical_route_bom_node_disconnected")
+    assert "priced from what was read" in line["what_to_do"].lower()
+    assert "quantity" in line["what_to_do"].lower()
+    assert "raise it rather than" not in line["what_to_do"]
+
+
+def test_the_broken_bucket_does_not_tell_anyone_to_stop():
+    """Everything that could be priced has been. This bucket says which numbers to CHECK
+    FIRST, not that the job waits for an engineer."""
+    action = er._BUCKET_ACTION[er.BROKEN]
+    assert "change anything you disagree with" in action.lower()
+    assert "raise it rather than" not in action
+
+
 def test_an_unknown_code_falls_back_rather_than_inventing_advice():
     """A made-up action is worse than none, because it gets followed."""
     rev = er.review({"violations": [{"code": "something_new", "severity": "warning",

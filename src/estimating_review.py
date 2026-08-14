@@ -19,8 +19,11 @@ SO IT SORTS BY WHAT TO DO. Three buckets, in the order a person works:
                          indicative prices, a short-run offcut, a gauge two sources disagree
                          about. This is estimating, and a good run produces MORE of it.
 
-  MISSING OR BROKEN      the engine could not do something, or did it and cannot defend it.
-                         Ours, and the list that has to shrink.
+  MISSING OR BROKEN      the engine could not read something cleanly, or read it and cannot
+                         defend where it came from. Ours, and the list that has to shrink —
+                         but NOT a reason to leave work off the estimate. Everything that
+                         could be priced has been; what this bucket says is which numbers to
+                         check first, and every one of them is a cell an estimator can change.
 
   FOR INFORMATION        a number the engine chose, said so, and named the lever for. Not a
                          decision and not a defect — until somebody disagrees, at which point
@@ -72,11 +75,31 @@ _ACTION = {
     "cad_files_not_read": "If any are flat patterns, ask for a DXF; general arrangements add "
                           "nothing over the PDF.",
     "price_not_firm": "Expected on an estimate. Clear it only when quoting firm.",
+    # PRICED ANYWAY, AND SAID SO. A broken join is a fault in the drawing pack's structure,
+    # not a reason to leave the work off the estimate. The part is costed from what WAS read;
+    # what the broken join puts in doubt is the QUANTITY it should carry, and that is a number
+    # an estimator changes in one cell.
+    "canonical_route_bom_node_disconnected":
+        "The part is priced from what was read. Its link to a parent assembly is broken in "
+        "the drawing pack, so the quantity may be wrong — confirm or change it.",
+    "bom_node_disconnected":
+        "The part is priced from what was read. Its link to a parent assembly is broken in "
+        "the drawing pack, so the quantity may be wrong — confirm or change it.",
+    "native_top_assembly_ambiguous":
+        "Two assemblies could each be the top of this job and one was chosen by closest "
+        "match. Confirm it, or change the quantities if the other is right.",
+    "assembly_only_part_record":
+        "Built from assembly pages with no detail drawing of its own. Priced from what was "
+        "read — confirm the size and material, or ask for the detail.",
 }
 
 _BUCKET_ACTION = {
     CONFIRM: "Confirm the figure or overwrite it.",
-    BROKEN: "Engine or drawing-pack problem — raise it rather than working around it.",
+    # NOT "STOP". Everything that could be priced HAS been, and an estimator can change any
+    # of it. What this bucket says is which numbers rest on something the engine could not
+    # read cleanly — so they are checked first, not so the job waits.
+    BROKEN: "Priced from what could be read. Check this one before the others, and change "
+            "anything you disagree with.",
     INFORMATION: "No action unless you disagree with the assumption.",
 }
 
