@@ -551,6 +551,28 @@ def material_has_a_rate(material) -> bool:
     return False
 
 
+# ── APPLIED FINISHES, BY AREA ────────────────────────────────────────────────────────
+#
+# THE ONE PLACE A FINISH GAP IS CLOSED. Keyed on the finish codes applied_finish.py reads off
+# the drawing, in GBP per square metre of coated face.
+#
+# EMPTY ON PURPOSE, AND THAT IS AN ANSWER RATHER THAN AN OVERSIGHT. Powder was the only finish
+# this engine could cost, which is right for steel and wrong for everything else — vinyl,
+# laminate, print, foil and paint go on MDF, acrylic and PETG every day. 11650-04's side panels
+# state "1/2 INCH REEDED VINYL + UV OR CLEAR VINYL" and the vinyl was costed at nothing, on a
+# panel where it is most of what the customer is buying.
+#
+# Until a rate is entered here, a stated finish produces an EXPLICIT estimator-input line
+# carrying the code and the area — never a zero, because a finish costed at nothing and a
+# finish nobody has priced read identically on a sheet and only one is an under-charge anybody
+# can catch. Entering one line here prices that finish on every job that states it, for good;
+# no enquiry should ever need code for this.
+#
+#   APPLIED_FINISH_RATES_GBP_PER_M2 = {"VINYL_REEDED": 14.50, "UV_COAT": 6.00}
+#
+APPLIED_FINISH_RATES_GBP_PER_M2: dict = {}
+
+
 ACRYLIC_PRICE_GBP_PER_M2 = {
     1.5: 8.2,    # 1 line (full sheet clear XT) — single-source
     1.8: 7.8,    # 3 lines (blanks), £6.4-8.3 — STRONG

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import engine_build
+import applied_finish
 import source_precedence
 from source_precedence import apply_field as _apply_field
 
@@ -3126,6 +3127,16 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             )
         material_cost = mass_kg * eff_price * (1.0 + scrap_frac) if eff_price is not None else None
         cost_method = "mass_times_price_per_kg"
+
+    # EVERY OTHER APPLIED FINISH, BESIDE POWDER RATHER THAN INSTEAD OF IT. Powder keeps its own
+    # workbook formula (by mass, both faces, oven); vinyl, laminate, print, foil, paint and UV
+    # are charged by coated area and had no home at all — so a drawing that stated one was
+    # costed at nothing and nothing said so. Written onto the part whether or not a rate exists:
+    # where none does, the line names the finish, the area and who has to price it.
+    _applied_finish = applied_finish.applied_finish_estimate(
+        part, blank_length, blank_width, quantity)
+    if _applied_finish:
+        part["applied_finish_estimate"] = _applied_finish
 
     powder_block = _powder_consumable_estimate(part, blank_length, blank_width, quantity)
     # acrylic_powder_suppressed_v1 (2026-07-15): powder coat is a STEEL finish. Acrylic /
