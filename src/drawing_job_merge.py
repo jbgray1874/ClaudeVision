@@ -1432,11 +1432,24 @@ def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         winner_name = (base if keep is k_base else hand).get("part_number")
         for field, val in zip(_STOCK_KEY, keep):
             was, was_src = loser.get(field), source_precedence.source_of(loser, field)
-            if source_precedence._same_value(was, val):
-                continue
-            source_precedence._observe(loser, field, was, was_src or "an earlier pass",
-                                       applied=True, displaced_by="mirror_of_measured")
-            loser[field] = val
+            # A DISPLACEMENT IS LOGGED ONLY WHERE SOMETHING WAS DISPLACED. Half a key often
+            # already matches — both hands read 2.0mm and disagreed only about the material —
+            # and recording that as an overwrite would put a reading on the record that never
+            # lost anything.
+            if not source_precedence._same_value(was, val):
+                source_precedence._observe(loser, field, was, was_src or "an earlier pass",
+                                           applied=True, displaced_by="mirror_of_measured")
+                loser[field] = val
+            # BUT THE WHOLE KEY TAKES ONE OWNER, including the half that already agreed. Left
+            # as it was, the hand's material said mirror_of_measured (75) while its gauge still
+            # said the model (90) — one purchase decision owned by two sources, which is the
+            # defect this rule exists to end, reappearing inside the fix for it. It also does
+            # real damage: the next pass to submit a gauge at 75 is refused while the material
+            # accepts it, and the two halves drift apart again.
+            #
+            # The WINNER is not restamped. It reached this key through its own readings and
+            # those are the honest provenance; only the hand that took the pair's answer
+            # records that it took the pair's answer.
             loser[source_precedence._source_key(field)] = "mirror_of_measured"
             loser.pop(f"{field}_confidence", None)
         loser.setdefault("review_flags", []).append(

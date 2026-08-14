@@ -186,6 +186,94 @@ def test_both_halves_of_a_disagreeing_key_move_together():
     assert _key(base) == _key(hand) == ("PETG", 2.0), "half the key moved and half stayed"
 
 
+# ── the identity exit criterion, in code ─────────────────────────────────────────────
+#
+# Three clauses, and the pair ending on one key is only the first. A pair can agree on
+# (material, gauge) and still be bought twice if the two records reach the catalogue by
+# different keys; and a hand can carry the settled value while its record still says the
+# model owns it, which is a lie about where the money came from and re-opens the argument
+# the next time anything submits at rank 75.
+
+def test_the_two_hands_reach_the_catalogue_by_the_same_key():
+    """THE RATE KEY, NOT JUST THE FIELDS. The lookup is keyed on
+    (_sheet_catalogue_token(material), round(gauge, 1)) — so two hands can hold equal-looking
+    values and still land on different cache entries if either half normalises differently.
+    This is the clause that actually decides whether the pair is bought once."""
+    import estimator
+    base, hand = _pair_as_the_pack_reads()
+    merge.settle_handed_pairs([base, hand])
+    keys = {(estimator._sheet_catalogue_token(p[MAT]), round(float(p[GAUGE]), 1))
+            for p in (base, hand)}
+    assert len(keys) == 1, f"the hands reach the catalogue by different keys: {keys}"
+
+
+def test_the_two_hands_price_at_the_same_sheet_rate(monkeypatch):
+    """The commercial statement of the same thing, and the number Tim reads. GBP 84.10 against
+    GBP 60.21 for one panel made twice is the defect; one rate for both is the fix."""
+    import estimator
+    estimator._SHEET_RATE_CACHE.clear()
+    estimator._SHEET_RATE_CACHE[("PETG", 2.0)] = 9.63
+    monkeypatch.setattr(estimator, "market_indication_for", lambda part, material: None)
+    base, hand = _pair_as_the_pack_reads()
+    merge.settle_handed_pairs([base, hand])
+    rates = set()
+    for p in (base, hand):
+        p.update({"quantity": 1, "blank_length_mm": 1250.0, "blank_width_mm": 525.0,
+                  "material_estimate": {}, "manufacturing_interpretation": {}})
+        rates.add(estimator.estimate_material(p).get("sheet_price_gbp"))
+    estimator._SHEET_RATE_CACHE.clear()
+    assert len(rates) == 1 and rates != {None}, f"the pair split across sheet prices: {rates}"
+
+
+def test_the_model_no_longer_owns_the_key_on_a_hand_that_was_settled():
+    """A hand carrying the settled VALUE while its record still names the model as the source
+    is a lie about where the money came from — and worse, it leaves a rank-90 owner on a datum
+    the pair overruled, so the next pass to submit at rank 75 is refused all over again."""
+    base, hand = _pair_as_the_pack_reads()
+    merge.settle_handed_pairs([base, hand])
+    for field in (MAT, GAUGE):
+        assert sp.source_of(hand, field) != "solidworks_api", (
+            f"{field} still belongs to the model on a hand the pair settled")
+    assert sp.source_of(hand, MAT) == "mirror_of_measured"
+
+
+def test_the_hand_that_won_keeps_its_own_provenance():
+    """Only the hand that TOOK the pair's answer records that it took it. The winner reached
+    this key through its own readings, and restamping it would erase the one record that can
+    say where the key actually came from — leaving a pair whose stock key traces to nothing."""
+    base, hand = _pair_as_the_pack_reads()
+    merge.settle_handed_pairs([base, hand])
+    assert sp.source_of(base, MAT) == "dxf_filename"
+    assert sp.source_of(hand, MAT) == "mirror_of_measured"
+
+
+def test_nothing_is_recorded_as_displaced_where_nothing_was():
+    """Half a key usually already matches: both hands read 2.0mm and disagreed only about the
+    material. The OWNER of that half still has to move — one purchase decision cannot be owned
+    by two sources — but recording it as an overwrite would put a reading on the record that
+    never lost anything, and `where_did_this_fact_come_from` would then show a gauge displaced
+    by the value it already held."""
+    base, hand = _pair_as_the_pack_reads()
+    merge.settle_handed_pairs([base, hand])
+    assert sp.source_of(hand, GAUGE) == "mirror_of_measured", (
+        "the agreed half kept the model as its owner; this test is looking at the wrong state")
+    assert not [e for e in sp.displaced_values(hand, GAUGE)
+                if sp._same_value(e.get("value"), hand[GAUGE])], (
+        "the gauge was logged as displaced by the value it already held")
+    # The material DID lose something, and that must still be on the record — otherwise this
+    # passes by the mechanism never having run.
+    assert [e for e in sp.displaced_values(hand, MAT) if str(e.get("value")) == "ABS"]
+
+
+def test_a_hand_the_pair_left_alone_keeps_its_own_provenance():
+    """The converse, so the clause above cannot be satisfied by stamping every hand. A pair
+    that already agreed was never settled, and its sources must still be its own."""
+    base = _part("07A", "PETG", 2.0)
+    hand = _part("07A-HANDED", "PETG", 2.0)
+    merge.settle_handed_pairs([base, hand])
+    assert sp.source_of(hand, MAT) == "solidworks_api"
+
+
 # ── one notion of identity, and it is wired ──────────────────────────────────────────
 
 def test_pairing_uses_the_same_identity_the_mirror_rule_uses():
