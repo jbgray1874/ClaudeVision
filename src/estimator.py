@@ -4017,6 +4017,15 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # model-supplied quantity as if the estimator had measured it.
     part["quantity"] = quantity   # precedence: direct-write ok — sanitises the part's own value
 
+    # THE LAST POINT AT WHICH EVERY SOURCE HAS SPOKEN, AND THE FIRST AT WHICH THE PAIR IS
+    # SPENT. Material and gauge are resolved as separate fields, so each half can come from a
+    # different reading — and 11650-04 landed on PETG at 2.2mm, which the model never said,
+    # the export never said, and nobody stocks. Settled HERE rather than inside
+    # estimate_material because the gauge drives the laser and the bend as well as the sheet:
+    # settling it only where the money is looked up would leave labour costing a thickness
+    # that material had already stopped believing in.
+    source_precedence.settle_companion_facts(part)
+
     # Commercial placeholders (PACKAGING, DELIVERY) are NOT parts to be estimated — they are
     # always-present reminder lines whose real cost is order-specific and lives in the enquiry,
     # not the drawing. They must pass through UNPRICED (£0, estimator-to-price); running them

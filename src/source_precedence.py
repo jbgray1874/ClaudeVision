@@ -35,7 +35,7 @@ signal that carries knowledge the drawing does not.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
@@ -127,6 +127,25 @@ SOURCE_RANK: Dict[str, int] = {
     "mirror_of_measured": 75,
     "drawing_deterministic": 70,
     "title_block": 70,
+    # WHAT THE DRAWING OFFICE TYPED ON THE EXPORT THAT GOES TO THE LASER.
+    #
+    # "11650-04-01A_2MM PETG_REVG.DXF" is not a guess and never was. It is a deliberate
+    # label, applied by the person who issued the flat, on the file the machine cuts from —
+    # and it was ranked `inference` (20) and applied only into a GAP, which meant that on a
+    # part already carrying a material it was never recorded at all.
+    #
+    # 11650-04 is what that costs. The title block says PETG, an options list says PETG or
+    # PC, SIX exports across five revisions are named 2MM PETG, and the parts catalogue
+    # stocks 37 rows of it. One SolidWorks model property said ABS and won, because the only
+    # other observation the record held was the title block: everything else had been
+    # skipped rather than submitted, so the corroboration rule had one source to count where
+    # the honest answer was two.
+    #
+    # Ranked WITH the drawing text, not above it. A filename is as good as the convention
+    # behind it, which is exactly what a title block is; it must still lose to a measured
+    # DXF or a model on its own. What changes is that it is now an OBSERVATION, and two
+    # independent observations are what the quorum is for.
+    "dxf_filename": 70,
     # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
     # off the drawing, not a guess — but it is one inference away from a measurement: an
     # overall is the finished part, and only a flat one has the same extent as its blank.
@@ -174,6 +193,10 @@ SOURCE_TIEBREAK: Dict[str, int] = {
     # else read off the drawing by rule, including body text, which is looser.
     "title_block": 2,
     "drawing_deterministic": 1,
+    # Below both at the same rank. A filename is a controlled convention like a title block,
+    # but it is a NAME rather than a field on the sheet -- so where the two disagree outright
+    # the printed drawing is the one that was issued.
+    "dxf_filename": 0,
     # The whole-job pass has seen the pack and can hold one sheet against another; the
     # per-part pass has seen one page. Same model, more context.
     "llm_full_extract": 2,
@@ -209,6 +232,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "mirror_of_measured":     "the measured opposite hand",
     "drawing_deterministic":  "the drawing",
     "title_block":            "the title block",
+    "dxf_filename":           "the DXF filename the drawing office typed",
     "pdf_overall_dims":       "the drawing's overall dimensions",
     "bom_tree":               "the bill of materials",
     "override_rule":          "an SDI override rule",
@@ -643,3 +667,133 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
             f"{field}: '{value}' from {source} NOT applied — '{_cur}' from {_cur_src_txt} is "
             f"the stronger source and was kept. The two disagree; confirm which is right")
     return False
+
+
+# ── FACTS THAT ARE BOUGHT TOGETHER ARE DECIDED TOGETHER ──────────────────────────────
+
+# Fields that name ONE THING between them. A material and a gauge are not two independent
+# facts about a part: they are a stock key, the thing that gets ordered, and the catalogue is
+# keyed on the pair. Resolving them separately lets each half come from a different reading —
+# which produces a key that no source ever asserted and no supplier stocks.
+CO_ASSERTED_GROUPS: List[Tuple[str, ...]] = [
+    ("normalized_material", "normalized_thickness_mm"),
+]
+
+
+def asserted_pairs(part: Dict[str, Any], group: Tuple[str, ...]) -> Dict[str, Tuple[Any, ...]]:
+    """What each distinct source said about EVERY field in `group`, as whole readings.
+
+    A source that spoke about only part of the group is recorded with MISSING for the rest —
+    a title block naming a material and no gauge has not asserted a pair, and must not be read
+    as having agreed to whatever gauge happened to be lying around.
+    """
+    said: Dict[str, Dict[str, Any]] = {}
+    for field in group:
+        for entry in displaced_values(part, field):
+            src = str(entry.get("source") or "")
+            if src:
+                said.setdefault(src, {}).setdefault(field, entry.get("value"))
+        for entry in ((part.get("_agreed") or {}).get(field) or []) if isinstance(part, dict) else []:
+            src = str(entry.get("source") or "")
+            if src:
+                said.setdefault(src, {}).setdefault(field, entry.get("value"))
+        _cur, _src = value_of(part, field), source_of(part, field)
+        if _cur is not MISSING and _src:
+            said.setdefault(str(_src), {}).setdefault(field, _cur)
+    return {src: tuple(vals.get(f, MISSING) for f in group) for src, vals in said.items()}
+
+
+def settle_companion_facts(part: Dict[str, Any]) -> List[str]:
+    """When a reading is overruled, the facts it carried alongside lose the standing they
+    borrowed from it.
+
+    11650-04 IS WHAT THIS COSTS, AND IT COST IT TWICE. The panels are read by a SolidWorks
+    model saying ABS 2.2mm, by a title block saying PETG, and by six DXF exports named
+    `11650-04-01A_2MM PETG_REVG.DXF`. Promoting the filename to a real source let two
+    independent readings outvote the model on MATERIAL — correctly — while the gauge stayed at
+    2.2 on the model's authority, because only one source had named 2.0 and a quorum needs two.
+
+    The result was PETG at 2.2mm. Nobody said that. The model said ABS at 2.2, the export said
+    PETG at 2.0, and the engine took one half from each — then looked up a rate keyed on the
+    pair, matched the gauge exactly as it must, found nothing stocked at 2.2, and priced the
+    part at nothing. A defensible decision on each field separately, and a purchase order that
+    cannot be placed.
+
+    THE RULE, AND IT IS NOT ABOUT SHEET. A source that is overruled on one half of a joint fact
+    does not keep its authority over the other half by default: the two came from one reading,
+    and that reading has been set aside. Where the sources that WON also named the companion,
+    theirs is the one that goes with it, because it is the reading that survived intact.
+
+    NOT A LICENCE TO MIX THE OTHER WAY. A source that never spoke about the companion has not
+    lost an argument about it, so a title block naming a material and no gauge leaves the
+    model's gauge exactly where it was. Only a reading that asserted BOTH and was overruled on
+    one gives up the other.
+
+    Returns the fields it moved, for the caller to report. Changes nothing when no
+    corroboration fired, which is almost every part.
+    """
+    if not isinstance(part, dict):
+        return []
+    corr = part.get("_corroboration") or {}
+    if not corr:
+        return []
+    moved: List[str] = []
+    for group in CO_ASSERTED_GROUPS:
+        overruled = [f for f in group if f in corr]
+        if not overruled:
+            continue
+        winners: set = set()
+        losers: set = set()
+        for f in overruled:
+            winners |= {str(s) for s in (corr[f].get("sources") or [])}
+            losers |= {str(s) for s in (corr[f].get("displaced_sources") or [])}
+        winners.discard("")
+        losers.discard("")
+        pairs = asserted_pairs(part, group)
+        for i, field in enumerate(group):
+            if field in overruled:
+                continue
+            held_src = source_of(part, field)
+            # ONLY A READING THAT LOST. A source still holding this field on its own merits,
+            # having never been contradicted on the companion, is untouched.
+            if not held_src or held_src not in losers:
+                continue
+            # Being in `losers` IS having asserted both halves: a source only lands there by
+            # having named the overruled value, and it is here by holding this one. An extra
+            # "did it assert both" check looked prudent and was unreachable — no mutant could
+            # kill it, which is the tell. Removed rather than kept as decoration.
+            candidates = [(src, pairs[src][i]) for src in sorted(winners)
+                          if src in pairs and pairs[src][i] is not MISSING]
+            if not candidates:
+                # NOTHING TO PUT IN ITS PLACE IS NOT A REASON TO PRETEND. The half-rejected
+                # reading stays, and the record says the pair rests on two readings that
+                # disagreed — which is a question for a person, not a number to invent.
+                part.setdefault("review_flags", []).append(
+                    f"{field}: kept '{value_of(part, field)}' from {held_src}, whose reading of "
+                    f"{'/'.join(f for f in overruled)} was outvoted. No source that won named "
+                    f"a {field}, so this half of the pair rests on a reading that was set "
+                    f"aside — confirm it")
+                continue
+            _src, _val = candidates[0]
+            _was, _was_src = value_of(part, field), held_src
+            if _same_value(_was, _val):
+                continue
+            path, leaf = _split(field)
+            node = _walk(part, path, create=True)
+            if node is None:
+                continue
+            _observe(part, field, _was, _was_src, applied=True, displaced_by=_src)
+            node[leaf] = _val
+            node[_source_key(leaf)] = _src
+            node.pop(f"{leaf}_confidence", None)
+            part.setdefault("review_flags", []).append(
+                f"{field}: '{_was}' from {_was_src} replaced by '{_val}' from {_src} — "
+                f"{_was_src} was overruled on {'/'.join(overruled)}, and a material and a "
+                f"gauge are one stock key. Taking one half from each reading produced "
+                f"'{_was}' with a material nobody paired it with, which is not a stock item "
+                f"anyone can buy; confirm the pair")
+            part.setdefault("_companion_settled", {})[field] = {
+                "value": _val, "source": _src, "displaced_value": _was,
+                "displaced_source": _was_src, "because_of": sorted(overruled)}
+            moved.append(field)
+    return moved
