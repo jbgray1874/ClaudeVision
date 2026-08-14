@@ -89,7 +89,20 @@ def _build_lines(doc: Dict[str, Any]) -> List[str]:
     the tool. An estimate written before the pull, read after it, would have been reported
     under a commit containing fixes it never had.
     """
-    stamped = doc.get("engine_build") if isinstance(doc.get("engine_build"), dict) else None
+    # WHEREVER THIS DOCUMENT KEEPS IT, exactly as _parts() already does for the parts.
+    #
+    # file_scan nests the whole estimate under summary["estimate_summary"], so the stamp
+    # estimate_document writes lands at estimate_summary.engine_build and NOT at the root.
+    # This read only looked at the root, so every stamped document in the system reported
+    # "NOT RECORDED. Re-run to get one" — and four rounds of debugging were spent re-running
+    # a job whose answer was already on disk, then concluding the artefact was stale when the
+    # rules had genuinely not fired. A diagnostic that reports an absence it caused is worse
+    # than no diagnostic: it sent us looking for the wrong bug, twice, with confidence.
+    stamped = None
+    for holder in (doc, doc.get("estimate_summary")):
+        if isinstance(holder, dict) and isinstance(holder.get("engine_build"), dict):
+            stamped = holder["engine_build"]
+            break
     here = engine_build.describe()
     lines: List[str] = []
     if stamped:

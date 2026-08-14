@@ -272,3 +272,39 @@ def test_naming_nothing_is_an_error_not_an_empty_report(tmp_path):
     path = _job(tmp_path, [BASE])
     with pytest.raises(SystemExit):
         tool.main(["--json", path])
+
+
+# ── the reader must look where the writer puts it ────────────────────────────────────
+
+def test_the_diagnostic_finds_the_stamp_where_file_scan_actually_nests_it():
+    """FOUR ROUNDS OF DEBUGGING WENT INTO THIS ABSENCE, AND THE ABSENCE WAS THE READER'S.
+
+    `estimate_document` stamps the build onto the document it returns, and file_scan assigns
+    that whole document to summary["estimate_summary"] before writing the JSON. So the stamp
+    lands at estimate_summary.engine_build. The diagnostic read doc["engine_build"] at the
+    root, found nothing, and printed "NOT RECORDED — re-run to get one" against every stamped
+    estimate in the system.
+
+    We re-ran the job. Twice. Then concluded the artefact was stale and stopped investigating
+    rules that had genuinely not fired. A diagnostic that reports an absence it caused itself
+    is worse than no diagnostic — it does not merely fail to help, it sends you after the
+    wrong bug with confidence."""
+    import importlib.util as _u
+    _p = os.path.join(os.path.dirname(__file__), "..", "tools", "diagnose",
+                      "where_did_this_fact_come_from.py")
+    _s = _u.spec_from_file_location("_diag", _p)
+    _m = _u.module_from_spec(_s)
+    _s.loader.exec_module(_m)
+    _stamp = {"known": True, "commit": "abc1234", "branch": "b", "dirty": False}
+
+    nested = _m._build_lines({"estimate_summary": {"engine_build": _stamp}})[0]
+    assert "abc1234" in nested, "the shape file_scan actually writes is not found"
+    assert "NOT RECORDED" not in nested
+
+    # The root shape still works — some writers stamp there, and this must not trade one
+    # blindness for another.
+    assert "root567" in _m._build_lines({"engine_build": dict(_stamp, commit="root567")})[0]
+
+    # And a document with no stamp anywhere is still reported as unstamped, or the guard
+    # above is satisfiable by never saying "NOT RECORDED" at all.
+    assert "NOT RECORDED" in _m._build_lines({})[0]
