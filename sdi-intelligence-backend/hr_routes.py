@@ -94,19 +94,21 @@ import hr_blip_inventry
 
 
 @router.post("/blip/load")
-def blip_load(force: bool = False, dry_run: bool = False,
+def blip_load(force: bool = False, dry_run: bool = False, source: str = "latest",
               x_sdi_key: str | None = Header(default=None)):
-    """Write the latest on-site list to the InVentry watched folder.
+    """Write the current on-site list to the InVentry watched folder.
 
+    source: "latest" (snapshot, keeps emails), "output" (the on-site JSON the
+    portal Files view exposes, emails recovered from the roster), or a path.
     dry_run writes the CSV beside the snapshot instead of into the watched
     folder — use it until InVentry confirm the presence import.
     """
     _check_key(x_sdi_key)
-    return hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run)
+    return hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run, source=source)
 
 
 @router.post("/blip/sync")
-def blip_sync(force: bool = False, dry_run: bool = False,
+def blip_sync(force: bool = False, dry_run: bool = False, source: str = "latest",
               x_sdi_key: str | None = Header(default=None)):
     """Query Blip then load the result into InVentry — the COO's one click."""
     _check_key(x_sdi_key)
@@ -114,5 +116,5 @@ def blip_sync(force: bool = False, dry_run: bool = False,
     if blip_summary.get("status") not in ("ok", "degraded"):
         return {"blip": blip_summary,
                 "load": {"status": "skipped", "reason": "Blip query failed"}}
-    load_summary = hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run)
+    load_summary = hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run, source=source)
     return {"blip": blip_summary, "load": load_summary}

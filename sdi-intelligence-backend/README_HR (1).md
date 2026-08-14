@@ -60,6 +60,24 @@ The CSV is the **full current on-site list**: in the file = on site, absent
 from the file = signed out. No separate employee-ID mapping is needed — InVentry
 matches on the same name + email the roster import already uses.
 
+### Two sources for the same on-site list
+
+| `source=` | File | Notes |
+|---|---|---|
+| `latest` (default) | `…\snapshots\blip_latest.json` | Full snapshot, **includes email** — the best match key for InVentry |
+| `output` | `K:\IT\HRSystemsOutput\blip_onsite_<UTC>.json` | The file the portal **Files view** exposes — the "site signed in" page. Newest wins. |
+| *a path* | any of the above | For a one-off file |
+
+`hr_blip.py` deliberately **strips email** from the portal-exposed file (names
+only, for PII). Loading with `source=output` therefore recovers each email from
+the roster snapshot (`latest.json`) by name. A name appearing twice is left
+blank rather than guessed — a wrong email on a fire roll is worse than a missing
+one — and anyone still without an email is written **name-only** and counted in
+`name_only`, since leaving them off the roll entirely is the more dangerous
+failure.
+
+The portal button uses `latest` because it keeps emails without a name lookup.
+
 ### ⚠ Confirm with InVentry before going live
 
 The button and the endpoints default to **dry run** (`HR_LOAD_DRY_RUN = true` in
@@ -118,8 +136,11 @@ GET  /api/hr/status       # last pull + load + presence-load summary
 
 POST /api/hr/blip         # presence: who is clocked in right now
 GET  /api/hr/blip/latest  # presence: last snapshot, no BrightHR call
-POST /api/hr/blip/load    # presence: on-site list -> InVentry  (?dry_run=true)
-POST /api/hr/blip/sync    # presence: blip + load in one call
+POST /api/hr/blip/load    # presence: on-site list -> InVentry
+                          #   ?dry_run=true   write beside the snapshot, not the watched folder
+                          #   ?source=output  load the JSON the portal Files view exposes
+                          #   ?force=true     override the presence guards
+POST /api/hr/blip/sync    # presence: blip + load in one call (same query params)
 ```
 
 Or scheduled, via Windows Task Scheduler (same code, no button):
