@@ -2965,12 +2965,30 @@ def _finalize_scan_summary(
               f"{type(_bm_err).__name__}: {_bm_err}", flush=True)
 
     try:
-        from drawing_job_merge import apply_mirror_geometry
+        from drawing_job_merge import apply_mirror_geometry, settle_handed_pairs
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
         if _mirrored:
             print("   [mirror] " + "; ".join(
                 f"{m.get('part_number')} inherits the measured flat of {m.get('mirrored_from')}"
                 for m in _mirrored), flush=True)
+        # SETTLING FOLLOWS MIRRORING EVERYWHERE MIRRORING HAPPENS, AND THIS IS THE SITE THE
+        # PORTAL ACTUALLY USES. The pair rules were wired into augment_summary_with_dxf, which
+        # this path does not call for the mirror step — so three commits of pair-scoped
+        # arbitration shipped, passed their guards, and never executed on a real job. The
+        # guard asserted the call existed in drawing_job_merge.py, which was true and useless:
+        # test the caller, not the helper.
+        _settled = settle_handed_pairs(summary["manufacturing_writeup"]["parts"])
+        for _s in _settled or ():
+            if _s.get("outcome") == "pooled_quorum":
+                print(f"   [pair] {_s.get('part_number')}: {_s.get('field')} -> "
+                      f"{_s.get('value')} on {len(_s.get('sources') or [])} pooled source(s) "
+                      f"across the pair", flush=True)
+            elif _s.get("outcome") == "undecided":
+                print(f"   [pair] {_s.get('part_number')} and {_s.get('base')} disagree on the "
+                      f"stock key with equal evidence — left for a person", flush=True)
+            else:
+                print(f"   [pair] {_s.get('part_number')} takes {_s.get('stock_key')} from "
+                      f"{_s.get('base')} — a handed pair is one purchase", flush=True)
     except Exception as _mirror_err:
         print(f"   [mirror] skipped: {type(_mirror_err).__name__}: {_mirror_err}", flush=True)
 

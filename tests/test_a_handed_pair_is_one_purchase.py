@@ -333,6 +333,49 @@ def test_pairing_uses_the_same_identity_the_mirror_rule_uses():
     assert src.count("def handed_pairs(") == 1
 
 
+def test_every_place_that_mirrors_also_settles_the_pair():
+    """THE GUARD THAT WOULD HAVE CAUGHT THREE COMMITS OF DEAD CODE.
+
+    Pair settlement was wired into `augment_summary_with_dxf`, and the portal path calls
+    `apply_mirror_geometry` from file_scan directly and never reaches that function. So
+    pair-scoped arbitration shipped, passed its guards, ran on nobody's job, and four rounds
+    of diagnosis went into asking why a rule that never executed had not changed anything.
+
+    The old guard asserted the call existed in drawing_job_merge.py. It did. It was also
+    useless — TEST THE CALLER, NOT THE HELPER, which is a defect family this codebase has a
+    name for and I walked into anyway.
+
+    So the rule is stated over EVERY call site in the tree: mirroring changes what a hand
+    holds, and settling is what reconciles the pair afterwards. A file that does one without
+    the other has half the mechanism, and half of this mechanism is exactly the failure it
+    exists to prevent."""
+    import glob
+    root = os.path.join(os.path.dirname(__file__), "..")
+    offenders = []
+    for path in glob.glob(os.path.join(root, "src", "*.py")):
+        if os.path.basename(path).startswith("_") or not os.path.isfile(path):
+            continue        # scratch probes are not the pipeline, and one "*.py" is a folder
+        text = open(path, encoding="utf-8", errors="replace").read()
+        # A call, not the definition and not an import line.
+        calls = [ln for ln in text.splitlines()
+                 if "apply_mirror_geometry(" in ln
+                 and not ln.strip().startswith(("def ", "from ", "import "))]
+        if calls and "settle_handed_pairs(" not in text:
+            offenders.append(os.path.basename(path))
+    assert not offenders, (
+        "these files mirror a hand and never settle the pair, so the hand keeps whatever the "
+        "mirror copied onto it and no pooled evidence is ever counted: " + ", ".join(offenders))
+
+
+def test_the_portal_path_settles_the_pair():
+    """Named explicitly, because the generic guard above passes the moment ANY mention of
+    settle_handed_pairs appears in a file — and this is the one path a real job takes."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "file_scan.py"),
+               encoding="utf-8").read()
+    assert "settle_handed_pairs(summary[\"manufacturing_writeup\"][\"parts\"])" in src
+    assert src.index("apply_mirror_geometry(summary") < src.index("settle_handed_pairs(summary")
+
+
 def test_the_merge_actually_settles_the_pairs():
     """BUILT IS NOT WIRED. The rule is worth nothing unless the merge runs it, and after the
     geometry rather than before: mirroring fills what a hand is MISSING, and settling only
