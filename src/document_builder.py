@@ -11,6 +11,10 @@ try:
     from extractor_patterns import infer_operations_from_text as _infer_ops_from_text
 except ImportError:
     _infer_ops_from_text = None
+try:
+    from extractor_patterns import _primary_thickness_mm as _primary_thickness_mm
+except ImportError:
+    _primary_thickness_mm = None
 from feature_synthesis import infer_bend_count as _infer_bend_count_impl
 from feature_synthesis import infer_hole_count as _infer_hole_count_impl
 from feature_synthesis import synthesize_manufacturing_features as _synthesize_manufacturing_features_impl
@@ -279,7 +283,9 @@ def _effective_part_page_role(page_role: Any, title_block_drawing_numbers: List[
 
 
 # Values that appear in M&S/SDI GENERAL TOLERANCES blocks (+/-0.5mm, +/-1.0mm etc.)
-# and must not be treated as actual sheet thicknesses.
+# and must not be treated as actual sheet thicknesses. Kept as a local mirror only so this
+# module still names the band when the extractor import is unavailable — the live decision is
+# _primary_thickness_mm's, so costing and observation cannot drift apart.
 _TOLERANCE_TABLE_VALUES = {0.5, 1.0, 1.5, 2.0}
 
 # Minimum plausible sheet metal thickness — filters sub-0.8mm noise
@@ -287,20 +293,35 @@ _MIN_SHEET_THICKNESS_MM = 0.8
 
 
 def _first_numeric_thickness(values: List[Any]) -> Any:
-    """Return first plausible sheet thickness, skipping tolerance-table bleed."""
+    """The stated sheet gauge, with a general tolerance table filtered out.
+
+    This is the SECOND place a drawing_deterministic gauge is applied (the title block's own
+    reading is the first). It must decide exactly as the title-block picker does, or the two
+    disagree on the same drawing: 8352's tolerance table (0.5/1.0/1.5/2.0 by length band) was
+    read here as a real 1.5mm gauge and stamped on parts the model then had to overrule, every
+    overrule a noise flag. The band is a gauge only when it is NOT the whole band — a lone 2.0
+    survives; the whole band sitting together is a tolerance table and names no gauge.
+
+    Delegates to extractor_patterns._primary_thickness_mm so there is one algorithm and one
+    band. The local branch is only reached if that import failed, and it now returns None (not
+    1.5) for a pure table, matching the shared picker.
+    """
+    if _primary_thickness_mm is not None:
+        return _primary_thickness_mm(values)
+
     floats = []
-    for v in values:
+    for v in values or ():
         try:
-            floats.append(float(v))
+            f = float(v)
         except (TypeError, ValueError):
             continue
-
-    # If every value is a tolerance-table value the list is contaminated —
-    # return the most common sheet thickness (1.5mm) if present, else None.
-    if floats and all(f in _TOLERANCE_TABLE_VALUES for f in floats):
-        return 1.5 if 1.5 in floats else None
-
-    # Otherwise return first value that isn't a sub-0.8mm noise reading
+        if f > 0:
+            floats.append(f)
+    if not floats:
+        return None
+    # Strip the band only when the WHOLE of it is present — a lone band value is a real gauge.
+    if _TOLERANCE_TABLE_VALUES <= {round(f, 1) for f in floats}:
+        floats = [f for f in floats if round(f, 1) not in _TOLERANCE_TABLE_VALUES]
     for f in floats:
         if f >= _MIN_SHEET_THICKNESS_MM:
             return f
