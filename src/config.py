@@ -1269,8 +1269,15 @@ FALLBACK_PRICING_POLICY = {
     #   - a hard wall-clock timeout per part (a slow/blocked call is abandoned -> part flagged),
     #   - a per-job budget (price the first N via fallback; flag the rest 'estimator to confirm'),
     #   - skip rollup/assembly parents (they carry no own price; web-searching them is wasted time).
+    #
+    # THE BUDGET IS A SAFETY CEILING, NOT A ROUTINE GATE. The policy is that every unpriced real
+    # line gets a number — a catalogue rate, else an LLM indication, never a bare zero that reads
+    # as free. At 25 a bought-in-heavy pack (8352's stand: castors, clips, graphic, trays, bungs,
+    # nutserts, hank bushes) spent the budget on the metal and left everyday hardware at zero. The
+    # per-part timeout is what actually bounds the run; the budget only guards a pathological pack,
+    # so it is set high enough that a normal pack prices ALL its lines.
     "web_ai_call_timeout_s": 25,
-    "max_web_ai_lookups_per_job": 25,
+    "max_web_ai_lookups_per_job": 80,
     "skip_rollup_parents": True,
     # SQL query-execution timeout (seconds). The pyodbc CONNECT timeout does not bound a running
     # query, so a slow/locked query on SDILive would hang the whole estimate at 0 CPU. This bounds
