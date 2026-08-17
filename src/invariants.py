@@ -2869,6 +2869,26 @@ def check_two_sources_disagree_about_the_material(summary: Any) -> List[Dict[str
         return [_violation("material_disagreement", UNVERIFIED,
                            "the summary could not be read, so this check verified nothing")]
     import source_precedence
+    from json_normaliser import normalise_material
+
+    def _genuinely_different(a: Any, b: Any) -> bool:
+        """Two materials disagree only if they are not the SAME material spelled differently.
+
+        The winner is stored in the engine's normalised form ('MILD_STEEL') while a drawing
+        reading arrives raw ('MILD STEEL'); _same_value compares case- and space-insensitively
+        but NOT underscore-vs-space, so it called those two a conflict and the check reported
+        'costed as MILD_STEEL ... says MILD_STEEL' on eight parts of the bag stand. Canonicalise
+        both through the same lexicon the pricing uses: MDF vs TIMBER stays a disagreement, a
+        spelling variant of one material does not. Where the lexicon cannot place a value, fall
+        back to the raw comparison rather than silently swallow a real difference.
+        """
+        if source_precedence._same_value(a, b):
+            return False
+        ca, cb = normalise_material(a), normalise_material(b)
+        if ca and cb:
+            return ca != cb
+        return True
+
     parts = _parts(summary)
     if not parts:
         return []
@@ -2879,18 +2899,25 @@ def check_two_sources_disagree_about_the_material(summary: Any) -> List[Dict[str
         won = part.get("normalized_material")
         if not str(won or "").strip():
             continue                 # a part with no material of its own has nothing to dispute
-        # corroboration_against returns only DISSENTING readings (already filtered to values the
-        # part does not now hold, and never empty), so a positive count is a genuine argument.
-        against = source_precedence.corroboration_against(part, "normalized_material")
-        if not against.get("count"):
+        # Distinct sources that named a GENUINELY different material — not a spelling variant of
+        # the one costed. Grouped by what they said, strongest (most sources) reported.
+        against: Dict[str, set] = {}
+        for entry in source_precedence.displaced_values(part, "normalized_material"):
+            val, src = entry.get("value"), str(entry.get("source") or "")
+            if not src or not str(val or "").strip():
+                continue
+            if not _genuinely_different(won, val):
+                continue
+            against.setdefault(str(val), set()).add(src)
+        if not against:
             continue
-        other = against.get("value")
+        other, srcs = max(against.items(), key=lambda kv: (len(kv[1]), kv[0]))
         disputed.append({
             "part_number": part.get("part_number"),
             "costed_as": won,
             "costed_from": part.get("material_source") or "the winning source",
             "other": other,
-            "other_from": ", ".join(against.get("sources") or []) or "an earlier pass",
+            "other_from": ", ".join(sorted(srcs)) or "an earlier pass",
         })
     if not disputed:
         return []

@@ -71,6 +71,29 @@ def test_two_readings_that_agree_are_not_a_disagreement():
     assert _run(part) == []
 
 
+def test_a_spelling_variant_of_one_material_is_not_a_disagreement():
+    """8352 REGRESSION. The winner is stored in the engine's normalised code form 'MILD_STEEL';
+    the drawing reading is the raw 'MILD STEEL'. _same_value does not collapse underscore vs
+    space, so the check said 'costed as MILD_STEEL ... says MILD_STEEL' on six parts of the bag
+    stand. Canonicalised through the pricing lexicon they are one material, and nothing is
+    reported."""
+    # The precondition that made the old check fire: these two are 'different' to _same_value.
+    assert sp._same_value("MILD_STEEL", "MILD STEEL") is False
+    part = {"part_number": "D4B", "normalized_material": "MILD_STEEL",
+            "material_source": "solidworks_api"}
+    sp._observe(part, MAT, "MILD STEEL", "drawing_deterministic", applied=False)
+    assert _run(part) == [], "a spelling variant of one material was reported as a conflict"
+
+
+def test_a_genuinely_different_material_still_reports_through_the_canonicaliser():
+    """The fix must not silence real disagreements: MDF against TIMBER is two materials."""
+    part = {"part_number": "D4C"}
+    sp.apply_field(part, MAT, "MDF", "solidworks_api")
+    sp._observe(part, MAT, "TIMBER", "inference", applied=False)
+    vios = _run(part)
+    assert len(vios) == 1 and "MDF" in vios[0]["message"] and "TIMBER" in vios[0]["message"]
+
+
 # ── what it deliberately leaves to the handed-pair rules ──────────────────────────────
 
 def test_a_handed_settled_part_is_not_reported_twice():
