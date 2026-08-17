@@ -1374,6 +1374,21 @@ def handed_pairs(parts: List[Dict[str, Any]]):
 # was one reading seen twice.
 _DERIVED_SOURCES = {"mirror_of_measured"}
 
+# A READING THAT NAMES THIS SPECIFIC PART, which a mirror must not overwrite.
+#
+# The measured and model sources (dxf 80, solidworks_api 90, estimator_confirmed 100) already
+# beat the mirror on rank, so they need no protection here. The one source ranked BELOW the
+# mirror that is still unambiguously about THIS hand is the export filename: "11650-04-01A_2MM
+# PETG_REVG.DXF" names the exact part it is cut from, so a mirror copying the OTHER hand cannot
+# claim to know better.
+#
+# Assembly-page text (drawing_deterministic / title_block on an assembly-only hand) is
+# DELIBERATELY not here. An assembly page lists many parts, and text scraped near one hand may
+# name the material of another; the existing rule that a mirror overwrites that is correct and
+# is kept. So this protects the hand's own cut file, and nothing that could belong to a
+# neighbour on a shared sheet.
+_A_READING_OF_THIS_SPECIFIC_PART = {"dxf_filename"}
+
 
 def _independent_support(record: Dict[str, Any], field: str, value: Any) -> set:
     return {s for s in source_precedence.support_for(record, field, value)
@@ -1867,9 +1882,42 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # correct than one.
         for _field, _key in (("normalized_thickness_mm", "normalized_thickness_mm"),
                              ("normalized_material", "normalized_material")):
-            if not _is_blank(base.get(_key)):
-                _apply_field(part, _field, base[_key], "mirror_of_measured",
-                             note=f"mirrored from {base.get('part_number')}")
+            if _is_blank(base.get(_key)):
+                continue
+            # A MIRROR FILLS WHAT A HAND IS MISSING. IT MUST NOT OVERRULE WHAT THE HAND READ.
+            #
+            # 11650-04 survived because its base carried a title-block PETG, so the pair-level
+            # quorum had a second independent voice to count. A pack WITHOUT that — a lone model
+            # on the base, and the hand's own export the only other reading — loses the whole
+            # pair to the model, because this line copies the base's material onto the hand at
+            # mirror_of_measured (75), beating the hand's own dxf_filename (70), and then
+            # settle_handed_pairs finds both hands agreeing and has nothing to settle. The
+            # hand's own measured reading is destroyed one function before the rule that would
+            # have defended it ever runs.
+            #
+            # RANK IS THE WRONG QUESTION HERE. What arrives is not an independent observation
+            # of THIS hand; it is the other hand's reading wearing a different source name. It
+            # carries no new information about this record, and it must not displace a reading
+            # this record made of itself. So it still fills a gap, and it still replaces a mere
+            # inference (a guess is not a reading) — but it stops at anything the hand actually
+            # read. Where the two disagree, the disagreement survives to the pair-level quorum,
+            # which is the one place with both hands' evidence on the table to settle it.
+            _held_src = source_precedence.source_of(part, _field)
+            _hand_read_it = _held_src in _A_READING_OF_THIS_SPECIFIC_PART
+            if _hand_read_it and not source_precedence._same_value(part.get(_field),
+                                                                   base[_key]):
+                source_precedence._observe(part, _field, base[_key], "mirror_of_measured",
+                                           applied=False)
+                part.setdefault("review_flags", []).append(
+                    f"{_field}: {base.get('part_number')} reads '{base[_key]}' and this hand "
+                    f"reads '{part.get(_field)}' from {_held_src}, which the hand read of "
+                    f"itself. A mirror copies the other hand rather than observing this one, "
+                    f"so it has not been applied over the hand's own reading — the pair is "
+                    f"settled on the evidence for the article, not by which hand was read "
+                    f"second")
+                continue
+            _apply_field(part, _field, base[_key], "mirror_of_measured",
+                         note=f"mirrored from {base.get('part_number')}")
 
         if not _got:
             continue            # blank AND rollup already complete — genuinely nothing to do
