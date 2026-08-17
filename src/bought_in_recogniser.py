@@ -54,6 +54,31 @@ _HEADWORDS_AMBIGUOUS = set("""
 plate channel rail bar panel frame foot bracket cover profile
 """.split())
 _HEADWORDS = _HEADWORDS_SAFE | _HEADWORDS_AMBIGUOUS
+
+# A historical match at or above this Jaccard score is "confident"; below it, "indicative".
+# One constant so the label an estimator reads and the price-or-query decision cannot drift.
+_CONFIDENT_MATCH_SCORE = 0.8
+
+
+def _should_withhold_ambiguous_price(ambiguous: bool, match_score) -> bool:
+    """Whether an ambiguous fabrication head-word must be queried instead of priced.
+
+    foot / plate / bracket / panel / frame / channel / rail / bar / cover / profile are the
+    words for things SDI MAKES. When such a phrase is priced from a WEAK (indicative) historical
+    match, it is far more likely a fabricated part under another name than a real purchase — and
+    the token double-count guard cannot always see the collision, because the fabricated part is
+    named differently: 8352-01-08 is 'M10 HANK BUSH' on the BOM and 'Foot Plate' in the notes,
+    sharing no token, so a £14 bought-in was invented on top of a plate already in Sheet Steel.
+
+    So an ambiguous head-word is PRICED only on a CONFIDENT match; a weak one is surfaced as a
+    query (no money), never invented into the total. A missing/garbled score is treated as weak.
+    SAFE head-words (screw/bolt/castor/…) are unaffected — they name things SDI buys."""
+    if not ambiguous:
+        return False
+    try:
+        return float(match_score or 0) < _CONFIDENT_MATCH_SCORE
+    except (TypeError, ValueError):
+        return True
 # ---------------------------------------------------------------------------
 # CURATED ELECTRICAL VOCABULARY (deterministic, always-scanned).
 # The lighting electricals (loom / junction box / mains cable / earth strap / LED link /
@@ -649,6 +674,15 @@ def recognise_bought_in_in_prose(
                 match = None  # implausible for a loose consumable - do not apply
                 flags.append("A possible historical price match was rejected as implausibly "
                              "high for a loose consumable - estimator to price")
+            # An ambiguous fabrication word on a WEAK match is probably a made-in part under
+            # another name (the FOOTPLATE class). Query it, don't invent a priced bought-in on
+            # top of a part already costed in Sheet Steel/Other Sheet.
+            if match and _should_withhold_ambiguous_price(ambiguous, match.get("match_score")):
+                match = None
+                flags.append("QUERY: an ambiguous fabrication word (plate/bracket/foot/...) "
+                             "matched SDI history only weakly - likely a fabricated part under "
+                             "another name, so NOT priced (would double-count a made-in part); "
+                             "estimator to confirm bought-in vs made-in and price if bought")
             if match:
                 stub["unit_cost_gbp"] = match["price"]
                 stub["unit_material_cost_gbp"] = match["price"]
@@ -658,7 +692,7 @@ def recognise_bought_in_in_prose(
                 stub["_matched_historical_desc"] = match["matched_desc"]
                 stub["_matched_code"] = match["code"]
                 stub["_match_score"] = match["match_score"]
-                conf = "confident" if match["match_score"] >= 0.8 else "indicative"
+                conf = "confident" if match["match_score"] >= _CONFIDENT_MATCH_SCORE else "indicative"
                 flags.append(
                     f"Priced from SDI history ({conf}, score {match['match_score']}): "
                     f"\u00a3{match['price']:.2f} \u2190 \u201c{match['matched_desc']}\u201d"
