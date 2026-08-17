@@ -146,7 +146,7 @@ $searchRoots = @(
     @(
         (Join-Path $root 'input\drawings')
         $env:SDI_JOBS_ROOT
-        (Get-Location).Path
+        (Get-Location).ProviderPath   # .Path would be provider-qualified when the cwd is a UNC
     ) | Where-Object { $_ -and (Test-Path $_) }
 )
 
@@ -347,7 +347,12 @@ if ($env:SDI_JOBS_ROOT -and (Test-Path $env:SDI_JOBS_ROOT)) {
 }
 
 function Resolve-Job([string] $wanted) {
-    if (Test-Path $wanted) { return (Resolve-Path $wanted).Path }
+    # .ProviderPath, NOT .Path. On a UNC pack Resolve-Path's .Path is the provider-qualified
+    # form "Microsoft.PowerShell.Core\FileSystem::\\sdi-dc01\share\...", which Python's Path()
+    # cannot read -- so --job reported "no such folder" on a pack that was right there. A run on
+    # a mapped drive letter happened to work because its .Path has no prefix, which is why this
+    # only bit the UNC share. .ProviderPath is the bare filesystem path the engine can open.
+    if (Test-Path $wanted) { return (Resolve-Path $wanted).ProviderPath }
 
     # A bare number, or a partial code. Prefer an exact folder name, then a prefix match,
     # so '12392' finds '12392-02' but '12392-02' is never answered with '12392-04'.
@@ -358,7 +363,7 @@ function Resolve-Job([string] $wanted) {
         foreach ($r in $searchRoots) {
             $rn = Split-Path $r -Leaf
             $isHit = if ($mode -eq 'exact') { $rn -ieq $leaf } else { $rn -ilike "$leaf*" }
-            if ($isHit) { return (Resolve-Path $r).Path }
+            if ($isHit) { return (Resolve-Path $r).ProviderPath }
         }
         foreach ($r in $searchRoots) {
             $hits = @(Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue |
