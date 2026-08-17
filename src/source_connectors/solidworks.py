@@ -797,9 +797,45 @@ def native_files_state(folder: str | Path) -> Dict[str, Any]:
     return out
 
 
+# The oldest extract schema this engine will trust WITHOUT re-reading the models. Bump it in
+# step with sw_native_analyse.EXTRACT_SCHEMA_VERSION whenever the extract gains a field the
+# estimate needs. An extract stamped below this is regenerated even when the models have not
+# changed — so an analyser CODE fix reaches an OLD job (2019 models, last year's extract)
+# automatically, instead of being frozen out by a freshness check that only compares file dates.
+_MIN_EXTRACT_SCHEMA_VERSION = 3
+
+
+def _extract_schema_version(extract_path: Path) -> int:
+    """The schema version stamped in an extract, or 0 when it predates versioning / is unreadable.
+    Reads the raw JSON (the version is stamped both at the top and in the manifest) and never
+    raises — an unreadable version reads as 0, which forces a re-run, the safe direction."""
+    try:
+        data = json.loads(Path(extract_path).read_text(encoding="utf-8"))
+    except Exception:                                            # noqa: BLE001
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    man = data.get("_manifest") if isinstance(data.get("_manifest"), dict) else {}
+    for src in (data, man):
+        v = src.get("schema_version")
+        try:
+            if v is not None:
+                return int(v)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
 def _should_run(extract_path: Path, folder: str | Path) -> bool:
-    """Run the analyser when there is no extract, or the one we have predates the models."""
+    """Run the analyser when there is no extract, the one we have predates the MODELS, or it
+    predates the analyser CODE (its schema version is behind what the estimate now needs)."""
     if not extract_path.exists():
+        return True
+    # THE FIX FOR OLD JOBS. A 2019 model is older than any extract taken since, so a date-only
+    # check would reuse last year's extract for ever and never pick up a new field (the weldment
+    # tube, material provenance). Re-run when the extract's schema is behind the code — the data
+    # we can now read out of the same unchanged models has moved on.
+    if _extract_schema_version(extract_path) < _MIN_EXTRACT_SCHEMA_VERSION:
         return True
     try:
         return native_files_state(folder)["newest_mtime"] > extract_path.stat().st_mtime

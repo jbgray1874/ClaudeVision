@@ -74,6 +74,14 @@ OPEN_OPTS = 1 | 2
 SW_TYPELIB_GUID = "{83A33D31-27C5-11CE-BFD4-00400513BB57}"
 SW_TYPELIB_MAJOR = 34
 
+# The version of the DATA this analyser writes into the extract. Bump it whenever the extract
+# gains a field the estimate depends on (v3 added material provenance + the weldment tube
+# section). The consumer re-runs the analyser when an extract's stamped version is behind this,
+# so a CODE improvement reaches an OLD job automatically — the models never changed, but what we
+# read out of them did, and a freshness check that only looks at file dates would reuse a stale
+# extract for ever. Kept in step with source_connectors.solidworks._MIN_EXTRACT_SCHEMA_VERSION.
+EXTRACT_SCHEMA_VERSION = 3
+
 # Opt-in (--flatten): flatten formed parts in memory to MEASURE the developed blank when
 # the cut-list property route yields nothing usable. Off by default because it rebuilds
 # every affected model. Read-only either way — the bend state is restored and the document
@@ -2096,8 +2104,10 @@ def main():
     _ok = [r for r in all_results
            if isinstance(r, dict) and not r.get("errors") and r.get("title")]
     payload = {
-        "schema": "sw_native_extract.v2",
+        "schema": f"sw_native_extract.v{EXTRACT_SCHEMA_VERSION}",
+        "schema_version": EXTRACT_SCHEMA_VERSION,
         "_manifest": {
+            "schema_version": EXTRACT_SCHEMA_VERSION,
             "native_files_fingerprint": _fp_after,
             "fingerprint_before": _fp_before,
             # True when the files moved under us mid-run. The consumer must not treat this
@@ -2108,7 +2118,7 @@ def main():
             # read as stale immediately.
             "generated_from": _fingerprint_scope(target),
             "solidworks_version": _sw_version,
-            "extractor_schema": "sw_native_extract.v2",
+            "extractor_schema": f"sw_native_extract.v{EXTRACT_SCHEMA_VERSION}",
             # READ OUT OF SOMEBODY'S OPEN SESSION. A borrowed document is read in the state
             # the designer has it in, which may include unsaved changes — so the extract can
             # describe a model that is not what is on disk, and the fingerprint cannot see
