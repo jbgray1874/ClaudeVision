@@ -2687,9 +2687,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # 5. priced bought-in
         elif "bought_in" in roles:
             bom_parts.append(pe)
-        # 6. board / other sheet
+        # 6. board / other sheet — but ONLY when it can be costed AS a sheet.
         elif _is_board(mat):
-            board_parts.append(pe)
+            import costed_facts as _cf_board
+            _bd6 = _cf_board.blank_dimensions(pe)
+            if _safe(_bd6.get("length_mm")) and _safe(_bd6.get("width_mm")):
+                board_parts.append(pe)
+            else:
+                # A board/plastic line with NO sheet dimensions cannot be nested or costed as a
+                # sheet — the Other Sheet block reads L×W and shows £0. A bought-in moulding read
+                # as a plastic (an ABS castor body) belongs on the BOM as a per-each line, where
+                # the catalogue / market / last-resort price applies. A genuine board PANEL that
+                # is merely missing its size lands here too and is flagged to add dimensions;
+                # either way it no longer reads as free. Keyed on the missing geometry, not a name.
+                _flag(f"{pn}: board/plastic material with no sheet dimensions — routed to the BOM "
+                      f"as a per-each line (catalogue/market price) instead of a £0 Other-Sheet "
+                      f"row. If this is a board panel, add its L×W and it will cost as a sheet.",
+                      flags)
+                bom_parts.append(pe)
         # 7. sheet metal with geometry but no stock_form set
         elif _is_sheet_metal(mat) and blank_l is not None:
             steel_parts.append(pe)
