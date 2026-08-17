@@ -123,6 +123,30 @@ def _sig_token_set(s: str) -> Set[str]:
     return set(_tokens(s))
 
 
+def _phrase_already_in_bom(desc: str, identity_texts) -> bool:
+    """True when a recognised phrase already identifies a part the BOM carries.
+
+    A BOUGHT-IN'S IDENTITY LIVES IN ITS PART NUMBER AS OFTEN AS ITS DESCRIPTION. 8352's castor
+    is in the BOM as part number 'TENTE LINEA CASTOR 5925UAP050L51_10' with the description just
+    'Black'. The recogniser reads 'Tente Linea Castor' from the drawing prose and mints
+    BI-TENTELINEACASTOR — a TWIN of a part already on the sheet — because the old dedup only
+    overlapped DESCRIPTIONS (here 'Black', no overlap) and matched part numbers EXACTLY
+    (BI-TENTELINEACASTOR is not the castor's number). The phrase's tokens {tente, linea, castor}
+    match the castor's PART NUMBER, and nothing looked there.
+
+    So the phrase is checked against the whole identity of each existing part — its description
+    AND its part number — by the same significant-token overlap the description dedup already
+    used. A numeric code like '8352-01-08' tokenises to nothing descriptive, so it never
+    false-matches a worded phrase; the guard only fires when the identity genuinely names the
+    same thing.
+    """
+    dts = _sig_token_set(desc)
+    if not dts:
+        return False
+    need = max(2, int(0.6 * len(dts)))
+    return any(len(dts & _sig_token_set(x)) >= need for x in identity_texts if x)
+
+
 # ---------------------------------------------------------------------------
 # SCOPE OF SUPPLY: what the drawing DEPICTS is not what SDI SUPPLIES.
 #
@@ -559,10 +583,11 @@ def recognise_bought_in_in_prose(
         key = _norm(desc)
         if not key or key in emitted:
             continue
-        # Dedup against layer-1 bought-in descriptions already found.
-        dts = _sig_token_set(desc)
-        if any(len(dts & _sig_token_set(x)) >= max(2, int(0.6 * len(dts)))
-               for x in existing_descriptions if x):
+        # Dedup against what the BOM already carries — by DESCRIPTION and by PART NUMBER, since a
+        # bought-in's identity often lives in its code ('TENTE LINEA CASTOR 5925UAP050L51_10')
+        # while its description is just 'Black'. Overlapping only descriptions minted a BI- twin
+        # of every such part, which then had no owner in the hierarchy.
+        if _phrase_already_in_bom(desc, list(existing_descriptions) + list(existing_pns)):
             continue
         # MINTED HERE, AND SAID SO. The prefix used to be written inline, which made it a
         # spelling rather than a fact: nothing downstream could ask whether a part number had
