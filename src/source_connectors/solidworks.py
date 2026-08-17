@@ -42,8 +42,21 @@ except Exception:                                                  # pragma: no 
     _bc = None                                                     # type: ignore[assignment]
 
 SOURCE_NAME = "solidworks_api"
+# A material the model carries only as a library appearance/simulation default — not a spec
+# the designer typed. Ranked below the drawing's own callout in source_precedence, so a lone
+# SW library material cannot overrule the drawing (MDF stays MDF against a birch-ply visual).
+APPLIED_MATERIAL_SOURCE = "solidworks_applied_material"
 RELIABILITY = 1.0
 EXTRACT_FILENAME = "_sw_native_extract.json"
+
+
+def _material_source_token(nat: "NativePart") -> str:
+    """Which waterfall source a native part's MATERIAL is submitted under. A material the
+    model carries only as a library appearance ('applied_library') enters below the drawing
+    callout; an explicit custom property — or an older extract that never recorded which it
+    was — enters at full model rank, exactly as before."""
+    return APPLIED_MATERIAL_SOURCE if str(getattr(nat, "material_source", "") or "") \
+        == "applied_library" else SOURCE_NAME
 
 # Stamped on a part whose blank came from the SolidWorks sheet-metal cut list. This is a
 # MEASURED flat pattern — the same class of truth as a DXF flat, from the model that
@@ -99,6 +112,11 @@ def _plausible_thk(v: Optional[float]) -> bool:
 class NativePart:
     part_number: str
     material: str = ""
+    # "custom_property" (a spec the designer typed — strongest model source) or
+    # "applied_library" (the model's appearance default — must not overrule a drawing callout).
+    # Empty on extracts taken before the analyser recorded it, which fall back to the old
+    # behaviour (the material is trusted at full model rank), so nothing regresses.
+    material_source: str = ""
     is_sheet_metal: bool = False
     bend_count: int = 0
     hole_count_est: int = 0
@@ -402,6 +420,7 @@ def normalize_native_extract(records: List[Dict[str, Any]],
         job.part_signals[pn] = NativePart(
             part_number=pn,
             material=str(rs.get("material") or ""),
+            material_source=str(rs.get("material_source") or ""),
             is_sheet_metal=bool(rs.get("is_sheet_metal")),
             bend_count=int(rs.get("bend_count") or 0),
             hole_count_est=int(rs.get("hole_count_est") or 0),
@@ -1570,8 +1589,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         if nat.material:
             new_mat = _norm_sw_material(nat.material)
             cur_mat = str(part.get("normalized_material") or "").strip().upper()
+            # The source the material enters under depends on WHERE the model got it. A typed
+            # custom property is the spec (full model rank); a library-applied appearance is a
+            # default that must lose to the drawing's own callout. An older extract that never
+            # recorded which it was enters at full rank, exactly as before.
+            _mat_src = _material_source_token(nat)
+            _applied_only = _mat_src == APPLIED_MATERIAL_SOURCE
             if new_mat and not cur_mat:
-                if _apply_field(part, "normalized_material", new_mat, SOURCE_NAME):
+                if _apply_field(part, "normalized_material", new_mat, _mat_src):
                     flags.append(f"material '{new_mat}' from the SolidWorks model "
                                  f"(applied material: {nat.material})")
                     out["material"] += 1
@@ -1579,38 +1604,46 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 # Same answer from a stronger source. Nothing changes on screen; what changes
                 # is that the value now rests on the model rather than on the drawing text,
                 # and a later pass can no longer quietly replace it.
-                _apply_field(part, "normalized_material", new_mat, SOURCE_NAME)
+                _apply_field(part, "normalized_material", new_mat, _mat_src)
             elif new_mat and cur_mat and new_mat != cur_mat:
                 _cross_family = (
                     (new_mat in _NON_METAL_FAMILIES and cur_mat in _METAL_FAMILIES)
                     or (new_mat in _METAL_FAMILIES and cur_mat in _NON_METAL_FAMILIES)
                 )
-                if _cross_family:
+                if _cross_family and not _applied_only:
                     # A wood/board part is definitively not steel (and vice versa). The
                     # model is authoritative on what the designer specified — override
-                    # the engine's family default and say so.
+                    # the engine's family default and say so. Only when the model carries a
+                    # SPEC, though: a bare library appearance is not evidence of family, so an
+                    # applied-only material falls through to the ranked submit below and loses
+                    # to the drawing's own word.
                     # Gated on the RESULT. A rank-100 estimator correction can legitimately
                     # survive this, and claiming "overridden" when it did not is a review
                     # flag that describes something the engine did not do.
-                    if _apply_field(part, "normalized_material", new_mat, SOURCE_NAME):
+                    if _apply_field(part, "normalized_material", new_mat, _mat_src):
                         flags.append(f"material '{cur_mat}' overridden to '{new_mat}' from the "
                                      f"SolidWorks model ('{nat.material}') — wrong material FAMILY")
                         out["material"] += 1
                 else:
-                    # SAME FAMILY, DIFFERENT GRADE — still submitted. This branch used to
-                    # decide the outcome itself and never call the resolver at all, on the
+                    # SAME FAMILY, DIFFERENT GRADE (or an applied-only material of any family) —
+                    # still submitted, at whichever rank its provenance earns. This branch used
+                    # to decide the outcome itself and never call the resolver at all, on the
                     # reasoning that the printed title block is what the shop buys to. That
                     # reasoning is a rank judgement, and rank is not this function's to make:
                     # it kept the drawing value even against an estimator's own correction,
                     # and it left the datum carrying the weaker source so a later pass could
                     # still move it. Submit; let apply_field decide and record the conflict.
-                    if _apply_field(part, "normalized_material", new_mat, SOURCE_NAME):
+                    if _apply_field(part, "normalized_material", new_mat, _mat_src):
+                        _how = ("appearance default, not a spec" if _applied_only
+                                else "same family, different grade")
                         flags.append(f"material '{cur_mat}' -> '{new_mat}' from the SolidWorks "
-                                     f"model ('{nat.material}') — same family, different grade")
+                                     f"model ('{nat.material}') — {_how}")
                         out["material"] += 1
                     else:
+                        _why = ("SolidWorks material is a library appearance, not a spec"
+                                if _applied_only else "kept the drawing value")
                         flags.append(f"material check: drawing '{cur_mat}' vs SolidWorks "
-                                     f"'{new_mat}' ('{nat.material}') — kept the drawing value")
+                                     f"'{new_mat}' ('{nat.material}') — {_why}")
                         out["material_conflict"] += 1
 
         # ── GEOMETRY: the sheet-metal cut list ───────────────────────────────────
@@ -1965,7 +1998,10 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
         # exact string the other one rejects.
         _nat_mat = _norm_sw_material(nat.material) if nat else ""
         if _nat_mat and not str(p.get("normalized_material") or "").strip():
-            if _apply_field(p, "normalized_material", _nat_mat, SOURCE_NAME):
+            # Same provenance split as the pre-estimate path: an applied-library appearance
+            # enters below the drawing callout, a typed spec at full model rank. This path only
+            # fills a gap, but the source it records is what a later pass weighs it by.
+            if _apply_field(p, "normalized_material", _nat_mat, _material_source_token(nat)):
                 p.setdefault("review_flags", []).append(
                     f"Material '{_nat_mat}' from SolidWorks model")
                 out["material_set"] += 1

@@ -146,6 +146,21 @@ SOURCE_RANK: Dict[str, int] = {
     # DXF or a model on its own. What changes is that it is now an OBSERVATION, and two
     # independent observations are what the quorum is for.
     "dxf_filename": 70,
+    # A MATERIAL THE MODEL CARRIES BY APPEARANCE, NOT BY SPEC.
+    #
+    # SolidWorks reports two kinds of material through the same API field: an EXPLICIT custom
+    # property the designer typed (the spec the part is bought to — that stays solidworks_api,
+    # rank 90) and the library-APPLIED material, which is the appearance/simulation template
+    # the model happens to carry. The applied material is frequently just a default the
+    # designer never revisited — "Plain Carbon Steel" on a part the drawing calls MDF, a
+    # birch-faced ply visual on a panel the title block calls MDF — so it must NOT overrule an
+    # explicit drawing callout. Ranked one step below the drawing text (drawing_deterministic /
+    # title_block / dxf_filename, all 70) so a lone SW library material loses to the drawing's
+    # word, yet above the PDF's inferred overall (65) and everything reasoned — because it is
+    # still a reading off the model, and when the drawing says nothing it is the best material
+    # evidence in the pack. The analyser tags which kind it is; an extract that predates the
+    # tag carries no applied-material observation and so behaves exactly as before.
+    "solidworks_applied_material": 68,
     # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
     # off the drawing, not a guess — but it is one inference away from a measurement: an
     # overall is the finished part, and only a flat one has the same extent as its blank.
@@ -227,6 +242,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "knowledge_base":         "SDI's knowledge base",
     "solidworks_api":         "the SolidWorks model",
     "solidworks_flat_pattern": "the SolidWorks flat pattern",
+    "solidworks_applied_material": "the SolidWorks library material (appearance, not a spec)",
     "dxf":                    "the DXF",
     "dxf_flat_pattern":       "the DXF flat pattern",
     "mirror_of_measured":     "the measured opposite hand",
@@ -250,6 +266,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
 # model can be held against the model, and a number off a language model cannot.
 MEASURED_SOURCES = frozenset({
     "estimator_confirmed", "knowledge_base", "solidworks_api", "solidworks_flat_pattern",
+    "solidworks_applied_material",
     "dxf", "dxf_flat_pattern", "mirror_of_measured", "drawing_deterministic",
     "title_block", "pdf_overall_dims", "bom_tree",
 })

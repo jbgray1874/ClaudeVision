@@ -204,6 +204,11 @@ class RouteSignals:
     surface_treatment: str = ""
     sheet_gauge: str = ""
     material: str = ""
+    # Where `material` came from: "custom_property" (the designer typed a spec) or
+    # "applied_library" (the model's appearance/simulation template, often a default). The
+    # waterfall ranks an applied-library material below the drawing's own callout, so an
+    # explicit MDF on the drawing is not overruled by a birch-ply appearance on the model.
+    material_source: str = ""
     thickness_mm: Optional[float] = None
     mass_kg: Optional[float] = None
     bbox_mm: Optional[Tuple[float, float, float]] = None
@@ -469,6 +474,34 @@ def _prop(props: Dict[str, str], *aliases: str) -> str:
             if al in k and v:
                 return _safe_str(v)
     return ""
+
+
+# The material aliases a designer may type into a custom property, in priority order.
+_MATERIAL_PROP_ALIASES = ("Material", "Material Description", "Material Spec", "Spec", "Grade")
+
+
+def _material_and_source(props: Dict[str, str], applied: str) -> Tuple[str, str]:
+    """The part's material AND where it came from — the split the waterfall needs.
+
+    SolidWorks hands the same material back two ways, and they are not equal evidence. An
+    EXPLICIT custom property is the spec the designer typed; it is what the part is bought to,
+    so it stays the strongest model source. The library-APPLIED material is the appearance /
+    simulation template the model happens to carry — frequently a default nobody revisited
+    ("Plain Carbon Steel" on a part the drawing calls MDF, a birch-ply visual on an MDF panel)
+    — so it must not overrule the drawing's own callout.
+
+    Returns (material, "custom_property") when a custom property names it, (material,
+    "applied_library") when only the applied material does, and ("", "") when the model names
+    no material at all. Pure — props is a plain dict and applied a plain string — so this
+    decision is verified in tests without a SolidWorks seat, even though the COM calls that
+    fill props/applied upstream cannot be."""
+    custom = _prop(props, *_MATERIAL_PROP_ALIASES)
+    if custom:
+        return custom, "custom_property"
+    applied = _safe_str(applied)
+    if applied:
+        return applied, "applied_library"
+    return "", ""
 
 
 def _table_text(table, row: int, col: int) -> str:
@@ -1066,8 +1099,9 @@ def sheet_metal_signals(doc) -> RouteSignals:
     if not _applied:
         _mid = _safe_str(_get0(doc, "MaterialIdName"))
         _applied = _mid.split("|")[-1].strip() if "|" in _mid else _mid
-    sig.material = _prop(props, "Material", "Material Description", "Material Spec",
-                         "Spec", "Grade") or _applied
+    # Split the material from its provenance: a typed custom property is the spec (strongest),
+    # the library-applied material is the appearance default (must not overrule the drawing).
+    sig.material, sig.material_source = _material_and_source(props, _applied)
     _thk = _prop(props, "Thickness", "Sheet Thickness", "Gauge", "Material Thickness")
     if _thk:
         try:
