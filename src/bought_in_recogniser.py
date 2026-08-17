@@ -193,6 +193,36 @@ def _sig_token_set(s: str) -> Set[str]:
     return set(_tokens(s))
 
 
+def _collides_with_a_made_part(phrase: str, ambiguous: bool, fab_token_sets) -> bool:
+    """Whether a recognised prose item is really a fabricated part under another name.
+
+    Two ways to collide with a made part:
+      * a strong WHOLE-PHRASE overlap (>= 2 shared significant tokens, or 60% of the phrase) —
+        a genuine second copy of the same description, tested for ANY item; or
+      * for an AMBIGUOUS fabrication-word item (foot / plate / bracket / panel / frame / ...), a
+        SINGLE shared fabrication word — because the job demonstrably MAKES that kind of part and
+        a dual-named part shares only that one word: 'Foot Plate' and the fabricated 'SCREW
+        PLATE' share 'plate' and nothing else. That single-word collision is exactly what the
+        >= 2-token test cannot see, and it is why BI-FOOTPLATE was invented at ~£14 on top of a
+        plate already costed in Sheet Steel.
+
+    Keyed on the fabrication word, not on any part number or filename, so every prose-heavy GA
+    inherits it. SAFE-headed items (screw / castor / …) never reach the single-word branch, so a
+    genuine bought fastener that merely mentions a fabrication word is not suppressed."""
+    pts = _sig_token_set(phrase)
+    if not pts:
+        return False
+    fab_words = pts & _HEADWORDS_AMBIGUOUS
+    for fts in fab_token_sets:
+        if not fts:
+            continue
+        if len(pts & fts) >= max(2, int(0.6 * len(pts))):
+            return True
+        if ambiguous and (fab_words & fts):
+            return True
+    return False
+
+
 def _phrase_already_in_bom(desc: str, identity_texts) -> bool:
     """True when a recognised phrase already identifies a part the BOM carries.
 
@@ -602,17 +632,11 @@ def recognise_bought_in_in_prose(
     up = re.sub(r"\s+", " ", up)
     # Pre-compute fabricated-part token sets once (for the double-count guard).
     fab_token_sets = [_sig_token_set(f) for f in fabricated_descriptions if f]
-    def _is_already_fabricated(phrase: str) -> bool:
-        pts = _sig_token_set(phrase)
-        if not pts:
-            return False
-        for fts in fab_token_sets:
-            if not fts:
-                continue
-            shared = pts & fts
-            if len(shared) >= max(2, int(0.6 * len(pts))):
-                return True
-        return False
+    def _is_already_fabricated(phrase: str, ambiguous: bool = False) -> bool:
+        # Delegates to the shared, tested collision rule. Whole-phrase overlap catches a genuine
+        # second copy of any item; an ambiguous fabrication word catches a made part under
+        # another name (the FOOTPLATE class) on a single shared word.
+        return _collides_with_a_made_part(phrase, ambiguous, fab_token_sets)
     # Curated electrical phrases are ALWAYS scanned (not subject to frequency mining), then
     # the mined vocab. Electrical head-words are registered as SAFE (see _HEADWORDS_SAFE). A
     # phrase only produces an item if it actually appears in THIS drawing's prose.
@@ -670,7 +694,7 @@ def recognise_bought_in_in_prose(
         # DOUBLE-COUNT GUARD: if this phrase matches something already counted as a
         # fabricated (DXF/grid) part, do NOT add a priced line. For ambiguous head-words
         # this is the common case (e.g. "base plate"); surface as a flagged query instead.
-        already_fab = _is_already_fabricated(desc)
+        already_fab = _is_already_fabricated(desc, ambiguous)
         stub = stub_builder(code_guess, desc, 1)
         stub["source"] = "prose_recogniser_layer2"
         stub["_layer2_recognised"] = True
