@@ -132,6 +132,9 @@ class NativePart:
     cut_length_mm: Optional[float] = None
     cut_out_count: Optional[int] = None
     blank_area_mm2: Optional[float] = None
+    # Tube/hollow-section profile read from the weldment cut list — the frame members a
+    # sheet-metal read never sees. {a, b, t, profile_form, length_mm} or None.
+    section_profile: Optional[Dict[str, Any]] = None
     surface_treatment: str = ""
     mass_kg: Optional[float] = None
     # Formed solid whose bends are baked into a Base Flange sketch (no countable bend
@@ -436,6 +439,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             blank_area_mm2=_num(rs.get("blank_area_mm2")),
             cut_out_count=(int(_num(rs.get("cut_out_count")))
                            if _num(rs.get("cut_out_count")) is not None else None),
+            section_profile=(rs.get("section_profile")
+                             if isinstance(rs.get("section_profile"), dict) else None),
             surface_treatment=str(rs.get("surface_treatment") or ""),
             mass_kg=_num(rs.get("mass_kg")),
             formed_but_no_bend_features=bool(rs.get("formed_but_no_bend_features")),
@@ -1460,6 +1465,26 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                         f"thickness {_env_thk:g}mm confirmed by the model's bounding box "
                         f"({' x '.join(f'{v:g}' for v in sorted(_bbox_all, reverse=True))}"
                         f") — the value was already right, the provenance was not")
+
+        # ── TUBE FRAME: adopt the section the weldment cut list carried ──────────────
+        # The frame's tube sizes live in the SolidWorks weldment cut list — a sheet-metal read
+        # never sees them, which is why the Wire block came through empty. The analyser now reads
+        # the member profile + length from the cut list; adopt it as the part's section_stock so
+        # the tube-costing path below (and the workbook's section block) prices it. Only where the
+        # part has no section already — a drawing-stated one is never overwritten.
+        _nat_section = getattr(nat, "section_profile", None)
+        if isinstance(_nat_section, dict) and not part.get("section_stock"):
+            part["section_stock"] = dict(_nat_section)
+            roles = part.setdefault("page_roles", [])
+            if "section" not in [str(r).lower() for r in roles]:
+                roles.append("section")
+            flags.append(
+                f"tube section {_nat_section.get('profile_form')} "
+                f"{_nat_section.get('a')}x{_nat_section.get('b')}x{_nat_section.get('t')}mm"
+                + (f" x {_nat_section.get('length_mm')}mm" if _nat_section.get('length_mm') else "")
+                + " read from the SolidWorks weldment cut list (member description + length) — "
+                "verify the profile and length")
+            out["section_from_weldment"] = out.get("section_from_weldment", 0) + 1
 
         # ── SECTION CUT LENGTH: the model knows what the drawing never printed ────
         #

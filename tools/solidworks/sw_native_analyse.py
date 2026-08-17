@@ -203,6 +203,9 @@ class RouteSignals:
     bend_count_cutlist: Optional[int] = None
     surface_treatment: str = ""
     sheet_gauge: str = ""
+    # A tube/hollow-section profile {a, b, t, profile_form, length_mm} read from a WELDMENT
+    # cut list — the frame members a sheet-metal read never sees. None on a non-section part.
+    section_profile: Optional[Dict[str, Any]] = None
     material: str = ""
     # Where `material` came from: "custom_property" (the designer typed a spec) or
     # "applied_library" (the model's appearance/simulation template, often a default). The
@@ -517,6 +520,48 @@ def parse_weldment_profile(description: str) -> Optional[Dict[str, Any]]:
         return None
     return {"a": side_a, "b": side_b, "t": wall,
             "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS"}
+
+
+# The cut-list property names a weldment member publishes its size and length under. Read into
+# _all_cutlist_props by the SAME COM enumeration that decides the cut-list KIND, so reading them
+# needs no new SolidWorks call — the analyser already has them.
+_WELDMENT_DESC_KEYS = ("Description", "Part Description", "Desc")
+_WELDMENT_LENGTH_KEYS = ("LENGTH", "Length", "Total Length", "Cut Length", "Member Length")
+
+
+def weldment_section_from_cutlist(all_props: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A tube section {a, b, t, profile_form, length_mm} from a weldment cut-list's OWN
+    properties: the member Description carries the profile, LENGTH the cut length.
+
+    Pure: a properties dict in, a section out, so it is proven in tests with no SolidWorks. The
+    dict is exactly what the COM enumeration already reads into _all_cutlist_props to decide the
+    cut-list kind, so this reads two names the analyser already holds — no new SolidWorks call.
+    Returns None when no hollow-section description can be read (an honest gap, never a guessed
+    tube). Carries review_section_profile so the estimate flags it for a human, like the drawing-
+    text section path does — a cut-list read is strong but a frame's members deserve a check."""
+    if not isinstance(all_props, dict) or not all_props:
+        return None
+    low = {str(k).strip().lower(): v for k, v in all_props.items()}
+    desc = ""
+    for k in _WELDMENT_DESC_KEYS:
+        v = low.get(k.lower())
+        if v:
+            desc = str(v)
+            break
+    prof = parse_weldment_profile(desc)
+    if not prof:
+        return None
+    section = dict(prof)
+    for k in _WELDMENT_LENGTH_KEYS:
+        v = low.get(k.lower())
+        _len = _num_mm(v) if v not in (None, "") else None
+        if _len and _len > 0:
+            section["length_mm"] = _len
+            break
+    section["detection_path"] = "weldment_cut_list"
+    section["source_text"] = desc[:60].strip()
+    section["review_section_profile"] = True
+    return section
 
 
 def _material_and_source(props: Dict[str, str], applied: str) -> Tuple[str, str]:
@@ -1416,6 +1461,23 @@ def sheet_metal_signals(doc) -> RouteSignals:
         if _is_steel and (sig.is_sheet_metal or sig.has_weldment):
             sig.ops_hint.append("powder_coating")
     sig.ops_hint = sorted(set(sig.ops_hint))
+    # ── TUBE FRAME: read the section out of the weldment cut list the analyser already has ──
+    # The cut-list read above enumerated every property name into _all_cutlist_props to decide
+    # the cut-list KIND; a weldment folder carries the member Description ('TUBE 30 X 30 X 2.6')
+    # and its LENGTH there. Extract the section from what is already in hand — no new SolidWorks
+    # call — so a frame's tubes stop arriving at the estimate empty. None on a sheet part.
+    try:
+        if sig.section_profile is None and isinstance(_cut_props, dict):
+            _all = _cut_props.get("_all_cutlist_props") or {}
+            _sec = weldment_section_from_cutlist(_all)
+            if _sec:
+                sig.section_profile = _sec
+                sig.ops_hint = sorted(set(sig.ops_hint) | {"welding", "dress_welds"})
+                sig.notes.append(f"weldment_section={_sec.get('profile_form')} "
+                                 f"{_sec.get('a')}x{_sec.get('b')}x{_sec.get('t')} "
+                                 f"len={_sec.get('length_mm')}")
+    except Exception as _e_sec:
+        sig.notes.append(f"weldment_section_err: {_e_sec!r}")
     return sig
 
 
