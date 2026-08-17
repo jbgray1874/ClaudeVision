@@ -479,6 +479,45 @@ def _prop(props: Dict[str, str], *aliases: str) -> str:
 # The material aliases a designer may type into a custom property, in priority order.
 _MATERIAL_PROP_ALIASES = ("Material", "Material Description", "Material Spec", "Spec", "Grade")
 
+# Hollow-section words a weldment cut-list member description carries. A frame's tube lives ONLY
+# in the weldment cut list — the analyser reads the sheet-metal keys and never these, so the
+# tube frame arrived at the estimate empty. Gated on a keyword so a plain part is not read as a
+# tube. Matches document_builder._SECTION_HOLLOW_KW so both readers agree on what a section is.
+_WELDMENT_SECTION_KW = ("TUBE", "RHS", "SHS", "CHS", "BOX", "HOLLOW", "SECTION",
+                        "SQUARE", "RECTANGULAR")
+_WELDMENT_PROFILE_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)")
+
+
+def parse_weldment_profile(description: str) -> Optional[Dict[str, Any]]:
+    """A hollow-section profile (side_a × side_b × wall) from a weldment cut-list member's
+    description — 'TUBE, SQUARE 30 X 30 X 2.6', 'RHS 60 X 40 X 3'.
+
+    Pure: a description string in, a profile out, so it is proven in tests with no SolidWorks.
+    The COM read that supplies the description and the member LENGTH needs a seat and is wired
+    separately; this is the parse that turns what SolidWorks already knows into the {a, b, t,
+    profile_form} the estimator's tube costing consumes.
+
+    The three numbers are ordered so the smallest is the wall thickness; SHS when the two sides
+    are equal, RHS otherwise. Gated on a hollow-section keyword AND a wall that is credibly less
+    than half of each side, so a plain part ('BRACKET 30 X 30 X 3 PLATE') is not read as a tube.
+    Returns None when no section can be read (an honest gap, never a guessed profile)."""
+    text = str(description or "").upper()
+    if not any(kw in text for kw in _WELDMENT_SECTION_KW):
+        return None
+    m = _WELDMENT_PROFILE_RE.search(text)
+    if not m:
+        return None
+    try:
+        dims = sorted(float(m.group(i)) for i in (1, 2, 3))
+    except (TypeError, ValueError):
+        return None
+    wall, side_a, side_b = dims[0], dims[1], dims[2]
+    if wall <= 0 or wall > 12 or side_a <= wall * 2 or side_b <= wall * 2:
+        return None
+    return {"a": side_a, "b": side_b, "t": wall,
+            "profile_form": "SHS" if abs(side_a - side_b) < 1e-6 else "RHS"}
+
 
 def _material_and_source(props: Dict[str, str], applied: str) -> Tuple[str, str]:
     """The part's material AND where it came from — the split the waterfall needs.
