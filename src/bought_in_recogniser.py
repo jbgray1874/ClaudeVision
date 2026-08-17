@@ -717,11 +717,15 @@ def recognise_bought_in_in_prose(
         stub["review_flag"] = True
         flags = [f"Deterministically recognised in drawing notes (head-word: '{head}')"]
         if already_fab:
-            # Recognise but DON'T price - it's likely the fabricated part counted elsewhere.
+            # Possible duplicate of a fabricated part already on the sheet. It is still PRICED
+            # downstream (the mandate is a number on every line, and this judgement is only a
+            # heuristic), but carries the marker so costing adds a loud possible-double-count
+            # flag the estimator confirms or strikes.
             stub["cost_source"] = "layer2_possible_fabricated_query"
             stub["_no_price_reason"] = "matches a fabricated part - possible double-count"
-            flags.append("QUERY: also appears as a fabricated part - estimator confirm "
-                         "bought-in vs made-in (NOT priced, to avoid double-counting)")
+            flags.append("QUERY: also appears as a fabricated part - PRICED (market/non-firm) so "
+                         "it is not read as free, but CONFIRM bought-in vs made-in and STRIKE if "
+                         "it duplicates a made part")
         else:
             match = ref.best_priced_match(desc)
             # Electrical items: their short phrase under-scores on Jaccard vs a longer
@@ -743,15 +747,16 @@ def recognise_bought_in_in_prose(
                 match = None  # implausible for a loose consumable - do not apply
                 flags.append("A possible historical price match was rejected as implausibly "
                              "high for a loose consumable - estimator to price")
-            # An ambiguous fabrication word on a WEAK match is probably a made-in part under
-            # another name (the FOOTPLATE class). Query it, don't invent a priced bought-in on
-            # top of a part already costed in Sheet Steel/Other Sheet.
+            # An ambiguous fabrication word on a WEAK history match is not priced FROM THAT
+            # MATCH — a loose Jaccard hit on a generic word is confidently wrong. The line is
+            # still priced downstream (market/last-resort) so it is not read as free, and flagged
+            # as a possible made-in duplicate for the estimator to confirm or strike.
             if match and _should_withhold_ambiguous_price(ambiguous, match.get("match_score")):
                 match = None
                 flags.append("QUERY: an ambiguous fabrication word (plate/bracket/foot/...) "
-                             "matched SDI history only weakly - likely a fabricated part under "
-                             "another name, so NOT priced (would double-count a made-in part); "
-                             "estimator to confirm bought-in vs made-in and price if bought")
+                             "matched SDI history only weakly - not priced from that weak match; "
+                             "a market/non-firm figure is shown instead. CONFIRM bought-in vs "
+                             "made-in and STRIKE if it duplicates a made part")
             if match:
                 stub["unit_cost_gbp"] = match["price"]
                 stub["unit_material_cost_gbp"] = match["price"]

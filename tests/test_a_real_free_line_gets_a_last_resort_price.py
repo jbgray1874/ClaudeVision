@@ -24,31 +24,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import estimator as E  # noqa: E402
 
 
-# ── the seal skip — the guardrail that stops the FOOTPLATE regression ────────────────────
-def test_a_sealed_query_is_never_eligible_by_cost_source():
+# ── a possible-double-count line is priced too (mandate: a number on every line) ─────────
+def test_a_possible_double_count_free_line_is_now_eligible():
+    """The mandate changed: a possible-duplicate line that ended free must still get a number —
+    it already carries a loud 'confirm/strike' flag, so £0 is not the answer."""
     assert E._last_resort_price_is_needed(
         {"description": "Foot Plate", "cost_source": "layer2_possible_fabricated_query",
-         "extended_total_cost_gbp": 0}) is False
+         "extended_total_cost_gbp": 0}) is True
 
 
-def test_a_sealed_query_is_never_eligible_by_costing_basis():
+def test_a_possible_double_count_line_that_ended_priced_is_left_alone():
+    """If the normal chain already priced it, the last-resort does not touch it — no double
+    application."""
     assert E._last_resort_price_is_needed(
-        {"description": "Foot Plate", "costing_basis": "recogniser_query_not_priced",
-         "extended_total_cost_gbp": 0}) is False
-
-
-def test_the_application_never_touches_a_sealed_line_even_if_passed():
-    """THE REGRESSION GUARD. Hand the pass a sealed footplate AND a real free line together;
-    only the real one is rescued, the phantom stays at nothing."""
-    sealed = {"part_number": "BI-FOOTPLATE", "description": "Foot Plate",
-              "cost_source": "layer2_possible_fabricated_query",
-              "extended_total_cost_gbp": 0, "quantity": 1}
-    real = {"part_number": "3086", "description": "Ticket Clips",
-            "extended_total_cost_gbp": 0, "quantity": 3}
-    n = E.apply_last_resort_prices([sealed, real], lambda pe: 0.40)
-    assert n == 1
-    assert sealed.get("extended_total_cost_gbp") == 0            # phantom untouched
-    assert real.get("extended_total_cost_gbp") == 1.20          # 0.40 x 3, entered the total
+        {"description": "Foot Plate", "cost_source": "layer2_possible_fabricated_query",
+         "extended_total_cost_gbp": 26.62}) is False
 
 
 # ── fires on a genuine 'reads as free' line ──────────────────────────────────────────────

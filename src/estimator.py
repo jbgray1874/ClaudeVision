@@ -4108,31 +4108,23 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # tape) because these stubs have no real geometry to cost. Respect the upstream price.
     _preset_src = str(part.get("source") or "")
     _preset_unit = part.get("unit_cost_gbp")
-    # A LINE THE PROSE RECOGNISER DECLINED TO PRICE STAYS DECLINED — THE SEAL.
+    # A LINE THE RECOGNISER SUSPECTS IS A MADE PART UNDER ANOTHER NAME IS PRICED — AND FLAGGED.
     #
-    # When the recogniser judges an ambiguous fabrication word ('Foot Plate') to be a made part
-    # under another name, it deliberately leaves it UNPRICED and flags it a query. But an
-    # unpriced bought-in with no ops then reached _resolve_part_system_cost below, which looked
-    # 'Foot Plate' up through the UDEF/RAG/catalogue/LLM chain and applied the LLM's market
-    # figure as system_unit_cost — a number that ENTERS the total and changes every run
-    # (GBP 14 one run, GBP 26 the next). So the recogniser's decision not to price was silently
-    # overturned one function later, and the phantom it removed walked back in through a
-    # different door. The query decision is now honoured here: recognised, on the sheet, priced
-    # at nothing, owned by the estimator — never re-priced by the system-cost lookup.
+    # The recogniser judges an ambiguous fabrication word ('Foot Plate') a POSSIBLE duplicate of
+    # a fabricated part already costed on the sheet (it shares 'plate' with a SCREW PLATE). We
+    # used to zero it to avoid paying twice — but that judgement is a heuristic and can be wrong
+    # (Foot Plate may be a genuine separate part), and a £0 reads as free, which is the error
+    # nobody catches. The mandate is a price on every line until catalogues/APIs replace the
+    # guesses. So the line is PRICED through the normal chain below (catalogue / UDEF / market /
+    # LLM) and carries a LOUD possible-double-count flag: the estimator sees the number AND the
+    # warning, and strikes it if it duplicates a made part. Non-firm, like every market figure.
     if part.get("cost_source") == "layer2_possible_fabricated_query":
-        part["material_estimate"] = {"unit_material_cost_gbp": None, "cost_per_part_gbp": None,
-                                     "extended_material_cost_gbp": None,
-                                     "cost_method": "recogniser_query_not_priced"}
-        part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
-        part["unit_cost_gbp"] = None
-        part["unit_total_cost_gbp"] = None
-        part["extended_total_cost_gbp"] = None
-        part["costing_basis"] = "recogniser_query_not_priced"
         part.setdefault("review_flags", []).append(
-            "NOT PRICED: the prose recogniser judged this a fabricated part under another name "
-            "(possible double-count) and declined to price it; the system-cost/LLM lookup is not "
-            "allowed to overturn that. Estimator to confirm bought-in vs made-in.")
-        return part
+            "POSSIBLE DOUBLE-COUNT — this line may be the same part as a fabricated item already "
+            "costed on the sheet (a plate/bracket read twice under two names). A market price is "
+            "shown so it is not read as free; CONFIRM it is a genuine bought-in and STRIKE it if "
+            "it duplicates a made part. Non-firm.")
+        # fall through to normal costing so the line carries a price, not a blank.
     # SDI BOM-code stubs (FIXING/VINYL priced from UDEF, or flagged unpriced) must also keep
     # their upstream state — a genuine catalogue price, or an honest "estimator to price".
     if _preset_src == "sdi_bom_code_unpriced":
@@ -5529,13 +5521,6 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
 
 
 # ── ALWAYS A NUMBER: a real line is never left reading as free ──────────────────────────────
-# The seal markers a queried (possible-fabricated) line carries. The last-resort MUST refuse
-# these, or the phantom the seal removed walks straight back in through the market lookup — the
-# exact door that kept FOOTPLATE alive at £14-£26. Belt-and-braces with the seal's early return.
-_SEAL_COST_SOURCE = "layer2_possible_fabricated_query"
-_SEAL_COSTING_BASIS = "recogniser_query_not_priced"
-
-
 def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     """Is this a REAL line that ended with no money at all — 'reads as free' — and may take a
     last-resort market price? Refuses every line that is £0 for a reason.
@@ -5543,13 +5528,9 @@ def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     A blank in the money column reads as a part that is free to make. Where the engine simply
     could not find a price for a real bought-in, the honest answer is an indicative market
     figure (non-firm), not a blank — the estimator can strike a number they can see and never
-    a zero they miss. But a line that is £0 ON PURPOSE must be left alone."""
-    # THE SEAL — never re-price a recogniser query. Both markers, so neither the early return
-    # nor a change to it can let a sealed phantom through here.
-    if pe.get("cost_source") == _SEAL_COST_SOURCE:
-        return False
-    if pe.get("costing_basis") == _SEAL_COSTING_BASIS:
-        return False
+    a zero they miss. A possible-double-count line is NOT excluded here: the mandate is a price
+    on every line, and that line already carries a loud 'confirm/strike' flag, so it takes a
+    figure like any other. Only a line that is £0 ON PURPOSE is left alone."""
     # Placeholders (packaging/delivery) and customer-supplied lines are £0 by design.
     if pe.get("_commercial_placeholder") or str(pe.get("source") or "") == "commercial_placeholder":
         return False
