@@ -259,6 +259,22 @@ PACKAGING_CONFIG = {
     "bays_per_delivery": None,   # bays per delivery load (delivery_price split across these)
 }
 
+# palletising.py counts an order into cartons and pallets from the blanks it already measured,
+# so a shipment is described as "~3 cartons on 1 pallet" and can be priced against a carton /
+# pallet catalogue. These are the limits it counts against; the module holds safe defaults, so
+# every key here is OPTIONAL and overrides just that one. The only assumption the count carries
+# is packing_factor (how much void a protective pack is) — declared on every plan, tuned here
+# for every job at once. Leave empty to accept the module defaults.
+#   e.g. {"pallet_max_weight_kg": 1000.0, "carton_internal_mm": [1150, 750, 550]}
+PALLETISING_CONFIG = {
+    # "packing_factor": 0.8,               # a pack treated as ~20% void
+    # "carton_internal_mm": [1200, 800, 600],
+    # "carton_max_weight_kg": 25.0,
+    # "pallet_footprint_mm": [1200, 1000], # UK standard, matches PACKAGING_CONFIG["pallet"]
+    # "pallet_max_height_mm": 1800.0,
+    # "pallet_max_weight_kg": 500.0,
+}
+
 # A9: tokens that mark a "part number" as a title-block artifact, not a real part.
 # Case-insensitive substring match. Inheritable — extend as new artifacts surface.
 JUNK_PART_TOKENS = [

@@ -94,13 +94,23 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         volume_m3 = (L / 1000.0) * (W / 1000.0) * (T / 1000.0)
         weight_kg += volume_m3 * _density_for(part.get("normalized_material")) * per
         longest, widest = max(longest, L), max(widest, W)
-    return {
+    out = {
         "schema": SCHEMA, "order_quantity": qty,
         "unit_weight_kg": round(weight_kg, 2) if weight_kg else None,
         "order_weight_kg": round(weight_kg * qty, 2) if weight_kg else None,
         "largest_part_mm": [longest, widest] if longest and widest else None,
         "parts_measured": counted, "parts_without_a_blank": skipped,
     }
+    # THE SHIPMENT AS CARTONS AND PALLETS, counted deterministically from the same blanks. It
+    # turns "about 34 kg" into "about 34 kg, ~3 cartons on 1 pallet" — a better question whoever
+    # answers it, and an outright count the moment a carton/pallet rate is on the catalogue. Its
+    # one assumption (the packing factor) is declared on the plan, not hidden in this total.
+    try:
+        import palletising
+        out["shipment"] = palletising.plan_shipment(parts, order_qty)
+    except Exception:                                                # noqa: BLE001
+        out["shipment"] = None
+    return out
 
 
 def _ask_market(description: str, tag: str) -> Optional[Dict[str, Any]]:
@@ -173,15 +183,26 @@ def _line(code: str, order: Dict[str, Any], description: str,
     return out
 
 
+def _count_phrase(order: Dict[str, Any]) -> str:
+    """The carton/pallet count for the description, when the shipment could be counted."""
+    try:
+        import palletising
+        return palletising.summary_phrase(order.get("shipment") or {})
+    except Exception:                                                # noqa: BLE001
+        return ""
+
+
 def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
     order = describe_order(parts, order_qty)
     size = order.get("largest_part_mm")
     where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
     weight = (f"about {order['order_weight_kg']:.0f} kg total, "
               if order.get("order_weight_kg") else "")
+    count = _count_phrase(order)
+    count = (f"{count}, " if count else "")
     return _line("PACKAGING", order,
                  f"Protective packaging and a pallet for {order['order_quantity']} "
-                 f"flat-packed display assemblies, {where}{weight}UK trade, per order",
+                 f"flat-packed display assemblies, {where}{weight}{count}UK trade, per order",
                  "PACKAGING")
 
 
@@ -189,7 +210,10 @@ def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
     order = describe_order(parts, order_qty)
     weight = (f"about {order['order_weight_kg']:.0f} kg" if order.get("order_weight_kg")
               else "a part pallet")
+    ship = order.get("shipment") or {}
+    pallets = ship.get("pallet_count")
+    on = (f" on {pallets} pallet(s)" if pallets else "")
     return _line("DELIVERY", order,
-                 f"Palletised haulage of {weight} for {order['order_quantity']} display "
+                 f"Palletised haulage of {weight}{on} for {order['order_quantity']} display "
                  f"assemblies, one UK mainland delivery, per order",
                  "DELIVERY")
