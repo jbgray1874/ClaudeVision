@@ -1142,6 +1142,40 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
 # one file and not board in another.
 
 
+def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_mm):
+    """A board's cost per SHEET from its £/kg rate x sheet volume x density.
+
+    THE BOARD EQUIVALENT OF HOW STEEL IS COSTED — £/tonne x weight. MDF carries a 1.35 £/kg rate
+    and a 750 kg/m3 density in config, so a 2440x1220x12 board is a known cost; the Other Sheet
+    block only ever read a ready-made £/sheet and, finding none, shipped 1235x365x12 MDF at £0
+    with the rate sitting in plain sight. Boards are bought by the sheet, so this is the sheet the
+    part nests into, and the workbook divides it by parts-per-sheet exactly as it does for steel.
+
+    Returns None when the material has no rate or density, or a dimension is missing — an honest
+    gap, never a guessed number. A rate that exists in config is reproducible, so this is not an
+    unrepeatable AI figure; it is an SDI material rate, the same class as the steel £/tonne.
+    """
+    if config is None:
+        return None
+    name = str(material or "").strip().upper()
+    if not name:
+        return None
+    rates = getattr(config, "MATERIAL_PRICE_GBP_PER_KG", {}) or {}
+    dens = getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {}
+    rate = density = None
+    for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
+        rate = rate if rate is not None else rates.get(k)
+        density = density if density is not None else dens.get(k)
+    try:
+        t, sl, sw = float(thickness_mm), float(sheet_l_mm), float(sheet_w_mm)
+    except (TypeError, ValueError):
+        return None
+    if not (rate and density and t > 0 and sl > 0 and sw > 0):
+        return None
+    sheet_vol_m3 = (sl / 1000.0) * (sw / 1000.0) * (t / 1000.0)
+    return round(sheet_vol_m3 * float(density) * float(rate), 2)
+
+
 def _is_board(mat: str) -> bool:
     """Not sheet metal -- so it is costed by area in the Other Sheet Material block.
 
@@ -3386,6 +3420,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
             if _cpp and _pps:
                 _sheet_price = round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
+        if not _sheet_price:
+            # LAST, AND ONLY A GAP-FILLER: derive the £/sheet from the material's own £/kg rate the
+            # same way steel is costed, so a board with a rate in config is never £0. MDF (1.35
+            # £/kg, 750 kg/m3) 1235x365x12 stops shipping free.
+            _sheet_price = _board_sheet_price_from_kg_rate(
+                pe.get("normalized_material") or me.get("material"), thick,
+                (sh[0] if len(sh) > 0 else 2440), (sh[1] if len(sh) > 1 else 1220))
+            if _sheet_price:
+                _flag(f"Other-sheet {pe.get('part_number')} priced from the "
+                      f"{str(pe.get('normalized_material') or '').upper()} £/kg rate x sheet volume "
+                      f"x density (£{_sheet_price:.2f}/sheet) — an SDI material rate, not a supplier "
+                      f"quote; confirm the board grade.", flags)
         if _sheet_price:
             ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)
         else:
