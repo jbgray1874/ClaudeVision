@@ -138,12 +138,57 @@ new old approx tbc na n/a unless otherwise stated qty quantity price each
 """.split())
 # Minimum token length to be considered a meaningful type-word.
 _MIN_TOKEN = 3
+
+# A SMALL, CURATED abbreviation map: shop shorthand -> the word the historical descriptions
+# actually spell out. Applied identically to BOTH the phrase and the priced line, so it only
+# ever RAISES overlap between equivalent descriptions and never invents a match between
+# genuinely different words. Curated and small on purpose — a guessed abbreviation is a false
+# match waiting to happen. Slash forms (s/s, m/c) are not here: punctuation is flattened to
+# spaces before the word split, so they never reach this map as one token.
+_ABBREV = {
+    "assy": "assembly",
+    "brkt": "bracket",
+    "bkt": "bracket",
+    "galv": "galvanised",
+    "galvd": "galvanised",
+    "sst": "stainless",
+    "washr": "washer",
+}
+
+
+def _singularize(tok: str) -> str:
+    """Strip a single trailing plural 's' so 'castors' == 'castor', 'plates' == 'plate'.
+
+    Guards the words that merely END in s but are not plurals — stainless, brass, glass, boss,
+    class — by refusing to strip a double 's', and never applies below 4 characters, so 'gas',
+    'bus' and the like are untouched. Deterministic and applied to both sides, so it can only
+    unify a plural with its singular, never collapse two genuinely different words."""
+    if len(tok) >= 4 and tok.endswith("s") and not tok.endswith("ss"):
+        return tok[:-1]
+    return tok
+
+
+def _normalize_token(w: str) -> str:
+    """One token, made comparable: singularise first, then expand the abbreviation, so a plural
+    shorthand resolves to the spelled-out word ('brkts' -> 'brkt' -> 'bracket')."""
+    base = _singularize(w)
+    return _ABBREV.get(base, base)
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 def _tokens(s: str) -> List[str]:
     s = _norm(s)
     s = re.sub(r"[^a-z0-9 ]", " ", s)
-    return [w for w in s.split() if len(w) >= _MIN_TOKEN and w not in _STOP and not w.isdigit()]
+    # Normalise each raw word (singularise + expand) BEFORE the stop/length/digit filter, so a
+    # plural of a boilerplate word ('materials' -> 'material') is caught by the stop list and a
+    # short plural ('bolts' -> 'bolt') still clears the minimum length.
+    out: List[str] = []
+    for w in s.split():
+        w = _normalize_token(w)
+        if len(w) >= _MIN_TOKEN and w not in _STOP and not w.isdigit():
+            out.append(w)
+    return out
 def _sig_token_set(s: str) -> Set[str]:
     return set(_tokens(s))
 
