@@ -13431,10 +13431,6 @@ def test_an_exhausted_search_provider_is_not_a_working_one():
     ok("_llm_market_estimate" in _src, "the LLM path exists and is the last resort")
 
 
-if __name__ == "__main__":
-    sys.exit(main())
-
-
 def test_a_price_with_no_supplier_does_not_read_as_a_catalogue_row():
     """GBP 1.06 FOR A WOOD SCREW, BESIDE GBP 0.05 FROM A REAL SUPPLIER, RENDERED THE SAME.
 
@@ -13739,3 +13735,12 @@ def test_two_rows_of_one_operation_are_still_one_operation():
     eq(_same[0]["detail"]["operation"], "P.Coat", "reported against the operation")
     ok("a" in _same[0]["detail"]["decision_id"] and "b" in _same[0]["detail"]["decision_id"],
        "naming both rows, so an estimator can find them")
+
+
+# THE ENTRY POINT STAYS LAST, so every test above it is collected by the standalone runner as
+# well as by pytest. Eight regression tests were defined BELOW this block and so never ran under
+# `python tests/test_estimating_rules.py` — collected by pytest, invisible to the runner, which
+# is the one disagreement between the two modes this file's own self-check exists to forbid. The
+# runner caught it the moment CI stopped dying on a missing dependency before reaching it.
+if __name__ == "__main__":
+    sys.exit(main())
