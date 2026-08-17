@@ -4,7 +4,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # .env IS NOT LOADED HERE. config.load_dot_env() does it, at config import, and this file
 # used to carry a second copy of that loader. Two loaders with slightly different search
@@ -63,6 +63,17 @@ def parse_args() -> argparse.Namespace:
              "--folder-as-job, and preferred over that pair because omitting either half "
              "silently produces a different estimate rather than an error.",
     )
+    parser.add_argument(
+        "--enquiry", type=str, default=None, metavar="FOLDER",
+        help="Read an ENQUIRY folder — each immediate sub-folder is one job — and print the run "
+             "plan the batch runner executes, or the reasons the drop is refused (a loose "
+             "drawing, an empty pack). Reads the tree and prices nothing; run-enquiry.ps1 runs "
+             "the plan through the same per-job engine as --job.")
+    parser.add_argument(
+        "--enquiry-qty", type=str, default=None, metavar="NAME=QTY,...",
+        help="Per-job order quantities for --enquiry, by job folder name, e.g. "
+             "'11650-00-GA=45,11650-04-SA01=5'. A job not named here falls back to --order-qty, "
+             "and one with neither is costed at the inferred quantity.")
     parser.add_argument("--search-root", type=str, default=str(DRAWINGS_DIR), help="Folder to search for drawings.")
     parser.add_argument("--drawing-pattern", type=str, default="*", help="Glob pattern for drawings (e.g. *.pdf, *.dxf).")
     parser.add_argument(
@@ -201,6 +212,51 @@ def _apply_web_ai_pricing_fallback_from_args(args: argparse.Namespace) -> None:
     config.PRICE_SOURCE_CONFIG = price_cfg
 
 
+def _parse_enquiry_qty(spec: Optional[str]) -> Dict[str, int]:
+    """'NAME=QTY,NAME=QTY' -> {name: qty}. A malformed pair is skipped with a note, not a crash:
+    a fat-fingered quantity should not stop the whole enquiry being read."""
+    out: Dict[str, int] = {}
+    for chunk in (spec or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, _, qty = chunk.rpartition("=")
+        try:
+            out[name.strip()] = int(qty)
+        except (TypeError, ValueError):
+            print(f"   [enquiry] ignoring '{chunk}' — not NAME=QTY")
+    return out
+
+
+def _print_enquiry_plan(folder: str, qty_spec: Optional[str],
+                        default_qty: Optional[int]) -> None:
+    """Read an enquiry folder and print the run plan, or the reasons it is refused.
+
+    This reads the tree and prices nothing. It is the gate a person sees before a batch runs —
+    which jobs, at what quantity — and the machine-readable plan run-enquiry.ps1 feeds to the
+    same per-job engine as --job. A refused drop prints its reasons and NO plan, so a malformed
+    enquiry cannot be half-run.
+    """
+    import enquiry as _enq
+    manifest = _enq.read_enquiry(folder, order_qty_by_job=_parse_enquiry_qty(qty_spec),
+                                 default_order_qty=default_qty)
+    print(_enq.one_line(manifest))
+    for card in manifest.get("jobs") or []:
+        print(f"   • {card['identity']}: {card['drawing_count']} drawing(s), {card['priced_at']}")
+        for warn in card.get("warnings") or []:
+            print(f"       - {warn}")
+    for refusal in manifest.get("refusals") or []:
+        print(f"   ✗ {refusal}")
+    plan = _enq.run_plan(manifest)
+    # A STABLE, PARSEABLE BLOCK for run-enquiry.ps1: everything between the markers is one
+    # run-packs.ps1 argument per line, and nothing else prints there. An empty block is a
+    # refused enquiry, and the wrapper runs nothing.
+    print("--- ENQUIRY RUN PLAN ---")
+    for token in plan:
+        print(token)
+    print("--- END ENQUIRY RUN PLAN ---")
+
+
 def main() -> None:
     args = parse_args()
     ensure_directories()
@@ -220,6 +276,10 @@ def main() -> None:
     # quantity; everything downstream reads what it decided.
     if getattr(args, "order_qty", None):
         os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
+
+    if getattr(args, "enquiry", None):
+        _print_enquiry_plan(args.enquiry, args.enquiry_qty, args.order_qty)
+        return
 
     if args.merge_dxf_into:
         json_path = Path(args.merge_dxf_into)

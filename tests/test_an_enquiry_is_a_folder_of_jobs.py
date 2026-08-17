@@ -227,3 +227,63 @@ def test_one_line_not_ready_leads_with_the_fix(tmp_path):
     _touch(os.path.join(root, "orphan.dxf"))
     line = enquiry.one_line(enquiry.read_enquiry(root))
     assert "not ready" in line
+
+
+# ── the run plan handed to the batch runner ──────────────────────────────────────────
+
+def test_the_plan_lists_each_job_with_its_quantity(tmp_path):
+    root = str(tmp_path / "11650")
+    a = _job(root, "11650-00-GA", "ga.pdf")
+    b = _job(root, "11650-04-SA01", "sa.pdf")
+    plan = enquiry.run_plan(enquiry.read_enquiry(
+        root, order_qty_by_job={"11650-00-GA": 45, "11650-04-SA01": 5}))
+    assert f"{os.path.abspath(a)}:45" in plan
+    assert f"{os.path.abspath(b)}:5" in plan
+
+
+def test_a_job_without_a_quantity_appears_as_a_bare_path(tmp_path):
+    """run-packs.ps1 costs a bare path at the inferred quantity; the plan must not invent one."""
+    root = str(tmp_path / "11650")
+    a = _job(root, "11650-00-GA", "ga.pdf")
+    plan = enquiry.run_plan(enquiry.read_enquiry(root))
+    assert plan == [os.path.abspath(a)]
+
+
+def test_a_refused_enquiry_produces_no_plan(tmp_path):
+    """The whole point of the gate: a malformed drop runs NOTHING, rather than three of four
+    jobs. A loose drawing refuses the enquiry, so the plan is empty."""
+    root = str(tmp_path / "11650")
+    _job(root, "11650-00-GA", "ga.pdf")
+    _touch(os.path.join(root, "orphan.dxf"))
+    m = enquiry.read_enquiry(root)
+    assert m["ok"] is False
+    assert enquiry.run_plan(m) == []
+
+
+def test_an_empty_pack_refuses_the_whole_plan(tmp_path):
+    root = str(tmp_path / "11650")
+    _job(root, "11650-00-GA", "ga.pdf")
+    _job(root, "11650-09-EMPTY")
+    assert enquiry.run_plan(enquiry.read_enquiry(root)) == []
+
+
+# ── wired into the CLI, not merely built ─────────────────────────────────────────────
+
+def test_the_cli_routes_enquiry_to_the_run_plan():
+    """BUILT IS NOT WIRED. main.py must expose --enquiry and hand it to the plan, or the module
+    is unreachable from the command the operator actually runs."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "main.py"),
+               encoding="utf-8").read()
+    assert '"--enquiry"' in src
+    assert "_print_enquiry_plan(args.enquiry" in src
+    assert "run_plan(manifest)" in src
+
+
+def test_the_run_wrapper_hands_the_plan_to_the_proven_sequencer():
+    """run-enquiry.ps1 must parse the plan block and call run-packs.ps1 — not re-implement the
+    per-job run, which is the one thing that would let a figure here disagree with a real run."""
+    path = os.path.join(os.path.dirname(__file__), "..", "run-enquiry.ps1")
+    assert os.path.exists(path), "run-enquiry.ps1 is missing"
+    ps = open(path, encoding="utf-8").read()
+    assert "--enquiry" in ps and "run-packs.ps1" in ps
+    assert "ENQUIRY RUN PLAN" in ps

@@ -206,6 +206,28 @@ def read_enquiry(enquiry_root: str,
     return out
 
 
+def run_plan(manifest: Dict[str, Any]) -> List[str]:
+    """The jobs an enquiry hands to the batch runner, as run-packs.ps1 arguments.
+
+    Each token is 'PATH:QTY' where the quantity is known and 'PATH' where it is not — the exact
+    shape run-packs.ps1 already parses (it splits on the last colon only when digits follow, so
+    a Windows drive letter in the path is safe). Nothing is recomputed here: the engine that
+    prices a job is the same one run-job.ps1 drives, and this only lists what to run.
+
+    A REFUSED ENQUIRY PRODUCES NO PLAN. A drop with a loose drawing or an empty pack returns an
+    empty list, not a partial one — running three of four jobs silently under-scopes the enquiry,
+    which is the failure read_enquiry exists to catch. The caller sees the refusals and fixes the
+    drop before anything runs.
+    """
+    if not manifest.get("ok"):
+        return []
+    plan: List[str] = []
+    for job in manifest.get("jobs") or []:
+        qty = job.get("order_quantity")
+        plan.append(f"{job['path']}:{int(qty)}" if qty else str(job["path"]))
+    return plan
+
+
 def one_line(manifest: Dict[str, Any]) -> str:
     """What an operator reads the moment the folder is pointed at, before any drawing is opened."""
     jobs = manifest.get("jobs") or []
