@@ -5528,6 +5528,93 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
     return keep
 
 
+# ── ALWAYS A NUMBER: a real line is never left reading as free ──────────────────────────────
+# The seal markers a queried (possible-fabricated) line carries. The last-resort MUST refuse
+# these, or the phantom the seal removed walks straight back in through the market lookup — the
+# exact door that kept FOOTPLATE alive at £14-£26. Belt-and-braces with the seal's early return.
+_SEAL_COST_SOURCE = "layer2_possible_fabricated_query"
+_SEAL_COSTING_BASIS = "recogniser_query_not_priced"
+
+
+def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
+    """Is this a REAL line that ended with no money at all — 'reads as free' — and may take a
+    last-resort market price? Refuses every line that is £0 for a reason.
+
+    A blank in the money column reads as a part that is free to make. Where the engine simply
+    could not find a price for a real bought-in, the honest answer is an indicative market
+    figure (non-firm), not a blank — the estimator can strike a number they can see and never
+    a zero they miss. But a line that is £0 ON PURPOSE must be left alone."""
+    # THE SEAL — never re-price a recogniser query. Both markers, so neither the early return
+    # nor a change to it can let a sealed phantom through here.
+    if pe.get("cost_source") == _SEAL_COST_SOURCE:
+        return False
+    if pe.get("costing_basis") == _SEAL_COSTING_BASIS:
+        return False
+    # Placeholders (packaging/delivery) and customer-supplied lines are £0 by design.
+    if pe.get("_commercial_placeholder") or str(pe.get("source") or "") == "commercial_placeholder":
+        return False
+    _rf = " ".join(str(f) for f in (pe.get("risk_flags") or []))
+    if "customer_supplied_zero_cost" in _rf:
+        return False
+    # An assembly parent carries its material on its children; its own £0 is correct.
+    if pe.get("is_assembly_parent") or (pe.get("route_context") or {}).get("is_assembly_parent"):
+        return False
+    # Already carries money on the line — nothing to rescue.
+    if (_safe_float(pe.get("extended_total_cost_gbp")) or 0.0) > 0:
+        return False
+    # Nothing to look a price up against.
+    if not str(pe.get("description") or pe.get("part_number") or "").strip():
+        return False
+    return True
+
+
+def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
+                             price_lookup) -> int:
+    """Give every real 'reads as free' line a per-each market/LLM indicative that ENTERS the
+    non-firm total. `price_lookup(pe)` returns a unit £ or None; None leaves the line an honest
+    gap (a market figure is not invented where none exists). Never touches a sealed recogniser
+    query. Returns how many lines it rescued."""
+    n = 0
+    for pe in part_estimates or []:
+        if not isinstance(pe, dict) or not _last_resort_price_is_needed(pe):
+            continue
+        try:
+            unit = _safe_float(price_lookup(pe))
+        except Exception:                                        # noqa: BLE001
+            unit = None
+        if unit is None or unit <= 0:
+            continue
+        qty = _safe_int(pe.get("quantity")) or 1
+        _unit = _round_money(unit)
+        _ext = _round_money(unit * qty)
+        _me = pe.setdefault("material_estimate", {})
+        _me.update({
+            "unit_material_cost_gbp": _unit, "cost_per_part_gbp": _unit,
+            "extended_material_cost_gbp": _ext,
+            "cost_method": "last_resort_market_indication",
+        })
+        pe["unit_cost_gbp"] = _unit
+        pe["unit_total_cost_gbp"] = _unit
+        pe["extended_total_cost_gbp"] = _ext
+        pe["costing_basis"] = "last_resort_market_indication"
+        pe.setdefault("review_flags", []).append(
+            "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
+            "indicative market figure is shown rather than a blank that reads as free. NON-FIRM "
+            "— verify or replace with a supplier rate before quoting.")
+        n += 1
+    return n
+
+
+def _last_resort_lookup(pe: Dict[str, Any]) -> Optional[float]:
+    """The per-each price for a 'reads as free' line: the same UDEF/RAG/catalogue/LLM chain the
+    system-cost path uses, run as a guaranteed last resort for a line the normal path left
+    unpriced (a bought-in the classifier skipped, a code the first pass did not look up)."""
+    try:
+        return _safe_float(_resolve_part_system_cost(pe).get("applied_unit_cost"))
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
 def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     if summary is not None:
@@ -5888,6 +5975,17 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 f"[DEBUG] estimate_document done part {idx}/{len(estimable_parts)}: "
                 f"{part_number} (+{round(time.time()-started,2)}s)"
             )
+    # ALWAYS A NUMBER. After every part is costed, any REAL line still reading as free gets a
+    # per-each market/LLM indicative so £0 never sits on a part the shop actually buys. Runs
+    # AFTER the loop (so the seal's early return has already fired) AND refuses the seal markers
+    # explicitly (so a queried FOOTPLATE can never be re-priced here). Non-firm, flagged.
+    try:
+        _rescued = apply_last_resort_prices(part_estimates, _last_resort_lookup)
+        if _rescued:
+            print(f"   [always-a-number] {_rescued} line(s) that read as free were given a "
+                  f"non-firm market/LLM indicative so no real part shows a blank price")
+    except Exception as _e_lr:                                   # noqa: BLE001
+        print(f"   [always-a-number] last-resort pricing skipped: {_e_lr}")
     material_total_raw = sum((item.get("material_estimate", {}).get("extended_material_cost_gbp") or 0.0) for item in part_estimates)
     labour_total_raw = sum((item.get("labour_estimate", {}).get("total_labour_cost_gbp") or 0.0) for item in part_estimates)
     material_total = _round_money(material_total_raw)
