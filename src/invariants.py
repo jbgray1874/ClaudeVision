@@ -2847,6 +2847,64 @@ def check_a_handed_pair_priced_on_the_cut_file(summary: Any) -> List[Dict[str, A
         parts=priced)]
 
 
+def check_two_sources_disagree_about_the_material(summary: Any) -> List[Dict[str, Any]]:
+    """A single part whose MATERIAL two sources read differently — the twin of the gauge check.
+
+    The gauge disagreement has been surfaced for a while; its material twin was registered as a
+    code and never produced, so a part costed as ABS while the drawing said PETG passed with
+    nothing said. That is the more expensive of the two: material sets the sheet rate AND whether
+    the part has a rate at all — ABS carries a density and a sheet size in config and no price,
+    PETG carries one — so a part costed on the wrong material can go from a real figure to zero,
+    which is the £35 -> £0 door 11650 lost and the displaced-value log was built to catch.
+
+    HANDED PAIRS ARE NOT THIS. A pair is settled across two records and has its own rules —
+    the pooled quorum, and the cut-file proviso — so a part carrying a handed settlement is
+    skipped here rather than reported twice under two codes. This is the WITHIN-record argument
+    on one part: a model against its own title block, an export against an inference.
+
+    Not blocking: the higher-ranked source has been used and the figure stands. What is added is
+    that somebody is told there was an argument, so they confirm the material before quoting firm.
+    """
+    if not isinstance(summary, dict):
+        return [_violation("material_disagreement", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    import source_precedence
+    parts = _parts(summary)
+    if not parts:
+        return []
+    disputed = []
+    for part in parts:
+        if part.get("_handed_settled"):
+            continue                 # a handed pair is surfaced by its own rule, not twice here
+        won = part.get("normalized_material")
+        if not str(won or "").strip():
+            continue                 # a part with no material of its own has nothing to dispute
+        # corroboration_against returns only DISSENTING readings (already filtered to values the
+        # part does not now hold, and never empty), so a positive count is a genuine argument.
+        against = source_precedence.corroboration_against(part, "normalized_material")
+        if not against.get("count"):
+            continue
+        other = against.get("value")
+        disputed.append({
+            "part_number": part.get("part_number"),
+            "costed_as": won,
+            "costed_from": part.get("material_source") or "the winning source",
+            "other": other,
+            "other_from": ", ".join(against.get("sources") or []) or "an earlier pass",
+        })
+    if not disputed:
+        return []
+    return [_violation(
+        "two_sources_disagree_about_the_material", WARNING,
+        f"{len(disputed)} part(s) have a material two sources read differently: "
+        + "; ".join(f"{d['part_number']} costed as {d['costed_as']} from {d['costed_from']}, but "
+                    f"{d['other_from']} says {d['other']}" for d in disputed[:6])
+        + ". Material sets the sheet rate and whether the part has a rate at all, so a part "
+          "costed on the wrong one can go from a real price to nothing. The higher-ranked source "
+          "has been used and the figure stands -- confirm which material the part is made from.",
+        parts=disputed)]
+
+
 def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, Any]]:
     """A part whose thickness two sources read differently, by enough to move the money.
 
@@ -3006,6 +3064,7 @@ CHECKS = (
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,
     check_a_handed_pair_priced_on_the_cut_file,
+    check_two_sources_disagree_about_the_material,
     check_two_sources_disagree_about_the_gauge,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
