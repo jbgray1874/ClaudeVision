@@ -78,6 +78,41 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+# The band a drawing prints as its GENERAL tolerance table (±0.5/1.0/1.5/2.0 by length). It
+# reads as a run of thicknesses and is not a gauge. Matches document_builder._TOLERANCE_TABLE_VALUES.
+_TOLERANCE_TABLE_VALUES = frozenset({0.5, 1.0, 1.5, 2.0})
+_MIN_SHEET_THICKNESS_MM = 0.8
+
+
+def _primary_thickness_mm(thicknesses) -> Optional[float]:
+    """The title block's own stated thickness, with a tolerance table filtered out.
+
+    8352's drawing carries a general tolerance table (0.5/1.0/1.5/2.0 by length band). Taking the
+    FIRST thickness put 0.5mm on six mild-steel parts as the title block's gauge; the model then
+    had to overrule each one, flagging a gauge disagreement that was pure noise. A LONE 2.0 is a
+    real gauge and must survive, but 2.0 sitting inside the whole band is a tolerance value — so
+    the band is only stripped when the WHOLE of it is present, exactly as the costing picker
+    decides. What survives, at or above the sheet floor, is the stated gauge; nothing surviving
+    means the title block named no thickness of its own, and None is the honest answer.
+    """
+    floats = []
+    for v in thicknesses or ():
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f > 0:
+            floats.append(f)
+    if not floats:
+        return None
+    if _TOLERANCE_TABLE_VALUES <= {round(f, 1) for f in floats}:
+        floats = [f for f in floats if round(f, 1) not in _TOLERANCE_TABLE_VALUES]
+    for f in floats:
+        if f >= _MIN_SHEET_THICKNESS_MM:
+            return f
+    return None
+
+
 def canonical_material(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -827,7 +862,7 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "normalized": {
             "primary_material": _first_or_none(material_values),
             "primary_finish": _first_or_none(finishes),
-            "primary_thickness_mm": _first_or_none(thicknesses),
+            "primary_thickness_mm": _primary_thickness_mm(thicknesses),
         },
         "confidence": {
             "drawing_numbers": _confidence(0.95 if drawing_numbers else 0.0),
