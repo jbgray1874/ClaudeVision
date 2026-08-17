@@ -33,13 +33,15 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      # ezdxf only. The suite is deliberately written against the PURE functions — material
-      # normalisation, thickness selection, route gating, precedence, contour counting — so
-      # it runs with no SolidWorks, no Excel, no SQL and no drawings, in about a second.
+      # The suite began as pure functions on ezdxf alone, and grew workbook checks that read
+      # what the .xlsx pipeline actually writes — so it needs openpyxl now, and was failing on
+      # every run without it (12 ModuleNotFoundError, reported green by nobody because CI only
+      # ever ran this one file). This is the set the suite genuinely uses: still no SolidWorks,
+      # no SQL and no drawings, but the readers it exercises must be importable.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest ezdxf
+          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow fastapi
 
       - name: Regression fixtures
         run: python -m pytest tests/test_estimating_rules.py -q
@@ -110,10 +112,15 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      # WHAT THE SUITE EXERCISES, not requirements.txt. It leaves out pyodbc (a system ODBC
+      # driver), PyMuPDF, pandas and openai — no test imports them unguarded, so tests needing
+      # them SKIP cleanly rather than fail. fastapi is here because the run-stop tests import
+      # the estimate_routes app directly and error without it (they do not skip); everything
+      # else the suite touches is a reader it can import offline.
       - name: Install the dependencies the suite exercises
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow
+          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow fastapi
 
       - name: Full test suite
         run: python -m pytest tests/ -q
