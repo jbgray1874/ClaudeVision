@@ -80,13 +80,15 @@ def test_the_disagreement_is_recorded_rather_than_silently_kept():
 
 def test_the_pair_then_settles_to_the_export_not_the_lone_model():
     """The reason the narrow fix matters: with the export preserved, the pair-level rules can
-    do their job. Base model (ABS) is one voice; the hand's export (PETG) is another; a lone
-    model does not outweigh the part's own cut file across the pair."""
+    do their job. Base model (ABS) is one voice; the hand's export (PETG) is another. On this
+    one-for-one split the cut file the CNC is driven from breaks the tie, so BOTH hands price
+    as PETG — one stock key from the export — and neither silently becomes ABS on the strength
+    of one model property."""
     base, hand = _base(), _hand_with("dxf_filename")
     djm.apply_mirror_geometry([base, hand])
     djm.settle_handed_pairs([base, hand])
-    # Neither silently becomes ABS on the strength of one model property.
     assert hand[MAT] == "PETG"
+    assert base[MAT] == "PETG", "the pair did not unify to the cut-file material"
 
 
 def test_an_export_that_agrees_with_the_base_is_corroborated_not_flagged():

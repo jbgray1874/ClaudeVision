@@ -2799,6 +2799,54 @@ def check_every_unpriced_line_says_why(summary: Any) -> List[Dict[str, Any]]:
 _GAUGE_WORTH_SAYING = 1.25
 
 
+def check_a_handed_pair_priced_on_the_cut_file(summary: Any) -> List[Dict[str, Any]]:
+    """A handed pair the engine settled on the CUT FILE because the pair split one-for-one.
+
+    When one hand's material was read from the exported flat the CNC is driven from and the
+    other's from a bare model property, the two readings are level on count. The engine prices
+    the pair from the export -- the laser cuts the DXF, not the SolidWorks library material,
+    which is often a stale default -- so a price is rendered for every part and both hands cost
+    the same stock. But that is a commercial DEFAULT, not a confirmed reading, and the pack
+    genuinely disagreed with itself, so it is said out loud instead of buried under a settled
+    key.
+
+    Not blocking: the price stands and is the right default. What this restores is that the two
+    hands read differently and a person should confirm the material before it is quoted firm.
+    """
+    if not isinstance(summary, dict):
+        return [_violation("handed_pair_settled_on_cut_file", UNVERIFIED,
+                           "the summary could not be read, so this check verified nothing")]
+    parts = _parts(summary)
+    if not parts:
+        return []
+    priced = []
+    for part in parts:
+        settled = (part.get("_handed_settled") or {}).get("stock_key") or {}
+        if settled.get("basis") != "cut_file":
+            continue
+        keep = list(settled.get("value") or [])
+        drop = list(settled.get("displaced") or [])
+        if len(keep) < 2 or len(drop) < 2:
+            continue
+        priced.append({"part_number": part.get("part_number"),
+                       "priced_as": keep, "model_said": drop,
+                       "agreed_with": settled.get("agreed_with")})
+    if not priced:
+        return []
+    return [_violation(
+        "handed_pair_settled_on_cut_file", WARNING,
+        f"{len(priced)} handed pair(s) split one reading each and were priced from the exported "
+        f"cut file rather than the model: "
+        + "; ".join(f"{d['part_number']} priced as {d['priced_as'][0]} at {d['priced_as'][1]}mm "
+                    f"(the model said {d['model_said'][0]} at {d['model_said'][1]}mm)"
+                    for d in priced[:6])
+        + ". The CNC is driven from the exported DXF, so the pair is costed on one stock key "
+          "from it and both hands price the same -- but a library material is often a stale "
+          "default, so this is a proviso, not a firm reading. Confirm the material before "
+          "quoting firm.",
+        parts=priced)]
+
+
 def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, Any]]:
     """A part whose thickness two sources read differently, by enough to move the money.
 
@@ -2957,6 +3005,7 @@ CHECKS = (
     check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,
+    check_a_handed_pair_priced_on_the_cut_file,
     check_two_sources_disagree_about_the_gauge,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,

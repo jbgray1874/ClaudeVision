@@ -41,6 +41,7 @@ _NOT_OURS = {
     "two_sources_disagree_about_the_gauge",
     "two_sources_disagree_about_the_material",
     "handed_pair_disagrees",
+    "handed_pair_settled_on_cut_file",
     "cad_files_not_read",
     "bom_page_not_read_by_both",
     "detail_drawing_missing",

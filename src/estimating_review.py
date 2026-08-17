@@ -72,6 +72,9 @@ _ACTION = {
     "two_sources_disagree_about_the_material": "Confirm which material the part is made from.",
     "handed_pair_disagrees": "The two hands read differently and the evidence is even. "
                              "Confirm which is right.",
+    "handed_pair_settled_on_cut_file": "The two hands read different materials; priced from the "
+                                       "exported cut file the CNC uses, not the model. Confirm "
+                                       "the material before quoting firm.",
     "cad_files_not_read": "If any are flat patterns, ask for a DXF; general arrangements add "
                           "nothing over the PDF.",
     "price_not_firm": "Expected on an estimate. Clear it only when quoting firm.",

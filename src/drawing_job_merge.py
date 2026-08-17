@@ -1389,6 +1389,19 @@ _DERIVED_SOURCES = {"mirror_of_measured"}
 # neighbour on a shared sheet.
 _A_READING_OF_THIS_SPECIFIC_PART = {"dxf_filename"}
 
+# THE FILE THE CNC IS ACTUALLY DRIVEN FROM. When a handed pair splits one-for-one — one hand's
+# material read from the exported flat, the other's from a bare model property — the readings
+# are level on COUNT but not on authority. The laser cuts the issued DXF, not the SolidWorks
+# library material, which is often a stale default (the ABS-vs-PETG problem this file exists
+# for). So on an otherwise even split the export breaks the tie, the pair takes one stock key,
+# and the conflict is kept as a loud proviso rather than left as two materials on one article.
+#
+# dxf_filename names the material on the cut file; dxf / dxf_flat_pattern are the geometry read
+# from it. All three ARE the manufacturing export. A model or drawing-text source is not, so a
+# pair split model-against-model, or export-against-export, is NOT broken here — that is a real
+# disagreement a person settles, and inventing a winner would hide it.
+_CNC_CUT_FILE_SOURCES = {"dxf_filename", "dxf", "dxf_flat_pattern"}
+
 
 def _independent_support(record: Dict[str, Any], field: str, value: Any) -> set:
     return {s for s in source_precedence.support_for(record, field, value)
@@ -1490,6 +1503,46 @@ def _pool_pair_evidence(hand: Dict[str, Any], base: Dict[str, Any]) -> List[Dict
     return moved
 
 
+def _rests_on_cut_file(support: set) -> bool:
+    """Does any reading in this support set come from the manufacturing export?
+
+    Support entries are 'tag:source:field' (base:dxf_filename:normalized_material); the source
+    is the middle token. One export reading is enough to say this side rests on the cut file.
+    """
+    for entry in support or ():
+        bits = str(entry).split(":")
+        if len(bits) >= 2 and bits[1] in _CNC_CUT_FILE_SOURCES:
+            return True
+    return False
+
+
+def _adopt_pair_stock_key(loser: Dict[str, Any], keep, drop, winner_name: Any,
+                          basis: str) -> None:
+    """The loser of a handed-pair decision takes the winner's WHOLE stock key.
+
+    However the pair was decided — more independent readings, or the cut file breaking an even
+    split — adopting the key is one rule and must stay one, or the two paths drift. The field
+    moves where it differs, logging what it displaced; the whole key takes ONE owner even on the
+    half that already agreed (else material says mirror_of_measured while gauge still says the
+    model, and the halves separate again at the next submission); and the winner is never
+    restamped, because it reached this key on its own honest readings. Only the FLAG differs by
+    how it was decided, and the caller writes that. `basis` records which way it went, so a
+    proviso can be raised on a pair settled by the cut file and not on one settled by weight of
+    evidence.
+    """
+    for field, val in zip(_STOCK_KEY, keep):
+        was, was_src = loser.get(field), source_precedence.source_of(loser, field)
+        if not source_precedence._same_value(was, val):
+            source_precedence._observe(loser, field, was, was_src or "an earlier pass",
+                                       applied=True, displaced_by="mirror_of_measured")
+            loser[field] = val
+        loser[source_precedence._source_key(field)] = "mirror_of_measured"
+        loser.pop(f"{field}_confidence", None)
+    loser.setdefault("_handed_settled", {})["stock_key"] = {
+        "value": list(keep), "displaced": list(drop), "agreed_with": winner_name,
+        "basis": basis}
+
+
 def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """A handed pair is ONE purchase, so it gets one stock key.
 
@@ -1574,13 +1627,42 @@ def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             return out
         s_hand, s_base = _support(k_hand), _support(k_base)
         if len(s_hand) == len(s_base):
+            # AN EVEN COUNT IS NOT AN EVEN AUTHORITY. If exactly one side rests on the cut file
+            # the CNC is driven from — one hand's material off the exported flat, the other's
+            # off a bare model property — the export breaks the tie. The laser cuts the issued
+            # DXF, not the SolidWorks library material, so the pair takes the export's key, both
+            # hands price from it (one rate, one laser row), and the disagreement is kept as a
+            # loud proviso rather than left as two materials on one article. A price is always
+            # rendered; the conflict is always visible; the pair is not firm until it is
+            # confirmed.
+            hand_on_export = _rests_on_cut_file(s_hand)
+            base_on_export = _rests_on_cut_file(s_base)
+            if hand_on_export != base_on_export:
+                keep, drop = ((k_hand, k_base) if hand_on_export else (k_base, k_hand))
+                loser = base if hand_on_export else hand
+                winner_name = (hand if hand_on_export else base).get("part_number")
+                _adopt_pair_stock_key(loser, keep, drop, winner_name, "cut_file")
+                loser.setdefault("review_flags", []).append(
+                    f"HANDED PAIR PRICED ON THE CUT FILE: this hand read {drop[0]} at "
+                    f"{drop[1]}mm and {winner_name} reads {keep[0]} at {keep[1]}mm from the DXF "
+                    f"the part is cut from. The readings are one-for-one, so neither outweighs "
+                    f"the other on count — but the CNC is driven from the exported flat, not "
+                    f"the model's library material, so both hands are priced as {keep[0]} at "
+                    f"{keep[1]}mm. The pack disagrees with itself: priced from the cut-file "
+                    f"export, the model disagrees — confirm the material")
+                settled.append({"part_number": loser.get("part_number"), "base": winner_name,
+                                "outcome": "settled_on_cut_file", "stock_key": list(keep)})
+                continue
+            # NO EXPORT VOICE TO BREAK IT — a genuine even split (model vs model, or export vs
+            # export). Do not invent a winner; flag only, and a person settles which is right.
             for rec in (hand, base):
                 rec.setdefault("review_flags", []).append(
                     f"HANDED PAIR DISAGREES: {hand.get('part_number')} is "
                     f"{k_hand[0]} at {k_hand[1]}mm and {base.get('part_number')} is "
                     f"{k_base[0]} at {k_base[1]}mm, on {len(s_hand)} readings each. One "
-                    f"panel made twice cannot be two purchases — but neither side has more "
-                    f"evidence, so nothing has been changed. Confirm which hand is right")
+                    f"panel made twice cannot be two purchases — but neither side rests on the "
+                    f"cut file and neither has more evidence, so nothing has been changed. "
+                    f"Confirm which hand is right")
             settled.append({"part_number": hand.get("part_number"),
                             "base": base.get("part_number"), "outcome": "undecided",
                             "hand_key": list(k_hand), "base_key": list(k_base)})
@@ -1588,28 +1670,7 @@ def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         keep, drop = ((k_hand, k_base) if len(s_hand) > len(s_base) else (k_base, k_hand))
         loser = hand if keep is k_base else base
         winner_name = (base if keep is k_base else hand).get("part_number")
-        for field, val in zip(_STOCK_KEY, keep):
-            was, was_src = loser.get(field), source_precedence.source_of(loser, field)
-            # A DISPLACEMENT IS LOGGED ONLY WHERE SOMETHING WAS DISPLACED. Half a key often
-            # already matches — both hands read 2.0mm and disagreed only about the material —
-            # and recording that as an overwrite would put a reading on the record that never
-            # lost anything.
-            if not source_precedence._same_value(was, val):
-                source_precedence._observe(loser, field, was, was_src or "an earlier pass",
-                                           applied=True, displaced_by="mirror_of_measured")
-                loser[field] = val
-            # BUT THE WHOLE KEY TAKES ONE OWNER, including the half that already agreed. Left
-            # as it was, the hand's material said mirror_of_measured (75) while its gauge still
-            # said the model (90) — one purchase decision owned by two sources, which is the
-            # defect this rule exists to end, reappearing inside the fix for it. It also does
-            # real damage: the next pass to submit a gauge at 75 is refused while the material
-            # accepts it, and the two halves drift apart again.
-            #
-            # The WINNER is not restamped. It reached this key through its own readings and
-            # those are the honest provenance; only the hand that took the pair's answer
-            # records that it took the pair's answer.
-            loser[source_precedence._source_key(field)] = "mirror_of_measured"
-            loser.pop(f"{field}_confidence", None)
+        _adopt_pair_stock_key(loser, keep, drop, winner_name, "more_independent_readings")
         loser.setdefault("review_flags", []).append(
             f"HANDED PAIR SETTLED: this hand read {drop[0]} at {drop[1]}mm and "
             f"{winner_name} read {keep[0]} at {keep[1]}mm. A handed pair is one purchase, "
@@ -1617,8 +1678,6 @@ def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             f"readings across the two hands ({max(len(s_hand), len(s_base))} against "
             f"{min(len(s_hand), len(s_base))}). Confirm if the hands are genuinely "
             f"different stock")
-        loser.setdefault("_handed_settled", {})["stock_key"] = {
-            "value": list(keep), "displaced": list(drop), "agreed_with": winner_name}
         settled.append({"part_number": loser.get("part_number"), "base": winner_name,
                         "outcome": "settled", "stock_key": list(keep)})
     return settled
