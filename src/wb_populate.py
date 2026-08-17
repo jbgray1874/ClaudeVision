@@ -954,6 +954,36 @@ def _safe(v, default=None):
         return default
 
 
+def _is_powder_consumable(part) -> bool:
+    """A BOM line that IS the powder itself (the coating consumable), by name or description.
+
+    Keyed on the word POWDER, not on a code, so it catches both the engine's generic 'POWDER'
+    row and a drawing-named one like 'POWDER197' — every powder job, not one pack's spelling."""
+    text = (str((part or {}).get("part_number") or "") + " "
+            + str((part or {}).get("description") or "")).upper()
+    return "POWDER" in text
+
+
+def _powder_consumable_rate(part, engine_rate):
+    """The reproducible £/kg a powder consumable line prices at, or None.
+
+    A drawing-NAMED powder (POWDER197) is read straight off the BOM and never passes through
+    the generic-row branch that stamps _catalogue_rate_gbp, so it reached the consumable pricer
+    rate-less and was withheld at £0 while the engine's own coated mass sat unused. The rate for
+    ANY powder is the same SDI figure the generic row uses — config.POWDER_COST_PER_KG — so a
+    powder line carrying no rate of its own inherits it. A line's OWN catalogue rate always wins,
+    and a non-powder line gets nothing here. Config-controlled, so the resulting price repeats
+    every run — an SDI material rate, not an unrepeatable AI figure."""
+    own = _safe((part or {}).get("_catalogue_rate_gbp"))
+    if own:
+        return own
+    if _is_powder_consumable(part):
+        rate = _safe(engine_rate)
+        if rate:
+            return rate
+    return None
+
+
 def _is_sheet_metal(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
@@ -3103,9 +3133,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         pe = _line["part"]
 
         if pe.get("_price_explicitly_withheld"):
-            _cat_rate = _safe(pe.get("_catalogue_rate_gbp"))
+            # A powder line's rate is config.POWDER_COST_PER_KG whether the drawing named the
+            # powder (POWDER197, read off the BOM with no rate) or the engine added a generic
+            # row (which stamps the rate). Resolving it here means a NAMED powder is priced
+            # from the engine's own coated mass exactly like the generic one, instead of being
+            # withheld at £0 with the kilos sitting unused. Keyed on the powder class, not a code.
+            _cat_rate = _powder_consumable_rate(pe, _POWDER_COST_PER_KG)
             _is_consumable_line = bool(pe.get("_consumable_qty_unknown")) or \
-                                  "POWDER" in str(pe.get("part_number") or "").upper()
+                                  _is_powder_consumable(pe)
             if _is_consumable_line and _cat_rate and _wire_powder_kg > 0:
                 # We withheld because we could not know the QUANTITY. We now can: the wire's
                 # coated area is real geometry (pi x d x L) that the workbook's sheet-only
