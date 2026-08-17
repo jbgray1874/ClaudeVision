@@ -870,24 +870,45 @@ class PricingService:
         except (TypeError, ValueError):
             _timeout_s = 25.0
         import concurrent.futures as _futures
+
+        def _compute() -> Dict[str, Any]:
+            # The lookup is multi-call (network + LLM) and can hang; run it on a worker thread
+            # and abandon it past the budget so the run never blocks. A miss returns {} — never
+            # stored, so tomorrow asks again rather than inheriting today's network problem.
+            try:
+                with _futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(lookup_web_ai_price, _spec,
+                                      enable_web_search=True, enable_llm_estimate=True)
+                    return _fut.result(timeout=_timeout_s) or {}
+            except _futures.TimeoutError:
+                print(f"   [pricing] web/AI fallback timed out ({_timeout_s:.0f}s) on "
+                      f"{part.get('part_number') or _spec.get('description')} — flagged "
+                      f"'estimator to confirm', run continues", flush=True)
+                return {}
+            except Exception:                                    # noqa: BLE001
+                return {}
+
+        # ASK ONCE PER SPECIFICATION AND STORE IT. A generated price that comes back GBP 4.54 one
+        # run and GBP 8.54 the next is not a price the workbook will put in the column — it gets
+        # withheld as a hint beside a zero, which on a pack of everyday bought-ins is most of the
+        # BOM reading as free. The same content-addressed cache the sheet rates use makes this
+        # per-piece figure hold still, so it is reproducible from the first run and PRICES the
+        # line (tagged indicative), which is the whole point of asking the market at all.
         try:
-            with _futures.ThreadPoolExecutor(max_workers=1) as _ex:
-                _fut = _ex.submit(
-                    lookup_web_ai_price, _spec, enable_web_search=True, enable_llm_estimate=True)
-                result = _fut.result(timeout=_timeout_s)
-        except _futures.TimeoutError:
-            print(f"   [pricing] web/AI fallback timed out ({_timeout_s:.0f}s) on "
-                  f"{part.get('part_number') or _spec.get('description')} — flagged 'estimator to "
-                  f"confirm', run continues", flush=True)
-            return None
-        except Exception:
-            return None
+            import generated_price_cache as _gpc
+            _model = str(fallback_policy.get("llm_model") or "auto")
+            result = _gpc.cached_estimate(_spec, "web_ai_price_lookup", _model, _compute)
+        except Exception:                                        # noqa: BLE001
+            result = _compute()          # the cache is a bonus, never a dependency
         if not result or not result.get("found") or not result.get("price_gbp"):
             return None
         capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
         return {
             "source": result.get("source_type", "web_ai_fallback"),
             "source_type": "web_ai_fallback",
+            # Reproducible once cached: the same spec returns the same number next run, so the
+            # column prices it instead of withholding it as an unrepeatable guess.
+            "price_is_reproducible": bool(result.get("price_is_reproducible")),
             # WHICH ENGINE ANSWERED. The lookup records it and nothing carried it forward, so
             # the estimating sheet could only say "an AI" — true, but an estimator asking
             # where a price came from deserves the actual name, and if the provider is ever
