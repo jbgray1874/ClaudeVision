@@ -4108,6 +4108,31 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # tape) because these stubs have no real geometry to cost. Respect the upstream price.
     _preset_src = str(part.get("source") or "")
     _preset_unit = part.get("unit_cost_gbp")
+    # A LINE THE PROSE RECOGNISER DECLINED TO PRICE STAYS DECLINED — THE SEAL.
+    #
+    # When the recogniser judges an ambiguous fabrication word ('Foot Plate') to be a made part
+    # under another name, it deliberately leaves it UNPRICED and flags it a query. But an
+    # unpriced bought-in with no ops then reached _resolve_part_system_cost below, which looked
+    # 'Foot Plate' up through the UDEF/RAG/catalogue/LLM chain and applied the LLM's market
+    # figure as system_unit_cost — a number that ENTERS the total and changes every run
+    # (GBP 14 one run, GBP 26 the next). So the recogniser's decision not to price was silently
+    # overturned one function later, and the phantom it removed walked back in through a
+    # different door. The query decision is now honoured here: recognised, on the sheet, priced
+    # at nothing, owned by the estimator — never re-priced by the system-cost lookup.
+    if part.get("cost_source") == "layer2_possible_fabricated_query":
+        part["material_estimate"] = {"unit_material_cost_gbp": None, "cost_per_part_gbp": None,
+                                     "extended_material_cost_gbp": None,
+                                     "cost_method": "recogniser_query_not_priced"}
+        part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
+        part["unit_cost_gbp"] = None
+        part["unit_total_cost_gbp"] = None
+        part["extended_total_cost_gbp"] = None
+        part["costing_basis"] = "recogniser_query_not_priced"
+        part.setdefault("review_flags", []).append(
+            "NOT PRICED: the prose recogniser judged this a fabricated part under another name "
+            "(possible double-count) and declined to price it; the system-cost/LLM lookup is not "
+            "allowed to overturn that. Estimator to confirm bought-in vs made-in.")
+        return part
     # SDI BOM-code stubs (FIXING/VINYL priced from UDEF, or flagged unpriced) must also keep
     # their upstream state — a genuine catalogue price, or an honest "estimator to price".
     if _preset_src == "sdi_bom_code_unpriced":
