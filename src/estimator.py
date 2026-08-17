@@ -941,6 +941,27 @@ def _plain_stock_rates_gbp_per_m2(rows: Iterable[Any], token: str,
     return rates
 
 
+def _commercial_order_quantity(summary: Any) -> int:
+    """How many of the assembly this order is for, for the packaging and delivery lines.
+
+    file_scan stamps the order quantity onto summary['assumed_job_quantity'] (and 'quantity'),
+    whichever way it was arrived at. The packaging and delivery lines divide a per-order figure
+    by this, so reading the wrong key does not fail loudly — it silently divides by one. It did:
+    the old read looked under summary['estimating_workbook'], a key nothing sets, so every order
+    was divided by 1 and 400-off packaging landed at GBP 115 a unit instead of 29 pence. One
+    reader of the order quantity, and it is the one file_scan wrote.
+    """
+    s = summary if isinstance(summary, dict) else {}
+    for key in ("assumed_job_quantity", "quantity"):
+        try:
+            v = int(s.get(key))
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 1
+
+
 def _sheet_catalogue_token(material: Any) -> Optional[str]:
     """The word to look this material up by in the parts catalogue, or None.
 
@@ -5656,10 +5677,13 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             # nobody argues with it; an indicative figure gets checked.
             try:
                 import commercial_lines as _cl
-                # HOW MANY OF THE ASSEMBLY THIS ORDER IS FOR — the one number both lines
-                # turn on, read from the same place the rest of the document reads it.
-                _oq = ((summary or {}).get("estimating_workbook") or {}).get(
-                    "assumed_job_quantity") or 1
+                # HOW MANY OF THE ASSEMBLY THIS ORDER IS FOR — the one number both lines turn
+                # on. file_scan stamps it onto summary['assumed_job_quantity'] (and 'quantity'),
+                # which is where the rest of this function reads it; the old read looked under
+                # summary['estimating_workbook'], a key nothing ever sets, so it fell to 1 and
+                # divided EVERY order by one — 400-off packaging landed at GBP 115 a unit
+                # instead of 29 pence.
+                _oq = _commercial_order_quantity(summary)
                 _cline = (_cl.packaging_line(parts, _oq) if _code == "PACKAGING"
                           else _cl.delivery_line(parts, _oq))
             except Exception:                               # noqa: BLE001

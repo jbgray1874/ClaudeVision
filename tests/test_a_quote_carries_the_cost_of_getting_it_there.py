@@ -147,9 +147,32 @@ def test_the_estimator_asks_for_these_lines_rather_than_zeroing_them():
     assert "import commercial_lines as _cl" in src
     assert "_cl.packaging_line(parts, _oq)" in src
     assert "_cl.delivery_line(parts, _oq)" in src
-    # And the quantity is the ORDER's, read where the rest of the document reads it — a
-    # per-order figure divided by the wrong divisor is a wrong number with a right shape.
-    assert '"assumed_job_quantity"' in src
+    # And the quantity is read through the one helper that knows where file_scan wrote it.
+    assert "_oq = _commercial_order_quantity(summary)" in src
+
+
+def test_the_order_quantity_is_read_where_file_scan_stamps_it():
+    """THE 8352 BUG, AS A UNIT. file_scan stamps the order quantity onto
+    summary['assumed_job_quantity'] (and 'quantity'). The old code read
+    summary['estimating_workbook']['assumed_job_quantity'], a key nothing sets, so it divided
+    every order by 1 — 400-off packaging at GBP 115 a unit. The helper reads the stamped key,
+    and a summary carrying ONLY the old bogus path still reads 1, so the wrong key cannot creep
+    back in disguised as a pass."""
+    import estimator
+    assert estimator._commercial_order_quantity({"assumed_job_quantity": 400}) == 400
+    assert estimator._commercial_order_quantity({"quantity": 400}) == 400
+    assert estimator._commercial_order_quantity({}) == 1
+    assert estimator._commercial_order_quantity(
+        {"estimating_workbook": {"assumed_job_quantity": 400}}) == 1
+
+
+def test_packaging_at_four_hundred_off_is_pennies_not_pounds(market):
+    """The bug in the money it moved: at 400 off, a GBP 84 order packaging figure is 21 pence a
+    unit, not 84 pounds. Proven at the commercial_lines level with the quantity the helper would
+    have handed it."""
+    line = cl.packaging_line(PANELS, 400)
+    assert line["order_gbp"] == 84.0
+    assert line["unit_gbp"] == pytest.approx(0.21, abs=0.01)
 
 
 def test_a_priced_placeholder_is_not_zeroed_again_by_the_costing_pass():
