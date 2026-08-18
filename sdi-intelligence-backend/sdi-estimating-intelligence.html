@@ -184,6 +184,36 @@
          disabled until there is. Use the UK estimator above.</p>
     </section>
 
+    <!-- ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════
+         A SEPARATE PATH, DELIBERATELY. The estimate above is the engine's; this is the
+         estimator's. Tim opens the workbook, edits it, saves it, and — hours or days later —
+         comes back with that amended sheet. Nothing is re-read and no drawing is needed: the
+         sheet IS the answer, and this turns it into a client quote. Only the CLIENT QUOTE is
+         regenerated; the AI job report and provenance stay as the engine wrote them, so the
+         two accounts of the job never get mixed up. -->
+    <section class="card">
+      <h2>Regenerate a client quote from an amended sheet</h2>
+      <p class="hint">Already edited an estimate workbook? Upload it here with the units, drawing
+         number and client, and it becomes a fresh client quote — saved to the AI Estimating
+         share along with the amended sheet, kept as the manual-override record.
+         No drawings needed: this never re-runs the engine or re-reads a drawing.</p>
+
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <button id="pickOverride">Choose amended workbook…</button>
+        <span class="p" id="overrideName"><span class="pending">No workbook chosen</span></span>
+        <input id="overrideFile" type="file" accept=".xlsx" hidden>
+      </div>
+
+      <p class="note" style="margin-top:10px">Uses the <strong>units, drawing number and
+         client</strong> entered at the top of this page. The workbook must have been opened and
+         <strong>saved in Excel</strong> at least once, so its totals are calculated.</p>
+
+      <button class="btn-run" id="regen" disabled style="margin-top:10px">
+        SDI Intelligence Estimator Client Report Regen</button>
+      <p class="req" id="regenReq"></p>
+      <ul class="out" id="regenOut"></ul>
+    </section>
+
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
     <section class="card">
       <h2>Drawings</h2>
@@ -1045,7 +1075,78 @@ runBtn.onclick = async () => {
   }, 2000);
 };
 
-renderFiles(); refresh(); setStatus("","Idle"); renderBatch(); bSet("","Idle");
+/* ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════════════════════
+   Upload the amended workbook + the three fields already on this page, POST it, and show
+   the regenerated client quote. Deliberately independent of the run state: this path needs
+   no runner, no drawings and no engine — an estimator can do it days after the estimate, on
+   a machine that has never run one. Only the client quote is regenerated. */
+const overrideFile=$("overrideFile"), overrideName=$("overrideName"),
+      regen=$("regen"), regenReq=$("regenReq"), regenOut=$("regenOut");
+
+$("pickOverride").onclick = () => overrideFile.click();
+overrideFile.addEventListener("change", () => {
+  const f = overrideFile.files[0];
+  overrideName.textContent = f ? f.name : "";
+  if(!f) overrideName.innerHTML = '<span class="pending">No workbook chosen</span>';
+  refreshRegen();
+});
+
+/* The same three facts the quote needs, read off the fields at the top of the page. Named
+   rather than inferred: a workbook saved days ago cannot be trusted to still carry them. */
+function refreshRegen(){
+  const missing=[];
+  if(!overrideFile.files[0]) missing.push("an amended workbook");
+  if(!(parseInt(units.value,10) > 0)) missing.push("the number of units");
+  if(!drawing.value.trim()) missing.push("a drawing number");
+  if(!client.value.trim()) missing.push("a client");
+  regen.disabled = missing.length > 0;
+  regenReq.textContent = missing.length ? "Needs " + missing.join(", ") + "." : "";
+}
+[units, client, drawing].forEach(el => el.addEventListener("input", refreshRegen));
+
+regen.onclick = async () => {
+  const f = overrideFile.files[0];
+  if(!f) return;
+  regen.disabled = true; regenOut.innerHTML = "";
+  const was = regen.textContent; regen.textContent = "Regenerating…";
+  try{
+    const fd = new FormData();
+    fd.append("file", f);
+    fd.append("units", String(parseInt(units.value,10)));
+    fd.append("drawing", drawing.value.trim());
+    fd.append("client", client.value.trim());
+    const r = await api("/api/estimate/override", {method:"POST", body:fd});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      /* The service explains itself — an uncalculated sheet, a wrong file type — so show
+         its words rather than a status code. */
+      regenOut.innerHTML = '<li><span style="color:var(--bad)">'
+        + (j.detail || ("Regeneration failed (" + r.status + ")")) + '</span></li>';
+      return;
+    }
+    const price = (typeof j.price === "number")
+      ? "£" + j.price.toFixed(2) + (j.price_source ? " (" + j.price_source + ")" : "") : "";
+    const head = document.createElement("li");
+    head.innerHTML = '<span style="color:var(--ok)">Client quote regenerated from your amended '
+      + 'sheet' + (price ? " at " + price + " per unit" : "") + '.</span>';
+    regenOut.appendChild(head);
+    [{path:j.quote_html, name:"Client quote (regenerated)"},
+     {path:j.override_xlsx, name:"Amended workbook (manual override record)"}]
+      .filter(d => d.path).forEach(d => {
+        const a=document.createElement("a");
+        a.href="/api/file?path="+encodeURIComponent(d.path);
+        a.textContent=d.name; a.target="_blank"; a.rel="noopener";
+        const li=document.createElement("li"); li.appendChild(a); regenOut.appendChild(li);
+      });
+  }catch(e){
+    regenOut.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service — '
+      + 'check it is running.</span></li>';
+  }finally{
+    regen.textContent = was; refreshRegen();
+  }
+};
+
+renderFiles(); refresh(); setStatus("","Idle"); renderBatch(); bSet("","Idle"); refreshRegen();
 </script>
 </body>
 </html>
