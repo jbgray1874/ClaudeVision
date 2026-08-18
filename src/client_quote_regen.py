@@ -194,3 +194,34 @@ def run_estimator_override(uploaded_workbook: str | Path, *, units: int, drawing
         "figures": figures,
         "job_stem": stem,
     }
+
+
+def main() -> None:
+    """Run the override loop from the command line, so the feature is usable before the portal
+    button exists: an estimator (or a PowerShell wrapper) points it at their amended sheet and
+    the three fields, and it writes the manual-override record and the regenerated client quote.
+
+        python src/client_quote_regen.py --workbook edited.xlsx --units 180 \\
+               --drawing 10575-02 --client Dyson
+    """
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Regenerate a client quote from an estimator's amended workbook.")
+    ap.add_argument("--workbook", required=True, help="Path to the amended (estimator-edited) xlsx")
+    ap.add_argument("--units", required=True, type=int, help="Number of units for the order")
+    ap.add_argument("--drawing", required=True, help="Drawing number for the quote header")
+    ap.add_argument("--client", required=True, help="Client name (heads the quote, picks the logo)")
+    ap.add_argument("--quote-dir", help="Override the quote destination (default: AISheets share)")
+    ap.add_argument("--override-xlsx-dir", help="Override where the _MANUAL_OVERRIDE sheet is saved")
+    a = ap.parse_args()
+    res = run_estimator_override(
+        a.workbook, units=a.units, drawing_number=a.drawing, client=a.client,
+        quote_dir=a.quote_dir, override_xlsx_dir=a.override_xlsx_dir)
+    print(f"  price read:    £{res['figures']['price']:.2f} "
+          f"({res['figures']['source_label']})")
+    print(f"  override sheet: {res['override_xlsx']}")
+    print(f"  client quote:   {res['quote_html']}")
+
+
+if __name__ == "__main__":
+    main()
