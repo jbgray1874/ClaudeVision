@@ -321,7 +321,14 @@ def _build_estimate_review_signals(part_estimates: List[Dict[str, Any]]) -> Dict
         if "powder_coating" in times_min and gr is not None and gr < geom_thr:
             reasons.append({"code": "low_geometry_reliability_with_powder", "detail": gr})
         if reasons:
-            parts_out.append({"part_number": p.get("part_number"), "reasons": reasons})
+            # Carry a FALLBACK IDENTITY, not just the part_number. A part whose number was
+            # rejected as boilerplate (set to None upstream) still has a description and a source
+            # file — without them the review report can only show "?" in its Item column, a flag
+            # the estimator cannot tie to anything. Same nameless-part gap the blocking flags fixed.
+            parts_out.append({"part_number": p.get("part_number"),
+                              "description": p.get("description"),
+                              "source_file": p.get("dxf_source_file") or p.get("source_file"),
+                              "reasons": reasons})
     rec = "manual_review_recommended" if parts_out else "no_automatic_flags"
     return {
         "schema": "estimate_review_signals.v1",

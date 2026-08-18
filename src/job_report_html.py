@@ -217,8 +217,15 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
 
     for f in flagged:
         if isinstance(f, dict):
+            # A findable name, not "?". part_number may be None (rejected as boilerplate); fall
+            # back through the description and the source filename so Tim can locate the part the
+            # review flag is about, instead of a bare "?" he cannot act on.
+            _src = f.get("source_file")
+            _label = (f.get("part_number") or f.get("part") or f.get("description")
+                      or (str(_src).rsplit("\\", 1)[-1].rsplit("/", 1)[-1] if _src else None)
+                      or "unidentified (no part number)")
             review["flagged_parts"].append({
-                "part": f.get("part_number") or f.get("part") or "?",
+                "part": _label,
                 "reason": _reason_text(f.get("reasons") or []),
                 "cost": f.get("unit_total_cost_gbp") or f.get("cost"),
             })
