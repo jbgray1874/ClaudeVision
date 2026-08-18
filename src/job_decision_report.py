@@ -496,6 +496,59 @@ def decisions_that_required_resolution(summary: Dict[str, Any]) -> List[Dict[str
     return out
 
 
+# The DATA contests, by the invariant code that already finds them. Read rather than
+# recomputed: the comparison rules are fiddly and earned (a material spelling variant is not a
+# disagreement; a gauge must differ by enough to move the money), and a second copy here would
+# be the two-copies-of-one-rule defect this codebase keeps digging out — with the tab and the
+# review block quietly disagreeing about the same part.
+_DATUM_CONTEST_CODES = {
+    "two_sources_disagree_about_the_material": "material",
+    "two_sources_disagree_about_the_gauge": "gauge",
+}
+
+
+def datum_decisions_that_required_resolution(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Contests about the DATA the price is computed from — what the part is made of, and how
+    thick — alongside the operation contests already listed.
+
+    THE OPERATION CONTESTS WERE THE ONLY ONES SHOWN, AND THEY ARE NOT THE EXPENSIVE ONES. On
+    8352 this block held two lines, both 'powder coating: not_applicable', while the same run
+    reported a back panel costed as PLYWOOD that inference read as TIMBER, and three parts whose
+    gauge two sources put 4x apart — 12mm against 3mm on the panel that sets the sheet rate.
+    Material decides the rate and whether the part has a rate at all; gauge decides the rate and
+    steps the cut time, so a part costed on the wrong one is wrong twice. Those are the decisions
+    worth a person's minute, and the tab that exists to show decisions did not show them.
+
+    Ordered worst-first by how far the two readings are apart, so the 4x argument is read before
+    the 1.1x one.
+    """
+    if not isinstance(summary, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    for violation in ((summary.get("invariants") or {}).get("violations") or []):
+        if not isinstance(violation, dict):
+            continue
+        datum = _DATUM_CONTEST_CODES.get(str(violation.get("code") or ""))
+        if not datum:
+            continue
+        for d in ((violation.get("detail") or {}).get("parts") or []):
+            if not isinstance(d, dict):
+                continue
+            out.append({
+                "part_number": d.get("part_number"),
+                "datum": datum,
+                "costed_as": d.get("costed_as"),
+                "costed_from": d.get("costed_from"),
+                "other": d.get("other"),
+                "other_from": d.get("other_from"),
+                # Only the gauge check measures how far apart the readings are; a material
+                # disagreement is categorical, so it sorts after the measured ones.
+                "ratio": d.get("ratio"),
+            })
+    out.sort(key=lambda d: (-(float(d.get("ratio") or 0)), str(d.get("part_number") or "")))
+    return out
+
+
 def powder_authority(summary: Dict[str, Any]) -> str:
     """Who decided powder on this job, in one sentence, naming source and rank.
 
@@ -654,10 +707,20 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     # settle rather than simply read. Powder is here because it has twice this month put a
     # figure on a sheet that no reader could trace to a decision.
     _contested = decisions_that_required_resolution(summary)
+    _datum_contested = datum_decisions_that_required_resolution(summary)
     _banner = powder_authority(summary)
-    if _contested:
-        _banner += (f"   |   {len(_contested)} decision(s) required resolution "
-                    f"— see the block below the table.")
+    # BOTH KINDS COUNTED. The operation contests were the only ones named here, and on a job
+    # whose real arguments were about material and gauge the banner read "2 decisions" while
+    # four costlier ones sat unmentioned two tabs away in the review list.
+    _n = len(_contested) + len(_datum_contested)
+    if _n:
+        _bits = []
+        if _contested:
+            _bits.append(f"{len(_contested)} operation")
+        if _datum_contested:
+            _bits.append(f"{len(_datum_contested)} material/gauge")
+        _banner += (f"   |   {_n} decision(s) required resolution "
+                    f"({', '.join(_bits)}) — see the blocks below the table.")
     else:
         _banner += "   |   No decision required resolution: no two equal sources disagreed."
     _c(ws, 4, 1, _banner, bold=True, size=9,
@@ -1019,6 +1082,40 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
                size=9, border=True)
             _c(ws, _r, 7, str(_d.get("settled_by_key") or "rank"), size=9, border=True,
                wrap=True)
+            _r += 1
+
+    # ── WHAT THE PART IS, WHERE TWO SOURCES DISAGREED ──────────────────────────
+    # The block above covers OPERATIONS, and those are not the expensive arguments. On 8352
+    # it held two lines, both "powder coating: not_applicable", while the same run had a back
+    # panel costed as PLYWOOD that inference read as TIMBER and three parts whose gauge two
+    # sources put 4x apart. Material decides the rate and whether the part has a rate at all;
+    # gauge decides the rate AND steps the cut time, so a part costed on the wrong one is
+    # wrong twice. A decisions tab that omits them is not describing the decisions that matter.
+    if _datum_contested:
+        _r = ws.max_row + 2
+        _c(ws, _r, 1, "WHAT THE PART IS — WHERE TWO SOURCES DISAGREED", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        _r += 1
+        _c(ws, _r, 1,
+           "The higher-ranked source was used and the figure stands. Confirm these before "
+           "quoting firm — material and gauge both move the money.",
+           size=8, italic=True, fg="666666")
+        _r += 1
+        for _ci, _h in enumerate(("Part", "Datum", "Costed as", "Read from",
+                                  "Other source said", "Which source", "Apart by"), 1):
+            _c(ws, _r, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        _r += 1
+        for _d in _datum_contested:
+            _ratio = _d.get("ratio")
+            _c(ws, _r, 1, str(_d.get("part_number") or ""), size=9, border=True)
+            _c(ws, _r, 2, str(_d.get("datum") or ""), size=9, border=True)
+            _c(ws, _r, 3, str(_d.get("costed_as") or ""), size=9, border=True)
+            _c(ws, _r, 4, str(_d.get("costed_from") or ""), size=9, border=True, wrap=True)
+            _c(ws, _r, 5, str(_d.get("other") or ""), size=9, border=True)
+            _c(ws, _r, 6, str(_d.get("other_from") or ""), size=9, border=True, wrap=True)
+            # Only the gauge contest measures a distance; a material argument is categorical.
+            _c(ws, _r, 7, (f"{float(_ratio):g}x" if _ratio else "—"),
+               align="center", size=9, border=True)
             _r += 1
 
     ws.freeze_panes = "A6"
