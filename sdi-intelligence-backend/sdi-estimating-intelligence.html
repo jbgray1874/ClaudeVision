@@ -208,8 +208,14 @@
          client</strong> entered at the top of this page. The workbook must have been opened and
          <strong>saved in Excel</strong> at least once, so its totals are calculated.</p>
 
+      <!-- NO RATE BOOK IS NAMED HERE BECAUSE NONE IS USED, and that is the point. Every other
+           estimating button on this page must say UK or China, because it reads a book of rates
+           and two unlabelled estimates are indistinguishable afterwards. This button reads no
+           book at all: the price comes off the estimator's OWN saved sheet, whichever rates it
+           was built from and whatever they have since changed by hand. Labelling it "UK" would
+           claim a provenance it does not have. It says whose number it is instead. -->
       <button class="btn-run" id="regen" disabled style="margin-top:10px">
-        SDI Intelligence Estimator Client Report Regen</button>
+        Estimator Client Report Regen — from your amended sheet</button>
       <p class="req" id="regenReq"></p>
       <ul class="out" id="regenOut"></ul>
     </section>
