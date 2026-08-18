@@ -1467,6 +1467,21 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
     return out
 
 
+def _part_label(part: Any) -> str:
+    """A name the estimator can actually find the part by. A part_number rejected as boilerplate
+    (file_scan sets it to None and keeps the record) still has to be locatable — a BLOCKING flag
+    that reads 'None is 12 x 11 mm' stops a quote and points at nothing. Fall back through the
+    description and the source file before admitting the part has no identity at all."""
+    if isinstance(part, dict):
+        for k in ("part_number", "description", "dxf_source_file", "source_file", "title"):
+            v = part.get(k)
+            if v:
+                s = str(v).strip()
+                if s and s.lower() != "none":
+                    return s.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]  # a path -> its filename
+    return "unidentified part (its number was rejected as boilerplate)"
+
+
 def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[str, Any]]:
     """The cut path must fit inside the blank it was cut from.
 
@@ -1520,6 +1535,7 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         if _blank["conflict"]:
             conflicting.append({
                 "part_number": part.get("part_number"),
+                "label": _part_label(part),
                 "readings": _blank["readings"],
                 "priced_from": _blank["holder"],
             })
@@ -1537,6 +1553,9 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         room = _bc.cut_path_a_blank_could_hold_mm(length, width) or 0.0
         impossible.append({
             "part_number": part.get("part_number"),
+            # A findable name for the message — part_number may be None (rejected boilerplate),
+            # and "None is 12 x 11 mm" blocks a quote while naming nothing to check.
+            "label": _part_label(part),
             "blank_mm": [round(length, 2), round(width, 2)],
             "blank_area_mm2": round(area, 1),
             "cut_length_mm": round(cut, 1),
@@ -1550,7 +1569,7 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         # TWO BLANKS ON ONE PART, SAID PLAINLY. Whichever is right, the record holds a
         # second size that some other reader will believe -- and did.
         _names = ", ".join(
-            f"{c['part_number']} ("
+            f"{c['label']} ("
             + " vs ".join(f"{r['length_mm']:g}x{r['width_mm']:g} in {r['holder']}"
                           for r in c["readings"][:3]) + ")"
             for c in conflicting[:4])
@@ -1570,7 +1589,7 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         f"{len(impossible)} part(s) carry a cut path that will not fit inside the blank "
         f"recorded for them, so one of the two is wrong and the material is priced from the "
         f"blank: "
-        + "; ".join(f"{p['part_number']} is {p['blank_mm'][0]:g} x {p['blank_mm'][1]:g} mm "
+        + "; ".join(f"{p['label']} is {p['blank_mm'][0]:g} x {p['blank_mm'][1]:g} mm "
                     f"with a {p['cut_length_mm']:,.0f} mm cut path "
                     f"({p['times_too_long']:g}x more than it could hold, implying cuts "
                     f"{p['implied_cut_spacing_mm']:g} mm apart)"
