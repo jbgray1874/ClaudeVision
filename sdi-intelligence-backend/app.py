@@ -32,6 +32,31 @@ import config
 
 config.validate()
 
+
+def _resolve_commit() -> str:
+    """The git commit this service is running, resolved ONCE at startup and stamped onto every
+    response as X-SDI-Commit. It is the answer to 'which version is the box on?' without an SSH
+    and a git log — hit any endpoint (or read /api/health) and the commit is there. This session
+    hit that question repeatedly (a stale extract, a box behind the tip); a version the running
+    service reports about itself ends the guessing. Env SDI_COMMIT wins for deploys with no
+    working tree; else the short hash from git; else 'unknown' — never an exception at import."""
+    import subprocess
+    env = os.getenv("SDI_COMMIT", "").strip()
+    if env:
+        return env[:40]
+    try:
+        here = Path(__file__).resolve().parent
+        out = subprocess.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=3)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+SDI_COMMIT = _resolve_commit()
+
 app = FastAPI(title="SDI Intelligence — Backend", version="0.1")
 
 app.add_middleware(
@@ -42,7 +67,18 @@ app.add_middleware(
     # "the button does nothing" rather than as a permissions error.
     allow_methods=["GET", "POST"],
     allow_headers=["X-SDI-Key", "Content-Type"],
+    # So browser JS on the portal can READ the version header, not just devtools/curl.
+    expose_headers=["X-SDI-Commit"],
 )
+
+
+@app.middleware("http")
+async def _stamp_version(request, call_next):
+    """Every response carries the running commit, errors included — so a 500 or a 415 still
+    tells you which version produced it."""
+    response = await call_next(request)
+    response.headers["X-SDI-Commit"] = SDI_COMMIT
+    return response
 
 
 # ── Access gate ─────────────────────────────────────────────────────────────
@@ -75,7 +111,8 @@ def health(x_sdi_key: str | None = Header(default=None)):
         roots_ok.append({"root": root, "reachable": os.path.isdir(root)})
     db = db_status()
     overall = all(r["reachable"] for r in roots_ok) and db["status"] in ("ok", "not_configured")
-    return {"status": "ok" if overall else "degraded", "file_roots": roots_ok, "database": db}
+    return {"status": "ok" if overall else "degraded", "commit": SDI_COMMIT,
+            "file_roots": roots_ok, "database": db}
 
 
 @app.get("/api/roots")
