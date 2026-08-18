@@ -213,14 +213,29 @@ def main() -> None:
     ap.add_argument("--client", required=True, help="Client name (heads the quote, picks the logo)")
     ap.add_argument("--quote-dir", help="Override the quote destination (default: AISheets share)")
     ap.add_argument("--override-xlsx-dir", help="Override where the _MANUAL_OVERRIDE sheet is saved")
+    ap.add_argument("--json", action="store_true",
+                    help="Emit the result as a single JSON line on stdout (for the backend endpoint)")
     a = ap.parse_args()
     res = run_estimator_override(
         a.workbook, units=a.units, drawing_number=a.drawing, client=a.client,
         quote_dir=a.quote_dir, override_xlsx_dir=a.override_xlsx_dir)
-    print(f"  price read:    £{res['figures']['price']:.2f} "
-          f"({res['figures']['source_label']})")
-    print(f"  override sheet: {res['override_xlsx']}")
-    print(f"  client quote:   {res['quote_html']}")
+    if a.json:
+        import json as _json
+        print(_json.dumps({
+            "manual_override": True,
+            "override_xlsx": res["override_xlsx"],
+            "quote_html": res["quote_html"],
+            "job_stem": res["job_stem"],
+            "price": res["figures"]["price"],
+            "price_source": res["figures"]["source_label"],
+            "sell_price": res["figures"].get("sell_price"),
+            "unit_cost": res["figures"].get("unit_cost"),
+        }))
+    else:
+        print(f"  price read:    £{res['figures']['price']:.2f} "
+              f"({res['figures']['source_label']})")
+        print(f"  override sheet: {res['override_xlsx']}")
+        print(f"  client quote:   {res['quote_html']}")
 
 
 if __name__ == "__main__":

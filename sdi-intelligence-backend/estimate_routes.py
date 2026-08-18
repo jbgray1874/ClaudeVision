@@ -53,12 +53,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
 import config
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
+
+# ── ESTIMATOR OVERRIDE: run the engine's quote regenerator OUT OF PROCESS ─────
+# The regenerator lives in the engine's src/ and imports the engine's config; this
+# service has its OWN config, so importing it in-process would collide on the module
+# name. A subprocess keeps the two configs in separate interpreters — the isolation
+# the in-process path could not guarantee — for a job that is a ~1s xlsx read anyway.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ENGINE_PYTHON = os.getenv(
+    "SDI_ENGINE_PYTHON", str(_REPO_ROOT / ".venv" / "Scripts" / "python.exe"))
+_OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
+_MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
 # default mapping here and "sometimes falls off", and a service account never has
@@ -514,6 +525,86 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     return {"run_id": run.run_id, "output_path": str(out),
             "drawing_folder": str(drawing_folder),
             "waiting_behind": busy.run_id if busy is not None else None}
+
+
+@router.post("/override")
+async def estimate_override(
+    file: UploadFile = File(...),
+    units: int = Form(...),
+    drawing: str = Form(...),
+    client: str = Form(...),
+    x_sdi_key: Optional[str] = Header(default=None),
+):
+    """Regenerate a CLIENT QUOTE from an estimator's amended workbook — the manual-override path.
+
+    The estimator uploads the sheet they edited (hours or days after the run) and re-enters the
+    three facts a saved sheet cannot be trusted to carry: units, drawing number, client. This
+    reads the estimator's own figure off that sheet and re-renders ONLY the client quote to the
+    AISheets share, from where the portal serves it. No engine re-run, no drawing read, no change
+    to the job report or provenance tab. Runs the regenerator out of process (config isolation).
+    """
+    _check_key(x_sdi_key)
+    name = (file.filename or "").strip()
+    if not name.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=415, detail="Only .xlsx workbooks are accepted")
+    # Read with a hard cap so a huge upload cannot exhaust the box's memory or disk.
+    data = await file.read(_MAX_OVERRIDE_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_OVERRIDE_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Workbook exceeds {_MAX_OVERRIDE_UPLOAD_BYTES // (1024 * 1024)} MB")
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded workbook is empty")
+
+    import json as _json
+    import subprocess
+    import tempfile
+    from urllib.parse import quote as _urlquote
+
+    tf = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        tf.write(data)
+        tf.close()
+        # Write BOTH deliverables to the same share this service serves files from, so the
+        # portal can display the quote straight away and the paths never leave the allowed root.
+        cmd = [_ENGINE_PYTHON, _OVERRIDE_CLI, "--workbook", tf.name,
+               "--units", str(units), "--drawing", drawing, "--client", client,
+               "--quote-dir", str(OUTPUT_ROOT), "--override-xlsx-dir", str(OUTPUT_ROOT),
+               "--json"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="Quote regeneration timed out")
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+        if proc.returncode != 0:
+            # The CLI surfaces a plain ValueError for a bad/uncalculated sheet or a missing
+            # field — hand its last line to the estimator as a 400, not a 500.
+            msg = (proc.stderr or proc.stdout or "override failed").strip()
+            last = msg.splitlines()[-1][:300] if msg else "override failed"
+            raise HTTPException(status_code=400, detail=last)
+        line = next((ln for ln in reversed(proc.stdout.splitlines())
+                     if ln.strip().startswith("{")), "")
+        result = _json.loads(line) if line else {}
+    finally:
+        try:
+            os.unlink(tf.name)
+        except OSError:
+            pass
+
+    quote_html = result.get("quote_html")
+    return {
+        "manual_override": True,
+        "quote_html": quote_html,
+        # A ready-to-open link the portal can drop straight into its viewable list.
+        "quote_url": (f"/api/file?path={_urlquote(quote_html)}" if quote_html else None),
+        "override_xlsx": result.get("override_xlsx"),
+        "units": units, "drawing": drawing, "client": client,
+        "price": result.get("price"), "price_source": result.get("price_source"),
+        "sell_price": result.get("sell_price"), "unit_cost": result.get("unit_cost"),
+    }
 
 
 @router.post("/batch")
