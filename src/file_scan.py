@@ -246,6 +246,53 @@ def _is_excluded_doc(path: Path) -> bool:
     return any(p in name for p in pats)
 
 
+def title_block_author_tokens(summary: Any) -> set:
+    """The NAMES of the people the title blocks credit — DRAWN BY / MODIFIED BY.
+
+    Read so that a draughtsman cannot be costed as a part. Dyson 10575-02 is drawn by
+    "P.Andrew" and the engine costed a part called ANDREW-14: 1200 x 1000 x 18mm MDF at
+    GBP 28.21 plus CNC joinery, on a job whose BOM has no MDF in it at all. The dimensions
+    were the pallet's, the name was the draughtsman's, and nothing on the sheet said either.
+
+    Only alphabetic runs of three or more characters count. Initials ("P", "PA") are far too
+    short to match on: two letters appear inside real codes constantly, and a guard that fires
+    on them would start deleting genuine parts, which is the worse failure by a distance.
+    """
+    tokens: set = set()
+    if not isinstance(summary, dict):
+        return tokens
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        block = ((page.get("page_analysis") or {}).get("title_block") or {})
+        if not isinstance(block, dict):
+            continue
+        for key in ("drawn_by", "modified_by"):
+            value = block.get(key)
+            for name in (value if isinstance(value, (list, tuple)) else [value]):
+                if not name:
+                    continue
+                for word in re.findall(r"[A-Za-z]{3,}", str(name).upper()):
+                    tokens.add(word)
+    return tokens
+
+
+def is_a_person_not_a_part(part_number: Any, author_tokens: set) -> bool:
+    """True when a 'part number' is one of the draughtsmen with a number stuck to it.
+
+    DELIBERATELY NARROW. The test is that the part number's letters, with every digit and
+    separator removed, are EXACTLY an author's name: "ANDREW-14" -> "ANDREW". A real SDI code
+    survives it untouched — "8352-01-02" has no letters at all, "BI-FOOTPLATE" reduces to
+    BIFOOTPLATE, "FIXING2104" to FIXING — and so does any code that merely CONTAINS a name.
+    Deleting a real part costs more than carrying a phantom, so the rule only fires where the
+    identity is nothing but the name.
+    """
+    if not part_number or not author_tokens:
+        return False
+    letters = re.sub(r"[^A-Za-z]", "", str(part_number)).upper()
+    return bool(letters) and letters in author_tokens
+
+
 def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: str = "*") -> List[Path]:
     if not search_root.exists():
         return []
@@ -2091,6 +2138,31 @@ def _finalize_scan_summary(
                 str(p.get("description") or p.get("part_number") or "").strip()
             )
         ]
+        # ── THE DRAUGHTSMAN IS NOT A COMPONENT ────────────────────────────────────
+        # Dyson 10575-02 is drawn by "P.Andrew", and the engine costed ANDREW-14 as a
+        # 1200 x 1000 x 18mm MDF panel — GBP 28.21 of board plus CNC joinery — on a job
+        # whose BOM contains no MDF. The dimensions were the pallet's; the name was the
+        # draughtsman's. It passed the boilerplate guard because that guard demands a digit
+        # and "-14" supplied one, so a person became a part on the strength of a revision
+        # number typed beside their name.
+        #
+        # DROPPED, NOT UN-NAMED. Blanking the part number leaves the money on the sheet
+        # under a nameless line, which is the same phantom wearing a worse label. It is not
+        # a part, so it does not belong in the costing at all — and the drop is announced,
+        # because a line vanishing without explanation is its own kind of unexplained number.
+        _authors = title_block_author_tokens(summary)
+        if _authors:
+            _people = [p for p in _pre_estimate_parts
+                       if is_a_person_not_a_part(p.get("part_number"), _authors)]
+            if _people:
+                _pre_estimate_parts = [p for p in _pre_estimate_parts if p not in _people]
+                for _ghost in _people:
+                    print(f"   [phantom] dropped '{_ghost.get('part_number')}' — that is the "
+                          f"draughtsman named in the title block, not a part", flush=True)
+                summary.setdefault("dropped_phantom_parts", []).extend(
+                    {"part_number": g.get("part_number"),
+                     "description": g.get("description"),
+                     "reason": "title_block_author_read_as_a_part"} for g in _people)
         # Normalise + validate each part_number: reject finish/boilerplate text.
         for _p in _pre_estimate_parts:
             _pn = _normalise_part_number(_p.get("part_number"))
