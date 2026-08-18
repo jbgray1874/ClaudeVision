@@ -839,6 +839,10 @@ _PLASTIC_SHEET_TOKENS = (
     "PETG", "PET ",                          # PET with a space: "PET" alone matches PETROL, PETG
     "HIPS", "ABS", "PVC", "FOAM", "NYLON",
     "ACETAL", "DELRIN", "HDPE", "UHMW", "PMMA",
+    # Aluminium composite panel (ACM) — costed by AREA on a board sheet, CNC-ROUTED not lasered
+    # (the laser melts the polyethylene core). Brand names because that is what drawings write;
+    # "COMPOSITE" is the generic. Dyson 10575-02-009 is DIBOND 3mm.
+    "DIBOND", "ALUPANEL", "REYNOBOND", "ETALBOND", "COMPOSITE",
 )
 _BOARD_TIMBER_TOKENS = (
     "MDF", "BOARD", "MELAMINE", "MFC",

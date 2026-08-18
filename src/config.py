@@ -348,6 +348,12 @@ STANDARD_SHEET_SIZES_MM = {
     "ABS": [(2050, 1520), (3050, 2050)],
     "PVC": [(2050, 1520), (3050, 2050)],
     "FOAMEX": [(3050, 2030)],
+    # Aluminium composite (ACM) — standard trade sheets. Physical stock fact, not a price.
+    "DIBOND": [(3050, 1500), (2050, 3050), (4050, 2020)],
+    "ALUPANEL": [(3050, 1500), (2050, 3050)],
+    "REYNOBOND": [(3050, 1500), (2050, 3050)],
+    "ETALBOND": [(3050, 1500), (2050, 3050)],
+    "COMPOSITE": [(3050, 1500)],
     "POLYPROPYLENE": [(2050, 1520)],
     "POLYSTYRENE": [(2050, 1520)],
     "PMMA": [(2050, 1520), (3050, 2050)],
@@ -409,6 +415,15 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "ABS": 1040,
     "PVC": 1400,
     "FOAMEX": 550,
+    # ACM effective density: 3mm DIBOND is ~4.5 kg/m2 -> 4.5/0.003 = 1500 kg/m3. A composite,
+    # so this is an EFFECTIVE figure for weight/handling — the material is priced by AREA
+    # (BOARD_SHEET_PRICE_GBP), not by mass, because two ally skins on a plastic core do not
+    # cost like a solid of any single density.
+    "DIBOND": 1500,
+    "ALUPANEL": 1500,
+    "REYNOBOND": 1500,
+    "ETALBOND": 1500,
+    "COMPOSITE": 1500,
     "POLYPROPYLENE": 905,
     "POLYSTYRENE": 1050,
     "PMMA": 1190,
@@ -1441,6 +1456,14 @@ BOARD_SHEET_PRICE_GBP = {
     "MFC":       {18.0: 58.55, 36.0: 84.54},
     "MFMDF":     {18.0: 58.55, 36.0: 84.54},   # same substrate family until priced separately
     "CHIPBOARD": {18.0: 58.55, 36.0: 84.54},
+    # DIBOND / ACM — PROVISIONAL, per full 3050x1500 (4.575 m2) sheet, ~£36/m2 at 3mm and
+    # ~£46/m2 at 4mm (mid trade). CONFIRM against SDI's own Dibond buy price and replace these
+    # two lines — then every Dibond job prices itself from the real number. Priced by the sheet
+    # and nested like any board, so a small panel is charged its share, not a whole sheet.
+    "DIBOND":    {3.0: 165.0, 4.0: 210.0},
+    "ALUPANEL":  {3.0: 165.0, 4.0: 210.0},
+    "REYNOBOND":  {3.0: 165.0, 4.0: 210.0},
+    "ETALBOND":  {3.0: 165.0, 4.0: 210.0},
 }
 
 # A6: any "thickness" above this (mm) is treated as a dimension misparse and rejected.
