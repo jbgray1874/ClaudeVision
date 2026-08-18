@@ -595,6 +595,17 @@ def material_has_a_rate(material) -> bool:
     for key in (name, name.replace(" ", "_")):
         if (MATERIAL_PRICE_GBP_PER_KG or {}).get(key) is not None:
             return True
+    # BOARD PRICED BY THE SHEET IS STILL PRICED. MFC, chipboard and DIBOND/ACM carry a
+    # per-sheet rate, not a GBP/kg — and without this a Dibond part that DOES price off
+    # BOARD_SHEET_PRICE_GBP was still reported "no rate", so the sheet showed a real price and a
+    # BLOCKING under-charge at once. The name may carry a gauge ("DIBOND 3.0MM"), so a board key
+    # that is a substring of it counts too.
+    _board = BOARD_SHEET_PRICE_GBP or {}
+    for key in (name, name.replace(" ", "_")):
+        if key in _board:
+            return True
+    if any(k in name for k in _board):
+        return True
     return False
 
 
