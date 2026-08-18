@@ -838,7 +838,49 @@ class PricingService:
             return False
         return True
 
+    def _standard_commodity_price(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        """A stable, reproducible provisional for a generically-named standard bought-in (a
+        pallet) from config.STANDARD_COMMODITY_PRICE_GBP, or None. Reproducible (a fixed config
+        number), so it prices the line AND clears price_not_reproducible — unlike the market
+        guess it stands in front of. Flagged for review: it is a provisional, not a quote."""
+        table = getattr(config, "STANDARD_COMMODITY_PRICE_GBP", {}) or {}
+        if not table:
+            return None
+        _desc_u = " ".join(str(v) for v in (
+            part.get("description"), part.get("part_number")) if v).upper()
+        if not _desc_u.strip():
+            return None
+        for _tok, _c in table.items():
+            if str(_tok).upper() in _desc_u:
+                try:
+                    _price = float(_c.get("price_gbp") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if _price <= 0:
+                    continue
+                return {
+                    "source": "standard_commodity_provisional",
+                    "source_type": "standard_commodity_provisional",
+                    "price_is_reproducible": True,      # a fixed config number, same every run
+                    "unit_price_gbp": round(_price, 2),
+                    "confidence": 0.5,
+                    "provenance": f"Standard commodity provisional: {_c.get('label', _tok)}",
+                    "review_flag": True,
+                    "review_reason": ("Provisional standard-commodity price — confirm against a "
+                                      "supplier quote or add the item to the purchasing catalogue."),
+                    "supplier_name": "SDI standard commodity (provisional)",
+                }
+        return None
+
     def _get_web_ai_fallback(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        # STANDARD COMMODITY BEFORE THE MARKET GUESS. A generically-named bought-in the purchasing
+        # DB cannot match — "PALLET", "STD PART" — reached this fallback and got a per-run LLM
+        # number that changes every run (the castor moved £4.54 -> £8.54) or a £0. A config
+        # provisional for a known standard commodity holds the line still at a sensible, REPRODUCIBLE
+        # figure. Consulted only here, on the fallback path, so a real DB catalogue rate still wins.
+        _commodity = self._standard_commodity_price(part)
+        if _commodity is not None:
+            return _commodity
         try:
             from web_ai_price_lookup import lookup_web_ai_price
         except ImportError:

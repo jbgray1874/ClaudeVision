@@ -259,6 +259,22 @@ PACKAGING_CONFIG = {
     "bays_per_delivery": None,   # bays per delivery load (delivery_price split across these)
 }
 
+# Standard bought-in COMMODITIES that appear on a BOM as a COMPONENT (not packaging) under a
+# generic name — "PALLET", "STD PART" — with no SDI part code, so the purchasing DB has nothing
+# to match and the line would otherwise fall to a per-run LLM guess or a £0. A stable, REPRODUCIBLE
+# provisional holds the line still at a sensible figure until SDI adds the item to the purchasing
+# catalogue, at which point the DB rate wins (this is only consulted on the fallback path, after
+# the catalogue and history miss). This is the COMPONENT pallet the display is built on — distinct
+# from PACKAGING_CONFIG["pallet"], which is the per-order SHIPPING pallet share. Confirm each price.
+#   token (matched as an UPPER-CASE substring of the description) -> {price_gbp, label}
+STANDARD_COMMODITY_PRICE_GBP = {
+    "PALLET": {
+        "price_gbp": 12.00,
+        "label": "standard 1200x1000 UK pallet (new) — PROVISIONAL, confirm new/recon and "
+                 "whether an ISPM-15 heat-treated stamp is needed for export",
+    },
+}
+
 # palletising.py counts an order into cartons and pallets from the blanks it already measured,
 # so a shipment is described as "~3 cartons on 1 pallet" and can be priced against a carton /
 # pallet catalogue. These are the limits it counts against; the module holds safe defaults, so
