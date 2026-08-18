@@ -119,8 +119,37 @@ if ($held.Count -gt 0) {
 
 # Set HERE, so this window cannot disagree with itself about which port it meant.
 $env:SDI_PORT = "$Port"
+
+# STAMP THE COMMIT THE SERVICE IS ABOUT TO RUN, resolved HERE where git is on the PATH.
+#
+# The service reports its own version as X-SDI-Commit on every response, so "which code is
+# actually running?" is one curl rather than an investigation. It resolves that by running git
+# in its own directory -- and the service starts from a virtualenv whose PATH has no git, so it
+# answered "unknown" and the header could not do the one job it exists for. An afternoon was
+# spent on a stale process that a truthful header would have identified in a line: the service
+# was serving code from before a pull, the page (static HTML) was serving code from after it,
+# and the two disagreeing looked like a broken feature rather than a process that needed
+# restarting.
+#
+# This shell HAS git. Resolve it here and hand it over, so the answer is always the truth about
+# the code on disk at the moment of starting. SDI_COMMIT already takes precedence in the
+# resolver precisely for deploys that cannot reach git.
+$commit = (& git -C $Root rev-parse --short HEAD 2>$null)
+if ($LASTEXITCODE -eq 0 -and $commit) {
+    $env:SDI_COMMIT = "$commit".Trim()
+} else {
+    # Never leave a STALE value from a previous run in this window standing in for the truth.
+    Remove-Item Env:\SDI_COMMIT -ErrorAction SilentlyContinue
+    Write-Host "git could not name the commit here - /api/health will report 'unknown'." -ForegroundColor Yellow
+}
+
 Write-Host "SDI Intelligence service" -ForegroundColor Cyan
 Write-Host "    http://localhost:$Port/estimating" -ForegroundColor Cyan
+if ($env:SDI_COMMIT) {
+    # RESTARTED IS NOT THE SAME AS RELOADED, and this line is where that becomes visible. A
+    # pull changes files on disk; a running service goes on serving what it imported at start.
+    Write-Host "    running commit $($env:SDI_COMMIT)  (after a git pull, restart this window)" -ForegroundColor DarkGray
+}
 Write-Host "Ctrl+C to stop."
 Write-Host ""
 
