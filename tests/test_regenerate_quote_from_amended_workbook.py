@@ -91,3 +91,31 @@ def test_client_and_units_are_required():
             assert False, "should have raised"
         except ValueError:
             pass
+
+
+def test_the_full_override_loop_saves_both_deliverables():
+    """run_estimator_override saves the amended sheet as the manual-override record AND the
+    regenerated quote, to their (here local) destinations, and returns both paths."""
+    src = tempfile.mkdtemp()
+    p = _amended_sheet(src, sell_price=195.0, qty=180, name="edited.xlsx")
+    q_dir, x_dir = tempfile.mkdtemp(), tempfile.mkdtemp()
+    res = cqr.run_estimator_override(p, units=180, drawing_number="10575-02", client="Dyson",
+                                     quote_dir=q_dir, override_xlsx_dir=x_dir)
+    assert os.path.basename(res["override_xlsx"]) == "10575-02_MANUAL_OVERRIDE.xlsx"
+    assert os.path.exists(res["override_xlsx"]) and os.path.exists(res["quote_html"])
+    html = Path(res["quote_html"]).read_text(encoding="utf-8")
+    assert "Dyson" in html and ("35,100" in html or "35100" in html)   # 180 x 195
+
+
+def test_the_override_validates_before_writing_anything():
+    """A bad request must leave no half-made files on the share — validation precedes the copy."""
+    src = tempfile.mkdtemp()
+    p = _amended_sheet(src, name="edited.xlsx")
+    x_dir = tempfile.mkdtemp()
+    try:
+        cqr.run_estimator_override(p, units=0, drawing_number="X", client="Dyson",
+                                   override_xlsx_dir=x_dir)
+        assert False, "should have raised"
+    except ValueError:
+        pass
+    assert not any(f.endswith("_MANUAL_OVERRIDE.xlsx") for f in os.listdir(x_dir))

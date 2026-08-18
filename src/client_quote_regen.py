@@ -143,3 +143,54 @@ def regenerate_quote_from_workbook(workbook_path: str | Path, *, units: int, dra
     out_path = out_dir_p / f"{stem}_quote.html"
     out_path.write_text(html, encoding="utf-8")
     return str(out_path), figures
+
+
+def run_estimator_override(uploaded_workbook: str | Path, *, units: int, drawing_number: str,
+                           client: str, quote_dir: Optional[str | Path] = None,
+                           override_xlsx_dir: Optional[str | Path] = None,
+                           job_stem: Optional[str] = None) -> Dict[str, Any]:
+    """The full override loop: save the estimator's amended workbook as the manual-override record,
+    regenerate the client quote to the AISheets share, and return both paths plus the figures read.
+
+    Destinations default to config (AISheets share for the quote; same for the override sheet unless
+    SDI_OVERRIDE_XLSX_DIR points elsewhere). Nothing else is regenerated — the job report and the
+    provenance tab are the engine's and are left as they were.
+    """
+    import shutil
+    try:
+        import config as _cfg
+        _default_quote = getattr(_cfg, "MANUAL_OVERRIDE_QUOTE_DIR", None)
+        _default_xlsx = getattr(_cfg, "MANUAL_OVERRIDE_XLSX_DIR", None) or _default_quote
+    except Exception:                                            # noqa: BLE001
+        _default_quote = _default_xlsx = None
+
+    src = Path(uploaded_workbook)
+    if not src.exists():
+        raise FileNotFoundError(f"uploaded workbook not found: {src}")
+    stem = job_stem or re.sub(r"[^\w\- ]", "", str(drawing_number or src.stem)).strip() or "quote"
+
+    # Validate BEFORE writing anything, so a bad request leaves no half-made files on the share.
+    figures = read_estimate_figures(src)
+    if not str(client or "").strip():
+        raise ValueError("client is required — it heads the quotation and picks the logo")
+    if not int(units or 0) > 0:
+        raise ValueError("units must be a positive whole number")
+
+    # 1. The amended workbook, saved as the manual-override record.
+    xlsx_dir = Path(override_xlsx_dir or _default_xlsx or src.parent)
+    xlsx_dir.mkdir(parents=True, exist_ok=True)
+    override_xlsx = xlsx_dir / f"{stem}_MANUAL_OVERRIDE.xlsx"
+    shutil.copy2(src, override_xlsx)
+
+    # 2. The client quote, regenerated from that record, to the AISheets share.
+    q_dir = Path(quote_dir or _default_quote or xlsx_dir)
+    quote_path, _ = regenerate_quote_from_workbook(
+        override_xlsx, units=int(units), drawing_number=str(drawing_number),
+        client=str(client), out_dir=q_dir, job_stem=stem)
+
+    return {
+        "override_xlsx": str(override_xlsx),
+        "quote_html": quote_path,
+        "figures": figures,
+        "job_stem": stem,
+    }

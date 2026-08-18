@@ -275,6 +275,17 @@ STANDARD_COMMODITY_PRICE_GBP = {
     },
 }
 
+# ── ESTIMATOR MANUAL-OVERRIDE OUTPUTS ────────────────────────────────────────────────
+# Where the estimator-override loop (client_quote_regen) writes its two deliverables. The
+# regenerated CLIENT QUOTE lands in the AISheets share so the portal can serve it; the amended
+# workbook is saved as the manual-override record. Both default to the AISheets share so a pilot
+# works out of the box; point OVERRIDE_XLSX_DIR at the job's Live Enquiry folder if the override
+# sheet should live beside its pack instead. Env-overridable for a test box with no share mounted.
+MANUAL_OVERRIDE_QUOTE_DIR = os.getenv(
+    "SDI_AISHEETS_DIR",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets")
+MANUAL_OVERRIDE_XLSX_DIR = os.getenv("SDI_OVERRIDE_XLSX_DIR", MANUAL_OVERRIDE_QUOTE_DIR)
+
 # palletising.py counts an order into cartons and pallets from the blanks it already measured,
 # so a shipment is described as "~3 cartons on 1 pallet" and can be priced against a carton /
 # pallet catalogue. These are the limits it counts against; the module holds safe defaults, so

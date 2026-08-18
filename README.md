@@ -194,6 +194,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_DUALPATH_BOM=0` | Read the BOM with the deterministic reader only, without the vision cross-check (default **on**) |
 | `SDI_ORDER_QTY` | Order quantity for the run, when it is not given on the command line |
 | `SDI_OUTPUT_ROOT` | Where reports and estimates are written (default `C:\ClaudeVision\output`) |
+| `SDI_AISHEETS_DIR` | Where the estimator-override loop writes the regenerated client quote (default the AISheets share). Point at a local folder on a test box with no share mounted |
+| `SDI_OVERRIDE_XLSX_DIR` | Where the estimator-override loop saves the amended workbook as the `_MANUAL_OVERRIDE` record (default: same as `SDI_AISHEETS_DIR`; set to the job's Live Enquiry folder to keep the override beside its pack) |
 | `SDI_WELD_DEBUG=1` | Per-weld diagnostics from the document builder |
 
 ## Quick health check
