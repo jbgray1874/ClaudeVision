@@ -210,6 +210,7 @@ _PORTAL = Path(__file__).with_name("sdi-intelligence-portal.html")
 
 
 _ESTIMATOR = Path(__file__).with_name("sdi-estimating-intelligence.html")
+_GUIDE = Path(__file__).with_name("sdi-estimating-guide.html")
 
 
 @app.get("/estimating")
@@ -220,6 +221,18 @@ def estimating_page():
     return JSONResponse(status_code=404,
                         content={"detail": "sdi-estimating-intelligence.html "
                                            "is not next to app.py"})
+
+
+@app.get("/guide")
+def estimating_guide():
+    """What each deliverable means and what it is asking the estimator to decide.
+
+    Served from the same origin as the page it explains, so it is one click from the run
+    button rather than a document somebody has to be sent and then find again."""
+    if _GUIDE.exists():
+        return FileResponse(str(_GUIDE))
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-estimating-guide.html is not next to app.py"})
 
 
 @app.get("/")

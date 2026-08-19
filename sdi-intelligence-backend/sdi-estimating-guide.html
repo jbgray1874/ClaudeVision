@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Estimating Intelligence — Estimator's Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#141417; --panel:#17171b; --line:#2a2a31; --ink:#f3f2ee; --muted:#a3a3aa;
+    --dim:#6b6b73; --brand:#ffd400; --ok:#5fd08a; --info:#6db3ff; --warn:#ff9d42; --bad:#ff6b6b;
+    --disp:'Archivo',system-ui,sans-serif; --body:'Hanken Grotesk',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace; --r:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);line-height:1.55}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--brand);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:900;font-size:34px;margin:6px 0 8px}
+  h1 span{color:var(--brand)}
+  h2{font-family:var(--disp);font-weight:800;font-size:22px;margin:34px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+  h3{font-family:var(--disp);font-weight:700;font-size:16px;margin:22px 0 6px}
+  p{margin:8px 0}
+  .lead{color:var(--muted);font-size:15px;max-width:74ch}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin:14px 0}
+  .panel.brand{border-left:3px solid var(--brand)}
+  .panel.warn{border-left:3px solid var(--warn)}
+  .panel.ok{border-left:3px solid var(--ok)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--disp);font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  td.k{white-space:nowrap;font-weight:600}
+  code,.mono{font-family:var(--mono);font-size:12.5px;background:#1e1e24;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#e8e7e2}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  .toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:18px 0 6px}
+  .toc a{display:block;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--brand);
+    border-radius:var(--r);padding:11px 13px;color:var(--ink);text-decoration:none}
+  .toc a:hover{border-color:var(--brand)}
+  .toc b{font-family:var(--disp);display:block;font-size:14px}
+  .toc span{color:var(--dim);font-size:12.5px}
+  .tag{font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap}
+  .tag.ok{color:var(--ok);border-color:#2c5340}.tag.warn{color:var(--warn);border-color:#5a4126}
+  .tag.bad{color:var(--bad);border-color:#5a2e2e}
+  .tag.info{color:var(--info);border-color:#2b4566}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--info)}
+  .cell{display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:-2px;margin-right:6px;border:1px solid #0006}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">SDI Intelligence</div>
+  <h1>Estimator's <span>Guide</span></h1>
+  <p class="lead">What each deliverable is for, what the numbers on it mean, and what the engine
+  is asking you to decide. Every run produces the same set: a workbook you edit, two tabs that
+  explain it, and a report that tells you how much of it to trust.</p>
+
+  <div class="toc">
+    <a href="#start"><b>Start here</b><span>The one rule</span></a>
+    <a href="#estimate"><b>Estimate sheet</b><span>The workbook you edit</span></a>
+    <a href="#provenance"><b>AI Provenance tab</b><span>Where each number came from</span></a>
+    <a href="#decisions"><b>Decision Report tab</b><span>What the engine had to choose</span></a>
+    <a href="#report"><b>Job report (HTML)</b><span>How much to trust it</span></a>
+    <a href="#missing"><b>Missing drawings</b><span>Priced from what we have</span></a>
+    <a href="#quote"><b>Client quote</b><span>What the customer sees</span></a>
+    <a href="#regen"><b>Amended sheet</b><span>Re-issuing after your edits</span></a>
+  </div>
+
+  <h2 id="start">Start here — the one rule</h2>
+  <div class="panel brand">
+    <p style="margin:0"><b>Everything the engine produces is an estimate, not a quotation.</b>
+    It prices what the drawings actually show, states plainly what it could not read, and never
+    invents a number to fill a gap. Where it cannot price something it says so rather than
+    quietly costing it at zero — a line at £0 and a line nobody has priced look identical on a
+    sheet, and only one of them is an under-charge.</p>
+  </div>
+  <p>So your job reading these documents is not to check arithmetic. It is to answer the
+  questions the engine could not: which material is it really, which gauge, is that price still
+  good, and does the offcut go on this job or to stock.</p>
+
+  <h2 id="estimate">1 · The Estimate sheet — the workbook you edit</h2>
+  <p class="lead">This is the working surface. It is the estimating template you already know,
+  populated. Every figure is an Excel formula, so it recalculates when you change an input.</p>
+
+  <h3>The blocks, top to bottom</h3>
+  <table>
+    <tr><th>Block</th><th>What lands here</th></tr>
+    <tr><td class="k">Bill of Materials</td><td>Bought-in parts — fixings, castors, pallets,
+      packaging, delivery, powder. Priced per each, times the quantity per unit, plus scrap.</td></tr>
+    <tr><td class="k">Wire</td><td>Wire, bar and tube sections, costed by length. Empty on a job
+      with no sections — that is correct, not a fault.</td></tr>
+    <tr><td class="k">Sheet Steel</td><td>Fabricated metal. Blank length and width, gauge, how
+      many nest out of a sheet, cost per part.</td></tr>
+    <tr><td class="k">Other Sheet Material</td><td>Board and plastic — ply, MDF, acrylic, Dibond.
+      Same nesting arithmetic, different stock sizes.</td></tr>
+    <tr><td class="k">Labour</td><td>Operations grouped by process and material. Setup is booked
+      <b>once per tooling group</b>, not once per part.</td></tr>
+    <tr><td class="k">Rate calculators</td><td>Laser, CNC and Powder — the template's own
+      calculators, filled with the blank size, hole count and cut distance the engine measured.</td></tr>
+  </table>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>Fabricated parts appear twice, and that is deliberate.</b></p>
+    <p style="margin:0">A part costed in Sheet Steel also appears in the Bill of Materials at
+    <b>£0.00</b>, labelled <i>"costed in Sheet Steel below"</i>. It is listed so the BOM is a
+    complete parts list; pricing it in both places would double the material.</p>
+  </div>
+
+  <h3>What wants your attention</h3>
+  <table>
+    <tr><th>You'll see</th><th>It means</th></tr>
+    <tr><td class="k"><span class="cell" style="background:#ffeb9c"></span>Shaded cells</td>
+      <td>An <b>estimator input</b>. The engine has no rate and no input you supply elsewhere will
+      fix it. Type the figure in and the sheet completes itself.</td></tr>
+    <tr><td class="k">PROVISIONAL beside Unit Cost / Sell Price</td>
+      <td>Outstanding inputs remain. The totals compute, but they are not a firm price until
+      those are filled.</td></tr>
+    <tr><td class="k">MATERIAL UNPRICED on a line</td>
+      <td>That item has no rate anywhere the engine can reach. Enter a unit rate, or confirm it is
+      something already in the catalogue under another code.</td></tr>
+    <tr><td class="k">Margin 0%</td>
+      <td>No commercial decision has been made yet. Sell Price equals cost until you set one.</td></tr>
+  </table>
+
+  <h2 id="provenance">2 · The AI Provenance tab — where each number came from</h2>
+  <p class="lead">One row per part, naming the source behind every value and how strong that
+  source is. This is where you go when a figure looks wrong and you want to know why it is what
+  it is.</p>
+
+  <h3>The strength words</h3>
+  <table>
+    <tr><th>Word</th><th>Meaning</th><th>Weight</th></tr>
+    <tr><td class="k">CONFIRMED</td><td>An estimator has already agreed this, and it was
+      remembered.</td><td><span class="tag ok">strongest</span></td></tr>
+    <tr><td class="k">MEASURED</td><td>Read off the SolidWorks model or a DXF flat pattern — a
+      measurement, not a reading.</td><td><span class="tag ok">strong</span></td></tr>
+    <tr><td class="k">REPORTED</td><td>Printed on the drawing or in the BOM. Reliable, but it is
+      what someone typed.</td><td><span class="tag info">good</span></td></tr>
+    <tr><td class="k">ASSUMED</td><td>A default or an inference is standing in. Worth a
+      glance.</td><td><span class="tag warn">weak</span></td></tr>
+    <tr><td class="k">UNKNOWN</td><td>Nothing supplied it. On a price this means nobody has
+      priced it yet.</td><td><span class="tag bad">gap</span></td></tr>
+  </table>
+
+  <div class="panel ok">
+    <p style="margin:0 0 6px 0"><b>The summary line separates two different questions.</b></p>
+    <p style="margin:0"><span class="mono">Engine read the drawing &amp; model: 18 measured · 3
+    reported · 1 needs a look &nbsp;|&nbsp; Pricing: 13 priced · 9 awaiting your rate</span></p>
+    <p style="margin:6px 0 0 0">How well the engine <b>read</b> the job is not the same as how
+    much of it has been <b>priced</b>. An estimate is expected to arrive with prices outstanding —
+    that is your half of the work, not a fault in the reading.</p>
+  </div>
+
+  <h2 id="decisions">3 · The Decision Report tab — what the engine had to choose</h2>
+  <p class="lead">Most values decide themselves: one strongest source, nothing contradicting it.
+  This tab shows the ones that did not, because those are where your judgement is worth most.</p>
+
+  <h3>Two blocks below the part table</h3>
+  <table>
+    <tr><th>Block</th><th>What it lists</th></tr>
+    <tr><td class="k">Decisions that required resolution</td>
+      <td><b>Operations.</b> Two equally-ranked sources disagreed about whether an operation
+      applies, and the arbiter settled it. The losing claim is named so you can check it.</td></tr>
+    <tr><td class="k">What the part is — where two sources disagreed</td>
+      <td><b>Material and gauge.</b> The costlier arguments. Material sets the rate <i>and</i>
+      whether the part has a rate at all; gauge sets the rate <i>and</i> steps the cut time — so a
+      part costed on the wrong one is wrong twice. Widest disagreement first.</td></tr>
+  </table>
+  <p>The higher-ranked source was used and the figure stands. What you are being asked is simply:
+  <b>confirm which is right before this goes out firm.</b></p>
+
+  <h2 id="report">4 · The job report (HTML) — how much to trust it</h2>
+  <p class="lead">The narrative version, and the best single document for judging whether an
+  estimate is safe to quote from.</p>
+  <table>
+    <tr><th>Section</th><th>Use it for</th></tr>
+    <tr><td class="k">At a glance</td><td>Unit cost, material and labour split, quantity.</td></tr>
+    <tr><td class="k">What went right</td><td>The checks that passed — cost streams separated,
+      each part costed once, bought-ins recognised.</td></tr>
+    <tr><td class="k">Review items &amp; limitations</td><td>Per part: what to verify and why.
+      Every row names the part it is about.</td></tr>
+    <tr><td class="k">Drawing pack</td><td>What the pack contained and what it lacked —
+      <b>including drawings named on the BOM that were not supplied</b>.</td></tr>
+    <tr><td class="k">Estimating review</td><td>Everything outstanding, sorted into
+      <i>confirm or overwrite</i> (yours) and <i>missing or broken inputs</i>.</td></tr>
+  </table>
+
+  <h2 id="missing">5 · "Drawings missing — priced from what we have"</h2>
+  <div class="panel brand">
+    <p style="margin:0"><b>An incomplete pack is priced, not refused.</b> The engine costs every
+    line it can read, leaves the undrawn assemblies uncosted rather than inventing metal and weld
+    for parts nobody has seen, and states the gap in several places. The total is real for what
+    was supplied — it is not a price for the whole product.</p>
+  </div>
+  <table>
+    <tr><th>Where it shows</th><th>What you see</th></tr>
+    <tr><td class="k">Job report — Drawing pack</td><td>The fullest account: which drawings the
+      BOM names that the pack does not contain.</td></tr>
+    <tr><td class="k">Job report — Estimating review</td><td>Listed as blocking, with the part
+      numbers and descriptions.</td></tr>
+    <tr><td class="k">Estimate sheet</td><td>Those assemblies carry little or no material, and the
+      sheet stays marked PROVISIONAL.</td></tr>
+    <tr><td class="k">AI Provenance</td><td>Those parts show as assembly-only records with no
+      geometry — nothing measured them.</td></tr>
+    <tr><td class="k">Run log</td><td>Named at the end of the run in the invariants block.</td></tr>
+  </table>
+  <p><b>What to do:</b> quote provisionally on what is priced and say which assemblies are
+  excluded, or ask for the detail pack and re-run. A thin total on an incomplete pack is an
+  incomplete pack — not a cheap job.</p>
+
+  <h2 id="quote">6 · The client quote — what the customer sees</h2>
+  <p class="lead">Deliberately the plainest document of the set. It carries the price, the
+  specification, what is included, and nothing about how the engine reached it.</p>
+  <ul>
+    <li>The price is labelled <b>indicative</b> everywhere it appears.</li>
+    <li>Internal reasoning — invariant names, confidence, engine workings — never appears on it.</li>
+    <li>It is generated from the job, so the material, finish and operations shown are the
+      engine's reading of the drawings.</li>
+  </ul>
+
+  <h2 id="regen">7 · Re-issuing a quote after you have edited the sheet</h2>
+  <p class="lead">When you have amended the workbook — filled the rates, corrected a price, set a
+  margin — the portal can turn your version into a fresh client quote.</p>
+  <ol>
+    <li><b>Edit and save in Excel.</b> This matters: the totals are formulas, and the values are
+      only stored once Excel has recalculated and saved them.</li>
+    <li>On the estimating page, fill in <b>units, drawing number and client</b>.</li>
+    <li><b>Choose amended workbook…</b> and pick your saved file.</li>
+    <li>Press <b>Estimator Client Report Regen</b>.</li>
+  </ol>
+  <p>You get a client quote carrying <b>your</b> figure — Sell Price if you set one, otherwise
+  Unit Cost — plus a copy of your sheet saved as the manual-override record. No drawings are
+  needed and none are re-read; the engine does not run again. The job report and provenance tab
+  are left as they were, because they describe the engine's estimate, not yours.</p>
+
+  <div class="foot">
+    <b>we.are.sdi</b> · SDI Estimating Intelligence · This guide describes the deliverables the
+    engine produces. Anything it prices is an estimate until an estimator has cleared the
+    outstanding items on it.
+  </div>
+</div>
+</body>
+</html>
