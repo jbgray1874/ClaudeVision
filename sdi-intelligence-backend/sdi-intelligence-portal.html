@@ -200,7 +200,8 @@
       <div id="aisvc-nav"></div>
       <div class="grp">Operate</div>
       <a href="/estimating"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="11" x2="8" y2="11"/><line x1="12" y1="11" x2="12" y2="11"/><line x1="16" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="8" y2="15"/><line x1="12" y1="15" x2="12" y2="15"/><line x1="16" y1="15" x2="16" y2="18"/></svg>Estimating Intelligence</a>
-      <a data-view="tools"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>AI Tools</a>
+      <a href="/guide"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Estimator's Guide</a>
+<a data-view="tools"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>AI Tools</a>
       <a data-view="files"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l2-2h5l2 2h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7z"/></svg>Files &amp; Directories</a>
       <a data-view="reports"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Status Reports</a>
       <a data-view="golive"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Go-Live Guide</a>
@@ -364,7 +365,7 @@
 
         <div class="tool reveal">
           <div class="th"><span class="nm">main.py</span><span class="chip c-done">Entry Point</span></div>
-          <div class="ds">The top-level runner. Accepts a job folder, orchestrates the full pipeline: PDF+DXF scan → BOM tree → per-part estimates → bay rollup → five-sheet xlsx workbook + JSON + audit log. Tim JSON overrides are intentionally absent — all pricing must come from drawings and the database.</div>
+          <div class="ds">The top-level runner. Accepts a job folder, orchestrates the full pipeline: PDF+DXF scan → SolidWorks native read → canonical BOM and route → per-part estimates → the populated estimating workbook (Estimate, Decision Report, AI Provenance) + JSON + deliverable HTML + audit log. Tim JSON overrides are intentionally absent — all pricing must come from drawings and the database.</div>
           <code>python -u main.py --search-root "K:\Estimating\AI Estimating\Live Enquiry\1282..." --folder-as-job</code>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> job folder PDFs/DXFs via <code>file_scan.py</code><br>
@@ -407,7 +408,7 @@
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> PDF/DXF files from job folder<br>
             <b>Exports:</b> <code>bom_rows</code>, <code>title_block</code>, <code>normalized_material</code>, <code>normalized_geometry</code> in summary dict<br>
-            <b>LLM calls:</b> Claude vision for difficult PDFs; falls back gracefully
+            <b>LLM calls:</b> xAI Grok vision for difficult PDFs (<code>api.x.ai</code>), cached per page; falls back gracefully. Anthropic is used separately for the bought-in price lookup, not for reading pages.
           </div>
         </div>
 
@@ -497,8 +498,125 @@
       <!-- ══════════════════════════════════════════════════════════════════
            OUTPUT & REPORTING
            ══════════════════════════════════════════════════════════════════ -->
+
+      <h2>Arbitration &amp; Assurance</h2>
+      <p class="sub" style="margin-top:-6px">Where the engine decides which of several readings it
+      believes, and whether the result may be quoted. This layer is what separates a number from a
+      defensible number, and it did not exist when this page was first written.</p>
+      <div class="tools">
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">source_precedence.py</span><span class="chip c-done">The Waterfall</span></div>
+          <div class="ds">Ranks every source that can state a value — SolidWorks model, DXF, drawing text, BOM, inference, LLM — and decides which wins. Crucially it also RECORDS what it displaced, so a disagreement can be reported afterwards instead of being silently overwritten.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> each part's competing readings<br>
+            <b>Writes:</b> the winning value plus <code>_displaced</code> on the part
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">route_compiler.py</span><span class="chip c-done">Canonical Route</span></div>
+          <div class="ds">Compiles one decision per operation per part: is it required, not applicable, or unverified, and on whose authority. Contested decisions — where two equally-ranked sources disagreed — are recorded with the losing claim named, and surface on the Decision Report tab.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> parts, BOM hierarchy, drawing cues<br>
+            <b>Writes:</b> <code>canonical_route_shadow</code> in the job JSON
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">invariants.py</span><span class="chip c-done">The Gate</span></div>
+          <div class="ds">The checks that decide whether a job may go out as a firm price. Each returns BLOCKING (the figure is not safe to quote), WARNING (a judgement for the estimator) or UNVERIFIED (the check could not run). Nothing is silenced: a material with no rate, a cut path that cannot fit its blank, a BOM naming a drawing the pack does not contain — all reach the reader.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the finished job summary<br>
+            <b>Writes:</b> <code>summary["invariants"]</code>; the Estimating Review block in the run log
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">costed_facts.py</span><span class="chip c-done">One Reader</span></div>
+          <div class="ds">The single source for facts every deliverable must agree on — blank dimensions, per-part material cost, which parts are board rather than steel, and which BOM lines have no drawing. It exists because the same question answered separately in four modules is how two documents from one run came to contradict each other.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the job summary<br>
+            <b>Writes:</b> nothing — it is a reader, and that is the point
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">price_provenance.py</span><span class="chip c-done">Where the Money Came From</span></div>
+          <div class="ds">Classifies every applied price: an agreed rate, a catalogue line, a purchase history, or a generated market estimate. Reproducibility and firmness are tracked separately — a list price repeats perfectly and commits nobody.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> each priced line<br>
+            <b>Writes:</b> provenance and firmness stamps read by the quote and the invariants
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">confidence.py</span><span class="chip c-done">Field Confidence</span></div>
+          <div class="ds">Per-field strength for each part — CONFIRMED, MEASURED, REPORTED, ASSUMED or UNKNOWN — scored on the field's own source rather than an average. The AI Provenance tab reads this, and reports how well the drawings were READ separately from how much has been PRICED.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> each part's sources<br>
+            <b>Writes:</b> the assessment behind the AI Provenance tab
+          </div>
+        </div>
+
+      </div>
+
       <h2>Output &amp; Reporting</h2>
       <div class="tools">
+        <div class="tool reveal">
+          <div class="th"><span class="nm">wb_populate.py</span><span class="chip c-done">The Workbook</span></div>
+          <div class="ds">Populates SDI's own estimating template — the Estimate tab an estimator edits. Writes Excel FORMULAS rather than values, so the sheet recalculates when a rate is changed. Labour is grouped by tooling setup, outstanding estimator inputs are listed and shaded, and BOM lines whose drawings were never supplied are named so the total is not read as covering them.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the canonical BOM and route<br>
+            <b>Writes:</b> the populated <code>.xlsx</code>
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">estimation_report.py</span><span class="chip c-done">AI Provenance tab</span></div>
+          <div class="ds">The per-part account of where every value came from and how strong it is. Its summary separates what the engine READ from what has been PRICED — an estimate is expected to arrive with rates outstanding, and folding that into one confidence band made a fully-read job read as a failure.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the job summary and confidence assessment<br>
+            <b>Writes:</b> the AI Provenance sheet
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">job_decision_report.py</span><span class="chip c-done">Decision Report tab</span></div>
+          <div class="ds">What the engine decided and on whose authority — plus the arguments it had to settle: operations where equally-ranked sources disagreed, and the costlier ones about material and gauge, widest disagreement first.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the canonical route and the invariants<br>
+            <b>Writes:</b> the Decision Report sheet
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">job_report_html.py</span><span class="chip c-done">Internal Job Report</span></div>
+          <div class="ds">The narrative deliverable — what went right, the review items, the drawing-pack audit including drawings named on the BOM but absent from the pack, and the failed checks in plain English. The best single document for judging whether an estimate is safe to quote from.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the job summary<br>
+            <b>Writes:</b> <code>&lt;job&gt;_report.html</code>
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">client_quote_html.py</span><span class="chip c-done">Customer Quotation</span></div>
+          <div class="ds">The document that leaves the building. Deliberately the plainest of the set: price, specification, what is included. The engine's reasoning — invariant names, confidence, the gap list — is kept off it; scope is the estimator's to state in their own words.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the job summary<br>
+            <b>Writes:</b> <code>&lt;job&gt;_quote.html</code>
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">client_quote_regen.py</span><span class="chip c-done">Estimator Override</span></div>
+          <div class="ds">Turns an estimator's AMENDED workbook back into a client quote. Reads their own figure off the saved sheet (Sell Price in preference to Unit Cost), reloads the original job so the material, finish, operations and GA survive, and files the sheet as the manual-override record. No engine re-run, no drawing re-read.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the amended <code>.xlsx</code> + the job's saved JSON<br>
+            <b>Writes:</b> the regenerated quote and <code>&lt;job&gt;_MANUAL_OVERRIDE.xlsx</code>
+          </div>
+        </div>
+
 
         <div class="tool reveal">
           <div class="th"><span class="nm">xlsx_output.py</span><span class="chip c-done">Workbook Writer</span></div>
