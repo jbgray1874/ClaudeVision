@@ -13,6 +13,7 @@ engine. It turns an amended sheet + three fields into a fresh, correctly-headed 
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -101,19 +102,78 @@ def read_estimate_figures(workbook_path: str | Path) -> Dict[str, Any]:
     }
 
 
+def _job_stem_from_workbook(workbook_path: Path) -> str:
+    """The job's own stem from an estimate workbook's filename, with the run timestamp removed.
+
+    The engine writes '<stem>_20260818_133037.xlsx'; its summary JSON is '<stem>.json'. Stripping
+    the timestamp is what lets an override find the job it came from days later."""
+    return re.sub(r"_\d{8}_\d{6}$", "", Path(workbook_path).stem)
+
+
+def find_original_summary(workbook_path: str | Path) -> Optional[Dict[str, Any]]:
+    """The engine's saved summary for the job this workbook came from, or None.
+
+    THE OVERRIDE QUOTE WAS THINNER THAN THE ENGINE'S, AND THAT IS WHAT A CUSTOMER SAW. Built from
+    price alone, it had no parts — so the specification read 'Material: As drawing', the operations
+    list collapsed to two generic lines, and the GA image was dropped because nothing told it which
+    drawing to render. The estimator's number was right and everything around it had been lost.
+
+    The job's own summary is on disk from the original run. Starting from it and overlaying only
+    what the estimator changed keeps the whole quotation — GA, materials, finish, the real
+    operations — and changes just the money and the three re-entered facts. Missing (a job run on
+    another machine, or output cleared) falls back to the minimal summary: a plain quote beats no
+    quote, and the caller says which happened."""
+    stem = _job_stem_from_workbook(workbook_path)
+    candidates = []
+    try:
+        import config as _cfg
+        candidates.append(Path(getattr(_cfg, "JSON_DIR")) / f"{stem}.json")
+    except Exception:                                            # noqa: BLE001
+        pass
+    # Beside the workbook too, for a pack whose outputs were filed with it.
+    candidates.append(Path(workbook_path).parent / f"{stem}.json")
+    for path in candidates:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except Exception:                                        # noqa: BLE001
+            continue
+    return None
+
+
 def _summary_from_figures(figures: Dict[str, Any], *, units: int, drawing_number: str,
-                          client: str, job_stem: str) -> Dict[str, Any]:
-    """The minimal summary the quote renderer understands, carrying the estimator's own price and
-    the three re-entered facts. Only the fields build_quote_html actually reads are set."""
-    return {
-        "job_output_stem": job_stem,
-        "manual_estimator_override": True,
-        "llm_full_extract": {"drawing_info": {"drawing_number": drawing_number}},
-        "estimate_summary": {
-            "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": figures["price"]},
-            "estimate_workbook_inputs": {"assumed_job_quantity": int(units)},
-        },
-    }
+                          client: str, job_stem: str,
+                          base: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The summary the quote renderer reads: the ORIGINAL job where one is on disk, with the
+    estimator's price and the three re-entered facts written over it — else a minimal stand-in.
+
+    Only the four things the estimator restated are overwritten. Everything else the quotation
+    shows (the GA, the material, the finish, the operation list) is the engine's own reading of
+    the drawings, which the estimator did not change by editing a price."""
+    summary: Dict[str, Any] = dict(base) if isinstance(base, dict) else {}
+    summary["job_output_stem"] = job_stem
+    summary["manual_estimator_override"] = True
+
+    # The drawing number the estimator typed wins over the one read off the title block: they are
+    # looking at the pack now, and a regen is when a misread number gets corrected.
+    _extract = dict(summary.get("llm_full_extract") or {})
+    _info = dict(_extract.get("drawing_info") or {})
+    if str(drawing_number or "").strip():
+        _info["drawing_number"] = str(drawing_number).strip()
+    _extract["drawing_info"] = _info
+    summary["llm_full_extract"] = _extract
+
+    _es = dict(summary.get("estimate_summary") or {})
+    _wep = dict(_es.get("workbook_equivalent_pricing") or {})
+    _wep["m105_total_unit_cost_gbp"] = figures["price"]
+    _es["workbook_equivalent_pricing"] = _wep
+    _inputs = dict(_es.get("estimate_workbook_inputs") or {})
+    _inputs["assumed_job_quantity"] = int(units)
+    _es["estimate_workbook_inputs"] = _inputs
+    summary["estimate_summary"] = _es
+    return summary
 
 
 def regenerate_quote_from_workbook(workbook_path: str | Path, *, units: int, drawing_number: str,
@@ -134,8 +194,16 @@ def regenerate_quote_from_workbook(workbook_path: str | Path, *, units: int, dra
     if not int(units or 0) > 0:
         raise ValueError("units must be a positive whole number")
 
+    # START FROM THE JOB, NOT FROM THE PRICE. Without this the quotation loses everything the
+    # estimator did not restate — the GA image, the material, the finish, the operation list.
+    _base = find_original_summary(path)
+    figures["source_summary_found"] = _base is not None
+    if _base is None:
+        print(f"   [regen] no saved summary found for '{stem}' — the quote will carry the price "
+              f"and the three fields you entered, but not the GA image, materials or operations "
+              f"from the original run.", flush=True)
     summary = _summary_from_figures(figures, units=int(units), drawing_number=str(drawing_number),
-                                    client=str(client), job_stem=stem)
+                                    client=str(client), job_stem=stem, base=_base)
     html = build_quote_html(summary, job_stem=stem, manual_workbook=str(path), customer=str(client))
 
     out_dir_p = Path(out_dir) if out_dir else path.parent

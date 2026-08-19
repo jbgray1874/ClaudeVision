@@ -107,6 +107,49 @@ def test_the_full_override_loop_saves_both_deliverables():
     assert "Dyson" in html and ("35,100" in html or "35100" in html)   # 180 x 195
 
 
+def test_the_override_quote_keeps_the_job_it_came_from():
+    """THE THIN-QUOTE FIX. Built from the price alone, the override quotation lost everything the
+    estimator had not restated: the specification read 'Material: As drawing', the operations
+    collapsed to two generic lines and the GA image was dropped. It now starts from the job's own
+    saved summary and overlays only the money and the three re-entered facts."""
+    import json
+    d = tempfile.mkdtemp()
+    stem = "8352-010ReuseableBagStand"
+    Path(d, f"{stem}.json").write_text(json.dumps({
+        "job_output_stem": stem,
+        "llm_full_extract": {"drawing_info": {"drawing_number": "8352", "title": "BAG STAND"}},
+        "estimate_summary": {
+            "part_estimates": [{"part_number": "8352-01-05",
+                                "normalized_material": "MILD STEEL",
+                                "textual_operations": ["laser_cutting", "welding"]}],
+            "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": 137.48},
+            "estimate_workbook_inputs": {"assumed_job_quantity": 400}}}), encoding="utf-8")
+    p = _amended_sheet(d, sell_price=195.06, name=f"{stem}_20260818_133037.xlsx")
+    out, figs = cqr.regenerate_quote_from_workbook(
+        p, units=400, drawing_number="8352", client="M & S", out_dir=d)
+    html = Path(out).read_text(encoding="utf-8")
+    assert figs["source_summary_found"] is True
+    assert "MILD STEEL" in html.upper()          # the real material, not "As drawing"
+    assert "195.06" in html                       # and the estimator's own price
+
+
+def test_the_run_timestamp_is_stripped_to_find_the_job():
+    assert cqr._job_stem_from_workbook("8352-010ReuseableBagStand_20260818_133037.xlsx") \
+        == "8352-010ReuseableBagStand"
+    # a workbook the estimator renamed keeps its own name
+    assert cqr._job_stem_from_workbook("my copy.xlsx") == "my copy"
+
+
+def test_a_job_with_no_saved_summary_still_produces_a_quote():
+    """A plain quote beats no quote — but the caller is told which it got."""
+    d = tempfile.mkdtemp()
+    p = _amended_sheet(d, name="orphan_20260818_133037.xlsx")
+    out, figs = cqr.regenerate_quote_from_workbook(
+        p, units=10, drawing_number="X1", client="Dyson", out_dir=d)
+    assert figs["source_summary_found"] is False
+    assert os.path.exists(out)
+
+
 def test_the_override_validates_before_writing_anything():
     """A bad request must leave no half-made files on the share — validation precedes the copy."""
     src = tempfile.mkdtemp()
