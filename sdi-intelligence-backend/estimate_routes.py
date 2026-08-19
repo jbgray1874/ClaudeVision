@@ -467,10 +467,36 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # pack; where only files were given, their common parent is the job.
     folder = req.job_folder
     if not folder and req.files:
+        # FILES FROM TWO JOBS HAVE A COMMON PARENT, AND IT IS NOT A JOB.
+        #
+        # commonpath() always returns something, so one stray file from another pack silently
+        # promoted the job to the folder that CONTAINS the jobs. 10575-02 was queued against
+        # "...\Live Enquiry" because an 11650 model was still in the list; the engine looked
+        # there, found no drawings directly beneath it, exited cleanly and filed nothing. The
+        # run reported COMPLETE and produced no estimate, which is the worst way to fail.
+        #
+        # A pack whose files sit in sub-folders of one job still works: they share that job as
+        # their common parent and only ONE top-level folder is involved. What is refused is a
+        # selection spanning two, because no single folder can be the job for both.
+        _parents = {str(Path(f).parent) for f in req.files if str(f).strip()}
         try:
-            folder = os.path.commonpath([str(Path(f).parent) for f in req.files])
+            folder = os.path.commonpath([p for p in _parents]) if _parents else None
         except ValueError:
-            folder = None
+            folder = None                       # different drives — no common parent exists
+        # TWO JOB FOLDERS, NOT TWO SUB-FOLDERS OF ONE JOB. An SDI job folder is named for its
+        # job number and so begins with a digit — 10575-02-V2UprightDisplay,
+        # 11650-04-SidePanel. A pack that files its drawings into PDFs\ and DXFs\ does not, and
+        # must keep working: those share one job as their parent and only the naming tells the
+        # two situations apart.
+        _job_like = {p for p in _parents if (Path(p).name[:1] or "").isdigit()}
+        if folder and len(_job_like) > 1 and folder not in _parents:
+            _named = ", ".join(sorted(Path(p).name or p for p in _job_like)[:4])
+            _more = f" and {len(_job_like) - 4} more" if len(_job_like) > 4 else ""
+            raise HTTPException(
+                400,
+                f"Those drawings come from {len(_job_like)} different job folders ({_named}"
+                f"{_more}), so there is no single job to estimate. Clear the list and add only "
+                f"this job's drawings, or use 'Add job folder'.")
     if not folder:
         raise HTTPException(400, "Add a job folder, or drawings that share one.")
 
