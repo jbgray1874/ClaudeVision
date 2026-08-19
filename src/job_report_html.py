@@ -770,8 +770,12 @@ them deliberately.</p>
 </table>"""
 
 
-def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
-    """Section 4 — the drawing-quality audit. Honest severity, not alarmist counts."""
+def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any]] = None) -> str:
+    """Section 4 — the drawing-quality audit. Honest severity, not alarmist counts.
+
+    Takes the summary as well as the quality figures, because the most serious thing that can be
+    wrong with a drawing pack is a drawing that is not in it, and that fact lives on the job
+    rather than in the extraction stats."""
     # 4.1 strengths
     strengths = []
     if dq.get("native_flat_parts"):
@@ -811,6 +815,25 @@ def _render_drawing_analysis(dq: Dict[str, Any]) -> str:
 
     # 4.2 weaknesses table — only genuine issues
     wk = ""
+    # DRAWINGS THAT NEVER ARRIVED COME FIRST, because it is the one weakness that changes what
+    # the total MEANS rather than how precisely it was measured. A pack missing four welded
+    # assemblies is not a cheap job; it is a job we have only seen part of, and the reader needs
+    # that before any confidence percentage below it.
+    try:
+        from costed_facts import undrawn_bom_lines as _undrawn
+        _missing_drawings = _undrawn(summary)
+    except Exception:                                            # noqa: BLE001
+        _missing_drawings = []
+    if _missing_drawings:
+        _names = ", ".join(
+            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
+            for m in _missing_drawings[:6])
+        _extra = f" …and {len(_missing_drawings) - 6} more" if len(_missing_drawings) > 6 else ""
+        wk += (f'<tr><td><b>Drawings named on the BOM but not in the pack</b></td>'
+               f'<td>{_esc(_names)}{_extra}</td>'
+               f'<td>Nothing read these, so nothing costed them. The estimate is priced from '
+               f'what was supplied and is <b>not</b> a price for the whole product — ask for '
+               f'the detail drawings before quoting the complete job.</td></tr>')
     if dq.get("parts_without_dxf"):
         parts = dq["parts_without_dxf"]
         n = len(parts)
@@ -1465,7 +1488,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         _render_parity(bundle) if has_parity else "",
         _render_whats_right(summary, streams),
         _render_review_items(review),
-        _render_drawing_analysis(dq),
+        _render_drawing_analysis(dq, summary),
         _render_checklist(review, dq),
         _render_design_recs(dq),
         _render_verdict(hl, dq, has_parity, summary),

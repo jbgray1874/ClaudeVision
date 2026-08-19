@@ -539,33 +539,6 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     return _number, _rev, (_title or _project or _number)
 
 
-def excluded_for_want_of_a_drawing(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The BOM lines this price could not cover because no drawing for them was supplied.
-
-    READ from the invariant that already found them, not recomputed — one reader, so the
-    quotation and the internal report can never name different parts.
-
-    This is the customer-facing half of a practice the engine only did internally: price what
-    the pack contains, and say what is missing. On Dyson 10575-02 that is four welded
-    assemblies — the back, the base, the base plate and the lens — which is most of the
-    physical product. The quotation showed a unit price under a heading reading "What's
-    included" and said nothing about them.
-    """
-    if not isinstance(summary, dict):
-        return []
-    out: List[Dict[str, Any]] = []
-    for violation in ((summary.get("invariants") or {}).get("violations") or []):
-        if not isinstance(violation, dict):
-            continue
-        if str(violation.get("code") or "") != "bom_names_a_drawing_the_pack_does_not_contain":
-            continue
-        for m in ((violation.get("detail") or {}).get("missing") or []):
-            if isinstance(m, dict) and str(m.get("part_number") or "").strip():
-                out.append({"part_number": str(m.get("part_number")).strip(),
-                            "description": str(m.get("description") or "").strip()})
-    return out
-
-
 def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
                      manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> str:
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
@@ -638,35 +611,19 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # operations -> two-column bullet list
     inc_items = "\n".join(f"      <li>{_esc(o)}</li>" for o in ops)
 
-    # WHAT THIS PRICE DOES NOT COVER, ON THE PAGE THE CUSTOMER READS.
+    # THE GAP LIST IS INTERNAL, AND THAT IS A DELIBERATE COMMERCIAL CHOICE.
     #
-    # The practice is to price what the pack contains and say what is missing. The engine did
-    # the first half and only half of the second: the internal report named the four Dyson
-    # assemblies nobody had sent drawings for, in language nobody outside would see, while the
-    # quotation showed a unit price and a list headed "What's included" and said nothing about
-    # what was not. Dyson would read that as a price for the display.
+    # A quotation once carried a "Not included in this price" block naming every BOM line whose
+    # drawing was missing. It is defensible engineering and it is the wrong document for it: what
+    # a customer is told about scope is the estimator's decision and their wording, not a list
+    # this engine generates from its own findings. The same page already carries INDICATIVE in
+    # three places, so nothing here reads as a firm price for a whole product.
     #
-    # An exclusion an estimator knows about and the customer does not is the expensive kind.
-    # This states the parts the price could not cover and why, in the customer's language --
-    # no invariant codes, no engine reasoning -- so the quotation is defensible on its face.
-    _excluded = excluded_for_want_of_a_drawing(summary)
+    # THE GAP IS NOT LOST, which is the condition for keeping it off this page. costed_facts
+    # .undrawn_bom_lines is read by the Estimate sheet, the AI Provenance tab, the Decision
+    # Report and the job report's drawing-pack section — every document the estimator works
+    # from names those parts, and they decide what the customer hears.
     exc_block = ""
-    if _excluded:
-        _rows = "\n".join(
-            f"      <li>{_esc(m['part_number'])}"
-            + (f" — {_esc(m['description'])}" if m.get("description") else "")
-            + "</li>" for m in _excluded[:12])
-        _more = (f"<li>…and {len(_excluded) - 12} further item(s)</li>"
-                 if len(_excluded) > 12 else "")
-        exc_block = f"""
-      <div class="inc">
-        <h3>Not included in this price</h3>
-        <p style="margin:0 0 6px 0;">No detail drawings were supplied for the following, so they
-        are <b>excluded</b> from the figure above. Send the drawings and we will price them.</p>
-        <ul>
-{_rows}{_more}
-        </ul>
-      </div>"""
 
     ga_block = ""
     if ga_uri:

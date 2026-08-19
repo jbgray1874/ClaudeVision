@@ -2228,6 +2228,53 @@ def write_revision_header(ws, summary: Dict[str, Any], job_folder_name: str) -> 
     return False
 
 
+def _write_undrawn_bom_lines(ws, summary: Dict[str, Any], flags: List[str]) -> None:
+    """Name, ON THE SHEET, the BOM lines whose drawings were never supplied.
+
+    An incomplete pack is priced rather than refused, so the total on this sheet is real for what
+    was supplied and is NOT a price for the whole product. That distinction lived in the job
+    report and the run log — two documents away from the person reading the number. Dyson
+    10575-02 priced at GBP 146 with four welded assemblies uncosted because nobody had sent their
+    drawings; the sheet said PROVISIONAL and did not say why.
+
+    Written below the estimator-input checklist, in the same place and the same voice, because
+    it is the same kind of fact: something outstanding that changes what the total means.
+    """
+    try:
+        from costed_facts import undrawn_bom_lines
+        missing = undrawn_bom_lines(summary)
+        if not missing:
+            return
+        _start = ws.max_row + 2
+        _c1 = _writable_cell(ws, _start, 3)
+        if _c1 is None:
+            _flag("undrawn-drawings block could not be placed on the Estimate tab — the rows "
+                  "below the totals are merged in this template. The job report still names "
+                  "them.", flags)
+            return
+        _c1.value = (f"DRAWINGS MISSING FROM THIS PACK ({len(missing)}) — priced from what was "
+                     f"supplied; these are NOT in the total above")
+        _c1.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        _c1.fill = PatternFill("solid", fgColor="7F2A2A")
+        _r = _start + 1
+        for _i, _m in enumerate(missing, 1):
+            _lbl = _writable_cell(ws, _r, 3)
+            if _lbl is not None:
+                _desc = _m.get("description") or ""
+                _lbl.value = (f"{_i}.  {_m.get('part_number')}"
+                              f"{'  —  ' + _desc if _desc else ''}"
+                              f"    (no detail drawing supplied — nothing costed it)")
+                _lbl.font = Font(name="Arial", size=10, color=C_ALERT_TEXT)
+                _lbl.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
+            _r += 1
+        _flag(f"DRAWINGS MISSING: {len(missing)} BOM line(s) name a drawing this pack does not "
+              f"contain — listed on the Estimate tab from row {_start}. The total is real for "
+              f"what was supplied and is not a price for the whole product.", flags)
+    except Exception as _exc:                                    # noqa: BLE001
+        _flag(f"undrawn-drawings block not written ({_exc}) — the sheet still calculates and "
+              f"the job report still names the missing drawings.", flags)
+
+
 def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
     """Put the outstanding inputs where the estimator is already looking.
 
@@ -4459,6 +4506,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         })
 
     _write_estimator_inputs(ws, _inputs, flags)
+    _write_undrawn_bom_lines(ws, summary, flags)
     _append_ai_sheets(wb, summary, flags)
 
     # ── Force Excel to recalc on open ──────────────────────────────────────

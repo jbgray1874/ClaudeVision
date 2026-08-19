@@ -696,6 +696,32 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
              f"{_mat_txt}{_lab_txt}The workbook is authoritative.",
              bg=C_KB, size=9, wrap=True)
         ws.row_dimensions[row].height = 32
+
+    # WHAT THIS TAB COULD NOT DESCRIBE, BECAUSE NOTHING READ IT.
+    #
+    # A part with no drawing has no row worth reading here: no material source, no geometry, no
+    # price — it simply is not in the job the engine saw. Leaving it out silently makes this tab
+    # look like a complete account of the product when it is an account of the drawings that
+    # arrived. Named here so the reader knows which parts this tab is NOT about.
+    try:
+        from costed_facts import undrawn_bom_lines as _undrawn
+        _missing = _undrawn(summary)
+    except Exception:                                            # noqa: BLE001
+        _missing = []
+    if _missing:
+        row += 2
+        ws.merge_cells(f"A{row}:P{row}")
+        _names = "; ".join(
+            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
+            for m in _missing[:8])
+        _more = f" …and {len(_missing) - 8} more" if len(_missing) > 8 else ""
+        cell(row, 1,
+             f"DRAWINGS MISSING FROM THIS PACK ({len(_missing)}) — no detail drawing was "
+             f"supplied for these, so nothing read them and nothing costed them. They are not "
+             f"in the figures above: {_names}{_more}",
+             bg=C_LOW, size=9, wrap=True, bold=True)
+        ws.row_dimensions[row].height = 30
+
     row += 2
     ws.merge_cells(f"A{row}:P{row}")
     # READING SEPARATED FROM PRICING, because they are two different questions and merging

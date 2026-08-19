@@ -1118,6 +1118,36 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
                align="center", size=9, border=True)
             _r += 1
 
+    # ── THE DECISIONS NOBODY COULD MAKE, BECAUSE THE DRAWING NEVER ARRIVED ─────
+    # Every other block on this tab describes a decision made from evidence. These parts had
+    # none: no drawing, so nothing read them, nothing costed them and no decision about them
+    # exists to report. Naming them keeps this tab an account of the whole BOM rather than of
+    # the parts that happened to have drawings.
+    try:
+        from costed_facts import undrawn_bom_lines as _undrawn
+        _missing = _undrawn(summary)
+    except Exception:                                            # noqa: BLE001
+        _missing = []
+    if _missing:
+        _r = ws.max_row + 2
+        _c(ws, _r, 1, "DRAWINGS MISSING FROM THIS PACK — NOTHING DECIDED, NOTHING COSTED",
+           bold=True, bg=C_LOW, fg=C_LOW_TXT, size=10)
+        _r += 1
+        _c(ws, _r, 1,
+           "No detail drawing was supplied for these BOM lines, so the engine never read them. "
+           "They carry no material, no route and no cost — the total is real for what was "
+           "supplied and is not a price for the whole product.",
+           size=8, italic=True, fg="666666")
+        _r += 1
+        for _ci, _h in enumerate(("Part", "Description", "Status"), 1):
+            _c(ws, _r, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        _r += 1
+        for _m in _missing:
+            _c(ws, _r, 1, str(_m.get("part_number") or ""), size=9, border=True)
+            _c(ws, _r, 2, str(_m.get("description") or ""), size=9, border=True, wrap=True)
+            _c(ws, _r, 3, "no drawing supplied", size=9, border=True)
+            _r += 1
+
     ws.freeze_panes = "A6"
 
 

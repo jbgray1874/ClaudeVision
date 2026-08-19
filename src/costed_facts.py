@@ -52,7 +52,34 @@ __all__ = [
     "costed_finish_label",
     "costed_finish_ops",
     "reconcile_risk_flags",
+    "undrawn_bom_lines",
 ]
+
+
+def undrawn_bom_lines(summary: Any) -> List[Dict[str, Any]]:
+    """BOM lines naming a drawing the pack does not contain — nothing read them, nothing costed
+    them, and the total still reads as a finished estimate.
+
+    ONE READER, FOUR SURFACES. The Estimate sheet, the AI Provenance tab, the Decision Report and
+    the job report all have to tell the same story about the same parts, and the invariant that
+    finds them has already done the work. Recomputing it in each place is how two documents from
+    one run come to name different parts.
+
+    Returns [{part_number, description}], empty when the pack is complete.
+    """
+    if not isinstance(summary, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    for violation in ((summary.get("invariants") or {}).get("violations") or []):
+        if not isinstance(violation, dict):
+            continue
+        if str(violation.get("code") or "") != "bom_names_a_drawing_the_pack_does_not_contain":
+            continue
+        for m in ((violation.get("detail") or {}).get("missing") or []):
+            if isinstance(m, dict) and str(m.get("part_number") or "").strip():
+                out.append({"part_number": str(m.get("part_number")).strip(),
+                            "description": str(m.get("description") or "").strip()})
+    return out
 
 # Operations that describe a FINISH rather than a fabrication step, most-specific first —
 # a part can be both sprayed and polished, and the headline should name the dominant one.
