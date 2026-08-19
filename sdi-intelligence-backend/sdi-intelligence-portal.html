@@ -1761,6 +1761,7 @@
               <li><b>Low DXF coverage</b> — fewer than ~60% of parts have a DXF file. Without flat-pattern geometry the engine can't measure area, weight or cut length reliably.</li>
               <li><b>Wire / mesh parts</b> — wire goods (baskets, grids) don't have flat DXFs by design. The engine flags these as insufficient rather than guess.</li>
               <li><b>No drawing pack</b> — if the folder contains only a GA drawing and no part drawings, coverage will be very low.</li>
+              <li><b>Drawings named on the BOM but not supplied</b> — the engine prices what it was given and states the gap: a red <b>DRAWINGS MISSING FROM THIS PACK</b> block on the Estimate sheet, a line on AI Provenance, and <b>NOTHING DECIDED, NOTHING COSTED</b> on the Decision Report, each naming the parts. <b>A thin total on an incomplete pack is an incomplete pack, not a cheap job</b> — ask for the detail drawings before quoting the whole product.</li>
               <li><b>Unknown materials</b> — if the engine can't determine the material for most parts it suppresses rather than cost them wrong.</li>
             </ul>
             <b style="display:block;margin-top:10px">What to do:</b> Check the Decision Report — it shows credibility % and flags exactly which parts are the problem. If the job has DXFs that weren't found, check the folder structure and re-run. If the job is genuinely wire goods, the wire model is the fix (in development).
@@ -1769,14 +1770,21 @@
 
         <!-- Confidence scores -->
         <div class="tool reveal" style="animation-delay:.1s">
-          <div class="th"><span class="nm">Confidence scores</span><span class="chip c-done">On every part</span></div>
-          <div class="ds">Every part in the Decision Report carries a confidence score — how certain the engine is about that part's cost. The job-level credibility % is the weighted average across all parts.</div>
+          <div class="th"><span class="nm">Confidence</span><span class="chip c-done">On every part</span></div>
+          <div class="ds">The AI Provenance tab names <b>how each value was arrived at</b>, field by field, rather than reducing a part to a single number. A score hid which half of a part was weak; the source does not.</div>
           <div class="muted" style="margin-top:10px;font-size:12.5px">
-            <div style="display:grid;grid-template-columns:80px 1fr;gap:6px 12px;align-items:start">
-              <span style="color:var(--ok);font-weight:600;font-family:var(--mono)">0.85 – 1.0</span><span>DXF geometry confirmed, price from price book or ERP. High confidence — use the number.</span>
-              <span style="color:var(--accent);font-weight:600;font-family:var(--mono)">0.60 – 0.84</span><span>PDF dimensions or partial geometry. Reasonable estimate — review the WHY column if the number looks off.</span>
-              <span style="color:var(--warn);font-weight:600;font-family:var(--mono)">0.30 – 0.59</span><span>Historical RAG match or inferred geometry. Treat as a guide only — check the part manually.</span>
-              <span style="color:var(--fail);font-weight:600;font-family:var(--mono)">&lt; 0.30</span><span>Minimal information. The engine has flagged this part — do not rely on the cost without manual verification.</span>
+            <div style="display:grid;grid-template-columns:104px 1fr;gap:6px 12px;align-items:start">
+              <span style="color:var(--ok);font-weight:600;font-family:var(--mono)">CONFIRMED</span><span>An estimator has already agreed this, and it was remembered.</span>
+              <span style="color:var(--ok);font-weight:600;font-family:var(--mono)">MEASURED</span><span>Read off the SOLIDWORKS model or a DXF flat pattern — a measurement, not a reading.</span>
+              <span style="color:var(--info);font-weight:600;font-family:var(--mono)">REPORTED</span><span>Printed on the drawing or in the BOM. Reliable, but it is what someone typed.</span>
+              <span style="color:var(--warn);font-weight:600;font-family:var(--mono)">ASSUMED</span><span>A default or an inference is standing in. Worth a glance.</span>
+              <span style="color:var(--fail);font-weight:600;font-family:var(--mono)">UNKNOWN</span><span>Nothing supplied it. On a price this means nobody has priced it yet.</span>
+            </div>
+            <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+              <b style="color:var(--ink)">Read and priced are two different questions.</b> The tab reports them
+              separately — how well the engine read the drawings, and how many lines are still awaiting your
+              rate. An estimate is expected to arrive with prices outstanding; that is not a fault in the
+              reading. See the <a href="/guide" style="color:var(--accent)">SDI Estimating Intelligence Guide</a>.
             </div>
           </div>
         </div>
@@ -1823,7 +1831,7 @@
               <li><b>3D welded assemblies</b> — bounding-box area under-estimates powder coat on complex weldments. Pass <code>items_per_bar=1</code> + real area as a manual override.</li>
               <li><b>No-DXF jobs</b> — jobs where drawings exist only as PDFs. The engine produces a suppressed estimate and flags it loudly.</li>
               <li><b>Powder coat setup cost</b> — the throughput model is built but not yet wired into the estimator. Current powder numbers will move when it goes live.</li>
-              <li><b>PET / PETG plastic parts</b> — currently misrouted to MILD_STEEL on some jobs. Fix in progress (<code>json_normaliser.py</code>).</li>
+              <li><b>PET / PETG plastic parts</b> — now route to the acrylic sheet path rather than to steel, which was the costly error. The remaining approximation is that PETG is priced as acrylic rather than on its own rate (<code>json_normaliser.py</code>).</li>
             </ul>
           </div>
         </div>
