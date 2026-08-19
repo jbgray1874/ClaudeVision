@@ -148,6 +148,7 @@
 
   <div class="toc">
     <a href="#start"><b>Start here</b><span>The one rule</span></a>
+    <a href="#run"><b>Running a job</b><span>Units, drawings, go</span></a>
     <a href="#estimate"><b>Estimate sheet</b><span>The workbook you edit</span></a>
     <a href="#provenance"><b>AI Provenance tab</b><span>Where each number came from</span></a>
     <a href="#decisions"><b>Decision Report tab</b><span>What the engine had to choose</span></a>
@@ -169,6 +170,26 @@
   questions the engine could not: which material is it really, which gauge, is that price still
   good, and does the offcut go on this job or to stock.</p>
 
+  <h2 id="run">Running a job</h2>
+  <p class="lead">On the estimating page: fill in <b>number of units, drawing number and client</b>,
+  add the drawings, and press <b>SDI (UK) Intelligence Estimator</b>.</p>
+  <table>
+    <tr><th>Step</th><th>What to know</th></tr>
+    <tr><td class="k">Number of units</td><td><b>State it.</b> With none given the engine assumes a
+      default, and quantity drives real money — setup is spread across the order, and a one-off
+      buys a whole sheet to make one part. A job priced at the wrong quantity is wrong by a lot,
+      not a little.</td></tr>
+    <tr><td class="k">Add job folder…</td><td>The reliable route. Point it at the job's own folder
+      and everything in it is read together.</td></tr>
+    <tr><td class="k">Add drawing files…</td><td>Use for a partial pack. Add files from
+      <b>one job only</b> — a stray file from another job has no single folder in common, and the
+      run is refused rather than estimating the wrong thing.</td></tr>
+    <tr><td class="k">Estimating runner</td><td>Must show <b>ready</b>. The run happens on a machine
+      with SOLIDWORKS and Excel; this page queues it.</td></tr>
+    <tr><td class="k">Output folder</td><td>Written to the estimating share, in a dated sub-folder,
+      so re-running never overwrites an earlier estimate.</td></tr>
+  </table>
+
   <h2 id="estimate">1 · The Estimate sheet — the workbook you edit</h2>
   <p class="lead">This is the working surface. It is the estimating template you already know,
   populated. Every figure is an Excel formula, so it recalculates when you change an input.</p>
@@ -178,8 +199,11 @@
     <tr><th>Block</th><th>What lands here</th></tr>
     <tr><td class="k">Bill of Materials</td><td>Bought-in parts — fixings, castors, pallets,
       packaging, delivery, powder. Priced per each, times the quantity per unit, plus scrap.</td></tr>
-    <tr><td class="k">Wire</td><td>Wire, bar and tube sections, costed by length. Empty on a job
-      with no sections — that is correct, not a fault.</td></tr>
+    <tr><td class="k">Wire</td><td>Wire, bar and tube sections, costed by length. <b>An empty Wire
+      block means one of two things, and they are not the same.</b> If the job genuinely has no
+      sections, empty is correct. If the general arrangement shows a tube frame and this block is
+      still empty, the sections were <i>not read</i> — check whether the pack included the models
+      or detail drawings for them, because the frame is then not in the total.</td></tr>
     <tr><td class="k">Sheet Steel</td><td>Fabricated metal. Blank length and width, gauge, how
       many nest out of a sheet, cost per part.</td></tr>
     <tr><td class="k">Other Sheet Material</td><td>Board and plastic — ply, MDF, acrylic, Dibond.
@@ -211,7 +235,17 @@
       something already in the catalogue under another code.</td></tr>
     <tr><td class="k">Margin 0%</td>
       <td>No commercial decision has been made yet. Sell Price equals cost until you set one.</td></tr>
+    <tr><td class="k">AI ESTIMATE · INDICATIVE on a line</td>
+      <td>A real figure, from a market estimate rather than a catalogue. It is <b>not a quote and
+      nobody has agreed it</b> — it is there so the line is not £0 while you find the real price.
+      Overwrite it before quoting firm.</td></tr>
   </table>
+  <div class="panel warn">
+    <p style="margin:0"><b>A part is costed once, in one place.</b> Fabricated parts are costed in
+    Sheet Steel or Other Sheet Material and appear in the BOM at £0; bought-in parts are costed in
+    the BOM and appear nowhere else. If you add a price to a fabricated part's BOM line, the job
+    pays for its material twice.</p>
+  </div>
 
   <h2 id="provenance">2 · The AI Provenance tab — where each number came from</h2>
   <p class="lead">One row per part, naming the source behind every value and how strong that
@@ -289,11 +323,20 @@
       BOM names that the pack does not contain.</td></tr>
     <tr><td class="k">Job report — Estimating review</td><td>Listed as blocking, with the part
       numbers and descriptions.</td></tr>
-    <tr><td class="k">Estimate sheet</td><td>Those assemblies carry little or no material, and the
-      sheet stays marked PROVISIONAL.</td></tr>
-    <tr><td class="k">AI Provenance</td><td>Those parts show as assembly-only records with no
-      geometry — nothing measured them.</td></tr>
+    <tr><td class="k">Estimate sheet</td><td>A red block below the estimator-input checklist:
+      <b>DRAWINGS MISSING FROM THIS PACK (N)</b> — each part named, with
+      <i>"priced from what was supplied; these are NOT in the total above"</i>. The sheet also
+      stays marked PROVISIONAL.</td></tr>
+    <tr><td class="k">AI Provenance</td><td>A line stating <b>which parts the tab is not about</b> —
+      a part with no drawing has no row worth reading, so it is named rather than left out
+      silently.</td></tr>
+    <tr><td class="k">Decision Report</td><td><b>DRAWINGS MISSING FROM THIS PACK — NOTHING DECIDED,
+      NOTHING COSTED.</b> Every other block on that tab describes a decision made from evidence;
+      these parts had none.</td></tr>
     <tr><td class="k">Run log</td><td>Named at the end of the run in the invariants block.</td></tr>
+    <tr><td class="k">Client quote</td><td><b>Nothing.</b> The customer's page carries the price and
+      the specification, labelled indicative. What they are told about scope is yours to say, in
+      your words.</td></tr>
   </table>
   <p><b>What to do:</b> quote provisionally on what is priced and say which assemblies are
   excluded, or ask for the detail pack and re-run. A thin total on an incomplete pack is an
@@ -323,6 +366,16 @@
   Unit Cost — plus a copy of your sheet saved as the manual-override record. No drawings are
   needed and none are re-read; the engine does not run again. The job report and provenance tab
   are left as they were, because they describe the engine's estimate, not yours.</p>
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>If the quote comes back saying "As drawing" everywhere, this is
+    why.</b></p>
+    <p style="margin:0">The regenerated quote keeps the material, finish, operations and the GA
+    image by reloading <b>the original run's saved job file</b>. It finds that file from the
+    workbook's own name, so <b>do not rename the workbook</b> before uploading it — and the
+    original run's output must still be on the machine. Where it cannot find the job, you still
+    get a quote, but it carries only the price and the three fields you typed, and the run log
+    says so.</p>
+  </div>
 
   <div class="foot">
     <b>we.are.sdi</b> · SDI Estimating Intelligence · This guide describes the deliverables the
