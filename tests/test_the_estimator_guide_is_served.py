@@ -84,5 +84,22 @@ def test_both_standalone_pages_keep_the_left_hand_navigation(client):
         assert "/#files" in body and "/#tools" in body, f"{path} cannot get back to the portal"
 
 
+def test_the_sidebar_carries_the_ai_services_too(client):
+    """TWENTY-ONE ENTRIES WERE MISSING. The portal builds its AI Services links from JavaScript,
+    which a static page cannot run, so the first sidebar carried only Overview/Operate/Govern —
+    most of the menu simply absent. They are listed explicitly and deep-link into the portal."""
+    for path in ("/estimating", "/guide"):
+        body = client.get(path).text
+        assert "/#aisvc-scheduling" in body, f"{path} is missing the AI Services group"
+        assert body.count('class="sdinav-item') >= 30, f"{path} has a short menu"
+
+
+def test_the_content_is_left_aligned_beside_the_menu(client):
+    """These pages centre their content, which was right full-width and wrong once a 250px rail
+    took the left of the screen — the content drifted toward the middle, away from the menu."""
+    for path in ("/estimating", "/guide"):
+        assert "margin-left:0 !important" in client.get(path).text
+
+
 def test_the_guide_is_named_for_the_product(client):
     assert "SDI Estimating Intelligence Guide" in client.get("/guide").text

@@ -26,9 +26,43 @@ PAGES = {
 START = "<!-- SDI-SIDEBAR:START -->"
 END = "<!-- SDI-SIDEBAR:END -->"
 
+# THE AI SERVICES, WHICH THE PORTAL RENDERS FROM JAVASCRIPT AND A COPIED SIDEBAR CANNOT.
+#
+# The first version of this nav carried Overview, Operate and Govern and stopped there — so on
+# /estimating twenty-one entries simply were not present, which is most of the menu. They live in
+# a SERVICES array the portal turns into links at load time; a static page has no such array, so
+# they are listed here and kept in step by the check below, which fails loudly rather than letting
+# the two drift apart in silence.
+#
+# Each links to the portal's own deep link for that service: /#aisvc-<id>.
+AI_SERVICES = [
+    ("estimating", "Estimating"),
+    ("brief", "AI Brief Capture &amp; Concept Design"),
+    ("omniverse", "Design Omniverse · Immersive"),
+    ("dfm", "AI Design for Manufacture"),
+    ("scheduling", "AI Production Scheduling"),
+    ("manufacture", "AI Manufacture &amp; Robotics"),
+    ("inspection", "AI Quality Inspection"),
+    ("md-agent", "MD Agent · Chief of Staff"),
+    ("sales-agent", "Sales Intelligence Agent"),
+    ("design-agent", "Design Support Agent"),
+    ("production-agent", "Production Control Agent"),
+    ("finance-agent", "Finance Intelligence Agent"),
+    ("chatbots", "ChatBots · Customer &amp; Internal"),
+    ("voice", "AI Voice Agents"),
+    ("brighthr", "BrightHR Ingestion → InVentry"),
+    ("wearesdi", "WeAreSDI · Public-Site AI Layer"),
+    ("x3", "Sage X3 Acceleration Program"),
+    ("obs", "OBS Studio · Live Recording"),
+    ("tech-radar", "AI Tech Radar"),
+    ("roadmap", "AI Roadmap"),
+]
+
 # Every entry outside this pair of pages goes to the portal and names the view it wants.
 NAV = [
     ("Overview", [("Dashboard", "/#dashboard", None)]),
+    ("AI Services", [("Overview", "/#aisvc", None)]
+                    + [(name, f"/#aisvc-{sid}", None) for sid, name in AI_SERVICES]),
     ("Operate", [
         ("Estimating Intelligence", "/estimating", "estimating"),
         ("SDI Estimating Intelligence Guide", "/guide", "guide"),
@@ -52,6 +86,11 @@ CSS = """
   /* The portal's own tokens are already defined on these pages, so this inherits the look. */
   :root{ --sdinav-w:250px; }
   body{ padding-left:var(--sdinav-w); }
+  /* LEFT-ALIGNED, not centred in what is left over. These pages centre their content with
+     margin:0 auto, which was fine full-width and wrong once a 250px rail took the left of the
+     screen: the content drifted toward the middle and sat away from the menu beside it. Keep the
+     measure (long lines are hard to read) and pin it to the left instead. */
+  .wrap{ margin-left:0 !important; margin-right:auto !important; }
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
     background:var(--panel,#17171b); border-right:1px solid var(--line,#2a2a31);
@@ -97,7 +136,29 @@ def _markup(current: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def _check_services_match_the_portal() -> None:
+    """The portal builds its AI Services links from a JavaScript array; this file lists them by
+    hand. Two lists of the same thing drift, and the failure is silent — entries quietly missing
+    from one page. Compare them and say so, loudly, rather than shipping a shorter menu."""
+    import re
+    portal = HERE / "sdi-intelligence-portal.html"
+    if not portal.exists():
+        return
+    found = re.findall(r"id:'([a-z0-9_-]+)',\s*name:'(?:[^'\\]|\\.)*'",
+                       portal.read_text(encoding="utf-8"))
+    theirs, ours = set(found), {sid for sid, _ in AI_SERVICES}
+    if theirs and theirs != ours:
+        missing, extra = sorted(theirs - ours), sorted(ours - theirs)
+        print("  ! AI Services list is out of step with the portal:")
+        if missing:
+            print(f"      missing here : {', '.join(missing)}")
+        if extra:
+            print(f"      not in portal: {', '.join(extra)}")
+        print("      Update AI_SERVICES in this file, then re-run.")
+
+
 def main() -> None:
+    _check_services_match_the_portal()
     for name, key in PAGES.items():
         path = HERE / name
         if not path.exists():

@@ -59,6 +59,11 @@
   /* The portal's own tokens are already defined on these pages, so this inherits the look. */
   :root{ --sdinav-w:250px; }
   body{ padding-left:var(--sdinav-w); }
+  /* LEFT-ALIGNED, not centred in what is left over. These pages centre their content with
+     margin:0 auto, which was fine full-width and wrong once a 250px rail took the left of the
+     screen: the content drifted toward the middle and sat away from the menu beside it. Keep the
+     measure (long lines are hard to read) and pin it to the left instead. */
+  .wrap{ margin-left:0 !important; margin-right:auto !important; }
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
     background:var(--panel,#17171b); border-right:1px solid var(--line,#2a2a31);
@@ -94,6 +99,28 @@
   </a>
   <div class="sdinav-grp">Overview</div>
   <a class="sdinav-item" href="/#dashboard">Dashboard</a>
+  <div class="sdinav-grp">AI Services</div>
+  <a class="sdinav-item" href="/#aisvc">Overview</a>
+  <a class="sdinav-item" href="/#aisvc-estimating">Estimating</a>
+  <a class="sdinav-item" href="/#aisvc-brief">AI Brief Capture &amp; Concept Design</a>
+  <a class="sdinav-item" href="/#aisvc-omniverse">Design Omniverse · Immersive</a>
+  <a class="sdinav-item" href="/#aisvc-dfm">AI Design for Manufacture</a>
+  <a class="sdinav-item" href="/#aisvc-scheduling">AI Production Scheduling</a>
+  <a class="sdinav-item" href="/#aisvc-manufacture">AI Manufacture &amp; Robotics</a>
+  <a class="sdinav-item" href="/#aisvc-inspection">AI Quality Inspection</a>
+  <a class="sdinav-item" href="/#aisvc-md-agent">MD Agent · Chief of Staff</a>
+  <a class="sdinav-item" href="/#aisvc-sales-agent">Sales Intelligence Agent</a>
+  <a class="sdinav-item" href="/#aisvc-design-agent">Design Support Agent</a>
+  <a class="sdinav-item" href="/#aisvc-production-agent">Production Control Agent</a>
+  <a class="sdinav-item" href="/#aisvc-finance-agent">Finance Intelligence Agent</a>
+  <a class="sdinav-item" href="/#aisvc-chatbots">ChatBots · Customer &amp; Internal</a>
+  <a class="sdinav-item" href="/#aisvc-voice">AI Voice Agents</a>
+  <a class="sdinav-item" href="/#aisvc-brighthr">BrightHR Ingestion → InVentry</a>
+  <a class="sdinav-item" href="/#aisvc-wearesdi">WeAreSDI · Public-Site AI Layer</a>
+  <a class="sdinav-item" href="/#aisvc-x3">Sage X3 Acceleration Program</a>
+  <a class="sdinav-item" href="/#aisvc-obs">OBS Studio · Live Recording</a>
+  <a class="sdinav-item" href="/#aisvc-tech-radar">AI Tech Radar</a>
+  <a class="sdinav-item" href="/#aisvc-roadmap">AI Roadmap</a>
   <div class="sdinav-grp">Operate</div>
   <a class="sdinav-item" href="/estimating">Estimating Intelligence</a>
   <a class="sdinav-item is-here" href="/guide">SDI Estimating Intelligence Guide</a>
