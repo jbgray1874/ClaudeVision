@@ -40,18 +40,25 @@ def _resolve_commit() -> str:
     hit that question repeatedly (a stale extract, a box behind the tip); a version the running
     service reports about itself ends the guessing. Env SDI_COMMIT wins for deploys with no
     working tree; else the short hash from git; else 'unknown' — never an exception at import."""
+    import shutil
     import subprocess
     env = os.getenv("SDI_COMMIT", "").strip()
     if env:
         return env[:40]
-    try:
-        here = Path(__file__).resolve().parent
-        out = subprocess.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
-                             capture_output=True, text=True, timeout=3)
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-    except Exception:
-        pass
+    # RUN AS A WINDOWS SERVICE, git IS NOT ON THE PATH. The service starts uvicorn from its own
+    # virtualenv under NT AUTHORITY\\SYSTEM, whose PATH has no git, so a bare "git" was never
+    # found and the header reported "unknown" on a perfectly current service — the one question
+    # it exists to answer. Resolve the executable explicitly, and ask about the REPO ROOT rather
+    # than this folder, so the answer does not depend on where the service was launched from.
+    _git = shutil.which("git") or r"C:\Program Files\Git\cmd\git.exe"
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        try:
+            out = subprocess.run([_git, "-C", str(_where), "rev-parse", "--short", "HEAD"],
+                                 capture_output=True, text=True, timeout=3)
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+        except Exception:                                        # noqa: BLE001
+            continue
     return "unknown"
 
 

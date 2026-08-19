@@ -70,3 +70,19 @@ def test_it_tells_the_estimator_to_save_in_excel_before_regenerating(client):
 
 def test_the_estimating_page_links_to_it(client):
     assert "/guide" in client.get("/estimating").text
+
+
+def test_both_standalone_pages_keep_the_left_hand_navigation(client):
+    """THE DEAD END. /estimating and /guide are their own documents, so the portal's sidebar
+    vanished the moment an estimator opened either and the only way back was the browser's Back
+    button — on the page they use daily, that reads as having left the system. Both now carry the
+    navigation, and every entry links into the portal's hash routes."""
+    for path in ("/estimating", "/guide"):
+        body = client.get(path).text
+        assert "sdinav" in body, f"{path} has no sidebar"
+        assert "is-here" in body, f"{path} does not mark where you are"
+        assert "/#files" in body and "/#tools" in body, f"{path} cannot get back to the portal"
+
+
+def test_the_guide_is_named_for_the_product(client):
+    assert "SDI Estimating Intelligence Guide" in client.get("/guide").text

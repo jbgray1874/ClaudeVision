@@ -111,6 +111,64 @@
 </style>
 </head>
 <body>
+<!-- SDI-SIDEBAR:START -->
+
+<style id="sdi-sidebar-css">
+  /* The portal's own tokens are already defined on these pages, so this inherits the look. */
+  :root{ --sdinav-w:250px; }
+  body{ padding-left:var(--sdinav-w); }
+  .sdinav{
+    position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
+    background:var(--panel,#17171b); border-right:1px solid var(--line,#2a2a31);
+    z-index:900; padding-bottom:24px;
+  }
+  .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
+    text-decoration:none; color:inherit; }
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,#ffd400);
+    color:#141417; font-weight:900; font-size:17px; display:flex; align-items:center;
+    justify-content:center; font-family:var(--disp,'Archivo',sans-serif); }
+  .sdinav-brand b{ font-family:var(--disp,'Archivo',sans-serif); font-size:13.5px;
+    letter-spacing:.02em; display:block; line-height:1.15; }
+  .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
+    color:var(--dim,#6b6b73); display:block; }
+  .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--dim,#6b6b73); padding:16px 16px 6px; }
+  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,#a3a3aa);
+    text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
+  .sdinav a.sdinav-item:hover{ color:var(--ink,#f3f2ee); background:#ffffff08; }
+  .sdinav a.sdinav-item.is-here{ color:var(--ink,#f3f2ee); border-left-color:var(--brand,#ffd400);
+    background:#ffffff0a; font-weight:600; }
+  @media (max-width:900px){
+    body{ padding-left:0; }
+    .sdinav{ position:static; width:auto; height:auto; border-right:0;
+      border-bottom:1px solid var(--line,#2a2a31); }
+  }
+</style>
+
+<nav class="sdinav" aria-label="SDI Intelligence">
+  <a class="sdinav-brand" href="/">
+    <span class="sdinav-mark">S</span>
+    <span><b>INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
+  </a>
+  <div class="sdinav-grp">Overview</div>
+  <a class="sdinav-item" href="/#dashboard">Dashboard</a>
+  <div class="sdinav-grp">Operate</div>
+  <a class="sdinav-item is-here" href="/estimating">Estimating Intelligence</a>
+  <a class="sdinav-item" href="/guide">SDI Estimating Intelligence Guide</a>
+  <a class="sdinav-item" href="/#tools">AI Tools</a>
+  <a class="sdinav-item" href="/#files">Files &amp; Directories</a>
+  <a class="sdinav-item" href="/#reports">Status Reports</a>
+  <a class="sdinav-item" href="/#golive">Go-Live Guide</a>
+  <a class="sdinav-item" href="/#testing">Testing</a>
+  <div class="sdinav-grp">Govern</div>
+  <a class="sdinav-item" href="/#permissions">Permissions</a>
+  <a class="sdinav-item" href="/#architecture">Architecture</a>
+  <a class="sdinav-item" href="/#rnd">R&amp;D Capture</a>
+  <a class="sdinav-item" href="/#servers">Servers</a>
+  <a class="sdinav-item" href="/#programme">AI Programme</a>
+</nav>
+<!-- SDI-SIDEBAR:END -->
+
 <div class="wrap">
 
   <header>
@@ -120,7 +178,7 @@
       <p class="sub">Drawings in, costed estimate out. Every run writes a complete deliverable set to the shared estimating folder.
         &nbsp;<a href="/guide" target="_blank" rel="noopener"
            style="color:var(--brand);text-decoration:none;border-bottom:1px solid currentColor">
-           Estimator's guide →</a></p>
+           SDI Estimating Intelligence Guide →</a></p>
     </div>
   </header>
 
