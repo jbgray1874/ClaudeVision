@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NovaTech Revenue Performance — Alba PIP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/alba.css">
+</head>
+<!-- Demo script: SCREEN 2.  Source design: Alba screen7.png -->
+<body data-section="portfolio" data-rail="1" data-screen="2">
+
+  <div class="crumb"><b>Portfolio</b> <span>/</span> <b>NovaTech Solutions</b> <span>/</span> Revenue Performance</div>
+
+  <div class="pagehead">
+    <div class="ttl">
+      <h1>NovaTech Solutions <span class="pill warn"><span class="dot warn"></span>Attention</span></h1>
+      <div class="sub">Revenue Performance &nbsp;•&nbsp; B2B Software</div>
+      <div class="meta">Updated 2 min ago &nbsp;•&nbsp; HubSpot + Xero + Stripe</div>
+    </div>
+    <div class="acts">
+      <div class="kpis k4" style="margin:0;grid-template-columns:repeat(4,minmax(116px,1fr))">
+        <div class="kpi">
+          <div class="lab">Q3 Revenue</div><div class="val">$8.7M</div>
+          <div class="cap bad">−3.3% vs plan</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Q4 Forecast</div><div class="val">$10.8M</div>
+          <div class="cap bad">−$1.2M vs target</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Pipeline Coverage</div><div class="val">1.9x</div>
+          <div class="cap bad">from 3.2x</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Win Rate</div><div class="val">22%</div>
+          <div class="cap bad">from 31%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid g-85">
+
+    <!-- ---------- actual + forecast vs plan ---------- -->
+    <div class="panel">
+      <div class="ph">Actual + Forecast vs Plan</div>
+      <div class="legend">
+        <div class="li"><span class="sw"></span>Actual</div>
+        <div class="li"><span class="sw f"></span>Forecast</div>
+        <div class="li"><span class="sw p"></span>Plan</div>
+      </div>
+      <svg class="chart" viewBox="0 0 660 250" preserveAspectRatio="xMidYMid meet" style="height:250px">
+        <!-- y grid + labels: $0M at y=215, $12M at y=15 -->
+        <g class="axlab">
+          <text x="0" y="19">$12M</text><text x="0" y="52">$10M</text><text x="4" y="85">$8M</text>
+          <text x="4" y="118">$6M</text><text x="4" y="151">$4M</text><text x="4" y="184">$2M</text>
+          <text x="4" y="217">$0M</text>
+        </g>
+        <g class="ax">
+          <line x1="42" y1="15"  x2="655" y2="15"/>
+          <line x1="42" y1="48"  x2="655" y2="48"/>
+          <line x1="42" y1="81"  x2="655" y2="81"/>
+          <line x1="42" y1="114" x2="655" y2="114"/>
+          <line x1="42" y1="147" x2="655" y2="147"/>
+          <line x1="42" y1="180" x2="655" y2="180"/>
+          <line x1="42" y1="215" x2="655" y2="215"/>
+        </g>
+
+        <!-- plan: straight climb to 12M -->
+        <path class="serie-plan" d="M60,190 L110,175 L160,159 L210,144 L260,128 L310,113
+                                    L360,97 L410,82 L460,66 L510,51 L560,35 L610,20"/>
+        <!-- actual Jan-Sep -->
+        <path class="serie-actual" d="M60,192 L110,180 L160,168 L210,157 L260,146 L310,135
+                                      L360,124 L410,113 L460,102"/>
+        <!-- forecast Sep-Dec -->
+        <path class="serie-forecast" d="M460,102 L510,88 L560,74 L610,60"/>
+        <g class="pt-actual">
+          <circle cx="60" cy="192" r="2.6"/><circle cx="110" cy="180" r="2.6"/>
+          <circle cx="160" cy="168" r="2.6"/><circle cx="210" cy="157" r="2.6"/>
+          <circle cx="260" cy="146" r="2.6"/><circle cx="310" cy="135" r="2.6"/>
+          <circle cx="360" cy="124" r="2.6"/><circle cx="410" cy="113" r="2.6"/>
+        </g>
+        <g class="pt-forecast">
+          <circle cx="460" cy="102" r="2.8"/><circle cx="510" cy="88" r="2.8"/>
+          <circle cx="560" cy="74" r="2.8"/><circle cx="610" cy="60" r="2.8"/>
+        </g>
+        <g class="axlab" text-anchor="middle">
+          <text x="60" y="234">Jan</text><text x="110" y="234">Feb</text><text x="160" y="234">Mar</text>
+          <text x="210" y="234">Apr</text><text x="260" y="234">May</text><text x="310" y="234">Jun</text>
+          <text x="360" y="234">Jul</text><text x="410" y="234">Aug</text><text x="460" y="234">Sep</text>
+          <text x="510" y="234">Oct</text><text x="560" y="234">Nov</text><text x="610" y="234">Dec</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- ---------- early warning ---------- -->
+    <div class="panel">
+      <div class="ph">Alba Early Warning</div>
+      <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint)">Likely Q4 miss</div>
+      <div class="headline bad" style="margin-top:5px">$1.2M</div>
+      <div style="margin-top:9px"><span class="pill bad">92% Confidence</span></div>
+
+      <p style="color:var(--ink-dim);font-size:12px;margin-top:13px;line-height:1.55">
+        Pipeline coverage and conversion have deteriorated together. Two enterprise deals moved into Q1 and
+        churn is rising.
+      </p>
+
+      <div class="deltas" style="margin-top:10px">
+        <div class="row"><div class="lbl"><span class="dot bad"></span>Pipeline coverage</div>
+          <div class="v">3.2x <span class="arrow">→</span> <span class="to">1.9x</span></div></div>
+        <div class="row"><div class="lbl"><span class="dot bad"></span>Win rate</div>
+          <div class="v">31% <span class="arrow">→</span> <span class="to">22%</span></div></div>
+        <div class="row"><div class="lbl"><span class="dot warn"></span>Enterprise deals slipped</div>
+          <div class="v"><span class="to">2</span></div></div>
+        <div class="row"><div class="lbl"><span class="dot bad"></span>Churn</div>
+          <div class="v">6.3% <span class="arrow">→</span> <span class="to">8.4%</span></div></div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <a class="btn primary" href="03-revenue-risk-investigation.html">Investigate Signal</a>
+        <a class="btn" href="03-revenue-risk-investigation.html">View Source Data</a>
+      </div>
+
+      <div class="provenance">
+        <div class="p">Evidence: 6 metrics</div>
+        <div class="p">3 systems</div>
+        <div class="p">Last refresh 09:42</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- supporting metrics ---------- -->
+  <div class="kpis k3">
+    <div class="kpi">
+      <div class="lab">Sales Cycle</div>
+      <div class="val">71 <span style="font-size:14px;font-weight:400;color:var(--ink-dim)">days</span></div>
+      <div class="cap bad">+14 days</div>
+    </div>
+    <div class="kpi">
+      <div class="lab">Churn</div>
+      <div class="val">8.4%</div>
+      <div class="cap bad">+2.1 pts</div>
+    </div>
+    <div class="kpi">
+      <div class="lab">Deal Slip Rate</div>
+      <div class="val">18%</div>
+      <div class="cap">2 enterprise deals</div>
+    </div>
+  </div>
+
+<script src="assets/alba.js"></script>
+</body>
+</html>
