@@ -174,7 +174,8 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
 
 
 def engine_command(engine_root: Path, engine_python: Path, job: Path,
-                   units: int, client: str, pdf: Optional[Path] = None) -> List[str]:
+                   units: int, client: str, pdf: Optional[Path] = None,
+                   manual_workbook: Optional[Path] = None) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
     promises a complete set every time, so it is not a flag the caller can forget.
 
@@ -198,7 +199,12 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         "--order-qty", str(units),
         "--deliverables",
         "--customer", client,
-    ]
+    ] + (
+        # THE PARITY PARTNER, WHEN THE ESTIMATOR ATTACHED ONE. main.py builds the bundle as part
+        # of the deliverables pass, so the comparison lands beside the estimate instead of being
+        # a separate job somebody has to remember to run. Absent, nothing changes.
+        ["--parity-workbook", str(manual_workbook)] if manual_workbook else []
+    )
 
 
 # ── one runner per machine, advisory ─────────────────────────────────────────
@@ -716,9 +722,19 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                 f"The job folder is not readable from this runner: {folder}", log)
         return
 
+    # THE MANUAL ESTIMATE TO COMPARE AGAINST, IF ONE CAME WITH THE RUN. Checked here for the
+    # same reason the drawing is: a path this runner cannot see must be reported as such, not
+    # handed to the engine to fail forty minutes later inside the deliverables pass.
+    manual_wb = Path(job["manual_workbook"]) if job.get("manual_workbook") else None
+    if manual_wb is not None and not manual_wb.is_file():
+        _finish(requests, base, headers, run_id, runner_id, "error",
+                f"The manual estimate for the parity report is not readable from this "
+                f"runner: {manual_wb}", log)
+        return
+
     before = snapshot(engine_root)
     cmd = engine_command(engine_root, engine_python, folder, int(job["units"]),
-                         job["client"], pdf=pdf)
+                         job["client"], pdf=pdf, manual_workbook=manual_wb)
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 

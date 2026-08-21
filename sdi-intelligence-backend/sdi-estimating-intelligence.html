@@ -252,6 +252,30 @@
            never overwrites an earlier estimate.</p>
       </div>
 
+      <!-- THE PARITY PARTNER, ATTACHED UP FRONT AND OPTIONAL.
+           The comparison an estimator actually wants is "is the engine near my number?", and
+           until now that meant running the estimate, waiting, then remembering to run a second
+           thing from a command line. Attaching the manual sheet here makes the bundle part of
+           the deliverables — produced at the moment somebody is looking at the job, which is
+           the only moment it gets read.
+
+           A SHARE PATH, NOT AN UPLOAD, and that is not a UI preference. The runner executes on
+           a different machine from this service; a file uploaded to this box does not exist on
+           that one. So the sheet must be somewhere both can see. The standalone parity card
+           below takes uploads, because nothing there leaves this box. -->
+      <div class="dest" id="parityAttachBox" style="border-left-color:var(--dim)">
+        <span class="k">Manual estimate to compare against <em style="color:var(--dim);
+              font-style:normal">— optional</em></span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <button id="pickRunManual" type="button">Choose manual estimate…</button>
+          <span class="p" id="runManualName"><span class="pending">None — no parity report</span></span>
+          <button id="clearRunManual" type="button" hidden>Clear</button>
+        </div>
+        <p class="note">Attach the manual estimate for this job and a <strong>parity report</strong>
+           is produced with the estimate, comparing the two. It must sit on a share the runner can
+           read. Leave it empty and the run is unchanged.</p>
+      </div>
+
       <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
            button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
            work placed in China is a different set of numbers, and the two must not be told
@@ -311,6 +335,61 @@
         Estimator Client Report Regen — from your amended sheet</button>
       <p class="req" id="regenReq"></p>
       <ul class="out" id="regenOut"></ul>
+    </section>
+
+    <!-- ══ PARITY ═══════════════════════════════════════════════════
+         THE COMPARISON, FOR A JOB ALREADY RUN. The card above regenerates a quote; this one
+         answers a different question — how close was the engine to the estimator? Neither side
+         is re-run and no drawing is read: two spreadsheets go in and a parity bundle comes out.
+
+         It needs no runner, no SOLIDWORKS seat and no queue, because it is arithmetic over two
+         files. That is why it can be done on any machine, at any time, including for jobs
+         issued months ago — which is the only way the back catalogue ever gets compared. -->
+    <section class="card">
+      <h2>Parity report — the AI estimate against the manual one</h2>
+      <p class="hint">Compare a job the engine has already estimated against the manual estimate
+         for the same job. Either side can be picked from the share or uploaded from this
+         machine. Nothing is re-run and no drawings are needed.</p>
+
+      <div class="dest" style="border-left-color:var(--brand)">
+        <span class="k">AI estimate</span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <button id="pickParityAi" type="button">Choose from share…</button>
+          <button id="uploadParityAi" type="button">Upload…</button>
+          <span class="p" id="parityAiName"><span class="pending">Nothing chosen</span></span>
+          <input id="parityAiFile" type="file" accept=".json,.xlsx,.xlsm" hidden>
+        </div>
+        <p class="note">The engine's own estimate workbook, or its summary <code>.json</code>.
+           Given the workbook, the summary is found from its filename — so the spreadsheet you
+           were sent is enough.</p>
+      </div>
+
+      <div class="dest" style="border-left-color:var(--info)">
+        <span class="k">Manual estimate</span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <button id="pickParityManual" type="button">Choose from share…</button>
+          <button id="uploadParityManual" type="button">Upload…</button>
+          <span class="p" id="parityManualName"><span class="pending">Nothing chosen</span></span>
+          <input id="parityManualFile" type="file" accept=".xlsx,.xlsm,.xls" hidden>
+        </div>
+        <p class="note">The estimator's workbook. <code>.xls</code> is accepted — most of the
+           back catalogue is in it.</p>
+      </div>
+
+      <label style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+        <input id="parityExcel" type="checkbox" style="margin-top:3px">
+        <span class="note" style="margin:0">
+          <strong>Resolve formulas through Excel.</strong> A workbook the engine wrote and nobody
+          has opened has no calculated values in it, so the totals read as blank. Tick this on a
+          machine with Excel to have them calculated. Slower, and it needs Excel — leave it off
+          if either sheet has been opened and saved.
+        </span>
+      </label>
+
+      <button class="btn-run" id="parityRun" disabled style="margin-top:12px">
+        Run parity report — AI against manual</button>
+      <p class="req" id="parityReq"></p>
+      <ul class="out" id="parityOut"></ul>
     </section>
 
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
@@ -653,6 +732,10 @@ const dlg=$("browser"), listing=$("listing"), crumbs=$("crumbs"),
       dTitle=$("dTitle"), dHelp=$("dHelp"), dChoose=$("dChoose"), dAll=$("dAll"),
       dUp=$("dUp");
 let mode="folder", cwd="", roots=[], selected=null;
+// ONE FILE, RETURNED TO WHOEVER ASKED. The picker could select many files for a job or
+// open one for reading, but nothing could say "give me the path of exactly one file",
+// which is what a parity side and an attached manual sheet each need.
+let pickOne = null;
 let shown=[];                 // the listable FILES in the folder on screen
 
 async function openBrowser(m){
@@ -660,12 +743,14 @@ async function openBrowser(m){
   dTitle.textContent = m==="folder" ? "Select a job folder"
                      : m==="files"  ? "Select drawing files"
                      : m==="batch"  ? "Select the drawings in this enquiry"
+                     : m==="pickone"? (pickOne ? pickOne.title : "Select a file")
                      : "Completed estimates";
-  dChoose.style.display = (m==="output") ? "none" : "";
+  dChoose.style.display = (m==="output" || m==="pickone") ? "none" : "";
   dAll.style.display = (m==="files" || m==="batch") ? "" : "none";
   dHelp.textContent = (m==="files" || m==="batch")
                     ? "Click files to select. Click a folder to open it."
                     : m==="folder" ? "Open a folder, then Use this folder."
+                    : m==="pickone" ? "Click the file to choose it. Click a folder to open it."
                     : "Click a file to open it. Reports open in a tab; workbooks download.";
   if(!roots.length){
     try{ roots = (await (await api("/api/roots")).json()).roots || []; }
@@ -831,6 +916,17 @@ async function navigate(path){
       // decision report render in a tab, the workbook downloads for Excel.
       if(mode==="output"){
         window.open("/api/file?path="+encodeURIComponent(it.path), "_blank", "noopener");
+        return;
+      }
+      if(mode==="pickone"){
+        /* The path is the server's, resolved by the listing — never typed, so it cannot be a
+           path this service will refuse when it comes back. */
+        if(pickOne && pickOne.accept && !pickOne.accept.some(x => it.name.toLowerCase().endsWith(x))){
+          dHelp.textContent = "That is not a " + pickOne.accept.join(" / ") + " file.";
+          return;
+        }
+        if(pickOne) pickOne.done(it);
+        dlg.close();
         return;
       }
       if(mode!=="files" && mode!=="batch") return;
@@ -1090,7 +1186,10 @@ runBtn.onclick = async () => {
     job_folder: folder ? folder.path : null,
     files: drawings.filter(d => !d.is_dir).map(d => d.path),
     output_root: OUTPUT_ROOT,
-    deliverables: true                    // --deliverables, always
+    deliverables: true,                   // --deliverables, always
+    // The optional parity partner. null means no comparison was asked for and the run is
+    // exactly as it was before this existed.
+    manual_workbook: runManual ? runManual.path : null
   };
   try{
     const r = await api("/api/estimate",{method:"POST",
@@ -1246,6 +1345,153 @@ regen.onclick = async () => {
 };
 
 renderFiles(); refresh(); setStatus("","Idle"); renderBatch(); bSet("","Idle"); refreshRegen();
+
+/* ══ PARITY ═══════════════════════════════════════════════════════════════════════════
+   Two entry points to one comparison.
+
+   (1) ATTACHED TO A FRESH RUN. A share path, handed to the runner, which passes it to the
+       engine as --parity-workbook so the bundle files with the deliverables. It must be a
+       share path and not an upload: the runner is a different machine, and a file uploaded
+       to this service does not exist there.
+
+   (2) STANDALONE, for a job already estimated. Either side may be a share path OR an upload,
+       because a manual estimate is usually still in somebody's mail. This runs on the service
+       box — no runner, no SOLIDWORKS, no queue — so an upload is fine and nothing waits. */
+
+function chooseOneFile(title, accept, done){
+  pickOne = {title, accept, done};
+  openBrowser("pickone");
+}
+
+/* ── (1) the parity partner attached to a fresh run ─────────────────────────────────── */
+let runManual = null;                      // {path, name} or null
+const runManualName = $("runManualName"), clearRunManual = $("clearRunManual");
+
+function renderRunManual(){
+  if(runManual){
+    runManualName.textContent = runManual.name;
+    runManualName.title = runManual.path;
+    clearRunManual.hidden = false;
+    $("parityAttachBox").style.borderLeftColor = "var(--brand)";
+  }else{
+    runManualName.innerHTML = '<span class="pending">None — no parity report</span>';
+    runManualName.title = "";
+    clearRunManual.hidden = true;
+    $("parityAttachBox").style.borderLeftColor = "var(--dim)";
+  }
+}
+$("pickRunManual").onclick = () => chooseOneFile(
+  "Select the manual estimate for this job", [".xlsx",".xlsm",".xls"],
+  it => { runManual = {path:it.path, name:it.name}; renderRunManual(); });
+clearRunManual.onclick = () => { runManual = null; renderRunManual(); };
+renderRunManual();
+
+/* ── (2) the standalone comparison ──────────────────────────────────────────────────── */
+const paritySides = {
+  ai:     {path:null, file:null, label:$("parityAiName"),     input:$("parityAiFile")},
+  manual: {path:null, file:null, label:$("parityManualName"), input:$("parityManualFile")},
+};
+
+function renderParity(side){
+  const s = paritySides[side];
+  if(s.file)       { s.label.textContent = s.file.name + "  (uploaded)"; s.label.title = ""; }
+  else if(s.path)  { s.label.textContent = s.path.split("\\").pop(); s.label.title = s.path; }
+  else             { s.label.innerHTML = '<span class="pending">Nothing chosen</span>'; }
+  refreshParity();
+}
+/* ONE SIDE, ONE SOURCE. Picking from the share clears an upload and vice versa, so the two
+   can never both be set and leave the estimator guessing which one was actually compared. */
+function setParityPath(side, path){ const s=paritySides[side]; s.path=path; s.file=null; s.input.value=""; renderParity(side); }
+function setParityFile(side, file){ const s=paritySides[side]; s.file=file; s.path=null; renderParity(side); }
+
+$("pickParityAi").onclick = () => chooseOneFile(
+  "Select the AI estimate (workbook or summary JSON)", [".json",".xlsx",".xlsm"],
+  it => setParityPath("ai", it.path));
+$("pickParityManual").onclick = () => chooseOneFile(
+  "Select the manual estimate", [".xlsx",".xlsm",".xls"],
+  it => setParityPath("manual", it.path));
+$("uploadParityAi").onclick = () => paritySides.ai.input.click();
+$("uploadParityManual").onclick = () => paritySides.manual.input.click();
+paritySides.ai.input.addEventListener("change", e => setParityFile("ai", e.target.files[0] || null));
+paritySides.manual.input.addEventListener("change", e => setParityFile("manual", e.target.files[0] || null));
+
+const parityRun = $("parityRun"), parityReq = $("parityReq"), parityOut = $("parityOut");
+function have(side){ const s = paritySides[side]; return !!(s.path || s.file); }
+function refreshParity(){
+  const missing = [];
+  if(!have("ai"))     missing.push("the AI estimate");
+  if(!have("manual")) missing.push("the manual estimate");
+  parityRun.disabled = missing.length > 0;
+  parityReq.textContent = missing.length ? "Needs " + missing.join(" and ") + "." : "";
+}
+refreshParity();
+
+parityRun.onclick = async () => {
+  parityRun.disabled = true; parityOut.innerHTML = "";
+  const was = parityRun.textContent; parityRun.textContent = "Comparing…";
+  try{
+    const fd = new FormData();
+    if(paritySides.ai.file)     fd.append("ai_file", paritySides.ai.file);
+    else                        fd.append("ai_path", paritySides.ai.path);
+    if(paritySides.manual.file) fd.append("manual_file", paritySides.manual.file);
+    else                        fd.append("manual_path", paritySides.manual.path);
+    fd.append("read_via_excel", $("parityExcel").checked ? "true" : "false");
+
+    const r = await api("/api/estimate/parity", {method:"POST", body:fd});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      /* The service explains itself in words an estimator can act on — a missing summary, the
+         wrong file type — so show those rather than a status code. */
+      parityOut.innerHTML = '<li><span style="color:var(--bad)">'
+        + (j.detail || ("Parity failed (" + r.status + ")")) + '</span></li>';
+      return;
+    }
+    const h = j.headline || {};
+    const li = document.createElement("li");
+
+    if(typeof h.ai_unit_cost_gbp === "number" && typeof h.manual_unit_cost_gbp === "number"){
+      /* The engine's own verdict against its configured thresholds — not one computed here,
+         so this line and the bundle can never disagree. */
+      const colour = h.status === "match" ? "var(--ok)"
+                   : h.status === "warning" ? "var(--warn)" : "var(--bad)";
+      const pct = (typeof h.pct_variance === "number")
+        ? " (" + (h.pct_variance > 0 ? "+" : "") + h.pct_variance.toFixed(1) + "%)" : "";
+      li.innerHTML = '<span style="color:' + colour + '">'
+        + (h.status ? String(h.status).toUpperCase() : "COMPARED") + '</span> — unit cost: AI £'
+        + h.ai_unit_cost_gbp.toFixed(2) + ' vs manual £' + h.manual_unit_cost_gbp.toFixed(2)
+        + ' &nbsp;gap £' + (h.gap_gbp ?? 0).toFixed(2) + pct;
+    }else{
+      /* NOT A ZERO. An empty value cache is not a £0 estimate, and showing one as the other
+         is the single most dangerous thing this card could do. */
+      li.innerHTML = '<span style="color:var(--warn)">Unit costs could not both be read</span>'
+        + ' — the workbook was read via ' + (h.workbook_read_mode || "openpyxl")
+        + '. A sheet nobody has opened in Excel holds no calculated values. Tick '
+        + '<em>Resolve formulas through Excel</em> and run it again.';
+    }
+    parityOut.appendChild(li);
+
+    const counts = document.createElement("li");
+    counts.innerHTML = 'Money cells: <strong>' + (h.money_match ?? "?") + '</strong> match · '
+      + (h.money_warning ?? "?") + ' warning · ' + (h.money_fail ?? "?") + ' fail'
+      + ' &nbsp;·&nbsp; labour route: <strong>' + (h.labour_route_match ?? "?") + '</strong> match · '
+      + (h.labour_route_issues ?? "?") + ' issues';
+    parityOut.appendChild(counts);
+
+    [{url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
+     {url:j.bundle_csv_url,  name:"Parity comparison (CSV)"}]
+      .filter(d => d.url).forEach(d => {
+        const a = document.createElement("a");
+        a.href = d.url; a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        const l = document.createElement("li"); l.appendChild(a); parityOut.appendChild(l);
+      });
+  }catch(e){
+    parityOut.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service — '
+      + 'check it is running.</span></li>';
+  }finally{
+    parityRun.textContent = was; refreshParity();
+  }
+};
+
 </script>
 </body>
 </html>

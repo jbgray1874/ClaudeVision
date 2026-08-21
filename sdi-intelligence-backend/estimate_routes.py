@@ -69,6 +69,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ENGINE_PYTHON = os.getenv(
     "SDI_ENGINE_PYTHON", str(_REPO_ROOT / ".venv" / "Scripts" / "python.exe"))
 _OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
+_PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
@@ -177,6 +178,7 @@ class Run:
     # case, where every drawing in it contributes to one BOM. The two are different
     # questions about the same files, and the runner has to be told which was asked.
     pdf_path: str = ""
+    manual_workbook: str = ""               # parity partner, if one was attached to this run
     batch_id: str = ""                      # which enquiry this drawing came in with
     # THE SECOND OPINION, KEPT BESIDE THE FIRST AND NEVER MIXED INTO IT. An LLM read of the
     # drawing arrives in seconds; the engine's estimate takes tens of minutes and runs one
@@ -289,6 +291,13 @@ class EstimateRequest(BaseModel):
     files: List[str] = []
     output_root: Optional[str] = None
     deliverables: bool = True
+    # THE MANUAL ESTIMATE, ATTACHED UP FRONT. Optional, and a path on the share rather than an
+    # upload, because the runner executes on a different machine from this service and a temp
+    # file here would not exist there. Given, the runner passes it to main.py as
+    # --parity-workbook and the parity bundle lands with the rest of the deliverables — which is
+    # the only way the comparison gets made at the moment somebody is actually looking at
+    # the job, rather than never.
+    manual_workbook: Optional[str] = None
 
 
 class BatchRequest(BaseModel):
@@ -390,6 +399,10 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         # and every drawing in it pools into one estimate; set means this one drawing is
         # the job. The runner cannot infer it -- both arrive as paths under the same share.
         "pdf_path": run.pdf_path,
+        # THE PARITY PARTNER, IF ONE WAS ATTACHED. Empty means no comparison was asked for.
+        # The runner passes it to main.py as --parity-workbook; it is a share path, readable
+        # from the runner's machine, never a temp file from this service's disk.
+        "manual_workbook": run.manual_workbook,
     }}
 
 
@@ -509,6 +522,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # share at all — that is rather the point of a runner — so the runner checks,
     # and reports a missing folder as a failed run with a reason.
 
+    # THE OPTIONAL PARITY PARTNER. Checked HERE, at the moment it is offered, rather than at the
+    # far end of a forty-minute run: a path typo that surfaces after the estimate has finished
+    # costs the whole run to correct, and the estimator has by then moved on.
+    manual_wb = ""
+    if req.manual_workbook and req.manual_workbook.strip():
+        _mw = _within_a_root(req.manual_workbook.strip())
+        if _mw is None:
+            raise HTTPException(
+                403, "That manual estimate is outside the shares this service may read.")
+        if _mw.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
+            raise HTTPException(
+                400, f"The manual estimate must be a workbook (.xlsx, .xlsm, .xls) — "
+                     f"got '{_mw.suffix}'.")
+        manual_wb = str(_mw)
+
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
     queued_at = time.time()
     drawing_folder = root / client / drawing
@@ -536,12 +564,15 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         busy = _busy_runner()
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out),
-                  queued_at=queued_at)
+                  manual_workbook=manual_wb, queued_at=queued_at)
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
     run.line(f"Reading   {job}")
     run.line(f"Filing to {out}")
+    if manual_wb:
+        run.line(f"Parity against {Path(manual_wb).name} — the bundle files with the "
+                 f"deliverables")
     if busy is not None:
         run.line(f"Queued behind {busy.drawing_number} for {busy.client}, which has been "
                  f"running {int(time.time() - (busy.started_at or 0))}s. SOLIDWORKS and "
@@ -630,6 +661,141 @@ async def estimate_override(
         "units": units, "drawing": drawing, "client": client,
         "price": result.get("price"), "price_source": result.get("price_source"),
         "sell_price": result.get("sell_price"), "unit_cost": result.get("unit_cost"),
+    }
+
+
+# ── Parity: the AI estimate against the manual one ───────────────────────────
+#
+# TWO WAYS IN, BECAUSE THERE ARE TWO MOMENTS WHEN THE COMPARISON IS WANTED.
+#
+#   1. AFTER THE FACT — a job already run, and the manual estimate that exists for it. Both
+#      sides come from the share, picked in the file browser. This is how the back catalogue
+#      gets compared, and it is the only way to build parity evidence for jobs already issued.
+#   2. AT RUN TIME — the estimator attaches their manual sheet to a fresh run, and the bundle
+#      lands with the other deliverables. See EstimateRequest.manual_workbook.
+#
+# This endpoint serves (1). Either side may be a path on the share OR an upload, because a
+# manual estimate is very often sitting in somebody's mail rather than filed yet, and telling an
+# estimator to save it to the share first is how a feature goes unused.
+#
+# It runs on THIS box, not on a runner: parity reads two files and does arithmetic. It needs no
+# SOLIDWORKS seat and no drawing read, so it must not queue behind a forty-minute estimate.
+_MAX_PARITY_UPLOAD_BYTES = int(os.getenv("SDI_MAX_PARITY_UPLOAD_MB", "20")) * 1024 * 1024
+_AI_SUFFIXES = (".json", ".xlsx", ".xlsm")
+_MANUAL_SUFFIXES = (".xlsx", ".xlsm", ".xls")
+
+
+async def _side_to_path(upload: Optional[UploadFile], path: Optional[str],
+                        *, label: str, suffixes: tuple, stack: list) -> str:
+    """One side of the comparison as a path on disk, from either an upload or the share.
+
+    Uploads are spooled to a temp file whose name is registered on `stack` for the caller to
+    clean up; share paths are checked against the allowed roots exactly as every other file
+    endpoint is, so this cannot become a way to read C:\Windows.
+    """
+    if upload is not None and (upload.filename or "").strip():
+        name = (upload.filename or "").strip()
+        if not name.lower().endswith(suffixes):
+            raise HTTPException(
+                status_code=415,
+                detail=f"The {label} must be one of {', '.join(suffixes)} — got '{name}'")
+        data = await upload.read(_MAX_PARITY_UPLOAD_BYTES + 1)
+        if len(data) > _MAX_PARITY_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"The {label} exceeds {_MAX_PARITY_UPLOAD_BYTES // (1024 * 1024)} MB")
+        if not data:
+            raise HTTPException(status_code=400, detail=f"The uploaded {label} is empty")
+        import tempfile
+        tf = tempfile.NamedTemporaryFile(suffix=Path(name).suffix, delete=False)
+        tf.write(data)
+        tf.close()
+        stack.append(tf.name)
+        return tf.name
+
+    if path and path.strip():
+        resolved = _within_a_root(path.strip())
+        if resolved is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"That {label} is outside the shares this service may read.")
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail=f"The {label} was not found: {path}")
+        return str(resolved)
+
+    raise HTTPException(status_code=400, detail=f"No {label} was given.")
+
+
+@router.post("/parity")
+async def estimate_parity(
+    ai_file: Optional[UploadFile] = File(default=None),
+    manual_file: Optional[UploadFile] = File(default=None),
+    ai_path: Optional[str] = Form(default=None),
+    manual_path: Optional[str] = Form(default=None),
+    read_via_excel: bool = Form(default=False),
+    x_sdi_key: Optional[str] = Header(default=None),
+):
+    """Compare one AI estimate against one manual estimate and return the bundle.
+
+    The AI side may be the engine's summary JSON or its own workbook — the workbook's summary is
+    resolved from its filename, because an estimator reaches for the spreadsheet they were sent,
+    not for a JSON they have never seen.
+    """
+    _check_key(x_sdi_key)
+
+    import json as _json
+    import subprocess
+    from urllib.parse import quote as _urlquote
+
+    temps: list = []
+    try:
+        ai = await _side_to_path(ai_file, ai_path, label="AI estimate",
+                                 suffixes=_AI_SUFFIXES, stack=temps)
+        manual = await _side_to_path(manual_file, manual_path, label="manual estimate",
+                                     suffixes=_MANUAL_SUFFIXES, stack=temps)
+
+        cmd = [_ENGINE_PYTHON, _PARITY_CLI, "--ai", ai, "--manual", manual,
+               "--out-dir", str(OUTPUT_ROOT), "--json"]
+        if read_via_excel:
+            cmd.append("--read-via-excel")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="The parity report timed out")
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+        if proc.returncode != 0:
+            # parity_run exits 2 with a single explanatory line for anything the estimator can
+            # fix — a missing summary, the wrong file type. Hand that back verbatim as a 400;
+            # anything else is ours and is a 500.
+            msg = (proc.stderr or proc.stdout or "parity failed").strip()
+            last = msg.splitlines()[-1][:400] if msg else "parity failed"
+            raise HTTPException(status_code=400 if proc.returncode == 2 else 500, detail=last)
+
+        line = next((ln for ln in reversed(proc.stdout.splitlines())
+                     if ln.strip().startswith("{")), "")
+        result = _json.loads(line) if line else {}
+    finally:
+        for t in temps:
+            try:
+                os.unlink(t)
+            except OSError:
+                pass
+
+    bundle_json = result.get("bundle_json")
+    bundle_csv = result.get("bundle_csv")
+    return {
+        "parity": True,
+        "job_stem": result.get("job_stem"),
+        "ai_summary": result.get("ai_summary"),
+        "manual_workbook": result.get("manual_workbook"),
+        "bundle_json": bundle_json,
+        "bundle_csv": bundle_csv,
+        "bundle_json_url": (f"/api/file?path={_urlquote(bundle_json)}" if bundle_json else None),
+        "bundle_csv_url": (f"/api/file?path={_urlquote(bundle_csv)}" if bundle_csv else None),
+        "headline": result.get("headline") or {},
     }
 
 
