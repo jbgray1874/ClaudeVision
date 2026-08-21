@@ -26,7 +26,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 import config
 
@@ -240,6 +240,47 @@ def estimating_guide():
         return FileResponse(str(_GUIDE))
     return JSONResponse(status_code=404,
                         content={"detail": "sdi-estimating-guide.html is not next to app.py"})
+
+
+_LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
+_LOGO_FALLBACK = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">'
+    '<circle cx="50" cy="50" r="50" fill="#e8a33d"/>'
+    '<text x="50" y="66" text-anchor="middle" font-family="Inter,Arial,sans-serif" '
+    'font-weight="800" font-size="54" fill="#000">S</text></svg>'
+)
+
+
+@app.get("/api/brand/logo")
+def brand_logo():
+    """The we.are.sdi logo, read from the SAME folder the client quote reads.
+
+    One file, two consumers. A logo copied into the portal would drift from the one on the
+    customer's quotation, and the quotation is the copy that must never be wrong.
+
+    This endpoint never 404s. If the file is missing it returns a plain mark rather than a
+    broken image, because a header with a hole in it looks like a broken site, while a plain
+    mark looks like a plain mark — the same reasoning the quote generator already applies.
+    """
+    folder = Path(config.BRAND_ASSETS_DIR)
+    key = config.BRAND_SDI_LOGO_KEY.lower()
+    try:
+        if folder.is_dir():
+            for ext in _LOGO_EXTS:                       # .svg first — it scales
+                for entry in folder.iterdir():
+                    if entry.suffix.lower() != ext:
+                        continue
+                    stem = "".join(c for c in entry.stem.lower() if c.isalnum())
+                    if stem == key:
+                        media = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
+                        return FileResponse(str(entry), media_type=media,
+                                            headers={"Cache-Control": "public, max-age=300"})
+    except OSError as exc:
+        logging.getLogger("sdi").warning(
+            "brand logo unreadable in %s (%s) — serving the fallback mark", folder, exc)
+
+    return Response(content=_LOGO_FALLBACK, media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")

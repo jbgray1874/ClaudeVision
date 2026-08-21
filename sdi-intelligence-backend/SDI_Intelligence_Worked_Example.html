@@ -62,11 +62,17 @@ code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:2
 .callout .ttl{font-size:13.5px;font-weight:600;color:var(--ink);margin-bottom:4px}
 .callout .dsc{font-size:12.5px;color:var(--dim)}
 .footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:11px;color:var(--faint)}
+
+  /* we.are.sdi — served by /api/brand/logo from the SAME folder the client quote reads, so the
+     portal header and the customer's quotation can never show different marks. The logo stands on
+     its own; .mark is kept only as the fallback when the endpoint is unreachable (a page opened
+     off the share rather than through the portal). */
+  .brandlogo{height:28px;width:auto;max-width:132px;display:block;flex:none}
 </style>
 </head>
 <body>
 <div class="hdr">
-  <div class="mark"><b>S</b></div>
+  <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi">
   <h1>SDI Intelligence — Worked Example</h1>
   <div class="sub">How the engine processes a real job end to end &nbsp;·&nbsp; Flat-Pack Trestle &nbsp;·&nbsp; 11 June 2026</div>
 </div>

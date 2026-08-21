@@ -94,6 +94,14 @@ DB_PASSWORD = _opt("SDI_DB_PASSWORD")
 DB_ENCRYPT = _opt("SDI_DB_ENCRYPT", "yes")
 DB_TRUST_CERT = _opt("SDI_DB_TRUST_CERT", "yes")
 
+# ── brand assets ────────────────────────────────────────────────────────────
+# The portal header shows the SAME we.are.sdi logo the client quote puts on its header. Pointing
+# both at one folder is deliberate: a logo that lives in two places drifts, and the customer-facing
+# document is the one that must never be wrong. src/client_quote_html.py reads this same folder.
+BRAND_ASSETS_DIR = _opt("SDI_BRAND_ASSETS_DIR", r"C:\ClaudeVision\assets\customer_logos")
+BRAND_SDI_LOGO_KEY = _opt("SDI_BRAND_LOGO_KEY", "wearesdi")
+
+
 DB_CONFIGURED = bool(DB_SERVER and not DB_SERVER.startswith("<") and DB_NAME and not DB_NAME.startswith("<"))
 
 

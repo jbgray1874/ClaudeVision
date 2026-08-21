@@ -133,6 +133,10 @@
   .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,#e8a33d);
     color:#0d0d0f; font-weight:900; font-size:17px; display:flex; align-items:center;
     justify-content:center; font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); }
+  /* we.are.sdi, served by /api/brand/logo from the SAME folder the client quote reads. The
+     lettered .sdinav-mark above is only the fallback for a page opened off the share, where
+     there is no backend to ask. */
+  .sdinav-logo{ height:28px; width:auto; max-width:132px; display:block; flex:none; }
   .sdinav-brand b{ font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); font-size:13.5px;
     letter-spacing:.02em; display:block; line-height:1.15; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
@@ -153,7 +157,7 @@
 
 <nav class="sdinav" aria-label="SDI Intelligence">
   <a class="sdinav-brand" href="/">
-    <span class="sdinav-mark">S</span>
+    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi">
     <span><b>INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
   </a>
   <div class="sdinav-grp">Overview</div>

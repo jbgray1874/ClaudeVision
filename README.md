@@ -197,6 +197,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_AISHEETS_DIR` | Where the estimator-override loop writes the regenerated client quote (default the AISheets share). Point at a local folder on a test box with no share mounted |
 | `SDI_OVERRIDE_XLSX_DIR` | Where the estimator-override loop saves the amended workbook as the `_MANUAL_OVERRIDE` record (default: same as `SDI_AISHEETS_DIR`; set to the job's Live Enquiry folder to keep the override beside its pack) |
 | `SDI_WELD_DEBUG=1` | Per-weld diagnostics from the document builder |
+| `SDI_BRAND_ASSETS_DIR` | *(portal backend)* Folder holding the brand logos the portal header serves — the **same folder** `src/client_quote_html.py` reads for the quotation header, so the two cannot show different marks (default `C:\ClaudeVision\assets\customer_logos`) |
+| `SDI_BRAND_LOGO_KEY` | *(portal backend)* Filename stem of SDI's own logo within that folder, matched case- and space-insensitively (default `wearesdi`) |
 
 ## Quick health check
 

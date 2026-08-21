@@ -34,11 +34,17 @@ details.faq summary:hover{border-color:rgba(232,163,61,.3)}
 .c-warn{background:rgba(232,163,61,.12);color:var(--warn);border-color:rgba(232,163,61,.3)}
 .c-fail{background:rgba(232,84,79,.12);color:var(--fail);border-color:rgba(232,84,79,.3)}
 .footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:11px;color:var(--faint)}
+
+  /* we.are.sdi — served by /api/brand/logo from the SAME folder the client quote reads, so the
+     portal header and the customer's quotation can never show different marks. The logo stands on
+     its own; .mark is kept only as the fallback when the endpoint is unreachable (a page opened
+     off the share rather than through the portal). */
+  .brandlogo{height:28px;width:auto;max-width:132px;display:block;flex:none}
 </style>
 </head>
 <body>
 <div class="hdr">
-  <div class="mark"><b>S</b></div>
+  <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi">
   <h1>SDI Intelligence — Frequently Asked Questions</h1>
   <div class="sub">For estimators, managers and the technical team &nbsp;·&nbsp; 11 June 2026</div>
 </div>
