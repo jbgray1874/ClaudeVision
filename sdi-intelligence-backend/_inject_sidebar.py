@@ -93,29 +93,29 @@ CSS = """
   .wrap{ margin-left:0 !important; margin-right:auto !important; }
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
-    background:var(--panel,#17171b); border-right:1px solid var(--line,#2a2a31);
+    background:var(--panel,#121214); border-right:1px solid var(--line,#26262b);
     z-index:900; padding-bottom:24px;
   }
   .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
     text-decoration:none; color:inherit; }
-  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,#ffd400);
-    color:#141417; font-weight:900; font-size:17px; display:flex; align-items:center;
-    justify-content:center; font-family:var(--disp,'Archivo',sans-serif); }
-  .sdinav-brand b{ font-family:var(--disp,'Archivo',sans-serif); font-size:13.5px;
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,#e8a33d);
+    color:#0d0d0f; font-weight:900; font-size:17px; display:flex; align-items:center;
+    justify-content:center; font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); }
+  .sdinav-brand b{ font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); font-size:13.5px;
     letter-spacing:.02em; display:block; line-height:1.15; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
-    color:var(--dim,#6b6b73); display:block; }
+    color:var(--dim,#6a6a72); display:block; }
   .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
-    text-transform:uppercase; color:var(--dim,#6b6b73); padding:16px 16px 6px; }
-  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,#a3a3aa);
+    text-transform:uppercase; color:var(--dim,#6a6a72); padding:16px 16px 6px; }
+  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,#9b9ba3);
     text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
-  .sdinav a.sdinav-item:hover{ color:var(--ink,#f3f2ee); background:#ffffff08; }
-  .sdinav a.sdinav-item.is-here{ color:var(--ink,#f3f2ee); border-left-color:var(--brand,#ffd400);
+  .sdinav a.sdinav-item:hover{ color:var(--ink,#f0efec); background:#ffffff08; }
+  .sdinav a.sdinav-item.is-here{ color:var(--ink,#f0efec); border-left-color:var(--brand,#e8a33d);
     background:#ffffff0a; font-weight:600; }
   @media (max-width:900px){
     body{ padding-left:0; }
     .sdinav{ position:static; width:auto; height:auto; border-right:0;
-      border-bottom:1px solid var(--line,#2a2a31); }
+      border-bottom:1px solid var(--line,#26262b); }
   }
 </style>
 """

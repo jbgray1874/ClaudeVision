@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SDI Intelligence — Technical Reference</title>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0d0f;--bg2:#141417;--surface:#17171b;--surface2:#1d1d22;--line:#2a2a31;--ink:#f3f2ee;--dim:#a3a3aa;--faint:#6b6b73;--acc:#ffd400;--ok:#5fd08a;--warn:#ff9d42;--fail:#ff5d5d;--info:#6db3ff;--disp:'Archivo',sans-serif;--body:'Hanken Grotesk',sans-serif;--mono:'JetBrains Mono',monospace}
-*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0a0b;--bg2:#0d0d0f;--surface:#121214;--surface2:#17171a;--line:#26262b;--ink:#f0efec;--dim:#9b9ba3;--faint:#6a6a72;--acc:#e8a33d;--ok:#4ec97f;--warn:#e8a33d;--fail:#e8544f;--info:#6da8e8;--disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;
+    --serif:'Spectral','Source Serif 4',Georgia,serif;margin:0;padding:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;padding:0 0 80px}
-.hdr{background:linear-gradient(135deg,#101013,#17171b);border-bottom:2px solid var(--acc);padding:36px 60px 32px}
+.hdr{background:linear-gradient(135deg,#101013,#121214);border-bottom:2px solid var(--acc);padding:36px 60px 32px}
 .mark{width:38px;height:38px;background:var(--acc);border-radius:4px;display:grid;place-items:center;margin-bottom:14px}
 .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:22px;letter-spacing:-1px}
 .hdr h1{font-family:var(--disp);font-weight:800;font-size:24px;letter-spacing:-.02em;margin-bottom:4px}
@@ -23,10 +24,10 @@ li{margin-bottom:5px}
 li b{color:var(--ink)}
 code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--acc)}
 .chip{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:2px 7px;border-radius:100px;border:1px solid;vertical-align:middle;margin-left:4px}
-.c-ok{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
-.c-acc{background:rgba(255,212,0,.1);color:var(--acc);border-color:rgba(255,212,0,.3)}
-.c-warn{background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)}
-.c-info{background:rgba(109,179,255,.12);color:var(--info);border-color:rgba(109,179,255,.3)}
+.c-ok{background:rgba(78,201,127,.12);color:var(--ok);border-color:rgba(78,201,127,.3)}
+.c-acc{background:rgba(232,163,61,.1);color:var(--acc);border-color:rgba(232,163,61,.3)}
+.c-warn{background:rgba(232,163,61,.12);color:var(--warn);border-color:rgba(232,163,61,.3)}
+.c-info{background:rgba(109,168,232,.12);color:var(--info);border-color:rgba(109,168,232,.3)}
 .note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:0 6px 6px 0;padding:14px 18px;margin:14px 0;font-size:13px;color:var(--dim)}
 .note b{color:var(--ink)}
 /* module cards */

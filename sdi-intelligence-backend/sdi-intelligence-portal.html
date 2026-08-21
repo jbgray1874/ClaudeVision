@@ -6,18 +6,19 @@
 <title>SDI Intelligence — Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0d0d0f; --bg-2:#141417; --surface:#17171b; --surface-2:#1d1d22;
-    --line:#2a2a31; --line-soft:#202026;
-    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
-    --accent:#ffd400; --accent-deep:#e6be00;
-    --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d; --info:#6db3ff;
+    --bg:#0a0a0b; --bg-2:#0d0d0f; --surface:#121214; --surface-2:#17171a;
+    --line:#26262b; --line-soft:#1e1e22;
+    --ink:#f0efec; --ink-dim:#9b9ba3; --ink-faint:#6a6a72;
+    --accent:#e8a33d; --accent-deep:#cf8c26;
+    --ok:#4ec97f; --warn:#e8a33d; --fail:#e8544f; --info:#6da8e8;
     --r:4px;
     --mono:'JetBrains Mono',ui-monospace,monospace;
-    --disp:'Archivo',sans-serif;
-    --body:'Hanken Grotesk',sans-serif;
+    --serif:'Spectral','Source Serif 4',Georgia,serif;
+    --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
@@ -25,8 +26,8 @@
     background:var(--bg); color:var(--ink); font-family:var(--body);
     font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
     background-image:
-      radial-gradient(900px 500px at 88% -8%, rgba(255,212,0,.06), transparent 60%),
-      radial-gradient(700px 600px at -5% 110%, rgba(255,212,0,.03), transparent 55%);
+      radial-gradient(900px 500px at 88% -8%, rgba(232,163,61,.06), transparent 60%),
+      radial-gradient(700px 600px at -5% 110%, rgba(232,163,61,.03), transparent 55%);
     min-height:100vh;
   }
   a{color:inherit;text-decoration:none}
@@ -36,12 +37,12 @@
 
   /* ---------- Sidebar ---------- */
   .side{
-    border-right:1px solid var(--line); background:linear-gradient(180deg,#101013,#0d0d0f);
+    border-right:1px solid var(--line); background:linear-gradient(180deg,#101013,#0a0a0b);
     display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
   }
   .brand{padding:22px 22px 20px;border-bottom:1px solid var(--line-soft);display:flex;gap:12px;align-items:center}
   .mark{width:34px;height:34px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none;
-        box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 6px 18px rgba(255,212,0,.18)}
+        box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 6px 18px rgba(232,163,61,.18)}
   .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:20px;line-height:1;letter-spacing:-1px}
   .brand-txt .t1{font-family:var(--disp);font-weight:800;letter-spacing:.12em;font-size:13px}
   .brand-txt .t2{font-size:10.5px;color:var(--ink-faint);letter-spacing:.34em;text-transform:uppercase;margin-top:2px}
@@ -63,17 +64,17 @@
   .main{display:flex;flex-direction:column;min-width:0}
   .top{
     height:62px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:0 28px;
-    position:sticky;top:0;background:rgba(13,13,15,.82);backdrop-filter:blur(10px);z-index:20
+    position:sticky;top:0;background:rgba(10,10,11,.82);backdrop-filter:blur(10px);z-index:20
   }
   .crumb{font-family:var(--mono);font-size:12px;color:var(--ink-faint);letter-spacing:.04em}
   .crumb b{color:var(--ink)}
   .top-r{margin-left:auto;display:flex;align-items:center;gap:14px}
   .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;padding:5px 9px;border:1px solid var(--line);
         border-radius:100px;color:var(--ink-dim);text-transform:uppercase}
-  .pill.live{color:var(--accent);border-color:rgba(255,212,0,.35)}
+  .pill.live{color:var(--accent);border-color:rgba(232,163,61,.35)}
   .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:6px;
-       box-shadow:0 0 0 0 rgba(95,208,138,.6);animation:pulse 2.4s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(95,208,138,.5)}70%{box-shadow:0 0 0 6px rgba(95,208,138,0)}100%{box-shadow:0 0 0 0 rgba(95,208,138,0)}}
+       box-shadow:0 0 0 0 rgba(78,201,127,.6);animation:pulse 2.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(78,201,127,.5)}70%{box-shadow:0 0 0 6px rgba(78,201,127,0)}100%{box-shadow:0 0 0 0 rgba(78,201,127,0)}}
   .ext{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-dim);font-weight:500}
   .ext:hover{color:var(--accent)}
   .user{display:flex;align-items:center;gap:9px;padding-left:14px;border-left:1px solid var(--line)}
@@ -121,18 +122,18 @@
 
   /* status chips */
   .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;padding:3px 8px;border-radius:3px;font-weight:500;white-space:nowrap}
-  .c-done{background:rgba(95,208,138,.13);color:var(--ok);border:1px solid rgba(95,208,138,.25)}
-  .c-prog{background:rgba(255,212,0,.12);color:var(--accent);border:1px solid rgba(255,212,0,.28)}
-  .c-pend{background:rgba(255,157,66,.12);color:var(--warn);border:1px solid rgba(255,157,66,.28)}
-  .c-plan{background:rgba(109,179,255,.1);color:var(--info);border:1px solid rgba(109,179,255,.24)}
-  .c-gate{background:rgba(255,93,93,.1);color:var(--fail);border:1px solid rgba(255,93,93,.26)}
+  .c-done{background:rgba(78,201,127,.13);color:var(--ok);border:1px solid rgba(78,201,127,.25)}
+  .c-prog{background:rgba(232,163,61,.12);color:var(--accent);border:1px solid rgba(232,163,61,.28)}
+  .c-pend{background:rgba(232,163,61,.12);color:var(--warn);border:1px solid rgba(232,163,61,.28)}
+  .c-plan{background:rgba(109,168,232,.1);color:var(--info);border:1px solid rgba(109,168,232,.24)}
+  .c-gate{background:rgba(232,84,79,.1);color:var(--fail);border:1px solid rgba(232,84,79,.26)}
 
   /* roadmap */
   .road{display:flex;flex-direction:column;gap:0;border-left:1px solid var(--line);margin-left:6px}
   .ph{position:relative;padding:0 0 26px 26px}
   .ph::before{content:"";position:absolute;left:-5px;top:3px;width:9px;height:9px;border-radius:50%;background:var(--bg);border:2px solid var(--ink-faint)}
   .ph.done::before{background:var(--ok);border-color:var(--ok)}
-  .ph.prog::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px rgba(255,212,0,.12)}
+  .ph.prog::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px rgba(232,163,61,.12)}
   .ph.gate::before{background:var(--fail);border-color:var(--fail)}
   .ph .ttl{font-family:var(--disp);font-weight:700;font-size:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .ph .dsc{color:var(--ink-dim);font-size:13px;margin-top:5px;max-width:68ch}
@@ -142,7 +143,7 @@
   .tools{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   @media(max-width:900px){.tools{grid-template-columns:1fr 1fr}}
   .tool{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:17px;display:flex;flex-direction:column;gap:10px;transition:.18s}
-  .tool:hover{border-color:rgba(255,212,0,.4);transform:translateY(-2px)}
+  .tool:hover{border-color:rgba(232,163,61,.4);transform:translateY(-2px)}
   .tool .th{display:flex;align-items:center;justify-content:space-between}
   .tool .nm{font-family:var(--disp);font-weight:700;font-size:14.5px}
   .tool .ds{font-size:12.5px;color:var(--ink-dim);min-height:34px}
@@ -174,7 +175,7 @@
   .tree .f::before{content:"└";position:absolute;left:6px;color:var(--ink-faint)}
   .tree .lvl{padding-left:18px}
 
-  .note{background:linear-gradient(180deg,rgba(255,212,0,.05),transparent);border:1px solid rgba(255,212,0,.22);
+  .note{background:linear-gradient(180deg,rgba(232,163,61,.05),transparent);border:1px solid rgba(232,163,61,.22);
         border-radius:var(--r);padding:16px 18px;font-size:13px;color:var(--ink-dim);margin-top:8px}
   .note b{color:var(--accent)}
   .note h4{font-family:var(--disp);font-weight:700;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);margin-bottom:9px}
@@ -667,7 +668,7 @@
 
       <div class="tools">
 
-        <div class="tool reveal" style="border-color:rgba(95,208,138,.25)">
+        <div class="tool reveal" style="border-color:rgba(78,201,127,.25)">
           <div class="th"><span class="nm">dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING</span><span class="chip c-done">Tier 1 · PRIMARY</span></div>
           <div class="ds">The single most important pricing table. 20,015 rows, 15,118 with prices. Contains the entire SDI bought-in catalogue — every ELEC*, FIXING*, SLOTTEDTUBE*, VINYL*, SUBPLAS*, SSH-* code SDI has ever bought. The complete 1282 Milwaukee BOM is here: ELEC-50CM LOOM £23.00 (Elite Sourcing), FIXING5 £0.01, SLOTTEDTUBE01/02 £3.57 (Preferred Tubes), SUBPLAS72 £1.00 (Eagle Plastics), VINYL03/76 £0.85 (Chartwell Press). Collation: Latin1_General_BIN (binary, case-sensitive).</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
@@ -713,7 +714,7 @@
         </div>
 
         <div class="tool reveal" style="animation-delay:.20s">
-          <div class="th"><span class="nm">dbo.estimating_tube_rate</span><span class="chip" style="background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)">3 rows · Pending</span></div>
+          <div class="th"><span class="nm">dbo.estimating_tube_rate</span><span class="chip" style="background:rgba(232,163,61,.12);color:var(--warn);border-color:rgba(232,163,61,.3)">3 rows · Pending</span></div>
           <div class="ds">The correct long-term home for Tony's tube prices — per-metre, by section profile, from Preferred Tubes Ltd Stockport. Currently 3 rows: 25×10×1.5, 30×60×1.5, 60×30×? all status <code>pending_supplier_invoice</code> sourced from warehouse labels. Once Tony confirms prices and wall thickness, status flips to verified. Engine should read tube prices here, not from BoughtInCatalogue per-piece rows.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Action needed:</b> Tony to confirm per-metre rates + wall thickness → update rows → flip status<br>
@@ -738,7 +739,7 @@
           </div>
         </div>
 
-        <div class="tool reveal" style="animation-delay:.32s;border-color:rgba(109,179,255,.2)">
+        <div class="tool reveal" style="animation-delay:.32s;border-color:rgba(109,168,232,.2)">
           <div class="th"><span class="nm">AIEstimating.BoughtInCatalogue + vCurrentBoughtIn</span><span class="chip c-plan">84 rows · Dedup needed</span></div>
           <div class="ds">Engine's own bought-in catalogue. 84 rows. <code>vCurrentBoughtIn</code> view excludes <code>rag_fallback%</code> source rows, so web_indicative rows win when duplicates exist. Known dedup issue: TUBE0070 (£5.80 rag_fallback vs £5.20 web_indicative), TUBE0072, FIXING1596, FIXING2104 all have conflicting duplicate rows. The less-verified price is being served — dedup action pending.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
@@ -747,7 +748,7 @@
           </div>
         </div>
 
-        <div class="tool reveal" style="animation-delay:.36s;border-color:rgba(109,179,255,.2)">
+        <div class="tool reveal" style="animation-delay:.36s;border-color:rgba(109,168,232,.2)">
           <div class="th"><span class="nm">AIEstimating.PartKnowledge · Corrections · LiveOverrides</span><span class="chip c-done">Learning Loop</span></div>
           <div class="ds">The three learning tables. Corrections receives estimator overrides. At three occurrences a Correction auto-promotes to PartKnowledge (injected at pre_scan) and LiveOverrides (fires immediately on every future run). The bridge between human feedback and a permanently correct engine.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
@@ -755,7 +756,7 @@
           </div>
         </div>
 
-        <div class="tool reveal" style="animation-delay:.40s;border-color:rgba(109,179,255,.2)">
+        <div class="tool reveal" style="animation-delay:.40s;border-color:rgba(109,168,232,.2)">
           <div class="th"><span class="nm">AIEstimating.ScanLog</span><span class="chip c-done">Audit</span></div>
           <div class="ds">One row per engine run — job number, scan date, file count, credibility score, suppression flag, total cost and run duration. Full audit trail for every estimate ever produced.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
@@ -813,7 +814,7 @@
           </tr>
           <tr>
             <td><b>—</b></td><td><i>No match</i></td><td>—</td><td>—</td>
-            <td><span class="chip" style="font-size:10px;background:rgba(255,93,93,.12);color:var(--fail);border-color:rgba(255,93,93,.25)">£0 + review flag with specific reason</span></td>
+            <td><span class="chip" style="font-size:10px;background:rgba(232,84,79,.12);color:var(--fail);border-color:rgba(232,84,79,.25)">£0 + review flag with specific reason</span></td>
           </tr>
         </table>
       </div>
@@ -861,15 +862,15 @@
         <p class="sub">Full technical and estimator documentation.</p>
       </div>
       <div class="tools">
-        <div class="tool reveal" style="border-color:rgba(109,179,255,.2)">
+        <div class="tool reveal" style="border-color:rgba(109,168,232,.2)">
           <div class="th"><span class="nm">📄 Technical Reference</span><span class="chip c-plan">James / Dev</span></div>
           <div class="ds">Every Python module, all libraries, LLM integration roles, AI Tech Radar areas.</div>
-          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_Technical_Reference.html" target="_blank" style="display:inline-block;background:rgba(109,179,255,.12);color:var(--info);border:1px solid rgba(109,179,255,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open Technical Reference →</a></div>
+          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_Technical_Reference.html" target="_blank" style="display:inline-block;background:rgba(109,168,232,.12);color:var(--info);border:1px solid rgba(109,168,232,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open Technical Reference →</a></div>
         </div>
-        <div class="tool reveal" style="animation-delay:.05s;border-color:rgba(95,208,138,.2)">
+        <div class="tool reveal" style="animation-delay:.05s;border-color:rgba(78,201,127,.2)">
           <div class="th"><span class="nm">📄 FAQ</span><span class="chip c-ok">All users</span></div>
           <div class="ds">Common questions — why £0, what does confidence mean, how to submit a correction.</div>
-          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_FAQ.html" target="_blank" style="display:inline-block;background:rgba(95,208,138,.12);color:var(--ok);border:1px solid rgba(95,208,138,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open FAQ →</a></div>
+          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_FAQ.html" target="_blank" style="display:inline-block;background:rgba(78,201,127,.12);color:var(--ok);border:1px solid rgba(78,201,127,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open FAQ →</a></div>
         </div>
       </div>
 
@@ -885,7 +886,7 @@
 
       <!-- folder label -->
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
-        <span style="font-family:var(--mono);font-size:11px;padding:7px 14px;border-radius:4px;border:1px solid var(--accent);background:rgba(255,212,0,.1);color:var(--accent);letter-spacing:.06em">AI Estimate Sheets</span>
+        <span style="font-family:var(--mono);font-size:11px;padding:7px 14px;border-radius:4px;border:1px solid var(--accent);background:rgba(232,163,61,.1);color:var(--accent);letter-spacing:.06em">AI Estimate Sheets</span>
         <span style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">K:\Estimating\Completed\AI Estimating\AISheets\</span>
       </div>
 
@@ -1001,158 +1002,158 @@
 
       <!-- SVG Architecture Diagram -->
       <div class="panel reveal" style="padding:32px 24px;overflow-x:auto">
-        <svg viewBox="0 0 860 540" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;display:block;margin:0 auto;font-family:'Hanken Grotesk',sans-serif">
+        <svg viewBox="0 0 860 540" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;display:block;margin:0 auto;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
           <defs>
-            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#6b6b73"/></marker>
-            <marker id="arr-acc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#ffd400"/></marker>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#6a6a72"/></marker>
+            <marker id="arr-acc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#e8a33d"/></marker>
           </defs>
 
           <!-- ── BROWSER ZONE ── -->
-          <rect x="10" y="10" width="200" height="140" rx="6" fill="#17171b" stroke="#2a2a31" stroke-width="1"/>
-          <text x="110" y="30" text-anchor="middle" font-size="9" fill="#6b6b73" letter-spacing="2" font-weight="600">BROWSER</text>
-          <rect x="30" y="40" width="160" height="44" rx="4" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="110" y="58" text-anchor="middle" font-size="11" fill="#f3f2ee" font-weight="600">SDI Intelligence Portal</text>
-          <text x="110" y="73" text-anchor="middle" font-size="10" fill="#a3a3aa">sdi-intelligence-portal.html</text>
-          <rect x="30" y="94" width="72" height="28" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="66" y="112" text-anchor="middle" font-size="10" fill="#a3a3aa">James / Admin</text>
-          <rect x="118" y="94" width="72" height="28" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="154" y="112" text-anchor="middle" font-size="10" fill="#a3a3aa">Tim / Howard / Tony</text>
-          <rect x="30" y="132" width="160" height="1" fill="#2a2a31"/>
+          <rect x="10" y="10" width="200" height="140" rx="6" fill="#121214" stroke="#26262b" stroke-width="1"/>
+          <text x="110" y="30" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2" font-weight="600">BROWSER</text>
+          <rect x="30" y="40" width="160" height="44" rx="4" fill="#17171a" stroke="#26262b"/>
+          <text x="110" y="58" text-anchor="middle" font-size="11" fill="#f0efec" font-weight="600">SDI Intelligence Portal</text>
+          <text x="110" y="73" text-anchor="middle" font-size="10" fill="#9b9ba3">sdi-intelligence-portal.html</text>
+          <rect x="30" y="94" width="72" height="28" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="66" y="112" text-anchor="middle" font-size="10" fill="#9b9ba3">James / Admin</text>
+          <rect x="118" y="94" width="72" height="28" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="154" y="112" text-anchor="middle" font-size="10" fill="#9b9ba3">Tim / Howard / Tony</text>
+          <rect x="30" y="132" width="160" height="1" fill="#26262b"/>
 
           <!-- ── SERVER ZONE ── -->
-          <rect x="10" y="170" width="200" height="180" rx="6" fill="#17171b" stroke="#ffd400" stroke-width="1.5" stroke-dasharray="4 3"/>
-          <text x="110" y="190" text-anchor="middle" font-size="9" fill="#ffd400" letter-spacing="2" font-weight="600">10.0.16.151 · WINDOWS SERVER</text>
-          <rect x="26" y="198" width="168" height="50" rx="4" fill="#1d1d22" stroke="#ffd400" stroke-width="1"/>
-          <text x="110" y="218" text-anchor="middle" font-size="11" fill="#ffd400" font-weight="700">FastAPI Backend</text>
-          <text x="110" y="233" text-anchor="middle" font-size="10" fill="#a3a3aa">app.py · port 8071</text>
-          <text x="38" y="248" font-size="9" fill="#6b6b73">/api/health · /api/files · /api/file · /api/db/ping</text>
+          <rect x="10" y="170" width="200" height="180" rx="6" fill="#121214" stroke="#e8a33d" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text x="110" y="190" text-anchor="middle" font-size="9" fill="#e8a33d" letter-spacing="2" font-weight="600">10.0.16.151 · WINDOWS SERVER</text>
+          <rect x="26" y="198" width="168" height="50" rx="4" fill="#17171a" stroke="#e8a33d" stroke-width="1"/>
+          <text x="110" y="218" text-anchor="middle" font-size="11" fill="#e8a33d" font-weight="700">FastAPI Backend</text>
+          <text x="110" y="233" text-anchor="middle" font-size="10" fill="#9b9ba3">app.py · port 8071</text>
+          <text x="38" y="248" font-size="9" fill="#6a6a72">/api/health · /api/files · /api/file · /api/db/ping</text>
 
-          <rect x="26" y="258" width="76" height="40" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="64" y="274" text-anchor="middle" font-size="10" fill="#f3f2ee" font-weight="600">Estimating</text>
-          <text x="64" y="288" text-anchor="middle" font-size="10" fill="#a3a3aa">Engine</text>
+          <rect x="26" y="258" width="76" height="40" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="64" y="274" text-anchor="middle" font-size="10" fill="#f0efec" font-weight="600">Estimating</text>
+          <text x="64" y="288" text-anchor="middle" font-size="10" fill="#9b9ba3">Engine</text>
 
-          <rect x="118" y="258" width="76" height="40" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="156" y="274" text-anchor="middle" font-size="10" fill="#f3f2ee" font-weight="600">BrightHR →</text>
-          <text x="156" y="288" text-anchor="middle" font-size="10" fill="#a3a3aa">InVentry</text>
+          <rect x="118" y="258" width="76" height="40" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="156" y="274" text-anchor="middle" font-size="10" fill="#f0efec" font-weight="600">BrightHR →</text>
+          <text x="156" y="288" text-anchor="middle" font-size="10" fill="#9b9ba3">InVentry</text>
 
-          <rect x="26" y="308" width="168" height="32" rx="3" fill="#141417" stroke="#2a2a31"/>
-          <text x="110" y="329" text-anchor="middle" font-size="10" fill="#6b6b73">C:\ClaudeVision\src\ · Python 3.10 venv</text>
+          <rect x="26" y="308" width="168" height="32" rx="3" fill="#0d0d0f" stroke="#26262b"/>
+          <text x="110" y="329" text-anchor="middle" font-size="10" fill="#6a6a72">C:\ClaudeVision\src\ · Python 3.10 venv</text>
 
           <!-- ── FILE SHARES ── -->
-          <rect x="250" y="170" width="175" height="180" rx="6" fill="#17171b" stroke="#2a2a31"/>
-          <text x="337" y="190" text-anchor="middle" font-size="9" fill="#6b6b73" letter-spacing="2" font-weight="600">FILE SHARES · VPN</text>
-          <rect x="266" y="198" width="143" height="34" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="337" y="213" text-anchor="middle" font-size="10" fill="#f3f2ee">K:\Estimating\</text>
-          <text x="337" y="226" text-anchor="middle" font-size="9" fill="#6b6b73">AI Estimating · job folders · DXFs</text>
-          <rect x="266" y="240" width="143" height="34" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="337" y="255" text-anchor="middle" font-size="10" fill="#f3f2ee">K:\IT\AI &amp; Automation\</text>
-          <text x="337" y="268" text-anchor="middle" font-size="9" fill="#6b6b73">StatusReporting · reports</text>
-          <rect x="266" y="282" width="143" height="34" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="337" y="297" text-anchor="middle" font-size="10" fill="#f3f2ee">C:\ClaudeVision\output\</text>
-          <text x="337" y="310" text-anchor="middle" font-size="9" fill="#6b6b73">Estimate workbooks · JSON · logs</text>
-          <rect x="266" y="324" width="143" height="20" rx="3" fill="#141417" stroke="#2a2a31"/>
-          <text x="337" y="338" text-anchor="middle" font-size="9" fill="#6b6b73">Served via /api/files — read-only</text>
+          <rect x="250" y="170" width="175" height="180" rx="6" fill="#121214" stroke="#26262b"/>
+          <text x="337" y="190" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2" font-weight="600">FILE SHARES · VPN</text>
+          <rect x="266" y="198" width="143" height="34" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="337" y="213" text-anchor="middle" font-size="10" fill="#f0efec">K:\Estimating\</text>
+          <text x="337" y="226" text-anchor="middle" font-size="9" fill="#6a6a72">AI Estimating · job folders · DXFs</text>
+          <rect x="266" y="240" width="143" height="34" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="337" y="255" text-anchor="middle" font-size="10" fill="#f0efec">K:\IT\AI &amp; Automation\</text>
+          <text x="337" y="268" text-anchor="middle" font-size="9" fill="#6a6a72">StatusReporting · reports</text>
+          <rect x="266" y="282" width="143" height="34" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="337" y="297" text-anchor="middle" font-size="10" fill="#f0efec">C:\ClaudeVision\output\</text>
+          <text x="337" y="310" text-anchor="middle" font-size="9" fill="#6a6a72">Estimate workbooks · JSON · logs</text>
+          <rect x="266" y="324" width="143" height="20" rx="3" fill="#0d0d0f" stroke="#26262b"/>
+          <text x="337" y="338" text-anchor="middle" font-size="9" fill="#6a6a72">Served via /api/files — read-only</text>
 
           <!-- ── DATABASE ── -->
-          <rect x="460" y="10" width="390" height="520" rx="6" fill="#17171b" stroke="#2a2a31"/>
-          <text x="655" y="32" text-anchor="middle" font-size="9" fill="#6b6b73" letter-spacing="2" font-weight="600">10.0.0.200 · SDILIVE SQL SERVER</text>
+          <rect x="460" y="10" width="390" height="520" rx="6" fill="#121214" stroke="#26262b"/>
+          <text x="655" y="32" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2" font-weight="600">10.0.0.200 · SDILIVE SQL SERVER</text>
 
           <!-- dbo — confirmed 24 Jun 2026 -->
-          <rect x="476" y="42" width="170" height="268" rx="4" fill="#141417" stroke="#2a2a31"/>
-          <text x="561" y="60" text-anchor="middle" font-size="9" fill="#6b6b73" letter-spacing="2">dbo · READ-ONLY</text>
-          <rect x="488" y="68" width="146" height="30" rx="3" fill="#1d1d22" stroke="#5fd08a" stroke-width="1.5"/>
-          <text x="561" y="84" text-anchor="middle" font-size="10" fill="#5fd08a">UDEF_PARTS_TABLE</text>
-          <text x="561" y="97" text-anchor="middle" font-size="9" fill="#5fd08a">20k rows · 15k priced · Tier 1 + Catalogue</text>
-          <rect x="488" y="106" width="146" height="26" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="561" y="124" text-anchor="middle" font-size="10" fill="#a3a3aa">PMA_TBL</text>
-          <text x="561" y="136" text-anchor="middle" font-size="9" fill="#6b6b73">Parts master · Tier 1.5</text>
-          <rect x="488" y="140" width="146" height="26" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="561" y="158" text-anchor="middle" font-size="10" fill="#a3a3aa">labour_rates</text>
-          <text x="561" y="170" text-anchor="middle" font-size="9" fill="#6b6b73">38 ops · all departments</text>
-          <rect x="488" y="174" width="146" height="26" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="561" y="192" text-anchor="middle" font-size="10" fill="#a3a3aa">material_prices · estimating_tube_rate</text>
-          <text x="561" y="204" text-anchor="middle" font-size="9" fill="#6b6b73">19 materials · 3 tube rows pending Tony</text>
-          <rect x="488" y="208" width="146" height="30" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="561" y="224" text-anchor="middle" font-size="10" fill="#a3a3aa">historical_quote_header + 3 detail tables</text>
-          <text x="561" y="238" text-anchor="middle" font-size="9" fill="#6b6b73">1,982 jobs · M&amp;S 777 / Boots 333 / TTI 316</text>
-          <rect x="488" y="246" width="146" height="18" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="561" y="259" text-anchor="middle" font-size="9" fill="#6b6b73">estimating_supplier_catalog_url · 138 rows</text>
+          <rect x="476" y="42" width="170" height="268" rx="4" fill="#0d0d0f" stroke="#26262b"/>
+          <text x="561" y="60" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2">dbo · READ-ONLY</text>
+          <rect x="488" y="68" width="146" height="30" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1.5"/>
+          <text x="561" y="84" text-anchor="middle" font-size="10" fill="#4ec97f">UDEF_PARTS_TABLE</text>
+          <text x="561" y="97" text-anchor="middle" font-size="9" fill="#4ec97f">20k rows · 15k priced · Tier 1 + Catalogue</text>
+          <rect x="488" y="106" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="561" y="124" text-anchor="middle" font-size="10" fill="#9b9ba3">PMA_TBL</text>
+          <text x="561" y="136" text-anchor="middle" font-size="9" fill="#6a6a72">Parts master · Tier 1.5</text>
+          <rect x="488" y="140" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="561" y="158" text-anchor="middle" font-size="10" fill="#9b9ba3">labour_rates</text>
+          <text x="561" y="170" text-anchor="middle" font-size="9" fill="#6a6a72">38 ops · all departments</text>
+          <rect x="488" y="174" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="561" y="192" text-anchor="middle" font-size="10" fill="#9b9ba3">material_prices · estimating_tube_rate</text>
+          <text x="561" y="204" text-anchor="middle" font-size="9" fill="#6a6a72">19 materials · 3 tube rows pending Tony</text>
+          <rect x="488" y="208" width="146" height="30" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="561" y="224" text-anchor="middle" font-size="10" fill="#9b9ba3">historical_quote_header + 3 detail tables</text>
+          <text x="561" y="238" text-anchor="middle" font-size="9" fill="#6a6a72">1,982 jobs · M&amp;S 777 / Boots 333 / TTI 316</text>
+          <rect x="488" y="246" width="146" height="18" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="561" y="259" text-anchor="middle" font-size="9" fill="#6a6a72">estimating_supplier_catalog_url · 138 rows</text>
 
           <!-- AIEstimating -->
-          <rect x="664" y="42" width="170" height="340" rx="4" fill="#141417" stroke="#6db3ff" stroke-width="1"/>
-          <text x="749" y="60" text-anchor="middle" font-size="9" fill="#6db3ff" letter-spacing="2">AIEstimating · WRITABLE</text>
-          <rect x="676" y="68" width="146" height="26" rx="3" fill="#1d1d22" stroke="#6db3ff" stroke-width="1"/>
-          <text x="749" y="86" text-anchor="middle" font-size="10" fill="#6db3ff">vCurrentBoughtIn</text>
-          <text x="749" y="98" text-anchor="middle" font-size="9" fill="#6b6b73">48 rows · Tier 3</text>
-          <rect x="676" y="104" width="146" height="26" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="749" y="122" text-anchor="middle" font-size="10" fill="#a3a3aa">LabourRateCard</text>
-          <text x="749" y="134" text-anchor="middle" font-size="9" fill="#6b6b73">staging → dbo.labour_rates</text>
-          <rect x="676" y="140" width="146" height="26" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="749" y="158" text-anchor="middle" font-size="10" fill="#a3a3aa">JobBoughtInMaterials</text>
-          <text x="749" y="170" text-anchor="middle" font-size="9" fill="#6b6b73">staging → UDEF_PARTS_TABLE</text>
-          <rect x="676" y="176" width="146" height="26" rx="3" fill="#1d1d22" stroke="#5fd08a" stroke-width="1"/>
-          <text x="749" y="194" text-anchor="middle" font-size="10" fill="#5fd08a">PartKnowledge</text>
-          <text x="749" y="206" text-anchor="middle" font-size="9" fill="#6b6b73">learning · pre_scan inject</text>
-          <rect x="676" y="212" width="146" height="26" rx="3" fill="#1d1d22" stroke="#5fd08a" stroke-width="1"/>
-          <text x="749" y="230" text-anchor="middle" font-size="10" fill="#5fd08a">Corrections</text>
-          <text x="749" y="242" text-anchor="middle" font-size="9" fill="#6b6b73">estimator feedback</text>
-          <rect x="676" y="248" width="146" height="26" rx="3" fill="#1d1d22" stroke="#5fd08a" stroke-width="1"/>
-          <text x="749" y="266" text-anchor="middle" font-size="10" fill="#5fd08a">LiveOverrides</text>
-          <text x="749" y="278" text-anchor="middle" font-size="9" fill="#6b6b73">auto-promoted at ×3</text>
-          <rect x="676" y="284" width="146" height="26" rx="3" fill="#1d1d22" stroke="#2a2a31"/>
-          <text x="749" y="302" text-anchor="middle" font-size="10" fill="#a3a3aa">ScanLog</text>
-          <text x="749" y="314" text-anchor="middle" font-size="9" fill="#6b6b73">audit trail · every run</text>
-          <rect x="676" y="320" width="146" height="26" rx="3" fill="#1d1d22" stroke="#ff9d42" stroke-width="1"/>
-          <text x="749" y="338" text-anchor="middle" font-size="10" fill="#ff9d42">HistoricalEstimates</text>
-          <text x="749" y="350" text-anchor="middle" font-size="9" fill="#6b6b73">304 jobs · pending reload</text>
-          <rect x="676" y="356" width="146" height="20" rx="3" fill="#141417" stroke="#2a2a31"/>
-          <text x="749" y="370" text-anchor="middle" font-size="9" fill="#6b6b73">AIBot · AIAgentPW2026 · ODBC 18</text>
+          <rect x="664" y="42" width="170" height="340" rx="4" fill="#0d0d0f" stroke="#6da8e8" stroke-width="1"/>
+          <text x="749" y="60" text-anchor="middle" font-size="9" fill="#6da8e8" letter-spacing="2">AIEstimating · WRITABLE</text>
+          <rect x="676" y="68" width="146" height="26" rx="3" fill="#17171a" stroke="#6da8e8" stroke-width="1"/>
+          <text x="749" y="86" text-anchor="middle" font-size="10" fill="#6da8e8">vCurrentBoughtIn</text>
+          <text x="749" y="98" text-anchor="middle" font-size="9" fill="#6a6a72">48 rows · Tier 3</text>
+          <rect x="676" y="104" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="749" y="122" text-anchor="middle" font-size="10" fill="#9b9ba3">LabourRateCard</text>
+          <text x="749" y="134" text-anchor="middle" font-size="9" fill="#6a6a72">staging → dbo.labour_rates</text>
+          <rect x="676" y="140" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="749" y="158" text-anchor="middle" font-size="10" fill="#9b9ba3">JobBoughtInMaterials</text>
+          <text x="749" y="170" text-anchor="middle" font-size="9" fill="#6a6a72">staging → UDEF_PARTS_TABLE</text>
+          <rect x="676" y="176" width="146" height="26" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1"/>
+          <text x="749" y="194" text-anchor="middle" font-size="10" fill="#4ec97f">PartKnowledge</text>
+          <text x="749" y="206" text-anchor="middle" font-size="9" fill="#6a6a72">learning · pre_scan inject</text>
+          <rect x="676" y="212" width="146" height="26" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1"/>
+          <text x="749" y="230" text-anchor="middle" font-size="10" fill="#4ec97f">Corrections</text>
+          <text x="749" y="242" text-anchor="middle" font-size="9" fill="#6a6a72">estimator feedback</text>
+          <rect x="676" y="248" width="146" height="26" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1"/>
+          <text x="749" y="266" text-anchor="middle" font-size="10" fill="#4ec97f">LiveOverrides</text>
+          <text x="749" y="278" text-anchor="middle" font-size="9" fill="#6a6a72">auto-promoted at ×3</text>
+          <rect x="676" y="284" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
+          <text x="749" y="302" text-anchor="middle" font-size="10" fill="#9b9ba3">ScanLog</text>
+          <text x="749" y="314" text-anchor="middle" font-size="9" fill="#6a6a72">audit trail · every run</text>
+          <rect x="676" y="320" width="146" height="26" rx="3" fill="#17171a" stroke="#e8a33d" stroke-width="1"/>
+          <text x="749" y="338" text-anchor="middle" font-size="10" fill="#e8a33d">HistoricalEstimates</text>
+          <text x="749" y="350" text-anchor="middle" font-size="9" fill="#6a6a72">304 jobs · pending reload</text>
+          <rect x="676" y="356" width="146" height="20" rx="3" fill="#0d0d0f" stroke="#26262b"/>
+          <text x="749" y="370" text-anchor="middle" font-size="9" fill="#6a6a72">AIBot · AIAgentPW2026 · ODBC 18</text>
 
           <!-- Promotion arrows inside DB zone -->
-          <line x1="664" y1="81" x2="634" y2="81" stroke="#ffd400" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
-          <line x1="664" y1="117" x2="634" y2="189" stroke="#ffd400" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
-          <line x1="664" y1="153" x2="634" y2="81" stroke="#ffd400" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
+          <line x1="664" y1="81" x2="634" y2="81" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
+          <line x1="664" y1="117" x2="634" y2="189" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
+          <line x1="664" y1="153" x2="634" y2="81" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
 
           <!-- ── ANTHROPIC API ── -->
-          <rect x="476" y="390" width="358" height="52" rx="4" fill="#141417" stroke="#2a2a31"/>
-          <text x="655" y="412" text-anchor="middle" font-size="10" fill="#a3a3aa" font-weight="600">Anthropic API (Claude Sonnet · Opus 4.8)</text>
-          <text x="655" y="428" text-anchor="middle" font-size="9" fill="#6b6b73">Vision extraction · Tech Radar web search · fallback pricing · ANTHROPIC_API_KEY</text>
+          <rect x="476" y="390" width="358" height="52" rx="4" fill="#0d0d0f" stroke="#26262b"/>
+          <text x="655" y="412" text-anchor="middle" font-size="10" fill="#9b9ba3" font-weight="600">Anthropic API (Claude Sonnet · Opus 4.8)</text>
+          <text x="655" y="428" text-anchor="middle" font-size="9" fill="#6a6a72">Vision extraction · Tech Radar web search · fallback pricing · ANTHROPIC_API_KEY</text>
 
           <!-- ── ARROWS ── -->
           <!-- Browser ↔ FastAPI -->
-          <line x1="110" y1="150" x2="110" y2="168" stroke="#6b6b73" stroke-width="1.5" marker-end="url(#arr)"/>
-          <text x="115" y="162" font-size="9" fill="#6b6b73">HTTP · same-origin</text>
+          <line x1="110" y1="150" x2="110" y2="168" stroke="#6a6a72" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="115" y="162" font-size="9" fill="#6a6a72">HTTP · same-origin</text>
 
           <!-- FastAPI → File Shares -->
-          <line x1="210" y1="248" x2="248" y2="280" stroke="#6b6b73" stroke-width="1.5" marker-end="url(#arr)"/>
-          <text x="215" y="270" font-size="9" fill="#6b6b73">read UNC</text>
+          <line x1="210" y1="248" x2="248" y2="280" stroke="#6a6a72" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="215" y="270" font-size="9" fill="#6a6a72">read UNC</text>
 
           <!-- FastAPI → DB -->
-          <line x1="210" y1="228" x2="458" y2="190" stroke="#ffd400" stroke-width="1.5" marker-end="url(#arr-acc)"/>
-          <text x="300" y="200" font-size="9" fill="#ffd400">pyodbc · VPN · port 1433</text>
+          <line x1="210" y1="228" x2="458" y2="190" stroke="#e8a33d" stroke-width="1.5" marker-end="url(#arr-acc)"/>
+          <text x="300" y="200" font-size="9" fill="#e8a33d">pyodbc · VPN · port 1433</text>
 
           <!-- Engine → DB -->
-          <line x1="102" y1="350" x2="458" y2="260" stroke="#5fd08a" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
-          <text x="240" y="330" font-size="9" fill="#5fd08a">read dbo · write AIEstimating</text>
+          <line x1="102" y1="350" x2="458" y2="260" stroke="#4ec97f" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
+          <text x="240" y="330" font-size="9" fill="#4ec97f">read dbo · write AIEstimating</text>
 
           <!-- Engine → Anthropic -->
-          <line x1="102" y1="350" x2="476" y2="410" stroke="#a3a3aa" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+          <line x1="102" y1="350" x2="476" y2="410" stroke="#9b9ba3" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
 
           <!-- Engine → File Shares (writes output) -->
-          <line x1="100" y1="350" x2="280" y2="348" stroke="#6b6b73" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
-          <text x="160" y="364" font-size="9" fill="#6b6b73">writes xlsx · JSON · logs</text>
+          <line x1="100" y1="350" x2="280" y2="348" stroke="#6a6a72" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+          <text x="160" y="364" font-size="9" fill="#6a6a72">writes xlsx · JSON · logs</text>
 
           <!-- Legend -->
-          <rect x="476" y="456" width="358" height="62" rx="4" fill="#141417" stroke="#2a2a31"/>
-          <text x="493" y="473" font-size="9" fill="#6b6b73" letter-spacing="1.5" font-weight="600">LEGEND</text>
-          <line x1="493" y1="486" x2="520" y2="486" stroke="#ffd400" stroke-width="1.5" marker-end="url(#arr-acc)"/>
-          <text x="526" y="490" font-size="9" fill="#a3a3aa">DB query / promotion</text>
-          <line x1="493" y1="503" x2="520" y2="503" stroke="#5fd08a" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
-          <text x="526" y="507" font-size="9" fill="#a3a3aa">Engine → DB (read dbo / write AIEstimating)</text>
-          <line x1="650" y1="486" x2="677" y2="486" stroke="#6b6b73" stroke-width="1.5" marker-end="url(#arr)"/>
-          <text x="683" y="490" font-size="9" fill="#a3a3aa">HTTP / file read</text>
-          <line x1="650" y1="503" x2="677" y2="503" stroke="#ffd400" stroke-width="1" stroke-dasharray="4 3"/>
-          <text x="683" y="507" font-size="9" fill="#a3a3aa">Staging → live promotion</text>
+          <rect x="476" y="456" width="358" height="62" rx="4" fill="#0d0d0f" stroke="#26262b"/>
+          <text x="493" y="473" font-size="9" fill="#6a6a72" letter-spacing="1.5" font-weight="600">LEGEND</text>
+          <line x1="493" y1="486" x2="520" y2="486" stroke="#e8a33d" stroke-width="1.5" marker-end="url(#arr-acc)"/>
+          <text x="526" y="490" font-size="9" fill="#9b9ba3">DB query / promotion</text>
+          <line x1="493" y1="503" x2="520" y2="503" stroke="#4ec97f" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
+          <text x="526" y="507" font-size="9" fill="#9b9ba3">Engine → DB (read dbo / write AIEstimating)</text>
+          <line x1="650" y1="486" x2="677" y2="486" stroke="#6a6a72" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="683" y="490" font-size="9" fill="#9b9ba3">HTTP / file read</text>
+          <line x1="650" y1="503" x2="677" y2="503" stroke="#e8a33d" stroke-width="1" stroke-dasharray="4 3"/>
+          <text x="683" y="507" font-size="9" fill="#9b9ba3">Staging → live promotion</text>
         </svg>
       </div>
 
@@ -1179,7 +1180,7 @@
       <div class="note reveal"><h4>Why this exists</h4>
         Per the MD's directive (26 May 2026): capture a monthly summary of the work across the AI / Software / ERP workstreams, with costs and benefits, so R&amp;D can be leveraged for tax efficiencies. Capturing as we go is far stronger — and cheaper — than reconstructing it at year-end, and is the best defence if HMRC raises an enquiry.</div>
 
-      <div class="panel reveal" style="animation-delay:.04s;border-color:rgba(255,93,93,.4);background:linear-gradient(180deg,rgba(255,93,93,.06),var(--surface))">
+      <div class="panel reveal" style="animation-delay:.04s;border-color:rgba(232,84,79,.4);background:linear-gradient(180deg,rgba(232,84,79,.06),var(--surface))">
         <h4 style="color:var(--fail)">⚠ The deadline that can lose the claim — advance notification</h4>
         <p style="margin:8px 0">If SDI has not made an R&amp;D claim in the previous three years, HMRC requires an <b>advance notification within 6 months of the end of the accounting period</b> in which the R&amp;D took place. Miss this window and the claim is lost entirely — regardless of how strong the underlying R&amp;D is.</p>
         <p style="margin:0"><b>First action for Charlotte / specialist:</b> confirm SDI's accounting-period end, confirm whether a claim was made in the last 3 years, and if not, diarise the 6-month notification deadline immediately. This is the single highest-priority item here.</p>
@@ -1261,7 +1262,7 @@
         </table>
       </div>
 
-      <div class="note reveal" style="animation-delay:.08s;border-color:rgba(255,157,66,.35)"><h4>Important caveat — this is not tax advice</h4>
+      <div class="note reveal" style="animation-delay:.08s;border-color:rgba(232,163,61,.35)"><h4>Important caveat — this is not tax advice</h4>
         This page structures the technical narrative and evidence. The merged-scheme rules, eligibility boundaries, rates, the PAYE/NIC cap and claim mechanics carry real nuance, and HMRC scrutiny has increased markedly. Tax treatment, what qualifies and how to claim must be confirmed by a qualified R&amp;D tax specialist — which is exactly why the MD asked Charlotte to take advice now. The value of capturing as we go is that the technical justification already exists, contemporaneously recorded, rather than reconstructed a year later.</div>
     </section>
 
@@ -1273,53 +1274,53 @@
       <div class="panel reveal" style="overflow-x:auto">
         <svg viewBox="0 0 760 460" xmlns="http://www.w3.org/2000/svg" style="width:100%;min-width:620px;height:auto;font-family:var(--mono)">
           <defs>
-            <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b6b73"/></marker>
+            <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6a6a72"/></marker>
           </defs>
           <!-- Domain tier -->
-          <rect x="290" y="24" width="180" height="58" rx="5" fill="#1d1d22" stroke="#ffd400" stroke-width="1.4"/>
-          <text x="380" y="46" text-anchor="middle" font-size="13" fill="#f3f2ee" font-weight="700">SDI-DC01</text>
-          <text x="380" y="62" text-anchor="middle" font-size="9.5" fill="#a3a3aa">Domain Controller</text>
-          <text x="380" y="74" text-anchor="middle" font-size="9" fill="#6b6b73">AD · DNS · DHCP · 10.0.0.4</text>
+          <rect x="290" y="24" width="180" height="58" rx="5" fill="#17171a" stroke="#e8a33d" stroke-width="1.4"/>
+          <text x="380" y="46" text-anchor="middle" font-size="13" fill="#f0efec" font-weight="700">SDI-DC01</text>
+          <text x="380" y="62" text-anchor="middle" font-size="9.5" fill="#9b9ba3">Domain Controller</text>
+          <text x="380" y="74" text-anchor="middle" font-size="9" fill="#6a6a72">AD · DNS · DHCP · 10.0.0.4</text>
           <!-- Data tier -->
-          <text x="150" y="135" text-anchor="middle" font-size="10" fill="#6db3ff" font-weight="700" letter-spacing="1">DATA TIER</text>
-          <rect x="40" y="148" width="170" height="56" rx="5" fill="#1d1d22" stroke="#6db3ff" stroke-width="1.2"/>
-          <text x="125" y="170" text-anchor="middle" font-size="12" fill="#f3f2ee" font-weight="700">ACCESS-DB01</text>
-          <text x="125" y="184" text-anchor="middle" font-size="9" fill="#a3a3aa">SQL · SDILive · 10.0.0.200</text>
-          <text x="125" y="196" text-anchor="middle" font-size="8.5" fill="#5fd08a">⬤ engine database</text>
-          <rect x="40" y="216" width="170" height="46" rx="5" fill="#17171b" stroke="#2a2a31" stroke-width="1.2"/>
-          <text x="125" y="236" text-anchor="middle" font-size="12" fill="#f3f2ee" font-weight="700">ACCESS-DB02</text>
-          <text x="125" y="250" text-anchor="middle" font-size="9" fill="#a3a3aa">SQL secondary · 10.0.0.201</text>
+          <text x="150" y="135" text-anchor="middle" font-size="10" fill="#6da8e8" font-weight="700" letter-spacing="1">DATA TIER</text>
+          <rect x="40" y="148" width="170" height="56" rx="5" fill="#17171a" stroke="#6da8e8" stroke-width="1.2"/>
+          <text x="125" y="170" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-DB01</text>
+          <text x="125" y="184" text-anchor="middle" font-size="9" fill="#9b9ba3">SQL · SDILive · 10.0.0.200</text>
+          <text x="125" y="196" text-anchor="middle" font-size="8.5" fill="#4ec97f">⬤ engine database</text>
+          <rect x="40" y="216" width="170" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
+          <text x="125" y="236" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-DB02</text>
+          <text x="125" y="250" text-anchor="middle" font-size="9" fill="#9b9ba3">SQL secondary · 10.0.0.201</text>
           <!-- ERP app/web tier -->
-          <text x="380" y="135" text-anchor="middle" font-size="10" fill="#ff9d42" font-weight="700" letter-spacing="1">ERP APP / WEB TIER</text>
-          <rect x="295" y="148" width="170" height="46" rx="5" fill="#17171b" stroke="#2a2a31" stroke-width="1.2"/>
-          <text x="380" y="168" text-anchor="middle" font-size="12" fill="#f3f2ee" font-weight="700">ACCESS-APP01</text>
-          <text x="380" y="182" text-anchor="middle" font-size="9" fill="#a3a3aa">ERP app tier · 10.0.0.202</text>
-          <rect x="295" y="206" width="170" height="46" rx="5" fill="#17171b" stroke="#2a2a31" stroke-width="1.2"/>
-          <text x="380" y="226" text-anchor="middle" font-size="12" fill="#f3f2ee" font-weight="700">ACCESS-WEB01</text>
-          <text x="380" y="240" text-anchor="middle" font-size="9" fill="#a3a3aa">ERP web tier · 10.0.0.52</text>
+          <text x="380" y="135" text-anchor="middle" font-size="10" fill="#e8a33d" font-weight="700" letter-spacing="1">ERP APP / WEB TIER</text>
+          <rect x="295" y="148" width="170" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
+          <text x="380" y="168" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-APP01</text>
+          <text x="380" y="182" text-anchor="middle" font-size="9" fill="#9b9ba3">ERP app tier · 10.0.0.202</text>
+          <rect x="295" y="206" width="170" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
+          <text x="380" y="226" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-WEB01</text>
+          <text x="380" y="240" text-anchor="middle" font-size="9" fill="#9b9ba3">ERP web tier · 10.0.0.52</text>
           <!-- App + RDS tier -->
-          <text x="610" y="135" text-anchor="middle" font-size="10" fill="#5fd08a" font-weight="700" letter-spacing="1">APP / RDS TIER</text>
-          <rect x="525" y="148" width="180" height="56" rx="5" fill="#1d1d22" stroke="#5fd08a" stroke-width="1.4"/>
-          <text x="615" y="170" text-anchor="middle" font-size="12" fill="#f3f2ee" font-weight="700">SDI-APP01</text>
-          <text x="615" y="184" text-anchor="middle" font-size="9" fill="#a3a3aa">App host · 10.0.0.5</text>
-          <text x="615" y="196" text-anchor="middle" font-size="8.5" fill="#ffd400">⬤ SDI Intelligence portal :8071</text>
-          <rect x="525" y="216" width="180" height="46" rx="5" fill="#17171b" stroke="#2a2a31" stroke-width="1.2"/>
-          <text x="615" y="236" text-anchor="middle" font-size="12" fill="#f3f2ee" font-weight="700">SDI-RDS01</text>
-          <text x="615" y="250" text-anchor="middle" font-size="9" fill="#a3a3aa">Remote Desktop · 10.0.0.8</text>
+          <text x="610" y="135" text-anchor="middle" font-size="10" fill="#4ec97f" font-weight="700" letter-spacing="1">APP / RDS TIER</text>
+          <rect x="525" y="148" width="180" height="56" rx="5" fill="#17171a" stroke="#4ec97f" stroke-width="1.4"/>
+          <text x="615" y="170" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">SDI-APP01</text>
+          <text x="615" y="184" text-anchor="middle" font-size="9" fill="#9b9ba3">App host · 10.0.0.5</text>
+          <text x="615" y="196" text-anchor="middle" font-size="8.5" fill="#e8a33d">⬤ SDI Intelligence portal :8071</text>
+          <rect x="525" y="216" width="180" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
+          <text x="615" y="236" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">SDI-RDS01</text>
+          <text x="615" y="250" text-anchor="middle" font-size="9" fill="#9b9ba3">Remote Desktop · 10.0.0.8</text>
           <!-- Connectors -->
-          <line x1="380" y1="82" x2="380" y2="148" stroke="#6b6b73" stroke-width="1" marker-end="url(#ar)"/>
-          <line x1="290" y1="55" x2="210" y2="160" stroke="#6b6b73" stroke-width="1" marker-end="url(#ar)"/>
-          <line x1="470" y1="55" x2="540" y2="160" stroke="#6b6b73" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="380" y1="82" x2="380" y2="148" stroke="#6a6a72" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="290" y1="55" x2="210" y2="160" stroke="#6a6a72" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="470" y1="55" x2="540" y2="160" stroke="#6a6a72" stroke-width="1" marker-end="url(#ar)"/>
           <!-- portal -> DB link -->
-          <line x1="525" y1="178" x2="210" y2="178" stroke="#ffd400" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar)"/>
-          <text x="360" y="172" text-anchor="middle" font-size="8.5" fill="#ffd400">portal → SQL (engine)</text>
+          <line x1="525" y1="178" x2="210" y2="178" stroke="#e8a33d" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+          <text x="360" y="172" text-anchor="middle" font-size="8.5" fill="#e8a33d">portal → SQL (engine)</text>
           <!-- Virtualisation host band -->
-          <rect x="40" y="300" width="665" height="120" rx="6" fill="#101013" stroke="#2a2a31" stroke-width="1.2" stroke-dasharray="5 4"/>
-          <text x="372" y="322" text-anchor="middle" font-size="11" fill="#6b6b73" font-weight="700" letter-spacing="1">CONFIRMED ESTATE — 2 PHYSICAL + 5 VMware VMs</text>
-          <text x="372" y="344" text-anchor="middle" font-size="9.5" fill="#a3a3aa">Physical: SDI-DC01 &amp; SDI-APP01 — HPE ProLiant DL380 Gen11, 32 GB, Server 2022</text>
-          <text x="372" y="362" text-anchor="middle" font-size="9.5" fill="#a3a3aa">Virtual: DB01/DB02/APP01/WEB01/RDS01 — VMware, Xeon Gold 6242, Server 2019</text>
-          <text x="372" y="386" text-anchor="middle" font-size="9" fill="#ff9d42" font-style="italic">Confirmed 8 Jul 2026: 2 ESXi hosts running STANDALONE, not clustered &mdash; no HA/vMotion failover</text>
-          <text x="372" y="404" text-anchor="middle" font-size="9" fill="#ff9d42" font-style="italic">⚠ Production DB (DB01) still on a single 8 GB VM, no SQL replica — DB02 idle with 24 GB</text>
+          <rect x="40" y="300" width="665" height="120" rx="6" fill="#101013" stroke="#26262b" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="372" y="322" text-anchor="middle" font-size="11" fill="#6a6a72" font-weight="700" letter-spacing="1">CONFIRMED ESTATE — 2 PHYSICAL + 5 VMware VMs</text>
+          <text x="372" y="344" text-anchor="middle" font-size="9.5" fill="#9b9ba3">Physical: SDI-DC01 &amp; SDI-APP01 — HPE ProLiant DL380 Gen11, 32 GB, Server 2022</text>
+          <text x="372" y="362" text-anchor="middle" font-size="9.5" fill="#9b9ba3">Virtual: DB01/DB02/APP01/WEB01/RDS01 — VMware, Xeon Gold 6242, Server 2019</text>
+          <text x="372" y="386" text-anchor="middle" font-size="9" fill="#e8a33d" font-style="italic">Confirmed 8 Jul 2026: 2 ESXi hosts running STANDALONE, not clustered &mdash; no HA/vMotion failover</text>
+          <text x="372" y="404" text-anchor="middle" font-size="9" fill="#e8a33d" font-style="italic">⚠ Production DB (DB01) still on a single 8 GB VM, no SQL replica — DB02 idle with 24 GB</text>
         </svg>
       </div>
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:26px 0 8px">Server inventory</h3>
@@ -1337,14 +1338,14 @@
         </table>
         <p class="sub" style="margin-top:10px">2 physical HPE ProLiant DL380 Gen11 (Server 2022, 32 GB, Xeon 6526Y) for DC + app host · 5 VMware VMs (Server 2019, Xeon 6242) for ERP, data &amp; remote-access tiers.</p>
       </div>
-      <div class="note reveal" style="animation-delay:.06s;border-color:rgba(255,93,93,.4);background:linear-gradient(180deg,rgba(255,93,93,.06),var(--surface))">
+      <div class="note reveal" style="animation-delay:.06s;border-color:rgba(232,84,79,.4);background:linear-gradient(180deg,rgba(232,84,79,.06),var(--surface))">
         <h4 style="color:var(--fail)">⚠ Resilience, resourcing &amp; remote-access — priority flags</h4>
         <b>No database high availability.</b> ACCESS-DB01 runs the whole business (SDILive ERP, finance, all Access SupplyChain DBs) on a single 8 GB VMware VM with <b>no AlwaysOn replica or failover</b>. If DB01 fails, the ERP is down until restored.<br><br>
         <b>Production DB under-resourced &amp; idle spare.</b> DB01 has just <b>8 GB RAM</b>; the idle ACCESS-DB02 has <b>24 GB</b> and was rebuilt 15 Jun 2026 — almost certainly intended as the upgraded/replacement DB host but never completed. DB01 C: drive is also low (~14 GB free).<br><br>
         <b>SDILive is in SIMPLE recovery model</b> — no point-in-time restore, only full/differential backup recovery. Confirm the Datto backup regime meets the business's recovery-point need for its core ERP.<br><br>
         <b>Multiple uncontrolled remote-access paths.</b> Across the estate there are <b>six</b> ways in: WatchGuard VPN, RD Gateway (RDS01), OpenVPN (RDS01), LogMeIn (RDS01), TeamViewer (DB01) and ScreenConnect (APP01). This is a significant attack surface — consolidate to one or two controlled, MFA-protected paths for Cyber Essentials Plus.
       </div>
-      <div class="note reveal" style="animation-delay:.08s;border-color:rgba(95,208,138,.35)"><h4 style="color:var(--ok)">✓ Good foundations already in place</h4>
+      <div class="note reveal" style="animation-delay:.08s;border-color:rgba(78,201,127,.35)"><h4 style="color:var(--ok)">✓ Good foundations already in place</h4>
         <b>Entra ID sync is live</b> — SDI-DC01 runs Azure AD Connect / Entra Connect, so on-prem AD already syncs to Entra. Foundation for cloud identity &amp; MFA.<br><br>
         <b>RADIUS is already running</b> — NPS (IAS) on SDI-RDS01. This is the mechanism to put Entra ID MFA in front of the WatchGuard VPN — no new infrastructure needed.<br><br>
         <b>WatchGuard is AD-integrated</b> — the Authentication Gateway on the DC means VPN auth already validates against Active Directory; adding MFA (AuthPoint or RADIUS→Entra) is an incremental step, not a rebuild.<br><br>
@@ -1358,7 +1359,7 @@
       <!-- PERIMETER & VPN -->
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:34px 0 8px">Perimeter &amp; VPN</h3>
       <p class="sub" style="margin-bottom:12px">The network edge, firewall and remote-access layer. Identified from the server sweep; full configuration analysis pending firewall-console access.</p>
-      <div class="note reveal" style="border-color:rgba(109,179,255,.3);background:linear-gradient(180deg,rgba(109,179,255,.06),var(--surface))">
+      <div class="note reveal" style="border-color:rgba(109,168,232,.3);background:linear-gradient(180deg,rgba(109,168,232,.06),var(--surface))">
         <h4 style="color:var(--info)">Context — this is the CURRENT, pre-remediation state (confirmed 8 Jul 2026)</h4>
         Intercity have stressed that everything confirmed on 8 Jul 2026 describes the <b>current setup as-is</b>, not the target state after remediation. Several items below (VPN role-scoping, MFA, firewall management/patching) are explicitly slated to be addressed by the planned <b>Fortigate migration</b>. Read this section as the baseline for the hardening work, not the finished position.
       </div>
@@ -1368,14 +1369,14 @@
           <tr><td><b>Firewall platform</b></td><td><span class="chip c-done">Confirmed</span></td><td>WatchGuard <b>Firebox M390</b> — current, supported mid-range business firewall. AD-integrated via the Auth Gateway on SDI-DC01.</td></tr>
           <tr><td><b>Gateway IP</b></td><td><span class="chip c-done">Confirmed</span></td><td><code>10.0.0.2</code> — Firebox internal interface; default gateway on every server.</td></tr>
           <tr><td><b>Logging / reporting</b></td><td><span class="chip c-done">Confirmed</span></td><td>WatchGuard <b>Dimensions</b> in use (traffic logging &amp; reporting) with a log encryption key on record.</td></tr>
-          <tr><td><b>LiveSecurity subscription</b></td><td style="color:var(--fail)"><span class="chip" style="background:rgba(255,93,93,.12);color:var(--fail);border-color:rgba(255,93,93,.25)">Expired</span></td><td><b>Expired 5 June 2026.</b> No active threat-intelligence / signature update feed on the M390 &mdash; the firewall is currently running without vendor security updates. Renewal action required.</td></tr>
+          <tr><td><b>LiveSecurity subscription</b></td><td style="color:var(--fail)"><span class="chip" style="background:rgba(232,84,79,.12);color:var(--fail);border-color:rgba(232,84,79,.25)">Expired</span></td><td><b>Expired 5 June 2026.</b> No active threat-intelligence / signature update feed on the M390 &mdash; the firewall is currently running without vendor security updates. Renewal action required.</td></tr>
           <tr><td><b>Single sign-on</b></td><td><span class="chip c-done">Confirmed</span></td><td>WatchGuard <b>SSO</b> agent configured. Read/Write admin credential tiers separated (good governance).</td></tr>
           <tr><td><b>Site-to-site VPN</b></td><td><span class="chip c-done">Confirmed</span></td><td><b>Branch Office VPN (BOVPN)</b> linking <b>Coalville ↔ Head Office</b> — a second site is in scope. PSK on record.</td></tr>
           <tr><td><b>Switching / WiFi (the "Aruba")</b></td><td><span class="chip c-done">Confirmed</span></td><td>Aruba is the <b>network switching &amp; wireless</b> layer — not a firewall. Aruba 1960 core stack + 1930 managed switches across cabinets A/B/C, plus HP switches; WiFi via <b>Aruba Central</b> (cloud-managed).</td></tr>
           <tr><td><b>Fireware OS version</b></td><td><span class="chip c-done">Confirmed</span></td><td><b>12.11.6 (Build 728370)</b>. Confirmed 8 Jul 2026 by Intercity. <span style="color:var(--warn)">No management/patching service for the M390 has been procured from Intercity</span> &mdash; patch cadence is currently undefined.</td></tr>
           <tr><td><b>VPN type &amp; tunnel mode</b></td><td><span class="chip c-done">Confirmed</span></td><td>SSL and IPSec both configured; Intercity report only SSL clients observed connecting in practice. <b>Split tunnel.</b></td></tr>
           <tr><td><b>VPN authentication</b></td><td><span class="chip c-prog">Partial</span></td><td>AD-integrated via WatchGuard Auth Gateway + SSO. <b>No MFA on the mobile VPN today &mdash; confirmed.</b> Intercity recommend <b>RADIUS &rarr; Entra ID</b> (simplest, fully supported by WatchGuard) over AuthPoint. This is also the agreed MFA route for the planned Fortigate migration.</td></tr>
-          <tr><td><b>VPN scope / routing</b></td><td style="color:var(--fail)"><span class="chip" style="background:rgba(255,93,93,.12);color:var(--fail);border-color:rgba(255,93,93,.25)">Confirmed risk</span></td><td><b>All internal subnets reachable &mdash; not scoped by role.</b> Confirmed by Intercity 8 Jul 2026, who also confirmed this was never designed/implemented/maintained by them and <b>will be revised for the planned Fortigate installation</b>.</td></tr>
+          <tr><td><b>VPN scope / routing</b></td><td style="color:var(--fail)"><span class="chip" style="background:rgba(232,84,79,.12);color:var(--fail);border-color:rgba(232,84,79,.25)">Confirmed risk</span></td><td><b>All internal subnets reachable &mdash; not scoped by role.</b> Confirmed by Intercity 8 Jul 2026, who also confirmed this was never designed/implemented/maintained by them and <b>will be revised for the planned Fortigate installation</b>.</td></tr>
           <tr><td><b>Inbound exposure</b></td><td><span class="chip c-done">Confirmed</span></td><td>Full inbound rule set confirmed by Intercity 8 Jul 2026 &mdash; see full NAT/inbound rule table below. <b>No RDP (3389) inbound rule found</b> &mdash; port 3389 appears only in an AutoBlock (deny) rule.</td></tr>
           <tr><td><b>Public / WAN IP &amp; redundancy</b></td><td><span class="chip c-done">Confirmed</span></td><td>Two public IPs on record: <code>213.210.38.226</code> and <code>193.117.171.246</code>. Link redundancy not explicitly confirmed &mdash; follow up if dual-IP implies dual-circuit failover.</td></tr>
         </table>
@@ -1396,11 +1397,11 @@
          </table>
          <p class="sub" style="margin-top:10px">Source: Intercity, 8 Jul 2026. Port 3389 (RDP) appears only in the AutoBlock deny rule &mdash; no inbound allow rule found for RDP. <b>Cyberguard</b> and <b>WaveNet</b> in the Source column are managed-service parties with scoped inbound access (SSH admin to 10.0.0.7, and ESXi management/iLO respectively) &mdash; confirm each is still required and MFA-gated.</p>
        </div>
-      <div class="note reveal" style="animation-delay:.04s;border-color:rgba(255,93,93,.4);background:linear-gradient(180deg,rgba(255,93,93,.06),var(--surface))">
+      <div class="note reveal" style="animation-delay:.04s;border-color:rgba(232,84,79,.4);background:linear-gradient(180deg,rgba(232,84,79,.06),var(--surface))">
         <h4 style="color:var(--fail)">⚠ The core finding — remote access is unconsolidated and unprotected by MFA</h4>
         Six separate remote-entry paths exist across the estate — <b>WatchGuard VPN</b>, <b>RD Gateway</b> (RDS01), <b>OpenVPN</b> (RDS01), <b>LogMeIn</b> (RDS01), <b>TeamViewer</b> (DB01) and <b>ScreenConnect</b> (APP01) — with no multi-factor authentication confirmed on any of them. For a business running its entire ERP, finance and engineering IP behind this perimeter, that is the single highest-priority security gap, and a blocker for Cyber Essentials Plus.
       </div>
-      <div class="note reveal" style="animation-delay:.06s;border-color:rgba(95,208,138,.35)">
+      <div class="note reveal" style="animation-delay:.06s;border-color:rgba(78,201,127,.35)">
         <h4 style="color:var(--ok)">Do we need a new VPN? — Assessment</h4>
         <b>Most likely no.</b> WatchGuard Firebox is solid, business-grade kit and already does the hard parts (AD integration, auth gateway). The problems are <b>configuration and governance, not the hardware</b> — missing MFA, over-broad routing, and tool sprawl. Replacing the VPN would be costly and wouldn't fix those. The current platform is very likely adequate once configured properly.<br><br>
         <b>The two things that would change that verdict</b> (both pending discovery): (1) the Firebox is end-of-life or on firmware too old to support AuthPoint MFA; (2) it's undersized for the user count. Confirm the model and Fireware version before any spend decision. <b>Update 8 Jul 2026:</b> Intercity have confirmed a <b>Fortigate migration is already planned</b>, which will include VPN role-scoping and Entra ID MFA. Given the M390's <b>expired LiveSecurity subscription</b> and <b>no procured management/patching service</b>, the practical recommendation is to treat the Fortigate migration as the fix for these gaps, and prioritise it accordingly rather than trying to fully remediate the M390 in the interim.
@@ -1414,12 +1415,12 @@
           <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">4</span><div style="font-size:13px"><b>Consolidate remote access.</b> Reduce the six entry paths to one or two controlled, MFA-protected routes. Remove TeamViewer, LogMeIn, OpenVPN and ScreenConnect where not strictly needed; standardise on the WatchGuard VPN + RD Gateway (both MFA-protected). <span style="color:var(--ink-dim)">— shrinks the attack surface</span></div></div>
           <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center">5</span><div style="font-size:13px"><b>Verify inbound exposure.</b> Confirm no RDP (3389) or management ports are published directly to the internet. Document the public IP and all inbound NAT/policies. <span style="color:var(--ink-dim)">— removes the most common breach vector</span></div></div>
         </div>
-        <div style="margin-top:14px;padding:12px;background:rgba(255,212,0,.06);border:1px solid rgba(255,212,0,.2);border-radius:6px;font-size:12px">
+        <div style="margin-top:14px;padding:12px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.2);border-radius:6px;font-size:12px">
           <b style="color:var(--accent)">⚠ Highest-risk work in the programme.</b> Firewall and VPN changes can lock out users (including remote admins) or open holes if done wrong. No live changes without: a full config backup, a documented rollback, and a scheduled maintenance window. Plan first, change second. Feeds directly into Cyber Essentials Plus.
         </div>
       </div>
       <!-- WIDER INFRASTRUCTURE -->
-      <div class="note reveal" style="margin-top:16px;border-color:rgba(255,93,93,.4);background:linear-gradient(180deg,rgba(255,93,93,.06),var(--surface))">
+      <div class="note reveal" style="margin-top:16px;border-color:rgba(232,84,79,.4);background:linear-gradient(180deg,rgba(232,84,79,.06),var(--surface))">
         <h4 style="color:var(--fail)">&#9888; Backup, DR &amp; ESXi HA — confirmed 8 Jul 2026, unresolved</h4>
         Intercity have confirmed the following are <b>owned and managed entirely by WaveNet</b>, not Intercity, and none of the following could be answered directly:
         <ul style="margin:8px 0 0 18px;line-height:1.9">
@@ -1431,7 +1432,7 @@
         </ul>
         <b style="display:block;margin-top:10px">Action needed:</b> raise all five directly with WaveNet &mdash; this is the single largest unresolved DR gap in the estate.
       </div>
-      <div class="note reveal" style="margin-top:16px;border-color:rgba(255,157,66,.35)">
+      <div class="note reveal" style="margin-top:16px;border-color:rgba(232,163,61,.35)">
         <h4 style="color:var(--warn)">Still outstanding — asked but not yet answered</h4>
         Tracked here so they don't get lost. Open as of 8 Jul 2026:
         <ul style="margin:8px 0 0 18px;line-height:1.9">
@@ -1560,7 +1561,7 @@
             </ul>
           </div>
         </div>
-        <div style="background:rgba(255,212,0,.06);border:1px solid rgba(255,212,0,.2);border-radius:6px;padding:12px;font-size:12px">
+        <div style="background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.2);border-radius:6px;padding:12px;font-size:12px">
           <b style="color:var(--accent)">Resource:</b> Yogesh Kumar — SolidWorks API &amp; DXF generation. PDM vault integration target confirmed on SDI-APP01.
           <br><b style="color:var(--accent);margin-top:4px;display:block">Goal:</b> Accelerate the design process — faster drawing creation, higher DXF coverage, richer geometry data flowing into estimating and production.
         </div>
@@ -1618,7 +1619,7 @@
           <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--warn);text-transform:uppercase">Workstream 4 · Roadmapped</div>
           <h2 style="font-family:var(--disp);font-weight:800;font-size:22px;margin:2px 0 0">Production &amp; CNC Shop Floor Intelligence</h2>
         </div>
-        <span class="chip" style="margin-left:auto;background:rgba(255,157,66,.15);color:var(--warn);border-color:rgba(255,157,66,.3)">2027</span>
+        <span class="chip" style="margin-left:auto;background:rgba(232,163,61,.15);color:var(--warn);border-color:rgba(232,163,61,.3)">2027</span>
       </div>
       <div class="panel reveal">
         <p style="margin:0 0 14px">Closing the design-to-manufacture loop — AI-generated G-code from DXF geometry, streamed directly to CNC machines. Integrates with the TRUMPF stack already running on SDI-APP01 (TruTops, TRUMPF SQL, the RabbitMQ brokers). The Python engine that extracts geometry from DXFs in Workstream 1 becomes the foundation for machine instruction generation.</p>
@@ -1642,10 +1643,10 @@
             </ul>
           </div>
         </div>
-        <div style="background:rgba(255,157,66,.06);border:1px solid rgba(255,157,66,.2);border-radius:6px;padding:12px;font-size:12px">
+        <div style="background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.2);border-radius:6px;padding:12px;font-size:12px">
           <b style="color:var(--warn)">Goal:</b> Automate the translation from engineered drawing to machine instruction — AI reads the drawing, generates the program, runs the machine.
         </div>
-        <div style="margin-top:12px;background:rgba(255,157,66,.04);border:1px solid rgba(255,157,66,.15);border-radius:6px;padding:14px">
+        <div style="margin-top:12px;background:rgba(232,163,61,.04);border:1px solid rgba(232,163,61,.15);border-radius:6px;padding:14px">
           <div style="font-family:var(--mono);font-size:10px;color:var(--warn);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">Related capability — Production &amp; Labour Planning</div>
           <p style="font-size:13px;margin:0 0 10px;line-height:1.6">Currently, warehouse and CNC machining staff manually work through a spreadsheet each week to plan machine effort (which jobs go on which machines, in what sequence, for how long) and labour effort (who does what, when). The goal is an AI-assisted planning tool that proposes the week's plan automatically — with the planner reviewing, adjusting and confirming before it's acted on. Human verification remains in the loop.</p>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
@@ -1705,15 +1706,15 @@
         <p class="sub">For Tim, Howard and Tony. How to read an AI estimate, what the engine can and can't do, and how to feed corrections back. Target go-live: September / October 2026, contingent on testing, adoption and holiday-period absences.</p></div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:28px">
-        <div class="tool reveal" style="border-color:rgba(255,212,0,.2)">
+        <div class="tool reveal" style="border-color:rgba(232,163,61,.2)">
           <div class="th"><span class="nm">📄 Worked Example</span><span class="chip c-acc">Start here</span></div>
           <div class="ds">A real job walked through end to end — how the engine reads drawings, classifies parts, calculates cost and why it suppresses. The fastest way to understand what the output means.</div>
-          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_Worked_Example.html" target="_blank" style="display:inline-block;background:rgba(255,212,0,.1);color:var(--acc);border:1px solid rgba(255,212,0,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open Worked Example →</a></div>
+          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_Worked_Example.html" target="_blank" style="display:inline-block;background:rgba(232,163,61,.1);color:var(--acc);border:1px solid rgba(232,163,61,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open Worked Example →</a></div>
         </div>
-        <div class="tool reveal" style="animation-delay:.05s;border-color:rgba(95,208,138,.2)">
+        <div class="tool reveal" style="animation-delay:.05s;border-color:rgba(78,201,127,.2)">
           <div class="th"><span class="nm">📄 FAQ</span><span class="chip c-ok">Estimators</span></div>
           <div class="ds">Answers to the most common questions — why does a part show £0, what does INSUFFICIENT DATA mean, how do I submit a correction, what does confidence 0.43 mean in practice.</div>
-          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_FAQ.html" target="_blank" style="display:inline-block;background:rgba(95,208,138,.12);color:var(--ok);border:1px solid rgba(95,208,138,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open FAQ →</a></div>
+          <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_FAQ.html" target="_blank" style="display:inline-block;background:rgba(78,201,127,.12);color:var(--ok);border:1px solid rgba(78,201,127,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open FAQ →</a></div>
         </div>
       </div>
 
@@ -1752,8 +1753,8 @@
         </div>
 
         <!-- INSUFFICIENT DATA -->
-        <div class="tool reveal" style="animation-delay:.05s;border-color:rgba(255,93,93,.3)">
-          <div class="th"><span class="nm">⚠ INSUFFICIENT DATA — what it means</span><span class="chip" style="background:rgba(255,93,93,.15);color:var(--fail);border-color:rgba(255,93,93,.3)">Do not quote</span></div>
+        <div class="tool reveal" style="animation-delay:.05s;border-color:rgba(232,84,79,.3)">
+          <div class="th"><span class="nm">⚠ INSUFFICIENT DATA — what it means</span><span class="chip" style="background:rgba(232,84,79,.15);color:var(--fail);border-color:rgba(232,84,79,.3)">Do not quote</span></div>
           <div class="ds">When the engine suppresses a job it means it doesn't have enough confident geometry or pricing to produce a number it would stand behind. The headline total is blanked — it is <b>not for quoting</b>. This is the engine being honest, not broken.</div>
           <div class="muted" style="margin-top:10px;font-size:12.5px">
             <b>Common reasons a job is suppressed:</b>
@@ -1790,7 +1791,7 @@
         </div>
 
         <!-- How to submit a correction -->
-        <div class="tool reveal" style="animation-delay:.15s;border-color:rgba(95,208,138,.2)">
+        <div class="tool reveal" style="animation-delay:.15s;border-color:rgba(78,201,127,.2)">
           <div class="th"><span class="nm">How to submit a correction</span><span class="chip c-done">Feeds the learning engine</span></div>
           <div class="ds">When you spot something wrong — wrong material, wrong thickness, wrong process, wrong price — tell James. Every correction gets logged and at three occurrences becomes a permanent engine fix. This is how the engine gets better over time.</div>
           <div class="muted" style="margin-top:10px;font-size:12.5px">
@@ -1822,8 +1823,8 @@
         </div>
 
         <!-- What the engine is not yet good at -->
-        <div class="tool reveal" style="animation-delay:.25s;border-color:rgba(255,157,66,.2)">
-          <div class="th"><span class="nm">Known limitations</span><span class="chip" style="background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)">In development</span></div>
+        <div class="tool reveal" style="animation-delay:.25s;border-color:rgba(232,163,61,.2)">
+          <div class="th"><span class="nm">Known limitations</span><span class="chip" style="background:rgba(232,163,61,.12);color:var(--warn);border-color:rgba(232,163,61,.3)">In development</span></div>
           <div class="ds">Areas where the engine currently suppresses or produces less reliable numbers. These are known and being addressed — not gaps to work around, but to be aware of during the parallel run.</div>
           <div class="muted" style="margin-top:8px;font-size:12.5px">
             <ul style="margin:4px 0 0 16px;line-height:1.9">
@@ -2298,7 +2299,7 @@
     document.querySelectorAll('.testing-tab').forEach(b=>{
       const active = b.dataset.folder===folder;
       b.style.borderColor = active ? 'var(--accent)' : 'var(--line)';
-      b.style.background  = active ? 'rgba(255,212,0,.1)' : 'transparent';
+      b.style.background  = active ? 'rgba(232,163,61,.1)' : 'transparent';
       b.style.color       = active ? 'var(--accent)' : 'var(--ink-dim)';
     });
     try{
@@ -2351,9 +2352,9 @@
       const ext=(it.ext||'').replace(/"/g,'');
       const m=it.modified||it.mtime||'';
       // badge for xlsx
-      const badge = ext==='.xlsx' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(95,208,138,.15);color:var(--ok);border:1px solid rgba(95,208,138,.3);border-radius:3px;padding:1px 5px;margin-left:4px">XLSX</span>'
-                  : ext==='.html' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(109,179,255,.15);color:var(--info);border:1px solid rgba(109,179,255,.3);border-radius:3px;padding:1px 5px;margin-left:4px">HTML</span>'
-                  : ext==='.json' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(255,157,66,.12);color:var(--warn);border:1px solid rgba(255,157,66,.3);border-radius:3px;padding:1px 5px;margin-left:4px">JSON</span>'
+      const badge = ext==='.xlsx' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(78,201,127,.15);color:var(--ok);border:1px solid rgba(78,201,127,.3);border-radius:3px;padding:1px 5px;margin-left:4px">XLSX</span>'
+                  : ext==='.html' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(109,168,232,.15);color:var(--info);border:1px solid rgba(109,168,232,.3);border-radius:3px;padding:1px 5px;margin-left:4px">HTML</span>'
+                  : ext==='.json' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(232,163,61,.12);color:var(--warn);border:1px solid rgba(232,163,61,.3);border-radius:3px;padding:1px 5px;margin-left:4px">JSON</span>'
                   : '';
       h+='<tr data-p="'+(it.path||'').replace(/"/g,'&quot;')+'" data-d="'+it.is_dir+'" data-e="'+ext+'" data-folder="'+folder+'" style="cursor:pointer">'
         +'<td><b>'+it.name+'</b>'+badge+'</td>'
