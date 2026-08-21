@@ -54,6 +54,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 import config
@@ -70,6 +72,7 @@ _ENGINE_PYTHON = os.getenv(
     "SDI_ENGINE_PYTHON", str(_REPO_ROOT / ".venv" / "Scripts" / "python.exe"))
 _OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
 _PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
+_PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
@@ -797,6 +800,98 @@ async def estimate_parity(
         "bundle_csv_url": (f"/api/file?path={_urlquote(bundle_csv)}" if bundle_csv else None),
         "headline": result.get("headline") or {},
     }
+
+
+# ── Print the drawings behind an estimate ────────────────────────────────────
+#
+# An estimate is checked against the drawings, and printing them meant opening the job folder
+# on the share and printing twelve files one at a time. Reviewing is what the parallel run
+# depends on; every step that makes it more tedious shows up as a job that never came back.
+#
+# Returns ONE PDF, bookmarked per drawing, served inline so it opens in the browser's viewer
+# where Ctrl+P does the rest. Merged out of process with the engine's python, which is where
+# PyMuPDF lives — the same isolation the override and parity paths use.
+class PrintRequest(BaseModel):
+    """Files and/or job folders. Folders are walked, because the Drawings panel holds a job
+    folder as often as it holds files and "print the drawings" means the pack either way."""
+    paths: List[str] = []
+    job: Optional[str] = None
+
+
+@router.post("/drawings/print")
+def drawings_print(req: PrintRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if not req.paths:
+        raise HTTPException(400, "No drawings were given to print.")
+
+    # Every path checked against the allowed roots, exactly as every other file endpoint is.
+    # Printing must not become a way to read anything on the box.
+    resolved: List[str] = []
+    for raw in req.paths:
+        if not str(raw).strip():
+            continue
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not resolved:
+        raise HTTPException(400, "No drawings were given to print.")
+
+    import json as _json
+    import subprocess
+    import tempfile
+
+    out = Path(tempfile.gettempdir()) / f"sdi_drawings_{uuid.uuid4().hex[:10]}.pdf"
+    cmd = [_ENGINE_PYTHON, _PRINT_CLI, *resolved, "--out", str(out), "--json"]
+    if req.job:
+        cmd += ["--job", req.job]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Merging the drawings timed out — is this a very large pack?")
+    except FileNotFoundError:
+        raise HTTPException(
+            500, f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "could not build the print").strip()
+        last = msg.splitlines()[-1][:400] if msg else "could not build the print"
+        raise HTTPException(400 if proc.returncode == 2 else 500, detail=last)
+
+    line = next((ln for ln in reversed(proc.stdout.splitlines())
+                 if ln.strip().startswith("{")), "")
+    result = _json.loads(line) if line else {}
+    if not out.is_file():
+        raise HTTPException(500, "The merged PDF was not written.")
+
+    # WHAT WAS LEFT OUT TRAVELS WITH THE FILE. The cover page says it on paper; these headers
+    # say it to the page, so the estimator is told before they walk to the printer as well as
+    # after. A PDF body cannot carry JSON, so the counts ride on the response.
+    headers = {
+        "Content-Disposition": f'inline; filename="{_safe_pdf_name(req.job)}"',
+        "X-SDI-Printed": str(result.get("printed_count", 0)),
+        "X-SDI-Skipped": str(result.get("skipped_count", 0)),
+        "X-SDI-Pages": str(result.get("pages") or 0),
+    }
+    return FileResponse(str(out), media_type="application/pdf", headers=headers,
+                        background=BackgroundTask(_unlink_quietly, out))
+
+
+def _safe_pdf_name(job: Optional[str]) -> str:
+    stem = safe_segment(job) if job else ""
+    return f"{stem or 'drawings'}-drawings.pdf"
+
+
+def _unlink_quietly(path: Path) -> None:
+    """The merged PDF is a temp file; delete it once it has been sent, not before.
+
+    Deleting it before the response is written truncates the download, and leaving it deletes
+    nothing at all — a box printing packs all day would fill its temp folder.
+    """
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
 
 
 @router.post("/batch")

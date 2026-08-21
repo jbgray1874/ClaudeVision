@@ -399,10 +399,15 @@
 
       <ul class="files" id="fileList"></ul>
       <p class="empty" id="fileEmpty">No drawings added yet.</p>
+      <p class="req" id="printNote"></p>
 
       <div style="display:flex;gap:9px;flex-wrap:wrap">
         <button id="addFolder">Add job folder…</button>
         <button id="addFiles">Add drawing files…</button>
+        <!-- THE PACK, ON PAPER. Checking an estimate means having the drawings in front of you,
+             and that meant opening the job folder on the share and printing twelve files one at
+             a time. One button, one PDF, bookmarked per drawing. -->
+        <button id="printDrawings" disabled>Print drawings…</button>
         <button id="clearFiles" style="margin-left:auto">Clear</button>
       </div>
     </section>
@@ -718,6 +723,7 @@ function renderFiles(){
     li.appendChild(x); fileList.appendChild(li);
   });
   fileEmpty.style.display = drawings.length ? "none" : "";
+  refreshPrint();
 }
 $("clearFiles").onclick = () => { drawings = []; renderFiles(); refresh(); };
 
@@ -1491,6 +1497,72 @@ parityRun.onclick = async () => {
     parityRun.textContent = was; refreshParity();
   }
 };
+
+
+/* ══ PRINT THE DRAWINGS ═══════════════════════════════════════════════════════════════
+   An estimate is checked against the drawings. Printing them meant opening the job folder on
+   the share and printing twelve files one at a time, and reviewing is the thing the whole
+   parallel run depends on.
+
+   One PDF, bookmarked per drawing, opened in a tab where Ctrl+P does the rest. Folders in the
+   list are walked by the service, so "print the drawings" works whether the estimator added a
+   job folder or the files inside it. */
+const printDrawings = $("printDrawings"), printNote = $("printNote");
+
+function refreshPrint(){
+  printDrawings.disabled = drawings.length === 0;
+  if(!drawings.length) printNote.textContent = "";
+}
+
+printDrawings.onclick = async () => {
+  if(!drawings.length) return;
+  /* THE TAB IS OPENED HERE, NOT AFTER THE AWAIT. A window.open() that happens after a network
+     round-trip is not a user gesture any more and browsers block it — the button would appear
+     to do nothing, which is the one failure mode that gets a feature abandoned. */
+  const tab = window.open("", "_blank");
+  printDrawings.disabled = true;
+  const was = printDrawings.textContent;
+  printDrawings.textContent = "Preparing…";
+  printNote.textContent = "";
+  try{
+    const r = await api("/api/estimate/drawings/print", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({paths: drawings.map(d => d.path),
+                            job: (drawing.value || "").trim() || null})
+    });
+    if(!r.ok){
+      const j = await r.json().catch(() => ({}));
+      printNote.textContent = j.detail || ("Could not build the print (" + r.status + ").");
+      if(tab) tab.close();
+      return;
+    }
+    /* WHAT WAS LEFT OUT IS SAID ON THE PAGE AS WELL AS ON THE COVER SHEET. The cover tells
+       whoever picks the paper up; this tells the estimator now, while they can still do
+       something about a DXF that has no printable drawing beside it. */
+    const printed = r.headers.get("X-SDI-Printed"), skipped = r.headers.get("X-SDI-Skipped"),
+          pages = r.headers.get("X-SDI-Pages");
+    printNote.textContent = printed
+      ? (printed + " drawing" + (printed === "1" ? "" : "s") + ", " + pages + " page"
+         + (pages === "1" ? "" : "s")
+         + (skipped && skipped !== "0"
+            ? " — " + skipped + " file" + (skipped === "1" ? "" : "s")
+              + " could not be printed and are named on the cover sheet."
+            : "."))
+      : "";
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    if(tab) tab.location = url; else window.open(url, "_blank");
+    /* Revoked late: revoking immediately can pull the file out from under a viewer that has
+       not finished loading it. */
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }catch(e){
+    printNote.textContent = "Could not reach the service — check it is running.";
+    if(tab) tab.close();
+  }finally{
+    printDrawings.textContent = was; refreshPrint();
+  }
+};
+refreshPrint();
 
 </script>
 </body>
