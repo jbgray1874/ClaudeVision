@@ -197,6 +197,9 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_AISHEETS_DIR` | Where the estimator-override loop writes the regenerated client quote (default the AISheets share). Point at a local folder on a test box with no share mounted |
 | `SDI_OVERRIDE_XLSX_DIR` | Where the estimator-override loop saves the amended workbook as the `_MANUAL_OVERRIDE` record (default: same as `SDI_AISHEETS_DIR`; set to the job's Live Enquiry folder to keep the override beside its pack) |
 | `SDI_WELD_DEBUG=1` | Per-weld diagnostics from the document builder |
+| `SDI_DM_OUTPUT_ROOT` | *(portal backend)* Folder the Document Manager extract tool writes its packs to. The portal imports from here; it does not run the extraction. Must ALSO appear in `SDI_FILE_ROOTS` — there is no looser path rule for this feature |
+| `SDI_DM_API_BASE` | *(portal backend)* Base URL of the DM API tool, for asking it to RUN an extract rather than importing one that has already run. **Unset** until its API contract is known; the portal reports 'not configured' rather than guessing |
+| `SDI_DM_API_KEY` | *(portal backend)* Key for `SDI_DM_API_BASE`, if it needs one |
 | `SDI_MAX_PARITY_UPLOAD_MB` | *(portal backend)* Cap on each side of an uploaded parity comparison (default **20**). Either side may instead be a path on the share, which is not capped |
 | `SDI_BRAND_ASSETS_DIR` | *(portal backend)* Folder holding the brand logos the portal header serves — the **same folder** `src/client_quote_html.py` reads for the quotation header, so the two cannot show different marks (default `C:\ClaudeVision\assets\customer_logos`) |
 | `SDI_BRAND_LOGO_KEY` | *(portal backend)* Filename stem of SDI's own logo within that folder, matched case- and space-insensitively (default `wearesdi`) |

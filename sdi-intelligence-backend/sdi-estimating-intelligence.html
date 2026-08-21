@@ -400,10 +400,16 @@
       <ul class="files" id="fileList"></ul>
       <p class="empty" id="fileEmpty">No drawings added yet.</p>
       <p class="req" id="printNote"></p>
+      <p class="req" id="dmNote"></p>
 
       <div style="display:flex;gap:9px;flex-wrap:wrap">
         <button id="addFolder">Add job folder…</button>
         <button id="addFiles">Add drawing files…</button>
+        <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
+             tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
+             folder copy of the same drawing and leaves the rest alone. Removing one is the
+             same ✕ as any other. -->
+        <button id="addFromDm" disabled title="Checking…">Add from Document Manager…</button>
         <!-- THE PACK, ON PAPER. Checking an estimate means having the drawings in front of you,
              and that meant opening the job folder on the share and printing twelve files one at
              a time. One button, one PDF, bookmarked per drawing. -->
@@ -711,11 +717,44 @@ async function checkRunners(){
 checkRunners();
 setInterval(checkRunners, 15000);
 
+/* ══ MERGING TWO SOURCES OF DRAWINGS ══════════════════════════════════════════════════
+   Drawings can now arrive from two places — the estimating shares, and a Document Manager
+   extract — and the same drawing can legitimately arrive from both.
+
+   THE RULE IS OVERRIDE BY NAME, NOT DEDUPE BY PATH. Two files called 12392-02-01.pdf are the
+   same drawing whatever folder each came from, and the one added LAST wins. That is what makes
+   the second button worth having: pulling a job from Document Manager over the top of a folder
+   copy replaces the stale sheets and leaves everything else alone. Deduping by path instead
+   would keep both, and the pack would carry one drawing twice — priced twice, if the two
+   disagreed.
+
+   Each entry remembers where it came from, so an override is visible in the list rather than
+   silent. */
+function mergeIntoDrawings(items){
+  let added = 0, replaced = 0;
+  items.forEach(it => {
+    if(!it || !it.path) return;
+    const key = (it.name || "").toLowerCase();
+    const at = drawings.findIndex(d => (d.name || "").toLowerCase() === key && !d.is_dir);
+    if(at >= 0 && !it.is_dir){ drawings[at] = it; replaced++; }
+    else if(at < 0){ drawings.push(it); added++; }
+  });
+  renderFiles(); refresh();
+  return {added, replaced};
+}
+
 function renderFiles(){
   fileList.innerHTML = "";
   drawings.forEach((f,i) => {
     const li = document.createElement("li");
+    /* WHERE IT CAME FROM, because two sources can now supply the same drawing and the later
+       one silently replaces the earlier. An override nobody can see is an override nobody can
+       check. */
+    const src = f.source === "dm" ? '<span class="kind" style="border-color:var(--info);'
+                                  + 'color:var(--info)" title="From a Document Manager '
+                                  + 'extract">DM</span>' : "";
     li.innerHTML = `<span class="kind">${f.is_dir?"folder":(f.name.split(".").pop()||"file").toUpperCase()}</span>`
+                 + src
                  + `<span class="nm" title="${f.path}">${f.name}</span>`;
     const x = document.createElement("button");
     x.className="x"; x.textContent="✕"; x.title="Remove";
@@ -742,10 +781,15 @@ let mode="folder", cwd="", roots=[], selected=null;
 // open one for reading, but nothing could say "give me the path of exactly one file",
 // which is what a parity side and an attached manual sheet each need.
 let pickOne = null;
+// Which SOURCE the next selection should be tagged with. Set only by the Document
+// Manager button and cleared on every other open, so a later ordinary pick cannot
+// inherit a DM badge from the last one.
+let dmPick = false;
 let shown=[];                 // the listable FILES in the folder on screen
 
-async function openBrowser(m){
+async function openBrowser(m, opts){
   mode = m; selected = null;
+  dmPick = !!(opts && opts.dm);
   dTitle.textContent = m==="folder" ? "Select a job folder"
                      : m==="files"  ? "Select drawing files"
                      : m==="batch"  ? "Select the drawings in this enquiry"
@@ -942,9 +986,17 @@ async function navigate(path){
          drift, and the paths are the one thing that must mean the same to the engine. */
       const on = li.getAttribute("aria-selected")==="true";
       li.setAttribute("aria-selected", on ? "false" : "true");
-      if(on) pickSet(pickList().filter(d => d.path !== it.path));
-      else if(!pickList().some(d => d.path===it.path))
-        pickList().push({path:it.path, name:it.name, is_dir:false});
+      if(on){
+        pickSet(pickList().filter(d => d.path !== it.path));
+      }else if(mode === "batch"){
+        // A hundred separate enquiries: a repeated filename is two different jobs, so no
+        // override here — see mergeIntoDrawings.
+        if(!pickList().some(d => d.path===it.path))
+          pickList().push({path:it.path, name:it.name, is_dir:false});
+      }else{
+        mergeIntoDrawings([{path:it.path, name:it.name, is_dir:false,
+                          source: dmPick ? "dm" : "share"}]);
+      }
       pickRender(); refreshAddAll();
     };
     listing.appendChild(li);
@@ -960,8 +1012,15 @@ function refreshAddAll(){
 
 dAll.onclick = () => {
   shown.forEach(it => {
-    if(pickList().some(d => d.path === it.path)) return;
-    pickList().push({path: it.path, name: it.name, is_dir: false});
+    /* The enquiry list is a list of separate jobs, not one pack, so a name collision there is
+       two different enquiries and must NOT override. Only the pack merges by name. */
+    if(mode === "batch"){
+      if(!pickList().some(d => d.path === it.path))
+        pickList().push({path: it.path, name: it.name, is_dir: false});
+    }else{
+      mergeIntoDrawings([{path: it.path, name: it.name, is_dir: false,
+                          source: dmPick ? "dm" : "share"}]);
+    }
   });
   // The rows already on screen must agree with what was just added.
   [...listing.children].forEach(li => {
@@ -1563,6 +1622,50 @@ printDrawings.onclick = async () => {
   }
 };
 refreshPrint();
+
+
+/* ══ DOCUMENT MANAGER EXTRACTS ════════════════════════════════════════════════════════
+   A SECOND SOURCE OF DRAWINGS, FEEDING THE SAME LIST. Yogesh's DM tool extracts a job's CAD
+   files out of Document Manager onto an output share; this imports the pack it left behind.
+
+   The two buttons are equals: both merge by name, so pulling a job from Document Manager over
+   the top of a folder copy replaces the stale sheets and leaves everything else alone, and the
+   ✕ removes a file whichever source it came from.
+
+   The button reports what is wrong rather than doing nothing. An unset share, a share this
+   service may not read, a share that is not mounted — each has a different fix, and the
+   estimator is told which. */
+const addFromDm = $("addFromDm"), dmNote = $("dmNote");
+let dmRoot = null;
+
+async function checkDm(){
+  try{
+    const r = await api("/api/estimate/dm/status");
+    if(!r.ok) throw new Error(String(r.status));
+    const j = await r.json();
+    dmRoot = j.root || null;
+    addFromDm.disabled = !j.configured;
+    addFromDm.title = j.configured
+      ? ("Import drawings from " + j.root)
+      : (j.reason || "Document Manager import is not configured.");
+    /* Said once, quietly, under the list — not as an error. Not being configured yet is a
+       deployment step, not a fault, and the page should not shout about it every visit. */
+    dmNote.textContent = j.configured ? "" : ("Document Manager import: " + (j.reason || "not configured."));
+  }catch(e){
+    addFromDm.disabled = true;
+    addFromDm.title = "Could not ask the service whether Document Manager is configured.";
+    dmNote.textContent = "";
+  }
+}
+
+addFromDm.onclick = () => {
+  if(!dmRoot) return;
+  /* The ordinary picker, started at the DM output share. Same containment rule, same
+     server-resolved paths — a second file browser would be a second place for the path rules
+     to drift, and the paths are the one thing that must mean the same to the engine. */
+  openBrowser("files", {dm: true}).then(() => navigate(dmRoot));
+};
+checkDm();
 
 </script>
 </body>

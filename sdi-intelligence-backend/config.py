@@ -94,6 +94,23 @@ DB_PASSWORD = _opt("SDI_DB_PASSWORD")
 DB_ENCRYPT = _opt("SDI_DB_ENCRYPT", "yes")
 DB_TRUST_CERT = _opt("SDI_DB_TRUST_CERT", "yes")
 
+# ── Document Manager (DM) extract tool ──────────────────────────────────────
+# Yogesh's DM API tool extracts a job's CAD files out of Document Manager and writes them to an
+# output share. This portal does not run that extraction; it IMPORTS what the extraction left
+# behind, so the two can be deployed, upgraded and broken independently of one another.
+#
+# Set DM_OUTPUT_ROOT to the folder the DM tool writes its packs into. It must also appear in
+# SDI_FILE_ROOTS, because everything this service reads goes through the same containment
+# check — there is no second, looser path rule for this one feature.
+#
+# DM_API_BASE is for the NEXT step: asking the tool to run an extract rather than picking up
+# one that has already run. It is deliberately unset by default, and the endpoint says so
+# plainly rather than guessing at somebody else's API.
+DM_OUTPUT_ROOT = _opt("SDI_DM_OUTPUT_ROOT")
+DM_API_BASE = _opt("SDI_DM_API_BASE")
+DM_API_KEY = _opt("SDI_DM_API_KEY")
+
+
 # ── brand assets ────────────────────────────────────────────────────────────
 # The portal header shows the SAME we.are.sdi logo the client quote puts on its header. Pointing
 # both at one folder is deliberate: a logo that lives in two places drifts, and the customer-facing

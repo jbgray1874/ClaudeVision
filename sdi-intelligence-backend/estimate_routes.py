@@ -894,6 +894,48 @@ def _unlink_quietly(path: Path) -> None:
         pass
 
 
+# ── Document Manager extract — importing what it produced ────────────────────
+#
+# FIRST PASS, AND THE LINE IS DRAWN DELIBERATELY. Yogesh's DM API tool pulls a job's CAD files
+# out of Document Manager and writes them to an output share. This portal does not run that
+# extraction and does not need to: it imports the pack the extraction left behind, which means
+# the two services can be deployed and upgraded independently, and a DM outage costs an import
+# rather than an estimate.
+#
+# Asking the tool to RUN an extract is the next step and needs its API contract — the base URL
+# and the request/response shapes. Until those are known this reports that it is not configured
+# rather than guessing at somebody else's endpoint and failing in a way nobody can diagnose.
+@router.get("/dm/status")
+def dm_status(x_sdi_key: Optional[str] = Header(default=None)):
+    """Whether a DM extract can be imported, and if not, exactly what is missing.
+
+    The page asks this before showing the button as usable, so an estimator is told "not
+    configured yet" instead of pressing something that quietly does nothing.
+    """
+    _check_key(x_sdi_key)
+    root = (getattr(config, "DM_OUTPUT_ROOT", "") or "").strip()
+    if not root:
+        return {"configured": False,
+                "reason": "SDI_DM_OUTPUT_ROOT is not set — point it at the folder the "
+                          "Document Manager tool writes its extracts to.",
+                "root": None, "reachable": False, "within_roots": False}
+
+    # It has to be inside SDI_FILE_ROOTS as well, or the browser will list it and then be
+    # refused when it tries to read it — which looks like a broken button, not a setting.
+    within = _within_a_root(root) is not None
+    reachable = os.path.isdir(root)
+    reason = ""
+    if not within:
+        reason = (f"{root} is not inside SDI_FILE_ROOTS, so this service may not read it. "
+                  f"Add it to SDI_FILE_ROOTS.")
+    elif not reachable:
+        reason = f"{root} is not reachable from this machine."
+    return {"configured": bool(within and reachable), "reason": reason,
+            "root": root, "reachable": reachable, "within_roots": within,
+            # Present but unset until the DM API contract is known.
+            "api_base": (getattr(config, "DM_API_BASE", "") or "") or None}
+
+
 @router.post("/batch")
 def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """An enquiry that is many drawings, each wanting its own estimate.
