@@ -118,32 +118,39 @@ def _line(violation: Dict[str, Any]) -> Dict[str, Any]:
         # summary of a summary loses the part an estimator needs.
         "what": str(violation.get("message") or "").strip(),
         "what_to_do": _ACTION.get(code) or _BUCKET_ACTION[bucket],
-        "blocks_a_firm_quote": violation.get("severity") == "blocking",
     }
 
 
 def review(result: Any) -> Dict[str, Any]:
     """The invariant result, re-sorted into what a person does with it.
 
-    BLOCKING STILL MEANS BLOCKING. Re-sorting changes the order and the wording, never the
-    gate: a job with an unconfirmed indicative price is still not a firm quote and still must
-    not reach an ERP export. What changes is that the reader can see WHICH of the twenty-one
-    lines they are able to act on.
+    IT REPORTS; IT DOES NOT RULE. The engine's job is to give an estimator the BOM, the route
+    and the prices, and to say where each one came from. Whether that is enough to quote from
+    is the estimator's judgement, made with the job in front of them and everything else they
+    know about the customer — none of which is in here.
+
+    So there is no verdict on these lines any more. There was: every finding carried a
+    "blocks a firm quote" flag and the block opened by announcing the estimate was not a firm
+    price. It was also empty in practice — thirty-four separate findings set it, three of them
+    fired on every job because no supplier feed is integrated yet, and a warning that is
+    always on is one an estimator learns to scroll past. Removing it costs nothing that was
+    working and takes the engine out of a decision that was never its to make.
+
+    What remains is the part that has value: the finding, why it matters, and the lever.
     """
     violations = (result or {}).get("violations") if isinstance(result, dict) else None
     lines = [_line(v) for v in (violations or []) if isinstance(v, dict)]
     buckets: Dict[str, List[Dict[str, Any]]] = {b: [] for b in ORDER}
     for ln in lines:
         buckets[ln["bucket"]].append(ln)
-    # Within a bucket, the ones that stop a quote come first. Severity is the wrong TOP-level
-    # sort and the right one inside a group of things the same person is doing.
+    # Stable within a bucket, so the same job reads the same way twice and a line does not
+    # move between runs for a reason nobody can see.
     for b in buckets:
-        buckets[b].sort(key=lambda l: (not l["blocks_a_firm_quote"], l["code"]))
+        buckets[b].sort(key=lambda l: l["code"])
     return {
         "schema": SCHEMA,
         "buckets": [{"title": b, "lines": buckets[b]} for b in ORDER if buckets[b]],
         "counts": {b: len(buckets[b]) for b in ORDER},
-        "may_quote_firm": bool((result or {}).get("may_quote_firm")),
         "metric": engine_discoveries.count(violations or []),
     }
 
@@ -153,15 +160,13 @@ def format_review(rev: Dict[str, Any]) -> str:
     if not isinstance(rev, dict) or not rev.get("buckets"):
         return "[estimating review] nothing outstanding"
     out: List[str] = ["", "══ ESTIMATING REVIEW ══════════════════════════════════════════"]
-    if not rev.get("may_quote_firm"):
-        out.append("   This is an ESTIMATE, not a firm price. Clear the blocking items "
-                   "below before quoting firm or exporting to an ERP.")
     for group in rev["buckets"]:
         out.append("")
         out.append(f"   {group['title'].upper()}  ({len(group['lines'])})")
         for ln in group["lines"]:
-            mark = "!" if ln["blocks_a_firm_quote"] else "·"
-            out.append(f"     {mark} {ln['what']}")
+            # One marker, because there is no longer a tier. A line either wanted saying or
+            # it did not, and the bucket already says whose work it is.
+            out.append(f"     · {ln['what']}")
             out.append(f"       -> {ln['what_to_do']}")
     m = rev.get("metric") or {}
     out.append("")

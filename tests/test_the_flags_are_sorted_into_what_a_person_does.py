@@ -68,12 +68,17 @@ def test_decisions_come_first_because_they_stop_the_quote():
     assert [g["title"] for g in er.review(RUN)["buckets"]][0] == er.CONFIRM
 
 
-def test_inside_a_bucket_the_blocking_ones_lead():
-    """Severity is the wrong TOP-level sort and the right one within a group of things the
-    same person is doing in the same sitting."""
-    lines = _bucket(er.review(RUN), er.CONFIRM)["lines"]
-    assert lines[0]["blocks_a_firm_quote"] is True
-    assert lines[-1]["blocks_a_firm_quote"] is False
+def test_inside_a_bucket_the_order_is_stable():
+    """Stable, so the same job reads the same way twice.
+
+    This used to lead with the findings that stopped a firm quote. There is no such tier any
+    more — the engine reports and the estimator decides — so the only property left worth
+    holding is that a line does not move between runs for a reason nobody can see.
+    """
+    rev = er.review(RUN)
+    codes = [l["code"] for l in _bucket(rev, er.CONFIRM)["lines"]]
+    assert codes == sorted(codes)
+    assert codes == [l["code"] for l in _bucket(er.review(RUN), er.CONFIRM)["lines"]]
 
 
 def test_an_empty_bucket_is_not_shown():
@@ -137,17 +142,37 @@ def test_the_engines_own_words_are_kept():
     assert "11650-04-02M" in line["what"]
 
 
-# ── the gate is unchanged ────────────────────────────────────────────────────────────
+# ── it reports, it does not rule ──────────────────────────────────────────────────────
 
-def test_resorting_does_not_soften_blocking():
-    """BLOCKING still means not firm and no ERP export. Re-sorting changes the order and the
-    wording, never the gate — an estimate that reads calmly and quotes firm on an unconfirmed
-    AI price is worse than the list it replaced."""
+def test_the_review_passes_no_verdict():
+    """The engine gives the BOM, the route, the prices and where each came from. Whether that
+    is enough to quote from is the estimator's judgement, made with the job in front of them.
+
+    This previously carried a verdict: every line held a "blocks a firm quote" flag and the
+    block opened by announcing the estimate was not a firm price. It was also empty in
+    practice — thirty-four findings set it and three fired on every job, so it was always on,
+    and a warning that is always on is one people learn to scroll past.
+    """
     rev = er.review(RUN)
-    assert rev["may_quote_firm"] is False
-    assert sum(1 for g in rev["buckets"] for l in g["lines"]
-               if l["blocks_a_firm_quote"]) == 2
-    assert "not a firm price" in er.format_review(rev).lower()
+    assert "may_quote_firm" not in rev, "no verdict in the payload"
+    for g in rev["buckets"]:
+        for l in g["lines"]:
+            assert "blocks_a_firm_quote" not in l, "and none on a line"
+    text = er.format_review(rev).lower()
+    assert "not a firm price" not in text
+    assert "blocking" not in text
+
+
+def test_every_finding_still_appears_and_still_names_its_lever():
+    """Removing the verdict must not remove the information. Nothing is hidden; what changed
+    is that the engine no longer grades it."""
+    rev = er.review(RUN)
+    codes = {l["code"] for g in rev["buckets"] for l in g["lines"]}
+    assert len(codes) == len([v for v in RUN["violations"]]), "every finding is still reported"
+    for g in rev["buckets"]:
+        for l in g["lines"]:
+            assert l["what"], "the finding is stated"
+            assert l["what_to_do"], "and the lever is named"
 
 
 def test_the_metric_travels_with_the_review():
