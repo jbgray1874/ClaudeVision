@@ -733,11 +733,30 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             f"drawings-only.",
             folder=sw.get("native_folder_unreachable")))
     if sw.get("native_present_but_unread"):
+        # A SEAT IS NOT ALWAYS THERE, AND THAT IS NORMAL RATHER THAN EXCEPTIONAL.
+        #
+        # This was BLOCKING, which made every job with models beside it read as defective
+        # whenever a licence had lapsed, a seat was in use on somebody else's desktop, or the
+        # estimate ran on a machine with no SOLIDWORKS at all. None of those is a fault in the
+        # estimate: the engine uses the model when it is there and the drawings when it is not,
+        # which is the design, not a degraded mode of it.
+        #
+        # And blocking it changed nothing anyway. BLOCKING sets one boolean, may_quote_firm, and
+        # no job can be quoted firm today regardless -- FIRM_PRICING_COVERAGE has every material
+        # class firm_capable=False, so no_firm_pricing_source already fires on every job. The
+        # only effect this rule had was to add another red line to a page that was already red,
+        # which is how an estimator learns to scroll past all of them.
+        #
+        # WARNING, not silence. The number still stands and the estimator is still told the
+        # models were not used, because a drawings-only read genuinely is less accurate --
+        # material, gauge and flat pattern are inferred rather than read. What it no longer does
+        # is call that a defect.
         out.append(_violation(
-            "native_models_not_read", BLOCKING,
+            "native_models_not_read", WARNING,
             f"{sw.get('native_files_present')} SolidWorks model file(s) are in this job folder "
-            f"but were not read: {sw.get('reason') or 'no extract was generated'}. The job has "
-            f"been costed from the drawings alone while the models were available.",
+            f"and were not read: {sw.get('reason') or 'no extract was generated'}. The job is "
+            f"costed from the drawings, which is a sound estimate and a less precise one — "
+            f"material, gauge and flat pattern are inferred rather than read from the model.",
             reason=sw.get("reason"), analyser_error=sw.get("analyser_error")))
     if sw.get("refused_wrong_job"):
         # A DISCARDED MODEL PACK CHANGES EVERY NUMBER ON THE SHEET, AND SAID SO ONLY IN A

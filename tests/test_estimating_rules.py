@@ -1498,19 +1498,33 @@ def test_the_pipeline_actually_runs_the_analyser():
            f"extract, only consume one somebody else made")
 
 
-def test_native_models_present_but_unread_is_loud():
+def test_native_models_present_but_unread_is_loud_but_does_not_block():
     """The pipeline consumed an extract only if one already existed, so on a machine WITH
     SolidWorks the strongest source available was used or skipped depending on whether a
     person had remembered to run a separate script — and skipping it looked exactly like a
-    job with no models at all."""
+    job with no models at all. It must still be SAID.
+
+    IT MUST NOT BLOCK, THOUGH, AND THAT IS A DELIBERATE REVERSAL. A seat is not always there:
+    a licence lapses, a seat is in use on somebody else's desktop, the estimate runs on a
+    machine that has no SOLIDWORKS at all. The engine uses the model when it is there and the
+    drawings when it is not, and that is the design rather than a degraded form of it — so a
+    missing seat must not make an otherwise sound job read as defective.
+
+    Blocking it achieved nothing anyway. BLOCKING sets one boolean, may_quote_firm, and no job
+    can be quoted firm while FIRM_PRICING_COVERAGE has every material class firm_capable=False.
+    The rule only added another red line to a page that was already red.
+    """
     from invariants import check_job
     j = _job()
     j["solidworks_native"] = {"found": False, "native_present_but_unread": True,
                               "native_files_present": 7, "reason": "no extract generated"}
     r = check_job(j, write_back=False)
-    ok("native_models_not_read" in [v["code"] for v in r["violations"]],
-       "models in the folder but unread must block")
-    ok(not r["may_quote_firm"], "and stop the price being firm")
+    v = next((x for x in r["violations"] if x["code"] == "native_models_not_read"), None)
+    ok(v is not None, "models in the folder but unread must still be reported")
+    ok(v and v["severity"] == "warning",
+       "as a WARNING — the number stands, and a missing seat is not a defect")
+    ok("inferred rather than read" in (v or {}).get("message", ""),
+       "and it must still say what was lost: the model read is more precise")
 
     # Stale is its own fact: an extract taken before the design changed.
     j2 = _job()
