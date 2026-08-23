@@ -187,7 +187,7 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `VISION_MAX_SIDE` | Max rendered image edge in px (default 4000) |
 | `SDI_ENABLE_PART_DESC_SCAN=1` | Re-enable the description `LIKE` catalogue scan (default **off** — see *Performance*) |
 | `ESTIMATE_DEFAULT_JOB_QUANTITY` | Default order quantity when not supplied |
-| `SDI_APPLY_SOLIDWORKS=0` / `=1` | Force the native extract off / on. Default: **on**. Models present and unread, or a job folder that cannot be opened, are BLOCKING findings — never silence |
+| `SDI_APPLY_SOLIDWORKS=0` / `=1` | Force the native extract off / on. Default: **on**. Models present and unread is a **WARNING** — a seat is not always available and the engine falls back to the drawings by design. A job folder that cannot be OPENED is still BLOCKING: "I could not look" must never read as "there is nothing there" |
 | `SDI_SW_EXTRACT_JSON` | Read the native extract from an explicit path (models on a CAD share, job folder elsewhere) |
 | `SDI_SW_RUN_ANALYSER=0` | Never invoke SolidWorks COM; consume an existing extract only. Default: **the analyser runs** when models are present and no fresh extract exists. Set this on a shared designer workstation |
 | `SDI_CANONICAL_ROUTE_WORKBOOK=0` | Fall back to the legacy per-part labour loop instead of the compiled route (default **on**) |
