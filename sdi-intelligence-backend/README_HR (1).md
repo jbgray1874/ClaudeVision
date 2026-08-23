@@ -15,8 +15,16 @@ snapshot on local disk in between, all wired into the intranet.
               latest snapshot ──▶ InVentry CSV (atomic write)
                                    C:\InVentryImports\brighthr_staff.csv
                                           │
-              InVentry CSV Automation Service sweeps it ──▶ front-desk tablets
+                                   ??? ──▶ InVentry front-desk tablets
 ```
+
+> **⚠ The last hop is NOT established.** `C:\InVentryImports\` is only the
+> default path in `hr_config.py`; nothing at InVentry has been configured to
+> read it, and no vendor conversation set it. It is a local folder on
+> SDI-APP01, so a cloud or off-box InVentry service could not reach it anyway.
+> Until InVentry tell us how they ingest external data (see
+> `docs/INVENTRY_INTEGRATION_REQUEST.md`), stages 2 and 3 write a correct file
+> to a destination nothing reads.
 
 **Why a snapshot in the middle:** audit trail of every pull, the load can retry
 without re-hitting the API, and the safety guard can compare against the last
@@ -51,14 +59,19 @@ InVentry evacuation list is live rather than manual.
  COO clicks "Load to InVentry"  ─▶  /api/hr/blip/load  hr_blip_inventry.py
       blip_latest.json ──▶ C:\InVentryImports\brighthr_onsite.csv  (atomic)
                                          │
-      InVentry CSV Automation Service sweeps it ──▶ on-site register / fire roll
+                                  ??? ──▶ on-site register / fire roll
 ```
+
+The final hop is unestablished — see the warning above.
 
 `POST /api/hr/blip/sync` does both in one call.
 
-The CSV is the **full current on-site list**: in the file = on site, absent
-from the file = signed out. No separate employee-ID mapping is needed — InVentry
-matches on the same name + email the roster import already uses.
+The CSV is written as the **full current on-site list**: in the file = on site,
+absent from the file = signed out. That is our assumption about how a presence
+import should behave, and it is one of the questions for InVentry — they may
+expect a delta instead. It carries the same name + email the roster CSV uses, so
+no separate employee-ID mapping is needed *if* they match on those fields; which
+identifier they actually match on is also an open question.
 
 ### Two sources for the same on-site list
 
@@ -78,19 +91,32 @@ failure.
 
 The portal button uses `latest` because it keeps emails without a name lookup.
 
-### ⚠ Confirm with InVentry before going live
+### ⚠ The delivery route to InVentry is still unknown
 
-The button and the endpoints default to **dry run** (`HR_LOAD_DRY_RUN = true` in
-the portal; `?dry_run=true` on the API), which writes the CSV next to the
-snapshot instead of into the watched folder. Before flipping it, confirm with
-InVentry support:
+Everything up to the file is built and produces real output — see the dated
+`blip_onsite_*.json` and `brighthr_staff_*.json` files in
+`\\sdi-dc01\shareddata$\Shared\IT\HRSystemsOutput`. What has never been
+established is how InVentry *receives* it.
 
-1. Does the CSV Automation Service accept a **presence/attendance** import, or
-   only a staff roster?
-2. Does it treat the file as **full current state** (absent = signed out)?
-3. What **column headers** does it expect? Ours are in
-   `hr_blip_inventry.ONSITE_FIELDS`.
-4. Should presence use a **separate watched folder** from the roster import?
+The "watched folder" in earlier versions of this document was an assumption, not
+a vendor answer. Treat the CSV as the shape of the payload, not as a working
+delivery mechanism.
+
+The request that unblocks this is drafted in
+**`docs/INVENTRY_INTEGRATION_REQUEST.md`**. In short, InVentry need to tell us:
+
+1. **How** they ingest external data — a folder their server watches (and where
+   must it live, given `C:\` on our app server is not reachable by them), a
+   database we write to, or an API.
+2. Whether that same route carries **live on-site presence**, or only the staff
+   roster.
+3. If presence is supported: the **format and columns**, and whether the payload
+   is **full current state** (absent = signed out) or a delta.
+4. Which **identifier** they match on — email, staff ID, or name.
+
+Until then the button and the endpoints default to **dry run**
+(`HR_LOAD_DRY_RUN = true` in the portal; `?dry_run=true` on the API), which
+writes the CSV beside the snapshot rather than to any InVentry path.
 
 ### Presence guards (different from the roster guards)
 
@@ -106,8 +132,9 @@ the building. So the load refuses to publish when:
   empty building. Zero from a *clean* run is published, since an empty site at
   3am is real.
 
-`--force` overrides all three. Everything is written atomically, so InVentry
-never sweeps a half-written file.
+`--force` overrides all three. Everything is written atomically (temp file then
+`os.replace`), so whatever ends up consuming the file can never read a
+half-written one.
 
 ---
 
@@ -137,7 +164,7 @@ GET  /api/hr/status       # last pull + load + presence-load summary
 POST /api/hr/blip         # presence: who is clocked in right now
 GET  /api/hr/blip/latest  # presence: last snapshot, no BrightHR call
 POST /api/hr/blip/load    # presence: on-site list -> InVentry
-                          #   ?dry_run=true   write beside the snapshot, not the watched folder
+                          #   ?dry_run=true   write beside the snapshot, not the InVentry path
                           #   ?source=output  load the JSON the portal Files view exposes
                           #   ?force=true     override the presence guards
 POST /api/hr/blip/sync    # presence: blip + load in one call (same query params)

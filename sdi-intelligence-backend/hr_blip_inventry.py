@@ -1,12 +1,12 @@
 """
-Stage 3 — LOAD Blip on-site presence into InVentry's watched folder.
+Stage 3 — BUILD the InVentry on-site presence file from Blip data.
 
 Stage 1/2 (hr_pull.py -> hr_load_inventry.py) sync the staff *roster*: who
 exists. This stage syncs *presence*: who is in the building right now, so the
 InVentry fire roll call and H&S reporting are live rather than manual.
 
-  hr_blip.py  ──▶  on-site JSON  ──▶  THIS  ──▶  brighthr_onsite.csv
-  (who's clocked in)                       InVentry CSV Automation Service
+  hr_blip.py  ──▶  on-site JSON  ──▶  THIS  ──▶  brighthr_onsite.csv  ──▶  ???
+  (who's clocked in)                                                  (see warning)
 
 Two sources hold the same on-site list, and either can be loaded:
 
@@ -19,15 +19,18 @@ Two sources hold the same on-site list, and either can be loaded:
                      by name; anyone left without one is written name-only and
                      reported.
 
-The CSV is the FULL current on-site list, written atomically: present in the
-file = on site, absent from the file = signed out. That is the same
-watched-folder mechanism the roster load already uses.
+The CSV is written as the FULL current on-site list, atomically: present in the
+file = on site, absent from the file = signed out.
 
-  ⚠ CONFIRM WITH INVENTRY before enabling on the live watched folder: that
-    their CSV Automation Service accepts a presence/attendance import, that it
-    treats the file as full current state, and what column headers it expects.
-    Until then run with --dry-run, which writes the CSV next to the snapshot
-    instead of into the watched folder.
+  ⚠ HOW INVENTRY RECEIVES THIS IS NOT YET ESTABLISHED. INVENTRY_ONSITE_CSV_PATH
+    defaults to a local folder on this server, mirroring the roster load's
+    default - but no InVentry service has been configured to read either, and a
+    local C:\ path is not reachable by an off-box or cloud InVentry instance.
+    The vendor request that settles it is in docs/INVENTRY_INTEGRATION_REQUEST.md.
+    Their answer may change the destination (a share, a database, an API), the
+    format, and whether full-state or delta semantics are expected - but not the
+    data itself, which is what this module produces.
+    Run with --dry-run until then; it writes the CSV next to the snapshot.
 
 Runnable two ways:
   * On demand via the backend  POST /api/hr/blip/load   (or /blip/sync)
@@ -42,9 +45,10 @@ from pathlib import Path
 
 import hr_config as cfg
 
-# Match these headers to InVentry's presence import mapping. The roster import
-# keys on name + email (see hr_load_inventry.INVENTRY_FIELDS), so presence uses
-# the same identifiers - no separate ID mapping table is needed.
+# Match these headers to InVentry's presence import mapping once they confirm it.
+# These mirror the roster import's columns (hr_load_inventry.INVENTRY_FIELDS) on
+# the assumption that InVentry matches people on name + email; which identifier
+# they actually key on is an open question for the vendor.
 ONSITE_FIELDS = ["First Name", "Surname", "Email Address", "Signed In"]
 
 SOURCE_LATEST = "latest"
@@ -214,7 +218,7 @@ def _age_minutes(timestamp):
 
 def run_blip_load(force: bool = False, dry_run: bool = False,
                   source: str = SOURCE_LATEST) -> dict:
-    """Write the current on-site list to the InVentry watched folder."""
+    """Write the current on-site list to the configured InVentry path."""
     source_path = _resolve_source(source)
     payload = json.loads(source_path.read_text(encoding="utf-8"))
     records, meta = _normalise(payload)
@@ -222,7 +226,7 @@ def run_blip_load(force: bool = False, dry_run: bool = False,
 
     target = Path(cfg.INVENTRY_ONSITE_CSV_PATH)
     if dry_run:
-        # Somewhere harmless: never the watched folder InVentry sweeps.
+        # Somewhere harmless: never the configured InVentry destination.
         target = Path(cfg.HR_SNAPSHOT_DIR) / f"dryrun_onsite_{_stamp()}.csv"
 
     summary = {
