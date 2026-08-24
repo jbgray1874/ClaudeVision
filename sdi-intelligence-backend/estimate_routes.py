@@ -646,10 +646,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
 
 @router.post("/override")
 async def estimate_override(
-    file: UploadFile = File(...),
     units: int = Form(...),
     drawing: str = Form(...),
     client: str = Form(...),
+    file: Optional[UploadFile] = File(default=None),
+    # THE SHEET IS USUALLY ALREADY ON THE SHARE, WHICH IS WHERE WE PUT IT.
+    #
+    # This accepted an upload and nothing else, so regenerating a quote from a run's own
+    # workbook meant finding it on disk in Explorer first -- for a file this service had
+    # written, to a folder this service can browse, and had just listed on the same page.
+    # The parity card sitting directly above offers "Choose from share" on both of its
+    # sides, so the panel read as though it had lost a capability it never had.
+    #
+    # A share path also skips the round trip entirely: the CLI takes a path, so there is no
+    # upload, no temp file and no copy of an estimate sitting in the box's temp folder.
+    share_path: Optional[str] = Form(default=None),
     x_sdi_key: Optional[str] = Header(default=None),
 ):
     """Regenerate a CLIENT QUOTE from an estimator's amended workbook — the manual-override path.
@@ -661,30 +672,56 @@ async def estimate_override(
     to the job report or provenance tab. Runs the regenerator out of process (config isolation).
     """
     _check_key(x_sdi_key)
-    name = (file.filename or "").strip()
-    if not name.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=415, detail="Only .xlsx workbooks are accepted")
-    # Read with a hard cap so a huge upload cannot exhaust the box's memory or disk.
-    data = await file.read(_MAX_OVERRIDE_UPLOAD_BYTES + 1)
-    if len(data) > _MAX_OVERRIDE_UPLOAD_BYTES:
+
+    _shared = (share_path or "").strip()
+    if bool(_shared) == bool(file is not None and (file.filename or "").strip()):
         raise HTTPException(
-            status_code=413,
-            detail=f"Workbook exceeds {_MAX_OVERRIDE_UPLOAD_BYTES // (1024 * 1024)} MB")
-    if not data:
-        raise HTTPException(status_code=400, detail="The uploaded workbook is empty")
+            status_code=400,
+            detail="Choose the amended workbook either from the share or as an upload — "
+                   "one of the two, not both and not neither.")
 
     import json as _json
     import subprocess
     import tempfile
     from urllib.parse import quote as _urlquote
 
-    tf = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-    try:
+    tf = None
+    if _shared:
+        # NEVER A BARE PATH FROM THE PAGE. Same gate as every other share read here: it must
+        # resolve inside a configured root, or this becomes a way to hand the engine any file
+        # on the server that the service account can open.
+        _ok = _within_a_root(_shared)
+        if _ok is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"That workbook is outside the folders this service is allowed to "
+                       f"read: {_shared}")
+        if _ok.suffix.lower() != ".xlsx":
+            raise HTTPException(status_code=415, detail="Only .xlsx workbooks are accepted")
+        if not _ok.is_file():
+            raise HTTPException(status_code=404, detail=f"No workbook at {_shared}")
+        _workbook = str(_ok)
+    else:
+        name = (file.filename or "").strip()
+        if not name.lower().endswith(".xlsx"):
+            raise HTTPException(status_code=415, detail="Only .xlsx workbooks are accepted")
+        # Read with a hard cap so a huge upload cannot exhaust the box's memory or disk.
+        data = await file.read(_MAX_OVERRIDE_UPLOAD_BYTES + 1)
+        if len(data) > _MAX_OVERRIDE_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Workbook exceeds {_MAX_OVERRIDE_UPLOAD_BYTES // (1024 * 1024)} MB")
+        if not data:
+            raise HTTPException(status_code=400, detail="The uploaded workbook is empty")
+        tf = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         tf.write(data)
         tf.close()
+        _workbook = tf.name
+
+    try:
         # Write BOTH deliverables to the same share this service serves files from, so the
         # portal can display the quote straight away and the paths never leave the allowed root.
-        cmd = [_ENGINE_PYTHON, _OVERRIDE_CLI, "--workbook", tf.name,
+        cmd = [_ENGINE_PYTHON, _OVERRIDE_CLI, "--workbook", _workbook,
                "--units", str(units), "--drawing", drawing, "--client", client,
                "--quote-dir", str(OUTPUT_ROOT), "--override-xlsx-dir", str(OUTPUT_ROOT),
                "--json"]
@@ -706,10 +743,14 @@ async def estimate_override(
                      if ln.strip().startswith("{")), "")
         result = _json.loads(line) if line else {}
     finally:
-        try:
-            os.unlink(tf.name)
-        except OSError:
-            pass
+        # ONLY OUR OWN TEMP FILE. tf is None when the workbook came off the share, and
+        # unlinking there would DELETE THE ESTIMATOR'S SHEET off the AISheets folder as a
+        # side effect of reading it.
+        if tf is not None:
+            try:
+                os.unlink(tf.name)
+            except OSError:
+                pass
 
     quote_html = result.get("quote_html")
     return {

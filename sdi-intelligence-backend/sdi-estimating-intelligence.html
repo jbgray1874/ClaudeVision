@@ -410,16 +410,28 @@
          two accounts of the job never get mixed up. -->
     <section class="card">
       <h2>Regenerate a client quote from an amended sheet</h2>
-      <p class="hint">Already edited an estimate workbook? Upload it here with the units, drawing
+      <p class="hint">Already edited an estimate workbook? Name it here with the units, drawing
          number and client, and it becomes a fresh client quote — saved to the AI Estimating
          share along with the amended sheet, kept as the manual-override record.
          No drawings needed: this never re-runs the engine or re-reads a drawing.</p>
 
+      <!-- TWO WAYS TO NAME THE SHEET, AND THE SHARE IS THE USUAL ONE.
+           This offered an upload and nothing else, so regenerating a quote from a run's own
+           workbook meant going and finding it in Explorer first — for a file this service
+           wrote, into a folder it can browse, and lists further down this very page. The
+           parity card directly above has "Choose from share" on both its sides, which made
+           this panel read as though it had lost something it never had. -->
       <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
-        <button id="pickOverride">Choose amended workbook…</button>
+        <button id="pickOverrideShare">Choose from share…</button>
+        <button id="pickOverride">Upload…</button>
         <span class="p" id="overrideName"><span class="pending">No workbook chosen</span></span>
         <input id="overrideFile" type="file" accept=".xlsx" hidden>
       </div>
+      <p class="note" style="margin-top:6px">The estimate workbooks this engine wrote are on
+         the share, under the client and job — the same folder <em>Completed estimates</em>
+         lists at the bottom of this page. Open one, edit it, save it, then choose it here.
+         <strong>Upload…</strong> is for a sheet that is not on the share: one that came back
+         by email, or one kept locally.</p>
 
       <p class="note" style="margin-top:10px">Uses the <strong>units, drawing number and
          client</strong> entered at the top of this page. The workbook must have been opened and
@@ -1414,11 +1426,40 @@ runBtn.onclick = async () => {
 const overrideFile=$("overrideFile"), overrideName=$("overrideName"),
       regen=$("regen"), regenReq=$("regenReq"), regenOut=$("regenOut");
 
+/* THE SHEET NAMED ON THE SHARE, if that is how it was chosen. Declared here with the rest of
+   this block's state rather than beside its button — a `const` read by a function that runs
+   before the declaration is a temporal-dead-zone ReferenceError, which is what killed "Add
+   all" and took the remainder of the script with it. */
+let overrideShare = null;                  // {path, name} or null
+
+/* EXACTLY ONE SOURCE AT A TIME. The route refuses both-or-neither, so choosing one here
+   clears the other rather than letting the page hold two and the server pick. */
+function setOverrideShare(v){
+  overrideShare = v;
+  if(v) overrideFile.value = "";
+  renderOverrideName();
+}
+function renderOverrideName(){
+  const f = overrideFile.files[0];
+  if(overrideShare) overrideName.textContent = overrideShare.name + "  (share)";
+  else if(f)        overrideName.textContent = f.name + "  (upload)";
+  else              overrideName.innerHTML = '<span class="pending">No workbook chosen</span>';
+}
+
+$("pickOverrideShare").onclick = () =>
+  /* accept is a LIST of suffixes the picker tests with .some(), and done receives the
+     listing ITEM — not two arguments. Both are easy to get wrong from the call site and
+     neither fails until somebody clicks: a string accept throws on .some, and (path, name)
+     silently binds path to the whole object. */
+  chooseOneFile("Choose the amended estimate workbook", [".xlsx"], (it) => {
+    setOverrideShare({path: it.path, name: it.name});
+    refreshRegen();
+  });
+
 $("pickOverride").onclick = () => overrideFile.click();
 overrideFile.addEventListener("change", () => {
-  const f = overrideFile.files[0];
-  overrideName.textContent = f ? f.name : "";
-  if(!f) overrideName.innerHTML = '<span class="pending">No workbook chosen</span>';
+  if(overrideFile.files[0]) overrideShare = null;   // an upload replaces a share pick
+  renderOverrideName();
   refreshRegen();
 });
 
@@ -1426,7 +1467,7 @@ overrideFile.addEventListener("change", () => {
    rather than inferred: a workbook saved days ago cannot be trusted to still carry them. */
 function refreshRegen(){
   const missing=[];
-  if(!overrideFile.files[0]) missing.push("an amended workbook");
+  if(!overrideFile.files[0] && !overrideShare) missing.push("an amended workbook");
   if(!(parseInt(units.value,10) > 0)) missing.push("the number of units");
   if(!drawing.value.trim()) missing.push("a drawing number");
   if(!client.value.trim()) missing.push("a client");
@@ -1437,12 +1478,16 @@ function refreshRegen(){
 
 regen.onclick = async () => {
   const f = overrideFile.files[0];
-  if(!f) return;
+  if(!f && !overrideShare) return;
   regen.disabled = true; regenOut.innerHTML = "";
   const was = regen.textContent; regen.textContent = "Regenerating…";
   try{
     const fd = new FormData();
-    fd.append("file", f);
+    /* ONE OR THE OTHER, never both — the route refuses both-or-neither rather than
+       choosing for us, so the page must not send two. A share path costs no upload: the
+       engine opens the sheet where it already is. */
+    if(overrideShare) fd.append("share_path", overrideShare.path);
+    else              fd.append("file", f);
     fd.append("units", String(parseInt(units.value,10)));
     fd.append("drawing", drawing.value.trim());
     fd.append("client", client.value.trim());
