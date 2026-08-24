@@ -161,6 +161,7 @@
     <a href="#missing"><b>Missing drawings</b><span>Priced from what we have</span></a>
     <a href="#quote"><b>Client quote</b><span>What the customer sees</span></a>
     <a href="#regen"><b>Amended sheet</b><span>Re-issuing after your edits</span></a>
+    <a href="#parity"><b>Parity report</b><span>Your estimate against the engine's</span></a>
   </div>
 
   <h2 id="start">Start here — the one rule</h2>
@@ -184,16 +185,37 @@
       default, and quantity drives real money — setup is spread across the order, and a one-off
       buys a whole sheet to make one part. A job priced at the wrong quantity is wrong by a lot,
       not a little.</td></tr>
-    <tr><td class="k">Add job folder…</td><td>The reliable route. Point it at the job's own folder
-      and everything in it is read together.</td></tr>
-    <tr><td class="k">Add drawing files…</td><td>Use for a partial pack. Add files from
-      <b>one job only</b> — a stray file from another job has no single folder in common, and the
-      run is refused rather than estimating the wrong thing.</td></tr>
+    <tr><td class="k">Extract DesignDrawingPack</td><td>The reliable route. Point it at the job's
+      own folder and every drawing in it is added. (Named for the Document Manager extract it will
+      call once that is connected — until then it browses the shares.)</td></tr>
+    <tr><td class="k">Add drawing files…</td><td>Use for a partial pack, or to add to what is
+      already listed. <b>Only the drawings on the list are priced</b> — see below.</td></tr>
+    <tr><td class="k">Add from Document Manager…</td><td>A second source. Drawings from a Document
+      Manager extract, merged into the same list. <b>Same filename replaces</b>, so a Document
+      Manager copy lands on top of an older one from the share.</td></tr>
+    <tr><td class="k">The ✕ beside a file</td><td>Removes it from the list, whichever source it came
+      from. A drawing you remove is not priced, and is not carried over if you run again.</td></tr>
+    <tr><td class="k">Print drawings…</td><td>Every drawing on the list as <b>one PDF</b>, bookmarked
+      by filename, for checking the estimate against the pack. If something on the list cannot be
+      printed — a DXF, a model — a cover sheet names it, so a part-pack is never mistaken for the
+      whole one.</td></tr>
     <tr><td class="k">Estimating runner</td><td>Must show <b>ready</b>. The run happens on a machine
       with SOLIDWORKS and Excel; this page queues it.</td></tr>
     <tr><td class="k">Output folder</td><td>Written to the estimating share, in a dated sub-folder,
       so re-running never overwrites an earlier estimate.</td></tr>
   </table>
+
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>What gets priced is what is on the list — nothing more.</b></p>
+    <p style="margin:0">When you press the estimate button, the drawings on the list are copied into
+    a folder of their own under <code>AISheets\SDIIntelligenceAISheet\&lt;client&gt;\&lt;drawing&gt;\</code>,
+    and the engine reads that folder. The run log says so: <code>Staged 7 drawing(s) into …</code>.
+    <b>Check that number matches your list.</b></p>
+    <p style="margin:6px 0 0 0">Run the same job again and that folder is <b>emptied and refilled</b>
+    — so a drawing you took off the list cannot come back and be priced a second time. It also means
+    the folder is a permanent record of exactly which drawings produced a given estimate, which is
+    what you want when somebody asks about a number six weeks later.</p>
+  </div>
 
   <h2 id="estimate">1 · The Estimate sheet — the workbook you edit</h2>
   <p class="lead">This is the working surface. It is the estimating template you already know,
@@ -390,3 +412,52 @@
 </div>
 </body>
 </html>
+
+  <h2 id="parity">8 · Parity — your estimate against the engine's</h2>
+  <p class="lead">The one report that answers "is this thing any good?". It compares the engine's
+  own reading of a job against a manual estimate for the same job — not sheet against sheet, but
+  the engine's full working against your number, so you see where the two part company rather
+  than only that they do.</p>
+
+  <p>It reports the <b>unit cost each side arrived at</b>, the gap between them in pounds and per
+  cent, and then the part that matters more: <b>how many money cells and route lines agree</b>.
+  Two totals landing close together while thirty cells underneath disagree is a coincidence, not
+  a validation, and the counts are what tell them apart.</p>
+
+  <h3>Two ways in, and which to use</h3>
+  <table>
+    <tr><th>You are…</th><th>Use</th></tr>
+    <tr><td class="k">About to run a job you have a manual estimate for</td>
+      <td>On the Job panel, <b>Choose manual estimate…</b> before you press the estimate button.
+      The comparison is produced with the rest of the deliverables — you name one file, because
+      the engine is about to produce the other.</td></tr>
+    <tr><td class="k">Looking at a job already estimated, maybe months ago</td>
+      <td>The <b>Parity report</b> card. Name both sides, because both already exist. No re-run, no
+      drawings, no runner — this is how the back catalogue gets compared.</td></tr>
+  </table>
+
+  <p>On the card, the <b>AI estimate</b> can be the engine's workbook rather than its
+  <code>.json</code>: the summary is found from the workbook's filename, so the spreadsheet you were
+  sent is enough. <b>Do not rename it</b> — that is how it finds the job. The <b>manual estimate</b>
+  can be <code>.xls</code>; most of the back catalogue is.</p>
+
+  <p>You are not asked for units. The quantity is read off the manual sheet and both sides are
+  compared at that quantity, so nothing you type can disagree with the sheet.</p>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>"Unit costs could not both be read" is not a failure — it is the
+    honest answer.</b></p>
+    <p style="margin:0">A workbook the engine wrote and nobody has opened in Excel holds
+    <b>formulas with no calculated values</b>. There is genuinely no number in the cell to compare.
+    Rather than show £0.00 — which looks like a real figure and would make the engine appear
+    infinitely over — it says it could not read them. Either tick <b>Resolve formulas through
+    Excel</b>, or open each sheet in Excel and save it once, which fixes it permanently.</p>
+  </div>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>Check the quantities match before reading much into a gap.</b></p>
+    <p style="margin:0">If the manual estimate was priced at 45 off and the engine ran at 10, the
+    comparison still works and normalises to 45 — but the engine's figure carries 10-off setup
+    spread across it. The difference you are looking at is then partly quantity, not accuracy.</p>
+  </div>
+
