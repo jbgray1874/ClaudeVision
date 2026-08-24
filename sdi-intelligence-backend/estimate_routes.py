@@ -59,6 +59,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 import config
+import docmgr
 import staging
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
@@ -1036,8 +1037,109 @@ def dm_status(x_sdi_key: Optional[str] = Header(default=None)):
         reason = f"{root} is not reachable from this machine."
     return {"configured": bool(within and reachable), "reason": reason,
             "root": root, "reachable": reachable, "within_roots": within,
-            # Present but unset until the DM API contract is known.
-            "api_base": (getattr(config, "DM_API_BASE", "") or "") or None}
+            "api_base": docmgr.base_url() or None,
+            "api_configured": docmgr.configured()}
+
+
+@router.get("/dm/health")
+def dm_health(x_sdi_key: Optional[str] = Header(default=None)):
+    """Is the Document Manager up, and can it drive SOLIDWORKS right now?
+
+    Asked before the button is offered rather than after it is pressed. DM accepts an extract
+    whether or not its COM is working and fails it minutes later, so "comAvailable" is the
+    difference between a sentence now and a wasted wait.
+    """
+    _check_key(x_sdi_key)
+    if not docmgr.configured():
+        return {"configured": False, "reachable": False, "com_available": None,
+                "reason": "The Document Manager API is not configured. Set SDI_DM_API_BASE "
+                          "and SDI_DM_API_KEY in the service's .env.",
+                "api_base": docmgr.base_url() or None}
+    try:
+        hp = docmgr.health()
+    except docmgr.DocMgrError as exc:
+        return {"configured": True, "reachable": False, "com_available": None,
+                "reason": str(exc), "api_base": docmgr.base_url()}
+    return {
+        "configured": True, "reachable": True,
+        "com_available": hp.get("comAvailable"),
+        "queue_depth": hp.get("queueDepth"),
+        "reason": ("" if hp.get("comAvailable") is not False else
+                   "The host is up but cannot drive SOLIDWORKS, so an extract would fail."),
+        "api_base": docmgr.base_url(),
+    }
+
+
+class DmExtractRequest(BaseModel):
+    project_number: str
+    customer: str = ""
+    assembly_folder: str = ""
+
+
+@router.post("/dm/extract")
+def dm_extract(req: DmExtractRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Ask the Document Manager for a file pack. Returns its job id; the page polls below.
+
+    NOT BLOCKING, DELIBERATELY. An extract is minutes of COM work. A request held open for
+    minutes is one dropped connection away from reporting a failure on work that is going
+    perfectly well — and the estimator would then run it again, on a host that does one heavy
+    extract at a time.
+    """
+    _check_key(x_sdi_key)
+    try:
+        started = docmgr.start_extract(req.project_number, customer=req.customer,
+                                       assembly_folder=req.assembly_folder)
+    except docmgr.DocMgrError as exc:
+        raise HTTPException(400, str(exc))
+    return {"job_id": started.get("jobId"), "status": started.get("status") or "queued",
+            "requested": started.get("requested"), "source_path": started.get("sourcePath")}
+
+
+@router.get("/dm/extract/{job_id}")
+def dm_extract_status(job_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Where that extract has got to, and — when it is done — whether WE can read the pack.
+
+    THE PART THAT WILL BITE, AND IT IS NOT AN API PROBLEM. DM returns `outputDir` as a path on
+    ITS OWN HOST. Unless that folder is a share this machine can also read, the extract
+    genuinely succeeded and the drawings are still unreachable from here — and every symptom
+    of that appears at our end, in a file browser that lists nothing, long after the API call
+    that "worked". So the answer says plainly whether the pack is readable from this machine
+    and inside SDI_FILE_ROOTS, and does not describe a job as usable when it is not.
+    """
+    _check_key(x_sdi_key)
+    try:
+        info = docmgr.job(job_id)
+    except docmgr.DocMgrError as exc:
+        raise HTTPException(400, str(exc))
+
+    out_dir = info.get("output_dir")
+    readable = bool(out_dir) and os.path.isdir(out_dir)
+    within = bool(out_dir) and _within_a_root(out_dir) is not None
+    note = ""
+    if info.get("ok") and out_dir:
+        if not within:
+            note = (f"The extract succeeded and wrote to {out_dir}, but that folder is not "
+                    f"inside SDI_FILE_ROOTS, so this service may not read it. Add it to "
+                    f"SDI_FILE_ROOTS, or have the Document Manager write to a shared folder.")
+        elif not readable:
+            note = (f"The extract succeeded and wrote to {out_dir}, but that folder is not "
+                    f"reachable from this machine — it is a path on the Document Manager's "
+                    f"own host. It has to be a share both machines can see.")
+    elif info.get("ok") and not out_dir:
+        note = "The extract completed but reported no output folder, so there is nothing to import."
+
+    return {
+        "job_id": job_id,
+        "status": info.get("status"),
+        "finished": info.get("finished"),
+        "ok": info.get("ok"),
+        "progress": info.get("progress"),
+        "error": info.get("error"),
+        "output_dir": out_dir,
+        "file_count": info.get("file_count"),
+        "readable_here": readable and within,
+        "note": note,
+    }
 
 
 @router.post("/batch")
