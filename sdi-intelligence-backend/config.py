@@ -35,8 +35,21 @@ _profile = os.getenv("SDI_PROFILE", "").strip() or platform.node().strip().lower
 # LOADED IN DESCENDING PRECEDENCE. python-dotenv's override=False means "do not
 # replace what is already set", so whatever is loaded FIRST wins — and the real
 # environment, being already in os.environ, wins over all of it.
+# THE REPO ROOT .env IS READ TOO, BECAUSE THERE ARE TWO FILES CALLED .env AND
+# NOTHING TOLD YOU WHICH ONE YOU WERE EDITING.
+#
+# This loaded only the one beside itself. The engine has its own at the repo
+# root, and "put it in .env" means that one to anybody who has been working in
+# C:\ClaudeVision all day. Settings added there were read by nothing, the
+# service reported the feature as "not configured", and the file plainly
+# contained the line saying otherwise. That is not a mistake anybody makes once.
+#
+# So both are read, most specific first: a value set beside the service wins,
+# then the shared one at the root, then the committed defaults. Local secrets
+# still beat committed files either way, which is the rule that matters.
 _layers = [
-    (_HERE / ".env",                       "secrets and local overrides"),
+    (_HERE / ".env",                       "secrets and local overrides, service-specific"),
+    (_HERE.parent / ".env",                "secrets and local overrides, shared with the engine"),
     (_HERE / "env" / f"{_profile}.env",    f"profile '{_profile}'"),
     (_HERE / "env" / "common.env",         "settings common to every machine"),
 ]
@@ -45,7 +58,10 @@ _loaded = []
 for _path, _what in _layers:
     if _path.is_file():
         load_dotenv(_path, override=False)
-        _loaded.append(f"{_path.name} ({_what})")
+        # THE FOLDER, NOT JUST THE NAME. Two of these are called '.env', and printing
+        # the bare name was how a file that had been read and a file that had not
+        # looked identical in the startup line.
+        _loaded.append(f"{_path.parent.name}\\{_path.name} ({_what})")
 
 # SAY WHERE THE VALUES CAME FROM. An evening was lost to a port set in one
 # PowerShell window and not another; a configuration that will not tell you
