@@ -36,7 +36,12 @@
 [CmdletBinding()]
 param(
     [string] $Root = "",
-    [string] $Server   = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8071" })),
+    # THE SAME TRAP AS start-runner.ps1 HAD. A hard-coded port bakes ONE answer into a task
+    # that then runs unattended at every logon, so when the wrong service is the live one the
+    # runner polls into silence for ever and the page says "no runner connected". SDI_PORT if
+    # this window knows it, else 8072, which is what start-service.ps1 serves; pass -Server to
+    # pin it to the installed Windows service on 8071 instead.
+    [string] $Server   = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8072" })),
     [string] $TaskName = "SDI Estimating Runner",
     [switch] $Remove
 )

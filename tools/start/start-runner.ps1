@@ -13,29 +13,31 @@
     within a minute and a half, and the page goes red - which is correct, but is
     a confusing thing to discover by accident.
 
-    WHICH PORT. There are two services and this script used to guess wrong.
-    config.py defaults to 8071 and that is what the installed Windows service
-    listens on, which is the page people actually open. start-service.ps1
-    defaults to 8072 on purpose, because 8071 is already held by that service -
-    it is the port for a hand-started copy while the real one keeps running.
+    WHICH PORT. This does not guess any more, because guessing has now been wrong
+    in BOTH directions.
 
-    This defaulted to 8072, so a runner started with no arguments dialled the
-    hand-started service while the page on 8071 said "No runner connected -
-    estimates cannot be run", and stayed saying it. Nothing was broken and
-    nothing said what was wrong: two defaults for one number, and the runner
-    holding the one that was not the page's.
+    There are two services: the installed Windows service on 8071, and a
+    hand-started copy on 8072 - deliberately different, so a hand-started one can
+    run without stopping the installed one. This script first defaulted to 8072,
+    which dialled the hand-started service while the page on 8071 said "No runner
+    connected"; it was changed to 8071, and then the Windows service was stopped
+    for testing and the same failure happened the other way round. Both times the
+    runner reported itself as running perfectly, polled a port with nothing on it,
+    and nothing anywhere said what was wrong.
 
-    It now defaults to the SAME 8071 config.py does, so the default agrees with
-    the default. Pass -Server explicitly when serving the hand-started copy.
+    So it now ASKS. With no -Server it probes SDI_PORT, then 8072, then 8071, and
+    serves whichever answers /api/health. With an explicit -Server it probes that
+    one and REFUSES TO START if nothing answers, rather than polling into
+    silence. A runner that cannot reach its service is not a runner, and it should
+    say so in the window you are looking at rather than on a page you are not.
 
     ASCII ONLY. See start-service.ps1 for why.
 #>
 [CmdletBinding()]
 param(
-    # ONE DEFAULT, THE SERVICE'S OWN. SDI_PORT first, so a window that already
-    # knows the port is believed; then 8071, which is config.py's default and
-    # the installed service's port. Never a literal that only this file knows.
-    [string] $Server = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8071" })),
+    # EMPTY MEANS FIND IT. See the header: a hard-coded default has been wrong in both
+    # directions, so the port is discovered rather than assumed. Pass -Server to pin it.
+    [string] $Server = "",
     [string] $Root   = "",
     [string] $ApiKey = $env:SDI_API_KEY
 )
@@ -114,6 +116,55 @@ if ($mine.Count -gt 0) {
     Write-Host "      Where-Object CommandLine -like '*sdi_estimate_runner*' |" -ForegroundColor Yellow
     Write-Host "      ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }" -ForegroundColor Yellow
     exit 1
+}
+
+# -- ASK WHICH SERVICE IS ACTUALLY THERE ---------------------------------------------
+#
+# A runner that cannot reach its service still starts, still prints a cheerful banner, and
+# still polls - into nothing. The page then says "No runner connected" and the two facts sit
+# in two windows with nothing joining them. So the reachability is settled HERE, before the
+# banner, where somebody is looking.
+function Test-SdiService([string] $Base) {
+    try {
+        $r = Invoke-WebRequest -Uri "$Base/api/health" -TimeoutSec 3 -UseBasicParsing `
+                               -ErrorAction Stop
+        return $r.StatusCode -eq 200
+    } catch {
+        # 401 means a service IS there and wants a key - that is reachable for this purpose.
+        $code = $null
+        try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+        return ($code -eq 401)
+    }
+}
+
+if ($Server) {
+    if (-not (Test-SdiService $Server)) {
+        Write-Host "Nothing is answering at $Server." -ForegroundColor Red
+        Write-Host "  The runner would poll it for ever and the page would say" -ForegroundColor Yellow
+        Write-Host "  'No runner connected' with nothing to explain why, so it stops here." -ForegroundColor Yellow
+        Write-Host "  Start the service first:" -ForegroundColor Yellow
+        Write-Host "      .\tools\start\start-service.ps1" -ForegroundColor Yellow
+        Write-Host "  Or omit -Server and this will find whichever one is running." -ForegroundColor Yellow
+        exit 1
+    }
+} else {
+    $candidates = @()
+    if ($env:SDI_PORT) { $candidates += "http://localhost:$($env:SDI_PORT)" }
+    $candidates += @("http://localhost:8072", "http://localhost:8071")
+    $candidates = $candidates | Select-Object -Unique
+
+    foreach ($c in $candidates) {
+        Write-Host "  probing $c ..." -ForegroundColor DarkGray
+        if (Test-SdiService $c) { $Server = $c; break }
+    }
+    if (-not $Server) {
+        Write-Host "No SDI Intelligence service is answering." -ForegroundColor Red
+        Write-Host "  Tried: $($candidates -join ', ')" -ForegroundColor Yellow
+        Write-Host "  Start one in another window:" -ForegroundColor Yellow
+        Write-Host "      .\tools\start\start-service.ps1" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "  found the service at $Server" -ForegroundColor Green
 }
 
 $env:SDI_SERVER = $Server

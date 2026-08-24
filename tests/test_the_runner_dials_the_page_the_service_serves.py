@@ -10,13 +10,19 @@ the port start-service.ps1 uses ON PURPOSE for a hand-started copy because 8071 
 held. So a runner started with no arguments connected to a service nobody was looking at,
 reported itself healthy in its own window, and the page it was meant to serve stayed red.
 
-Nothing anywhere compared the two numbers. This does: the runner's default port is the port
-the service defaults to serving on. It is a text read of two files and needs neither Windows
-nor PowerShell, so it runs here.
+THEN IT HAPPENED AGAIN, THE OTHER WAY ROUND. The rule used to be "make the two defaults
+agree", and the runner's default was changed from 8072 to 8071 to satisfy it. Then the
+installed 8071 service was stopped for testing, the hand-started 8072 one was the only live
+service, and a runner started with no arguments polled 8071 into silence -- reporting itself
+healthy, with the page red, exactly as before.
 
-The general shape is the one this codebase keeps meeting -- two rules for one question, each
-correct in its own file. The rule here is that the DEFAULT must agree with the DEFAULT; an
-explicit -Server is a deliberate override and is none of this test's business.
+A default cannot be right, because WHICH service is live changes. So the rule changed: the
+runner ASKS. It probes SDI_PORT, then 8072, then 8071, serves whichever answers /api/health,
+and REFUSES TO START when nothing does -- in the window somebody is looking at, rather than
+leaving the fact on a page they are not.
+
+These tests hold that shape: no hard-coded port stands alone, the probe exists, and a dead
+port stops the runner instead of being polled for ever.
 """
 from __future__ import annotations
 
@@ -44,33 +50,44 @@ def _service_default_port() -> str:
     return m.group(1)
 
 
-def _runner_default_port() -> str:
-    """The port start-runner.ps1 dials when given no -Server."""
-    m = re.search(r'\$Server\s*=\s*\(?"?http://localhost:(?:"?\s*\+\s*)?'
-                  r'.*?(\d{4})', _read(RUNNER_PS1), re.DOTALL)
-    assert m, "start-runner.ps1 no longer declares a default server in the form this reads"
-    return m.group(1)
+def test_the_runner_does_not_hard_code_one_port_as_its_default():
+    """A baked-in default has now been wrong in both directions.
 
-
-def test_the_runner_defaults_to_the_port_the_service_defaults_to():
-    service, runner = _service_default_port(), _runner_default_port()
-    assert runner == service, (
-        f"start-runner.ps1 dials port {runner} by default; the service listens on {service} "
-        f"by default. A runner started with no arguments therefore connects to a service the "
-        f"page is not talking to, and the page shows 'No runner connected' forever while the "
-        f"runner's own window reports itself healthy. Nothing in either process is wrong, "
-        f"which is what makes it cost a morning.")
-
-
-def test_the_runner_honours_sdi_port_before_its_own_default():
-    """A window that already knows the port is believed. Otherwise setting SDI_PORT for the
-    service and starting the runner in the same shell reintroduces the same split."""
+    Whichever number is written here is correct only while that service happens to be the
+    live one, and which is live changes with what somebody started this morning.
+    """
     body = _read(RUNNER_PS1)
-    assert "$env:SDI_PORT" in body, (
-        "start-runner.ps1 ignores SDI_PORT, so a service moved off the default takes the "
-        "runner with it only if somebody remembers -Server")
-    assert body.index("$env:SDI_PORT") < body.index("$Root"), \
-        "SDI_PORT must be consulted in the $Server default, not somewhere later"
+    m = re.search(r'\[string\]\s*\$Server\s*=\s*("")', body)
+    assert m, (
+        "start-runner.ps1 declares a hard-coded default server again. That has failed twice: "
+        "as 8072 while the page was on 8071, and as 8071 once the 8071 service was stopped. "
+        "The default must be empty and the port discovered.")
+
+
+def test_the_runner_probes_before_it_polls():
+    """The failure was never that the port was wrong. It was that a runner polling nothing
+    looks exactly like a runner working, in a window nobody doubts."""
+    body = _read(RUNNER_PS1)
+    assert "/api/health" in body, \
+        "start-runner.ps1 never asks whether anything is there before it starts polling"
+    probe_at = body.index("/api/health")
+    launch_at = body.rindex("& $python $runner")
+    assert probe_at < launch_at, "the probe must happen BEFORE the runner is launched"
+
+
+def test_a_dead_port_stops_the_runner_rather_than_being_polled_for_ever():
+    body = _read(RUNNER_PS1)
+    assert "exit 1" in body, "nothing answering must stop the runner, not start it anyway"
+    assert "start-service.ps1" in body, \
+        "and the message must say how to fix it, not merely that it is broken"
+
+
+def test_the_runner_still_honours_sdi_port_first():
+    """A window that already knows the port is believed, ahead of any probing order."""
+    body = _read(RUNNER_PS1)
+    assert "$env:SDI_PORT" in body, "start-runner.ps1 ignores SDI_PORT"
+    assert body.index("$env:SDI_PORT") < body.rindex("& $python $runner"), \
+        "SDI_PORT must be consulted while choosing the server, not after launching"
 
 
 def test_the_hand_started_service_keeps_its_own_port_on_purpose():
