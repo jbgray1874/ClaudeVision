@@ -186,3 +186,61 @@ def test_a_wildly_large_selection_is_refused_before_it_copies(staging, tmp_path,
     assert not (Path(staging.staging_root()) / "Boots" / "12422").exists() or \
         not any((Path(staging.staging_root()) / "Boots" / "12422").iterdir()), \
         "nothing is copied when the selection is refused"
+
+
+# ── the SolidWorks extract must travel with the job ─────────────────────────────────────
+#
+# THE REGRESSION THIS PINS. Staging pointed the engine at a folder that did not contain
+# _sw_native_extract.json, and the SolidWorks connector is self-gating on that file. Layer 0 —
+# modelled material, gauge, flat blank, full-depth BOM quantities, the strongest source in the
+# building — stopped applying. Silently: with no models in the staged folder either,
+# "models present but unread" could not fire, so the job read as a genuinely drawings-only one.
+
+def test_the_solidworks_extract_is_staged_with_the_drawings(staging, tmp_path):
+    pack = tmp_path / "10575-02"
+    _pdf(pack / "ga.pdf")
+    (pack / "_sw_native_extract.json").write_text('{"parts": []}', encoding="utf-8")
+
+    res = staging.stage([str(pack)], client="Dyson", drawing="10575-02")
+    staged = {p.name for p in Path(res["folder"]).iterdir()}
+    assert "_sw_native_extract.json" in staged, \
+        "without it the SolidWorks layer silently stops applying"
+    assert res["sidecars"] == ["_sw_native_extract.json"]
+
+
+def test_the_extract_follows_even_when_only_drawings_were_selected(staging, tmp_path):
+    """An estimator picks drawings. They have no reason to know the extract exists, and
+    picking three PDFs must not quietly disable the model read."""
+    pack = tmp_path / "10575-02"
+    _pdf(pack / "a.pdf"); _pdf(pack / "b.pdf")
+    (pack / "_sw_native_extract.json").write_text('{"parts": []}', encoding="utf-8")
+
+    res = staging.stage([str(pack / "a.pdf")], client="Dyson", drawing="10575-02")
+    assert "_sw_native_extract.json" in {p.name for p in Path(res["folder"]).iterdir()}
+
+
+def test_the_extract_is_not_reported_as_an_unrecognised_file(staging, tmp_path):
+    """It was listed as 'not staged: _sw_native_extract.json — not a drawing file (.json)',
+    which reads as though it had been considered and rejected."""
+    pack = tmp_path / "10575-02"
+    _pdf(pack / "ga.pdf")
+    (pack / "_sw_native_extract.json").write_text("{}", encoding="utf-8")
+    res = staging.stage([str(pack)], client="Dyson", drawing="10575-02")
+    assert not any("_sw_native_extract" in s["path"] for s in res["skipped"])
+
+
+def test_a_solidworks_drawing_file_is_staged(staging, tmp_path):
+    """.slddrw is one of the engine's own native extensions, alongside .sldprt and .sldasm.
+    Leaving it out made a job with a SolidWorks drawing look like a job without one."""
+    pack = tmp_path / "10575-02"
+    _pdf(pack / "ga.pdf")
+    (pack / "10575-02-GA.SLDDRW").write_bytes(b"\x00")
+    res = staging.stage([str(pack)], client="Dyson", drawing="10575-02")
+    assert "10575-02-GA.SLDDRW" in {p.name for p in Path(res["folder"]).iterdir()}
+
+
+def test_no_extract_means_no_sidecar_and_no_pretending(staging, tmp_path):
+    pack = tmp_path / "12422"
+    _pdf(pack / "ga.pdf")
+    res = staging.stage([str(pack)], client="Boots", drawing="12422")
+    assert res["sidecars"] == [] and res["sidecars_count"] == 0

@@ -575,6 +575,15 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))
+    # SAY WHEN THE SOLIDWORKS EXTRACT CAME WITH IT, and say when it did not. Layer 0 applying
+    # or not is the single biggest difference between two runs of the same pack, and it used to
+    # be invisible either way.
+    if staged.get("sidecars"):
+        run.line(f"  carried   {', '.join(staged['sidecars'])} — the SOLIDWORKS extract "
+                 f"applies to this run")
+    else:
+        run.line("  no SOLIDWORKS extract found beside these drawings — the job is costed "
+                 "from the drawings")
     for _sk in staged["skipped"][:6]:
         run.line(f"  not staged: {Path(_sk['path']).name} — {_sk['reason']}")
     run.line(f"Reading   {job}")
