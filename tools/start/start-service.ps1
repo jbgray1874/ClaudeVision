@@ -176,9 +176,28 @@ if ($Log) {
     Write-Host "Logging to $logFile"
     "==== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on port $Port, commit $($env:SDI_COMMIT) ====" |
         Out-File -FilePath $logFile -Append -Encoding utf8
-    & $python $app 2>&1 | Tee-Object -FilePath $logFile -Append
-    "==== exited  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') with code $LASTEXITCODE ====" |
-        Out-File -FilePath $logFile -Append -Encoding utf8
+
+    # THE SERVICE WAS KILLED BY ITS OWN FIRST LINE OF OUTPUT.
+    #
+    # In Windows PowerShell 5.1, `& native 2>&1` while $ErrorActionPreference is "Stop" turns
+    # the first stderr line into a TERMINATING error. uvicorn writes its startup banner -
+    # "INFO: Started server process" - to stderr, so the redirection added here for logging
+    # made the script throw the instant the service began to talk. The log showed a "started"
+    # stamp, no output, and no "exited" stamp; the task went straight back to Ready and every
+    # page returned ERR_CONNECTION_REFUSED. Logging the service is what stopped it running.
+    #
+    # Stderr is NORMAL OUTPUT from this process, not an error condition, so the preference is
+    # dropped for the one statement that treats it as such - and restored in a finally, with
+    # the exit stamp, so a crash still leaves the record this whole switch exists to produce.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $python $app 2>&1 | Tee-Object -FilePath $logFile -Append
+    } finally {
+        $ErrorActionPreference = $prev
+        "==== exited  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') with code $LASTEXITCODE ====" |
+            Out-File -FilePath $logFile -Append -Encoding utf8
+    }
 } else {
     & $python $app
 }
