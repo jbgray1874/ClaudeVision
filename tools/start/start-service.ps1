@@ -22,7 +22,15 @@
 param(
     [int]    $Port = 8072,
     [string] $Root = "",
-    [switch] $Force
+    [switch] $Force,
+    # WRITE EVERYTHING TO A FILE AS WELL AS THE CONSOLE.
+    #
+    # Used by the scheduled task, which runs with no window at all: without this a service
+    # that dies at 3pm leaves nothing behind but a page that stopped answering, and the only
+    # honest thing anybody can say afterwards is "it was working this morning". Off by
+    # default because a console session already has its output on screen, and piping through
+    # Tee-Object is not worth the buffering when somebody is watching it live.
+    [switch] $Log
 )
 
 $ErrorActionPreference = "Stop"
@@ -160,4 +168,17 @@ Write-Host "This service QUEUES estimates. It does not run them." -ForegroundCol
 Write-Host "In a second window, start the runner on a machine with SOLIDWORKS:" -ForegroundColor Yellow
 Write-Host "    C:\ClaudeVision\tools\start\start-runner.ps1 -Server http://localhost:$Port" -ForegroundColor Yellow
 Write-Host ""
-& $python $app
+
+if ($Log) {
+    $logDir = Join-Path $Root "output\logs"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    $logFile = Join-Path $logDir ("service-" + (Get-Date -Format "yyyy-MM-dd") + ".log")
+    Write-Host "Logging to $logFile"
+    "==== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on port $Port, commit $($env:SDI_COMMIT) ====" |
+        Out-File -FilePath $logFile -Append -Encoding utf8
+    & $python $app 2>&1 | Tee-Object -FilePath $logFile -Append
+    "==== exited  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') with code $LASTEXITCODE ====" |
+        Out-File -FilePath $logFile -Append -Encoding utf8
+} else {
+    & $python $app
+}
