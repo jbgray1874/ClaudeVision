@@ -924,6 +924,217 @@
         </table>
       </div>
 
+
+      <!-- ===== FEATURE TEST SCRIPT ===== -->
+      <div class="pagehead" style="margin-top:40px;padding-top:28px;border-top:1px solid var(--line)">
+        <div class="kicker">Release Test</div><h1>Test script — every capability, in order</h1>
+        <p class="sub">The checklist above is about whether an <em>estimate</em> is right. This is about
+        whether the <em>tool</em> works. Run it end to end after any release; it takes about
+        forty minutes with a job you already know. Each step says what should happen and what
+        counts as a failure, so a result can be written down rather than remembered.</p>
+      </div>
+
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">Before you start</h3>
+        <table>
+          <tr><th style="width:34%">Check</th><th>How</th></tr>
+          <tr><td><b>The service is running the new code</b></td>
+              <td>The start window prints <code>running commit &lt;hash&gt;</code>. A page can be newer
+              than the service behind it — a pull changes files on disk, a running process goes on
+              serving what it imported. <b>Restart after every pull.</b></td></tr>
+          <tr><td><b>Only one service is running</b></td>
+              <td>A console on one port and a Windows service on another will both poll the same
+              queue. <code>Get-Service SDIIntelligence</code> — stop one.</td></tr>
+          <tr><td><b>The runner is connected</b></td>
+              <td>Only needed for a full estimate. Parity, print and the quote regen all run on the
+              service box. Start it with <code>-Server</code> pointing at the right port — it
+              defaults to 8071.</td></tr>
+          <tr><td><b>The shares are reachable</b></td>
+              <td><code>/api/health</code> lists every root and whether it can be read. Use UNC
+              paths, never mapped drives — a Windows service has no drive letters.</td></tr>
+        </table>
+      </div>
+
+      <!-- 1 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          1 · A full estimate <span class="chip c-done" style="font-size:10px">Core</span></h3>
+        <p class="sub" style="margin-bottom:12px">The path everything else hangs off. Use a job you
+        have a manual estimate for.</p>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>Fill in units, drawing number and client. Press <b>Extract DesignDrawingPack</b>
+              and pick the job folder.</td>
+              <td>The drawings appear in the list. The run button enables once all four are
+              present.</td></tr>
+          <tr><td>Press <b>SDI (UK) Intelligence Estimator</b>.</td>
+              <td>The log opens with <code>Staged N drawing(s) into …</code> then
+              <code>Reading …</code>. <b>N must equal the number of drawings on the list.</b></td></tr>
+          <tr><td>Wait for it to finish.</td>
+              <td>A complete deliverable set in the output folder: workbook, client quote, job
+              report, and the provenance and decision tabs.</td></tr>
+        </table>
+        <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
+          <b>It is wrong if</b> the staged count differs from the list, the run reports COMPLETE
+          with no workbook, or the output folder holds files from an earlier run.
+        </div>
+      </div>
+
+      <!-- 2 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          2 · Staging replaces on a re-run <span class="chip c-prog" style="font-size:10px">New</span></h3>
+        <p class="sub" style="margin-bottom:12px">The check that selection means selection. This is
+        the one most likely to be got wrong by a change elsewhere, and the one that would be most
+        expensive to miss: an estimate priced on a drawing nobody chose.</p>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>Remove one drawing with the <b>✕</b>, then run the same client and drawing
+              number again.</td>
+              <td><code>Staged N-1 drawing(s) … (replaced N from a previous run)</code></td></tr>
+          <tr><td>Open <code>…\AISheets\SDIIntelligenceAISheet\&lt;client&gt;\&lt;drawing&gt;\</code>
+              in Explorer.</td>
+              <td>It holds <b>exactly</b> what was on the list. The removed drawing is gone.</td></tr>
+          <tr><td>Run a different job for the same client.</td>
+              <td>Its own folder. The first job's pack is untouched.</td></tr>
+        </table>
+        <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
+          <b>It is wrong if</b> the removed drawing is still in the folder, or the estimate prices
+          more parts than were selected.
+        </div>
+      </div>
+
+      <!-- 3 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          3 · Print the drawings <span class="chip c-prog" style="font-size:10px">New</span></h3>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>With drawings on the list, press <b>Print drawings…</b></td>
+              <td>A tab opens with <b>one PDF</b> containing every drawing, bookmarked by
+              filename. The line under the list names how many and how many pages.</td></tr>
+          <tr><td>Include a DXF or a SolidWorks model in the list and print again.</td>
+              <td>A <b>cover sheet</b> appears first, naming what could not be printed. Only PDFs
+              can be printed; the cover exists so a part-pack is never mistaken for a whole one.</td></tr>
+          <tr><td>Print from the browser dialog.</td>
+              <td>Printer and settings come from the browser and Windows — not from Office.
+              <b>Confirm scale and orientation on a real A3 sheet.</b></td></tr>
+        </table>
+        <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
+          <b>It is wrong if</b> a drawing is missing with no cover sheet saying so, or a drawing
+          prints at the wrong scale.
+        </div>
+      </div>
+
+      <!-- 4 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          4 · Parity at run time <span class="chip c-prog" style="font-size:10px">New</span></h3>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>On the Job panel, press <b>Choose manual estimate…</b> and pick the manual
+              workbook for this job. Run the estimate.</td>
+              <td>The log says <code>Parity against &lt;file&gt;</code>. The parity bundle files
+              with the other deliverables.</td></tr>
+          <tr><td>Run without attaching one.</td>
+              <td>No parity bundle, and nothing else about the run changes.</td></tr>
+        </table>
+      </div>
+
+      <!-- 5 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          5 · Parity on two existing sheets <span class="chip c-prog" style="font-size:10px">New</span></h3>
+        <p class="sub" style="margin-bottom:12px">No runner, no drawings, no re-run — this is how the
+        back catalogue gets compared.</p>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>In the <b>Parity report</b> card, choose an AI estimate workbook and the manual
+              estimate for the same job. Press <b>Run parity report</b>.</td>
+              <td>A line giving both unit costs, the gap and the percentage, plus how many money
+              cells and route lines agree. Links to the bundle JSON and CSV.</td></tr>
+          <tr><td>Try it with a workbook nobody has opened in Excel.</td>
+              <td><b>"Unit costs could not both be read"</b> — not £0.00. A sheet the engine wrote
+              and nobody has opened holds no calculated values.</td></tr>
+          <tr><td>Tick <b>Resolve formulas through Excel</b> and run it again.</td>
+              <td>The figures appear. Slower, and it needs Excel on the machine.</td></tr>
+          <tr><td>Point the AI side at a job whose JSON is on another machine.</td>
+              <td>A message naming the <code>&lt;stem&gt;.json</code> it wanted and where it
+              looked.</td></tr>
+        </table>
+        <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
+          <b>It is wrong if</b> a missing value ever shows as <code>£0.00</code>. That reads as a
+          real number and an estimator would act on it.
+        </div>
+      </div>
+
+      <!-- 6 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          6 · Regenerate a client quote <span class="chip c-done" style="font-size:10px">Core</span></h3>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>Open an estimate workbook in Excel, change the price, <b>save it</b>. Upload it
+              with units, drawing number and client.</td>
+              <td>A fresh client quote carrying <b>your</b> figure, saved to the share along with
+              the amended sheet as the manual-override record.</td></tr>
+          <tr><td>Upload a sheet that has never been opened in Excel.</td>
+              <td>A message saying the totals are formulas and need Excel to calculate them —
+              not a quote at £0.</td></tr>
+        </table>
+      </div>
+
+      <!-- 7 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          7 · Document Manager import <span class="chip c-plan" style="font-size:10px">When configured</span></h3>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td>With <code>SDI_DM_OUTPUT_ROOT</code> unset.</td>
+              <td>The button is disabled and a line under the list says which setting is
+              missing — not a button that does nothing.</td></tr>
+          <tr><td>Set it, restart, and import a pack.</td>
+              <td>Files appear with a <b>DM</b> badge.</td></tr>
+          <tr><td>Import a drawing with the same filename as one already on the list.</td>
+              <td>It <b>replaces</b> it in place and keeps its position. Same name, later wins.</td></tr>
+          <tr><td>Run with drawings from both sources.</td>
+              <td>One estimate. Staging puts them in one folder, which is what makes the mixed
+              pack possible at all.</td></tr>
+        </table>
+      </div>
+
+      <!-- 8 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          8 · The rest of the tool <span class="chip c-done" style="font-size:10px">Regression</span></h3>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td><b>Multi-drawing enquiry</b> — add several unrelated PDFs, choose a method,
+              run.</td>
+              <td>One estimate per drawing, each in its own folder under the client. A repeated
+              filename here is two different enquiries and must <b>not</b> override.</td></tr>
+          <tr><td><b>Stop a run</b> mid-estimate.</td>
+              <td>The queue frees immediately; the runner stops at its end.</td></tr>
+          <tr><td><b>Queue a second job</b> while one is running.</td>
+              <td>Accepted and queued, naming what it is waiting behind. Refusing it was a bug.</td></tr>
+          <tr><td><b>Browse output</b> from the Testing page and open a quote and a workbook.</td>
+              <td>Reports render in a tab; workbooks download for Excel.</td></tr>
+          <tr><td><b>Every page</b> — portal, estimating, guide, FAQ, technical reference, worked
+              example, R&amp;D capture.</td>
+              <td>Left navigation present, amber theme, we.are.sdi logo top left, and each page
+              names SDI Intelligence.</td></tr>
+        </table>
+      </div>
+
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">What to write down</h3>
+        <p class="sub" style="margin-bottom:0">For each step: <b>pass, fail, or not tested</b> — and
+        for a failure, what you did and what happened, in a sentence. "Parity showed £0.00 on 11650
+        with the Excel box unticked" is fixable. "Parity looked wrong" is not. A step nobody ran is
+        <b>not tested</b>, never a pass; a release that claims coverage it does not have is worse
+        than one that admits the gap.</p>
+      </div>
+
       <!-- parallel run jobs -->
       <div class="pagehead" style="margin-top:40px;padding-top:28px;border-top:1px solid var(--line)">
         <div class="kicker">Parallel Run</div><h1>Test jobs</h1>
