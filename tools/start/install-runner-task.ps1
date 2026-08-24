@@ -100,7 +100,32 @@ if (-not (Test-Path $runner)) { throw "No runner at $runner" }
 $action = New-ScheduledTaskAction -Execute $python `
     -Argument "`"$runner`" --server `"$Server`"" -WorkingDirectory $Root
 
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# TWO TRIGGERS, BECAUSE ONE OF THEM HAS A HOLE IN IT.
+#
+# AtLogOn starts the runner when the desktop session appears, which is the only
+# moment SOLIDWORKS becomes possible. On its own it is not "up as long as the
+# laptop is": Windows' own restart handling below gives up after three attempts
+# in an hour, and it does not fire at all when the process exits with code 0. Once
+# either of those happens the runner is gone until the next logon, which in
+# practice means until the machine is next rebooted - days.
+#
+# So a second trigger sweeps every five minutes for ever. -MultipleInstances
+# IgnoreNew makes that free when a runner is already up: the sweep is refused by
+# the scheduler and nothing happens. When one is NOT up, it is back within five
+# minutes without anybody noticing it went.
+$triggers = @(New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
+try {
+    $sweep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5)
+    # Some Windows builds default the repetition to a fixed duration and quietly stop
+    # after a day. Ask for indefinite explicitly; if the property is rejected, the
+    # AtLogOn trigger alone still installs rather than the whole thing failing.
+    $sweep.Repetition.Duration = ""
+    $triggers += $sweep
+} catch {
+    Write-Host "  note: could not add the 5-minute restart sweep ($($_.Exception.Message))." -ForegroundColor Yellow
+    Write-Host "        the task still starts at logon and restarts on failure."
+}
 
 # RestartInterval/RestartCount are what make this worth doing: if the process
 # exits for any reason, Windows starts it again a minute later, up to three times
@@ -116,17 +141,46 @@ $settings = New-ScheduledTaskSettingsSet `
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
     -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-    -Settings $settings -Principal $principal -Force | Out-Null
+# The sweep trigger is the part most likely to be rejected by an older build's task XML
+# validation. If it is, install WITHOUT it rather than failing the whole installation and
+# leaving the machine with no task at all - a runner that starts at logon is far better than
+# none, and the message says which of the two got installed.
+try {
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
+        -Settings $settings -Principal $principal -Force | Out-Null
+} catch {
+    Write-Host "  note: Windows refused the 5-minute sweep ($($_.Exception.Message))." -ForegroundColor Yellow
+    Write-Host "        installing with the logon trigger only."
+    $triggers = @(New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
+        -Settings $settings -Principal $principal -Force | Out-Null
+}
 
 Write-Host "Installed scheduled task '$TaskName'." -ForegroundColor Green
 Write-Host "  python   $python"
 Write-Host "  server   $Server"
-Write-Host "  restarts every minute if it exits, three times an hour"
 Write-Host "  starts   at logon for $env:USERNAME, in that session (SOLIDWORKS needs one)"
+Write-Host "  restarts every minute if it exits, three times an hour"
+Write-Host "  and is checked every 5 minutes after that, so it comes back on its own"
 Write-Host ""
-Write-Host "Start it now without logging out:" -ForegroundColor Cyan
-Write-Host "    Start-ScheduledTask -TaskName '$TaskName'"
+
+# START IT, DO NOT MERELY OFFER TO. The trigger is AtLogOn, so registering the task left
+# nothing running until the next logon -- and this script said so in one Cyan line among
+# fifteen, which is not the same as it happening. Somebody installed the task, saw a page
+# still reporting "no runner connected", and had no reason to connect the two.
+Write-Host "Starting it now (the trigger alone would wait for the next logon)..." -ForegroundColor Cyan
+try {
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    $info = Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo
+    Write-Host "    task state: $((Get-ScheduledTask -TaskName $TaskName).State)" -ForegroundColor Green
+    if ($info.LastTaskResult -ne 0 -and $info.LastTaskResult -ne 267009) {
+        Write-Host "    last result: $($info.LastTaskResult) - check the log below" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "    could not start it: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "    start it by hand:  Start-ScheduledTask -TaskName '$TaskName'" -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "It writes everything it says to:" -ForegroundColor Cyan
 Write-Host "    $Root\output\logs\runner-<date>.log"
