@@ -1575,14 +1575,22 @@ parityRun.onclick = async () => {
    One PDF, bookmarked per drawing, opened in a tab where Ctrl+P does the rest. Folders in the
    list are walked by the service, so "print the drawings" works whether the estimator added a
    job folder or the files inside it. */
-const printDrawings = $("printDrawings"), printNote = $("printNote");
-
+/* ELEMENTS LOOKED UP WHEN NEEDED, NOT CAPTURED IN A const HERE.
+   renderFiles() calls refreshPrint(), and renderFiles runs while the page is still being set
+   up — before execution ever reaches this line. A `const` handle declared here is in its
+   temporal dead zone at that moment, so the first render threw
+   "Cannot access 'printDrawings' before initialization", which killed the rest of the script
+   and left Add-all adding exactly one file of five. Resolving inside the function removes the
+   ordering dependency altogether: it does not matter where in the file this block sits. */
 function refreshPrint(){
-  printDrawings.disabled = drawings.length === 0;
-  if(!drawings.length) printNote.textContent = "";
+  const btn = $("printDrawings"), note = $("printNote");
+  if(!btn) return;
+  btn.disabled = drawings.length === 0;
+  if(!drawings.length && note) note.textContent = "";
 }
 
-printDrawings.onclick = async () => {
+$("printDrawings").onclick = async () => {
+  const printDrawings = $("printDrawings"), printNote = $("printNote");
   if(!drawings.length) return;
   /* THE TAB IS OPENED HERE, NOT AFTER THE AWAIT. A window.open() that happens after a network
      round-trip is not a user gesture any more and browsers block it — the button would appear
@@ -1644,10 +1652,12 @@ refreshPrint();
    The button reports what is wrong rather than doing nothing. An unset share, a share this
    service may not read, a share that is not mounted — each has a different fix, and the
    estimator is told which. */
-const addFromDm = $("addFromDm"), dmNote = $("dmNote");
 let dmRoot = null;
 
 async function checkDm(){
+  /* Looked up inside, for the same reason refreshPrint does. */
+  const addFromDm = $("addFromDm"), dmNote = $("dmNote");
+  if(!addFromDm) return;
   try{
     const r = await api("/api/estimate/dm/status");
     if(!r.ok) throw new Error(String(r.status));
@@ -1659,15 +1669,15 @@ async function checkDm(){
       : (j.reason || "Document Manager import is not configured.");
     /* Said once, quietly, under the list — not as an error. Not being configured yet is a
        deployment step, not a fault, and the page should not shout about it every visit. */
-    dmNote.textContent = j.configured ? "" : ("Document Manager import: " + (j.reason || "not configured."));
+    if(dmNote) dmNote.textContent = j.configured ? "" : ("Document Manager import: " + (j.reason || "not configured."));
   }catch(e){
     addFromDm.disabled = true;
     addFromDm.title = "Could not ask the service whether Document Manager is configured.";
-    dmNote.textContent = "";
+    if(dmNote) dmNote.textContent = "";
   }
 }
 
-addFromDm.onclick = () => {
+$("addFromDm").onclick = () => {
   if(!dmRoot) return;
   /* The ordinary picker, started at the DM output share. Same containment rule, same
      server-resolved paths — a second file browser would be a second place for the path rules
