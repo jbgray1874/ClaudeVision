@@ -64,7 +64,11 @@ DRIVER = """
 window.addEventListener("load", async () => {
   const log = []; window.onerror = (m, s, l) => log.push("JS ERROR: " + m + " @" + l);
   const wait = ms => new Promise(r => setTimeout(r, ms));
+  // The Job panel, as an estimator would have filled it. The DM panel derives its project
+  // number from the drawing number, so these are the inputs to that derivation.
+  drawing.value = "10575-02"; client.value = "Dyson"; units.value = "1";
   try {
+    await wait(400);                       // let checkDm() settle before anything reads its flag
     await openBrowser("files"); await wait(250);
     await navigate("/srv/Estimating/Live Enquiry"); await wait(250);
     log.push("shown=" + shown.length);
@@ -76,6 +80,18 @@ window.addEventListener("load", async () => {
     await navigate("/srv/Estimating/Live Enquiry"); await wait(250);
     listing.children[0].click(); listing.children[2].click(); await wait(200);
     log.push("clicks=" + drawings.length);
+
+    /* THE DOCUMENT MANAGER EXTRACT PANEL. checkDm() runs on load and decides which job the
+       Extract button does; the stub reports the API as configured, so it must open the panel
+       rather than the file browser. This is the same class of wiring that broke "Add all" —
+       a handler that throws leaves every later one unbound and the page merely looks inert. */
+    dlg.close(); await wait(150);
+    $("addFolder").click(); await wait(200);
+    log.push("dmpanel=" + (!$("dmExtractBox").hidden));
+    log.push("dmproject=" + $("dmProject").value);
+    log.push("dmassembly=" + $("dmAssembly").value);
+    $("dmCancel").click(); await wait(150);
+    log.push("dmclosed=" + $("dmExtractBox").hidden);
   } catch (e) { log.push("THREW: " + e.message); }
   const d = document.createElement("div"); d.id = "RESULT"; d.textContent = log.join(" || ");
   document.body.appendChild(d);
@@ -123,6 +139,12 @@ def main() -> int:
         ("addall=5" in result, "ADD ALL added all five — one of five was the original bug"),
         ("printdisabled=false" in result, "the print button enabled once drawings were added"),
         ("clicks=2" in result, "clicking two files added exactly two"),
+        ("dmpanel=true" in result,
+         "Extract DesignDrawingPack opens the DM panel when the API is configured"),
+        ("dmproject=10575" in result,
+         "the project number is derived from the drawing number (10575-02 -> 10575)"),
+        ("dmassembly=10575-02" in result, "the assembly folder is the drawing number"),
+        ("dmclosed=true" in result, "Cancel closes the panel"),
     ]
     bad = [why for ok, why in checks if not ok]
     for ok, why in checks:

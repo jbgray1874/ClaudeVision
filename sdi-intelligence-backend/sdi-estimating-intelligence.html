@@ -319,13 +319,41 @@
       <p class="req" id="printNote"></p>
       <p class="req" id="dmNote"></p>
 
+      <!-- THE THREE FACTS DOCUMENT MANAGER LOOKS A PROJECT UP BY, shown rather than guessed.
+           projectNumber is the only required one; customer and assemblyFolder narrow the
+           search and make it faster and less ambiguous. They are PREFILLED from the Job panel
+           because 10575-02 for Dyson means project 10575, customer Dyson, assembly 10575-02 —
+           but they are editable, because a numbering convention is a habit and not a rule, and
+           a form that silently derives the wrong project is worse than one that asks. -->
+      <div class="dest" id="dmExtractBox" hidden style="border-left-color:var(--info);margin-top:10px">
+        <span class="k">Extract from Document Manager</span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
+          <label style="display:block">PROJECT
+            <input id="dmProject" style="width:120px" placeholder="10575"></label>
+          <label style="display:block">CUSTOMER <span style="opacity:.6">(optional)</span>
+            <input id="dmCustomer" style="width:150px" placeholder="Dyson"></label>
+          <label style="display:block">ASSEMBLY FOLDER <span style="opacity:.6">(optional)</span>
+            <input id="dmAssembly" style="width:140px" placeholder="10575-02"></label>
+          <button class="btn-run" id="dmGo" style="margin:0">Extract</button>
+          <button id="dmCancel" style="margin:0">Cancel</button>
+        </div>
+        <p class="note" id="dmProgress" style="margin-top:8px"></p>
+      </div>
+
       <div style="display:flex;gap:9px;flex-wrap:wrap">
-        <!-- RENAMED AHEAD OF THE ENDPOINT IT WILL CALL. Today this browses the shares and adds a
-             job folder, which is what a run needs. When the Document Manager extract endpoint
-             lands it is called from here instead, and the pack comes back the same way. The
-             label leads the wiring deliberately: an estimator learns one button, not two. -->
-        <button id="addFolder" title="Add the job folder for this estimate. Will call the Document Manager extract when that endpoint is ready.">Extract DesignDrawingPack</button>
+        <!-- THE ENDPOINT IT WAS RENAMED FOR, NOW BEHIND IT. This asks Document Manager to walk
+             the SOLIDWORKS references for a project and build a file pack, then opens the pack
+             it wrote so the drawings can be chosen from it. Minutes of COM work on their host,
+             so it reports progress rather than appearing to hang.
+             It falls back to browsing the shares when the DM API is not configured — the
+             behaviour this button had before — because a machine without the API set up still
+             needs a way to add a job folder. -->
+        <button id="addFolder" title="Ask Document Manager to extract this project's drawing pack.">Extract DesignDrawingPack</button>
         <button id="addFiles">Add drawing files…</button>
+        <!-- THE SHARE, WHEN THE BUTTON ABOVE IS TALKING TO DOCUMENT MANAGER. Adding a whole job
+             folder off the share is what that button used to do, and it is still wanted: not
+             every job goes through DM, and DM is not always up. -->
+        <button id="addShareFolder">Add job folder…</button>
         <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
              tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
              folder copy of the same drawing and leaves the rest alone. Removing one is the
@@ -1135,8 +1163,121 @@ dChoose.onclick = () => {
   dlg.close();
 };
 $("dClose").onclick = () => dlg.close();
-$("addFolder").onclick = () => openBrowser("folder");
+$("addShareFolder").onclick = () => openBrowser("folder");
 $("addFiles").onclick  = () => openBrowser("files");
+
+/* ══ DOCUMENT MANAGER EXTRACT ═════════════════════════════════════════════════════════
+   Ask DM to build a file pack for a project, then open the folder it wrote.
+
+   IT OPENS THE PACK RATHER THAN IMPORTING IT WHOLE, and that is deliberate. DM writes
+   possible_candidates/ and selection_report.html alongside the drawings (includeCandidates
+   defaults to true), so "add everything it produced" would put files into an estimate that
+   the estimator never chose and would not expect to be priced. The picker they already know
+   shows the pack; the same merge-by-name rule applies as for any other source.
+
+   POLLED, NOT WAITED ON. The extract is minutes of COM work on their host. A request held
+   open that long is one dropped connection from reporting failure on work that is going
+   fine — and a second press queues behind the first, because DM does one heavy extract at
+   a time. */
+let dmPoll = null;
+let dmApiReady = false;                 // set by checkDm(); no API means fall back to the share
+
+function dmSay(text, cls){
+  const el = $("dmProgress");
+  el.textContent = text || "";
+  el.style.color = cls === "e" ? "var(--bad)" : cls === "w" ? "var(--warn,#e8a33d)"
+                 : cls === "ok" ? "var(--ok)" : "";
+}
+
+function dmStopPolling(){
+  if(dmPoll){ clearInterval(dmPoll); dmPoll = null; }
+  $("dmGo").disabled = false;
+  $("dmGo").textContent = "Extract";
+}
+
+$("addFolder").onclick = () => {
+  /* No API configured means this button keeps the job it has always had. Silently browsing
+     when somebody expected an extract would be worse, so the note says which one happened. */
+  if(!dmApiReady){
+    dmSay("");
+    openBrowser("folder");
+    return;
+  }
+  const box = $("dmExtractBox");
+  box.hidden = false;
+  /* 10575-02 -> project 10575, assembly 10575-02. Prefilled, never forced: a numbering
+     convention is a habit, and a form that quietly derives the wrong project is worse than
+     one that asks. Only filled when empty, so a correction survives reopening the panel. */
+  const dn = safe(drawing.value).trim();
+  if(!$("dmProject").value)  $("dmProject").value  = (dn.split("-")[0] || "").trim();
+  if(!$("dmCustomer").value) $("dmCustomer").value = safe(client.value).trim();
+  if(!$("dmAssembly").value) $("dmAssembly").value = dn;
+  $("dmProject").focus();
+};
+
+$("dmCancel").onclick = () => {
+  /* Stops US watching. It does NOT stop their host — one extract at a time is running there
+     whatever this page does, and saying otherwise would have somebody press Extract again
+     into a queue. */
+  dmStopPolling();
+  $("dmExtractBox").hidden = true;
+  dmSay("");
+};
+
+$("dmGo").onclick = async () => {
+  const project = $("dmProject").value.trim();
+  if(!project){ dmSay("A project number is needed — it is what DM looks the job up by.", "e"); return; }
+  $("dmGo").disabled = true; $("dmGo").textContent = "Extracting…";
+  dmSay("Asking Document Manager for the pack…");
+  let jobId = null;
+  try{
+    const r = await api("/api/estimate/dm/extract", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({project_number: project,
+                            customer: $("dmCustomer").value.trim(),
+                            assembly_folder: $("dmAssembly").value.trim()})});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ dmSay(detailText(j, r, "Document Manager refused the request"), "e"); dmStopPolling(); return; }
+    jobId = j.job_id;
+    dmSay("Extract queued on the Document Manager host (job " + jobId + "). This takes minutes.");
+  }catch(e){
+    dmSay("Could not reach the service — " + e.message, "e"); dmStopPolling(); return;
+  }
+
+  dmPoll = setInterval(async () => {
+    let s;
+    try{
+      const r = await api("/api/estimate/dm/extract/" + encodeURIComponent(jobId));
+      s = await r.json().catch(() => ({}));
+      if(!r.ok){ dmSay(detailText(s, r, "Lost track of the extract"), "e"); dmStopPolling(); return; }
+    }catch(e){ return; }               // a dropped poll is not a failed extract
+
+    if(!s.finished){
+      dmSay("Document Manager is working… (" + (s.status || "running")
+            + (s.progress ? " · " + s.progress : "") + ")");
+      return;
+    }
+    dmStopPolling();
+
+    if(!s.ok){
+      dmSay("The extract failed on the Document Manager host: "
+            + (s.error || "no reason given") + ".", "e");
+      return;
+    }
+    /* SUCCEEDED IS NOT THE SAME AS USABLE. The pack is written on their host; if the folder
+       is not readable from here the extract worked and the drawings are still out of reach,
+       and the service says which. */
+    if(!s.readable_here){
+      dmSay(s.note || ("The extract wrote " + (s.file_count || "?") + " file(s) to "
+            + (s.output_dir || "an unknown folder") + ", which this machine cannot read."), "e");
+      return;
+    }
+    dmSay("Extract finished — " + (s.file_count != null ? s.file_count + " file(s) in " : "")
+          + s.output_dir + ". Choose the drawings for this estimate.", "ok");
+    openBrowser("files", {dm: true}).then(() => navigate(s.output_dir));
+  }, 4000);
+};
+
 $("openRoot").onclick  = () => openBrowser("output");
 
 /* ══ MULTI-DRAWING ENQUIRY ════════════════════════════════════════════
@@ -1852,11 +1993,33 @@ async function checkDm(){
     addFromDm.title = j.configured
       ? ("Import drawings from " + j.root)
       : (j.reason || "Document Manager import is not configured.");
+
+    /* TWO SETTINGS, TWO CAPABILITIES, AND THEY ARE INDEPENDENT.
+       SDI_DM_OUTPUT_ROOT lets you pick up a pack that already exists. The API lets you ASK
+       for one — and the API needs no output root at all, because DM reports where it wrote
+       each pack. Treating them as one switch would disable the extract on a machine that is
+       perfectly able to run it. */
+    dmApiReady = !!j.api_configured;
+    const addFolder = $("addFolder");
+    if(addFolder){
+      addFolder.title = dmApiReady
+        ? ("Ask Document Manager (" + (j.api_base || "configured") + ") to extract this "
+           + "project's drawing pack.")
+        : "Add the job folder for this estimate from the share. The Document Manager extract "
+          + "API is not configured, so this browses rather than extracting.";
+    }
     /* Said once, quietly, under the list — not as an error. Not being configured yet is a
        deployment step, not a fault, and the page should not shout about it every visit. */
-    if(dmNote) dmNote.textContent = j.configured ? "" : ("Document Manager import: " + (j.reason || "not configured."));
+    if(dmNote){
+      const gaps = [];
+      if(!j.configured) gaps.push("importing a pack that already exists needs "
+                                  + (j.reason || "SDI_DM_OUTPUT_ROOT"));
+      if(!dmApiReady) gaps.push("asking for a new one needs SDI_DM_API_BASE and SDI_DM_API_KEY");
+      dmNote.textContent = gaps.length ? ("Document Manager: " + gaps.join("; ") + ".") : "";
+    }
   }catch(e){
     addFromDm.disabled = true;
+    dmApiReady = false;
     addFromDm.title = "Could not ask the service whether Document Manager is configured.";
     if(dmNote) dmNote.textContent = "";
   }

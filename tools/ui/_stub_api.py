@@ -16,7 +16,12 @@ class H(http.server.SimpleHTTPRequestHandler):
         if p.path=="/api/roots": return self._j({"roots":[{"name":"Live Enquiry","path":ROOT}]})
         if p.path=="/api/files": return self._j({"path":ROOT,"items":FILES})
         if p.path=="/api/estimate/runners": return self._j({"runners":[]})
-        if p.path=="/api/estimate/dm/status": return self._j({"configured":False,"reason":"not set"})
+        if p.path=="/api/estimate/dm/status":
+            # api_configured drives the Extract button; the two settings are independent,
+            # so the stub exercises "API on, pickup root off" - the state a laptop with
+            # the .env filled in but no output share is actually in.
+            return self._j({"configured":False,"reason":"SDI_DM_OUTPUT_ROOT is not set",
+                            "api_configured":True,"api_base":"http://dm-host:8000"})
         if p.path.startswith("/api/"): return self._j({})
         return super().do_GET()
     def log_message(self,*a): pass
