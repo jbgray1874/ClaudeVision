@@ -575,6 +575,33 @@ const OUTPUT_ROOT = "\\\\sdi-dc01\\shareddata$\\Shared\\Estimating\\Completed\\A
 const API_KEY = "";                       // set if SDI_API_KEY is enabled
 const api = (p,o={}) => fetch(p,{...o,headers:{"X-SDI-Key":API_KEY,...(o.headers||{})}});
 
+/* WHAT THE SERVICE SAID, IN WORDS, WHATEVER SHAPE IT SAID IT IN.
+   Three call sites did `j.detail || "Failed (" + r.status + ")"`, which is right for the
+   only shape we write ourselves -- HTTPException(detail="a sentence"). FastAPI's own
+   validation failure is a different shape: detail is a LIST of objects, one per field, so
+   the concatenation renders the literal text [object Object] and the estimator is told
+   nothing at all. That is precisely the case you most need words for, because a 422 means
+   the PAGE and the SERVICE disagree about the request -- almost always a service running
+   code from before the last pull, which is invisible from the browser.
+   So: a string passes through, a validation list becomes "field: message", and anything
+   else falls back to the status rather than to punctuation. */
+function detailText(j, r, fallback){
+  const d = j && j.detail;
+  if(typeof d === "string" && d.trim()) return d;
+  if(Array.isArray(d) && d.length){
+    return d.map(e => {
+      const where = Array.isArray(e.loc) ? e.loc.filter(x => x !== "body").join(".") : "";
+      return (where ? where + ": " : "") + (e.msg || "invalid");
+    }).join("; ")
+      + (r && r.status === 422
+          ? "  —  the service is rejecting a field this page sent. It is usually running "
+            + "code from before the last pull; restart it and try again."
+          : "");
+  }
+  if(d && typeof d === "object"){ try{ return JSON.stringify(d); }catch(e){} }
+  return fallback + (r ? " (" + r.status + ")" : "");
+}
+
 const $ = id => document.getElementById(id);
 const units=$("units"), client=$("client"), drawing=$("drawing");
 const runBtn=$("run"), stopBtn=$("stop"), destPath=$("destPath"), req=$("req");
@@ -1513,7 +1540,7 @@ regen.onclick = async () => {
       /* The service explains itself — an uncalculated sheet, a wrong file type — so show
          its words rather than a status code. */
       regenOut.innerHTML = '<li><span style="color:var(--bad)">'
-        + (j.detail || ("Regeneration failed (" + r.status + ")")) + '</span></li>';
+        + detailText(j, r, "Regeneration failed") + '</span></li>';
       return;
     }
     const price = (typeof j.price === "number")
@@ -1637,7 +1664,7 @@ parityRun.onclick = async () => {
       /* The service explains itself in words an estimator can act on — a missing summary, the
          wrong file type — so show those rather than a status code. */
       parityOut.innerHTML = '<li><span style="color:var(--bad)">'
-        + (j.detail || ("Parity failed (" + r.status + ")")) + '</span></li>';
+        + detailText(j, r, "Parity failed") + '</span></li>';
       return;
     }
     const h = j.headline || {};
@@ -1728,7 +1755,7 @@ $("printDrawings").onclick = async () => {
     });
     if(!r.ok){
       const j = await r.json().catch(() => ({}));
-      printNote.textContent = j.detail || ("Could not build the print (" + r.status + ").");
+      printNote.textContent = detailText(j, r, "Could not build the print");
       if(tab) tab.close();
       return;
     }
