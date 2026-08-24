@@ -81,10 +81,37 @@ if (-not (Test-Path (Join-Path $Root "tools\runner\sdi_estimate_runner.py"))) {
 
 
 if ($Remove) {
+    # -Remove KILLS AN ESTIMATE IN PROGRESS, AND THIS SAID THE OPPOSITE.
+    #
+    # It claimed "any runner running right now keeps running until it stops", which is not
+    # what happens: unregistering a task terminates the instance the scheduler is running,
+    # and the runner is that instance. So -Remove ends the engine mid-estimate, the process
+    # tree dies with no traceback, and the log simply stops in the middle of a job that was
+    # going perfectly well. Somebody reading it afterwards sees a run that died for no
+    # reason and goes looking for a crash that never happened. That cost an afternoon.
+    #
+    # So: say what it does BEFORE doing it, stop the task deliberately rather than as a side
+    # effect, and name the run that was lost.
+    $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $existing) {
+        Write-Host "No scheduled task '$TaskName' to remove." -ForegroundColor Yellow
+        Write-Host "A runner started by hand is a separate process and is untouched."
+        exit 0
+    }
+    if ($existing.State -eq "Running") {
+        Write-Host "'$TaskName' is RUNNING RIGHT NOW." -ForegroundColor Yellow
+        Write-Host "Removing it ends that process. If it is part-way through an estimate,"
+        Write-Host "that estimate is lost and nothing is filed - the engine is killed, so"
+        Write-Host "the log simply stops mid-job."
+        Write-Host ""
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Write-Host "Stopped it." -ForegroundColor Yellow
+    }
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "Removed scheduled task '$TaskName'." -ForegroundColor Yellow
-    Write-Host "The runner is no longer started automatically. Any runner running right"
-    Write-Host "now keeps running until it stops."
+    Write-Host "Nothing starts the runner automatically now. A runner you started by hand in"
+    Write-Host "a console window is a SEPARATE process and is not affected by this."
     exit 0
 }
 
