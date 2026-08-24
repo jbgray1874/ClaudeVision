@@ -92,10 +92,23 @@ ARCHIVE_SQL_DIR = ARCHIVE_DIR / "sql"
 SUPPORTED_EXTENSIONS = {".pdf", ".dxf"}
 
 # The ODA File Converter turns DWG into DXF offline and free, so a DWG flat pattern feeds the
-# reader we already have instead of being ignored. Leave as None to auto-detect: PATH first,
-# then the usual install roots. Set it explicitly if it lives somewhere else.
-#   e.g. r"C:\Program Files\ODA\ODAFileConverter 25.4.0\ODAFileConverter.exe"
-DWG_CONVERTER_PATH = None
+# reader we already have instead of being ignored. Leave unset to auto-detect: PATH first,
+# then the usual install roots.
+#
+# THIS IS THE BACKEND THAT DOES NOT NEED SOLIDWORKS, WHICH IS THE POINT OF IT.
+#
+# cad_inputs tries ODA first and SOLIDWORKS second, deliberately: a licensed interactive seat
+# is not something an estimate may depend on. It can be closed, the licence can lapse, the
+# runner can be in a different logon session -- all three look identical from here, and all
+# three end with DWG files present and unread. ODA is free, offline and batch, and once it is
+# installed the DWG path works with SOLIDWORKS shut for good.
+#
+# FROM THE ENVIRONMENT, because the machine that needs this is not the machine this file is
+# edited on. It was a hard-coded None, so pointing the engine at a converter meant editing a
+# git-tracked source file on the laptop -- which is then a local modification that fights
+# every pull. SDI_DWG_CONVERTER in .env sets it per machine and nothing tracked changes.
+#   e.g. SDI_DWG_CONVERTER=C:\Program Files\ODA\ODAFileConverter 25.4.0\ODAFileConverter.exe
+DWG_CONVERTER_PATH = os.getenv("SDI_DWG_CONVERTER", "").strip() or None
 
 # PDF GA + flat DXF per part: DXF augments geometry on the PDF scan JSON (see drawing_job_merge.py).
 DRAWING_JOB_DISCOVERY = {
