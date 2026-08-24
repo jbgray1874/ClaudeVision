@@ -59,6 +59,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 import config
+import staging
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
 
@@ -479,48 +480,48 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if not isinstance(req.units, int) or req.units < 1:
         raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
 
-    # A JOB IS A FOLDER. The page can add loose files too, but the engine reads a
-    # pack; where only files were given, their common parent is the job.
-    folder = req.job_folder
-    if not folder and req.files:
-        # FILES FROM TWO JOBS HAVE A COMMON PARENT, AND IT IS NOT A JOB.
-        #
-        # commonpath() always returns something, so one stray file from another pack silently
-        # promoted the job to the folder that CONTAINS the jobs. 10575-02 was queued against
-        # "...\Live Enquiry" because an 11650 model was still in the list; the engine looked
-        # there, found no drawings directly beneath it, exited cleanly and filed nothing. The
-        # run reported COMPLETE and produced no estimate, which is the worst way to fail.
-        #
-        # A pack whose files sit in sub-folders of one job still works: they share that job as
-        # their common parent and only ONE top-level folder is involved. What is refused is a
-        # selection spanning two, because no single folder can be the job for both.
-        _parents = {str(Path(f).parent) for f in req.files if str(f).strip()}
-        try:
-            folder = os.path.commonpath([p for p in _parents]) if _parents else None
-        except ValueError:
-            folder = None                       # different drives — no common parent exists
-        # TWO JOB FOLDERS, NOT TWO SUB-FOLDERS OF ONE JOB. An SDI job folder is named for its
-        # job number and so begins with a digit — 10575-02-V2UprightDisplay,
-        # 11650-04-SidePanel. A pack that files its drawings into PDFs\ and DXFs\ does not, and
-        # must keep working: those share one job as their parent and only the naming tells the
-        # two situations apart.
-        _job_like = {p for p in _parents if (Path(p).name[:1] or "").isdigit()}
-        if folder and len(_job_like) > 1 and folder not in _parents:
-            _named = ", ".join(sorted(Path(p).name or p for p in _job_like)[:4])
-            _more = f" and {len(_job_like) - 4} more" if len(_job_like) > 4 else ""
+    # THE DRAWINGS ARE STAGED, AND THE STAGED FOLDER IS THE JOB.
+    #
+    # Selection used to mean almost nothing. The picks were used to derive a common parent and
+    # then discarded; the runner got the FOLDER and priced everything in it. Three drawings
+    # chosen out of twelve produced an estimate built from twelve, and no line said so. It also
+    # made two sources impossible to combine: a Document Manager extract and the estimating
+    # share are different parents, so the run was refused outright.
+    #
+    # So every selected drawing is copied into one folder per client and job, and THAT is what
+    # the engine reads. Selection means selection, two sources merge, and the folder is a
+    # durable record of exactly which drawings produced a number.
+    _sources: List[str] = []
+    if req.job_folder and str(req.job_folder).strip():
+        _sources.append(str(req.job_folder).strip())
+    _sources += [str(f).strip() for f in (req.files or []) if str(f).strip()]
+    if not _sources:
+        raise HTTPException(400, "Add a job folder, or the drawings for this job.")
+
+    # Everything the page offers has already come from a listing this service produced, but it
+    # arrives back over HTTP and is checked again — the page can be bypassed.
+    for _src in _sources:
+        if _within_a_root(_src) is None:
             raise HTTPException(
-                400,
-                f"Those drawings come from {len(_job_like)} different job folders ({_named}"
-                f"{_more}), so there is no single job to estimate. Clear the list and add only "
-                f"this job's drawings, or use 'Add job folder'.")
-    if not folder:
-        raise HTTPException(400, "Add a job folder, or drawings that share one.")
+                403, f"That drawing is outside the shares this service may read: {_src}")
+
+    try:
+        staged = staging.stage(_sources, client=client, drawing=drawing)
+    except staging.StagingError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        # A share that has gone away, or an account without write rights on it. Say which,
+        # because the two have completely different fixes.
+        raise HTTPException(
+            502, f"The drawings could not be staged to {staging.staging_root()} "
+                 f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
+    folder = staged["folder"]
 
     job = _within_a_root(folder)
     if job is None:
         raise HTTPException(
-            403, "That folder is outside the shares this service may read. "
-                 "Add it to SDI_FILE_ROOTS if it should be readable.")
+            403, f"The staging folder {folder} is outside the shares this service may read. "
+                 f"Add SDI_STAGING_ROOT to SDI_FILE_ROOTS.")
     # NOTE: existence is NOT checked here. This service may not be able to see the
     # share at all — that is rather the point of a runner — so the runner checks,
     # and reports a missing folder as a failed run with a reason.
@@ -571,6 +572,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
+    run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
+             + (f" (replaced {staged['replaced_count']} from a previous run)"
+                if staged["replaced_count"] else ""))
+    for _sk in staged["skipped"][:6]:
+        run.line(f"  not staged: {Path(_sk['path']).name} — {_sk['reason']}")
     run.line(f"Reading   {job}")
     run.line(f"Filing to {out}")
     if manual_wb:

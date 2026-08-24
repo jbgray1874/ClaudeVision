@@ -94,6 +94,20 @@ DB_PASSWORD = _opt("SDI_DB_PASSWORD")
 DB_ENCRYPT = _opt("SDI_DB_ENCRYPT", "yes")
 DB_TRUST_CERT = _opt("SDI_DB_TRUST_CERT", "yes")
 
+# ── Staging: the drawings an estimate was actually run on ───────────────────
+# Every drawing the estimator selected is copied here, into one folder per client and job, and
+# the engine is pointed at that folder. Selection then means selection — before this, the picks
+# only chose a parent folder and the engine read everything in it — and drawings from two
+# sources (the estimating share and a Document Manager extract) can be combined, which two
+# separate parent folders made impossible.
+#
+# REPLACED ON A RE-RUN, NOT ADDED TO, so a second run cannot inherit a drawing that has since
+# been taken off the list. K: maps to \\sdi-dc01\shareddata$\Shared.
+STAGING_ROOT = _opt(
+    "SDI_STAGING_ROOT",
+    r"K:\Estimating\Completed\AI Estimating\AISheets\SDIIntelligenceAISheet")
+
+
 # ── Document Manager (DM) extract tool ──────────────────────────────────────
 # Yogesh's DM API tool extracts a job's CAD files out of Document Manager and writes them to an
 # output share. This portal does not run that extraction; it IMPORTS what the extraction left

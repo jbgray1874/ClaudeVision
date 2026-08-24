@@ -36,7 +36,14 @@ def api(tmp_path, monkeypatch):
     stub = types.ModuleType("config")
     stub.API_KEY = ""
     stub.FILE_ROOTS = [str(tmp_path)]
+    # The drawings are staged into their own folder before a run is queued, so the queue needs
+    # somewhere to stage to. Inside tmp_path, and therefore inside FILE_ROOTS, as it must be on
+    # a real box.
+    stub.STAGING_ROOT = str(tmp_path / "staged")
     monkeypatch.setitem(sys.modules, "config", stub)
+    for name in list(sys.modules):
+        if name == "staging":
+            del sys.modules[name]
     monkeypatch.syspath_prepend(str(BACKEND))
     for name in list(sys.modules):
         if name == "estimate_routes":
@@ -44,7 +51,11 @@ def api(tmp_path, monkeypatch):
     er = pytest.importorskip("estimate_routes",
                              reason="fastapi/pydantic not installed in this environment")
     er._RUNS.clear(); er._RUNNERS.clear()
+    # A REAL DRAWING IN THE JOB FOLDER. The folder used to be enough because the runner was
+    # handed the folder and read whatever was in it; now the selection is staged, so a job
+    # with no drawing in it is correctly refused and these tests would all fail on that.
     (tmp_path / "job").mkdir(exist_ok=True)
+    (tmp_path / "job" / "ga.pdf").write_bytes(b"%PDF-1.4 a drawing")
     return er, tmp_path
 
 
