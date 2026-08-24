@@ -277,6 +277,28 @@ def _online_runners() -> List[Runner]:
     return [r for r in _RUNNERS.values() if r.online]
 
 
+def _to_unc(path: Optional[str]) -> Optional[str]:
+    """A mapped drive letter rewritten as the share it stands for, or the path untouched.
+
+    Applied only where a path arrives from ANOTHER MACHINE — today that is the Document
+    Manager's `outputDir`. Everything the portal produces itself is UNC already, and
+    translating those would be a rule applied where there is nothing to fix.
+
+    A letter is a per-logon-session mapping: it means nothing to a service, it can differ
+    between two machines, and it is not the form SDI_FILE_ROOTS is written in. So a folder
+    that is genuinely readable fails both the containment check and the open, which is how
+    staging failed with "cannot find the path specified: 'K:\\'".
+    """
+    p = str(path or "").strip()
+    if len(p) < 2 or p[1] != ":":
+        return p or None                       # already UNC, relative, or empty
+    unc = (getattr(config, "DRIVE_MAP", {}) or {}).get(p[0].upper())
+    if not unc:
+        return p                               # a letter we have no mapping for: say so, do not guess
+    rest = p[2:].lstrip("\\/")
+    return (unc + "\\" + rest) if rest else unc
+
+
 def _busy_runner() -> Optional[Run]:
     """ONE ESTIMATE AT A TIME PER RUNNER. Two concurrent automations of one Excel
     instance on one desktop is not a supported thing to do, whatever folders they
@@ -1112,7 +1134,14 @@ def dm_extract_status(job_id: str, x_sdi_key: Optional[str] = Header(default=Non
     except docmgr.DocMgrError as exc:
         raise HTTPException(400, str(exc))
 
-    out_dir = info.get("output_dir")
+    # A PATH FROM ANOTHER MACHINE, IN WHATEVER FORM THAT MACHINE USES.
+    #
+    # The share is one both machines reach, so this is not expected to bite — but the form the
+    # path arrives in is not something we get to choose. SDI_FILE_ROOTS is written in UNC, so a
+    # drive-letter path fails the containment check and the open even when the folder is right
+    # there and readable; staging already failed that way once. Translating a mapped letter to
+    # its UNC form costs nothing when the path is already UNC, because nothing matches.
+    out_dir = _to_unc(info.get("output_dir"))
     readable = bool(out_dir) and os.path.isdir(out_dir)
     within = bool(out_dir) and _within_a_root(out_dir) is not None
     note = ""

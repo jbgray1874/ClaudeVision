@@ -130,6 +130,33 @@ STAGING_ROOT = _opt(
     r"\SDIIntelligenceAISheet")
 
 
+# A DRIVE LETTER IS SOMEBODY ELSE'S SESSION, AND PATHS ARRIVE FROM OTHER MACHINES.
+#
+# The Document Manager reports where it wrote a pack as a path seen from ITS host, and that
+# path is a K: one. K: is a per-logon-session mapping: it means nothing to a service, it can
+# differ between two machines, and it is not the form SDI_FILE_ROOTS is written in — so a
+# perfectly reachable folder fails both the containment check and the open. Staging already
+# failed exactly this way once ("cannot find the path specified: 'K:\\'").
+#
+# So a letter is translated to its UNC form the moment a foreign path enters. Written as
+# "K=\\\\server\\share" pairs separated by ';'. The default is the one mapping this business
+# actually uses; set SDI_DRIVE_MAP to change or extend it, or to "" to switch it off.
+def _parse_drive_map(raw: str) -> dict:
+    out = {}
+    for pair in str(raw or "").split(";"):
+        if "=" not in pair:
+            continue
+        letter, unc = pair.split("=", 1)
+        letter, unc = letter.strip().rstrip(":").upper(), unc.strip().rstrip("\\/")
+        if len(letter) == 1 and letter.isalpha() and unc:
+            out[letter] = unc
+    return out
+
+
+DRIVE_MAP = _parse_drive_map(
+    _opt("SDI_DRIVE_MAP", r"K=\\sdi-dc01\shareddata$\Shared"))
+
+
 # ── Document Manager (DM) extract tool ──────────────────────────────────────
 # Yogesh's DM API tool extracts a job's CAD files out of Document Manager and writes them to an
 # output share. This portal does not run that extraction; it IMPORTS what the extraction left
