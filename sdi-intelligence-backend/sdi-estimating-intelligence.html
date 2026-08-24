@@ -368,9 +368,18 @@
           <span class="p" id="parityAiName"><span class="pending">Nothing chosen</span></span>
           <input id="parityAiFile" type="file" accept=".json,.xlsx,.xlsm" hidden>
         </div>
+        <!-- "THE SPREADSHEET YOU WERE SENT IS ENOUGH" WAS A PROMISE THIS CANNOT KEEP.
+             Parity reads the engine's JSON, not its workbook; the workbook is only used to
+             work out the JSON's name. So the spreadsheet is enough exactly when that JSON is
+             on THIS machine - and it is written to output\json on whichever machine ran the
+             job, which for anything estimated elsewhere it will not be. Better to say the
+             condition than to let it fail and read as a broken form. -->
         <p class="note">The engine's own estimate workbook, or its summary <code>.json</code>.
-           Given the workbook, the summary is found from its filename — so the spreadsheet you
-           were sent is enough.</p>
+           Given the workbook, the summary is found by name — so the spreadsheet is enough
+           <em>provided that job's <code>.json</code> is on this machine</em>. It is written to
+           <code>output\json</code> by whichever machine ran the estimate, so for a job run
+           elsewhere, copy the JSON across or point at it directly. The refusal names the file
+           it looked for.</p>
       </div>
 
       <div class="dest" style="border-left-color:var(--info)">
@@ -387,11 +396,22 @@
 
       <label style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
         <input id="parityExcel" type="checkbox" style="margin-top:3px">
+        <!-- IT APPLIES TO THE MANUAL SHEET, AND THIS SAID THE ENGINE'S.
+             Only one workbook is ever opened on this path. The AI side is read from the job's
+             summary JSON - the engine's .xlsx is used solely to find that JSON by name and is
+             never opened at all - so a tick can do nothing whatever to it. The text described
+             the one file the switch cannot reach, which is worse than saying nothing: somebody
+             ticks it for the AI sheet, pays the Excel round trip, and still gets blanks from
+             the manual one. -->
         <span class="note" style="margin:0">
-          <strong>Resolve formulas through Excel.</strong> A workbook the engine wrote and nobody
-          has opened has no calculated values in it, so the totals read as blank. Tick this on a
-          machine with Excel to have them calculated. Slower, and it needs Excel — leave it off
-          if either sheet has been opened and saved.
+          <strong>Resolve formulas through Excel — applies to the MANUAL sheet only.</strong>
+          An <code>.xlsx</code> whose formulas have never been calculated stores no values, so
+          its totals read as blank. That happens when nobody has opened and saved it since it
+          was written. Tick this to have Excel compute them.
+          <br><span style="opacity:.75">Not needed for the AI side: that is read from the job's
+          summary JSON, not from a spreadsheet. Not needed for <code>.xls</code> either — a
+          different reader handles those and ignores this. Needs Excel on the machine running
+          the service, and it is slower, so leave it off unless the totals come back blank.</span>
         </span>
       </label>
 
