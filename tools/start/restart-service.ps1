@@ -1,0 +1,134 @@
+<#
+    Restart the SDI Intelligence service so it serves the code on disk.
+
+        .\tools\start\restart-service.ps1
+        .\tools\start\restart-service.ps1 -Port 8073
+
+    WHY THIS EXISTS, WHICH IS NOT OBVIOUS UNTIL IT HAS COST YOU AN AFTERNOON.
+
+    "Stop-ScheduledTask; Start-ScheduledTask" looks like a restart and can
+    restart nothing at all. Both commands return cleanly, the site keeps
+    answering, and it keeps answering with the code it imported hours ago.
+
+    Two things combine to produce that:
+
+      1. Stopping the task does not reliably kill the python process serving
+         the site. The task's action is powershell.exe, which then runs python
+         as a child; when the wrapper goes, the child can be left holding the
+         port with nothing supervising it.
+
+      2. start-service.ps1 REFUSES a port that is already held - deliberately,
+         so the five-minute sweep cannot trample a running site. So the newly
+         started task finds the port taken, exits, and the orphan carries on
+         serving.
+
+    The symptom reaches an estimator as a page failing on a field the service
+    has never heard of. That reads as a broken feature, not as a stale process,
+    and there is nothing on the page that could tell them otherwise.
+
+    So this stops the task, ENDS WHATEVER IS ACTUALLY LISTENING, starts the
+    task again, and then checks the commit the SITE reports against this
+    checkout's HEAD - because "it restarted" and "it is running the new code"
+    are different claims and only the second one matters.
+
+    ASCII ONLY, like the other scripts here.
+#>
+[CmdletBinding()]
+param(
+    [int]    $Port = 8072,
+    [string] $Root = "",
+    [string] $TaskName = "SDI Intelligence Service"
+)
+
+$ErrorActionPreference = "Stop"
+
+if (-not $Root) {
+    $here = $PSScriptRoot
+    if (-not $here -and $MyInvocation.MyCommand.Path) {
+        $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $here) { throw "Cannot work out where this script is. Pass -Root C:\ClaudeVision" }
+    $Root = (Resolve-Path (Join-Path $here "..\..")).Path
+}
+
+Write-Host "Restarting the SDI Intelligence service on port $Port" -ForegroundColor Cyan
+
+# -- 1. STOP THE TASK, IF THERE IS ONE ------------------------------------------------
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($task) {
+    if ($task.State -eq "Running") {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Write-Host "  stopped the scheduled task"
+    } else {
+        Write-Host "  the scheduled task was not running"
+    }
+} else {
+    Write-Host "  no scheduled task installed - install-service-task.ps1 sets one up" -ForegroundColor Yellow
+}
+
+# -- 2. END WHATEVER IS ACTUALLY LISTENING --------------------------------------------
+#
+# THE STEP THE OBVIOUS RESTART MISSES. Named before it is killed: a pid and a start time
+# is what tells you afterwards whether you ended the thing you meant to.
+Start-Sleep -Seconds 1
+$held = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+if ($held.Count -eq 0) {
+    Write-Host "  nothing was left listening on $Port"
+} else {
+    foreach ($procId in @($held | Select-Object -ExpandProperty OwningProcess -Unique)) {
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($p) {
+            $started = "unknown"
+            if ($p.StartTime) { $started = $p.StartTime.ToString("HH:mm:ss") }
+            Write-Host "  ending pid $procId ($($p.ProcessName), started $started)" -ForegroundColor Yellow
+        }
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 800
+}
+
+# -- 3. START IT AGAIN ------------------------------------------------------------------
+if ($task) {
+    Start-ScheduledTask -TaskName $TaskName
+    Write-Host "  started the scheduled task"
+} else {
+    Write-Host "  start it yourself:  .\tools\start\install-service-task.ps1" -ForegroundColor Yellow
+    exit 1
+}
+
+# uvicorn has to import the app before it listens; reporting failure while it is still
+# starting would be its own false alarm.
+Start-Sleep -Seconds 8
+
+# -- 4. IS IT SERVING THE CODE ON DISK? -------------------------------------------------
+#
+# The only question worth asking. git is on the PATH in THIS shell and not in the
+# virtualenv the service starts from, so the comparison can be made here and nowhere else.
+$head = ""
+$h = (& git -C $Root rev-parse --short HEAD 2>$null)
+if ($LASTEXITCODE -eq 0 -and $h) { $head = "$h".Trim() }
+
+try {
+    $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 6
+    $serving = "$($health.commit)".Trim()
+    if ($head -and $serving -and $serving -ne "unknown" -and $serving -ne $head) {
+        Write-Host ""
+        Write-Host "  STILL STALE: serving $serving, this checkout is at $head." -ForegroundColor Red
+        Write-Host "  Something took the port again. Find it and run this script once more:" -ForegroundColor Yellow
+        Write-Host "    Get-NetTCPConnection -LocalPort $Port -State Listen |" -ForegroundColor Yellow
+        Write-Host "      ForEach-Object { Get-Process -Id `$_.OwningProcess }" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host ""
+    Write-Host "  serving commit $serving$(if ($head -and $serving -eq $head) { ' - matches this checkout' })" -ForegroundColor Green
+    Write-Host "  http://localhost:$Port/estimating" -ForegroundColor Green
+} catch {
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) {
+        Write-Host "  answering on $Port (401 - key required, which is fine)" -ForegroundColor Green
+    } else {
+        Write-Host ""
+        Write-Host "  NOT answering on $Port." -ForegroundColor Red
+        Write-Host "  The reason is in $Root\output\logs\service-<date>.log" -ForegroundColor Yellow
+        exit 1
+    }
+}
