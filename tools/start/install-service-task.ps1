@@ -173,6 +173,34 @@ try {
     try {
         $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 5
         Write-Host "    site answering on $Port (commit $($health.commit))" -ForegroundColor Green
+
+        # ANSWERING IS NOT THE SAME AS ANSWERING WITH THIS CODE, and the difference is
+        # invisible from a browser.
+        #
+        # The starter refuses a port that is already held, by design - so if anything else is
+        # serving 8072 (a console window somebody left open, an older task instance), this
+        # task starts, finds the port taken, exits, and the health check above passes because
+        # the OTHER process answered it. "Stop-ScheduledTask; Start-ScheduledTask" then looks
+        # like a restart and restarts nothing. The site goes on serving code from before the
+        # last pull, and the only symptom is a page failing on a field the service has never
+        # heard of - which reads as a broken feature, not a stale process. That cost an
+        # afternoon once and most of another today.
+        #
+        # git is on the PATH in THIS shell, so the comparison can be made here and nowhere
+        # else. Reported, never acted on: killing whatever holds the port is a decision for
+        # the person standing in front of the machine.
+        $headHere = (& git -C $Root rev-parse --short HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $headHere -and $health.commit -and
+            $health.commit -ne "unknown" -and ("$headHere".Trim() -ne "$($health.commit)".Trim())) {
+            Write-Host ""
+            Write-Host "    WARNING: the site is serving commit $($health.commit), but this" -ForegroundColor Red
+            Write-Host "    checkout is at $("$headHere".Trim()). Something OTHER than this task holds" -ForegroundColor Red
+            Write-Host "    port $Port, so the task exited and nothing was restarted." -ForegroundColor Red
+            Write-Host ""
+            Write-Host "    Find it:  Get-NetTCPConnection -LocalPort $Port -State Listen |" -ForegroundColor Yellow
+            Write-Host "                ForEach-Object { Get-Process -Id `$_.OwningProcess }" -ForegroundColor Yellow
+            Write-Host "    Then stop it and run this script again." -ForegroundColor Yellow
+        }
     } catch {
         # 401 means it IS answering and simply wants the key - that is a pass, not a failure.
         if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) {
