@@ -26,7 +26,37 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PAGE = ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html"
 STUB = Path(__file__).with_name("_stub_api.py")
-CHROME = os.getenv("SDI_CHROME", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
+# WHERE THE BROWSER IS, LOOKED FOR RATHER THAN ASSUMED. The first version hard-coded the
+# Linux container's Playwright build, so on a Windows laptop it printed "no Chromium" and
+# exited 0 — a check that reports success because it did not run is the exact failure this
+# script exists to catch. Any Chromium-family browser will do; Edge is on every SDI machine.
+_CANDIDATES = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    "/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+]
+
+
+def _find_browser() -> str:
+    explicit = os.getenv("SDI_CHROME", "").strip()
+    if explicit:
+        return explicit
+    for c in _CANDIDATES:
+        if Path(c).is_file():
+            return c
+    import shutil as _sh
+    for name in ("chrome", "chromium", "msedge", "google-chrome"):
+        found = _sh.which(name)
+        if found:
+            return found
+    return ""
+
+
+CHROME = _find_browser()
 PORT = os.getenv("SDI_SMOKE_PORT", "8098")
 
 DRIVER = """
@@ -55,9 +85,14 @@ window.addEventListener("load", async () => {
 
 
 def main() -> int:
-    if not Path(CHROME).is_file():
-        print(f"No Chromium at {CHROME} — set SDI_CHROME. Skipped.")
+    if not CHROME or not Path(CHROME).is_file():
+        print("SKIPPED — no Chrome, Chromium or Edge found. This is NOT a pass; the page was\n"
+              "never loaded. Looked in:")
+        for c in _CANDIDATES:
+            print(f"    {c}")
+        print("Set SDI_CHROME to a browser and run it again.")
         return 0
+    print(f"browser: {CHROME}")
 
     drive = PAGE.with_name("_smoke_drive.html")
     drive.write_text(PAGE.read_text(encoding="utf-8").replace("</body>", DRIVER + "</body>"),
