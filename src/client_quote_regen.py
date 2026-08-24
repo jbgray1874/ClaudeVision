@@ -107,10 +107,15 @@ def _job_stem_from_workbook(workbook_path: Path) -> str:
 
     The engine writes '<stem>_20260818_133037.xlsx'; its summary JSON is '<stem>.json'. Stripping
     the timestamp is what lets an override find the job it came from days later."""
-    return re.sub(r"_\d{8}_\d{6}$", "", Path(workbook_path).stem)
+    stem = re.sub(r"_\d{8}_\d{6}$", "", Path(workbook_path).stem)
+    # And the copy the override loop makes of it. '<stem>_MANUAL_OVERRIDE.xlsx' is this
+    # module's own naming, so a lookup that does not know about it is looking for a file this
+    # module guaranteed would never be written.
+    return re.sub(r"_MANUAL_OVERRIDE$", "", stem)
 
 
-def find_original_summary(workbook_path: str | Path) -> Optional[Dict[str, Any]]:
+def find_original_summary(workbook_path: str | Path, *, stem: Optional[str] = None,
+                          extra_dirs: Tuple[Path, ...] = ()) -> Optional[Dict[str, Any]]:
     """The engine's saved summary for the job this workbook came from, or None.
 
     THE OVERRIDE QUOTE WAS THINNER THAN THE ENGINE'S, AND THAT IS WHAT A CUSTOMER SAW. Built from
@@ -123,15 +128,43 @@ def find_original_summary(workbook_path: str | Path) -> Optional[Dict[str, Any]]
     operations — and changes just the money and the three re-entered facts. Missing (a job run on
     another machine, or output cleared) falls back to the minimal summary: a plain quote beats no
     quote, and the caller says which happened."""
-    stem = _job_stem_from_workbook(workbook_path)
-    candidates = []
+    # THE STEM IS TOLD TO US WHEN THE CALLER KNOWS IT, AND THE CALLER USUALLY DOES.
+    #
+    # Deriving it from the filename alone was right for the workbook the ENGINE wrote and wrong
+    # for the one the portal hands over. run_estimator_override copies the estimator's sheet to
+    # '<stem>_MANUAL_OVERRIDE.xlsx' first and passes THAT path here, and the deriver strips only
+    # a '_YYYYMMDD_HHMMSS' suffix -- so it looked for '10575-02_MANUAL_OVERRIDE.json', which
+    # cannot exist. The lookup therefore failed on EVERY regeneration made from the portal, and
+    # failed silently: the quote came out with 'Material: As drawing', two generic operations and
+    # no GA image, which reads as a thin quote rather than as a lookup that missed.
+    #
+    # It worked when called directly on the engine's own file, which is how it was tested.
+    # BOTH STEMS, NOT ONE INSTEAD OF THE OTHER. They are different things and either can be
+    # the right one:
+    #   - the caller's stem comes from the DRAWING NUMBER ("10575-02"), which is what the
+    #     portal knows and what the override names its files after;
+    #   - the filename's stem is the job's own output stem ("8352-010ReuseableBagStand"),
+    #     which is what the engine named the summary after and need not resemble the drawing
+    #     number at all.
+    # Trying only the caller's would lose every job whose output stem is not its drawing
+    # number; trying only the filename's is the defect described above.
+    stems = []
+    for _s in (stem, _job_stem_from_workbook(workbook_path)):
+        if _s and _s not in stems:
+            stems.append(_s)
+
+    dirs = []
     try:
         import config as _cfg
-        candidates.append(Path(getattr(_cfg, "JSON_DIR")) / f"{stem}.json")
+        dirs.append(Path(getattr(_cfg, "JSON_DIR")))
     except Exception:                                            # noqa: BLE001
         pass
+    # Where the ORIGINAL workbook came from, when the caller has copied it since.
+    dirs.extend(Path(_d) for _d in extra_dirs)
     # Beside the workbook too, for a pack whose outputs were filed with it.
-    candidates.append(Path(workbook_path).parent / f"{stem}.json")
+    dirs.append(Path(workbook_path).parent)
+
+    candidates = [d / f"{s}.json" for s in stems for d in dirs]
     for path in candidates:
         try:
             if path.is_file():
@@ -178,7 +211,8 @@ def _summary_from_figures(figures: Dict[str, Any], *, units: int, drawing_number
 
 def regenerate_quote_from_workbook(workbook_path: str | Path, *, units: int, drawing_number: str,
                                    client: str, out_dir: Optional[str | Path] = None,
-                                   job_stem: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+                                   job_stem: Optional[str] = None,
+                                   summary_dirs: Tuple[Path, ...] = ()) -> Tuple[str, Dict[str, Any]]:
     """Read an amended workbook + three re-entered fields and write a fresh client quote HTML.
 
     Returns (quote_html_path, figures). Reuses build_quote_html so the override quote is
@@ -196,8 +230,11 @@ def regenerate_quote_from_workbook(workbook_path: str | Path, *, units: int, dra
 
     # START FROM THE JOB, NOT FROM THE PRICE. Without this the quotation loses everything the
     # estimator did not restate — the GA image, the material, the finish, the operation list.
-    _base = find_original_summary(path)
+    # The stem is passed EXPLICITLY. Deriving it from this file's name is what broke the lookup
+    # for every portal regeneration -- see find_original_summary.
+    _base = find_original_summary(path, stem=stem, extra_dirs=tuple(summary_dirs))
     figures["source_summary_found"] = _base is not None
+    figures["source_summary_stem"] = stem
     if _base is None:
         print(f"   [regen] no saved summary found for '{stem}' — the quote will carry the price "
               f"and the three fields you entered, but not the GA image, materials or operations "
@@ -252,15 +289,27 @@ def run_estimator_override(uploaded_workbook: str | Path, *, units: int, drawing
 
     # 2. The client quote, regenerated from that record, to the AISheets share.
     q_dir = Path(quote_dir or _default_quote or xlsx_dir)
-    quote_path, _ = regenerate_quote_from_workbook(
+    # The ORIGINAL folder is offered as a place to look: the estimator's sheet may sit beside the
+    # run's outputs on the share, and by this point we are holding a copy somewhere else.
+    quote_path, _qfig = regenerate_quote_from_workbook(
         override_xlsx, units=int(units), drawing_number=str(drawing_number),
-        client=str(client), out_dir=q_dir, job_stem=stem)
+        client=str(client), out_dir=q_dir, job_stem=stem,
+        summary_dirs=(src.parent,))
+
+    # THE SECOND HALF OF THE SAME SILENCE. The flag saying whether the job's own summary was
+    # found lived only in the figures regenerate_quote_from_workbook returns, and this discarded
+    # them into `_`. So the one fact that explains a thin quote never left this function: the CLI
+    # could not print it, the route could not return it, and the page could not show it. An
+    # estimator saw a quotation missing its GA and had nothing to tell them why.
+    figures["source_summary_found"] = bool(_qfig.get("source_summary_found"))
+    figures["source_summary_stem"] = _qfig.get("source_summary_stem") or stem
 
     return {
         "override_xlsx": str(override_xlsx),
         "quote_html": quote_path,
         "figures": figures,
         "job_stem": stem,
+        "source_summary_found": figures["source_summary_found"],
     }
 
 
@@ -298,12 +347,20 @@ def main() -> None:
             "price_source": res["figures"]["source_label"],
             "sell_price": res["figures"].get("sell_price"),
             "unit_cost": res["figures"].get("unit_cost"),
+            # WHETHER THE QUOTE IS THE WHOLE QUOTE. False means the job's own summary was not
+            # found, so the GA image, the real materials and the real operation list are absent
+            # and the page must say so rather than let a thin quotation pass as a complete one.
+            "source_summary_found": res.get("source_summary_found", False),
+            "source_summary_stem": res["figures"].get("source_summary_stem"),
         }))
     else:
         print(f"  price read:    £{res['figures']['price']:.2f} "
               f"({res['figures']['source_label']})")
         print(f"  override sheet: {res['override_xlsx']}")
         print(f"  client quote:   {res['quote_html']}")
+        if not res.get("source_summary_found"):
+            print(f"  NOTE: no saved summary for '{res['job_stem']}' — the quote carries your "
+                  f"price but not the GA image, materials or operations from the original run.")
 
 
 if __name__ == "__main__":

@@ -762,6 +762,12 @@ async def estimate_override(
         "units": units, "drawing": drawing, "client": client,
         "price": result.get("price"), "price_source": result.get("price_source"),
         "sell_price": result.get("sell_price"), "unit_cost": result.get("unit_cost"),
+        # IS THIS THE WHOLE QUOTE? False means the job's own summary was not found, so the
+        # quotation carries the estimator's price but none of the engine's reading of the
+        # drawings -- no GA image, "Material: As drawing", two generic operations. It looks
+        # like a finished document and it is a thin one, so the page has to be able to say so.
+        "source_summary_found": bool(result.get("source_summary_found")),
+        "source_summary_stem": result.get("source_summary_stem"),
     }
 
 

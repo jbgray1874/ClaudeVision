@@ -1549,6 +1549,24 @@ regen.onclick = async () => {
     head.innerHTML = '<span style="color:var(--ok)">Client quote regenerated from your amended '
       + 'sheet' + (price ? " at " + price + " per unit" : "") + '.</span>';
     regenOut.appendChild(head);
+
+    /* A THIN QUOTE LOOKS EXACTLY LIKE A FINISHED ONE, WHICH IS WHY THIS HAS TO BE SAID.
+       When the job's own summary is not found, the quotation still renders: correct branding,
+       correct price, correct customer — and no GA image, "Material: As drawing" and two
+       generic operations in place of the real ones. Nothing on the page or the document
+       distinguishes that from a complete quotation, so an estimator sends it. */
+    if(j.source_summary_found === false){
+      const warn = document.createElement("li");
+      warn.innerHTML = '<span style="color:var(--warn,#e8a33d)">This quote carries your price '
+        + 'but NOT the engine\'s reading of the drawings — no general-arrangement image, '
+        + '"Material: As drawing", and a generic operations list. The saved summary for '
+        + '<b>' + (j.source_summary_stem || j.drawing || "this job") + '</b> was not found on '
+        + 'this machine, so there was nothing to carry over. It is the original run\'s '
+        + '<b>' + (j.source_summary_stem || "&lt;job&gt;") + '.json</b>: it is only on the '
+        + 'machine that ran the estimate. Check before sending.</span>';
+      regenOut.appendChild(warn);
+    }
+
     [{path:j.quote_html, name:"Client quote (regenerated)"},
      {path:j.override_xlsx, name:"Amended workbook (manual override record)"}]
       .filter(d => d.path).forEach(d => {
