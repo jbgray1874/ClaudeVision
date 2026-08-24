@@ -939,16 +939,23 @@
         <table>
           <tr><th style="width:34%">Check</th><th>How</th></tr>
           <tr><td><b>The service is running the new code</b></td>
-              <td>The start window prints <code>running commit &lt;hash&gt;</code>. A page can be newer
-              than the service behind it — a pull changes files on disk, a running process goes on
-              serving what it imported. <b>Restart after every pull.</b></td></tr>
-          <tr><td><b>Only one service is running</b></td>
-              <td>A console on one port and a Windows service on another will both poll the same
-              queue. <code>Get-Service SDIIntelligence</code> — stop one.</td></tr>
+              <td><code>.\tools\start\restart-service.ps1</code> after every pull. A page can be
+              newer than the service behind it — a pull changes files on disk, a running process
+              goes on serving what it imported, and the symptom reaches you as a form failing on a
+              field the service has never heard of. The script ends the process actually holding the
+              port and then checks the commit the <em>site</em> reports against this checkout:
+              <code>serving commit &lt;hash&gt; — matches this checkout</code>. Anything else is a
+              restart that did not happen.</td></tr>
+          <tr><td><b>Nothing else holds the port</b></td>
+              <td>A console started by hand and a scheduled task will both try to serve 8072, and
+              the one that got there first wins silently. <code>restart-service.ps1</code> names and
+              ends whatever is listening, which is the step a plain stop-and-start misses.</td></tr>
           <tr><td><b>The runner is connected</b></td>
-              <td>Only needed for a full estimate. Parity, print and the quote regen all run on the
-              service box. Start it with <code>-Server</code> pointing at the right port — it
-              defaults to 8071.</td></tr>
+              <td>Only needed for a full estimate. Parity, print, the quote regen and the Document
+              Manager extract all run without it. <code>install-runner-task.ps1</code> installs and
+              starts it, and keeps it up: it restarts on failure and is checked every five minutes.
+              <b>Never</b> run either installer with <code>-Remove</code> mid-estimate — that ends
+              the engine and files nothing.</td></tr>
           <tr><td><b>The shares are reachable</b></td>
               <td><code>/api/health</code> lists every root and whether it can be read. Use UNC
               paths, never mapped drives — a Windows service has no drive letters.</td></tr>
@@ -1106,7 +1113,58 @@
       <!-- 8 -->
       <div class="panel reveal">
         <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
-          8 · The rest of the tool <span class="chip c-done" style="font-size:10px">Regression</span></h3>
+          8 · Document Manager extract <span class="chip c-prog" style="font-size:10px">New</span></h3>
+        <p class="sub" style="margin-bottom:12px">The second drawing source: ask Document Manager to
+        walk a project's SOLIDWORKS references and build a pack, instead of hunting for one on the
+        share. It runs on <em>their</em> host — a different machine and a different SOLIDWORKS seat
+        from the estimating runner — so this section works even while our own seat is down.</p>
+        <table>
+          <tr><th style="width:34%">Do</th><th>Expect</th></tr>
+          <tr><td><b>Before anything else</b> — <code>/api/estimate/dm/health</code>.</td>
+              <td><code>configured: True · reachable: True · com_available: True</code>. If
+              <code>com_available</code> is false, stop: their host cannot drive SOLIDWORKS and every
+              extract will fail. That is their end, not ours.</td></tr>
+          <tr><td>Fill in units, drawing number and client, then press
+              <b>Extract DesignDrawingPack</b>.</td>
+              <td>A panel opens with <b>project</b>, <b>customer</b> and <b>assembly folder</b>
+              already filled in — <code>10575-02</code> for Dyson gives <code>10575 / Dyson /
+              10575-02</code>. Check the project is right before pressing Extract; the split is a
+              guess at your numbering, not a rule.</td></tr>
+          <tr><td>Press <b>Extract</b>.</td>
+              <td>It reports the job id, then progress every few seconds. <b>Minutes, not
+              seconds.</b> A page that sits on "working" is normal here.</td></tr>
+          <tr><td>Wait for it to finish.</td>
+              <td>The file browser opens at the folder DM wrote, and the note names how many files
+              landed. Pick the drawings you want — they merge into the list like any others, badged
+              as coming from Document Manager.</td></tr>
+          <tr><td>Run the estimate on that pack.</td>
+              <td>Staged and priced exactly as a pack from the share. The source it came from
+              changes nothing downstream.</td></tr>
+          <tr><td><b>Mix the two sources</b> — add a drawing from the share with the same filename
+              as one from DM.</td>
+              <td>The later one wins and replaces it in place; everything else is left alone. One
+              entry, not two.</td></tr>
+          <tr><td>Press <b>Cancel</b> during an extract, then press Extract again.</td>
+              <td>Cancel stops <em>us watching</em>, not their host. The second press queues behind
+              the first — DM runs one heavy extract at a time.</td></tr>
+        </table>
+        <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
+          <b>It is wrong if</b> the panel does not open (the API is not configured — the button
+          falls back to browsing the share and its tooltip says so), the extract reports success but
+          the browser opens nothing, or the pack lands somewhere this machine cannot read. That last
+          one is not a fault in the API: DM reports where it wrote the pack as a path on
+          <em>its</em> host, and the service says plainly when we cannot reach it.
+        </div>
+        <p class="sub" style="margin-top:10px"><b>Note</b> the folder holds more than the drawings.
+        DM writes <code>possible_candidates/</code> and <code>selection_report.html</code> alongside
+        them, which is why the pack is <em>opened</em> for you to choose from rather than imported
+        whole.</p>
+      </div>
+
+      <!-- 9 -->
+      <div class="panel reveal">
+        <h3 style="font-family:var(--disp);font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">
+          9 · The rest of the tool <span class="chip c-done" style="font-size:10px">Regression</span></h3>
         <table>
           <tr><th style="width:34%">Do</th><th>Expect</th></tr>
           <tr><td><b>Multi-drawing enquiry</b> — add several unrelated PDFs, choose a method,
