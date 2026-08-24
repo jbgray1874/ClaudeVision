@@ -102,10 +102,16 @@ DB_TRUST_CERT = _opt("SDI_DB_TRUST_CERT", "yes")
 # separate parent folders made impossible.
 #
 # REPLACED ON A RE-RUN, NOT ADDED TO, so a second run cannot inherit a drawing that has since
-# been taken off the list. K: maps to \\sdi-dc01\shareddata$\Shared.
+# been taken off the list.
+#
+# THE DEFAULT IS A UNC PATH, NOT K:. A mapped drive letter belongs to a login session, so a
+# service running under a service account has no K: at all — the first attempt failed with
+# "The system cannot find the path specified: 'K:\\'" for exactly that reason. K: maps to
+# \\sdi-dc01\shareddata$\Shared, so this is the same folder by a name that works everywhere.
 STAGING_ROOT = _opt(
     "SDI_STAGING_ROOT",
-    r"K:\Estimating\Completed\AI Estimating\AISheets\SDIIntelligenceAISheet")
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"
+    r"\SDIIntelligenceAISheet")
 
 
 # ── Document Manager (DM) extract tool ──────────────────────────────────────

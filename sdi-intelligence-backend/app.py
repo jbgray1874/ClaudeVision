@@ -22,6 +22,7 @@ Security
 import os
 import logging
 import mimetypes
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Query
@@ -117,9 +118,35 @@ def health(x_sdi_key: str | None = Header(default=None)):
     for root in config.FILE_ROOTS:
         roots_ok.append({"root": root, "reachable": os.path.isdir(root)})
     db = db_status()
-    overall = all(r["reachable"] for r in roots_ok) and db["status"] in ("ok", "not_configured")
+
+    # WHERE THE DRAWINGS GET STAGED, AND WHETHER THAT WILL ACTUALLY WORK.
+    #
+    # Every run now copies its drawings into this folder before the engine reads them, so a
+    # staging root that is unset, unreachable, or outside the readable roots stops every
+    # estimate. The first failure in the field was a mapped drive in the default — "cannot find
+    # the path specified: 'K:\'" — and the only way to tell whether the service had picked up
+    # a corrected .env was to try another run and read the error. Reporting it here answers that
+    # in one request, the same reason the commit is reported.
+    _staging = (getattr(config, "STAGING_ROOT", "") or "").strip()
+    staging = {
+        "root": _staging or None,
+        "configured": bool(_staging),
+        "reachable": bool(_staging) and os.path.isdir(_staging),
+        "within_file_roots": bool(_staging) and _within_a_root(_staging) is not None,
+        "mapped_drive": bool(re.match(r"^[A-Za-z]:", _staging)),
+    }
+    if staging["mapped_drive"]:
+        staging["note"] = ("This is a mapped drive letter. Drive letters belong to a login "
+                           "session, so a service running as a service account will not have "
+                           "it. Use the \\\\server\\share form.")
+    elif not staging["within_file_roots"] and staging["configured"]:
+        staging["note"] = "Not inside SDI_FILE_ROOTS — add it, or runs will be refused."
+
+    overall = (all(r["reachable"] for r in roots_ok)
+               and db["status"] in ("ok", "not_configured")
+               and staging["reachable"] and staging["within_file_roots"])
     return {"status": "ok" if overall else "degraded", "commit": SDI_COMMIT,
-            "file_roots": roots_ok, "database": db}
+            "file_roots": roots_ok, "database": db, "staging": staging}
 
 
 @app.get("/api/roots")
