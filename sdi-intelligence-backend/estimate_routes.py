@@ -286,6 +286,33 @@ def _busy_runner() -> Optional[Run]:
     return None
 
 
+def _active_run_for(client: str, drawing: str) -> Optional[Run]:
+    """A run of THIS job that has not finished — queued or running.
+
+    STAGING MADE A SECOND RUN OF THE SAME JOB DESTRUCTIVE, AND NOTHING SAID SO.
+
+    The staged folder is one per client and job, and it is CLEARED before it is filled so a
+    re-run cannot inherit a drawing that was taken off the list. That is right for a re-run
+    that happens after the first has finished, and it is the whole reason staging exists.
+
+    But staging happens the moment Run is pressed, not when the run is claimed. So pressing
+    Run again while the first is still working deletes the folder the ENGINE IS READING, and
+    fills it with a different set of drawings. The first estimate then prices some mixture of
+    the two packs, or fails on a file that vanished under it, and the sheet it produces looks
+    entirely ordinary. This is the only way in the service to corrupt a run that was going
+    perfectly well.
+
+    Queueing a DIFFERENT job behind this one is fine and stays fine -- a hundred-drawing
+    enquiry is a hundred different job folders. It is only the same client and the same
+    drawing that collide, because they are the same folder.
+    """
+    for run in _RUNS.values():
+        if run.status in {"queued", "running"} \
+                and run.client == client and run.drawing_number == drawing:
+            return run
+    return None
+
+
 # ── request models ───────────────────────────────────────────────────────────
 class EstimateRequest(BaseModel):
     client: str
@@ -504,6 +531,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         if _within_a_root(_src) is None:
             raise HTTPException(
                 403, f"That drawing is outside the shares this service may read: {_src}")
+
+    # BEFORE ANYTHING IS DELETED. Staging clears this job's folder, and clearing it under a
+    # run that is reading it is the one way to quietly corrupt an estimate that was going
+    # perfectly well. So the same job twice is refused while the first is still live, and the
+    # refusal names the run holding it in the form the page knows how to offer a release for.
+    with _LOCK:
+        _expire_dead_claims()
+        dup = _active_run_for(client, drawing)
+    if dup is not None:
+        _for = int(time.time() - (dup.started_at or dup.queued_at or time.time()))
+        raise HTTPException(
+            409,
+            f"{drawing} for {client} is already {dup.status} ({_for}s). Running it again now "
+            f"would replace the drawings that run is reading, so it is refused. Wait for it "
+            f"to finish, or release it: POST /api/estimate/{dup.run_id}/abandon")
 
     try:
         staged = staging.stage(_sources, client=client, drawing=drawing)

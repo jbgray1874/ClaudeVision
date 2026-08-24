@@ -288,6 +288,14 @@
            with a queue behind it, twice in one afternoon. -->
       <button class="btn-stop" id="stop" hidden>Stop this estimate</button>
 
+      <!-- AND THE RUN IN FRONT OF YOURS, WHICH STOP CANNOT REACH.
+           Stop acts on THIS tab's run. When your job is queued behind somebody else's -- or
+           behind a claim whose runner has died, which looks identical from here and lasts
+           the full 900-second lease -- there was nothing on screen to press. The release
+           existed only in the 409 refusal, and letting jobs queue instead of refusing them
+           orphaned that path entirely. Shown only while something is actually in front. -->
+      <button class="btn-stop" id="release" hidden>Release the run in front of this one</button>
+
       <!-- THE BUTTON IS HERE; THE BOOK BEHIND IT IS NOT. It is deliberately inert and stays
            inert: there is no China endpoint, no China rate set, no China route. A control
            that quietly did nothing would be read as a run that produced no file, so it is
@@ -568,6 +576,11 @@ let poll     = null;
    handler returned the page no longer knew what was running — a run id the page cannot name
    is a run the page cannot stop, however many buttons it grows. */
 let runId    = null;
+/* THE RUN IN FRONT OF THIS ONE, if the service said there was one when it accepted the job.
+   Declared up here with the rest of the run state and NOT beside its button: a `const` read
+   from a function that runs before the declaration is a temporal-dead-zone ReferenceError,
+   which is what silently killed "Add all" and took the rest of the script with it. */
+let blockedBy = "";
 /* Named rather than typed as a bare number. The runner beats at lease/6 capped to 30s, so
    telling somebody "stopping now" when it is up to half a minute away is how a stop that IS
    working gets pressed three more times. */
@@ -1243,8 +1256,41 @@ stopBtn.onclick = async () => {
   }
 };
 
+/* Elements looked up INSIDE the handler, for the reason given at `blockedBy`. */
+$("release").onclick = async () => {
+  const btn = $("release");
+  if(!blockedBy || btn.disabled) return;
+  if(!confirm("Release the estimate in front of this one?\n\nUse this when that run is dead "
+            + "— the runner was closed, crashed, or the machine slept — and its claim is "
+            + "holding the desktop until the 15-minute lease runs out.\n\nIt frees the queue "
+            + "so your job can start. It does NOT reach into a runner that is genuinely "
+            + "still working: that one carries on, and its result is refused when it "
+            + "reports.")) return;
+  btn.disabled = true;
+  try{
+    const r = await api("/api/estimate/" + blockedBy + "/abandon", {method:"POST"});
+    if(r.ok){
+      line("Released the run in front. This job should be claimed within a few seconds.", "w");
+      blockedBy = ""; btn.hidden = true;
+    }else{
+      /* 409 here means it finished on its own between the page offering this and the click,
+         which is a good outcome and must not read as a failure. */
+      const detail = (await r.text()).slice(0,200);
+      line(/already (done|error|finished)/i.test(detail)
+             ? "It finished on its own — nothing to release."
+             : "Could not release it: " + detail,
+           /already/i.test(detail) ? "w" : "e");
+      blockedBy = ""; btn.hidden = true;
+    }
+  }catch(e){
+    line("Could not release it — " + e.message, "e");
+    btn.disabled = false;
+  }
+};
+
 runBtn.onclick = async () => {
   if(running || runBtn.disabled) return;
+  blockedBy = ""; $("release").hidden = true;   // last run's blocker is not this run's
   runDest = null;              // the previous run's folder is not this run's
   running = true; refresh();
   log.innerHTML=""; out.innerHTML="";
@@ -1293,6 +1339,16 @@ runBtn.onclick = async () => {
     // start time, and the page must show the folder that exists rather than the
     // one it guessed a second earlier.
     if(started.output_path){ runDest = started.output_path; refresh(); }
+    /* A RUN HOLDING THE DESKTOP THAT NOTHING ON SCREEN CAN RELEASE.
+       The lease is 900s, deliberately, so a quiet engine is not killed mid-estimate. The
+       cost is that a runner which has actually DIED leaves its claim looking busy for a
+       full fifteen minutes, and the queue waits behind a process that no longer exists.
+       Stop only ever acted on THIS tab's run, so there was nothing to press: the release
+       existed solely on the 409 path, and allowing jobs to queue orphaned it.
+       The person reading this is standing in front of the machine and knows whether it is
+       working, which the service cannot. So offer it, and say what it does not do. */
+    blockedBy = started.waiting_behind || "";
+    if(blockedBy){ $("release").hidden = false; }
   }catch(e){
     setStatus("err","Failed to start"); line("Could not start the run — "+e.message);
     running=false; refresh(); return;
@@ -1328,6 +1384,9 @@ runBtn.onclick = async () => {
     // "Queued" is a real state now and the estimator should see it rather than a
     // spinner that means nothing: the job is waiting for a runner to take it.
     if(s.status === "queued"){ setStatus("run","Queued"); return; }
+    /* Past queued means the desktop is ours, so whatever was in front has gone. Leaving the
+       release button up would invite somebody to abandon THEIR OWN running estimate. */
+    if(blockedBy){ blockedBy = ""; $("release").hidden = true; }
     if(s.status === "running"){
       setStatus("run", s.runner ? "Running on " + s.runner : "Running");
       return;

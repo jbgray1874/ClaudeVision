@@ -172,10 +172,28 @@ Write-Host "Starting it now (the trigger alone would wait for the next logon)...
 try {
     Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
     Start-Sleep -Seconds 3
-    $info = Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo
-    Write-Host "    task state: $((Get-ScheduledTask -TaskName $TaskName).State)" -ForegroundColor Green
-    if ($info.LastTaskResult -ne 0 -and $info.LastTaskResult -ne 267009) {
-        Write-Host "    last result: $($info.LastTaskResult) - check the log below" -ForegroundColor Yellow
+    $info  = Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo
+    $state = (Get-ScheduledTask -TaskName $TaskName).State
+    Write-Host "    task state: $state" -ForegroundColor Green
+
+    # STATE IS THE ANSWER; LastTaskResult IS NOT. Running means it worked, whatever code the
+    # scheduler last recorded - and the codes it records on a SUCCESSFUL install look alarming.
+    # 0x800710E0 is "refused, an instance is already running", which is -MultipleInstances
+    # IgnoreNew doing precisely its job when the sweep trigger and this manual start coincide.
+    # Printing that in yellow under a task that is up reads as a failure and sends somebody
+    # looking for a problem that is not there.
+    if ($state -ne "Running") {
+        $why = switch ($info.LastTaskResult) {
+            0          { "the runner started and then exited - see the log below" }
+            267011     { "it has not run yet" }
+            267014     { "the last run was stopped by hand" }
+            2147942402 { "file not found - check the python path above" }
+            2147943645 { "the service cannot be started in its current state" }
+            2147946720 { "an instance was already running, so this start was refused" }
+            default    { "code $($info.LastTaskResult)" }
+        }
+        Write-Host "    NOT running: $why" -ForegroundColor Yellow
+        Write-Host "    try:  Start-ScheduledTask -TaskName '$TaskName'" -ForegroundColor Yellow
     }
 } catch {
     Write-Host "    could not start it: $($_.Exception.Message)" -ForegroundColor Red
