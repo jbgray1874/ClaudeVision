@@ -412,8 +412,15 @@
       <h2>Regenerate a client quote from an amended sheet</h2>
       <p class="hint">Already edited an estimate workbook? Name it here with the units, drawing
          number and client, and it becomes a fresh client quote — saved to the AI Estimating
-         share along with the amended sheet, kept as the manual-override record.
-         No drawings needed: this never re-runs the engine or re-reads a drawing.</p>
+         share along with the amended sheet, kept as the manual-override record.</p>
+      <!-- STATED AS A REQUIREMENT, NOT AS AN ASIDE. "No drawings needed" was the last clause
+           of a paragraph, while the Job panel above says in red that a drawing and a runner
+           are "still needed" - and the red line wins every time. Somebody with a sheet to
+           re-quote and no drawings to hand concluded twice that they could not proceed. -->
+      <p class="note" style="margin:0 0 10px">
+         <strong>Needs only units, drawing number and client.</strong> No drawings, and no
+         estimating runner: this never re-runs the engine or re-reads a drawing, so it works
+         on a machine that has never run an estimate, months after the job.</p>
 
       <!-- TWO WAYS TO NAME THE SHEET, AND THE SHARE IS THE USUAL ONE.
            This offered an upload and nothing else, so regenerating a quote from a run's own
@@ -670,7 +677,16 @@ function refresh(){
   if(running){
     req.textContent = ""; req.style.color = "";
   }else if(missing.length){
-    req.textContent = "Still needed: " + missing.join(", "); req.style.color = "";
+    /* SAY WHICH BUTTON THIS BLOCKS, because it does not block them all.
+       "Still needed: ... at least one drawing, an estimating runner" is about running an
+       ESTIMATE. It sits at the top of the page in red, so it reads as the whole page being
+       unavailable - and the two panels below it, Parity and Regenerate, need neither a
+       drawing nor a runner. An estimator with a sheet to re-quote and no drawings to hand
+       reads that line and reasonably concludes they cannot proceed. */
+    req.textContent = "Still needed to RUN AN ESTIMATE: " + missing.join(", ")
+                    + ". The parity report and the client-quote regeneration below need "
+                    + "none of this — only units, client and drawing number.";
+    req.style.color = "";
   }else if(drawingNumberLooksWrong()){
     req.textContent = "Check the drawing number — " + safe(drawing.value)
                     + " does not appear in any drawing you have added";
