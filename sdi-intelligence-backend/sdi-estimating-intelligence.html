@@ -301,42 +301,38 @@
          disabled until there is. Use the UK estimator above.</p>
     </section>
 
-    <!-- ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════
-         A SEPARATE PATH, DELIBERATELY. The estimate above is the engine's; this is the
-         estimator's. Tim opens the workbook, edits it, saves it, and — hours or days later —
-         comes back with that amended sheet. Nothing is re-read and no drawing is needed: the
-         sheet IS the answer, and this turns it into a client quote. Only the CLIENT QUOTE is
-         regenerated; the AI job report and provenance stay as the engine wrote them, so the
-         two accounts of the job never get mixed up. -->
+    <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
     <section class="card">
-      <h2>Regenerate a client quote from an amended sheet</h2>
-      <p class="hint">Already edited an estimate workbook? Upload it here with the units, drawing
-         number and client, and it becomes a fresh client quote — saved to the AI Estimating
-         share along with the amended sheet, kept as the manual-override record.
-         No drawings needed: this never re-runs the engine or re-reads a drawing.</p>
+      <h2>Drawings</h2>
+      <p class="hint">Add a job folder, or individual PDFs, DXFs, DWGs and SolidWorks models. Add as many times as you need.</p>
 
-      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
-        <button id="pickOverride">Choose amended workbook…</button>
-        <span class="p" id="overrideName"><span class="pending">No workbook chosen</span></span>
-        <input id="overrideFile" type="file" accept=".xlsx" hidden>
+      <ul class="files" id="fileList"></ul>
+      <p class="empty" id="fileEmpty">No drawings added yet.</p>
+      <p class="req" id="printNote"></p>
+      <p class="req" id="dmNote"></p>
+
+      <div style="display:flex;gap:9px;flex-wrap:wrap">
+        <!-- RENAMED AHEAD OF THE ENDPOINT IT WILL CALL. Today this browses the shares and adds a
+             job folder, which is what a run needs. When the Document Manager extract endpoint
+             lands it is called from here instead, and the pack comes back the same way. The
+             label leads the wiring deliberately: an estimator learns one button, not two. -->
+        <button id="addFolder" title="Add the job folder for this estimate. Will call the Document Manager extract when that endpoint is ready.">Extract DesignDrawingPack</button>
+        <button id="addFiles">Add drawing files…</button>
+        <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
+             tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
+             folder copy of the same drawing and leaves the rest alone. Removing one is the
+             same ✕ as any other. -->
+        <button id="addFromDm" disabled title="Checking…">Add from Document Manager…</button>
+        <!-- THE PACK, ON PAPER. Checking an estimate means having the drawings in front of you,
+             and that meant opening the job folder on the share and printing twelve files one at
+             a time. One button, one PDF, bookmarked per drawing. -->
+        <button id="printDrawings" disabled>Print drawings…</button>
+        <button id="clearFiles" style="margin-left:auto">Clear</button>
       </div>
-
-      <p class="note" style="margin-top:10px">Uses the <strong>units, drawing number and
-         client</strong> entered at the top of this page. The workbook must have been opened and
-         <strong>saved in Excel</strong> at least once, so its totals are calculated.</p>
-
-      <!-- NO RATE BOOK IS NAMED HERE BECAUSE NONE IS USED, and that is the point. Every other
-           estimating button on this page must say UK or China, because it reads a book of rates
-           and two unlabelled estimates are indistinguishable afterwards. This button reads no
-           book at all: the price comes off the estimator's OWN saved sheet, whichever rates it
-           was built from and whatever they have since changed by hand. Labelling it "UK" would
-           claim a provenance it does not have. It says whose number it is instead. -->
-      <button class="btn-run" id="regen" disabled style="margin-top:10px">
-        Estimator Client Report Regen — from your amended sheet</button>
-      <p class="req" id="regenReq"></p>
-      <ul class="out" id="regenOut"></ul>
     </section>
+  </div>
 
+  <!-- ══ RUN ════════════════════════════════════════════════════════ -->
     <!-- ══ PARITY ═══════════════════════════════════════════════════
          THE COMPARISON, FOR A JOB ALREADY RUN. The card above regenerates a quote; this one
          answers a different question — how close was the engine to the estimator? Neither side
@@ -392,34 +388,42 @@
       <ul class="out" id="parityOut"></ul>
     </section>
 
-    <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
+    <!-- ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════
+         A SEPARATE PATH, DELIBERATELY. The estimate above is the engine's; this is the
+         estimator's. Tim opens the workbook, edits it, saves it, and — hours or days later —
+         comes back with that amended sheet. Nothing is re-read and no drawing is needed: the
+         sheet IS the answer, and this turns it into a client quote. Only the CLIENT QUOTE is
+         regenerated; the AI job report and provenance stay as the engine wrote them, so the
+         two accounts of the job never get mixed up. -->
     <section class="card">
-      <h2>Drawings</h2>
-      <p class="hint">Add a job folder, or individual PDFs, DXFs, DWGs and SolidWorks models. Add as many times as you need.</p>
+      <h2>Regenerate a client quote from an amended sheet</h2>
+      <p class="hint">Already edited an estimate workbook? Upload it here with the units, drawing
+         number and client, and it becomes a fresh client quote — saved to the AI Estimating
+         share along with the amended sheet, kept as the manual-override record.
+         No drawings needed: this never re-runs the engine or re-reads a drawing.</p>
 
-      <ul class="files" id="fileList"></ul>
-      <p class="empty" id="fileEmpty">No drawings added yet.</p>
-      <p class="req" id="printNote"></p>
-      <p class="req" id="dmNote"></p>
-
-      <div style="display:flex;gap:9px;flex-wrap:wrap">
-        <button id="addFolder">Add job folder…</button>
-        <button id="addFiles">Add drawing files…</button>
-        <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
-             tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
-             folder copy of the same drawing and leaves the rest alone. Removing one is the
-             same ✕ as any other. -->
-        <button id="addFromDm" disabled title="Checking…">Add from Document Manager…</button>
-        <!-- THE PACK, ON PAPER. Checking an estimate means having the drawings in front of you,
-             and that meant opening the job folder on the share and printing twelve files one at
-             a time. One button, one PDF, bookmarked per drawing. -->
-        <button id="printDrawings" disabled>Print drawings…</button>
-        <button id="clearFiles" style="margin-left:auto">Clear</button>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <button id="pickOverride">Choose amended workbook…</button>
+        <span class="p" id="overrideName"><span class="pending">No workbook chosen</span></span>
+        <input id="overrideFile" type="file" accept=".xlsx" hidden>
       </div>
-    </section>
-  </div>
 
-  <!-- ══ RUN ════════════════════════════════════════════════════════ -->
+      <p class="note" style="margin-top:10px">Uses the <strong>units, drawing number and
+         client</strong> entered at the top of this page. The workbook must have been opened and
+         <strong>saved in Excel</strong> at least once, so its totals are calculated.</p>
+
+      <!-- NO RATE BOOK IS NAMED HERE BECAUSE NONE IS USED, and that is the point. Every other
+           estimating button on this page must say UK or China, because it reads a book of rates
+           and two unlabelled estimates are indistinguishable afterwards. This button reads no
+           book at all: the price comes off the estimator's OWN saved sheet, whichever rates it
+           was built from and whatever they have since changed by hand. Labelling it "UK" would
+           claim a provenance it does not have. It says whose number it is instead. -->
+      <button class="btn-run" id="regen" disabled style="margin-top:10px">
+        Estimator Client Report Regen — from your amended sheet</button>
+      <p class="req" id="regenReq"></p>
+      <ul class="out" id="regenOut"></ul>
+    </section>
+
   <section class="card" style="margin-top:18px">
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <h2 style="margin:0;flex:1">Run</h2>
