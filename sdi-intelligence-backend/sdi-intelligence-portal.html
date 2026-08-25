@@ -256,7 +256,6 @@
       <a data-view="golive"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Go-Live Guide</a>
       <a data-view="testing"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2"/><line x1="8" y1="2" x2="16" y2="2"/></svg>Testing</a>
       <div class="grp">Govern</div>
-      <a data-view="permissions"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Permissions</a>
       <a data-view="architecture"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6m11-11h-6M7 12H1"/></svg>Architecture</a>
       <a data-view="rnd"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2"/><line x1="8" y1="2" x2="16" y2="2"/><line x1="7.5" y1="13" x2="16.5" y2="13"/></svg>R&amp;D Capture</a>
       <a data-view="servers"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="11" width="20" height="6" rx="1"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="14" x2="6.01" y2="14"/></svg>Servers</a>
@@ -1096,7 +1095,88 @@
       <div class="pagehead">
         <div class="kicker">Quality Assurance</div>
         <h1>Testing</h1>
-        <p class="sub">Browse and open all AI estimate workbooks for parallel run review. Click any file to open it. Copy engine output here after each run for JR and the estimating team to review.</p>
+        <p class="sub">The agreed procedure for full testing from <b>Wednesday 2 September 2026</b>, and the workbooks to review. Click any file to open it.</p>
+      </div>
+
+      <!-- The agreed procedure, as circulated to estimating. Owners are explicit on every step
+           because the one measured finding so far is that shared ownership is no ownership. -->
+      <div class="note reveal" style="border-color:rgba(232,163,61,.4);background:linear-gradient(180deg,rgba(232,163,61,.06),var(--surface));margin-bottom:20px">
+        <h4 style="color:var(--accent)">Where the tool lives during testing</h4>
+        The AI Estimating tool <b>stays on James Gray's machine</b> until the server remediation works are
+        finished. It is <b>not rolled out for general access</b> during testing — you do not run it, and you do
+        not need to. Everything reaches you as files in a folder and comes back as a spreadsheet.
+      </div>
+
+      <div class="pagehead" style="padding-top:0">
+        <div class="kicker">From 2 September</div><h1 style="font-size:22px">The testing procedure</h1>
+        <p class="sub">Four stages. Each one names who holds it.</p>
+      </div>
+
+      <div class="tools" style="margin-bottom:36px">
+        <div class="tool reveal" style="grid-column:1/-1">
+          <div class="th"><span class="nm">1 &nbsp;·&nbsp; Set up and run the job</span><span class="chip c-acc">James Gray</span></div>
+          <div class="ds">Checks the <b>Live Enquiry Log</b>, collects the drawings from the Design &amp; Production folders, creates a new folder in <b>Live Enquiry</b>, and uploads the drawings into the tool.</div>
+          <div class="muted" style="margin-top:10px;font-size:12.5px">
+            <b style="color:var(--ink)">A run takes between 10 minutes and 2 hours</b> depending on how many drawings
+            there are and how complex the job is. That is expected, not a fault — plan around it rather than chasing it.<br><br>
+            <b style="color:var(--ink)">When it finishes the folder contains three things:</b>
+            <ul style="margin:6px 0 0 16px;line-height:1.9">
+              <li>A <b>populated estimating sheet</b> — the one you work in</li>
+              <li>A <b>generated quote</b> ready to send to the customer</li>
+              <li>An <b>HTML report</b> setting out how the AI reached the estimate</li>
+            </ul>
+            <div style="margin-top:10px">James then e-mails <b>estimating@wearesdi.com</b> to say the folder is ready.
+            <b>Nothing is expected from you until that e-mail arrives.</b></div>
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.05s;grid-column:1/-1;border-color:rgba(78,201,127,.25)">
+          <div class="th"><span class="nm">2 &nbsp;·&nbsp; Review and amend</span><span class="chip c-ok">Estimating team</span></div>
+          <div class="ds">Work from the populated estimating sheet with the drawings alongside it. Put any changes <b>into that same spreadsheet</b> — not into a new one, not into an e-mail — and send it back to James.</div>
+          <div class="muted" style="margin-top:10px;font-size:12.5px">
+            <b style="color:var(--warn)">Save it in Excel before you send it.</b> The totals are formulas and Excel
+            only writes the computed values on save. The tool will tell you if this was missed rather than produce a
+            blank quote, but it costs a round trip.<br><br>
+            Changing a number in the sheet <b>is</b> the feedback — it is what the parity report at stage 3 is built
+            from. You do not need to write an explanation at this stage; you will be asked about the differences
+            that matter.
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.1s;grid-column:1/-1">
+          <div class="th"><span class="nm">3 &nbsp;·&nbsp; Regenerate and run parity</span><span class="chip c-acc">James Gray</span></div>
+          <div class="ds">Uploads your amended estimate into the tool and regenerates the customer quote. Then runs a <b>parity report</b> between the two estimates and sends the queries — why did these change? — to <b>estimating@wearesdi.com</b>.</div>
+          <div class="muted" style="margin-top:10px;font-size:12.5px">
+            <b style="color:var(--ink)">Filing convention, so the folder stays readable:</b>
+            <ul style="margin:6px 0 0 16px;line-height:1.9">
+              <li>The amended <b>spreadsheet</b> is saved in the folder as <b>V2</b></li>
+              <li>The updated <b>client quote overwrites the original</b> — deliberately <b>not</b> versioned, because nothing going to a customer should say V2</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.15s;grid-column:1/-1;border-color:rgba(78,201,127,.25)">
+          <div class="th"><span class="nm">4 &nbsp;·&nbsp; Answer the parity queries</span><span class="chip c-ok">Estimating team · 7 working days</span></div>
+          <div class="ds">Review that week's parity reports and send answers back to James <b>within 7 working days</b>.</div>
+          <div class="muted" style="margin-top:10px;font-size:12.5px">
+            <b style="color:var(--ink)">This is the stage the whole thing exists for.</b> A changed number tells us
+            <i>that</i> the engine was off; your answer tells us <i>why</i>, and that is what lets the model be
+            retaught so the same problem stops recurring. It is also the one place where differences between how
+            each of us estimates become visible, which is worth having in its own right.
+          </div>
+        </div>
+      </div>
+
+      <div class="note reveal" style="animation-delay:.2s;margin-bottom:36px;border-color:rgba(109,168,232,.3)">
+        <h4 style="color:var(--info)">Training — one hour, before this starts</h4>
+        A one-hour session, run by James Gray with the programme lead, covers what each report means and what is
+        needed from you when sending notes back on a parity report. If you take one thing from this page:
+        <b>the answers at stage 4 are the deliverable</b>, and they are what the 4 September gate is evidenced on.
+      </div>
+
+      <div class="pagehead" style="padding-top:0">
+        <div class="kicker">Files</div><h1 style="font-size:22px">AI estimate workbooks</h1>
+        <p class="sub">Browse and open the workbooks from the AISheets share. Click any file to open it.</p>
       </div>
 
       <!-- folder label -->
@@ -1127,7 +1207,9 @@
           <tr><td><b>Headline total</b></td><td>AI total vs manual benchmark. Target &plusmn;5%. Flag anything outside &plusmn;10%.</td><td><span class="chip c-done" style="font-size:10px">Primary</span></td></tr>
           <tr><td><b>Bought-in lines</b></td><td>Every ELECTRICS, FIXING*, SLOTTEDTUBE*, VINYL*, SUBPLAS* should have a price and supplier from UDEF. <code>catalogue_unpriced</code> = missing from UDEF &mdash; report code + description.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
           <tr><td><b>Quantities</b></td><td>Per-part quantities match the drawing BOM. Parts at qty&nbsp;1 that should be qty&nbsp;2 (e.g. legs) = BOM tree issue &mdash; note drawing number + part code.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
-          <tr><td><b>Quality Summary tab</b></td><td>Review confidence, geometry source and flags per part. Red flags need investigation before sign-off.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
+          <tr><td><b>AI Provenance tab</b></td><td>Named <i>Quality Summary</i> in earlier builds. Shows how each field was arrived at &mdash; <code>CONFIRMED</code>, <code>MEASURED</code>, <code>REPORTED</code>, <code>ASSUMED</code>, <code>UNKNOWN</code> &mdash; rather than a single score per part. An <code>ASSUMED</code> material or gauge is what to look at first.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
+          <tr><td><b>Decision Report tab</b></td><td>One row per part with the reasoning behind it. Start here when a number looks wrong &mdash; it says <i>why</i> the engine decided what it did, and names anything it could not decide at all.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
+          <tr><td><b>Drawings the estimate was built from</b></td><td>On the HTML job report. Read the list against what you know is in the job &mdash; a pack missing a part is the expensive mistake, and a thin total on an incomplete pack is an incomplete pack, not a cheap job.</td><td><span class="chip c-done" style="font-size:10px">Primary</span></td></tr>
           <tr><td><b>Customer / revision</b></td><td>If blank on older drawings, fill in manually &mdash; does not affect calculations.</td><td><span class="chip c-plan" style="font-size:10px">Minor</span></td></tr>
           <tr><td><b>Labour lines</b></td><td>Laser, fold, weld, powder coat broadly in line with manual. Zero time on a part that clearly needs ops = flag.</td><td><span class="chip c-plan" style="font-size:10px">Check</span></td></tr>
         </table>
@@ -1462,22 +1544,10 @@
     </section>
 
     <!-- ===== PERMISSIONS ===== -->
-    <section class="view" id="permissions">
-      <div class="pagehead"><div class="kicker">Govern</div><h1>Permissions</h1>
-        <p class="sub">Who can view, run and administer. In production these map to Azure Entra ID groups and are enforced server-side — never in the browser.</p></div>
-      <div class="panel reveal">
-        <table>
-          <tr><th>User</th><th>Role</th><th>Dashboards</th><th>Run tools</th><th>Files</th><th>Admin</th></tr>
-          <tr><td><b>James</b></td><td>Owner · Admin</td><td>✓</td><td>✓</td><td>R / W</td><td>✓</td></tr>
-          <tr><td><b>Tim</b></td><td>Estimator</td><td>✓</td><td>✓</td><td>R</td><td>—</td></tr>
-          <tr><td><b>Howard</b></td><td>Estimator</td><td>✓</td><td>✓</td><td>R</td><td>—</td></tr>
-          <tr><td><b>Tony</b></td><td>Estimator</td><td>✓</td><td>view</td><td>R</td><td>—</td></tr>
-          <tr><td><b>MD / FD</b></td><td>Executive</td><td>✓</td><td>—</td><td>reports</td><td>—</td></tr>
-        </table>
-      </div>
-      <div class="note reveal" style="animation-delay:.08s"><h4>How "permissions set up by you" works in production</h4>
-        Roles live in Azure Entra ID groups you manage. The portal reads the signed-in user's group claims and the API checks them on every request. The static prototype shows the model only — it cannot grant or enforce access on its own.</div>
-    </section>
+    <!-- The Permissions page was removed on 25 Aug 2026. It described a role model that does not
+         exist: the portal has NO user authentication today (a go-live gate, plan task due 21 Aug,
+         unstarted), so a table saying who may run what was a picture of an intention, not a
+         control. The real position now lives on this page, under "No user authentication". -->
 
     <!-- ===== ARCHITECTURE ===== -->
     <section class="view" id="architecture">
@@ -1501,15 +1571,18 @@
           <rect x="30" y="94" width="72" height="28" rx="3" fill="#17171a" stroke="#26262b"/>
           <text x="66" y="112" text-anchor="middle" font-size="10" fill="#9b9ba3">James / Admin</text>
           <rect x="118" y="94" width="72" height="28" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="154" y="112" text-anchor="middle" font-size="10" fill="#9b9ba3">Tim / Howard / Tony</text>
+          <text x="154" y="107" text-anchor="middle" font-size="9" fill="#9b9ba3">Estimating</text>
+          <text x="154" y="118" text-anchor="middle" font-size="8" fill="#6a6a72">no login · not rolled out</text>
           <rect x="30" y="132" width="160" height="1" fill="#26262b"/>
 
           <!-- ── SERVER ZONE ── -->
           <rect x="10" y="170" width="200" height="180" rx="6" fill="#121214" stroke="#e8a33d" stroke-width="1.5" stroke-dasharray="4 3"/>
-          <text x="110" y="190" text-anchor="middle" font-size="9" fill="#e8a33d" letter-spacing="2" font-weight="600">10.0.16.151 · WINDOWS SERVER</text>
+          <!-- Not a server. The engine and portal run on James Gray's laptop and will do through
+               testing, per the 2 September procedure and the 19 Aug status report. -->
+          <text x="110" y="190" text-anchor="middle" font-size="9" fill="#e8a33d" letter-spacing="2" font-weight="600">JAMES GRAY'S LAPTOP · NOT A SERVER</text>
           <rect x="26" y="198" width="168" height="50" rx="4" fill="#17171a" stroke="#e8a33d" stroke-width="1"/>
           <text x="110" y="218" text-anchor="middle" font-size="11" fill="#e8a33d" font-weight="700">FastAPI Backend</text>
-          <text x="110" y="233" text-anchor="middle" font-size="10" fill="#9b9ba3">app.py · port 8071</text>
+          <text x="110" y="233" text-anchor="middle" font-size="10" fill="#9b9ba3">app.py · port 8072</text>
           <text x="38" y="248" font-size="9" fill="#6a6a72">/api/health · /api/files · /api/file · /api/db/ping</text>
 
           <rect x="26" y="258" width="76" height="40" rx="3" fill="#17171a" stroke="#26262b"/>
@@ -1591,7 +1664,9 @@
           <text x="749" y="338" text-anchor="middle" font-size="10" fill="#e8a33d">HistoricalEstimates</text>
           <text x="749" y="350" text-anchor="middle" font-size="9" fill="#6a6a72">304 jobs · pending reload</text>
           <rect x="676" y="356" width="146" height="20" rx="3" fill="#0d0d0f" stroke="#26262b"/>
-          <text x="749" y="370" text-anchor="middle" font-size="9" fill="#6a6a72">AIBot · AIAgentPW2026 · ODBC 18</text>
+          <!-- The service account's PASSWORD was printed here, on a page anyone with the portal
+               open can read. Rotation is a separate outstanding action; displaying it is not. -->
+          <text x="749" y="370" text-anchor="middle" font-size="9" fill="#6a6a72">AIBot · credential in .env · ODBC 18</text>
 
           <!-- Promotion arrows inside DB zone -->
           <line x1="664" y1="81" x2="634" y2="81" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
@@ -1600,8 +1675,10 @@
 
           <!-- ── ANTHROPIC API ── -->
           <rect x="476" y="390" width="358" height="52" rx="4" fill="#0d0d0f" stroke="#26262b"/>
-          <text x="655" y="412" text-anchor="middle" font-size="10" fill="#9b9ba3" font-weight="600">Anthropic API (Claude Sonnet · Opus 4.8)</text>
-          <text x="655" y="428" text-anchor="middle" font-size="9" fill="#6a6a72">Vision extraction · Tech Radar web search · fallback pricing · ANTHROPIC_API_KEY</text>
+          <!-- Vision extraction is xAI Grok, not Anthropic. The page had it the wrong way round. -->
+          <text x="655" y="408" text-anchor="middle" font-size="10" fill="#9b9ba3" font-weight="600">xAI Grok vision (api.x.ai) · Anthropic API (Opus 4.8)</text>
+          <text x="655" y="422" text-anchor="middle" font-size="9" fill="#6a6a72">xAI: drawing vision — rank 40 coverage net, cached per page · XAI_API_KEY</text>
+          <text x="655" y="434" text-anchor="middle" font-size="9" fill="#6a6a72">Anthropic: bought-in price fallback · Tech Radar web search · ANTHROPIC_API_KEY</text>
 
           <!-- ── ARROWS ── -->
           <!-- Browser ↔ FastAPI -->
@@ -1642,8 +1719,25 @@
       </div>
 
       <div class="note reveal" style="margin-top:16px;animation-delay:.1s">
-        <h4>Security boundary</h4>
-        The browser only ever talks to the FastAPI backend on port 8071 — same origin, no CORS complexity. The backend validates every request with <code>X-SDI-Key</code>, enforces UNC root containment on every file path, and is the only process that touches SDILive or the file shares. The browser never has credentials, never sees a UNC path directly, and never touches the VPN.
+        <h4>Security boundary — what it does and does not do</h4>
+        The browser only ever talks to the FastAPI backend, same origin, no CORS complexity. The backend
+        <b>enforces UNC root containment on every file path</b> and is the only process that touches SDILive or the
+        file shares. The browser never holds credentials, never sees a UNC path directly and never touches the VPN.
+        Those parts are real.<br><br>
+        <b>What it does not do:</b> the <code>X-SDI-Key</code> check is written but <code>SDI_API_KEY</code> is
+        <b>blank</b>, so the gate is <b>off</b>. This page previously said the backend "validates every request",
+        which overstated it — the mechanism exists, it is not switched on.
+      </div>
+
+      <div class="note reveal" style="margin-top:12px;animation-delay:.13s;border-color:rgba(232,84,79,.4);background:linear-gradient(180deg,rgba(232,84,79,.06),var(--surface))">
+        <h4 style="color:var(--fail)">⚠ No user authentication</h4>
+        <b>The portal has no user login today.</b> Anyone who can reach it gets everything on it — there is no
+        per-user role, no admin tier and nothing enforced by identity. Windows Authentication with AD group
+        control is a go-live gate (plan task due 21 August, unstarted).<br><br>
+        This is the reason the <b>Permissions</b> page was removed on 25 August. It showed a table of who could
+        view, run and administer, which read as a control that was in force. It was a picture of an intention.
+        Until Entra ID or Windows auth is in front of the portal, the honest statement is this one, and the
+        practical mitigation is that the tool is not rolled out beyond James Gray's machine during testing.
       </div>
       <div class="note reveal" style="margin-top:12px;animation-delay:.16s">
         <h4>To harden for wider access</h4>
@@ -1651,7 +1745,9 @@
           <li>Set <code>SDI_API_KEY</code> in <code>.env</code> (currently blank — gate is off)</li>
           <li>Add Azure Entra ID SSO in front of the portal for user-level authentication</li>
           <li>Restrict <code>SDI_ALLOWED_ORIGINS</code> to the exact portal URL once hosted</li>
+          <li>Add Windows Authentication + AD group control — the go-live gate, currently unstarted</li>
           <li>Move the service account to Windows auth (<code>SDI_DB_AUTH=windows</code>) to eliminate the SQL password from the env file</li>
+          <li><b style="color:var(--fail)">Rotate the <code>AIBot</code> SQL password.</b> It was a literal in the source tree and was printed on this very diagram, so it is in the git history and cannot be un-published by deleting it. Rotation has to come first; removing it from files is the second step, not the fix.</li>
         </ul>
       </div>
     </section>
@@ -2200,6 +2296,13 @@
           <div><div style="font-family:var(--mono);font-size:15px;color:var(--ink)">7 / 19</div><div class="muted" style="font-size:11.5px;margin-top:2px">Estimates answered since 5 May, 1 formally signed off. This is the evidence the gate is measured on.</div></div>
         </div>
         <div class="muted" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px">
+          <b style="color:var(--ink)">From Wednesday 2 September we are in full testing.</b> The tool stays on James
+          Gray's machine until the server remediation works are done, and is not rolled out for general access — so
+          jobs reach you as a folder and an e-mail, not as something you run. The four-stage loop, who holds each
+          stage and the 7-working-day turnaround on parity queries are set out on the
+          <a href="#testing" style="color:var(--accent)">Testing page</a>. <b>Read that before 2 September.</b>
+        </div>
+        <div class="muted" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px">
           <b style="color:var(--ink)">Why you are being told this.</b> Four of the eight acceptance gates are evidenced by
           estimator review, and nothing has come back since 28 July. The capability is not what is at risk on
           4 September &mdash; the evidence is. <b>A sheet you look at and return is worth more to the programme
@@ -2458,7 +2561,7 @@
        + '<div style="margin-top:8px;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase"><span>1 May</span><span>26 May</span><span>15 Jun</span><span style="color:var(--accent);font-weight:600">SEPT / OCT GO-LIVE</span></div>',
      inputs:['SolidWorks PDF', 'DXF files', 'job folder path'],
      outputs:['Costed Excel workbook', 'Parity report HTML', 'Normalised JSON', 'Audit trail'],
-     tech:['Python', 'PyMuPDF', 'pdfplumber', 'Claude Sonnet Vision', 'ezdxf', 'pyodbc \u2192 SQL Server'],
+     tech:['Python', 'PyMuPDF', 'pdfplumber', 'xAI Grok vision', 'SOLIDWORKS COM API', 'ezdxf', 'pyodbc \u2192 SQL Server'],
      phase:'Phase 1 \u00b7 GO-LIVE SEPT / OCT 2026',
      invoke:'Invoked from the command line by the estimating team during the parallel run. See <b>AI Tools</b> for the exact commands and arguments. UI-triggered runs are planned post-go-live.'},
 
@@ -2633,17 +2736,19 @@
      desc:'Professional screen recording and live streaming \u2014 AI demos, presentations, facility content and virtual camera for Teams.',
      detail:'OBS (Open Broadcaster Software) is the capture and broadcast layer at SDI. Record AI tool demos, estimating engine runs, design presentations and facility walkthroughs for the portal, SEEN content and client materials. Free, open source, runs locally. Download from obsproject.com if not already installed.',
      sections:[
-       {title:'First-time setup', body:'Settings \u2192 Video: Base Resolution 1920\u00d71080, Output 1920\u00d71080, FPS 30. Settings \u2192 Output \u2192 Recording: Format <b>MP4</b>, set a recordings folder (e.g. <code>C:\\SDIRecordings</code>). Settings \u2192 Audio: Desktop Audio = your speakers; Mic = your microphone. Encoder: <b>NVENC</b> if you have an NVIDIA GPU (faster, no CPU hit), otherwise <b>x264</b>.'},
-       {title:'Scene \u00b7 AI Demo / Estimating Engine', body:'Add Scene \u201cEngine Demo\u201d. Sources \u2192 + \u2192 <b>Display Capture</b> (full screen). Add <b>Audio Input Capture</b> (your microphone). Press <b>Start Recording</b> before running the engine. Stop when done. The MP4 lands in your configured recordings folder. Use this for parity run walkthroughs and portal demonstrations.'},
+       {title:'First-time setup', body:'Settings \u2192 Video: Base Resolution 1920\u00d71080, Output 1920\u00d71080, FPS 30. Settings \u2192 Output \u2192 Recording: set a recordings folder (e.g. <code>C:\\SDIRecordings</code>). Settings \u2192 Audio: Desktop Audio = your speakers; Mic = your microphone.'
+         +'<br><br><b>Do not record straight to plain MP4.</b> An MP4 is only finalised when recording stops cleanly \u2014 a crash, a power loss or a flat battery leaves an <b>unplayable file with the whole recording lost</b>. Record to <b>MKV</b> (or <b>hybrid MP4</b> if your OBS offers it) and use <b>File \u2192 Remux Recordings</b> to produce an MP4 afterwards; remuxing is a container swap, it takes seconds and re-encodes nothing. This matters here because an engine run can last two hours.'
+         +'<br><br><b>Encoder:</b> <b>NVENC</b> on an NVIDIA GPU, <b>Intel QuickSync (QSV)</b> on an Intel Core Ultra machine \u2014 which is what the estimating laptop is, so NVENC will not be offered there. <b>x264</b> is the fallback and the only one that costs real CPU, which is worth avoiding while the engine is running.'},
+       {title:'Scene \u00b7 AI Demo / Estimating Engine', body:'Add Scene \u201cEngine Demo\u201d. Sources \u2192 + \u2192 <b>Display Capture</b> (full screen). Add <b>Audio Input Capture</b> (your microphone). Press <b>Start Recording</b> before running the engine. Stop when done \u2014 the file lands in your configured recordings folder, then remux to MP4. Use this for parity run walkthroughs and portal demonstrations.<br><br>If Display Capture shows a <b>black screen</b>, that is the laptop\u2019s hybrid graphics, not a broken install: use <b>Window Capture</b> on the specific window instead, or set OBS to the same GPU in Windows \u2192 Settings \u2192 Display \u2192 Graphics.'},
        {title:'Scene \u00b7 Presentation (screen + face cam)', body:'Add Scene \u201cPresentation\u201d. Sources: <b>Window Capture</b> (select your slides or browser) + <b>Video Capture Device</b> (webcam) + <b>Audio Input</b>. Drag the webcam source to the bottom-right and resize it. Use for recording portal walkthroughs, AI tool demonstrations or client-facing demos.'},
        {title:'Scene \u00b7 Facility Walkthrough', body:'Add Scene \u201cFacility\u201d. Sources: <b>Video Capture Device</b> (GoPro via USB, external camera or built-in laptop camera). Set output resolution to match your camera. Exports as MP4 for LinkedIn video, the SEEN newsletter or the wearesdi.com media library.'},
-       {title:'Virtual Camera \u2192 Teams / Zoom / Meet', body:'Tools \u2192 VirtualCam \u2192 <b>Start Virtual Camera</b>. In Teams: Settings \u2192 Devices \u2192 Camera \u2192 select <b>OBS Virtual Camera</b>. Everything in your active OBS scene broadcasts live into the call \u2014 switch scenes mid-call to share different layouts. If Virtual Camera isn\u2019t shown, install the <b>obs-virtualcam</b> plugin (free, GitHub).'},
+       {title:'Virtual Camera \u2192 Teams / Zoom / Meet', body:'<b>Start Virtual Camera</b> is a button in the <b>Controls</b> dock, bottom-right of the main window, under Start Recording. In Teams: Settings \u2192 Devices \u2192 Camera \u2192 select <b>OBS Virtual Camera</b>. Everything in your active OBS scene broadcasts live into the call \u2014 switch scenes mid-call to share different layouts. Start the virtual camera <i>before</i> joining, or Teams may not list it. <br><br><i>Corrected 25 Aug 2026:</i> this page previously said Tools \u2192 VirtualCam and told you to install the <b>obs-virtualcam</b> plugin. The virtual camera has been built into OBS on Windows since version 26.1 \u2014 the plugin is obsolete and installing it on a current OBS is more likely to break the feature than enable it.'},
        {title:'Streaming live \u00b7 LinkedIn Live / YouTube', body:'Settings \u2192 Stream: select <b>YouTube</b> or <b>Custom RTMP</b> for LinkedIn Live. Paste your stream key from YouTube Studio or LinkedIn Live Events (you need to create the live event in advance on each platform to get the key). Press <b>Start Streaming</b>. OBS handles encoding; the platform handles distribution.'},
        {title:'Hotkeys worth setting', body:'Settings \u2192 Hotkeys. Recommended: <b>Ctrl+Shift+R</b> Start/Stop Recording, <b>Ctrl+Shift+S</b> Start/Stop Streaming, <b>F1, F2\u2026</b> per scene. Hotkeys fire even when OBS is minimised \u2014 useful when the engine is running full-screen and you need to stop recording without switching windows.'}
      ],
      inputs:['Screen / window capture', 'Webcam or external camera (GoPro, USB cam)', 'Microphone', 'Stream key for LinkedIn Live or YouTube'],
      outputs:['MP4 recordings (local)', 'Live stream to YouTube / LinkedIn', 'Virtual camera feed into Teams / Zoom / Meet'],
-     tech:['OBS Studio \u2014 free \u00b7 obsproject.com', 'OBS VirtualCam plugin', 'x264 / NVENC encoder', 'LinkedIn Live / YouTube Studio'],
+     tech:['OBS Studio \u2014 free \u00b7 obsproject.com', 'built-in Virtual Camera (OBS 26.1+)', 'NVENC / Intel QSV / x264 encoder', 'LinkedIn Live / YouTube Studio'],
      phase:'Live \u00b7 introduced by James',
      invoke:'Launch OBS from the desktop. Select the right scene for the task, hit <b>Start Recording</b> or <b>Start Streaming</b>. Recordings land in your configured output folder (Settings \u2192 Output \u2192 Recording Path). Stop recording before closing the engine window.'},
 
@@ -2677,7 +2782,7 @@
   const links=[...document.querySelectorAll('.nav a')];
   const views=[...document.querySelectorAll('.view')];
   const crumb=document.getElementById('crumb');
-  const labels={dashboard:'Dashboard',roadmap:'AI Roadmap',tools:'AI Tools',files:'Files & Directories',reports:'Status Reports',permissions:'Permissions',architecture:'Architecture & Security',golive:'Go-Live Guide',rnd:'R&D Capture',servers:'Server Infrastructure',programme:'AI Programme'};
+  const labels={dashboard:'Dashboard',roadmap:'AI Roadmap',tools:'AI Tools',files:'Files & Directories',reports:'Status Reports',architecture:'Architecture & Security',golive:'Go-Live Guide',rnd:'R&D Capture',servers:'Server Infrastructure',programme:'AI Programme'};
   function go(id,updateHash){
     if(!id||id==='undefined')return;
     links.forEach(l=>l.classList.toggle('active',l.dataset.view===id));

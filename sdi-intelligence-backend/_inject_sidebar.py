@@ -73,7 +73,7 @@ NAV = [
         ("Testing", "/#testing", None),
     ]),
     ("Govern", [
-        ("Permissions", "/#permissions", None),
+        # Permissions removed 25 Aug 2026 — it described a role model the portal does not enforce.
         ("Architecture", "/#architecture", None),
         ("R&amp;D Capture", "/#rnd", None),
         ("Servers", "/#servers", None),
