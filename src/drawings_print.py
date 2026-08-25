@@ -35,6 +35,16 @@ PRINTABLE = (".pdf",)
 # "not a printable drawing" is a different message from "we did not recognise this".
 KNOWN_UNPRINTABLE = (".dxf", ".dwg", ".sldprt", ".sldasm", ".step", ".stp", ".iges", ".igs")
 
+# THINGS THE ENGINE WROTE, WHICH WERE NEVER PART OF THE PACK.
+#
+# `_sw_native_extract.json` is the SOLIDWORKS extract the engine itself produces and drops beside
+# the drawings. It was being listed under the red NOT PRINTED heading, beneath a sentence reading
+# "these are part of the job and are not in this print" — which is untrue of it twice over: it is
+# not part of the job and it is not a drawing. A warning that cries wolf about a file nobody was
+# ever going to print is how the whole list stops being read, and the list exists to catch the one
+# case that matters: a real drawing missing from the paper.
+ENGINE_ARTIFACTS = ("_sw_native_extract.json",)
+
 
 class PrintInputError(ValueError):
     """Something the estimator can fix, phrased for them. The backend turns it into a 400."""
@@ -66,6 +76,8 @@ def collect(paths: List[str]) -> Tuple[List[Path], List[Tuple[Path, str]]]:
         if key in seen:
             return
         seen.add(key)
+        if p.name.lower() in ENGINE_ARTIFACTS:      # never part of the pack; not a gap in it
+            return
         suffix = p.suffix.lower()
         if suffix in PRINTABLE:
             printable.append(p)
@@ -111,20 +123,44 @@ def _cover(doc: Any, job: Optional[str], printed: List[Path],
         y += gap
 
     line(f"Drawings for {job}" if job else "Drawings", size=16, gap=26)
-    line(f"{len(printed)} drawing{'' if len(printed) == 1 else 's'} follow this page.", gap=22)
+    n = len(printed)
+    line(f"{n} drawing{'' if n == 1 else 's'} {'follows' if n == 1 else 'follow'} this page.",
+         gap=22)
 
     for p in printed:
         line(f"    {p.name}", size=9, gap=12)
 
-    y += 14
-    line(f"NOT PRINTED — {len(skipped)} file{'' if len(skipped) == 1 else 's'}",
-         size=11, colour=(0.7, 0.1, 0.1), gap=18)
-    line("These are part of the job and are not in this print. They are listed so the pack",
-         size=9, colour=(0.35, 0.35, 0.35), gap=11)
-    line("is not reviewed as if it were complete.",
-         size=9, colour=(0.35, 0.35, 0.35), gap=18)
-    for p, why in skipped:
-        line(f"    {p.name}  —  {why}", size=9, colour=(0.35, 0.35, 0.35), gap=12)
+    # A SKIPPED FILE WHOSE DRAWING IS ON THE PAPER ANYWAY IS NOT A GAP.
+    #
+    # A pack routinely carries the same GA as both a PDF and a DWG. Listing the DWG in red under
+    # "part of the job and not in this print" says the reviewer is missing a drawing they are in
+    # fact holding — it was printed, from the PDF beside it. Only a stem with NO printed
+    # counterpart is a real hole in the paper, and separating the two is what keeps the red list
+    # worth reading.
+    printed_stems = {p.stem.lower() for p in printed}
+    covered = [(p, w) for p, w in skipped if p.stem.lower() in printed_stems]
+    missing = [(p, w) for p, w in skipped if p.stem.lower() not in printed_stems]
+
+    if missing:
+        y += 14
+        line(f"NOT PRINTED — {len(missing)} file{'' if len(missing) == 1 else 's'}",
+             size=11, colour=(0.7, 0.1, 0.1), gap=18)
+        line("These are part of the job and are not in this print. They are listed so the pack",
+             size=9, colour=(0.35, 0.35, 0.35), gap=11)
+        line("is not reviewed as if it were complete.",
+             size=9, colour=(0.35, 0.35, 0.35), gap=18)
+        for p, why in missing:
+            line(f"    {p.name}  —  {why}", size=9, colour=(0.35, 0.35, 0.35), gap=12)
+
+    if covered:
+        y += 14
+        line(f"ALSO IN THE PACK — {len(covered)} file{'' if len(covered) == 1 else 's'}, "
+             f"already on the paper", size=10, colour=(0.35, 0.35, 0.35), gap=16)
+        line("The same drawing was printed from its PDF. Nothing is missing here.",
+             size=9, colour=(0.45, 0.45, 0.45), gap=16)
+        for p, _why in covered:
+            line(f"    {p.name}  —  printed from {p.stem}.PDF",
+                 size=9, colour=(0.45, 0.45, 0.45), gap=12)
 
 
 def build(paths: List[str], out_path: str | Path,
@@ -174,7 +210,12 @@ def build(paths: List[str], out_path: str | Path,
             _cover(merged, job, printed, skipped)
             # The cover took page 1, so every bookmark moves down by one.
             toc = [[lvl, title, page + 1] for lvl, title, page in toc]
-            toc.insert(0, [1, "Contents — and what is not printed", 1])
+            # Name the bookmark for what the sheet actually says. When every skipped file's
+            # drawing was printed from its PDF twin there is no gap, and a bookmark promising
+            # "what is not printed" would send a reviewer looking for a problem that is not there.
+            _stems = {p.stem.lower() for p in printed}
+            _gap = any(p.stem.lower() not in _stems for p, _ in skipped)
+            toc.insert(0, [1, "Contents — and what is not printed" if _gap else "Contents", 1])
 
         merged.set_toc(toc)
         out = Path(out_path)

@@ -980,14 +980,18 @@ let shown=[];                 // the listable FILES in the folder on screen
 async function openBrowser(m, opts){
   mode = m; selected = null;
   dmPick = !!(opts && opts.dm);
-  dTitle.textContent = m==="folder" ? "Select a job folder"
+  // opts.title / opts.help let a caller say WHY this picker opened, for the case where the
+  // button pressed was not called "browse" — see the Document Manager fallback.
+  dTitle.textContent = (opts && opts.title) ? opts.title
+                     : m==="folder" ? "Select a job folder"
                      : m==="files"  ? "Select drawing files"
                      : m==="batch"  ? "Select the drawings in this enquiry"
                      : m==="pickone"? (pickOne ? pickOne.title : "Select a file")
                      : "Completed estimates";
   dChoose.style.display = (m==="output" || m==="pickone") ? "none" : "";
   dAll.style.display = (m==="files" || m==="batch") ? "" : "none";
-  dHelp.textContent = (m==="files" || m==="batch")
+  dHelp.textContent = (opts && opts.help) ? opts.help
+                    : (m==="files" || m==="batch")
                     ? "Click files to select. Click a folder to open it."
                     : m==="folder" ? "Open a folder, then Use this folder."
                     : m==="pickone" ? "Click the file to choose it. Click a folder to open it."
@@ -1262,10 +1266,24 @@ function dmStopPolling(){
 
 $("addFolder").onclick = () => {
   /* No API configured means this button keeps the job it has always had. Silently browsing
-     when somebody expected an extract would be worse, so the note says which one happened. */
+     when somebody expected an extract would be worse, so the note says which one happened.
+
+     IT DID NOT SAY SO. dmSay() writes into #dmProgress, which lives INSIDE #dmExtractBox —
+     the panel this branch never opens. So the explanation went into a hidden element and the
+     button appeared to ignore its own label: press "Extract DesignDrawingPack", get an
+     unexplained "Select a job folder". #dmNote is the one that is actually on screen, and
+     the picker now says it in its own title too, where somebody who missed the note will
+     still see it. */
   if(!dmApiReady){
     dmSay("");
-    openBrowser("folder");
+    const n = $("dmNote");
+    if(n) n.textContent =
+      "Document Manager is not configured on this machine (SDI_DM_API_BASE / SDI_DM_API_KEY), "
+      + "so Extract DesignDrawingPack cannot ask for a pack. The share browser opened instead — "
+      + "pick the job folder there.";
+    openBrowser("folder", {
+      title: "Select a job folder — Document Manager not configured",
+      help:  "DM could not be asked for a pack, so this is the share. Open a folder, then Use this folder."});
     return;
   }
   const box = $("dmExtractBox");
