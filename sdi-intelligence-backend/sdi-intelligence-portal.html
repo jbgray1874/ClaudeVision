@@ -1314,13 +1314,30 @@
           <tr><td>Include a DXF or a SolidWorks model in the list and print again.</td>
               <td>A <b>cover sheet</b> appears first, naming what could not be printed. Only PDFs
               can be printed; the cover exists so a part-pack is never mistaken for a whole one.</td></tr>
+          <tr><td>Print a pack that holds <b>both the PDF and the DWG of the same drawing</b>
+              &mdash; which most packs do.</td>
+              <td>The DWG is listed under <b>“already on the paper”</b>, not in the red NOT PRINTED
+              list. The drawing <i>was</i> printed, from its PDF twin. <b>Corrected 25 Aug:</b> it
+              used to be reported as missing from the print, which told a reviewer they were short
+              a drawing they were holding.</td></tr>
+          <tr><td>Print a pack the engine has already run, so
+              <code>_sw_native_extract.json</code> sits beside the drawings.</td>
+              <td>It does not appear anywhere on the cover. It is written by the engine, it is not
+              part of the job and it is not a drawing &mdash; it was being listed under a heading
+              asserting the first two.</td></tr>
+          <tr><td>Print a pack where a drawing genuinely has no PDF.</td>
+              <td><b>That</b> is what the red list is for, and it should now be the only thing in
+              it. The bookmark reads <code>Contents — and what is not printed</code>; when nothing
+              is genuinely absent it reads just <code>Contents</code>.</td></tr>
           <tr><td>Print from the browser dialog.</td>
               <td>Printer and settings come from the browser and Windows — not from Office.
               <b>Confirm scale and orientation on a real A3 sheet.</b></td></tr>
         </table>
         <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
           <b>It is wrong if</b> a drawing is missing with no cover sheet saying so, or a drawing
-          prints at the wrong scale.
+          prints at the wrong scale &mdash; and equally if the red list names something that is not
+          actually absent. A list that cries wolf is a list nobody reads, and it exists for the one
+          case that matters.
         </div>
       </div>
 
@@ -1359,6 +1376,17 @@
           <tr><td>Point the AI side at a job whose JSON is on another machine.</td>
               <td>A message naming the <code>&lt;stem&gt;.json</code> it wanted and where it
               looked.</td></tr>
+          <tr><td><b>Upload</b> the AI workbook instead of choosing it from the share &mdash;
+              drag <code>&lt;job&gt;_&lt;date&gt;_&lt;time&gt;.xlsx</code> straight in.</td>
+              <td>It resolves the job's summary from the <b>filename</b> and runs, exactly as the
+              share path does. <b>This was broken until 25 Aug:</b> the upload was spooled to a
+              random temp name, so it always went looking for <code>tmpXXXXXXXX.json</code> and
+              failed with a message quoting a path nobody has ever seen. Choosing from the share
+              worked, uploading could not, and nothing on screen said why.</td></tr>
+          <tr><td>Upload the manual side as an older <code>.xls</code>.</td>
+              <td>Accepted and read. <code>.xls</code> goes through xlrd, which returns computed
+              values, so unlike the regen path it does <b>not</b> need opening and saving in Excel
+              first.</td></tr>
         </table>
         <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
           <b>It is wrong if</b> a missing value ever shows as <code>£0.00</code>. That reads as a
@@ -1441,7 +1469,9 @@
         </table>
         <div style="border-left:2px solid var(--fail);background:rgba(232,84,79,.07);padding:10px 14px;margin-top:12px;font-size:13px;color:var(--ink-dim)">
           <b>It is wrong if</b> the panel does not open (the API is not configured — the button
-          falls back to browsing the share and its tooltip says so), the extract reports success but
+          falls back to browsing the share, and since 25 Aug says so in the note under the list and
+          in the picker's own title &mdash; it used to write that explanation into a hidden element,
+          so the button appeared to ignore its own label), the extract reports success but
           the browser opens nothing, or the pack lands somewhere this machine cannot read. That last
           one is not a fault in the API: DM reports where it wrote the pack as a path on
           <em>its</em> host, and the service says plainly when we cannot reach it.
@@ -1464,10 +1494,32 @@
               filename here is two different enquiries and must <b>not</b> override.</td></tr>
           <tr><td><b>Stop a run</b> mid-estimate.</td>
               <td>The queue frees immediately; the runner stops at its end.</td></tr>
-          <tr><td><b>Queue a second job</b> while one is running.</td>
+          <tr><td><b>Queue a second job</b> while one is running &mdash; a <b>different</b> client
+              or drawing number.</td>
               <td>Accepted and queued, naming what it is waiting behind. Refusing it was a bug.</td></tr>
+          <tr><td><b>Press Run twice on the SAME client and drawing number.</b></td>
+              <td><b>Refused</b>, with the run in front named and a
+              <b>Release the run in front of this one</b> button offered. This is the opposite of
+              the row above and both are correct: a different job queues, the same job is refused.
+              Re-running <b>replaces</b> the staged folder, so a second press used to delete the
+              drawings out from under the estimate that was mid-flight. The refusal happens
+              <i>before</i> staging touches anything. Do not file this as the bug above.</td></tr>
           <tr><td><b>Browse output</b> from the Testing page and open a quote and a workbook.</td>
-              <td>Reports render in a tab; workbooks download for Excel.</td></tr>
+              <td>Reports render in a tab; workbooks download for Excel &mdash; with their real
+              filenames, not a GUID.</td></tr>
+          <tr><td><b>Sort a file listing</b> by name, then type, then size. Do it on more than one
+              page.</td>
+              <td>Sorts on every listing site-wide, not just the first. Click the same heading
+              again to reverse it.</td></tr>
+          <tr><td>Create a <b>sub-folder</b> on a share and refresh the listing.</td>
+              <td>It appears and can be opened.</td></tr>
+          <tr><td><b>Collapse the left rail</b>, reload the page, then expand it.</td>
+              <td>It collapses to icons, the button reads <b>Expand</b>, and the choice survives
+              the reload.</td></tr>
+          <tr><td>Check the <b>build pill</b> at the foot of the rail.</td>
+              <td><code>host · commit</code>, and the commit matches
+              <code>git rev-parse --short HEAD</code>. If it does not, stop testing &mdash; you are
+              testing code that is not the code you pulled, which has already cost a day once.</td></tr>
           <tr><td><b>Every page</b> — portal, estimating, guide, FAQ, technical reference, worked
               example, R&amp;D capture.</td>
               <td>Left navigation present, amber theme, we.are.sdi logo top left, and each page
