@@ -271,7 +271,13 @@
       <div class="crumb">SDI&nbsp;/&nbsp;<b id="crumb">Dashboard</b></div>
       <div class="top-r">
         <span class="pill live" id="health-pill"><span class="dot"></span>ENGINE ONLINE</span>
-        <span class="pill">PROTOTYPE · STATIC BUILD</span>
+        <!-- WHICH MACHINE AM I LOOKING AT, AND HOW OLD IS IT.
+             Three false negatives in one day came from testing on a second deployment and
+             concluding a feature had not been built: a download that had been fixed, a sort
+             that had been added, a collapse button that was there. Nothing on the page
+             distinguished the two, and X-SDI-Commit only helps somebody who thinks to curl
+             for it. So the header says it: the host being served and the commit behind it. -->
+        <span class="pill" id="build-pill" title="Which service is answering, and what code it is running">PROTOTYPE · STATIC BUILD</span>
         <a class="ext" href="https://wearesdi.com" target="_blank" rel="noopener">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           wearesdi.com
@@ -2867,8 +2873,21 @@
   if(_reportsNav) _reportsNav.addEventListener('click', ()=>setTimeout(reportsInit,0));
 
   (async function(){ const p=document.getElementById('health-pill'); if(!p) return;
-    try{ const d=await _get('/api/health'); p.innerHTML='<span class="dot"></span>'+(d.status==='ok'?'BACKEND ONLINE':'BACKEND '+(d.status||'').toUpperCase()); }
-    catch(e){ p.classList.remove('live'); p.innerHTML='BACKEND OFFLINE'; }
+    const b=document.getElementById('build-pill');
+    try{ const d=await _get('/api/health'); p.innerHTML='<span class="dot"></span>'+(d.status==='ok'?'BACKEND ONLINE':'BACKEND '+(d.status||'').toUpperCase());
+      if(b){
+        /* The HOST as the browser addressed it, and the COMMIT the service reports. Host
+           first because that is the fact that was wrong every time: the right code on the
+           wrong machine looks exactly like missing code. */
+        const host = location.host || 'local';
+        const commit = (d.commit && d.commit!=='unknown') ? d.commit : '?';
+        b.textContent = host + ' \u00b7 ' + commit;
+        b.title = 'Serving from ' + host + ' at commit ' + commit
+                + (commit==='?' ? ' \u2014 this service cannot name its own commit, which usually means it was started without git on the PATH.' : '');
+      }
+    }
+    catch(e){ p.classList.remove('live'); p.innerHTML='BACKEND OFFLINE';
+      if(b){ b.textContent=(location.host||'local')+' \u00b7 no backend'; } }
   })();
 
   // ---- BrightHR Blip (COO control — who's clocked in) ----
