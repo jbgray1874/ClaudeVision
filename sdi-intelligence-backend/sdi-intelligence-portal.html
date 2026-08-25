@@ -2469,6 +2469,38 @@
      Client-side, because the listing is already in the browser: no request, no server change,
      and it works the same in all three views. FOLDERS STAY FIRST whatever the sort — a folder
      has no size and no useful extension, so interleaving them by either just buries them. */
+  /* ── HANDING A FILE TO THE BROWSER, WITH ITS NAME ─────────────────────────────────
+     A workbook opened from here arrived in Downloads as
+     "2c94c3cb-4442-4dc9-b4f5-ec02f58a020e" — no name, no extension, and Excel will not
+     touch it. The service was doing its part: /api/file sets
+     Content-Disposition: attachment; filename="10575-02_20260824_162345.xlsx".
+
+     The page threw it away. These views fetch the file (they must — the API needs the
+     X-SDI-Key header, and a plain link cannot send one) and then handed the browser
+     `window.open(URL.createObjectURL(blob))`. A BLOB URL CARRIES NO FILENAME, so the
+     response header never reaches the download and the browser names it after the blob.
+
+     An anchor with `download` restores it: same blob, but the browser is told what to call
+     the file. Viewable things — an HTML report, a PDF — still open in a tab, because those
+     are meant to be read rather than saved. */
+  function _deliver(blob, path, ext, inline){
+    const name = String(path||'').split(/[\\/]/).pop() || ('download'+(ext||''));
+    const url = URL.createObjectURL(blob);
+    if(inline){ window.open(url,'_blank'); }
+    else {
+      const a=document.createElement('a');
+      a.href=url; a.download=name; a.style.display='none';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    /* Revoked late: revoking straight away can pull the file out from under a viewer or a
+       download that has not finished reading it. */
+    setTimeout(()=>URL.revokeObjectURL(url), 60000);
+    return name;
+  }
+  /* What a browser can genuinely render. Everything else — the workbook above all — is
+     saved with its name so the application that owns it can open it. */
+  const _INLINE_EXT = new Set(['.html','.htm','.pdf','.svg','.png','.jpg','.jpeg','.gif']);
+
   const _fsort = {};                       // per-list: {key, dir}
   function _fileSort(items, key, dir){
     const val = it => key==='name' ? (it.name||'').toLowerCase()
@@ -2531,7 +2563,9 @@
       const blob=await r.blob();
       if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
       else if(ext==='.txt'||ext==='.log'){ v.textContent=(await blob.text()).slice(0,20000); }
-      else { window.open(URL.createObjectURL(blob),'_blank'); v.textContent='Opened '+path+' in a new tab.'; }
+      else { const inline=_INLINE_EXT.has(ext);
+             const nm=_deliver(blob, path, ext, inline);
+             v.textContent = inline ? ('Opened '+nm+' in a new tab.') : ('Downloaded '+nm+' \u2014 open it from your Downloads folder.'); }
     }catch(e){ v.textContent='Error: '+e.message; }
   }
   const _filesNav=document.querySelector('.nav a[data-view="files"]');
@@ -2609,7 +2643,9 @@
       const blob=await r.blob();
       if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
       else if(ext==='.txt'||ext==='.log'||ext==='.md'){ v.textContent=(await blob.text()).slice(0,20000); }
-      else { window.open(URL.createObjectURL(blob),'_blank'); v.textContent='Opened '+path+' in a new tab.'; }
+      else { const inline=_INLINE_EXT.has(ext);
+             const nm=_deliver(blob, path, ext, inline);
+             v.textContent = inline ? ('Opened '+nm+' in a new tab.') : ('Downloaded '+nm+' \u2014 open it from your Downloads folder.'); }
     }catch(e){ v.textContent='Error: '+e.message; }
   }
 
@@ -2745,7 +2781,9 @@
       const blob=await r.blob();
       if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
       else if(ext==='.txt'||ext==='.log'||ext==='.csv'){ v.textContent=(await blob.text()).slice(0,40000); }
-      else { window.open(URL.createObjectURL(blob),'_blank'); v.textContent='Opened in new tab: '+path; }
+      else { const inline=_INLINE_EXT.has(ext);
+             const nm=_deliver(blob, path, ext, inline);
+             v.textContent = inline ? ('Opened in new tab: '+nm) : ('Downloaded '+nm+' \u2014 open it from your Downloads folder.'); }
     }catch(e){ v.textContent='Error: '+e.message; }
   }
 
