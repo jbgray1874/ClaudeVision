@@ -2460,15 +2460,65 @@
     try{ const d=await _get('/api/files?path='+encodeURIComponent(path)); crumb.textContent=d.path; _renderFiles(d.items||[], path); }
     catch(e){ list.innerHTML='<div class="muted">'+e.message+'</div>'; }
   }
+  /* ── SORTING, SHARED BY EVERY FILE LIST ON THIS PAGE ───────────────────────────────
+     The API returns one order — folders first, then name — and the column headings looked
+     like headings rather than controls, so a folder of ninety parity reports could only be
+     read in the order the server happened to hand over. Newest-first is the question people
+     actually ask of an output folder, and it was the one order unavailable.
+
+     Client-side, because the listing is already in the browser: no request, no server change,
+     and it works the same in all three views. FOLDERS STAY FIRST whatever the sort — a folder
+     has no size and no useful extension, so interleaving them by either just buries them. */
+  const _fsort = {};                       // per-list: {key, dir}
+  function _fileSort(items, key, dir){
+    const val = it => key==='name' ? (it.name||'').toLowerCase()
+               : key==='type' ? (it.is_dir?'':(it.ext||'').toLowerCase())
+               : key==='modified' ? (it.modified||0)
+               : (it.size_bytes==null?-1:it.size_bytes);
+    return items.slice().sort((a,b)=>{
+      if(a.is_dir!==b.is_dir) return a.is_dir?-1:1;      // folders first, always
+      const x=val(a), y=val(b);
+      const c = typeof x==='number' ? x-y : String(x).localeCompare(String(y));
+      return dir==='desc' ? -c : c;
+    });
+  }
+  function _sortHead(listId, key, label){
+    const st=_fsort[listId]||{};
+    const on = st.key===key;
+    const arrow = on ? (st.dir==='desc'?' \u25be':' \u25b4') : '';
+    return '<th data-sort="'+key+'" style="cursor:pointer;user-select:none"'
+         + (on?' class="sorted"':'') + '>'+label+arrow+'</th>';
+  }
+  function _sortableClick(listId, redraw){
+    document.getElementById(listId).addEventListener('click', e=>{
+      const th=e.target.closest('th[data-sort]'); if(!th) return;
+      const key=th.dataset.sort, st=_fsort[listId]||{};
+      /* Same column again reverses. A different column starts ascending, except size and
+         modified, where the first thing anybody wants is the biggest or the newest. */
+      _fsort[listId] = (st.key===key)
+        ? {key, dir: st.dir==='asc'?'desc':'asc'}
+        : {key, dir: (key==='size'||key==='modified') ? 'desc' : 'asc'};
+      redraw();
+    }, true);
+  }
+
+  let _filesLast = {items:[], curPath:null};
   function _renderFiles(items, curPath){
+    if(items) _filesLast = {items, curPath};
+    const {items:its, curPath:cp} = _filesLast;
     const list=document.getElementById('files-list');
-    let h='<table><tr><th>Name</th><th>Type</th><th>Size</th></tr>';
-    if(curPath!==null) h+='<tr class="up"><td colspan="3" style="cursor:pointer;color:var(--accent)">&#8629; back to roots</td></tr>';
-    items.forEach(it=>{ const ext=(it.ext||'').replace(/"/g,'');
+    const st=_fsort['files-list']||{key:'name',dir:'asc'};
+    const rows=_fileSort(its, st.key, st.dir);
+    let h='<table><tr>'+_sortHead('files-list','name','Name')
+        + _sortHead('files-list','type','Type')
+        + _sortHead('files-list','size','Size')+'</tr>';
+    if(cp!==null) h+='<tr class="up"><td colspan="3" style="cursor:pointer;color:var(--accent)">&#8629; back to roots</td></tr>';
+    rows.forEach(it=>{ const ext=(it.ext||'').replace(/"/g,'');
       h+='<tr data-p="'+(it.path||'').replace(/"/g,'&quot;')+'" data-d="'+it.is_dir+'" data-e="'+ext+'" style="cursor:pointer">'
         +'<td><b>'+it.name+'</b></td><td>'+(it.is_dir?'folder':(ext||'file'))+'</td><td>'+_sz(it.size_bytes)+'</td></tr>'; });
     list.innerHTML=h+'</table>';
   }
+  _sortableClick('files-list', () => _renderFiles(null, null));
   document.getElementById('files-list').addEventListener('click', e=>{
     if(e.target.closest('tr.up')){ filesInit(); return; }
     const tr=e.target.closest('tr[data-p]'); if(!tr) return;
@@ -2516,16 +2566,37 @@
     try{ const d=await _get('/api/files?path='+encodeURIComponent(path)); crumb.textContent=d.path; _renderReports(d.items||[], path); }
     catch(e){ list.innerHTML='<div class="muted">'+e.message+'</div>'; }
   }
+  /* THE API RETURNS A UNIX TIMESTAMP AND THIS PRINTED IT RAW. The Modified column read
+     "1787154888", which is a number nobody can use and which sorts fine but tells you
+     nothing. It is the one column that answers "which of these is the current one". */
+  function _when(v){
+    const n = Number(v);
+    if(!n) return '';
+    const d = new Date(n < 1e12 ? n*1000 : n);   // seconds or milliseconds, both appear
+    if(isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
+         + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  }
+
+  let _reportsLast = {items:[], curPath:null};
   function _renderReports(items, curPath){
+    if(items) _reportsLast = {items, curPath};
+    const {items:its} = _reportsLast;
     const list=document.getElementById('reports-list');
-    let h='<table><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr>';
+    const st=_fsort['reports-list']||{key:'modified',dir:'desc'};   // newest first by default
+    const rows=_fileSort(its, st.key, st.dir);
+    let h='<table><tr>'+_sortHead('reports-list','name','Name')
+        + _sortHead('reports-list','type','Type')
+        + _sortHead('reports-list','size','Size')
+        + _sortHead('reports-list','modified','Modified')+'</tr>';
     h+='<tr class="up"><td colspan="4" style="cursor:pointer;color:var(--accent)">&#8629; back to roots</td></tr>';
-    items.forEach(it=>{ const ext=(it.ext||'').replace(/"/g,'');
-      const m=it.modified||it.mtime||'';
+    rows.forEach(it=>{ const ext=(it.ext||'').replace(/"/g,'');
       h+='<tr data-p="'+(it.path||'').replace(/"/g,'&quot;')+'" data-d="'+it.is_dir+'" data-e="'+ext+'" style="cursor:pointer">'
-        +'<td><b>'+it.name+'</b></td><td>'+(it.is_dir?'folder':(ext||'file'))+'</td><td>'+_sz(it.size_bytes)+'</td><td class="muted">'+m+'</td></tr>'; });
+        +'<td><b>'+it.name+'</b></td><td>'+(it.is_dir?'folder':(ext||'file'))+'</td><td>'+_sz(it.size_bytes)
+        +'</td><td class="muted">'+_when(it.modified||it.mtime)+'</td></tr>'; });
     list.innerHTML=h+'</table>';
   }
+  _sortableClick('reports-list', () => _renderReports(null, null));
   document.getElementById('reports-list').addEventListener('click', e=>{
     if(e.target.closest('tr.up')){ reportsInit(); return; }
     const tr=e.target.closest('tr[data-p]'); if(!tr) return;
@@ -2617,15 +2688,23 @@
     }catch(e){ list.innerHTML='<div class="muted" style="padding:16px">'+e.message+'</div>'; }
   }
 
+  let _testingLast = {items:[], folder:null, curPath:null};
   function _renderTesting(items, folder, curPath){
+    if(items) _testingLast = {items, folder, curPath};
+    ({items, folder, curPath} = _testingLast);
     const list=document.getElementById('testing-list');
     const isRoot = !curPath;
-    let h='<table><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr>';
+    const st=_fsort['testing-list']||{key:'modified',dir:'desc'};   // newest first: this is a test view
+    items=_fileSort(items, st.key, st.dir);
+    let h='<table><tr>'+_sortHead('testing-list','name','Name')
+        + _sortHead('testing-list','type','Type')
+        + _sortHead('testing-list','size','Size')
+        + _sortHead('testing-list','modified','Modified')+'</tr>';
     if(!isRoot) h+='<tr class="testing-up" data-folder="'+folder+'"><td colspan="4" style="cursor:pointer;color:var(--accent)">&#8629; back</td></tr>';
     if(!items.length) h+='<tr><td colspan="4" class="muted" style="padding:12px">No files yet</td></tr>';
     items.forEach(it=>{
       const ext=(it.ext||'').replace(/"/g,'');
-      const m=it.modified||it.mtime||'';
+      const m=_when(it.modified||it.mtime);
       // badge for xlsx
       const badge = ext==='.xlsx' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(78,201,127,.15);color:var(--ok);border:1px solid rgba(78,201,127,.3);border-radius:3px;padding:1px 5px;margin-left:4px">XLSX</span>'
                   : ext==='.html' ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(109,168,232,.15);color:var(--info);border:1px solid rgba(109,168,232,.3);border-radius:3px;padding:1px 5px;margin-left:4px">HTML</span>'
@@ -2639,6 +2718,7 @@
     });
     list.innerHTML=h+'</table>';
   }
+  _sortableClick('testing-list', () => _renderTesting(null, null, null));
 
   document.addEventListener('click', e=>{
     // tab switcher
