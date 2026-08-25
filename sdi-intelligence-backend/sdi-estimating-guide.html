@@ -240,9 +240,18 @@
       default, and quantity drives real money — setup is spread across the order, and a one-off
       buys a whole sheet to make one part. A job priced at the wrong quantity is wrong by a lot,
       not a little.</td></tr>
-    <tr><td class="k">Extract DesignDrawingPack</td><td>The reliable route. Point it at the job's
-      own folder and every drawing in it is added. (Named for the Document Manager extract it will
-      call once that is connected — until then it browses the shares.)</td></tr>
+    <tr><td class="k">Extract DesignDrawingPack</td><td><b>Asks Document Manager to build the pack.</b>
+      A panel opens with the project number, customer and assembly folder already filled in from the
+      Job panel — <code>10575-02</code> for Dyson gives <code>10575 / Dyson / 10575-02</code>. Check
+      the project is right before pressing Extract; that split is a guess at your numbering, not a
+      rule. It takes <b>minutes</b>, on their host, and reports progress while it works. When it
+      finishes the pack opens for you to choose from — it does not import everything, because the
+      extract also writes candidate files and a selection report you would not want priced.
+      <br><span class="muted">If the Document Manager API is not configured, this button browses
+      the shares as it used to, and its tooltip says which of the two it will do.</span></td></tr>
+    <tr><td class="k">Add job folder…</td><td>The share browse. Point it at the job's own folder and
+      every drawing in it is added. Not every job comes through Document Manager, and Document
+      Manager is not always up.</td></tr>
     <tr><td class="k">Add drawing files…</td><td>Use for a partial pack, or to add to what is
       already listed. <b>Only the drawings on the list are priced</b> — see below.</td></tr>
     <tr><td class="k">Add from Document Manager…</td><td>A second source. Drawings from a Document
@@ -256,6 +265,17 @@
       whole one.</td></tr>
     <tr><td class="k">Estimating runner</td><td>Must show <b>ready</b>. The run happens on a machine
       with SOLIDWORKS and Excel; this page queues it.</td></tr>
+    <tr><td class="k">Running the same job twice</td><td><b>Refused while the first is still going</b>,
+      and refused <em>before</em> anything is deleted. Staging clears this job's folder to fill it, so
+      a second press would empty the folder the first run is reading and refill it with a different
+      pack — the estimate would then price some mixture of the two, and the sheet would look entirely
+      ordinary. A <em>different</em> drawing still queues freely.</td></tr>
+    <tr><td class="k">Waiting behind another run</td><td>One estimate at a time per machine: SOLIDWORKS
+      and Excel are driven on one desktop. The page says what it is waiting for and how long that has
+      been running. If that run is <b>dead</b> — the machine slept, the runner was closed — its claim
+      holds the queue for up to fifteen minutes, so <b>Release the run in front of this one</b> frees
+      it. That releases the queue; it does not reach into a runner that is genuinely still
+      working.</td></tr>
     <tr><td class="k">Output folder</td><td>Written to the estimating share, in a dated sub-folder,
       so re-running never overwrites an earlier estimate.</td></tr>
   </table>
@@ -382,6 +402,12 @@
   <table>
     <tr><th>Section</th><th>Use it for</th></tr>
     <tr><td class="k">At a glance</td><td>Unit cost, material and labour split, quantity.</td></tr>
+    <tr><td class="k">Drawings this estimate<br>was built from</td><td><b>The files that produced the
+      number, named.</b> Every drawing read, what each contributed, and — marked in red — any file that
+      was <b>present in the pack and not read</b>. A DWG nobody could convert is not a neutral fact: it
+      is geometry that sat in the folder and reached no number. This is the fastest way to catch the
+      expensive mistake, because somebody who knows the job reads six filenames and sees the seventh
+      is missing.</td></tr>
     <tr><td class="k">What went right</td><td>The checks that passed — cost streams separated,
       each part costed once, bought-ins recognised.</td></tr>
     <tr><td class="k">Review items &amp; limitations</td><td>Per part: what to verify and why.
@@ -403,8 +429,11 @@
     <tr><th>Where it shows</th><th>What you see</th></tr>
     <tr><td class="k">Job report — Drawing pack</td><td>The fullest account: which drawings the
       BOM names that the pack does not contain.</td></tr>
-    <tr><td class="k">Job report — Estimating review</td><td>Listed as blocking, with the part
-      numbers and descriptions.</td></tr>
+    <tr><td class="k">Job report — Estimating review</td><td>Listed with the part numbers and
+      descriptions. <span class="muted">These used to be marked "blocking". That word has gone: it
+      set one internal flag, three rules raised it on every job regardless, and it read as a refusal
+      the engine was not entitled to make. The engine reports the BOMs, the routes and the prices
+      with their sources — the judgement is yours.</span></td></tr>
     <tr><td class="k">Estimate sheet</td><td>A red block below the estimator-input checklist:
       <b>DRAWINGS MISSING FROM THIS PACK (N)</b> — each part named, with
       <i>"priced from what was supplied; these are NOT in the total above"</i>. The sheet also
@@ -451,12 +480,17 @@
   <div class="panel warn">
     <p style="margin:0 0 6px 0"><b>If the quote comes back saying "As drawing" everywhere, this is
     why.</b></p>
-    <p style="margin:0">The regenerated quote keeps the material, finish, operations and the GA
-    image by reloading <b>the original run's saved job file</b>. It finds that file from the
-    workbook's own name, so <b>do not rename the workbook</b> before uploading it — and the
-    original run's output must still be on the machine. Where it cannot find the job, you still
-    get a quote, but it carries only the price and the three fields you typed, and the run log
-    says so.</p>
+    <p style="margin:0 0 8px 0">The regenerated quote keeps the material, finish, operations and
+    the GA image by reloading <b>the original run's saved job file</b>. It looks that up by the job's
+    stem and by the workbook's own name, so a renamed sheet usually still resolves — but the original
+    run's output must be on this machine. Where it cannot find the job you still get a quote, and the
+    page now <b>says so in amber</b>, names the <code>.json</code> it looked for, and tells you it
+    lives on the machine that ran the estimate. Check that before sending: a thin quote renders
+    exactly like a complete one.</p>
+    <p style="margin:0"><b>Two ways to name the sheet.</b> <i>Choose from share…</i> browses the
+    AISheets folder — the estimate workbooks this engine wrote are already there, under the client
+    and job, and that is the usual route. <i>Upload…</i> is for a sheet that is not on the share: one
+    that came back by email, or one kept locally.</p>
   </div>
 
   <div class="foot">
