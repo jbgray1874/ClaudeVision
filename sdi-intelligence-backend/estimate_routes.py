@@ -819,9 +819,18 @@ async def _side_to_path(upload: Optional[UploadFile], path: Optional[str],
                         *, label: str, suffixes: tuple, stack: list) -> str:
     """One side of the comparison as a path on disk, from either an upload or the share.
 
-    Uploads are spooled to a temp file whose name is registered on `stack` for the caller to
-    clean up; share paths are checked against the allowed roots exactly as every other file
-    endpoint is, so this cannot become a way to read C:\Windows.
+    Uploads are spooled into a temp DIRECTORY, under the name the estimator's file actually had.
+    That directory is registered on `stack` for the caller to remove; share paths are checked
+    against the allowed roots exactly as every other file endpoint is, so this cannot become a
+    way to read C:\Windows.
+
+    THE NAME IS NOT COSMETIC. The AI side of a parity report is the engine's SUMMARY, and when an
+    estimator hands us the workbook instead - which is what they were sent, so it is what they
+    reach for - the summary is resolved from the workbook's filename: '1057502_20260824_162345.xlsx'
+    means '1057502.json'. Spooling to tempfile's own random name threw that away, so every uploaded
+    AI workbook resolved to 'tmpq7x3k1a9.json', which exists nowhere. The upload route could not
+    do the one thing the resolver was written to make possible, and it failed with a message
+    quoting a temp path the estimator has never seen.
     """
     if upload is not None and (upload.filename or "").strip():
         name = (upload.filename or "").strip()
@@ -837,11 +846,18 @@ async def _side_to_path(upload: Optional[UploadFile], path: Optional[str],
         if not data:
             raise HTTPException(status_code=400, detail=f"The uploaded {label} is empty")
         import tempfile
-        tf = tempfile.NamedTemporaryFile(suffix=Path(name).suffix, delete=False)
-        tf.write(data)
-        tf.close()
-        stack.append(tf.name)
-        return tf.name
+        # Take the basename only, and only from the parts of it we control: a browser is not
+        # obliged to send a clean name, and this one is used to build a path.
+        safe = re.sub(r"[^A-Za-z0-9._ +-]", "_", Path(name.replace("\\", "/")).name).lstrip(".")
+        if not safe.lower().endswith(suffixes):        # sanitising must not smuggle past the gate
+            raise HTTPException(
+                status_code=415,
+                detail=f"The {label} must be one of {', '.join(suffixes)} — got '{name}'")
+        tmpdir = tempfile.mkdtemp(prefix="sdi_parity_")
+        stack.append(tmpdir)
+        dest = Path(tmpdir) / safe
+        dest.write_bytes(data)
+        return str(dest)
 
     if path and path.strip():
         resolved = _within_a_root(path.strip())
@@ -908,11 +924,9 @@ async def estimate_parity(
                      if ln.strip().startswith("{")), "")
         result = _json.loads(line) if line else {}
     finally:
-        for t in temps:
-            try:
-                os.unlink(t)
-            except OSError:
-                pass
+        import shutil
+        for t in temps:                    # directories now, one per uploaded side
+            shutil.rmtree(t, ignore_errors=True)
 
     bundle_json = result.get("bundle_json")
     bundle_csv = result.get("bundle_csv")
