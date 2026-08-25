@@ -412,7 +412,11 @@
     <!-- ===== TOOLS ===== -->
     <section class="view" id="tools">
       <div class="pagehead"><div class="kicker">Operate</div><h1>AI Tools &amp; Key Python Files</h1>
-        <p class="sub">Every module in <code>C:\ClaudeVision\src\</code> documented — what it does, what it reads, what it writes, and which database tables and spreadsheets it connects to. Run commands are from the engine host.</p></div>
+        <p class="sub">The modules that decide an estimate — what each does, what it reads, what it writes, and which
+        database tables and spreadsheets it touches. Run commands are from the engine host.
+        <b>Not every file in <code>src\</code> is here</b>, and deliberately so: the folder also holds one-off probes
+        (prefixed <code>_</code>), superseded copies and diagnostics that nothing in the pipeline calls. What follows is
+        what runs.</p></div>
 
       <!-- ══════════════════════════════════════════════════════════════════
            ENTRY POINTS
@@ -928,6 +932,157 @@
           <div class="ds">Common questions — why £0, what does confidence mean, how to submit a correction.</div>
           <div style="margin-top:10px"><a href="/api/file?path=C%3A%5CClaudeVision%5Coutput%5Creports%5CSDI_Intelligence_FAQ.html" target="_blank" style="display:inline-block;background:rgba(78,201,127,.12);color:var(--ok);border:1px solid rgba(78,201,127,.3);border-radius:4px;padding:6px 14px;font-size:12px;text-decoration:none;font-family:var(--mono)">Open FAQ →</a></div>
         </div>
+      </div>
+
+    
+      <!-- ══════════════════════════════════════════════════════════════════
+           THE PORTAL BACKEND — an entire layer that was undocumented here
+           ══════════════════════════════════════════════════════════════════ -->
+      <h2>Portal Backend <span class="chip c-prog" style="font-size:10px">New</span></h2>
+      <p class="sub" style="margin:-8px 0 14px">Everything above runs on the engine host when somebody types a
+      command. This layer is what makes it a service an estimator can use from a browser — the queue, the runner
+      protocol, and the two ways drawings arrive. It lives in <code>C:\ClaudeVision\sdi-intelligence-backend\</code>.</p>
+      <div class="tools">
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">estimate_routes.py</span><span class="chip c-done">The queue &amp; the API</span></div>
+          <div class="ds">The largest module in the service and the one that decides what an estimate actually is.
+          Holds the run queue in memory, hands work to a runner over a claim/heartbeat/report protocol, and exposes
+          every estimating endpoint: start a run, stop one, attach a manual sheet for parity, regenerate a client quote
+          from an amended workbook, print a pack, ask Document Manager for one. One estimate at a time per runner —
+          two concurrent automations of one Excel instance on one desktop is not a supported thing to do.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Lease:</b> 900s, deliberately generous — a quiet engine driving Excel and SOLIDWORKS prints nothing
+            for minutes, and a short lease killed four healthy runs of 11650 in one morning<br>
+            <b>Refuses:</b> a second run of the same client and drawing while one is live, <em>before</em> staging
+            deletes anything<br>
+            <b>Writes:</b> nothing itself — the runner and the engine do the work
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.05s">
+          <div class="th"><span class="nm">staging.py</span><span class="chip c-prog">New</span></div>
+          <div class="ds">What was selected is what gets priced. The page's picks used to be thrown away — the runner
+          was handed the parent FOLDER and read everything in it, so three drawings chosen out of twelve produced an
+          estimate built from twelve and no document said so. Every chosen file is now copied into one folder per
+          client and job, and that folder is what the engine reads. It also carries
+          <code>_sw_native_extract.json</code> across, without which the SOLIDWORKS layer silently stops applying.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Writes:</b> <code>…\AISheets\SDIIntelligenceAISheet\&lt;client&gt;\&lt;drawing&gt;\</code><br>
+            <b>Replaced on a re-run, not added to</b>, so a drawing taken off the list cannot still be priced<br>
+            <b>The delete is fenced four ways</b> — must be configured, must resolve inside the staging root, must not
+            BE the root, and every child is re-checked so a junction cannot carry it elsewhere
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.1s">
+          <div class="th"><span class="nm">docmgr.py</span><span class="chip c-plan">Awaiting first live extract</span></div>
+          <div class="ds">The Document Manager API, called from the backend and only from the backend. Asks DM to walk
+          a project's SOLIDWORKS references and build a file pack, then reports where it landed. DM authenticates with
+          one shared secret covering every consumer, so the page never sees it — <code>_headers()</code> is the only
+          place it is read and nothing formats it into a message.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Checks first:</b> <code>comAvailable</code> — DM accepts a job whether or not it can drive SOLIDWORKS
+            and fails it minutes later, so a refusal now beats a wasted wait<br>
+            <b>Not blocking:</b> an extract is minutes of COM work; the portal starts it and polls<br>
+            <b>Reads what DM cannot do:</b> geometry, feature tree, exports and non-SOLIDWORKS files are outside it
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.15s">
+          <div class="th"><span class="nm">app.py</span><span class="chip c-done">The service</span></div>
+          <div class="ds">FastAPI host for the portal. Serves the pages, lists and returns files from the configured
+          shares, reports health including whether the staging folder is reachable, and serves the we.are.sdi mark from
+          the same folder the client quote reads. HTML is served with a sandbox CSP — anybody who can write to the
+          estimating share can put an <code>.html</code> on it, and one served from this origin could otherwise script
+          the page that served it.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Serves:</b> <code>/api/files</code>, <code>/api/file</code>, <code>/api/health</code>,
+            <code>/api/brand/logo</code><br>
+            <b>Every response carries <code>X-SDI-Commit</code></b>, so "which code is actually running?" is one curl
+            rather than an afternoon
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════════
+           BUILT SINCE THIS PAGE WAS WRITTEN
+           ══════════════════════════════════════════════════════════════════ -->
+      <h2>Engine modules added since <span class="chip c-prog" style="font-size:10px">New</span></h2>
+      <div class="tools">
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">merge_boms.py</span><span class="chip c-done">Dual-path BOM</span></div>
+          <div class="ds">Two readings of the same pack, reconciled. Path A is the deterministic table read; Path B is
+          the Grok vision pass acting as a coverage net. Every line comes out labelled with how it was seen — BOTH,
+          B_OVERRIDE, A_ONLY or B_RECOVERED — so a part that only one method found is visible rather than silently
+          included or silently dropped.</div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.05s">
+          <div class="th"><span class="nm">cad_inputs.py</span><span class="chip c-done">DWG &amp; inventory</span></div>
+          <div class="ds">Turns DWG into DXF so a DWG flat pattern feeds the reader we already have, and declares every
+          CAD file that was present and NOT read. <b>Two backends, and the order matters:</b> the ODA File Converter
+          first, because it is free, offline and needs no licence; SOLIDWORKS second. A licensed interactive seat can
+          be closed, lapsed, or in another logon session — all three look identical from here, and all three end with
+          DWG files unread.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Set:</b> <code>SDI_DWG_CONVERTER</code> to the ODA executable, or leave unset to auto-detect<br>
+            <b>Feeds:</b> the report's "present, not read" list — geometry that sat in the folder and reached no number
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.1s">
+          <div class="th"><span class="nm">parity_run.py</span><span class="chip c-prog">New</span></div>
+          <div class="ds">Runs a parity report from two sheets that already exist — the engine's and the estimator's —
+          for a job estimated weeks or months ago. Nothing is re-run and no drawings are needed. The AI side may be
+          named as the workbook rather than the JSON: it resolves <code>&lt;stem&gt;.json</code> from the filename,
+          because an estimator reaches for the spreadsheet they were sent, not a JSON they have never seen.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Needs:</b> that job's summary JSON on <em>this</em> machine — it is written to <code>output\json</code>
+            by whichever machine ran the estimate, and the refusal names the file it looked for
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.15s">
+          <div class="th"><span class="nm">drawings_print.py</span><span class="chip c-prog">New</span></div>
+          <div class="ds">The pack, on paper. Merges the drawings behind an estimate into one PDF with a bookmark per
+          file. <b>The cover sheet appears only when something could not be printed</b> — an extra sheet on every print
+          is an annoyance, and an annoyance is how a feature stops being used. A corrupt or password-protected PDF
+          costs one drawing, not the whole print, and is named on the cover.</div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.2s">
+          <div class="th"><span class="nm">estimator_inputs.py</span><span class="chip c-done">The estimator's list</span></div>
+          <div class="ds">Collects everything the sheet cannot answer on its own and writes the OUTSTANDING ESTIMATOR
+          INPUTS block below the totals, with Unit Cost and Sell Price marked PROVISIONAL until they are filled. Placed
+          against the totals labels and nowhere else — an earlier version anchored to the labour range and landed
+          inside the table, putting text into a numeric cell and taking the whole sheet to <code>#VALUE!</code>.</div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.25s">
+          <div class="th"><span class="nm">estimating_review.py</span><span class="chip c-done">Reports, does not judge</span></div>
+          <div class="ds">Lists what the estimator should look at, by code and bucket. It no longer passes a verdict:
+          the BLOCKING language and the firm-quote gate were removed because they set exactly one boolean and three
+          rules fired on every job regardless. The engine reports the BOMs, the routes and the prices with their
+          sources; the estimator decides.</div>
+        </div>
+
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════════
+           WHAT IS IN src\ AND IS NOT THE ENGINE
+           ══════════════════════════════════════════════════════════════════ -->
+      <h2>Not part of the pipeline</h2>
+      <div class="tool reveal" style="border-left:2px solid var(--warn)">
+        <div class="ds"><b>Worth knowing before anyone reads the folder as documentation.</b>
+        <code>src\</code> also holds files nothing calls: modules prefixed <code>_</code> are one-off probes written to
+        answer a single question; <code>estimator1.py</code> and <code>estimator_old.py</code> are superseded copies of
+        <code>estimator.py</code> at 155KB each; <code>estimation_report.baclkup.py</code> is a backup with a typo in
+        its name; and <code>dxf_reader.py.py</code> is a stray duplicate of <code>dxf_reader.py</code>, which is the one
+        the pipeline imports. None of these is loaded by a run. They are listed here so that finding them does not read
+        as a system with four estimators in it.</div>
       </div>
 
     </section>
