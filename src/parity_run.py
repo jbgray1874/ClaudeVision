@@ -155,11 +155,29 @@ def run_parity(ai: str | Path,
     bundle, written_json, written_csv = generate_and_write(
         summary_path, manual_path, out_json, out_csv, read_via_excel=read_via_excel)
 
+    # THE ONE OF THE THREE A PERSON CAN ACTUALLY READ.
+    #
+    # parity_report_html has existed all along and renders this bundle properly — the job report
+    # already imports its tables. But nothing ever wrote the standalone page, so this route
+    # produced a JSON nobody reads and a CSV that needs Excel, and the answer to "why did these
+    # two estimates differ" was a 2,000-line file. The renderer was there; the call was not.
+    #
+    # Failure-isolated on purpose: the bundle is the record, and a template fault in the report
+    # must not cost the comparison that was just computed successfully.
+    written_html = None
+    try:
+        from parity_report_html import generate_report_files
+        written_html = generate_report_files(written_json, out_dir=out, job_stem=stem)
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"   [parity] the HTML report could not be written ({exc}) — the bundle JSON and "
+              f"CSV are complete and unaffected.", flush=True)
+
     return {
         "ai_summary": str(summary_path),
         "manual_workbook": str(manual_path),
         "bundle_json": str(written_json),
         "bundle_csv": str(written_csv),
+        "bundle_html": written_html,
         "job_stem": stem,
         "read_via_excel": bool(read_via_excel),
         "headline": _headline(bundle),

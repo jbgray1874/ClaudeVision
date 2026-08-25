@@ -930,6 +930,7 @@ async def estimate_parity(
 
     bundle_json = result.get("bundle_json")
     bundle_csv = result.get("bundle_csv")
+    bundle_html = result.get("bundle_html")
     return {
         "parity": True,
         "job_stem": result.get("job_stem"),
@@ -937,8 +938,10 @@ async def estimate_parity(
         "manual_workbook": result.get("manual_workbook"),
         "bundle_json": bundle_json,
         "bundle_csv": bundle_csv,
+        "bundle_html": bundle_html,
         "bundle_json_url": (f"/api/file?path={_urlquote(bundle_json)}" if bundle_json else None),
         "bundle_csv_url": (f"/api/file?path={_urlquote(bundle_csv)}" if bundle_csv else None),
+        "bundle_html_url": (f"/api/file?path={_urlquote(bundle_html)}" if bundle_html else None),
         "headline": result.get("headline") or {},
     }
 

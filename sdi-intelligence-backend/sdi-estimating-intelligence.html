@@ -1979,7 +1979,11 @@ parityRun.onclick = async () => {
       + (h.labour_route_issues ?? "?") + ' issues';
     parityOut.appendChild(counts);
 
-    [{url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
+    /* HTML FIRST, BECAUSE IT IS THE ONE A PERSON READS. The JSON is the record and the CSV is
+       for Excel; leading with either sends an estimator into a 2,000-line file to answer
+       "why did these two differ". */
+    [{url:j.bundle_html_url, name:"Parity report (HTML — read this one)"},
+     {url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
      {url:j.bundle_csv_url,  name:"Parity comparison (CSV)"}]
       .filter(d => d.url).forEach(d => {
         const a = document.createElement("a");

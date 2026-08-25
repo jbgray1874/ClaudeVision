@@ -119,3 +119,37 @@ def test_csv_is_servable_by_default():
     src = (_ROOT / "sdi-intelligence-backend" / "config.py").read_text(encoding="utf-8")
     at = src.index('_opt("SDI_ALLOWED_EXTENSIONS"')
     assert ".csv" in src[at:src.index(")", at)], "the default extension list must include .csv"
+
+
+# ── the report a person reads must actually be written ─────────────────────────────────
+
+def test_run_parity_writes_the_html_report():
+    """parity_report_html has existed all along — the job report imports its tables — but
+    nothing wrote the standalone page, so this route produced a JSON nobody reads and a CSV
+    that needs Excel. The renderer was there; the call was not."""
+    src = (_ROOT / "src" / "parity_run.py").read_text(encoding="utf-8")
+    assert "from parity_report_html import generate_report_files" in src
+    assert '"bundle_html"' in src
+
+
+def test_the_html_failing_cannot_lose_the_comparison():
+    """The bundle is the record. A template fault in the report must not cost a comparison
+    that was just computed successfully, so the call is failure-isolated."""
+    src = (_ROOT / "src" / "parity_run.py").read_text(encoding="utf-8")
+    at = src.index("from parity_report_html import generate_report_files")
+    block = src[at - 200:at + 500]
+    assert "try:" in block and "except Exception" in block
+
+
+def test_the_route_hands_back_a_url_for_it():
+    src = (_ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    assert "bundle_html_url" in src
+
+
+def test_the_page_offers_the_html_first():
+    """Leading with the JSON or CSV sends an estimator into a 2,000-line file to answer
+    'why did these two differ'."""
+    page = (_ROOT / "sdi-intelligence-backend"
+            / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+    at = page.index("bundle_html_url")
+    assert at < page.index("bundle_json_url"), "the readable report must be listed first"
