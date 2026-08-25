@@ -96,7 +96,12 @@ API_KEY = _opt("SDI_API_KEY")  # empty disables the gate (not recommended)
 FILE_ROOTS = [r.strip() for r in _opt("SDI_FILE_ROOTS").split("|") if r.strip()]
 ALLOWED_EXTENSIONS = {
     e.strip().lower() if e.strip().startswith(".") else "." + e.strip().lower()
-    for e in _opt("SDI_ALLOWED_EXTENSIONS", ".xlsx,.html,.json,.jpg").split(",")
+    # .csv IS NOT OPTIONAL HERE. The parity route hands the page a bundle_csv_url pointing at
+    # /api/file, and the card renders it as a button — so leaving .csv off the list means the
+    # service offers a link it then refuses with "Extension .csv is not served". An endpoint
+    # that will not serve what another endpoint just told the page to fetch is a broken button,
+    # not a security setting.
+    for e in _opt("SDI_ALLOWED_EXTENSIONS", ".xlsx,.html,.json,.jpg,.csv").split(",")
     if e.strip()
 }
 

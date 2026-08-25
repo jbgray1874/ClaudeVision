@@ -188,6 +188,32 @@ def _headline(bundle: Dict[str, Any]) -> Dict[str, Any]:
 
     manual_unit = num(rollup, "workbook_unit_cost_cached")
     ai_unit = num(rollup, "json_implied_unit_using_workbook_qty")
+
+    # THE ROLLUP IS NOT THE ONLY PLACE A UNIT COST IS READ, AND SAYING IT IS MISLEADS BADLY.
+    #
+    # 10575-02 produced no rollup comparison, so the card announced "Unit costs could not both be
+    # read" and told the estimator to tick "Resolve formulas through Excel". Both halves were
+    # wrong. The money-cell row for M117 had ALREADY read both sides -- AI £168.03 against manual
+    # £832.80, a 396% gap and a status of `fail` -- and the .xls had been read by xlrd, which
+    # returns computed values, so the Excel box would have changed nothing.
+    #
+    # A parity report that finds a four-hundred-percent gap and reports itself as unreadable is
+    # worse than one that fails outright: the estimator closes the card believing there is nothing
+    # to see. So where the rollup is silent, the money cells answer instead.
+    if ai_unit is None or manual_unit is None:
+        for row in bundle.get("money_cell_comparisons") or []:
+            if "unit manufacturing cost" not in str(row.get("label", "")).lower():
+                continue
+            a, m = num(row, "json_numeric"), num(row, "workbook_cached_numeric")
+            if a is not None and m is not None:
+                ai_unit, manual_unit = a, m
+                rollup = {**rollup,
+                          "status": row.get("status"),
+                          "pct_variance": row.get("pct_variance"),
+                          "workbook_unit_cost_cell": row.get("cell"),
+                          "unit_cost_source": "money_cell"}
+                break
+
     gap = round(ai_unit - manual_unit, 2) if (ai_unit is not None and manual_unit is not None) else None
 
     return {

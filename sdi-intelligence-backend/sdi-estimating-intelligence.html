@@ -1952,11 +1952,23 @@ parityRun.onclick = async () => {
         + ' &nbsp;gap £' + (h.gap_gbp ?? 0).toFixed(2) + pct;
     }else{
       /* NOT A ZERO. An empty value cache is not a £0 estimate, and showing one as the other
-         is the single most dangerous thing this card could do. */
+         is the single most dangerous thing this card could do.
+
+         BUT THE REMEDY ONLY APPLIES TO ONE READER. Ticking "Resolve formulas through Excel"
+         does nothing for an .xls: xlrd returns the computed values that are already in the
+         file, which is what the card's own help text says two paragraphs above. Offering it
+         anyway sends an estimator to press a box that cannot change the outcome, and implies
+         the fault is theirs for not having opened the sheet. */
+      const viaXlrd = String(h.workbook_read_mode || "").toLowerCase() === "xlrd";
       li.innerHTML = '<span style="color:var(--warn)">Unit costs could not both be read</span>'
-        + ' — the workbook was read via ' + (h.workbook_read_mode || "openpyxl")
-        + '. A sheet nobody has opened in Excel holds no calculated values. Tick '
-        + '<em>Resolve formulas through Excel</em> and run it again.';
+        + ' — the workbook was read via ' + (h.workbook_read_mode || "openpyxl") + '. '
+        + (viaXlrd
+           ? 'That reader returns the values already computed in the file, so this is not a '
+             + 'calculation problem and <em>Resolve formulas through Excel</em> will not change '
+             + 'it — the sheet has no unit-cost cell where one was expected. Open the bundle '
+             + 'below: the money-cell rows show what was read.'
+           : 'A sheet nobody has opened in Excel holds no calculated values. Tick '
+             + '<em>Resolve formulas through Excel</em> and run it again.');
     }
     parityOut.appendChild(li);
 
