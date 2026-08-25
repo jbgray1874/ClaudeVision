@@ -65,6 +65,13 @@ def _resolve_commit() -> str:
 
 SDI_COMMIT = _resolve_commit()
 
+# Must match wb_populate.CELL_MAP["template_path"] and the runner's WB_TEMPLATE_DEFAULT.
+# A health check reporting a different file than the engine opens would say ok on a machine
+# that cannot run an estimate, which is worse than not checking. A test pins all three.
+# The double space in the filename is real.
+_WB_TEMPLATE_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                        r"\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx")
+
 app = FastAPI(title="SDI Intelligence — Backend", version="0.1")
 
 app.add_middleware(
@@ -142,11 +149,34 @@ def health(x_sdi_key: str | None = Header(default=None)):
     elif not staging["within_file_roots"] and staging["configured"]:
         staging["note"] = "Not inside SDI_FILE_ROOTS — add it, or runs will be refused."
 
+    # THE TEMPLATE THE WORKBOOK IS BUILT FROM, FOR THE SAME REASON STAGING IS ABOVE.
+    #
+    # 10575-02 ran for 971 seconds and produced a summary and no estimate, because this file
+    # was not on the share. Every deliverable hangs off the workbook -- the client quote, the
+    # job report, the Decision Report and AI Provenance tabs are all gated on it -- so one
+    # missing file takes out all five, and the run still reported itself complete.
+    #
+    # The runner now refuses such a run up front. This answers the same question without
+    # starting one at all, which is what "is the tool ready?" should cost.
+    _tpl = (os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"') or _WB_TEMPLATE_DEFAULT
+    template = {
+        "path": _tpl,
+        "from_env": bool((os.environ.get("SDI_WB_TEMPLATE") or "").strip()),
+        "reachable": os.path.isfile(_tpl),
+    }
+    if not template["reachable"]:
+        template["note"] = ("No workbook can be built without it, so a run would produce a "
+                            "summary and no estimate. Restore it on the share under that exact "
+                            "name -- the double space is real -- or set SDI_WB_TEMPLATE to a "
+                            "copy this machine can read.")
+
     overall = (all(r["reachable"] for r in roots_ok)
                and db["status"] in ("ok", "not_configured")
-               and staging["reachable"] and staging["within_file_roots"])
+               and staging["reachable"] and staging["within_file_roots"]
+               and template["reachable"])
     return {"status": "ok" if overall else "degraded", "commit": SDI_COMMIT,
-            "file_roots": roots_ok, "database": db, "staging": staging}
+            "file_roots": roots_ok, "database": db, "staging": staging,
+            "workbook_template": template}
 
 
 @app.get("/api/roots")

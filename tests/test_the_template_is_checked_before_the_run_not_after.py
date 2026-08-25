@@ -49,6 +49,28 @@ def test_the_runner_default_matches_the_engine_default():
         f"  engine: {default}\n  runner: {runner.WB_TEMPLATE_DEFAULT}")
 
 
+def test_the_health_check_looks_for_the_same_file():
+    """Three places now name this template: the engine, the runner's pre-check and
+    /api/health. A health check reporting a different file than the engine opens would say
+    ok on a machine that cannot produce an estimate."""
+    src = (_ROOT / "sdi-intelligence-backend" / "app.py").read_text(encoding="utf-8")
+    at = src.index("_WB_TEMPLATE_DEFAULT = (")
+    block = src[at:src.index("\n\n", at)]
+    joined = "".join(part.split('r"', 1)[1].rsplit('"', 1)[0]
+                     for part in block.split("\n") if 'r"' in part)
+    assert joined == runner.WB_TEMPLATE_DEFAULT, (
+        f"health checks a different template:\n  health: {joined}\n"
+        f"  runner: {runner.WB_TEMPLATE_DEFAULT}")
+
+
+def test_health_reports_degraded_when_the_template_is_missing():
+    """Reporting it in the payload but leaving `status: ok` would put the fact where only
+    somebody already suspicious would look."""
+    src = (_ROOT / "sdi-intelligence-backend" / "app.py").read_text(encoding="utf-8")
+    at = src.index("overall = (all(r[\"reachable\"]")
+    assert 'template["reachable"]' in src[at:at + 400]
+
+
 def test_the_double_space_in_the_filename_is_preserved():
     """`Blank Estimate Sheet  WB 2026.xlsx` really does carry two spaces. Anything that
     normalises whitespace here turns a working path into a missing file."""
