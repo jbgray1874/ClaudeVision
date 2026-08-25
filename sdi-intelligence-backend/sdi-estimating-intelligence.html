@@ -53,7 +53,14 @@
   .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
   /* The second book, sitting under the first rather than beside it — same size, so it reads
      as the same kind of thing, but it never lights up because nothing is behind it. */
-  .btn-soon{margin-top:9px;cursor:not-allowed}
+  .btn-soon{margin-top:0;cursor:not-allowed}
+  /* THE NOTE HAS TO BELONG TO THE BUTTON IT IS ABOUT. It explains why CHINA is disabled and
+     ends "use the UK estimator above" — but sitting loose under both buttons it was the only
+     prose near either, and read as though the whole block were switched off. Boxing the pair
+     makes the ownership visual instead of something you have to read to the end to discover. */
+  .soon-block{margin-top:16px;padding:12px 14px 2px;border:1px dashed var(--line);
+              border-radius:6px;background:var(--bg)}
+  .soon-block .note{margin-top:8px}
   /* Deliberately not styled like the run button. Stop is destructive and rare; it should
      not be the thing a hand reaches for by muscle memory. */
   .btn-stop{width:100%;background:transparent;color:#ff9b9b;border:1px solid #7d3a3a;padding:11px 18px;font-size:14px;font-weight:600;margin-top:9px;border-radius:7px;cursor:pointer}
@@ -356,12 +363,15 @@
            that quietly did nothing would be read as a run that produced no file, so it is
            disabled and it says why in words, not by being greyed out and unexplained. It is
            NOT wired into refresh() — nothing that enables the UK button may reach it. -->
-      <button class="btn-run btn-soon" id="runChina" disabled aria-disabled="true"
-              title="Not connected yet — there is no China estimating endpoint behind this button">
-        SDI (China) Intelligence Estimator</button>
-      <p class="note" id="chinaNote">Not connected yet. There is no China estimating endpoint,
-         rate set or route behind this button — pressing it would do nothing, so it is held
-         disabled until there is. Use the UK estimator above.</p>
+      <div class="soon-block">
+        <button class="btn-run btn-soon" id="runChina" disabled aria-disabled="true"
+                title="Not connected yet — there is no China estimating endpoint behind this button">
+          SDI (China) Intelligence Estimator</button>
+        <p class="note" id="chinaNote"><b>This button only.</b> Not connected yet — there is no
+           China estimating endpoint, rate set or route behind it, so pressing it would do
+           nothing and it is held disabled until there is. The UK estimator above is unaffected
+           and runs as normal.</p>
+      </div>
     </section>
 
     <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
