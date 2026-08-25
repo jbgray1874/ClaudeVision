@@ -822,10 +822,17 @@ function refresh(){
        ESTIMATE. It sits at the top of the page in red, so it reads as the whole page being
        unavailable - and the two panels below it, Parity and Regenerate, need neither a
        drawing nor a runner. An estimator with a sheet to re-quote and no drawings to hand
-       reads that line and reasonably concludes they cannot proceed. */
+       reads that line and reasonably concludes they cannot proceed.
+
+       AND THE FIRST ATTEMPT AT SAYING SO CONTRADICTED ITSELF. It read "need none of this —
+       only units, client and drawing number", while the missing list it followed routinely
+       BEGINS with units, client and drawing number. It also lumped the two panels together
+       when they differ: parity needs nothing at all from this panel, regeneration needs the
+       three text fields. Naming them separately is the only version that is true of both. */
     req.textContent = "Still needed to RUN AN ESTIMATE: " + missing.join(", ")
-                    + ". The parity report and the client-quote regeneration below need "
-                    + "none of this — only units, client and drawing number.";
+                    + ". This does not block the two panels below — the parity report needs "
+                    + "nothing from this panel at all, and regenerating a client quote needs "
+                    + "the units, client and drawing number but no drawing file and no runner.";
     req.style.color = "";
   }else if(drawingNumberLooksWrong()){
     req.textContent = "Check the drawing number — " + safe(drawing.value)
