@@ -123,11 +123,15 @@
      These items carry no icons -- unlike the portal's rail, which collapses to icons --
      so there is nothing useful to show at 46px. It becomes a strip with the toggle on
      it: the screen goes back to the form, and one click brings the menu back. */
-  body.nav-collapsed{ --sdinav-w:46px; }
+  body.nav-collapsed{ --sdinav-w:56px; }
   body.nav-collapsed .sdinav-grp,
   body.nav-collapsed .sdinav-item,
-  body.nav-collapsed .sdinav-brand span,
-  body.nav-collapsed .sdinav-toggle span{ display:none; }
+  body.nav-collapsed .sdinav-brand span{ display:none; }
+  /* The word stays. An arrow alone asks the reader to work out which way it points and
+     what that does; "Expand" does not. Stacked under the chevron, because it will not sit
+     beside it at this width. */
+  body.nav-collapsed .sdinav-toggle{ flex-direction:column; gap:4px; font-size:9px;
+     letter-spacing:.08em; text-transform:uppercase; padding:10px 0 11px; }
   body.nav-collapsed .sdinav-brand{ padding:14px 0; justify-content:center; }
   body.nav-collapsed .sdinav-logo{ max-width:26px; }
   .sdinav{ display:flex; flex-direction:column; }
@@ -242,7 +246,8 @@
     b.classList.toggle("nav-collapsed", on);
     t.setAttribute("aria-expanded", String(!on));
     t.setAttribute("aria-label", on ? "Expand the navigation" : "Collapse the navigation");
-    t.title = on ? "Expand" : "Collapse";
+    t.title = on ? "Expand the navigation" : "Collapse the navigation";
+    var l=t.querySelector("span"); if(l) l.textContent = on ? "Expand" : "Collapse";
     try{ localStorage.setItem(K, on?"1":"0"); }catch(e){}
   }
   var start=false; try{ start = localStorage.getItem(K)==="1"; }catch(e){}

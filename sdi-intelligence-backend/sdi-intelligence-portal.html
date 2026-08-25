@@ -76,7 +76,12 @@
   .side.collapsed .nav a .ic{width:18px;height:18px;opacity:.9}
   .side.collapsed .nav a.active::before{left:-6px}
   .side.collapsed .side-foot-txt{display:none}
-  .side.collapsed .side-toggle span{display:none}
+  /* THE WORD STAYS, STACKED UNDER THE CHEVRON. An arrow on its own asks the reader to
+     work out which way it points and what that does; "Expand" does not. At 64px the label
+     will not sit beside the chevron, so collapsed it goes underneath in a small caps label
+     -- the one place on this rail where two lines are worth more than one. */
+  .side.collapsed .side-toggle{flex-direction:column;gap:4px;font-size:9px;
+                               letter-spacing:.1em;text-transform:uppercase;padding:10px 0 11px}
 
   .side-toggle{
     display:flex;align-items:center;gap:9px;width:100%;
@@ -2571,7 +2576,8 @@
       side.classList.toggle('collapsed', on);
       btn.setAttribute('aria-expanded', String(!on));
       btn.setAttribute('aria-label', on ? 'Expand the navigation' : 'Collapse the navigation');
-      btn.title = on ? 'Expand' : 'Collapse';
+      btn.title = on ? 'Expand the navigation' : 'Collapse the navigation';
+      const lbl = btn.querySelector('span'); if(lbl) lbl.textContent = on ? 'Expand' : 'Collapse';
       try{ localStorage.setItem(KEY, on?'1':'0'); }catch(e){}
     }
     let start=false;
