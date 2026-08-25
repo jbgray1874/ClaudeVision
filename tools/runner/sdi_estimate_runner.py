@@ -84,6 +84,21 @@ from typing import Any, Dict, List, Optional
 
 DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
 
+# THE WORKBOOK TEMPLATE, RESOLVED THE SAME WAY THE ENGINE RESOLVES IT.
+#
+# Must stay identical to wb_populate.template_path(): SDI_WB_TEMPLATE wins, otherwise the copy
+# on the share. A test pins this default against wb_populate's CELL_MAP, because a runner that
+# checks for a different file than the engine opens is worse than no check at all — it would
+# pass a run the engine then fails on, which is the exact shape of the bug it exists to prevent.
+#
+# The double space in the filename is real, not a typo.
+WB_TEMPLATE_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                       r"\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx")
+
+
+def workbook_template() -> str:
+    return (os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"') or WB_TEMPLATE_DEFAULT
+
 # HOW OFTEN THE LEASE IS RENEWED WHILE THE ENGINE IS QUIET. Read from the same name the
 # service uses, so the two cannot be configured apart -- a runner beating slower than the
 # lease it renews is the original defect with different numbers, arriving silently.
@@ -743,6 +758,22 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The manual estimate for the parity report is not readable from this "
                 f"runner: {manual_wb}", log)
+        return
+
+    # THE TEMPLATE THE WORKBOOK IS BUILT FROM. This is the one that actually bit. 10575-02 ran
+    # for sixteen minutes, and only then did wb_populate report TEMPLATE NOT FOUND on the share.
+    # The canonical-route cutover deliberately forbids the legacy fallback builder, so there was
+    # no second path: the run ended having written a summary and no estimate, and reported done.
+    #
+    # None of the reading, pricing or arbitration was wasted effort in principle -- but the one
+    # fact that decided the outcome was knowable before any of it started.
+    tpl = workbook_template()
+    if not Path(tpl).is_file():
+        _finish(requests, base, headers, run_id, runner_id, "error",
+                f"The estimate workbook template is not readable from this runner: {tpl} — "
+                f"so no workbook could be built and the run would produce a summary and no "
+                f"estimate. Check the file is on the share under that exact name (the double "
+                f"space is real), or point SDI_WB_TEMPLATE at a local copy.", log)
         return
 
     before = snapshot(engine_root)

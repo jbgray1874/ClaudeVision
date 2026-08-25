@@ -360,6 +360,13 @@ class _FakeRequests:
 def _run_with_a_quiet_engine(runner, root, monkeypatch, quiet_for=0.45):
     monkeypatch.setattr(runner, "_BEAT_SECONDS", 0.02)
     monkeypatch.setattr(runner, "_SAY_QUIET_AFTER", 0.05)
+    # The runner now refuses a run whose workbook template it cannot see, because 10575-02
+    # spent sixteen minutes discovering that. These tests are about the LEASE and the silence
+    # reporting, and run on a machine with no share — so give them a template that exists.
+    # Pointing it at a real file keeps the pre-check honest rather than switching it off.
+    tpl = root / "Blank Estimate Sheet  WB 2026.xlsx"
+    tpl.write_bytes(b"not a workbook; the runner only checks that it is there")
+    monkeypatch.setenv("SDI_WB_TEMPLATE", str(tpl))
     monkeypatch.setattr(runner.subprocess, "Popen",
                         lambda *a, **k: _FakeProc(quiet_for))
     req = _FakeRequests()
@@ -492,6 +499,11 @@ def test_the_silence_is_measured_from_the_last_line_not_the_start_of_the_run(eng
     """
     monkeypatch.setattr(runner_mod := __import__("sdi_estimate_runner"), "_BEAT_SECONDS", 0.02)
     monkeypatch.setattr(runner_mod, "_SAY_QUIET_AFTER", 0.15)
+    # See _run_with_a_quiet_engine: the template pre-check would otherwise refuse this run
+    # before the engine it is measuring ever starts.
+    _tpl = engine[1] / "Blank Estimate Sheet  WB 2026.xlsx"
+    _tpl.write_bytes(b"present is all this check asks")
+    monkeypatch.setenv("SDI_WB_TEMPLATE", str(_tpl))
     gap = 0.6
     monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _TalksThenPauses(gap))
     req = _FakeRequests()
