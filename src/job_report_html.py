@@ -893,18 +893,99 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
         wk += (f'<tr><td><b>Validation issues</b></td><td>{len(dq["validation_issues"])} item(s)</td>'
                f'<td>The manufacturing write-up flagged structural issues (assembly-only parts, missing cues).</td></tr>')
 
-    weaknesses = f"""<h3>4.2 &nbsp;Weaknesses &amp; inconsistencies found</h3>
+    weaknesses = f"""<h3>4.3 &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <table><thead><tr><th>Finding</th><th>Where</th><th>Effect on estimating</th></tr></thead>
-<tbody>{wk}</tbody></table>""" if wk else """<h3>4.2 &nbsp;Weaknesses &amp; inconsistencies found</h3>
+<tbody>{wk}</tbody></table>""" if wk else """<h3>4.3 &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <div class="callout good"><b>No significant drawing faults detected.</b> The pack read cleanly with no
 missing DXFs, filename issues, or contaminated fields flagged.</div>"""
 
     return f"""<h2>4 &nbsp;Drawing analysis</h2>
 <p>The estimate is only ever as good as the drawing pack it reads. This section audits the drawings
 directly — what was clear, and where the engine had to work around them.</p>
-<h3>4.1 &nbsp;Strengths of the drawing pack</h3>
+{_files_read_section(summary or {})}
+<h3>4.2 &nbsp;Strengths of the drawing pack</h3>
 <ul class="clean">{''.join(strengths)}</ul>
 {weaknesses}"""
+
+
+def _files_read_section(summary: Dict[str, Any]) -> str:
+    """4.1 — THE DRAWINGS THIS NUMBER CAME FROM, NAMED.
+
+    The pack was recorded and never shown. `job_source_pdfs` was in the summary and the report
+    used it for counts and filename hygiene; `cad_inputs` held the files that were present and
+    NOT read. Neither was ever put in front of the estimator, so the one document people
+    actually read could not answer "which drawings produced this?" — six weeks later, when
+    somebody asks, that is the whole question.
+
+    It matters more since staging, not less. Selection now genuinely decides what is priced, so
+    a drawing left off the list is absent from the estimate and there was nothing on paper
+    saying which ones were on it. A short list is also the fastest way to catch the expensive
+    mistake — a pack that is missing a part — because a person who knows the job reads six
+    filenames and sees the seventh is not there.
+
+    Files present and NOT read are named beside the ones that were. A DWG nobody could convert
+    is not a neutral fact: it is geometry that was in the folder and did not reach the number.
+    """
+    read = [str(p.get("name") or p) if isinstance(p, dict) else str(p)
+            for p in (summary.get("job_source_pdfs") or [])]
+    cad = summary.get("cad_inputs") or {}
+    dxf = summary.get("dxf_augmentation") or {}
+
+    def _names(items) -> List[str]:
+        out = []
+        for it in items or []:
+            nm = (it.get("dxf_name") or it.get("name") or it.get("file")
+                  if isinstance(it, dict) else str(it))
+            if nm:
+                out.append(str(nm))
+        return out
+
+    rows: List[tuple] = []
+    for n in read:
+        rows.append((n, "PDF", "read"))
+    for n in _names(dxf.get("matched")):
+        rows.append((n, "DXF", "matched to a part — measured flat pattern"))
+    for n in _names(dxf.get("unmatched_dxf")):
+        rows.append((n, "DXF", "present, matched to no part"))
+    for n in (cad.get("solidworks") or []):
+        rows.append((str(n), "MODEL", "SOLIDWORKS model"))
+    for n in (cad.get("converted") or []):
+        rows.append((str(n), "DXF", "converted from a DWG"))
+    # LAST AND MARKED, because this is the row that changes what the number means.
+    unread = [str(n) for n in (cad.get("unread") or [])]
+    for n in unread:
+        rows.append((n, "—", "PRESENT, NOT READ — contributed nothing"))
+
+    if not rows:
+        # Silence would read as "no drawings", which is never true of a job that produced a
+        # number. Say that the record is missing, not that the pack was.
+        return ('<h3>4.1 &nbsp;Drawings this estimate was built from</h3>'
+                '<div class="callout warn">The engine did not record which files it read on '
+                'this job, so they cannot be listed here. The staged input folder for this '
+                'client and drawing holds exactly the pack that was priced.</div>')
+
+    seen, body = set(), ""
+    for name, kind, what in rows:
+        key = (name.lower(), kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        cls = ' style="color:#b3261e;font-weight:600"' if "NOT READ" in what else ""
+        body += (f'<tr><td><code>{_esc(name)}</code></td><td>{_esc(kind)}</td>'
+                 f'<td{cls}>{_esc(what)}</td></tr>')
+
+    note = ""
+    if unread:
+        note = (f'<div class="callout warn"><b>{len(unread)} file(s) were in the pack and were '
+                f'not read.</b> They contributed nothing to this estimate. A DWG usually means '
+                f'no converter was available; a STEP or IGES carries geometry but no part '
+                f'numbers, quantities or material, so it is never a source.</div>')
+
+    return (f'<h3>4.1 &nbsp;Drawings this estimate was built from</h3>'
+            f'<p>Exactly these files, and nothing else in the folder. Drawings not selected for '
+            f'the run were not read.</p>'
+            f'<table><thead><tr><th>File</th><th>Type</th><th>What it contributed</th></tr>'
+            f'</thead><tbody>{body}</tbody></table>{note}')
 
 
 def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
