@@ -158,6 +158,19 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
         log.append("[collect] NOTHING was copied. The engine exited cleanly but wrote "
                    "nothing new into output\\estimates or output\\json — check the log "
                    "above for what it did instead.")
+    elif not any(f["name"].lower().endswith(".xlsx") for f in filed):
+        # FILES ARE NOT AN ESTIMATE. The zero-file case was covered; this one was not, and it
+        # is the one that actually happened: 10575-02 ran for sixteen minutes, exited 0, filed
+        # its summary JSON and the console log, and was reported DONE with no workbook — so the
+        # page said the estimate was ready and the folder held nothing an estimator opens.
+        #
+        # A summary with no workbook means the deliverables pass did not produce one. That is a
+        # failed run whatever the exit code said, and it is named here rather than left for
+        # somebody to notice by opening the folder.
+        log.append("[collect] NO WORKBOOK. " + ", ".join(f["name"] for f in filed)
+                   + " were filed, but no .xlsx — the engine wrote a summary and no estimate. "
+                     "The deliverables pass did not produce one; the console log above says "
+                     "what it did instead.")
 
     # The console is part of the record, and is written LAST so it contains the
     # filing result too. An estimate on a share with no account of how it was
@@ -764,6 +777,19 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     except Exception as exc:                           # noqa: BLE001 — surface it
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The estimate ran but could not be filed: {exc}", log)
+        return
+
+    # DONE MEANS THERE IS AN ESTIMATE. Exit code 0 says the engine did not crash; it does not
+    # say it produced anything. 10575-02 ran 16 minutes, exited 0, filed a summary JSON and a
+    # log, and the page reported it complete — sending an estimator to a folder with no workbook
+    # in it. The deliverables are still filed and the log still says what happened, because the
+    # summary and the console are exactly what is needed to work out why.
+    if not any(f["name"].lower().endswith(".xlsx") for f in filed):
+        _finish(requests, base, headers, run_id, runner_id, "error",
+                "The engine finished without producing a workbook. "
+                + (", ".join(f["name"] for f in filed) or "Nothing")
+                + " was filed to the output folder — open the run log there for what the "
+                  "engine did instead.", log, filed)
         return
 
     _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
