@@ -57,6 +57,39 @@
   .nav a:hover{background:var(--surface);color:var(--ink)}
   .nav a.active{background:var(--surface-2);color:var(--ink)}
   .nav a.active::before{content:"";position:absolute;left:-12px;top:7px;bottom:7px;width:3px;background:var(--accent);border-radius:0 3px 3px 0}
+  /* ── COLLAPSING THE RAIL ──────────────────────────────────────────────────────────
+     Twenty-six nav entries take 248px of a 1080px report the whole time it is being read.
+     Collapsed, the icons stay and the labels go: the rail still says where you are and what
+     you can reach, in a quarter of the width.
+
+     LABELS ARE HIDDEN WITH font-size:0 RATHER THAN A CLASS ON EACH ONE. The labels are bare
+     text nodes beside an inline SVG -- `<a><svg/>Dashboard</a>` -- and CSS cannot address a
+     text node. Wrapping twenty-six of them would also miss the AI Services group, which is
+     built by JavaScript at load. font-size:0 collapses every text node in the anchor at once
+     and leaves the SVG alone, because the icon carries its own width and height. */
+  .app.rail{grid-template-columns:64px 1fr}
+  .side.collapsed .brand{padding:18px 0;justify-content:center}
+  .side.collapsed .brand-txt{display:none}
+  .side.collapsed .nav{padding:14px 6px}
+  .side.collapsed .nav .grp{display:none}
+  .side.collapsed .nav a{font-size:0;gap:0;justify-content:center;padding:11px 0}
+  .side.collapsed .nav a .ic{width:18px;height:18px;opacity:.9}
+  .side.collapsed .nav a.active::before{left:-6px}
+  .side.collapsed .side-foot-txt{display:none}
+  .side.collapsed .side-toggle span{display:none}
+
+  .side-toggle{
+    display:flex;align-items:center;gap:9px;width:100%;
+    padding:10px 16px;border:0;border-top:1px solid var(--line-soft);
+    background:transparent;color:var(--ink-faint);cursor:pointer;
+    font-family:inherit;font-size:11.5px;letter-spacing:.04em;text-align:left;transition:.16s;
+  }
+  .side-toggle:hover{background:var(--surface);color:var(--ink)}
+  .side-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .side.collapsed .side-toggle{justify-content:center;padding:10px 0}
+  .side-toggle .chev{width:14px;height:14px;flex:none;transition:transform .18s}
+  .side.collapsed .side-toggle .chev{transform:rotate(180deg)}
+
   .side-foot{padding:14px 16px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--ink-faint)}
   .side-foot a{color:var(--accent);font-weight:600}
 
@@ -220,9 +253,15 @@
       <a data-view="servers"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="11" width="20" height="6" rx="1"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="14" x2="6.01" y2="14"/></svg>Servers</a>
       <a data-view="programme"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>AI Programme</a>
     </nav>
+    <button class="side-toggle" id="side-toggle" type="button"
+            aria-label="Collapse the navigation" aria-expanded="true">
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+      <span>Collapse</span>
+    </button>
     <div class="side-foot">
-      SDI Intelligence · Estimating Engine<br>
-      <a href="https://wearesdi.com" target="_blank" rel="noopener">wearesdi.com ↗</a>
+      <span class="side-foot-txt">SDI Intelligence · Estimating Engine<br>
+      <a href="https://wearesdi.com" target="_blank" rel="noopener">wearesdi.com ↗</a></span>
     </div>
   </aside>
 
@@ -2500,6 +2539,40 @@
   /* What a browser can genuinely render. Everything else — the workbook above all — is
      saved with its name so the application that owns it can open it. */
   const _INLINE_EXT = new Set(['.html','.htm','.pdf','.svg','.png','.jpg','.jpeg','.gif']);
+
+  /* ── THE RAIL TOGGLE ──────────────────────────────────────────────────────────────
+     Remembered per browser, because a preference that resets on every page is not a
+     preference. localStorage is wrapped: a private window or a policy that blocks site data
+     throws on access, and a nav that will not render because it could not read a cosmetic
+     setting is a bad trade. */
+  (function(){
+    const app=document.querySelector('.app'), side=document.querySelector('.side'),
+          btn=document.getElementById('side-toggle');
+    if(!app||!side||!btn) return;
+    const KEY='sdi.nav.collapsed';
+    /* TITLES BEFORE ANYTHING IS HIDDEN. Collapsed, the label is gone and the icon has to
+       answer for it on hover — including the AI Services group, which JavaScript writes
+       after this runs, so the observer below catches those too. */
+    const label = a => { const t=(a.textContent||'').trim(); if(t && !a.title) a.title=t; };
+    document.querySelectorAll('.nav a').forEach(label);
+    const nav=document.querySelector('.nav');
+    if(nav && window.MutationObserver){
+      new MutationObserver(() => nav.querySelectorAll('a').forEach(label))
+        .observe(nav, {childList:true, subtree:true});
+    }
+    function set(on){
+      app.classList.toggle('rail', on);
+      side.classList.toggle('collapsed', on);
+      btn.setAttribute('aria-expanded', String(!on));
+      btn.setAttribute('aria-label', on ? 'Expand the navigation' : 'Collapse the navigation');
+      btn.title = on ? 'Expand' : 'Collapse';
+      try{ localStorage.setItem(KEY, on?'1':'0'); }catch(e){}
+    }
+    let start=false;
+    try{ start = localStorage.getItem(KEY)==='1'; }catch(e){}
+    if(start) set(true);
+    btn.addEventListener('click', () => set(!side.classList.contains('collapsed')));
+  })();
 
   const _fsort = {};                       // per-list: {key, dir}
   function _fileSort(items, key, dir){

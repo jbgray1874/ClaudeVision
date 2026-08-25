@@ -118,6 +118,32 @@
   /* The portal's own tokens are already defined on these pages, so this inherits the look. */
   :root{ --sdinav-w:250px; }
   body{ padding-left:var(--sdinav-w); }
+  /* ── COLLAPSED ────────────────────────────────────────────────────────────────────
+     The whole layout is already driven by --sdinav-w, so collapsing is one variable.
+     These items carry no icons -- unlike the portal's rail, which collapses to icons --
+     so there is nothing useful to show at 46px. It becomes a strip with the toggle on
+     it: the screen goes back to the form, and one click brings the menu back. */
+  body.nav-collapsed{ --sdinav-w:46px; }
+  body.nav-collapsed .sdinav-grp,
+  body.nav-collapsed .sdinav-item,
+  body.nav-collapsed .sdinav-brand span,
+  body.nav-collapsed .sdinav-toggle span{ display:none; }
+  body.nav-collapsed .sdinav-brand{ padding:14px 0; justify-content:center; }
+  body.nav-collapsed .sdinav-logo{ max-width:26px; }
+  .sdinav{ display:flex; flex-direction:column; }
+  .sdinav-body{ flex:1; }
+  .sdinav-toggle{
+    display:flex; align-items:center; gap:9px; width:100%;
+    padding:10px 16px; border:0; border-top:1px solid var(--line,#26262b);
+    background:transparent; color:var(--muted,#9b9ba3); cursor:pointer;
+    font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
+    position:sticky; bottom:0; transition:.16s;
+  }
+  .sdinav-toggle:hover{ color:var(--ink,#f0efec); background:#ffffff08; }
+  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand,#e8a33d); outline-offset:-2px; }
+  body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
+  .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
+  body.nav-collapsed .sdinav-toggle .chev{ transform:rotate(180deg); }
   /* LEFT-ALIGNED, not centred in what is left over. These pages centre their content with
      margin:0 auto, which was fine full-width and wrong once a 250px rail took the left of the
      screen: the content drifted toward the middle and sat away from the menu beside it. Keep the
@@ -160,6 +186,7 @@
     <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi">
     <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
   </a>
+  <div class="sdinav-body">
   <div class="sdinav-grp">Overview</div>
   <a class="sdinav-item" href="/#dashboard">Dashboard</a>
   <div class="sdinav-grp">AI Services</div>
@@ -198,7 +225,30 @@
   <a class="sdinav-item" href="/#rnd">R&amp;D Capture</a>
   <a class="sdinav-item" href="/#servers">Servers</a>
   <a class="sdinav-item" href="/#programme">AI Programme</a>
+</div>
+<button class="sdinav-toggle" id="sdinav-toggle" type="button"
+        aria-label="Collapse the navigation" aria-expanded="true">
+  <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+  <span>Collapse</span>
+</button>
 </nav>
+<script>(function(){
+  var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
+  if(!t) return;
+  document.querySelectorAll(".sdinav-item").forEach(function(a){
+    var s=(a.textContent||"").trim(); if(s && !a.title) a.title=s; });
+  function set(on){
+    b.classList.toggle("nav-collapsed", on);
+    t.setAttribute("aria-expanded", String(!on));
+    t.setAttribute("aria-label", on ? "Expand the navigation" : "Collapse the navigation");
+    t.title = on ? "Expand" : "Collapse";
+    try{ localStorage.setItem(K, on?"1":"0"); }catch(e){}
+  }
+  var start=false; try{ start = localStorage.getItem(K)==="1"; }catch(e){}
+  if(start) set(true);
+  t.addEventListener("click", function(){ set(!b.classList.contains("nav-collapsed")); });
+})();</script>
 <!-- SDI-SIDEBAR:END -->
 
 <div class="wrap">
