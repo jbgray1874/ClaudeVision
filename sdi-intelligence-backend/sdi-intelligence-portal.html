@@ -1169,7 +1169,7 @@
 
       <div class="note reveal" style="animation-delay:.2s;margin-bottom:36px;border-color:rgba(109,168,232,.3)">
         <h4 style="color:var(--info)">Training — one hour, before this starts</h4>
-        A one-hour session, run by James Gray with the programme lead, covers what each report means and what is
+        A one-hour session, run by James Gray and Charlotte Blackwell, covers what each report means and what is
         needed from you when sending notes back on a parity report. If you take one thing from this page:
         <b>the answers at stage 4 are the deliverable</b>, and they are what the 4 September gate is evidenced on.
       </div>
@@ -1716,6 +1716,125 @@
           <line x1="650" y1="503" x2="677" y2="503" stroke="#e8a33d" stroke-width="1" stroke-dasharray="4 3"/>
           <text x="683" y="507" font-size="9" fill="#9b9ba3">Staging → live promotion</text>
         </svg>
+      </div>
+
+      <!-- ── THE SOURCE WATERFALL ───────────────────────────────────────────────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">How a datum is decided — the source waterfall</h3>
+      <p class="sub" style="margin-bottom:12px">Every source that can say something about a part is read, and none is trusted blindly. Each carries a rank. <b>The rule is absolute, and it is the reason the engine can be audited: a weaker source may FILL a datum, it may never REPLACE a stronger one</b> — and where two disagree, the disagreement is written onto the part and the stronger value kept. Nothing is decided by whichever pass happens to run last.</p>
+      <div class="panel reveal" style="overflow-x:auto">
+        <table style="min-width:860px">
+          <tr><th>Rank</th><th>Source</th><th>What it supplies</th><th>Why it sits there</th></tr>
+          <tr><td><b style="color:var(--ok)">100</b></td><td><b>Human confirmation</b></td><td>Anything an estimator has agreed</td><td>Outranks every machine source. A confirmed value is never re-derived.</td></tr>
+          <tr><td><b style="color:var(--accent)">90</b></td><td><b>SOLIDWORKS COM API</b><br><span class="muted" style="font-size:11px">.sldprt · .sldasm</span></td><td>Material, gauge, flat blank, bend count, weldment cut list, full-depth assembly BOM</td><td>What the shop actually builds from. <b style="color:var(--warn)">Needs a licensed seat — none active since 19 Aug</b>, so runs are currently falling through to rank 70.</td></tr>
+          <tr><td><b>80</b></td><td><b>DXF geometry</b></td><td>Measured blank area, cut length, pierce count</td><td>A measurement, not a reading. Beaten only by the model it was flattened from.</td></tr>
+          <tr><td><b>70</b></td><td><b>Deterministic drawing read</b></td><td>Title-block fields — material, finish, revision, quantity</td><td>Printed fact. Reliable, but it is what somebody typed.</td></tr>
+          <tr><td><b>60</b></td><td><b>PDF BOM tree</b></td><td>Structure read from the printed BOM table</td><td>Same caveat, one step further from the geometry.</td></tr>
+          <tr><td><b>40</b></td><td><b>xAI Grok vision</b><br><span class="muted" style="font-size:11px">the coverage net</span></td><td>BOM rows, route operations, bought-in identification the deterministic readers could not see</td><td>Lowest rank on purpose. <b>It fills gaps a measurement left; it never overwrites one.</b> Cached per page, so a re-issue costs nothing.</td></tr>
+        </table>
+      </div>
+      <div class="note reveal" style="margin-top:12px;animation-delay:.06s">
+        <h4>Dual-path BOM, and why nothing is silently dropped</h4>
+        Both BOM readers run on <b>every</b> job and are reconciled per <code>(parent, item)</code>:
+        <b>agree</b> → one row, high confidence, no flag · <b>differ</b> → the vision row wins, flagged as a possible
+        drawing inconsistency · <b>deterministic only</b> → kept, flagged · <b>vision only</b> → kept, flagged
+        <code>B_RECOVERED</code>. Nothing either path found is ever dropped, and the label travels with the line
+        into the workbook. The output is a <b>canonical BOM</b> and a <b>canonical route</b> with provenance per
+        field, gated by BLOCKING / WARNING invariants — and all five deliverables (workbook, client quote, job
+        report, AI Provenance, Decision Report) read from that one costed-facts layer, which is why they cannot
+        contradict each other.
+      </div>
+
+      <!-- ── THE PRICE CHAIN ────────────────────────────────────────────────────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">How a price is found — the chain, in the order it actually runs</h3>
+      <p class="sub" style="margin-bottom:12px">Read from <code>pricing_service._select_anchor_price_source()</code>. First hit wins; there is no averaging and no blending.</p>
+      <div class="panel reveal" style="overflow-x:auto">
+        <table style="min-width:900px">
+          <tr><th>#</th><th>Source</th><th>Table / service</th><th>Reproducible?</th><th>Note</th></tr>
+          <tr><td>1</td><td><b>UDEF anchor</b></td><td><code>dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING</code> — 15,118 priced</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td>What SDI already buys under a code. The best answer available.</td></tr>
+          <tr><td>2</td><td><b>PMA parts master</b></td><td><code>dbo.PMA_TBL</code></td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td>Purchased-part master.</td></tr>
+          <tr><td>3</td><td><b>Bought-in parts</b></td><td><code>dbo.bought_in_parts</code></td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td>Curated bought-in list.</td></tr>
+          <tr><td>4</td><td><b>Historical RAG</b></td><td><code>historical_quote_material_line</code> → <code>_header</code> — 1,982 jobs</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td><b>SDI's own quoting history</b> (M&amp;S 777 · Boots 333 · TTI 316 · Tesco 243). Fixings capped at £10 from RAG to stop implausible matches.</td></tr>
+          <tr><td>5</td><td><b>Supplier catalogue</b></td><td><code>dbo.estimating_supplier_catalog_url</code> — 138 rows</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td>Indicative; confidence capped at 0.65 and always review-flagged.</td></tr>
+          <tr><td>6</td><td><b>Standard commodity</b></td><td>config provisional</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td><td>Holds a known commodity still at a sensible figure rather than letting an LLM move it every run.</td></tr>
+          <tr><td>7</td><td><b>LLM market estimate</b></td><td>Anthropic first → <b>xAI Grok if that is unavailable</b></td><td><span class="chip" style="font-size:10px;background:rgba(232,84,79,.15);color:var(--fail);border-color:rgba(232,84,79,.3)">No</span></td><td>Gated by <code>enable_web_ai_fallback</code>, a per-job budget and a 25 s hard timeout on a worker thread, so a slow lookup can never hang a run. Asked once per specification and stored, because the same castor came back £4.54 one run and £8.54 the next.</td></tr>
+          <tr><td>8</td><td><b>No price</b></td><td>—</td><td>—</td><td>£0 <b>with a specific reason</b> and <code>review_required</code>. A £0 line is never presented as free.</td></tr>
+        </table>
+      </div>
+      <div class="note reveal" style="margin-top:12px;animation-delay:.06s;border-color:rgba(232,163,61,.35)">
+        <h4 style="color:var(--warn)">Where real supplier data plugs in — requested 25 Aug 2026</h4>
+        Steps <b>1–6 are reproducible</b>: the same job prices the same way tomorrow. Step 7 is not — the same
+        inputs can produce a different number, which is why every job carrying one raises a blocking finding.
+        <b>Every supplier catalogue loaded moves lines up the chain permanently</b>, off step 7 and onto step 5 or
+        better, and removes outstanding inputs from every future job.<br><br>
+        A request went to <b>estimating@wearesdi.com on 25 August</b> for the top 2–3 suppliers per material class
+        — sheet steel, wire/tube, board, plastics, fixings, bought-in, powder/finishing, vinyl/print, packaging —
+        along with how each price arrives today (e-mail, PDF, portal, phone), whose portal login is used, whether
+        we hold a net contract price or list-then-discount, whose part codes appear on the quote, and how often the
+        prices move. <b>Nothing about who SDI buys from or what it pays changes</b>; it only means the engine
+        prices from the numbers estimating already trusts, still overwritable per job.
+      </div>
+
+      <!-- ── RUNTIME ───────────────────────────────────────────────────────────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Runtime — what runs where, and why the runner is a Scheduled Task</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+        <table style="min-width:900px">
+          <tr><th>Process</th><th>What it is</th><th>Lifecycle</th><th>Why</th></tr>
+          <tr><td><b>Portal / API</b></td><td><code>app.py</code> — FastAPI, port 8072</td><td>Scheduled Task, restarted by <code>restart-service.ps1</code></td><td>Serves the pages, the file browser and <code>/api/estimate/*</code>. Never runs an estimate itself.</td></tr>
+          <tr><td><b>Estimate runner</b></td><td><code>sdi_estimate_runner.py</code> — task <b>“SDI Estimating Runner”</b></td><td><b>AtLogOn</b> + a 5-minute sweep, <b><code>-LogonType Interactive</code></b>. Polls the API every 5 s.</td><td><b>This is the whole reason it is not a Windows Service.</b> Services run in session 0, which has <b>no interactive desktop</b> — and SOLIDWORKS and Excel COM automation cannot attach without one. A service would look healthier and fail every job.</td></tr>
+          <tr><td><b>Estimating engine</b></td><td><code>C:\ClaudeVision\src\</code> — Python 3.10 venv</td><td>Spawned per claimed run</td><td>Does the reading, arbitration, pricing and workbook write.</td></tr>
+        </table>
+      </div>
+      <div class="note reveal" style="margin-top:12px;animation-delay:.06s">
+        <h4>The queue, and the mistake it was made to prevent</h4>
+        A run is <b>claimed</b> (<code>POST /runner/claim</code>), reports <b>progress</b>, then <b>completes</b> —
+        so a run that dies with the laptop is visible as abandoned rather than appearing to hang for ever. Inputs
+        are <b>staged</b> into one folder per client + drawing, and re-running a job <b>replaces</b> that folder.<br><br>
+        <b>That replacement is why a second Run press on a job already running is refused with a 409 — checked
+        <i>before</i> staging deletes anything.</b> Without the check, pressing Run twice deleted the drawings out
+        from under the estimate that was mid-flight. The refusal names the run in front of you and offers to
+        release it.<br><br>
+        <b>Selection is the estimate.</b> The folder is not read wholesale; what was staged is what was priced,
+        and the job report names every file read and every file present-but-not-read.
+      </div>
+
+      <!-- ── DEPLOYMENT ────────────────────────────────────────────────────────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Which code is actually serving</h3>
+      <div class="note reveal">
+        <h4>An afternoon was lost to this once</h4>
+        Three deployments existed on three different commits at the same time — <code>localhost:8072</code>, an old
+        NSSM service on <code>8071</code>, and <code>10.0.0.5:8071</code> — and produced <b>three false negatives in
+        one day</b>: a fix was tested against a build that did not contain it.<br><br>
+        Two things now make that impossible to repeat. <b>The service reports its own commit on every response</b>,
+        shown in the build pill at the foot of the rail as <code>host · commit</code>. And
+        <code>restart-service.ps1</code> stops the task, <b>names and ends whatever is actually holding the port</b>
+        — an orphaned Python child was the reason a restart once did not restart — then verifies the served commit
+        matches the checkout and <b>exits non-zero if it is still stale</b>.<br><br>
+        <b style="color:var(--warn)">Standing question:</b> <code>10.0.0.5:8071</code> on SDI-APP01 is still a
+        separate deployment. It is either updated with the rest or retired; leaving it running is how the original
+        confusion happened.
+      </div>
+
+      <!-- ── CONFIG & EXTERNAL ─────────────────────────────────────────────────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Configuration, secrets and external services</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+        <table style="min-width:880px">
+          <tr><th>Layer</th><th>File</th><th>Holds</th><th>In git?</th></tr>
+          <tr><td>1</td><td><code>sdi-intelligence-backend/.env</code></td><td>Secrets and local overrides, service-specific</td><td><span class="chip" style="font-size:10px;background:rgba(232,84,79,.15);color:var(--fail);border-color:rgba(232,84,79,.3)">Never</span></td></tr>
+          <tr><td>2</td><td><code>.env</code> (repo root)</td><td>Secrets shared with the engine</td><td><span class="chip" style="font-size:10px;background:rgba(232,84,79,.15);color:var(--fail);border-color:rgba(232,84,79,.3)">Never</span></td></tr>
+          <tr><td>3</td><td><code>env/&lt;profile&gt;.env</code></td><td>Per-machine settings</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td></tr>
+          <tr><td>4</td><td><code>env/common.env</code></td><td>Settings common to every machine</td><td><span class="chip c-done" style="font-size:10px">Yes</span></td></tr>
+        </table>
+        <p class="sub" style="margin-top:10px">Earlier layers win. <code>SDI_DRIVE_MAP</code> resolves drive letters to UNC (<code>K=\\sdi-dc01\shareddata$\Shared</code>) because <b>mapped drives are per-logon-session</b> — a path that resolves on the desktop does not resolve for a differently-launched process, which is a recurring source of "it works for me".</p>
+      </div>
+      <div class="panel reveal" style="margin-top:12px;overflow-x:auto">
+        <table style="min-width:880px">
+          <tr><th>External service</th><th>Used for</th><th>Key</th><th>Failure behaviour</th></tr>
+          <tr><td><b>xAI Grok</b> — <code>api.x.ai</code></td><td>Drawing vision (rank 40); second-line price LLM</td><td><code>XAI_API_KEY</code></td><td>Cached per page; degrades to deterministic reads only.</td></tr>
+          <tr><td><b>Anthropic</b></td><td>First-line price fallback; Tech Radar web search</td><td><code>ANTHROPIC_API_KEY</code></td><td>Falls through to xAI, then to a flagged £0.</td></tr>
+          <tr><td><b>SDILive SQL</b> — 10.0.0.200</td><td><code>dbo</code> read-only · <code>AIEstimating</code> writable</td><td><code>AIBot</code> via ODBC 18, over VPN, port 1433</td><td>No prices; run continues and says so.</td></tr>
+          <tr><td><b>SOLIDWORKS COM</b></td><td>Rank-90 model read</td><td>Licensed seat, interactive session</td><td><b>Self-gating</b> — no seat, no models, no effect. The job runs on PDF and DXF exactly as before and states which it used.</td></tr>
+          <tr><td><b>Document Manager API</b></td><td>Custom properties incl. cut-list, <i>without</i> a SOLIDWORKS seat</td><td><code>DOCMGR_ACCESS_SECRET</code>, <code>DOCMGR_BASE_URL</code></td><td>Health (<code>comAvailable</code>) checked before every extract; routes <code>/dm/health</code>, <code>/dm/extract</code>. Reads cached values only — no geometry, no feature tree, no exports.</td></tr>
+        </table>
       </div>
 
       <div class="note reveal" style="margin-top:16px;animation-delay:.1s">
