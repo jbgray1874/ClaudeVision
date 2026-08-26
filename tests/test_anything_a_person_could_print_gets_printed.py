@@ -223,3 +223,62 @@ def test_the_cover_says_what_is_missing_not_that_it_is_not_a_drawing(tmp_path):
         assert "Word document" in cover
     finally:
         doc.close()
+
+
+# ── the hang, and why Office runs in a child process ───────────────────────────
+#
+# The first pack printed with Office conversion enabled hung on the estimating page. Spreadsheets
+# in the file list, Excel opened through COM, and something in it raised a dialog nobody could
+# see. A COM call waiting on a modal dialog blocks UNINTERRUPTIBLY — no timeout, no
+# KeyboardInterrupt, no way to give up — so the print never returned.
+#
+# In-process there is no fix. A subprocess can be killed; a blocked COM call cannot. These pin the
+# shape of that fix so nobody quietly moves it back in-process for tidiness.
+
+def test_office_conversion_has_a_timeout():
+    assert isinstance(pc.OFFICE_TIMEOUT_SECONDS, (int, float))
+    assert 30 <= pc.OFFICE_TIMEOUT_SECONDS <= 600, (
+        "long enough that a big spreadsheet finishes, short enough that a dialog is caught")
+
+
+def test_office_runs_out_of_process():
+    """The property that makes the timeout possible at all."""
+    src = (_ROOT / "src" / "printable_converters.py").read_text(encoding="utf-8")
+    at = src.index("def _office_to_pdf(")
+    body = src[at:src.index("def _kill_stray_office")]
+    assert "subprocess.run" in body, "an in-process COM call cannot be timed out"
+    assert "TimeoutExpired" in body
+    assert "OFFICE_TIMEOUT_SECONDS" in body
+
+
+def test_a_timeout_is_reported_as_a_file_problem_not_a_machine_problem():
+    """Word being installed and Word hanging on one document are different situations, and the
+    cover has to say which. A timeout means: look at that file."""
+    src = (_ROOT / "src" / "printable_converters.py").read_text(encoding="utf-8")
+    at = src.index("except subprocess.TimeoutExpired:")
+    block = src[at:at + 500]
+    assert "ConversionFailed" in block
+    assert "ConversionUnavailable" not in block
+
+
+def test_the_two_meanings_survive_the_process_boundary():
+    """An exception type does not cross a process boundary. The child prints a marker and the
+    parent reads it, or 'Word is not installed' and 'this file is corrupt' become one message."""
+    src = (_ROOT / "src" / "printable_converters.py").read_text(encoding="utf-8")
+    assert 'UNAVAILABLE:' in src
+    at = src.index("def _office_child_main")
+    child = src[at:]
+    assert "UNAVAILABLE:" in child, "the child must emit the marker"
+    parent = src[src.index("def _office_to_pdf("):src.index("def _kill_stray_office")]
+    assert 'startswith("UNAVAILABLE:")' in parent, "the parent must read it"
+
+
+def test_the_child_entry_point_exists_and_takes_two_paths():
+    assert hasattr(pc, "_office_child_main")
+    src = (_ROOT / "src" / "printable_converters.py").read_text(encoding="utf-8")
+    assert '"--office"' in src, "the dispatcher and the child must agree on the flag"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill is real on Windows")
+def test_the_stray_killer_is_a_no_op_off_windows():
+    pc._kill_stray_office()          # must not raise

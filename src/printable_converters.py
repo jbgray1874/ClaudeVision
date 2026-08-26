@@ -212,7 +212,7 @@ _OFFICE_APPS = {
 }
 
 
-def _office_to_pdf(src: Path, out: Path) -> Path:
+def _office_to_pdf_inprocess(src: Path, out: Path) -> Path:
     """Export through the Office application itself, which is the only faithful renderer.
 
     WHY COM AND NOT A LIBRARY. No Python library renders .docx the way Word does, and an
@@ -290,6 +290,72 @@ def _office_to_pdf(src: Path, out: Path) -> Path:
     return out
 
 
+# How long one document gets before we conclude Office is not coming back. A big spreadsheet can
+# legitimately take a while; a modal dialog takes forever. This is the line between them.
+OFFICE_TIMEOUT_SECONDS = 90
+
+
+def _office_to_pdf(src: Path, out: Path) -> Path:
+    """Run the Office conversion in a CHILD PROCESS, with a timeout.
+
+    THIS IS NOT DEFENSIVE PROGRAMMING, IT IS THE FIRST THING THAT HAPPENED. The first pack printed
+    with Office conversion enabled hung on the estimating page — spreadsheets in the file list,
+    Excel opened through COM, and something in it raised a dialog nobody could see. A COM call
+    waiting on a modal dialog blocks UNINTERRUPTIBLY: no timeout, no KeyboardInterrupt, no way to
+    give up. The print never returned.
+
+    In-process there is no fix for that. `subprocess` can be killed; a blocked COM call cannot.
+    So the conversion runs in a child, the parent waits `OFFICE_TIMEOUT_SECONDS`, and a child that
+    has not finished is killed and reported as a file that could not be converted. One spreadsheet
+    that upsets Excel then costs one line on the cover instead of the whole pack.
+
+    The child is this module, run as a script — see `main()` at the bottom.
+    """
+    app_name = _OFFICE_APPS.get(src.suffix.lower())
+    if app_name is None:
+        raise ConversionUnavailable(f"no Office application handles '{src.suffix}'")
+    if sys.platform != "win32":
+        raise ConversionUnavailable(
+            f"{app_name} conversion needs Windows — this is {sys.platform}")
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--office", str(src), str(out)],
+            capture_output=True, text=True, timeout=OFFICE_TIMEOUT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        _kill_stray_office()
+        raise ConversionFailed(
+            f"{app_name} did not respond within {OFFICE_TIMEOUT_SECONDS}s — it may have opened a "
+            f"dialog. The file was left out rather than holding up the print.") from None
+
+    if proc.returncode == 0 and Path(out).exists():
+        return Path(out)
+    detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+    last = detail[-1] if detail else f"exit code {proc.returncode}"
+    # The child prints one marker line so the parent can keep the two meanings apart.
+    if last.startswith("UNAVAILABLE:"):
+        raise ConversionUnavailable(last[len("UNAVAILABLE:"):].strip())
+    raise ConversionFailed(last[:200] if last else f"{app_name} produced no file")
+
+
+def _kill_stray_office() -> None:
+    """A killed child can leave the Office process it started behind, still holding the dialog.
+
+    Only the ones this conversion started should die — but COM gives us no handle on them, and a
+    stray EXCEL.EXE with an invisible dialog will hang the NEXT conversion too. So they go. This
+    runs on the estimating laptop, where nobody is working in Excel while a print is running; on a
+    machine where that is not true this would be rude, and the timeout is set high enough that it
+    should never fire on a document that is merely slow.
+    """
+    if sys.platform != "win32":
+        return
+    for image in ("EXCEL.EXE", "WINWORD.EXE", "POWERPNT.EXE"):
+        try:
+            subprocess.run(["taskkill", "/F", "/IM", image], capture_output=True, timeout=20)
+        except Exception:                                           # noqa: BLE001
+            pass
+
+
 # ── the registry ──────────────────────────────────────────────────────────────
 
 # suffix -> (what it is, in words for the cover page, converter)
@@ -332,3 +398,33 @@ def convert(src: Path, out: Path) -> Path:
         raise ConversionUnavailable(f"nothing here converts '{Path(src).suffix}'")
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     return fn(Path(src), Path(out))
+
+
+def _office_child_main(argv: List[str]) -> int:
+    """The child process the Office dispatcher spawns. One document, then exit.
+
+    It prints a single marker line on failure so the parent can keep ConversionUnavailable and
+    ConversionFailed apart across a process boundary — an exception type does not survive one, and
+    the difference between "Word is not installed" and "this file is corrupt" is the whole value
+    of the cover line.
+    """
+    src, out = Path(argv[0]), Path(argv[1])
+    try:
+        _office_to_pdf_inprocess(src, out)
+    except ConversionUnavailable as exc:
+        print(f"UNAVAILABLE: {exc}", file=sys.stderr)
+        return 2
+    except ConversionFailed as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"could not be converted ({type(exc).__name__})", file=sys.stderr)
+        return 4
+    return 0
+
+
+if __name__ == "__main__":                                          # pragma: no cover
+    if len(sys.argv) >= 4 and sys.argv[1] == "--office":
+        raise SystemExit(_office_child_main(sys.argv[2:4]))
+    print(__doc__)
+    raise SystemExit(0)
