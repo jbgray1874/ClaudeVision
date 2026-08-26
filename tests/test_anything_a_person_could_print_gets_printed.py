@@ -169,7 +169,11 @@ def test_a_file_that_is_not_really_an_image_fails_as_a_file_problem(tmp_path):
 # ── the guards, which are what make this safe to ship before the laptop test ────
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the Windows path is tested on the laptop")
-def test_office_on_a_non_windows_machine_says_which_machine(tmp_path):
+def test_office_on_a_non_windows_machine_says_which_machine(tmp_path, monkeypatch):
+    """With the switch ON, the next thing checked is the platform. Enabled explicitly here
+    because Office became opt-in after this was written — and the platform guard still has to
+    hold for anyone who turns it on."""
+    monkeypatch.setattr(pc, "OFFICE_ENABLED", True)
     src = tmp_path / "spec.docx"
     src.write_bytes(b"x")
     with pytest.raises(pc.ConversionUnavailable) as exc:
@@ -280,5 +284,128 @@ def test_the_child_entry_point_exists_and_takes_two_paths():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill is real on Windows")
-def test_the_stray_killer_is_a_no_op_off_windows():
-    pc._kill_stray_office()          # must not raise
+def test_the_stray_killer_is_a_no_op_off_windows(tmp_path):
+    pc._kill_stray_office(tmp_path / "o.pdf")          # must not raise
+
+
+# ── it must never close a document somebody is working in ──────────────────────
+#
+# The first version killed EVERY Excel, Word and PowerPoint on the machine, reasoning that
+# "nobody is working in Excel while a print is running". The first time it ran it closed a Word
+# document that had been open since the previous afternoon, and a PowerPoint deck. Neither had
+# anything to do with the print.
+#
+# An assumption about how somebody uses their own laptop is not a safety mechanism.
+
+def test_it_kills_by_process_id_and_never_by_image_name():
+    src = (_ROOT / "src" / "printable_converters.py").read_text(encoding="utf-8")
+    at = src.index("def _kill_stray_office")
+    body = src[at:src.index("def _office_pids")]
+    assert '"/IM"' not in body, (
+        "killing by image name closes every Office window on the machine, including documents "
+        "somebody is working in")
+    assert '"/PID"' in body
+
+
+def test_with_nothing_recorded_it_kills_nothing(tmp_path, monkeypatch):
+    """The safe default. A stray Office process that slows the next conversion is a much smaller
+    problem than shutting a document somebody has open."""
+    calls = []
+    monkeypatch.setattr(pc.subprocess, "run",
+                        lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(pc.sys, "platform", "win32")
+    pc._kill_stray_office(tmp_path / "never-written.pdf")
+    assert calls == [], "it tried to kill something with no process id recorded"
+
+
+def test_the_recorded_id_is_the_one_that_is_killed(tmp_path, monkeypatch):
+    out = tmp_path / "o.pdf"
+    pc._pid_file(out).write_text("4242", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(pc.sys, "platform", "win32")
+    monkeypatch.setattr(pc.subprocess, "run", lambda cmd, **k: seen.append(cmd))
+    pc._kill_stray_office(out)
+    assert seen and seen[0][:3] == ["taskkill", "/F", "/PID"]
+    assert seen[0][3] == "4242"
+
+
+def test_the_marker_is_cleared_so_a_later_print_cannot_reuse_it(tmp_path, monkeypatch):
+    """A stale id would name a process that has since been recycled to something else."""
+    out = tmp_path / "o.pdf"
+    pc._pid_file(out).write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(pc.sys, "platform", "win32")
+    monkeypatch.setattr(pc.subprocess, "run", lambda cmd, **k: None)
+    pc._kill_stray_office(out)
+    assert not pc._pid_file(out).exists()
+
+
+def test_the_child_only_records_when_exactly_one_process_appeared():
+    """Two appearing at once means we cannot tell which is ours, and killing the wrong one is
+    the whole failure this is here to prevent. Recording nothing is the right answer."""
+    src = (_ROOT / "src" / "printable_converters.py").read_text(encoding="utf-8")
+    assert "len(started) == 1" in src
+
+
+# ── the engine's own output is not a drawing ───────────────────────────────────
+#
+# The Drawings panel holds a job FOLDER, and after a run that folder holds what the engine wrote.
+# Print was opening Excel — through COM — to render the AI's own estimate workbook back into a
+# page. That is what hung the first real print. An estimator pressing Print wants the drawings;
+# they already have the estimate, it is the thing they are checking against.
+
+@pytest.mark.parametrize("name", [
+    "10575-02_20260824_162345.xlsx",
+    "10575-02_20260825_183903.xlsx",
+    "10575-02_quote.html",
+    "10575-02_report.html",
+    "10575-02_parity_bundle.json",
+])
+def test_a_run_deliverable_is_recognised_as_engine_output(name):
+    assert dp.is_engine_output(name)
+
+
+@pytest.mark.parametrize("name", [
+    "10575-02-GA - V2 Upright Vacuum Display [Rev D].PDF",
+    "10575-02-009_DIBOND_3.0mm_Rev D.DXF",
+    "Finishing spec.docx",
+    "10575-02-GA (Rev D) Cordless Vacuum Display - V2.xls",   # the MANUAL estimate, not ours
+])
+def test_a_real_document_is_not_mistaken_for_engine_output(name):
+    """The manual estimate is somebody's work, not a run deliverable. Excluding it would hide a
+    file an estimator may well want."""
+    assert not dp.is_engine_output(name)
+
+
+def test_engine_output_is_never_opened(tmp_path):
+    """Not merged, not converted, not even opened — which is the point, since opening it is what
+    took ninety seconds of Excel per file."""
+    import pymupdf
+    d = pymupdf.open()
+    d.new_page()
+    (tmp_path / "GA.PDF").write_bytes(d.tobytes())
+    d.close()
+    (tmp_path / "10575-02_20260824_162345.xlsx").write_bytes(b"not really a workbook")
+    (tmp_path / "10575-02_quote.html").write_text("<html></html>", encoding="utf-8")
+
+    res = dp.build([str(tmp_path)], tmp_path / "m.pdf", job="10575-02")
+    assert [Path(p).name for p in res["printed"]] == ["GA.PDF"]
+    assert not any("_20260824_" in s["path"] for s in res["skipped"]), \
+        "it reached the skipped list, which means it was opened"
+
+
+# ── Office is opt-in ───────────────────────────────────────────────────────────
+
+def test_office_is_off_unless_asked_for():
+    """It is the only converter that drives another application, and the only one that can hang
+    on something this process cannot see. Off by default is the difference between a Print button
+    that is reliable and one that is not."""
+    assert pc.OFFICE_ENABLED is False or "SDI_PRINT_OFFICE" in __import__("os").environ
+
+
+def test_the_message_names_the_switch(tmp_path, monkeypatch):
+    monkeypatch.setattr(pc, "OFFICE_ENABLED", False)
+    src = tmp_path / "spec.docx"
+    src.write_bytes(b"x")
+    with pytest.raises(pc.ConversionUnavailable) as exc:
+        pc.convert(src, tmp_path / "o.pdf")
+    assert "SDI_PRINT_OFFICE" in str(exc.value), "a reader must be told how to turn it on"

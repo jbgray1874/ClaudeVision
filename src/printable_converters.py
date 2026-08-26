@@ -34,6 +34,7 @@ cover rather than an exception. Every converter here is guarded for exactly that
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -244,12 +245,21 @@ def _office_to_pdf_inprocess(src: Path, out: Path) -> Path:
     pythoncom.CoInitialize()
     app = None
     try:
+        before = _office_pids()
         try:
             app = win32com.client.DispatchEx(f"{app_name}.Application")
         except Exception as exc:                                    # noqa: BLE001
             raise ConversionUnavailable(
                 f"{app_name} could not be started on this machine — it may not be installed, "
                 f"or this process has no interactive desktop") from exc
+        # RECORD WHAT WE STARTED, so a timeout kills that and nothing else. COM returns no handle
+        # on the process, so the only way to know is what appeared between these two lines.
+        try:
+            started = _office_pids() - before
+            if len(started) == 1:
+                _pid_file(out).write_text(str(started.pop()), encoding="utf-8")
+        except Exception:                                           # noqa: BLE001
+            pass                        # no marker means the timeout kills nothing. Correct.
         try:
             app.Visible = False
         except Exception:                                           # noqa: BLE001
@@ -295,6 +305,18 @@ def _office_to_pdf_inprocess(src: Path, out: Path) -> Path:
 OFFICE_TIMEOUT_SECONDS = 90
 
 
+# OFFICE CONVERSION IS OFF UNLESS SOMEBODY ASKS FOR IT.
+#
+# It is the only converter that drives another application. Everything else here is a library
+# call that either works or raises; Office opens Word or Excel, which can show a dialog, wait on a
+# file lock, or sit in Protected View — none of which this process can see or answer.
+#
+# It hung the first real print, and the second. Defaulting it OFF means Print is reliable for the
+# formats that cannot hang — drawings, text, images — and the fragile path is one somebody chose.
+# Set SDI_PRINT_OFFICE=1 to turn it on.
+OFFICE_ENABLED = os.getenv("SDI_PRINT_OFFICE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _office_to_pdf(src: Path, out: Path) -> Path:
     """Run the Office conversion in a CHILD PROCESS, with a timeout.
 
@@ -314,6 +336,11 @@ def _office_to_pdf(src: Path, out: Path) -> Path:
     app_name = _OFFICE_APPS.get(src.suffix.lower())
     if app_name is None:
         raise ConversionUnavailable(f"no Office application handles '{src.suffix}'")
+    if not OFFICE_ENABLED:
+        raise ConversionUnavailable(
+            f"{app_name} documents are not printed by default — converting them opens {app_name} "
+            f"itself, which can stall on a dialog nobody can see. Set SDI_PRINT_OFFICE=1 to "
+            f"include them.")
     if sys.platform != "win32":
         raise ConversionUnavailable(
             f"{app_name} conversion needs Windows — this is {sys.platform}")
@@ -323,7 +350,7 @@ def _office_to_pdf(src: Path, out: Path) -> Path:
             [sys.executable, str(Path(__file__).resolve()), "--office", str(src), str(out)],
             capture_output=True, text=True, timeout=OFFICE_TIMEOUT_SECONDS, check=False)
     except subprocess.TimeoutExpired:
-        _kill_stray_office()
+        _kill_stray_office(out)
         raise ConversionFailed(
             f"{app_name} did not respond within {OFFICE_TIMEOUT_SECONDS}s — it may have opened a "
             f"dialog. The file was left out rather than holding up the print.") from None
@@ -338,22 +365,59 @@ def _office_to_pdf(src: Path, out: Path) -> Path:
     raise ConversionFailed(last[:200] if last else f"{app_name} produced no file")
 
 
-def _kill_stray_office() -> None:
-    """A killed child can leave the Office process it started behind, still holding the dialog.
+def _pid_file(out: Path) -> Path:
+    """Where the child records the Office process it started, so only that one is ever killed."""
+    return Path(out).with_suffix(".office-pid")
 
-    Only the ones this conversion started should die — but COM gives us no handle on them, and a
-    stray EXCEL.EXE with an invisible dialog will hang the NEXT conversion too. So they go. This
-    runs on the estimating laptop, where nobody is working in Excel while a print is running; on a
-    machine where that is not true this would be rude, and the timeout is set high enough that it
-    should never fire on a document that is merely slow.
+
+def _kill_stray_office(out: Path) -> None:
+    """Kill ONLY the Office process this conversion started.
+
+    THE FIRST VERSION OF THIS KILLED EVERY EXCEL, WORD AND POWERPOINT ON THE MACHINE, on the
+    reasoning that "nobody is working in Excel while a print is running". That was wrong the first
+    time it ran: it closed a Word document that had been open since the previous afternoon and a
+    PowerPoint deck, neither of anything to do with the print. An assumption about how somebody
+    uses their own laptop is not a safety mechanism.
+
+    So the child records the process id it created — snapshot before, diff after, since COM hands
+    back no handle — and only that id is killed. If the file is absent, or the id has already
+    gone, NOTHING is killed. A stray Office process that hangs the next conversion is a far
+    smaller problem than shutting a document somebody is working in.
     """
     if sys.platform != "win32":
         return
+    marker = _pid_file(out)
+    try:
+        pid = int(marker.read_text(encoding="utf-8").strip())
+    except Exception:                                               # noqa: BLE001
+        return                          # nothing recorded — kill nothing, deliberately
+    finally:
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+    try:
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=20)
+    except Exception:                                               # noqa: BLE001
+        pass
+
+
+def _office_pids() -> set:
+    """Process ids of the Office applications currently running, for the before/after diff."""
+    if sys.platform != "win32":
+        return set()
+    found = set()
     for image in ("EXCEL.EXE", "WINWORD.EXE", "POWERPNT.EXE"):
         try:
-            subprocess.run(["taskkill", "/F", "/IM", image], capture_output=True, timeout=20)
+            res = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV",
+                                  "/NH"], capture_output=True, text=True, timeout=20)
         except Exception:                                           # noqa: BLE001
-            pass
+            continue
+        for line in (res.stdout or "").splitlines():
+            parts = [p.strip('" ') for p in line.split('","')]
+            if len(parts) >= 2 and parts[1].isdigit():
+                found.add(int(parts[1]))
+    return found
 
 
 # ── the registry ──────────────────────────────────────────────────────────────

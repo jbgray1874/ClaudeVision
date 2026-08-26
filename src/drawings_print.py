@@ -78,6 +78,32 @@ KNOWN_UNPRINTABLE = (".sldprt", ".sldasm", ".slddrw", ".sldlfp",
 # case that matters: a real drawing missing from the paper.
 ENGINE_ARTIFACTS = ("_sw_native_extract.json",)
 
+# AND THE ENGINE'S DELIVERABLES, WHICH ARE NOT DRAWINGS EITHER.
+#
+# The Drawings panel holds a job FOLDER, and after a run that folder contains what the engine
+# wrote: the timestamped estimate workbooks, the client quote, the job report, the parity bundle.
+# Print was converting those — opening Excel, through COM, to render the AI's own estimate back
+# into a page — which is slow, pointless, and is what hung the first real print. An estimator
+# pressing Print on a job wants THE DRAWINGS. They already have the estimate; it is the thing
+# they are checking against.
+#
+# Recognised by shape rather than by a list, because the shapes are stable and the filenames are
+# per-job: <job>_<YYYYMMDD>_<HHMMSS>.xlsx, <job>_quote.html, <job>_report.html, *_parity*.
+import re as _re
+ENGINE_OUTPUT_PATTERNS = (
+    _re.compile(r"_\d{8}_\d{6}\.xlsx?$", _re.I),      # a run's estimate workbook
+    _re.compile(r"_quote\.html?$", _re.I),
+    _re.compile(r"_report\.html?$", _re.I),
+    _re.compile(r"_parity[^/\\]*\.(?:html?|json|csv)$", _re.I),
+    _re.compile(r"_decision_report\.html?$", _re.I),
+    _re.compile(r"_ai_provenance\.html?$", _re.I),
+)
+
+
+def is_engine_output(name: str) -> bool:
+    """True for something a run wrote, rather than something a designer drew."""
+    return any(p.search(str(name or "")) for p in ENGINE_OUTPUT_PATTERNS)
+
 
 class PrintInputError(ValueError):
     """Something the estimator can fix, phrased for them. The backend turns it into a 400."""
@@ -143,7 +169,9 @@ def collect(paths: List[str], ignored: Optional[List[Path]] = None
             # A true no-op: the file IS accounted for, once. Nothing to report.
             return
         seen.add(key)
-        if p.name.lower() in ENGINE_ARTIFACTS:      # never part of the pack; not a gap in it
+        if p.name.lower() in ENGINE_ARTIFACTS or is_engine_output(p.name):
+            # Never part of the pack, and not a gap in it. Named on the cover under IGNORED so
+            # the count still reconciles, but never opened and never converted.
             if ignored is not None:
                 ignored.append(p)
             return
