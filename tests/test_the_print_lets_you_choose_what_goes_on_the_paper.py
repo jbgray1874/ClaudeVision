@@ -87,3 +87,40 @@ def test_the_picker_does_not_touch_the_run_list():
     assert "drawings.splice" not in body
     assert "drawings =" not in body
     assert "renderFiles" not in body, "it is re-rendering the run list, so it is changing it"
+
+
+# ── a click must never do nothing ──────────────────────────────────────────────
+#
+# The old handler opened a tab on the click itself, so even a failure was visible. Routing
+# through a dialog put a silent path in the middle: anything thrown inside openPrintPicker — a
+# missing element, a bad row, a browser that will not showModal — left the button looking dead.
+# A dead-looking button is indistinguishable from a broken service, and is how a feature gets
+# abandoned. It happened, on the first real use.
+
+def test_the_click_is_wrapped_so_a_failure_is_visible():
+    at = _PAGE.index('$("printDrawings").onclick')
+    body = _PAGE[at:at + 900]
+    assert "try{" in body and "catch" in body, "the click can still fail silently"
+    assert "printNote" in body, "a failure must be said on the page"
+
+
+def test_a_failed_chooser_still_prints():
+    """Falling back to the old behaviour — print everything — beats doing nothing. The estimator
+    gets paper and a sentence explaining why they did not get to choose."""
+    at = _PAGE.index('$("printDrawings").onclick')
+    body = _PAGE[at:at + 900]
+    assert "runPrint(drawings.map(d => d.path))" in body, "no fallback: the click does nothing"
+
+
+def test_a_browser_without_dialog_support_is_detected_rather_than_assumed():
+    at = _PAGE.index('$("printDrawings").onclick')
+    body = _PAGE[at:at + 900]
+    assert "showModal" in body, "it must check the browser can open a dialog before relying on it"
+
+
+def test_one_bad_row_does_not_cost_the_whole_dialog():
+    """Every file in the list gets described. One that cannot be must not take the other eleven
+    with it — it is offered ticked, and the server decides whether it converts."""
+    at = _PAGE.index("function openPrintPicker")
+    body = _PAGE[at:at + 900]
+    assert "try { def = printDefault(d); } catch" in body

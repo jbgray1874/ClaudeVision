@@ -2073,8 +2073,11 @@ let printPicked = null;          // Set of paths, or null before the dialog has 
 function openPrintPicker(){
   const dlg = $("printPick"), list = $("ppList"), help = $("ppHelp");
   const rows = drawings.map(d => {
-    const name = d.name || String(d.path||"").split(/[\\\/]/).pop();
-    return Object.assign({}, printDefault(d), {path:d.path, name});
+    const name = d.name || String(d.path||"").split(/[\\\/]/).pop() || String(d.path||"");
+    /* One unrecognisable row must not cost the dialog. Ticked, because the server decides what
+       actually converts and an unknown here is better offered than silently dropped. */
+    let def; try { def = printDefault(d); } catch(e){ def = {on:true, why:""}; }
+    return Object.assign({}, def, {path:d.path, name});
   });
   printPicked = new Set(rows.filter(r => r.on).map(r => r.path));
 
@@ -2114,9 +2117,27 @@ function openPrintPicker(){
 $("ppClose").onclick = () => $("printPick").close();
 $("ppGo").onclick = () => { $("printPick").close(); runPrint([...printPicked]); };
 
+/* A CLICK MUST NEVER DO NOTHING.
+   The old handler opened a tab on the click itself, so even a failure was visible. Routing
+   through a dialog put a silent path in the middle: anything thrown inside openPrintPicker —
+   a missing element, a bad row, a browser that will not showModal — left the button looking
+   dead, which is indistinguishable from a broken service and is how a feature gets abandoned.
+   So: try the picker, say so on the page if it fails, and fall back to printing everything,
+   which is what the button did before the picker existed. */
 $("printDrawings").onclick = () => {
   if(!drawings.length) return;
-  openPrintPicker();
+  const note = $("printNote");
+  try{
+    const dlg = $("printPick");
+    if(!dlg || typeof dlg.showModal !== "function")
+      throw new Error("this browser cannot open the chooser");
+    openPrintPicker();
+  }catch(e){
+    if(note) note.textContent =
+      "The chooser could not open (" + (e && e.message ? e.message : e) +
+      ") — printing everything in the list instead.";
+    runPrint(drawings.map(d => d.path));
+  }
 };
 
 async function runPrint(paths){
