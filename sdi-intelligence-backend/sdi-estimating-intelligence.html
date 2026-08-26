@@ -1304,7 +1304,7 @@ $("addFolder").onclick = () => {
     dmSay("");
     const n = $("dmNote");
     if(n) n.textContent =
-      "Document Manager is not configured on this machine (SDI_DM_API_BASE / SDI_DM_API_KEY), "
+      "Document Manager is not configured on this machine (DOCMGR_BASE_URL / DOCMGR_ACCESS_SECRET), "
       + "so Extract DesignDrawingPack cannot ask for a pack. The share browser opened instead — "
       + "pick the job folder there.";
     openBrowser("folder", {
@@ -2240,7 +2240,7 @@ async function checkDm(){
       const gaps = [];
       if(!j.configured) gaps.push("importing a pack that already exists needs "
                                   + (j.reason || "SDI_DM_OUTPUT_ROOT"));
-      if(!dmApiReady) gaps.push("asking for a new one needs SDI_DM_API_BASE and SDI_DM_API_KEY");
+      if(!dmApiReady) gaps.push("asking for a new one needs DOCMGR_BASE_URL and DOCMGR_ACCESS_SECRET");
       dmNote.textContent = gaps.length ? ("Document Manager: " + gaps.join("; ") + ".") : "";
     }
   }catch(e){

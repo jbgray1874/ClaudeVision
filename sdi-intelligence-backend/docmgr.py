@@ -96,8 +96,10 @@ def _headers() -> Dict[str, str]:
     key = api_key()
     if not key:
         raise DocMgrError(
-            "No Document Manager access secret is configured. Set SDI_DM_API_KEY (or "
-            "DOCMGR_ACCESS_SECRET) in the service's .env — never in the page.")
+            "No Document Manager access secret is configured. Set DOCMGR_ACCESS_SECRET in "
+            "the service's .env — never in the page. That is the name the Document Manager's "
+            "own guide gives to callers; SDI_DM_API_KEY is accepted too, but naming ours "
+            "first sent somebody looking for a setting its author had never heard of.")
     return {"X-API-Key": key, "Content-Type": "application/json"}
 
 
@@ -105,8 +107,9 @@ def _need_base() -> str:
     base = base_url()
     if not base:
         raise DocMgrError(
-            "No Document Manager address is configured. Set SDI_DM_API_BASE (or "
-            "DOCMGR_BASE_URL) to the API's base URL.")
+            "No Document Manager address is configured. Set DOCMGR_BASE_URL to the API's "
+            "base URL — the name its own guide gives to callers. SDI_DM_API_BASE is "
+            "accepted as well.")
     return base
 
 
@@ -118,7 +121,7 @@ def _explain(resp: Any, what: str) -> None:
     """
     if resp.status_code == 401:
         raise DocMgrError(
-            "The Document Manager refused our access secret (401). Check SDI_DM_API_KEY "
+            "The Document Manager refused our access secret (401). Check DOCMGR_ACCESS_SECRET "
             "matches the secret its owner issued.")
     if resp.status_code == 404:
         raise DocMgrError(f"The Document Manager has no record of that {what} (404).")

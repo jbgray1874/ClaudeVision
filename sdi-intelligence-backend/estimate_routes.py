@@ -1091,8 +1091,9 @@ def dm_health(x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
     if not docmgr.configured():
         return {"configured": False, "reachable": False, "com_available": None,
-                "reason": "The Document Manager API is not configured. Set SDI_DM_API_BASE "
-                          "and SDI_DM_API_KEY in the service's .env.",
+                "reason": "The Document Manager API is not configured. Set DOCMGR_BASE_URL "
+                          "and DOCMGR_ACCESS_SECRET in the service's .env — those are the "
+                          "names the Document Manager's own guide gives to callers.",
                 "api_base": docmgr.base_url() or None}
     try:
         hp = docmgr.health()
