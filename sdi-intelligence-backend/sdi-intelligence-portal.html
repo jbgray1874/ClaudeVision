@@ -1972,7 +1972,7 @@
         <table>
           <tr><th>Workstream</th><th>The technological uncertainty</th><th>The advance sought</th></tr>
           <tr><td><b>AI Estimating Engine</b></td><td>Could cost-driving geometry, materials &amp; BOMs be reliably extracted from inconsistent SolidWorks PDF/DXF packs, producing a defensible cost where the method wasn't readily deducible?</td><td>A deterministic engine that reads drawings and produces a costed estimate with a credibility score, failing loud rather than guessing.</td></tr>
-          <tr><td><b>Drawing Intelligence / SolidWorks API</b></td><td>Can missing flat-pattern DXFs be generated automatically from a GA/PDF, and drawings ingested directly from SolidWorks via API?</td><td>Automated DXF generation to remove the largest single accuracy limiter in the engine.</td></tr>
+          <tr><td><b>SDI Technical Design Intelligence</b></td><td>Can missing flat-pattern DXFs be generated automatically from a GA/PDF, and drawings ingested directly from SolidWorks via API?</td><td>Automated DXF generation to remove the largest single accuracy limiter in the engine.</td></tr>
           <tr><td><b>RAG Pricing Pipeline</b></td><td>Could historical quote data be retrieved &amp; re-ranked to price parts never seen before, with quantified confidence?</td><td>A multi-tier retrieval pipeline with token-overlap re-ranking and per-part confidence flags.</td></tr>
           <tr><td><b>HR / Systems Integration</b></td><td>Could disparate systems (BrightHR, InVentry, Blip) be reconciled where no common identifier is exposed by the APIs?</td><td>A reconciliation pipeline resolving identity across systems with no shared key.</td></tr>
           <tr><td><b>Immersive Design &amp; Visualisation</b></td><td>Can photoreal client concepts be generated &amp; iterated from brief using AI and real-time 3D, at a fidelity/speed not previously achievable?</td><td>An AI-assisted concept pipeline (Unreal Engine + generative tools) for brand-experience work.</td></tr>
@@ -2134,7 +2134,7 @@
         <b>Endpoint security &amp; backup present</b> — CrowdStrike Falcon, Datto backup, NinjaRMM and Sysmon across the estate. <b>Confirmed 8 Jul 2026:</b> NinjaRMM alerts on OS patches (CVSS &ge;7.0, 14+ days outstanding), device down 20 min, disk active time &gt;90% for 60 min, disk free &lt;15%, high CPU/memory, and SMART degraded status &mdash; visible to helpdesk engineers in the Ninja console. <b style="color:var(--warn)">No information available on CrowdStrike alerting/ownership.</b> Ninja covers endpoints and servers only &mdash; <b style="color:var(--warn)">network devices (switches, APs) are not monitored</b>. Windows server patching (once in full support) will be monthly via Ninja, delayed 7 days after Patch Tuesday.
       </div>
       <div class="note reveal" style="animation-delay:.1s"><h4>Other findings &amp; follow-ups</h4>
-        <b>SDI-APP01 is a critical multi-role box</b> — portal + SOLIDWORKS PDM vault + TRUMPF shop-floor stack, all production, each with its own SQL. Needs change control; the PDM vault is the Drawing Intelligence / SolidWorks API integration target.<br><br>
+        <b>SDI-APP01 is a critical multi-role box</b> — portal + SOLIDWORKS PDM vault + TRUMPF shop-floor stack, all production, each with its own SQL. Needs change control; the PDM vault is the SDI Technical Design Intelligence integration target.<br><br>
         <b>Access SupplyChain is a three-tier system</b> — database + app logic on DB01, application services + TaskCentre + LM-X licensing on APP01, IIS web front-end on WEB01. Licence keys go to the <b>LM-X server on ACCESS-APP01</b>.<br><br>
         <b>ACCESS-DB02 is a reclaimable / pending asset</b> — clean 24 GB VM doing nothing; bring into service (DB upgrade or HA replica) or decommission.<br><br>
         <b>Housekeeping:</b> SDI-APP01 runs orphan VMware Tools despite being physical (removable); RDS01 C: low (~18 GB free); <b>two ESXi hosts (SDI-ESXi01 — HPE DL380 G10, and SDI-ESXi02) plus vCenter are confirmed</b> — verify they're clustered with HA and on shared storage; assign an owner/contact per server.</div>
@@ -2266,7 +2266,7 @@
           <div style="position:relative;z-index:1;text-align:center">
             <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);margin:0 auto 8px;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3" width="14"><circle cx="12" cy="12" r="3"/></svg></div>
             <div style="font-family:var(--mono);font-size:10px;color:var(--accent);font-weight:700">Q3–Q4 2026</div>
-            <div style="font-size:12px;color:var(--ink);margin-top:4px;font-weight:600">Drawing Intelligence</div>
+            <div style="font-size:12px;color:var(--ink);margin-top:4px;font-weight:600">SDI Technical Design<br>Intelligence</div>
             <div style="font-size:11px;color:var(--ink-dim)">SolidWorks API · DXF gen</div>
           </div>
           <div style="position:relative;z-index:1;text-align:center">
@@ -2317,7 +2317,7 @@
         <div style="width:4px;height:36px;background:var(--accent);border-radius:2px;flex-shrink:0"></div>
         <div>
           <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--accent);text-transform:uppercase">Workstream 2 · In build</div>
-          <h2 style="font-family:var(--disp);font-weight:800;font-size:22px;margin:2px 0 0">Drawing Intelligence &amp; SolidWorks Integration</h2>
+          <h2 style="font-family:var(--disp);font-weight:800;font-size:22px;margin:2px 0 0">SDI Technical Design Intelligence</h2>
         </div>
         <span class="chip c-plan" style="margin-left:auto">Q3–Q4 2026</span>
       </div>
