@@ -80,6 +80,45 @@ $app    = Join-Path $Root "sdi-intelligence-backend\app.py"
 if (-not (Test-Path $python)) { throw "No service virtualenv at $python" }
 if (-not (Test-Path $app))    { throw "No app.py at $app" }
 
+# -- STAMP THE BUILD, FROM THE SHELL RATHER THAN FROM THE SERVICE ----------------------
+#
+# app.py resolves its own commit by shelling out to git, and on SDI-APP01 that came back
+# "unknown" on a service that was perfectly current. git works there for a person and not
+# for the account the task runs as - a different PATH, or safe.directory refusing a repo
+# somebody else cloned. Either way the one field that exists to catch a stale deployment
+# was the field that stopped working, which is the worst place for it to fail.
+#
+# Resolving it HERE and handing it down closes that: this script is the task's own action,
+# so whatever it can see, the service gets. SDI_COMMIT is checked before git by app.py, so
+# nothing else needs to change.
+#
+# NOT hardcoded in .env, which was the other option and is worse than "unknown": a pinned
+# hash keeps reporting a build that stopped running at the next deploy, and reports it
+# confidently. A wrong answer here costs an afternoon; an absent one costs a question.
+if (-not $env:SDI_COMMIT) {
+    $gitExe = (Get-Command git -ErrorAction SilentlyContinue).Source
+    if (-not $gitExe) {
+        foreach ($cand in @("C:\Program Files\Git\cmd\git.exe",
+                            "C:\Program Files (x86)\Git\cmd\git.exe")) {
+            if (Test-Path $cand) { $gitExe = $cand; break }
+        }
+    }
+    if ($gitExe) {
+        $prevEA = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $sha = (& $gitExe -C $Root rev-parse --short HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $sha) { $env:SDI_COMMIT = "$sha".Trim() }
+        } catch { }                       # never stop the service over a version string
+        finally { $ErrorActionPreference = $prevEA }
+    }
+    if ($env:SDI_COMMIT) {
+        Write-Host "  build $($env:SDI_COMMIT)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  build unresolved - the site will report 'unknown'" -ForegroundColor Yellow
+    }
+}
+
 # SAY WHO HAS THE PORT, not just that somebody does. "Only one usage of each
 # socket address" sends you to the firewall. A name, a pid and the account it
 # runs as sends you to the right window - which is how we established that 8071
