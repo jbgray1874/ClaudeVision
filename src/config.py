@@ -161,7 +161,14 @@ TITLE_BLOCK_LABELS = [
     "GAUGE",
 ]
 
-PART_NUMBER_PATTERN = r"\b(?:\d{4,5}[A-Z]?|[A-Z]{1,6}\d{0,4}|FIXING\d*)(?:-[A-Z0-9_]{1,12}|\s-\s[A-Z0-9_]{1,12}){1,4}\b"
+# The head of a part number must carry a DIGIT. `[A-Z]{1,6}\d{0,4}` used to allow zero, which
+# made any run of one to six letters a valid code head — and on 10575-02 that turned the title
+# block's "DRAWN BY: P.Andrew - 14/11/2023" into a part called ANDREW-14, costed at £108.73.
+#
+# Every real SDI code has a digit up front: 10575-02, BE2030-10, 12173-02-GA. The alpha-led
+# catalogue codes — FIXING591, VINYL03, SUBPLAS72 — attach their digits directly and never take
+# the hyphenated shape this pattern reads, so nothing legitimate is lost by requiring one.
+PART_NUMBER_PATTERN = r"\b(?:\d{4,5}[A-Z]?|[A-Z]{1,6}\d{1,4}|FIXING\d*)(?:-[A-Z0-9_]{1,12}|\s-\s[A-Z0-9_]{1,12}){1,4}\b"
 PART_NUMBER_PATTERNS = [
     PART_NUMBER_PATTERN,
     r"\b[A-Z]{1,4}\s*-\s*\d{2,}\b",

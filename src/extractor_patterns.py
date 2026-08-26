@@ -339,9 +339,17 @@ def _extract_following_line_values(text: str, label_pattern: str, max_lines: int
 
 
 def _extract_part_number_candidates(text: str) -> List[str]:
+    # Dates are blanked before the scan. A title block puts a date immediately after a name —
+    # "DRAWN BY: P.Andrew - 14/11/2023" — and the day of the month then completes a part number
+    # that the name started. Masking the date leaves "P.Andrew - " with nothing to pair with.
+    #
+    # This is the second of two defences; config's PART_NUMBER_PATTERN also requires a digit in
+    # the head. Either would have stopped ANDREW-14 on its own, and the title block is the one
+    # place on a drawing where prose and part numbers sit this close together.
+    masked = re.sub(DATE_PATTERN, lambda m: " " * len(m.group(0)), text or "", flags=re.IGNORECASE)
     candidates: List[str] = []
     for pattern in PART_NUMBER_PATTERNS:
-        candidates.extend(_findall_unique(pattern, text, flags=re.IGNORECASE))
+        candidates.extend(_findall_unique(pattern, masked, flags=re.IGNORECASE))
     return _dedupe_strings(candidates)
 
 
@@ -361,6 +369,12 @@ def _looks_like_part_number(value: str) -> bool:
     if len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
         return False
     if len(parts) == 2 and len(parts[0]) <= 2 and len(parts[1]) <= 2:
+        return False
+    # The head has to carry a digit. A pure-alpha head is prose: ANDREW-14 was a draughtsman and
+    # a date, PANEL-02 is a note. Real codes are 10575-02, BE2030-10, 12173-02-GA. The rule lives
+    # here as well as in the pattern so it holds for every route into this filter, not only the
+    # one regex that happened to produce the fault.
+    if parts and not any(ch.isdigit() for ch in parts[0]):
         return False
     return bool(re.fullmatch(r"[A-Z0-9_]+(?:\s*-\s*[A-Z0-9_]+){1,4}", normalized))
 
