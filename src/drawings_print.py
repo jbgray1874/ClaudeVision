@@ -33,7 +33,12 @@ from typing import Any, Dict, List, Optional, Tuple
 PRINTABLE = (".pdf",)
 # Named separately from "anything else" so the cover page can say WHY a file was left out —
 # "not a printable drawing" is a different message from "we did not recognise this".
-KNOWN_UNPRINTABLE = (".dxf", ".dwg", ".sldprt", ".sldasm", ".step", ".stp", ".iges", ".igs")
+# `.slddrw` was missing from this list, so a SolidWorks DRAWING file fell to the catch-all branch
+# and the cover reported "not printed — '.slddrw' is not a drawing". It is the drawing file. It is
+# the one absence an estimator would most want explained properly, and it was the one explained
+# with something untrue. Part, assembly and drawing are now all here together.
+KNOWN_UNPRINTABLE = (".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".sldlfp",
+                     ".step", ".stp", ".iges", ".igs")
 
 # THINGS THE ENGINE WROTE, WHICH WERE NEVER PART OF THE PACK.
 #
@@ -48,6 +53,29 @@ ENGINE_ARTIFACTS = ("_sw_native_extract.json",)
 
 class PrintInputError(ValueError):
     """Something the estimator can fix, phrased for them. The backend turns it into a 400."""
+
+
+def _cover_count_line(printed_files: int, pages: Optional[int]) -> str:
+    """How much paper follows, in files AND in sheets.
+
+    A DRAWING AND A SHEET ARE NOT THE SAME THING, and this line used to use one word for both.
+    On 10575-02 a single GA PDF carries three sheets, so the cover read "1 drawing follows this
+    page" and the reviewer turned over to find three. Somebody looking at that screen could not
+    tell what the feature had done.
+
+    Both numbers matter and they answer different questions. Sheets is what is in your hand.
+    Files is what tells you whether the pack is complete. When they happen to be equal, saying it
+    twice is noise, so it says it once.
+    """
+    def s(n: int, word: str) -> str:
+        return f"{n} {word}{'' if n == 1 else 's'}"
+
+    if pages is None:                       # the merge could not be read back; say what we know
+        return f"{s(printed_files, 'drawing')} {'follows' if printed_files == 1 else 'follow'} this page."
+    if pages == printed_files:
+        return f"{s(pages, 'drawing')} {'follows' if pages == 1 else 'follow'} this page."
+    return (f"{s(pages, 'sheet')} {'follows' if pages == 1 else 'follow'} this page, "
+            f"from {s(printed_files, 'drawing')}.")
 
 
 def _ensure_engine_on_path() -> None:
@@ -123,9 +151,11 @@ def _cover(doc: Any, job: Optional[str], printed: List[Path],
         y += gap
 
     line(f"Drawings for {job}" if job else "Drawings", size=16, gap=26)
-    n = len(printed)
-    line(f"{n} drawing{'' if n == 1 else 's'} {'follows' if n == 1 else 'follow'} this page.",
-         gap=22)
+    # MINUS THE COVER ITSELF. new_page(0) above has already run, so doc.page_count includes this
+    # sheet — and the number wanted here is how many pages FOLLOW it. Counting itself made a
+    # three-sheet pack announce four.
+    _following = max(doc.page_count - 1, 0) or None
+    line(_cover_count_line(len(printed), _following), gap=22)
 
     for p in printed:
         line(f"    {p.name}", size=9, gap=12)

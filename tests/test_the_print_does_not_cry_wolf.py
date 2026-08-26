@@ -95,9 +95,15 @@ def test_only_the_dxf_is_a_genuine_gap(pack):
 # ── the sentence on the paper ──────────────────────────────────────────────────────────
 
 def test_one_drawing_follows_rather_than_follow():
-    """It read "1 drawing follow this page." on every single-drawing print."""
-    src = (_ROOT / "src" / "drawings_print.py").read_text(encoding="utf-8")
-    assert "'follows' if n == 1 else 'follow'" in src
+    """It read "1 drawing follow this page." on every single-drawing print.
+
+    Asserted on BEHAVIOUR, not on the source text. This test used to grep for the exact
+    conditional expression and broke the moment the sentence moved into a helper — while the
+    grammar it exists to protect was still perfectly correct. A test that fails on a refactor and
+    would pass on a regression is worse than no test.
+    """
+    assert dp._cover_count_line(printed_files=1, pages=1) == "1 drawing follows this page."
+    assert dp._cover_count_line(printed_files=2, pages=2) == "2 drawings follow this page."
 
 
 def test_the_pack_still_prints(pack):
