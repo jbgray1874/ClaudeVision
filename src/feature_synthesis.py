@@ -78,7 +78,25 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
     bend_count = infer_bend_count(part, geometry_confidence)
     hole_count = infer_hole_count(part, geometry_confidence)
     slot_count = max(text_slot_count, geometry_slot_count)
-    finish_required = bool(part.get("normalized_finish") or part.get("surface_finishes"))
+    # A FINISH NOBODY STATED IS NOT A FINISH NOBODY NEEDS.
+    #
+    # A GA writes "REFER TO INDIVIDUAL COMPONENT DRAWINGS" in its FINISH field when the answer is
+    # on the component sheets. That string is truthy, so it read as a finish; where it never
+    # reached the part at all, the part read as needing none. Both are wrong and both end the
+    # same way — on 10575-02, £0.00 of powder and £0.00 of P.Coat labour on a powder-coated job,
+    # with nothing on the sheet to say the question had not been answered.
+    #
+    # So a cross-reference is not counted as a finish, and `finish_deferred` records that we were
+    # TOLD TO LOOK ELSEWHERE rather than told there is nothing to do. Those two must not look the
+    # same to anything downstream, and until now they did.
+    try:
+        from extractor_patterns import is_cross_reference_note as _is_xref
+    except Exception:                                        # noqa: BLE001
+        _is_xref = lambda _v: False                          # noqa: E731
+    _finish_values = [v for v in ([part.get("normalized_finish")]
+                                  + list(part.get("surface_finishes") or [])) if v]
+    finish_deferred = bool(_finish_values) and all(_is_xref(v) for v in _finish_values)
+    finish_required = bool([v for v in _finish_values if not _is_xref(v)])
     fold_required = bend_count > 0 or "folding" in part.get("textual_operations", [])
     laser_required = bool(part.get("flat_pattern_detected") or "laser_cutting" in part.get("textual_operations", []))
     drilling_required = hole_count > 0 or "hole_machining" in part.get("textual_operations", [])
@@ -99,6 +117,9 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
         "fold_required": fold_required,
         "drilling_required": drilling_required,
         "finish_required": finish_required,
+        # Carried separately so a reader — and the review flags — can tell "no finish needed"
+        # from "the drawing sent us to a sheet that is not in this pack".
+        "finish_deferred": finish_deferred,
         "tapping_required": tapping_required,
         "countersink_required": countersink_required,
         "welding_required": welding_required,

@@ -632,6 +632,24 @@ def _extract_colour_candidates(text: str) -> List[str]:
 # Cross-reference / placeholder phrases a MATERIAL field may carry on GA / parent sheets
 # ("MATERIAL: SEE INDIVIDUAL DRAWINGS") — these are NOT materials and must not be accepted
 # as one when the keyword list doesn't recognise the labelled value.
+def is_cross_reference_note(value: Any) -> bool:
+    """True when a MATERIAL or FINISH value is an instruction, not an answer.
+
+    "REFER TO INDIVIDUAL COMPONENT DRAWINGS" is what a GA puts in those fields when the real
+    values live on the component sheets. It is not a material and it is not a finish, and on
+    10575-02 the engine stored it as both: the material could not be priced (£0.00) and no finish
+    was ever routed, so a powder-coated job carried £0.00 of powder and £0.00 of P.Coat labour.
+    Nothing failed. The job was simply costed as though the parts were made of nothing and
+    finished with nothing.
+
+    The guard already existed — `_MATERIAL_REF_NOTE_RE`, below — but only on the title-block
+    reader. This value arrived from `llm_full_extract`, a different path with no such check, and
+    that is the hole. Exported so every path that accepts a material or a finish can use the ONE
+    definition rather than growing its own.
+    """
+    return bool(_MATERIAL_REF_NOTE_RE.search(normalize_text(value).upper())) if value else False
+
+
 _MATERIAL_REF_NOTE_RE = re.compile(
     r"\b(SEE|REFER|INDIVIDUAL|ASSEMBLY|DRAWING|DRAWINGS|SHOWN|ABOVE|BELOW|VARIOUS|"
     r"AS\s+PER|TBC|TBA|N/?A|NONE)\b",

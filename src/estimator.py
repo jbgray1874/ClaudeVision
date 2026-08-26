@@ -2296,6 +2296,31 @@ def market_indication_for(part: Dict[str, Any], material: Any) -> Optional[Dict[
 
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     material = part.get("normalized_material") or _first(part.get("materials", []))
+
+    # A CROSS-REFERENCE IS NOT A MATERIAL.
+    #
+    # A GA puts "REFER TO INDIVIDUAL COMPONENT DRAWINGS" in its MATERIAL field when the real
+    # values live on the component sheets. On 10575-02 the engine stored that string as the
+    # material: nothing could be priced against it, so the part costed £0.00, and the same string
+    # in the FINISH field meant no finish was ever routed — £0.00 of powder and £0.00 of P.Coat
+    # labour on a powder-coated job. Nothing failed; the job was costed as though the parts were
+    # made of nothing.
+    #
+    # The guard existed on the title-block reader already. This value came from llm_full_extract,
+    # which had none. Cleared here, at the point every material passes through, and flagged —
+    # because "we were not told" and "no material needed" must not look the same on a sheet.
+    try:
+        from extractor_patterns import is_cross_reference_note as _is_xref
+    except Exception:                                        # noqa: BLE001
+        _is_xref = lambda _v: False                          # noqa: E731
+    if _is_xref(material):
+        part.setdefault("review_flags", []).append(
+            f"material not stated on this drawing — it reads {str(material)!r}, which defers to "
+            f"another sheet. That sheet is not in this pack, so this part has NO material and "
+            f"cannot be priced. An estimator must supply it.")
+        part["normalized_material"] = None   # precedence: direct-write ok — removes a non-answer, adds no evidence. The arbitration weighs competing MATERIALS; "refer to another drawing" is not a competing material and there is nothing to weigh it against. Submitting it as a reading would give a cross-reference a rank and let it beat a real one.
+        material = None
+
     material = _canonical_material_family(material)
     if material:
         # Propagate the canonical family back onto the part so wb_populate's block routing
