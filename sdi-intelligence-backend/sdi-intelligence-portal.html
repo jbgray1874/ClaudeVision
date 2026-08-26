@@ -491,8 +491,8 @@
 
           <div style="margin-top:11px;font-size:12.5px;color:var(--ink-dim)"><b style="color:var(--ink)">Behind these, R&amp;D:</b> PDF → ASM/PRT reconstruction (F1) and 3DS Max API automation (F2) are POC-pending; BOM-to-Excel using Ian's custom-property spec (F3) is flagged a quick win; electrical/AV schematic generation (F4) is at concept. All dates TBC. <b style="color:var(--ink)">Companion workstream:</b> SDI Creative Design Intelligence — brief-to-render and immersive review — sits under Phase 2 below.</div>
         </div><div class="tag">DM API · In-house PDM · SolidWorks COM · Yogesh Kumar</div></div>
-        <div class="ph reveal" style="animation-delay:.05s"><div class="ttl">Phase 2 · Design AI &amp; Immersive <span class="chip c-plan">Q3 2026</span></div><div class="dsc">Client brief → structured JSON → photorealistic renders in hours via Firefly / Midjourney. Parametric 3D generation in Fusion 360. Full-scale immersive walkthrough in NVIDIA Omniverse / Unreal Engine 5. MD Agent Phase 1 — voice + email — begins.</div><div class="tag">Brief capture · Design Omniverse · MD Agent</div></div>
-        <div class="ph reveal" style="animation-delay:.1s"><div class="ttl">Phase 3 · DFM &amp; Production Scheduling <span class="chip c-plan">Q4 2026</span></div><div class="dsc">Every design AI-reviewed pre-shop-floor — flags costly features, suggests alternatives, auto-BOM straight into the estimating engine. <b>Partly proven already</b>: interference, hole-alignment, topple and weight checks all run today in the SolidWorks COM POC, so this phase starts from working code rather than from nothing. AI production scheduling POC. MD Agent Phase 2 — WhatsApp + ERP. Co-worker agents rollout begins.</div><div class="tag">DFM · Scheduling · Co-worker agents</div></div>
+        <div class="ph reveal" style="animation-delay:.05s"><div class="ttl">Phase 2 · Design AI &amp; Immersive <span class="chip c-plan">Q3 2026</span></div><div class="dsc">Client brief → structured JSON → photorealistic renders in hours via Firefly / Midjourney. Parametric 3D generation in Fusion 360. Full-scale immersive walkthrough in NVIDIA Omniverse / Unreal Engine 5. Chief of Staff Agent Phase 1 — voice + email — begins.</div><div class="tag">Brief capture · Immersive Design · Chief of Staff Agent</div></div>
+        <div class="ph reveal" style="animation-delay:.1s"><div class="ttl">Phase 3 · DFM &amp; Production Scheduling <span class="chip c-plan">Q4 2026</span></div><div class="dsc">Every design AI-reviewed pre-shop-floor — flags costly features, suggests alternatives, auto-BOM straight into the estimating engine. <b>Partly proven already</b>: interference, hole-alignment, topple and weight checks all run today in the SolidWorks COM POC, so this phase starts from working code rather than from nothing. AI production scheduling POC. Chief of Staff Agent Phase 2 — WhatsApp + ERP. Co-worker agents rollout begins.</div><div class="tag">DFM · Scheduling · Co-worker agents</div></div>
         <div class="ph reveal" style="animation-delay:.15s"><div class="ttl">Phase 4–5 · Scheduling &amp; First Robotic Cells <span class="chip c-plan">Q1–Q2 2027</span></div><div class="dsc">Live AI nesting (Lantek / ProNest). Robotic press brake first cell. Omniverse digital twin of the factory floor. Isaac Sim for robot programming &amp; validation. Keyence inspection on the laser station.</div><div class="tag">Nesting · Press brake · Digital twin</div></div>
         <div class="ph reveal" style="animation-delay:.2s"><div class="ttl">Phase 5–6 · Full Robotic Manufacture <span class="chip c-plan">Q2–Q3 2027</span></div><div class="dsc">Cobot welder first cell. AI powder-coat optimisation. Full inspection network — every station. Feedback loop fully active — every completed job calibrates the system. Full pipeline operational.</div><div class="tag">Cobot weld · Powder coat AI · Inspection</div></div>
         <div class="ph reveal" style="animation-delay:.25s"><div class="ttl">Continuous · RAG advisory + Sage X3 seam <span class="chip c-plan">From day 1 · Jan 2027</span></div><div class="dsc">Read-only RAG advisory sidecar — find_comparables() against the corpus. Versioned price &amp; supplier seam aligned to the Sage X3 migration so the estimating engine cuts cleanly across the ERP change.</div><div class="tag">RAG · X3 seam</div></div>
@@ -2893,7 +2893,7 @@
   // ---- AI Services (data-driven — add ONE object here to add a service) ----
   const SERVICES=[
     // --- LIVE / IN-FLIGHT ---
-    {id:'estimating', name:'Estimating', status:'Live \u00b7 parallel run', cls:'c-prog',
+    {id:'estimating', name:'SDI Estimating Intelligence', status:'Live \u00b7 parallel run', cls:'c-prog',
      desc:'Deterministic cost-estimating engine \u2014 SolidWorks PDF/DXF in, costed workbook out.',
      detail:'Live cost-estimating engine that mirrors the SDI estimating workbook to the cell. All 80 workbook formulas reverse-engineered. A growing RAG store of historical SDI jobs feeds comparables on material, labour and operations. Five-tier price chain with source attribution and confidence on every line \u2014 no priceless rows. Cell-level parity report against the manually completed workbook. Currently in parallel run with Tim, Howard and Tony ahead of a targeted GO-LIVE in September / October 2026 (contingent on testing, adoption and holiday-period cover).'
        +'<div style="margin-top:22px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase">Programme timeline</div>'
@@ -2924,8 +2924,41 @@
      phase:'Phase 1 \u00b7 GO-LIVE SEPT / OCT 2026',
      invoke:'Invoked from the command line by the estimating team during the parallel run. See <b>AI Tools</b> for the exact commands and arguments. UI-triggered runs are planned post-go-live.'},
 
+    // Sits directly below Estimating because it is the workstream that feeds it: the DM API
+    // endpoint has been serving the estimating app since 24-Aug-26. Refs (P1-P3.4, C1-C4, F1-F4)
+    // are the delivery tracker's own, so a reader can hold this page and that sheet side by side.
+    {id:'technical-design', name:'SDI Technical Design Intelligence', status:'In build · P1 60%', cls:'c-prog',
+     desc:'Reads SolidWorks project data natively, and builds SDI its own PDM — Sept 2026 to Jan 2027.',
+     detail:'Two threads run under one workstream. The <b>Document Manager API</b> tools (P1, P2) pull the correct drawing pack for a project straight into the estimating app and into the shop-floor Production folder — reading without a SolidWorks seat, read-only, never writing to the live CAD share. Then an <b>SDI in-house PDM</b> (P3.1–P3.4) gives engineering trustworthy file management, CAD-awareness, revision control and release workflows. It is built on GitLab + LFS with a DM API intelligence layer over PostgreSQL — it is <b>not</b> an integration with the SOLIDWORKS PDM vault.'
+       +'<div style="margin-top:20px;padding:14px 16px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px">'
+       +'<b style="color:var(--accent)">Proven, but held by a licence.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B — C1 multi-format export (including <b>DXF flat patterns</b>), C2 the topple / weight / interference / hole-alignment check suite, C3 drawing generation from a model, C4 machine-tolerance validation against the TRUMPF tool list (in progress). Every one is marked <i>go-live subject to SolidWorks licence</i>. Resolving one seat releases four finished tools — among them the DXF generation that answers the estimating engine’s largest accuracy limiter.</div>'
+       +'<div style="margin-top:14px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;font-size:13px">'
+       +'<b>Why the dates run to January.</b> Yogesh is the sole developer. Requirement collection, development, unit testing, peer review, deployment and go-live are all hands-on and must run one at a time — only user testing overlaps. That, plus leave from 10 Dec 2026 to 4 Jan 2027, is what pushes P3.3 and P3.4 into the new year. The dates are a capacity constraint, not an estimate of effort.</div>',
+     sections:[{title:'Delivery phases · tracker refs P1–P3.4', body:
+        '<div style="display:grid;grid-template-columns:96px 1fr;gap:9px 14px;align-items:start;font-size:13px">'
+       +'<span class="chip c-prog" style="font-size:10px;text-align:center">15 Sep 26</span><div><b>P1 · DM API — Design Files Extraction Tool.</b> Pulls the correct drawing pack and manufacturing files for a project into the estimating app. In progress, 60% done; endpoint live for the estimating app since 24 Aug 2026.</div>'
+       +'<span class="chip c-plan" style="font-size:10px;text-align:center">24 Sep 26</span><div><b>P2 · DM API — Production Folder auto-extraction.</b> Auto-collects the shop-floor drawing pack. Prefers the latest revision chosen <i>by data inside the file, not the filename</i>, and writes near-misses to <code>possible_candidates/</code> with a why-not-copied report rather than guessing.</div>'
+       +'<span class="chip c-plan" style="font-size:10px;text-align:center">29 Oct 26</span><div><b>P3.1 · In-house PDM, Phase 1 (MVP).</b> Check-in/out, versioning, locking and history, so engineers can collaborate safely on work in progress.</div>'
+       +'<span class="chip c-plan" style="font-size:10px;text-align:center">18 Nov 26</span><div><b>P3.2 · PDM Phase 2 — CAD-aware.</b> Where-used, missing references, version consistency and released-reference checks.</div>'
+       +'<span class="chip c-plan" style="font-size:10px;text-align:center">5 Jan 27</span><div><b>P3.3 · PDM Phase 3 — engineering revisions.</b> Approval workflow: WIP → pending approval → released / not-approved / obsolete.</div>'
+       +'<span class="chip c-plan" style="font-size:10px;text-align:center">14 Jan 27</span><div><b>P3.4 · PDM Phase 4 — prototype release workflows.</b> Release routes for WIP, prototype and production components.</div>'
+       +'</div>'},
+      {title:'Behind these · R&amp;D pipeline, dates TBC', body:
+        '<ul style="margin:0 0 0 17px;line-height:1.85;font-size:13px">'
+       +'<li><b>F1 · PDF → ASM/PRT reconstruction</b> — rebuild 3D parts and assemblies from PDF drawings. POC pending</li>'
+       +'<li><b>F2 · Autodesk 3DS Max API automation</b> — feed the SolidWorks/design pipeline. POC pending</li>'
+       +'<li><b>F3 · BOM-to-Excel extraction</b> — using Ian’s custom-property spec, normalised with anomalies flagged. Marked a quick win</li>'
+       +'<li><b>F4 · Electrical / AV schematic generation</b> — layouts connecting power, cabling, LED strips, displays and drivers. Concept</li>'
+       +'</ul>'}],
+     inputs:['Live CAD share (W:), by project number', 'SolidWorks ASM/PRT/DRW', 'Technical subfolder or master assembly'],
+     outputs:['Drawing pack into the estimating app', 'Production folder pack + why-not-copied report', 'BOM and cut lists (CSV/JSON)', 'DXF flat patterns, STEP, IGES, PDF/DWG (C1, licence permitting)'],
+     tech:['Document Manager SDK', 'SOLIDWORKS COM API', 'GitLab + LFS', 'PostgreSQL', 'REST + MCP tools', 'Windows service'],
+     phase:'Workstream 2 · SEP 2026 → JAN 2027',
+     invoke:'P1’s REST endpoint is already wired into the estimating page — Extract Drawing Pack. P2 offers an operator UI. The COM tools ship as an installable tray app. Full phase detail is on the <b>AI Programme</b> and <b>AI Roadmap</b> pages.',
+     next:'Resolve a SolidWorks seat — it is the single constraint holding C1–C4, and it releases DXF flat-pattern generation into the estimating engine.'},
+
     // --- PIPELINE STAGES ---
-    {id:'brief', name:'AI Brief Capture & Concept Design', status:'Planned', cls:'c-plan',
+    {id:'brief', name:'SDI Brief & Concept Intelligence', status:'Planned', cls:'c-plan',
      desc:'Client brief \u2192 structured JSON \u2192 photorealistic concepts in hours.',
      detail:'Front of the pipeline. Verbal brief or spec sheet captured by Claude and converted to a structured Brief JSON: footprint, load, materials, brand, budget, quantity, lead time. The same JSON feeds the design generators (Firefly/Midjourney) and the estimating pipeline simultaneously. Photorealistic concepts in under two hours; sketch-to-3D via Vizcom for designers working from a napkin.',
      inputs:['Client brief (audio / text)', 'spec sheets', 'brand assets', 'budget & lead-time constraints'],
@@ -2934,7 +2967,7 @@
      phase:'Phase 2 \u00b7 Q3 2026',
      invoke:'POC scoping after go-live. The Brief JSON contract is the first artefact to lock down.'},
 
-    {id:'omniverse', name:'Design Omniverse \u00b7 Immersive', status:'Discovery', cls:'c-plan',
+    {id:'omniverse', name:'SDI Immersive Design Intelligence', status:'Discovery', cls:'c-plan',
      desc:'Full-scale digital-twin walkthrough in NVIDIA Omniverse / Unreal Engine 5.',
      detail:'Immersive client review of designs before any steel is cut. Full-scale walkthrough in NVIDIA Omniverse or Unreal Engine 5, optionally via Vision Pro / Quest 3 headset. Client signs off in the room. The same Omniverse environment later hosts the factory digital twin used in Phase 5 robotic-cell validation (Isaac Sim).',
      inputs:['Parametric 3D model', 'brand textures', 'retail / store reference environment'],
@@ -2943,7 +2976,7 @@
      phase:'Phase 2 \u00b7 Q3 2026',
      invoke:'POC scoping with the internal design team. Hardware shortlist underway.'},
 
-    {id:'dfm', name:'AI Design for Manufacture', status:'Planned', cls:'c-plan',
+    {id:'dfm', name:'SDI Design for Manufacture Intelligence', status:'Planned', cls:'c-plan',
      desc:'Every design AI-reviewed before the shop floor \u2014 flags cost, suggests alternatives, auto-BOM.',
      detail:'AI review of every design before manufacture. Flags costly features with a \u00a3 impact estimate. Suggests redesign alternatives. Auto-generates flat patterns, bend sequences, weld sequences and full BOM. The BOM feeds straight into the estimating engine \u2014 closing the loop between design and estimate.'
        // NOT ALL OF THIS IS SPECULATIVE ANY MORE. Four of the checks this service was described
@@ -2968,7 +3001,7 @@
      phase:'Phase 3 \u00b7 Q4 2026 \u2014 geometry checks already proven',
      invoke:'Partly built. The COM POC covers the geometry and export side; what remains is the cost model per feature and the BOM handoff into estimating. Note the proven half is held by a SolidWorks seat — the delivery tracker marks C1–C4 go-live subject to licence — so this phase can start from working code the day that is resolved.'},
 
-    {id:'scheduling', name:'AI Production Scheduling', status:'Planned', cls:'c-plan',
+    {id:'scheduling', name:'SDI Production Scheduling Intelligence', status:'Planned', cls:'c-plan',
      desc:'Optimal job sequencing across laser, brake, weld and coat \u2014 with dynamic rescheduling.',
      detail:'Operation routes from the estimating engine feed an AI scheduler. Optimal sequencing across laser, brake, weld and powder coat. Dynamic rescheduling when priorities shift. Material procurement triggered automatically. Accurate lead-time commitment at point of order. Capacity dashboard visible 2\u20134 weeks ahead.',
      inputs:['Operation routes from estimating', 'live shop-floor capacity', 'stock levels', 'priority overrides'],
@@ -2977,7 +3010,7 @@
      phase:'Phase 4 \u00b7 Q1 2027',
      invoke:'Gated on the Sage X3 migration providing the live operational data layer.'},
 
-    {id:'manufacture', name:'AI Manufacture & Robotics', status:'Planned', cls:'c-plan',
+    {id:'manufacture', name:'SDI Manufacture & Robotics Intelligence', status:'Planned', cls:'c-plan',
      desc:'AI nesting \u00b7 robotic brake \u00b7 cobot weld \u00b7 AI powder coat \u2014 feedback to the estimating engine.',
      detail:'AI nesting \u2192 laser auto-program (Lantek / ProNest). Robotic press brake with AI bend sequencing (Trumpf TruBend Cell or Amada HG-ATC). Cobot welding with vision path planning (UR + Vectis or Fanuc CRX). AI-controlled powder coat (Nordson / Gema). Every stage feeds back into the estimating engine\u2019s RAG store for continuous calibration. Each robotic cell is a multi-\u00a3100k investment with 18\u201330 month payback.',
      inputs:['Operation route', 'flat patterns', 'tacked assembly geometry', 'powder application path'],
@@ -2986,7 +3019,7 @@
      phase:'Phase 5 \u00b7 Q1\u2013Q3 2027',
      invoke:'Capex planning underway. First cell projected for Q1 2027.'},
 
-    {id:'inspection', name:'AI Quality Inspection', status:'Planned', cls:'c-plan',
+    {id:'inspection', name:'SDI Quality Inspection Intelligence', status:'Planned', cls:'c-plan',
      desc:'Vision systems at every station \u2014 every part checked, deviations feed back into DFM rules.',
      detail:'Keyence IV3 at laser and brake stations \u2014 show 10 good parts, system is live. Cognex In-Sight 3800 deep learning at weld and powder coat \u2014 trained on SDI\u2019s own good/bad examples. Every deviation logged against job number; defect patterns auto-update DFM rules and brake parameters. Target: 97%+ first-pass yield.',
      inputs:['Live camera feeds per station', 'reference drawings', 'job number'],
@@ -2996,7 +3029,7 @@
      invoke:'Specced; quote in flight with Keyence for the laser cell.'},
 
     // --- CO-WORKER AGENTS ---
-    {id:'md-agent', name:'MD Agent \u00b7 Chief of Staff', status:'Concept', cls:'c-plan',
+    {id:'md-agent', name:'SDI Chief of Staff Agent', status:'Concept', cls:'c-plan',
      desc:'Matt Evans\u2019 AI Chief of Staff \u2014 voice, email, WhatsApp, ERP, sales & finance intelligence.',
      detail:'A seven-layer agent that lives in the MD\u2019s digital world. Starts highly suggestive; over 6\u201312 months transitions to acting, with Matt approving at decreasing frequency as trust builds. Year 2+: full autopilot on routine operations, escalating only genuine judgement calls. Layers: (1) Voice \u2014 always-on assistant. (2) Email \u2014 inbox intelligence and morning briefing. (3) WhatsApp \u2014 client / staff messaging. (4) ERP \u2014 live Access \u2192 Sage X3 view. (5) Sales intelligence \u2014 client profiles, reorder alerts. (6) Financial dashboard \u2014 P&L, margin, debtors. (7) Progressive autonomy model.',
      inputs:['Email (Gmail / Microsoft Graph)', 'WhatsApp Business', 'Access / Sage X3 DB', 'voice (Deepgram Nova-2)', 'calendar', 'CRM'],
@@ -3005,16 +3038,16 @@
      phase:'Phase 3+ \u00b7 progressive rollout',
      invoke:'Not yet built. Layer 1 (voice + email morning brief) is the proposed pilot post-go-live.'},
 
-    {id:'sales-agent', name:'Sales Intelligence Agent', status:'Planned', cls:'c-plan',
+    {id:'sales-agent', name:'SDI Sales Agent', status:'Planned', cls:'c-plan',
      desc:'Quote follow-ups, client profiles from order history, reorder alerts, pipeline reporting.',
      detail:'Co-worker agent for the sales team. Drafts quote follow-up emails in SDI house style. Generates client profile cards from order history (average value, frequency, last contact, open quotes). Pipeline visualisation. Reorder alerts \u2014 "TTI haven\u2019t ordered in 6 weeks, last order was \u00a328k; suggest a call." New-stock suggestions based on current levels, pipeline jobs and lead times. Auto-updates CRM from email and WhatsApp threads.',
      inputs:['Sales pipeline (CRM)', 'order history (Sage X3)', 'client comms threads', 'stock levels'],
      outputs:['Quote follow-up drafts', 'client profile cards', 'reorder alerts', 'pipeline report'],
      tech:['Claude Sonnet API', 'SDILive', 'Access Supply Chain / Sage X3', 'CRM integration'],
-     phase:'Priority 2 \u2014 after the MD Agent pilot',
+     phase:'Priority 2 \u2014 after the Chief of Staff Agent pilot',
      invoke:'Not yet built. Specced in the May 2026 strategy doc.'},
 
-    {id:'design-agent', name:'Design Support Agent', status:'Planned', cls:'c-plan',
+    {id:'design-agent', name:'SDI Design Support Agent', status:'Planned', cls:'c-plan',
      desc:'Drawing review notes, DFM flag summaries, BOM checking, SolidWorks DXF automation.',
      detail:'Co-worker agent for the design team. Auto-generates drawing review notes. Summarises DFM flags into plain language for client meetings. Structures client briefs from meeting notes. Checks BOM against the estimate workbook for omissions. Automates the SolidWorks DXF batch export step via Task Scheduler \u2014 replacing manual export.',
      inputs:['SolidWorks model + drawings', 'meeting notes', 'estimate workbook (for BOM cross-check)'],
@@ -3023,7 +3056,7 @@
      phase:'Priority 3',
      invoke:'DXF batch export automation is the most-requested first feature.'},
 
-    {id:'production-agent', name:'Production Control Agent', status:'Planned', cls:'c-plan',
+    {id:'production-agent', name:'SDI Production Control Agent', status:'Planned', cls:'c-plan',
      desc:'WO status drafts, capacity alerts, supplier chasing, material shortfall flags.',
      detail:'Co-worker agent for production control. Drafts work-order status updates to clients. Flags capacity bottlenecks. Chases supplier delivery dates. Cross-references stock against the scheduled jobs and flags material-shortfall risk before it bites. Drafts delivery confirmations and shipping documentation.',
      inputs:['WO schedule', 'stock levels', 'supplier order book', 'shop-floor status'],
@@ -3032,7 +3065,7 @@
      phase:'Priority 3',
      invoke:'Not yet built.'},
 
-    {id:'finance-agent', name:'Finance Intelligence Agent', status:'Planned', cls:'c-plan',
+    {id:'finance-agent', name:'SDI Finance Agent', status:'Planned', cls:'c-plan',
      desc:'Variance reporting, cost analysis, board-report drafting, aged-debtor chasing.',
      detail:'Co-worker agent for Charlotte Blackwell\u2019s finance team. Variance reporting: estimated vs actual labour and materials from WO data. Cost analysis by customer and product family. Board-report drafting from the numbers. Aged-debtor chasing email drafts. Invoice processing assistance.',
      inputs:['Sage X3 financial data', 'WO actuals', 'estimate workbooks', 'AR / AP ledger'],
@@ -3042,7 +3075,7 @@
      invoke:'Not yet built.'},
 
     // --- CUSTOMER-FACING ---
-    {id:'chatbots', name:'ChatBots \u00b7 Customer & Internal', status:'Planned', cls:'c-plan',
+    {id:'chatbots', name:'SDI ChatBot Intelligence', status:'Planned', cls:'c-plan',
      desc:'RAG chatbot on wearesdi.com + internal knowledge bot, grounded in SDI technical docs.',
      detail:'Two flavours. (1) Public-facing on wearesdi.com: a RAG-based bot (e.g. MxChat) trained on SDI technical documentation and case studies \u2014 answers engineering questions like a 24/7 product expert and captures brief requirements straight into the estimating pipeline. (2) Internal: a knowledge bot grounded in process docs, certifications and capabilities, routing complex enquiries to the right human.',
      inputs:['Web chat messages', 'internal Slack / Teams queries', 'SDI knowledge corpus'],
@@ -3051,9 +3084,9 @@
      phase:'Phase 2 \u2014 alongside the website rebuild',
      invoke:'Knowledge corpus assembly is the first task. UI invocation will be the on-site chat widget; brief-capture handover is API-to-API.'},
 
-    {id:'voice', name:'AI Voice Agents', status:'Planned', cls:'c-plan',
+    {id:'voice', name:'SDI Voice Intelligence', status:'Planned', cls:'c-plan',
      desc:'Voice agents for enquiries, reception and support \u2014 natural conversation.',
-     detail:'Spoken AI for routine inbound enquiries \u2014 order status, lead times, brochure requests \u2014 routed to humans when complexity warrants. Same Deepgram / ElevenLabs stack as the MD Agent\u2019s voice layer. Optional pilot: outbound voice agent for quote follow-ups.',
+     detail:'Spoken AI for routine inbound enquiries \u2014 order status, lead times, brochure requests \u2014 routed to humans when complexity warrants. Same Deepgram / ElevenLabs stack as the Chief of Staff Agent\u2019s voice layer. Optional pilot: outbound voice agent for quote follow-ups.',
      inputs:['Inbound calls', 'caller intent', 'live ERP / CRM lookups'],
      outputs:['Spoken responses', 'routed call transfers', 'logged conversation summaries'],
      tech:['Deepgram Nova-2 STT', 'ElevenLabs TTS', 'Claude Sonnet', 'Twilio voice'],
@@ -3061,7 +3094,7 @@
      invoke:'Not yet built. Pilot use-case selection pending.'},
 
     // --- INTERNAL TOOLS ---
-    {id:'brighthr', name:'BrightHR Ingestion \u2192 InVentry', status:'Built \u00b7 awaiting API access', cls:'c-prog',
+    {id:'brighthr', name:'SDI People Data Intelligence · BrightHR', status:'Built \u00b7 awaiting API access', cls:'c-prog',
      desc:'On-demand pull of staff roster from BrightHR into InVentry tablets.',
      detail:'COO-driven on-demand sync. Pulls the active staff roster from BrightHR (Personal Access Token or client_credentials OAuth), writes the InVentry-format CSV (First Name, Surname, Email Address) to the watched folder where InVentry\u2019s service picks it up. Every pull is snapshotted to disk for audit. Guards: refuses to write if zero records are returned or if the dropout exceeds the configured threshold (default 30%). Live attendance (Blip clock-ins) is a separate, later feature once BrightHR API access exposes it.'
        +'<div style="margin-top:18px;padding:14px;background:var(--bg);border:1px solid var(--line)">'
@@ -3080,7 +3113,7 @@
      phase:'Built \u2014 gated on BrightHR API credentials',
      invoke:'Once API access is granted: the COO or any director with permission clicks <b>Run Sync</b> above. Also schedulable from Windows Task Scheduler. Endpoints: <code>POST /api/hr/sync</code> (pull+load), <code>/api/hr/pull</code>, <code>/api/hr/load</code>.'},
 
-    {id:'wearesdi', name:'WeAreSDI \u00b7 Public-Site AI Layer', status:'Beta', cls:'c-prog',
+    {id:'wearesdi', name:'SDI Web Intelligence', status:'Beta', cls:'c-prog',
      desc:'Layered AI-readiness on the existing WordPress site \u2014 not a rewrite.',
      detail:'WordPress is the right engine for what SDI is doing \u2014 AI search engines love it for clean HTML, schema/JSON-LD support and B2B-intel integrations. Rather than rewrite the site, we layer six AI-native upgrades on top, and use this portal to mock new sections privately before they touch the staging WordPress clone.',
      sections:[
@@ -3098,7 +3131,7 @@
      invoke:'Mock pages drafted in this portal behind your login. Once approved, applied to the WordPress staging clone before production.',
      link:'https://wearesdi.com', linkLabel:'Open wearesdi.com \u2197'},
 
-    {id:'x3', name:'Sage X3 Acceleration Program', status:'Planned \u00b7 2027', cls:'c-plan',
+    {id:'x3', name:'SDI ERP Intelligence · Sage X3', status:'Planned \u00b7 2027', cls:'c-plan',
      desc:'AI support for the Sage X3 ERP migration and the versioned price seam.',
      detail:'Tooling and AI assistance to accelerate the Sage X3 rollout. Includes the versioned price / supplier seam that feeds the estimating engine from Jan 2027 forward (the current price chain bridges this until X3 is live). Migration-period dual-running validation plan.',
      inputs:['Current ERP (Access Supply Chain)', 'historical pricing', 'supplier master data', 'BOM data'],
@@ -3107,7 +3140,7 @@
      phase:'Jan 2027 seam',
      invoke:'Aligned with the X3 migration timeline. Detailed scoping starts Q4 2026.'},
 
-    {id:'obs', name:'OBS Studio \u00b7 Live Recording', status:'Live \u00b7 James', cls:'c-done',
+    {id:'obs', name:'SDI Recording Intelligence · OBS', status:'Live \u00b7 James', cls:'c-done',
      desc:'Professional screen recording and live streaming \u2014 AI demos, presentations, facility content and virtual camera for Teams.',
      detail:'OBS (Open Broadcaster Software) is the capture and broadcast layer at SDI. Record AI tool demos, estimating engine runs, design presentations and facility walkthroughs for the portal, SEEN content and client materials. Free, open source, runs locally. Download from obsproject.com if not already installed.',
      sections:[
@@ -3128,7 +3161,7 @@
      invoke:'Launch OBS from the desktop. Select the right scene for the task, hit <b>Start Recording</b> or <b>Start Streaming</b>. Recordings land in your configured output folder (Settings \u2192 Output \u2192 Recording Path). Stop recording before closing the engine window.'},
 
     // --- META ---
-    {id:'tech-radar', name:'AI Tech Radar', status:'Live \u00b7 on demand', cls:'c-done',
+    {id:'tech-radar', name:'SDI Tech Radar Intelligence', status:'Live \u00b7 on demand', cls:'c-done',
      desc:'Continuous intelligence scan of the global AI marketplace, tuned to SDI\u2019s stack.',
      detail:'A standing, evidence-based view of where AI is heading across SDI\u2019s entire technology stack. Uses Claude Opus 4.8 with live web search to track the newest large language models, OCR and document-extraction engines, computer-vision systems, geometry and mathematical estimating models, 3D and generative-design tools, and simulation platforms including NVIDIA Omniverse and digital twins. Each finding is assessed against how SDI actually works \u2014 the estimating engine, the co-worker agents and the design studio \u2014 and tagged ADOPT, TRIAL, ASSESS or HOLD so leadership can see at a glance what is proven, what is worth piloting and what to keep watching. Every run flags only what has changed since the last, giving the MD a true "what\u2019s new" view. Runs on demand and can be scheduled weekly via Windows Task Scheduler.',
      inputs:['Live web search', 'SDI roadmap context', 'previous-run snapshot (for the what\u2019s-new diff)'],
@@ -3137,7 +3170,7 @@
      phase:'Live \u2014 ten areas, six in the default run',
      invoke:'Run <code>python tech_radar.py</code> on the engine host (<code>--full</code> for all areas). Reports land in <code>output\\reports</code> and surface in Status Reports.'},
 
-    {id:'roadmap', name:'AI Roadmap', status:'Live', cls:'c-done', view:'roadmap',
+    {id:'roadmap', name:'SDI AI Roadmap', status:'Live', cls:'c-done', view:'roadmap',
      desc:'The full delivery plan \u2014 Phase 1 live, Phases 2\u20136 mapped through Q3 2027.'}
   ];
   (function renderSvc(){
