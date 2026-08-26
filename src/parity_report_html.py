@@ -188,20 +188,38 @@ def _delta_class(engine: Optional[float], manual: Optional[float]) -> str:
 
 
 def _section_table(rows: List[Dict[str, Any]]) -> str:
+    """Δ AND THE PERCENTAGE MUST POINT THE SAME WAY, OR THE TABLE READS BACKWARDS.
+
+    The bundle's own `pct_variance` is a magnitude measured against the ENGINE figure, with no
+    direction: material came out `Δ -£179.27` beside `+163.5%`. The engine is £179 lower and the
+    percentage says positive. Read at a glance — which is how a variance column is read — it
+    announced the engine as 163% over when it was 62% under.
+
+    So the percentage is computed here from the same two numbers as Δ, against the MANUAL figure,
+    which is what "the engine is x% under the estimator" means to the person reading it. The
+    header says which way round it is rather than leaving it to be inferred.
+    """
     body = []
     for r in rows:
         e, m = r["engine"], r["manual"]
         d = (e - m) if (e is not None and m is not None) else None
         cls = _delta_class(e, m)
-        arrow = "over" if cls == "over" else ("under" if cls == "under" else "")
+        # Signed, and against the manual. Falls back to the bundle's own figure only when the
+        # delta cannot be computed, where there is no sign to disagree with anyway.
+        if d is not None and m:
+            var = _pct(d / m * 100.0)
+        elif d is not None and not m:
+            var = "—"                      # manual is zero: a percentage of nothing says nothing
+        else:
+            var = _pct(r["pct"]) if r.get("pct") is not None else "—"
         body.append(
             "<tr><td>%s</td><td class='num'>%s</td><td class='num'>%s</td>"
             "<td class='num %s'>%s</td><td class='num %s'>%s</td></tr>" % (
                 _esc(r["label"]), _gbp(e), _gbp(m), cls, (_gbp(d) if d is not None else "—"),
-                cls, (_pct(r["pct"]) if r.get("pct") is not None else ("" if d is None else arrow))
-            ))
+                cls, var))
     return ("<table><tr><th>Section</th><th class='num'>Engine</th><th class='num'>Manual</th>"
-            "<th class='num'>&Delta;</th><th class='num'>Var</th></tr>%s</table>" % "".join(body))
+            "<th class='num'>&Delta;</th><th class='num'>Var vs manual</th></tr>%s</table>"
+            % "".join(body))
 
 
 def _route_table(route: Dict[str, Any]) -> str:
@@ -265,23 +283,160 @@ def _matched_table(recon: Dict[str, Any]) -> str:
 
 
 def _unmatched_section(recon: Dict[str, Any]) -> str:
-    mo = recon.get("manual_only") or []
-    ao = recon.get("ai_only") or []
+    """"THEY ARE NOT MISSES" WAS A HARDCODED SENTENCE THAT CONTRADICTED THE DATA UNDER IT.
+
+    The reconciliation classifies every unmatched line. On 10575-02 four carried
+    `category: "genuine_miss"` with the issue "the engine should have produced this. Investigate."
+    — one of them 20KGMOQ, the £12.50 of powder the engine costed at nothing. This function read
+    only `.get("code")`, threw away the category, the issue and both cost fields, and printed a
+    blanket denial over the top. The most important line in the comparison was presented as
+    nothing to worry about.
+
+    The lines are now separated by what the bundle says they are, and the money is shown, because
+    a gap with no cost against it cannot be prioritised.
+    """
+    mo = list(recon.get("manual_only") or [])
+    ao = list(recon.get("ai_only") or [])
     if not mo and not ao:
         return ""
-    rows = max(len(mo), len(ao))
-    body = []
-    for i in range(rows):
-        mc = mo[i].get("code") if i < len(mo) else ""
-        ac = ao[i].get("code") if i < len(ao) else ""
-        body.append("<tr><td><span class='pn'>%s</span></td><td><span class='pn'>%s</span></td></tr>" % (
-            _esc(mc), _esc(ac)))
-    return (
-        "<p class='muted'>These lines did not match on part code &mdash; the manual estimate and the "
-        "engine use different naming for fabricated parts (e.g. <span class='pn'>1449-PEGPANEL</span> "
-        "vs <span class='pn'>1449-01C</span>). They are not misses: their cost is compared at the "
-        "section-subtotal level above. Shown side-by-side for manual cross-reference.</p>"
-        "<table><tr><th>On manual only</th><th>On engine only</th></tr>%s</table>" % "".join(body))
+
+    misses = [r for r in mo if str(r.get("category", "")).lower() == "genuine_miss"]
+    naming = [r for r in mo if str(r.get("category", "")).lower() != "genuine_miss"]
+    out = []
+
+    if misses:
+        total = sum(_f(r.get("manual_cost_gbp")) or 0.0 for r in misses)
+        out.append(
+            "<div class='callout c-warn'><b>%d line(s) the engine should have produced and did not "
+            "&mdash; %s on the manual estimate.</b> These are the reconciliation's own "
+            "<span class='pn'>genuine_miss</span> classification, not a naming difference. Each one "
+            "is work or material the estimator priced and the engine did not.</div>"
+            % (len(misses), _gbp(total)))
+        rows = "".join(
+            "<tr><td><span class='pn'>%s</span></td><td>%s</td><td class='num'>%s</td></tr>" % (
+                _esc(r.get("code")), _esc(r.get("description") or "—"),
+                _gbp(r.get("manual_cost_gbp")))
+            for r in sorted(misses, key=lambda r: -(_f(r.get("manual_cost_gbp")) or 0.0)))
+        out.append("<table><tr><th>Missing from the engine</th><th>Description</th>"
+                   "<th class='num'>Manual cost</th></tr>%s</table>" % rows)
+
+    if ao:
+        total = sum(_f(r.get("ai_cost_gbp")) or 0.0 for r in ao)
+        out.append(
+            "<h3>On the engine estimate only</h3>"
+            "<p class='muted'>%d line(s), %s costed. Some are the engine's own naming for a part the "
+            "manual calls something else; a line here that names a part from <b>another job</b>, or a "
+            "part number that is not a part at all, is a fault worth reporting.</p>"
+            % (len(ao), _gbp(total)))
+        rows = "".join(
+            "<tr><td><span class='pn'>%s</span></td><td>%s</td><td class='num'>%s</td></tr>" % (
+                _esc(r.get("code")), _esc((r.get("description") or "—")[:90]),
+                _gbp(r.get("ai_cost_gbp")))
+            for r in sorted(ao, key=lambda r: -(_f(r.get("ai_cost_gbp")) or 0.0)))
+        out.append("<table><tr><th>On engine only</th><th>Description</th>"
+                   "<th class='num'>Engine cost</th></tr>%s</table>" % rows)
+
+    if naming:
+        out.append(
+            "<h3>Naming differences</h3>"
+            "<p class='muted'>%d manual line(s) the reconciliation did not classify as a miss &mdash; "
+            "the two estimates use different naming for the same fabricated part (e.g. "
+            "<span class='pn'>1449-PEGPANEL</span> vs <span class='pn'>1449-01C</span>). Their cost is "
+            "compared at the section-subtotal level above.</p>" % len(naming))
+        rows = "".join(
+            "<tr><td><span class='pn'>%s</span></td><td>%s</td><td class='num'>%s</td></tr>" % (
+                _esc(r.get("code")), _esc(r.get("description") or "—"),
+                _gbp(r.get("manual_cost_gbp")))
+            for r in naming)
+        out.append("<table><tr><th>On manual only</th><th>Description</th>"
+                   "<th class='num'>Manual cost</th></tr>%s</table>" % rows)
+
+    return "".join(out)
+
+
+_REASON_WORDS = {
+    "large_flat": "measured as one large flat panel — check it is a part and not a drawing border",
+    "missing_material_thickness": "no thickness read",
+    "missing_material_spec": "no material read",
+    "low_part_confidence": "low confidence",
+    "risk_flag": "flagged",
+}
+
+
+def _review_table(bundle: Dict[str, Any]) -> str:
+    """NAME THE PARTS. The section said "4 part(s) flagged" and referred the reader to another
+    document for which four. The bundle carries them, with reasons, and a count nobody can act
+    on is not a review section."""
+    sig = ((bundle.get("estimate_provenance") or {}).get("estimate_review_signals") or {})
+    flagged = sig.get("parts_flagged") or []
+    if not flagged:
+        return ""
+    rows = []
+    for p in flagged:
+        why = []
+        for r in p.get("reasons") or []:
+            code, detail = str(r.get("code") or ""), r.get("detail")
+            if code == "low_part_confidence":
+                why.append("confidence %s" % detail)
+            else:
+                why.append(_REASON_WORDS.get(str(detail), str(detail or code)))
+        rows.append("<tr><td><span class='pn'>%s</span></td><td>%s</td><td>%s</td></tr>" % (
+            _esc(p.get("part_number")), _esc(p.get("description") or "—"),
+            _esc("; ".join(why) or "—")))
+    return ("<table><tr><th>Part</th><th>Description</th><th>Why it is flagged</th></tr>%s</table>"
+            % "".join(rows))
+
+
+def _unpriced_table(bundle: Dict[str, Any]) -> str:
+    """Parts the engine carried at nothing.
+
+    This is where an incomplete pack shows up as money. A BOM line whose drawing was never
+    supplied reaches the estimate as a part with a material of "REFER TO INDIVIDUAL COMPONENT
+    DRAWINGS" and a cost of £0 — which sums into a total that still reads as a finished estimate.
+    Naming them here answers the question the headline gap raises.
+    """
+    prov = bundle.get("estimate_provenance") or {}
+    rows = []
+    for p in prov.get("parts_for_demo") or []:
+        cost = _f(p.get("unit_total_cost_gbp"))
+        if cost is None or cost > 0.005:
+            continue
+        rows.append("<tr><td><span class='pn'>%s</span></td><td>%s</td><td>%s</td></tr>" % (
+            _esc(p.get("part_number")), _esc(p.get("description") or "—"),
+            _esc((p.get("database_system_cost") or {}).get("supplier_name")
+                 or (p.get("material_price") or {}).get("supplier_display") or "—")))
+    if not rows:
+        return ""
+    return ("<div class='callout c-warn'><b>%d part(s) reached the estimate costing nothing.</b> "
+            "A £0 line is not a free part &mdash; it is a part nothing could price, and it sums "
+            "into a total that still reads as finished. Where the reason is "
+            "<span class='pn'>REFER TO INDIVIDUAL COMPONENT DRAWINGS</span>, the detail drawing was "
+            "not in the pack.</div>"
+            "<table><tr><th>Part</th><th>Description</th><th>Why nothing was applied</th></tr>%s"
+            "</table>" % (len(rows), "".join(rows)))
+
+
+def _powder_note(bundle: Dict[str, Any], recon: Dict[str, Any]) -> str:
+    """Powder as a number rather than a dash in the route table.
+
+    The route table showed "Powder Coating — manual only", which is a hint. The bundle holds the
+    engine's own powder total and the manual's powder line, and the two together are a finding.
+    """
+    prov = bundle.get("estimate_provenance") or {}
+    pc = prov.get("powder_coating_summary") or {}
+    eng = _f(pc.get("powder_total_gbp"))
+    if eng is None:
+        return ""
+    man = 0.0
+    for r in (recon.get("manual_only") or []):
+        if "powder" in str(r.get("description", "")).lower() or "POWDER" in str(r.get("code", "")):
+            man += _f(r.get("manual_cost_gbp")) or 0.0
+    if eng > 0.005 or man <= 0.005:
+        return ""
+    return ("<div class='callout c-warn'><b>Powder coating: engine £0.00, manual %s.</b> "
+            "The engine applied no powder material and no powder labour to a job the estimator "
+            "powder coated. Powder is the one finish this engine can cost, so a zero here is a "
+            "gap in the route, not a finish it was never asked to price.</div>" % _gbp(man))
 
 
 def _analysis_html(analysis: Optional[Dict[str, Any]]) -> str:
@@ -375,7 +530,12 @@ def generate_parity_html(bundle: Dict[str, Any], analysis: Optional[Dict[str, An
             verdict, vclass = "Material variance &mdash; over 15% from the manual estimate", "c-warn"
 
     parts_flagged = ((bundle.get("estimate_provenance") or {}).get("estimate_review_signals") or {})
+    # COUNT THE LIST WHEN THE COUNTER IS ABSENT. Keying the whole section off one summary field
+    # meant a bundle carrying the flagged parts but not the tally dropped them silently — the
+    # parts are the point, the number is a convenience.
     flag_n = parts_flagged.get("flagged_part_count")
+    if not flag_n:
+        flag_n = len(parts_flagged.get("parts_flagged") or []) or None
 
     body = []
     body.append("<h1>Parity Diagnostic &mdash; %s</h1>" % _esc(job))
@@ -425,11 +585,22 @@ def generate_parity_html(bundle: Dict[str, Any], analysis: Optional[Dict[str, An
         body.append("<h2>4 &middot; Lines not matched on code</h2>")
         body.append(us)
 
+    _powder = _powder_note(bundle, recon)
+    _unpriced = _unpriced_table(bundle)
+    if _powder or _unpriced:
+        body.append("<h2>5 &middot; Where the engine's total went short</h2>")
+        body.append("<p class='muted'>The headline gap has causes, and these are the ones readable "
+                    "from this bundle. They are stated here so the difference in Section 1 is not "
+                    "left as a number without an explanation.</p>")
+        body.append(_powder)
+        body.append(_unpriced)
+
     if flag_n:
-        body.append("<h2>5 &middot; Engine self-review</h2>")
-        body.append("<div class='callout c-warn'><b>%s part(s) flagged by the engine for manual review.</b> "
-                    "The engine surfaces its own low-confidence parts &mdash; see the estimate output for "
-                    "per-part reasons.</div>" % _esc(flag_n))
+        body.append("<h2>6 &middot; Engine self-review</h2>")
+        body.append("<div class='callout c-warn'><b>%s part(s) flagged by the engine for manual "
+                    "review.</b> The engine surfaces its own weak reads rather than presenting them "
+                    "as settled.</div>" % _esc(flag_n))
+        body.append(_review_table(bundle))
 
     body.append(_analysis_html(analysis))
 
