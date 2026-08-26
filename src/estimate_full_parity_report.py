@@ -1522,13 +1522,41 @@ _OUT_OF_SCOPE_RE = re.compile(
 )
 
 
+# COSTED BY THE ENGINE, BUT NOT AS A LINE WITH THIS CODE.
+#
+# The manual estimate buys powder as a catalogue item — one row, "Powder - MN250F 610 Matt Black",
+# coded 20KGMOQ to record the 20 kg minimum order. The engine never emits that row: it prices
+# powder BY MASS inside each part (sheet_steel_costing.powder_total_cost -> estimator's
+# powder_material_gbp) and rolls it up. Same money, different shape.
+#
+# Before this existed the code match failed and the line fell through to genuine_miss, telling the
+# estimator "the engine should have produced this. Investigate." On 10575-02 that sent us looking
+# for £12.50 of powder that is already in the total — and had anyone closed the gap by adding the
+# line, every coated job would have been charged twice.
+#
+# A confident wrong classification is worse than none. Each entry names the engine field to compare
+# against, because "it is somewhere else" is only useful with the somewhere.
+_COSTED_ELSEWHERE: Tuple[Tuple[Any, str], ...] = (
+    (re.compile(r"\bPOWDER\b|\bKGMOQ\b", re.IGNORECASE),
+     "The engine costs powder by mass per part (powder_material_gbp), not as a catalogue line — "
+     "so no line carries this code. Compare the engine's total powder_material_gbp against this "
+     "row rather than treating it as absent. A real under-charge would show as a difference "
+     "between those two totals, not as a missing line."),
+)
+
+
 def _classify_manual_only(description: str) -> Dict[str, str]:
-    """Decide whether a manual-only line is a genuine miss or out-of-scope logistics."""
-    if _OUT_OF_SCOPE_RE.search(str(description or "")):
+    """Decide whether a manual-only line is a genuine miss, out-of-scope logistics, or a cost the
+    engine carries in a different shape."""
+    text = str(description or "")
+    if _OUT_OF_SCOPE_RE.search(text):
         return {
             "category": "out_of_scope",
             "issue": "Logistics / packaging — added by the estimator, not derivable from the drawing. Not an engine fault.",
         }
+    for pattern, issue in _COSTED_ELSEWHERE:
+        if pattern.search(text):
+            return {"category": "costed_elsewhere", "issue": issue}
     return {
         "category": "genuine_miss",
         "issue": "On the manual estimate but missing from the AI estimate — the engine should have produced this. Investigate.",

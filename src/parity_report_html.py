@@ -300,8 +300,17 @@ def _unmatched_section(recon: Dict[str, Any]) -> str:
     if not mo and not ao:
         return ""
 
-    misses = [r for r in mo if str(r.get("category", "")).lower() == "genuine_miss"]
-    naming = [r for r in mo if str(r.get("category", "")).lower() != "genuine_miss"]
+    # FOUR BUCKETS, NOT TWO. "Everything that is not a miss" was a naming-differences table, which
+    # meant logistics the estimator adds at quote time — and later powder, which the engine costs
+    # per part — were both presented as the two estimates spelling a part name differently. Three
+    # unrelated situations reading as one, and the reader given no way to tell them apart.
+    def _cat(row):
+        return str(row.get("category", "")).lower()
+
+    misses = [r for r in mo if _cat(r) == "genuine_miss"]
+    elsewhere = [r for r in mo if _cat(r) == "costed_elsewhere"]
+    scope = [r for r in mo if _cat(r) == "out_of_scope"]
+    naming = [r for r in mo if _cat(r) not in {"genuine_miss", "costed_elsewhere", "out_of_scope"}]
     out = []
 
     if misses:
@@ -335,6 +344,41 @@ def _unmatched_section(recon: Dict[str, Any]) -> str:
             for r in sorted(ao, key=lambda r: -(_f(r.get("ai_cost_gbp")) or 0.0)))
         out.append("<table><tr><th>On engine only</th><th>Description</th>"
                    "<th class='num'>Engine cost</th></tr>%s</table>" % rows)
+
+    if elsewhere:
+        total = sum(_f(r.get("manual_cost_gbp")) or 0.0 for r in elsewhere)
+        out.append(
+            "<h3>Costed by the engine, in a different shape</h3>"
+            "<p class='muted'>%d manual line(s), %s. <b>These are not missing.</b> The engine carries "
+            "the same money somewhere other than a line with this code &mdash; powder, for instance, is "
+            "priced by mass inside each part rather than bought as a catalogue item. Compare against "
+            "the engine field named below; a genuine under-charge shows as a difference between the "
+            "two totals, not as an absent line.</p>" % (len(elsewhere), _gbp(total)))
+        rows = "".join(
+            "<tr><td><span class='pn'>%s</span></td><td>%s</td><td class='num'>%s</td>"
+            "<td class='muted'>%s</td></tr>" % (
+                _esc(r.get("code")), _esc(r.get("description") or "—"),
+                _gbp(r.get("manual_cost_gbp")), _esc(r.get("issue") or "—"))
+            for r in elsewhere)
+        out.append("<table><tr><th>On manual only</th><th>Description</th>"
+                   "<th class='num'>Manual cost</th><th>Where the engine carries it</th></tr>"
+                   "%s</table>" % rows)
+
+    if scope:
+        total = sum(_f(r.get("manual_cost_gbp")) or 0.0 for r in scope)
+        out.append(
+            "<h3>Out of scope for the engine</h3>"
+            "<p class='muted'>%d line(s), %s. Logistics and packaging the estimator adds at quote "
+            "time. Not derivable from a drawing and not an engine fault &mdash; but they are real "
+            "money on the manual estimate, so they are shown rather than hidden.</p>"
+            % (len(scope), _gbp(total)))
+        rows = "".join(
+            "<tr><td><span class='pn'>%s</span></td><td>%s</td><td class='num'>%s</td></tr>" % (
+                _esc(r.get("code")), _esc(r.get("description") or "—"),
+                _gbp(r.get("manual_cost_gbp")))
+            for r in scope)
+        out.append("<table><tr><th>On manual only</th><th>Description</th>"
+                   "<th class='num'>Manual cost</th></tr>%s</table>" % rows)
 
     if naming:
         out.append(
