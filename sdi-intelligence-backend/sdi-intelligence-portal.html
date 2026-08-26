@@ -2080,14 +2080,39 @@
         <table style="min-width:960px">
           <tr><th>Host</th><th>IP</th><th>Role</th><th>Key workloads</th><th>Hardware</th><th>RAM</th><th>OS</th><th>Type</th></tr>
           <tr><td><b>SDI-DC01</b></td><td>10.0.0.4 / .10</td><td>Domain Controller</td><td>AD DS · DNS · DHCP · Print · <b>Entra Connect / Azure AD Sync</b> · <b>WatchGuard Auth Gateway</b></td><td>HPE ProLiant DL380 Gen11 (Xeon 6526Y)</td><td>32 GB</td><td>Server 2022</td><td><span class="chip c-done">Physical</span></td></tr>
-          <tr><td><b>SDI-APP01</b></td><td>10.0.0.5</td><td>App host + engineering</td><td><b>SDI Intelligence portal</b> (:8071) · <b>SOLIDWORKS PDM</b> (Archive + ConisioDb + SWPDM SQL + SolidNetWork licence) · <b>TRUMPF stack</b> (TRUMPFSQL2 + brokers)</td><td>HPE ProLiant DL380 Gen11 (Xeon 6526Y)</td><td>32 GB</td><td>Server 2022</td><td><span class="chip c-done">Physical</span></td></tr>
+          <tr><td><b>SDI-APP01</b></td><td>10.0.0.5</td><td>App host + engineering</td><td><b>SDI Intelligence portal</b> (:8071 &mdash; <b>secondary</b>, pages and parity only; no runner, so it cannot produce an estimate) · <b>SOLIDWORKS PDM</b> (Archive + ConisioDb + SWPDM SQL + SolidNetWork licence) · <b>TRUMPF stack</b> (TRUMPFSQL2 + brokers)</td><td>HPE ProLiant DL380 Gen11 (Xeon 6526Y)</td><td>32 GB</td><td>Server 2022</td><td><span class="chip c-done">Physical</span></td></tr>
+          <!-- THE MACHINE THE CAPABILITY ACTUALLY RUNS ON, AND IT WAS NOT IN THE INVENTORY.
+               Seven hosts were listed and none of them was the one running the estimating
+               engine. An inventory that omits the box the business is about to depend on from
+               September is not an inventory of the estate. -->
+          <tr style="background:rgba(232,163,61,.05)"><td><b>DESKTOP-GFAAP80</b></td><td>&mdash;</td><td><b style="color:var(--accent)">Estimating engine &mdash; primary</b></td><td><b>SDI Intelligence portal</b> (:8072 &mdash; <b>the one in daily use</b>) · <b>Estimating runner</b> (Scheduled Task, interactive session) · SOLIDWORKS + Excel COM · the engine itself, <code>C:\ClaudeVision</code></td><td><span style="color:var(--warn)">Personal laptop</span> (Intel Core Ultra 9)</td><td>64 GB</td><td>Windows 11</td><td><span class="chip" style="background:rgba(232,163,61,.15);color:var(--warn);border-color:rgba(232,163,61,.35)">Laptop</span></td></tr>
           <tr><td><b>ACCESS-DB01</b></td><td>10.0.0.200</td><td>ERP database + app server</td><td><b>Production SQL</b> (MSSQLSERVER — 19 DBs: SDILive, SDIFinance, SDI_ACBL, ASC722, ADM, ADS, AA_*, TCDatabase) · <b>Access SupplyChain Server 7.2.2</b> · Access NFP Server</td><td>VMware VM (Xeon 6242)</td><td>32 GB</td><td>Server 2019</td><td><span class="chip c-plan">VM</span></td></tr>
           <tr><td><b>ACCESS-DB02</b></td><td>10.0.0.201</td><td>SQL Server (name only)</td><td><b>No SQL, no workload</b> — freshly reinstalled, clean Server 2019 awaiting role. Best-resourced DB-class box, yet idle.</td><td>VMware VM (Xeon 6242)</td><td>24 GB</td><td>Server 2019</td><td><span class="chip c-plan">VM</span></td></tr>
           <tr><td><b>ACCESS-APP01</b></td><td>10.0.0.202</td><td>ERP application tier</td><td>Access Data Service · File Import/Export · Access Connect · <b>TaskCentre Server</b> · <b>LM-X licence server</b> (Access SupplyChain licensing)</td><td>VMware VM (Xeon 6242)</td><td>8 GB</td><td>Server 2019</td><td><span class="chip c-plan">VM</span></td></tr>
           <tr><td><b>ACCESS-WEB01</b></td><td>10.0.0.52</td><td>ERP web tier</td><td>IIS (W3SVC) — Access SupplyChain web front-end</td><td>VMware VM (Xeon 6242)</td><td><span style="color:var(--warn)">4 GB</span></td><td>Server 2019</td><td><span class="chip c-plan">VM</span></td></tr>
           <tr><td><b>SDI-RDS01</b></td><td>10.0.0.8</td><td>Remote access gateway</td><td><b>Full RDS</b> (Session Host · Connection Broker · <b>RD Gateway</b> · Web Access · Licensing) · <b>NPS/RADIUS</b> (IAS) · also <b>OpenVPN</b> + <b>LogMeIn</b></td><td>VMware VM (Xeon 6242)</td><td>32 GB</td><td>Server 2019</td><td><span class="chip c-plan">VM</span></td></tr>
         </table>
-        <p class="sub" style="margin-top:10px">2 physical HPE ProLiant DL380 Gen11 (Server 2022, 32 GB, Xeon 6526Y) for DC + app host · 5 VMware VMs (Server 2019, Xeon 6242) for ERP, data &amp; remote-access tiers.</p>
+        <p class="sub" style="margin-top:10px">2 physical HPE ProLiant DL380 Gen11 (Server 2022, 32 GB, Xeon 6526Y) for DC + app host · 5 VMware VMs (Server 2019, Xeon 6242) for ERP, data &amp; remote-access tiers &mdash; plus one laptop carrying the estimating engine.</p>
+        <div class="note" style="margin-top:12px;border-color:rgba(232,163,61,.4);background:linear-gradient(180deg,rgba(232,163,61,.06),var(--surface))">
+          <h4 style="color:var(--warn)">Two portals, and only one of them can estimate</h4>
+          <b>DESKTOP-GFAAP80 :8072 is primary.</b> It holds the engine, the runner, the SOLIDWORKS
+          and Excel automation and the only interactive desktop COM can attach to. Every estimate
+          is produced here.<br><br>
+          <b>SDI-APP01 :8071 is secondary</b> and has no runner, so it will never produce an
+          estimate &mdash; the Run button stays disabled and says so. What it <i>does</i> serve is
+          the portal pages and, usefully, the <b>parity report and client-quote regeneration</b>,
+          neither of which needs a runner or a drawing. That makes it a review station for the
+          estimating team on the intranet while estimates stay on the laptop, which is what the
+          2 September procedure describes.<br><br>
+          <b>Keep them on the same commit.</b> Three deployments on three different commits produced
+          three false diagnoses in one day; the build pill at the foot of the rail reports
+          <code>host &middot; commit</code> on each, and they must agree.<br><br>
+          <b style="color:var(--fail)">This is the exposure, stated plainly:</b> the tool estimating
+          is due to depend on from September runs on one person's laptop. There is no resilience, no
+          second user and no separation between a working machine and a production service. The
+          server specification is settled; the constraint is IT hardware resource and a service
+          account, both outstanding.
+        </div>
       </div>
       <div class="note reveal" style="animation-delay:.06s;border-color:rgba(232,84,79,.4);background:linear-gradient(180deg,rgba(232,84,79,.06),var(--surface))">
         <h4 style="color:var(--fail)">⚠ Resilience, resourcing &amp; remote-access — priority flags</h4>
