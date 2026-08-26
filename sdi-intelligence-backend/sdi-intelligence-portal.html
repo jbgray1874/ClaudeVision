@@ -2347,6 +2347,80 @@
           <b style="color:var(--accent)">Resource:</b> Yogesh Kumar — SolidWorks API &amp; DXF generation. PDM vault integration target confirmed on SDI-APP01.
           <br><b style="color:var(--accent);margin-top:4px;display:block">Goal:</b> Accelerate the design process — faster drawing creation, higher DXF coverage, richer geometry data flowing into estimating and production.
         </div>
+
+        <!-- ── TECHNICAL DESIGN. Two POCs are done and the capability list above described an
+             intention rather than what has been proven. Recorded from the delivery tracker so a
+             technical reader can see what exists, and equally what it deliberately will not do. -->
+        <h3 style="font-family:var(--disp);font-weight:700;font-size:16px;margin:24px 0 4px">Technical design &mdash; two proven components</h3>
+        <p class="sub" style="margin-bottom:12px">Both POCs complete, mid-August 2026. They do different jobs and are deployed independently, which is deliberate: a Document Manager outage costs an import, not an estimate.</p>
+
+        <div class="panel" style="background:var(--bg-2);padding:16px 18px;margin-bottom:12px">
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+            <b style="font-size:14px">Document Manager API</b>
+            <span class="chip c-done" style="font-size:10px">POC done</span>
+            <span class="muted" style="font-size:11.5px;margin-left:auto">Windows service &middot; read-only</span>
+          </div>
+          <p style="margin:0 0 10px;font-size:13px">Reads SolidWorks files <b>without a SolidWorks seat</b> &mdash; Document Manager SDK and licence only. That is the point of it: model data with no licence contention and no interactive desktop.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12.5px">
+            <div>
+              <div style="font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">What it reads</div>
+              <ul style="margin:0;padding-left:16px;line-height:1.75">
+                <li>Metadata, custom properties, configurations</li>
+                <li>Full recursive assembly structure with <b>rolled-up quantities</b></li>
+                <li>BOM, flattened and indented, as CSV or JSON</li>
+                <li><b>Cut lists</b> &mdash; weldment and sheet metal, with resolved lengths and profiles</li>
+                <li>Drawing sheets, views, linked models, BOM and revision tables</li>
+                <li>Preview thumbnails</li>
+              </ul>
+            </div>
+            <div>
+              <div style="font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">How it is reached</div>
+              <ul style="margin:0;padding-left:16px;line-height:1.75">
+                <li><b>REST API</b> for the estimating app &mdash; extract, files, jobs, health</li>
+                <li>Operator UI for browsing and running scans, with cancel</li>
+                <li>MCP tools for agent use</li>
+                <li>Builds a pack: current PDFs, DWGs, DXFs, STEP/IGES for a master tree</li>
+                <li>Prefers the latest revision, chosen <b>by data inside the file</b>, not the filename</li>
+                <li>Writes a flat trusted folder plus <code>possible_candidates/</code> and a report for near-misses</li>
+              </ul>
+            </div>
+          </div>
+          <div style="margin-top:10px;padding-top:9px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--ink-dim)">
+            <b style="color:var(--ink)">Deliberately does not:</b> create or regenerate PDFs, DXFs or STEP from models &mdash; it copies exports that already exist. It does not edit CAD or replace a SolidWorks session. <b>No writes to the live CAD share.</b> That boundary is what makes it safe to run unattended against production drawings.
+          </div>
+        </div>
+
+        <div class="panel" style="background:var(--bg-2);padding:16px 18px">
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+            <b style="font-size:14px">SolidWorks COM API</b>
+            <span class="chip c-done" style="font-size:10px">POC done</span>
+            <span class="muted" style="font-size:11.5px;margin-left:auto">needs a seat &middot; interactive session</span>
+          </div>
+          <p style="margin:0 0 10px;font-size:13px">Drives SolidWorks itself, so it reaches what the Document Manager cannot: geometry, the feature tree, and exports generated on demand.</p>
+          <div style="overflow-x:auto">
+            <table style="min-width:560px;font-size:12.5px">
+              <tr><th>Capability</th><th>What it does</th></tr>
+              <tr><td><b>export-dxf</b></td><td>Sheet-metal flat patterns &mdash; <b>the answer to the engine's largest accuracy limiter</b>, a job with no DXFs</td></tr>
+              <tr><td><b>export-package</b></td><td>Full release set: STEP per part and assembly, DXF flats for sheet metal, IGES per body for weldments, PDF/PNG/DWG/DXF from drawings, mirroring the source folder structure</td></tr>
+              <tr><td><b>create-drawing-pack</b></td><td>Multi-sheet pack &mdash; GA, BOM, sub-assembly and part sheets, with per-sheet auto-scaling</td></tr>
+              <tr><td><b>report / bom</b></td><td>Model report (metadata, mass, bounding box) and a parts-only BOM with quantities</td></tr>
+              <tr><td><b>interference-check</b></td><td>Clash detection, exiting non-zero so it can gate a build</td></tr>
+              <tr><td><b>hole-alignment-check</b></td><td>Cross-component hole-axis alignment. <b>No SolidWorks API exists for this</b> &mdash; it reads cylindrical-face geometry directly and flags near-misses</td></tr>
+              <tr><td><b>topple-analysis</b></td><td>Tip-over stability from centre of mass and support footprint &mdash; 12173-02-GA measured at ~25.9&deg;</td></tr>
+              <tr><td><b>weight-check</b></td><td>Mass against a limit</td></tr>
+              <tr><td><b>machine / standards validation</b></td><td><span class="chip c-prog" style="font-size:10px">In progress</span> Validate against the TRUMPF tool list and SDI design standards</td></tr>
+            </table>
+          </div>
+          <div style="margin-top:10px;padding-top:9px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--ink-dim)">
+            Packaged as a tray app with an Inno Setup installer, verified install &rarr; real job &rarr; uninstall.
+            <b style="color:var(--warn);display:block;margin-top:6px">Constraint, and it drives the server case:</b> COM binds within a Windows session and at a matching integrity level, so a licence in use on somebody's desktop cannot serve the engine. That is why the third SOLIDWORKS seat belongs to the server rather than to a person.
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:14px;border-color:rgba(78,201,127,.3)">
+          <h4 style="color:var(--ok)">Why two components rather than one</h4>
+          The Document Manager gives cheap, safe, unattended reads with no licence contention &mdash; enough for a BOM, quantities and cut lists. The COM API gives geometry and generated exports but needs a seat and an interactive desktop. <b>The engine already works this way:</b> the COM read sits at rank 90 in the source waterfall and self-gates, so no seat means the job runs on PDF and DXF exactly as before and says which it used. Adding the Document Manager as a lower-cost source for cut-list data would close the largest remaining gap without adding a licence.
+        </div>
       </div>
 
       <!-- WORKSTREAM 3 — IMMERSIVE DESIGN -->
@@ -2788,12 +2862,28 @@
 
     {id:'dfm', name:'AI Design for Manufacture', status:'Planned', cls:'c-plan',
      desc:'Every design AI-reviewed before the shop floor \u2014 flags cost, suggests alternatives, auto-BOM.',
-     detail:'AI review of every design before manufacture. Flags costly features with a \u00a3 impact estimate. Suggests redesign alternatives. Auto-generates flat patterns, bend sequences, weld sequences and full BOM. The BOM feeds straight into the estimating engine \u2014 closing the loop between design and estimate.',
-     inputs:['Fusion 360 / SolidWorks model', 'manufacturing capability rules', 'price reference'],
-     outputs:['DFM flag report (\u00a3 impact per feature)', 'flat patterns', 'bend / weld sequence', 'BOM \u2192 estimate'],
-     tech:['Fusion 360 Manufacturing Extension', 'Boothroyd Dewhurst DFMA', 'nTopology', 'custom rules engine'],
-     phase:'Phase 3 \u00b7 Q4 2026',
-     invoke:'Not yet built. Roadmapped after the Phase 2 design AI is in.'},
+     detail:'AI review of every design before manufacture. Flags costly features with a \u00a3 impact estimate. Suggests redesign alternatives. Auto-generates flat patterns, bend sequences, weld sequences and full BOM. The BOM feeds straight into the estimating engine \u2014 closing the loop between design and estimate.'
+       // NOT ALL OF THIS IS SPECULATIVE ANY MORE. Four of the checks this service was described
+       // as needing already run in the SolidWorks COM POC. Saying so changes the estimate of what
+       // is left to build, and the reader deserves the distinction between planned and proven.
+       +'<div style="margin-top:20px;padding:14px 16px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px">'
+       +'<b style="color:var(--ok)">Part of this is already proven, not planned.</b> The SolidWorks COM POC (Yogesh Kumar, complete mid-Aug 2026) already performs several of the checks this service was scoped to need:'
+       +'<ul style="margin:9px 0 0 17px;line-height:1.85">'
+       +'<li><b>interference-check</b> \u2014 clash detection, exiting non-zero so it can gate a build rather than only reporting</li>'
+       +'<li><b>hole-alignment-check</b> \u2014 cross-component hole-axis alignment. There is no SolidWorks API for this; it reads cylindrical-face geometry directly and flags near-misses</li>'
+       +'<li><b>topple-analysis</b> \u2014 tip-over stability from centre of mass and support footprint, measured at ~25.9\u00b0 on 12173-02-GA</li>'
+       +'<li><b>weight-check</b> \u2014 mass against a limit</li>'
+       +'<li><b>machine / standards validation</b> \u2014 in progress, against the TRUMPF tool list and SDI design standards. This is the DFM rules engine in all but name</li>'
+       +'</ul>'
+       +'<div style="margin-top:10px;padding-top:9px;border-top:1px dashed rgba(78,201,127,.25)">'
+       +'And <b>export-dxf</b> and <b>export-package</b> generate the flat patterns, STEP and IGES this service was going to have to build. '
+       +'So the remaining work is narrower than the phase suggests: the <b>\u00a3 impact per feature</b>, the redesign suggestions, and wiring the generated BOM into the estimating engine. The geometry checks exist.</div>'
+       +'</div>',
+     inputs:['SolidWorks model (COM API)', 'manufacturing capability rules', 'TRUMPF tool list', 'price reference'],
+     outputs:['DFM flag report (\u00a3 impact per feature)', 'flat patterns (export-dxf, proven)', 'clash + hole-alignment + stability checks (proven)', 'BOM \u2192 estimate'],
+     tech:['SOLIDWORKS COM API (POC done)', 'Document Manager API (POC done)', 'custom rules engine', 'TRUMPF tool list'],
+     phase:'Phase 3 \u00b7 Q4 2026 \u2014 geometry checks already proven',
+     invoke:'Partly built. The COM POC covers the geometry and export side; what remains is the cost model per feature and the BOM handoff into estimating.'},
 
     {id:'scheduling', name:'AI Production Scheduling', status:'Planned', cls:'c-plan',
      desc:'Optimal job sequencing across laser, brake, weld and coat \u2014 with dynamic rescheduling.',
