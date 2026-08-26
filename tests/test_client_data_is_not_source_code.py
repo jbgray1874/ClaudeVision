@@ -86,19 +86,33 @@ def test_the_engine_does_not_read_a_committed_corpus():
                       f"source control would break this: {hits}")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN LIVE EXPOSURE, deliberately left failing-as-expected rather than fixed here. "
-    "sdi-intelligence-backend/.env is tracked and holds the production database password "
-    "and the HR client secret. It must NOT be untracked first: the secrets have to be "
-    "ROTATED, because removing the file does not remove it from history -- rotation is the "
-    "cure and deletion is only tidying. Untracking it also deletes it from every other "
-    "working copy on merge, which stops the live service until someone restores it. "
-    "strict=True on purpose: the moment the file is untracked this test PASSES, the xfail "
-    "becomes an error, and whoever fixed it is told to delete this marker."))
 def test_the_env_file_is_not_tracked():
     """Filed alongside because it is the same defect with a different payload, entered the
     repository in the SAME commit, and has the same cure: ignore rules do nothing to a file
-    that is already tracked."""
+    that is already tracked.
+
+    THE MARKER THAT USED TO BE HERE, and why it is gone. This was a strict xfail recording
+    sdi-intelligence-backend/.env as a known live exposure, with the instruction that whoever
+    untracked it should delete the marker. It worked exactly as designed: the file was untracked
+    and this test turned from xfail into an error naming itself.
+
+    Its reasoning said untracking must not come FIRST, because rotation is the cure and deletion
+    is only tidying. That still holds and none of it is retracted. What changed is the ordering
+    it was warning about: the next morning's job was "change the SDI live database password and
+    put it into .env only", and with .env tracked, "into .env only" would have committed the NEW
+    password on the next commit that touched the file — rotating a credential straight back into
+    the exposure it was being rotated out of. Untracking had to happen before that, not after.
+
+    SO SAY PLAINLY WHAT IS AND IS NOT FIXED. Untracking removes the file from the index, not from
+    history. Every password committed to this repository is still in it and still readable by
+    anyone who has ever had a clone; making the repository private did not undo that. The live SQL
+    login and the BrightHR client secret were exposed for four months and are exposed still. This
+    test stops the NEXT secret being added. Rotation is what ends the current one, and the strict
+    xfail in test_a_setting_we_read_is_a_setting_that_exists.py stays failing until it happens.
+
+    The other warning it carried is operational and is real: untracking deletes the file from
+    every other working copy on the next pull, taking the service down until someone restores it.
+    Every machine must copy its .env aside BEFORE pulling this and put it back afterwards."""
     tracked = _tracked()
     live = [f for f in tracked
             if f.endswith(".env") and ".example" not in f and "/env/" not in f]
