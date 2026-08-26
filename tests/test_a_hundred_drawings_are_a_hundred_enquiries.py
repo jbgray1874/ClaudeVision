@@ -396,18 +396,36 @@ def test_refused_drawings_are_named_on_the_page():
 def test_the_page_script_parses():
     """THIRTY-THREE KILOBYTES OF INLINE SCRIPT, and a single syntax error anywhere in it
     blanks the entire page — no console for the estimator, no error on the server, just a
-    dead screen. Cheap to check and impossible to notice otherwise."""
+    dead screen. Cheap to check and impossible to notice otherwise.
+
+    AND IT WAS NOT CHECKING ANYTHING. The page grew a second <script> — the small theme block
+    in the head — and `re.search(r"<script>(.*)</script>", ..., re.S)` is GREEDY. It matched
+    from the first opening tag to the LAST closing one, so the text handed to node contained
+    `</script>` and `<script>` literally, and node refused it on line 17 every single time:
+
+        SyntaxError: Unexpected token '<'
+
+    A guard that fails identically whatever you do is not a guard. It sat in the failing list
+    long enough to be read as furniture, which is worse than not having it: the whole point is
+    that a syntax error here is invisible until an estimator opens a blank page, and this was
+    the only thing looking. Every block is now checked on its own, and the count is asserted so
+    a third one cannot be added and silently skipped."""
     import shutil
     import subprocess
     import re
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed here")
-    script = re.search(r"<script>(.*)</script>", _page(), re.S)
-    assert script, "the page has no script block at all"
-    proc = subprocess.run([node, "--check", "-"], input=script.group(1),
-                          capture_output=True, text=True)
-    assert proc.returncode == 0, f"the page's script does not parse:\n{proc.stderr[:600]}"
+    blocks = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", _page(), re.S)
+    assert blocks, "the page has no script block at all"
+    assert len(blocks) == 2, (
+        f"the page has {len(blocks)} script blocks, not the 2 this expects — if that is "
+        f"deliberate, update the count; it is here so a new block cannot go unchecked")
+    for i, src in enumerate(blocks):
+        proc = subprocess.run([node, "--check", "-"], input=src,
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, (
+            f"script block {i + 1} does not parse:\n{proc.stderr[:600]}")
 
 
 # ── two methods, side by side ───────────────────────────────────────────────────────

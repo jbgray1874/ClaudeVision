@@ -1314,6 +1314,22 @@ $("addFolder").onclick = () => {
   }
   const box = $("dmExtractBox");
   box.hidden = false;
+  /* CONFIGURED IS NOT REACHABLE, and the difference is a settings problem versus a switched-off
+     desktop. Both used to present as a ready button: the panel opened, a project number was
+     typed, Extract was pressed, and only then did a ConnectTimeout come back. The health call
+     is asked HERE rather than only at page load because a desktop that was off when the page
+     opened can be on by now — and because a reading taken minutes ago is not evidence about
+     the press happening now. It never blocks the form; it says what is true beside it. */
+  dmSay("Checking the Document Manager is up…");
+  api("/api/estimate/dm/health").then(r => r.json()).then(h => {
+    if(h.reachable && h.com_available !== false){
+      dmSay("Document Manager is up at " + (h.api_base || "its host") + ". Enter the project.", "ok");
+    }else{
+      /* Not an error style for com_available — the host answered, so this is a CAD problem on
+         their side that its owner fixes, and it may clear without anybody touching this page. */
+      dmSay(h.reason || "The Document Manager did not answer.", h.reachable ? "w" : "e");
+    }
+  }).catch(() => dmSay("Could not ask whether the Document Manager is up. Extract will say.", "w"));
   /* 10575-02 -> project 10575, assembly 10575-02. Prefilled, never forced: a numbering
      convention is a habit, and a form that quietly derives the wrong project is worse than
      one that asks. Only filled when empty, so a correction survives reopening the panel. */
@@ -2235,13 +2251,32 @@ async function checkDm(){
           + "API is not configured, so this browses rather than extracting.";
     }
     /* Said once, quietly, under the list — not as an error. Not being configured yet is a
-       deployment step, not a fault, and the page should not shout about it every visit. */
+       deployment step, not a fault, and the page should not shout about it every visit.
+
+       AND THE OUTPUT ROOT IS ONLY MENTIONED WHEN THERE IS NOTHING BETTER. Asking DM for a pack
+       needs no output root: DM reports where it wrote each pack and we read that back. Nagging
+       for a share setting on a machine that can already ask the API sends somebody hunting for
+       a setting the API's own author had never heard of. That happened, and it cost an
+       afternoon. */
     if(dmNote){
       const gaps = [];
-      if(!j.configured) gaps.push("importing a pack that already exists needs "
-                                  + (j.reason || "SDI_DM_OUTPUT_ROOT"));
-      if(!dmApiReady) gaps.push("asking for a new one needs DOCMGR_BASE_URL and DOCMGR_ACCESS_SECRET");
+      if(!dmApiReady){
+        gaps.push("asking for a pack needs DOCMGR_BASE_URL and DOCMGR_ACCESS_SECRET");
+        if(!j.configured) gaps.push("importing one that already exists needs "
+                                    + (j.reason || "SDI_DM_OUTPUT_ROOT"));
+      }
       dmNote.textContent = gaps.length ? ("Document Manager: " + gaps.join("; ") + ".") : "";
+
+      /* CONFIGURED SAYS THE SETTINGS ARE THERE. IT SAYS NOTHING ABOUT THE HOST BEING ON.
+         Asked second and without being waited on, so the note is right immediately from the
+         settings and gets more right a moment later — a page that holds a blank line for a
+         ten-second timeout is worse than one that fills in. */
+      if(dmApiReady){
+        api("/api/estimate/dm/health").then(r => r.json()).then(h => {
+          if(h.reachable && h.com_available !== false) return;   // nothing to say is the goal
+          dmNote.textContent = "Document Manager: " + (h.reason || "its host did not answer.");
+        }).catch(() => {});
+      }
     }
   }catch(e){
     addFromDm.disabled = true;
