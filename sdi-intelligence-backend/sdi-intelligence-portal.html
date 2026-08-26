@@ -349,31 +349,43 @@
             </div>
           </div>
 
-          <!-- TRACK 2 — TECHNICAL DESIGN / PDM. The phase ladder below is assembled from what the
-               Programme page already records (two POCs proven mid-Aug 2026, PDM vault target
-               confirmed on SDI-APP01, DXF generation, AI-assisted design). Dates beyond the
-               proven POCs are indicative and want confirming against YK's delivery tracker. -->
+          <!-- TRACK 2 — TECHNICAL DESIGN. Dates and phase names taken from the delivery tracker
+               (Yogesh Kumar, ref P1–P3.4). Note the PDM is an SDI in-house build — GitLab + LFS
+               with a DM API intelligence layer — NOT integration with the SOLIDWORKS PDM vault.
+               Getting that wrong changes what the work is, so it is stated explicitly below. -->
           <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
-            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Workstream 2 · In build</div>
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Workstream 2 · In build · Yogesh Kumar</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Technical Design Intelligence</div>
-            <div class="muted" style="font-size:12.5px;line-height:1.6">SOLIDWORKS PDM vault on SDI-APP01 read natively — no export step. Feeds the estimating engine that is running now.</div>
-            <div style="margin-top:11px;display:flex;flex-direction:column;gap:7px">
+            <div class="muted" style="font-size:12.5px;line-height:1.6">Two DM API tools into the estimating app, then an <b>SDI in-house PDM</b> built in four phases. Sole developer, so the phases run one after another.</div>
+            <div style="margin-top:11px;display:flex;flex-direction:column;gap:6px">
               <div style="display:flex;align-items:flex-start;gap:9px">
-                <span class="chip c-done" style="font-size:10px;flex-shrink:0;min-width:74px;text-align:center">Proven</span>
-                <div style="font-size:12.5px;line-height:1.5"><b>Phase 1 · Read the vault</b> <span class="muted">— Document Manager API (no seat) + SolidWorks COM API (seat). Both POCs complete, mid-Aug 2026.</span></div>
+                <span class="chip c-prog" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">15 Sep 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>P1 · DM API — Design Files Extraction</b> <span class="muted">— drawing pack straight into the estimating app. In progress, 60%. Endpoint live 24 Aug 26.</span></div>
               </div>
               <div style="display:flex;align-items:flex-start;gap:9px">
-                <span class="chip c-prog" style="font-size:10px;flex-shrink:0;min-width:74px;text-align:center">Q3–Q4 26</span>
-                <div style="font-size:12.5px;line-height:1.5"><b>Phase 2 · PDM integration</b> <span class="muted">— against the live vault rather than the file share; revision chosen by data inside the file, not the filename.</span></div>
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">24 Sep 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>P2 · DM API — Production Folder auto-extraction</b> <span class="muted">— shop-floor drawing pack, with a why-not-copied report.</span></div>
               </div>
               <div style="display:flex;align-items:flex-start;gap:9px">
-                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:74px;text-align:center">Q4 26</span>
-                <div style="font-size:12.5px;line-height:1.5"><b>Phase 3 · DXF generation</b> <span class="muted">— flat patterns produced where none exist. The largest single accuracy limiter in the engine today.</span></div>
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">29 Oct 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>P3.1 · In-house PDM — MVP</b> <span class="muted">— check-in/out, versioning, locking, history.</span></div>
               </div>
               <div style="display:flex;align-items:flex-start;gap:9px">
-                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:74px;text-align:center">2027</span>
-                <div style="font-size:12.5px;line-height:1.5"><b>Phase 4 · AI-assisted design</b> <span class="muted">— drawing tools inside SolidWorks (Leo AI or equivalent), and DFM checks gating a build.</span></div>
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">18 Nov 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>P3.2 · PDM — CAD-aware</b> <span class="muted">— where-used, missing references, version consistency.</span></div>
               </div>
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">5 Jan 27</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>P3.3 · PDM — engineering revisions</b> <span class="muted">— approval workflow, WIP → released → obsolete.</span></div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">14 Jan 27</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>P3.4 · PDM — prototype release workflows</b> <span class="muted">— WIP, prototype and production release routes.</span></div>
+              </div>
+            </div>
+            <!-- The single largest schedule risk on this workstream, and it is not a date. -->
+            <div style="margin-top:11px;padding:9px 11px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.22);border-radius:5px;font-size:11.5px;line-height:1.55">
+              <b style="color:var(--accent)">Blocked on a licence, not on code.</b> Four SolidWorks COM tools are POC-complete — multi-format export incl. DXF flat patterns, the topple/weight/interference/hole check suite, and drawing generation from a model. All three carry <i>go-live subject to SolidWorks licence</i>. Nothing ships until a seat is resolved.
             </div>
           </div>
 
@@ -452,15 +464,33 @@
         <!-- SDI Technical Design Intelligence. Not numbered as a phase because it is not one — it
              runs alongside Phase 1 and feeds it, which is exactly how the programme page shows it
              (Workstream 2). Numbering it would imply Phase 1 finishes first. It does not. -->
-        <div class="ph prog reveal" style="animation-delay:.03s"><div class="ttl">Parallel · SDI Technical Design Intelligence <span class="chip c-plan">Q3–Q4 2026 → 2027</span></div><div class="dsc"><b>Reads drawings natively from the SOLIDWORKS PDM vault instead of from exports</b>, and generates the flat-pattern DXFs that don't exist — today the single largest accuracy limiter in the estimating engine. This runs <i>alongside</i> Phase 1, not after it: every DXF it produces raises the accuracy of estimates being made now. Owner: Yogesh Kumar. Vault target confirmed on SDI-APP01 (10.0.0.5).
-          <div style="margin-top:12px;display:flex;flex-direction:column;gap:9px">
-            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-done" style="font-size:10px;flex-shrink:0;min-width:82px;text-align:center">Proven</span><div><b>Phase 1 · Read the vault.</b> Two POCs complete, mid-Aug 2026, deliberately separate. The <b>Document Manager API</b> reads metadata, recursive assembly structure with rolled-up quantities, BOMs and weldment/sheet-metal cut lists <i>without a SolidWorks seat</i> — read-only, no writes to the live CAD share, safe unattended. The <b>SolidWorks COM API</b> drives a real seat to reach geometry, the feature tree and on-demand exports.</div></div>
-            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-prog" style="font-size:10px;flex-shrink:0;min-width:82px;text-align:center">Q3–Q4 2026</span><div><b>Phase 2 · PDM integration.</b> Point both APIs at the live vault rather than the file share. Revision chosen by the data inside the file, not by the filename — near-misses written to <code>possible_candidates/</code> with a report rather than guessed at.</div></div>
-            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:82px;text-align:center">Q4 2026</span><div><b>Phase 3 · DXF generation.</b> Produce flat patterns from GA drawings and PDFs where none exist, plus part identity, geometry and material from a PDF GA. This is the phase that moves the estimating accuracy number.</div></div>
-            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:82px;text-align:center">2027</span><div><b>Phase 4 · AI-assisted design.</b> Drawing tools inside SolidWorks (Leo AI or equivalent), and the DFM checks already working in the COM POC — interference, hole-alignment, topple, weight — promoted from reporting to gating a build.</div></div>
+        <!-- Phases, refs and dates below are the delivery tracker's own (Yogesh Kumar, P1–P3.4,
+             C1–C4, F1–F4). Two things this page previously got wrong and which matter: the PDM is
+             an SDI in-house build, not integration with the SOLIDWORKS PDM vault; and DXF
+             generation is already POC-proven, held by a licence rather than by development. -->
+        <div class="ph prog reveal" style="animation-delay:.03s"><div class="ttl">Parallel · SDI Technical Design Intelligence <span class="chip c-plan">Sep 2026 → Jan 2027</span></div><div class="dsc">Runs <i>alongside</i> Phase 1, not after it — the first deliverable feeds the estimating engine that is in parallel run now. Owner: <b>Yogesh Kumar</b>, and he is the sole developer, so the phases below run one at a time rather than in parallel with each other. Dates exclude weekends, England &amp; Wales bank holidays and leave from 10 Dec 2026 to 4 Jan 2027 — which is why the later PDM phases land in the new year.
+          <div style="margin-top:13px;display:flex;flex-direction:column;gap:9px">
+            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-prog" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">15 Sep 26</span><div><b>P1 · DM API — Design Files Extraction Tool.</b> Pulls the correct drawing pack and manufacturing files for a project straight into the SDI estimating app. In progress, 60% done; the endpoint went live for the estimating app on 24 Aug 2026. Reads without a SolidWorks seat — Document Manager SDK and licence only, read-only, <b>no writes to the live CAD share</b>.</div></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">24 Sep 26</span><div><b>P2 · DM API — Production Folder auto-extraction.</b> A screen that auto-collects the drawing pack for the shop-floor Production folder. Prefers the latest revision chosen <i>by data inside the file, not the filename</i>, and writes near-misses to <code>possible_candidates/</code> with a why-not-copied report instead of guessing.</div></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">29 Oct 26</span><div><b>P3.1 · SDI in-house PDM — Phase 1 (MVP).</b> Trustworthy file management: check-in/out, versioning, locking and history, so engineers can collaborate safely on work in progress. Built on GitLab + LFS with a DM API intelligence layer over PostgreSQL.</div></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">18 Nov 26</span><div><b>P3.2 · PDM Phase 2 — CAD-aware.</b> The PDM understands CAD links: where-used, missing references, version consistency and released-reference checks.</div></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">5 Jan 27</span><div><b>P3.3 · PDM Phase 3 — engineering revisions.</b> Real revision control with an approval workflow — WIP → pending approval → released / not-approved / obsolete.</div></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">14 Jan 27</span><div><b>P3.4 · PDM Phase 4 — prototype release workflows.</b> Release routes for WIP, prototype and production components.</div></div>
           </div>
-          <div style="margin-top:11px;font-size:12px;color:var(--ink-dim)"><b style="color:var(--ink)">Companion workstream:</b> SDI Creative Design Intelligence — brief-to-render and immersive review — carried under Phase 2 below.</div>
-        </div><div class="tag">PDM vault · SolidWorks API · DXF generation · Yogesh Kumar</div></div>
+
+          <div style="margin-top:13px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px">
+            <b style="color:var(--accent)">Proven, but held by a licence.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B, yet every one carries <i>go-live subject to SolidWorks licence</i> — the constraint is a seat, not development effort:
+            <ul style="margin:8px 0 0 17px;line-height:1.8;font-size:13px">
+              <li><b>C1 · Multi-format export package</b> — one-click release set: <b>DXF flat patterns</b>, PDF/DWG drawings, STEP per part, IGES per body, mirroring the project folder structure</li>
+              <li><b>C2 · Design validation suite</b> — topple, weight, interference and cross-part hole alignment in one pass, one report. Topple validated on a live assembly (12173-02-GA, ~25.9°)</li>
+              <li><b>C3 · Drawing generation from ASM/PRT</b> — views, sheets, BOM and title block auto-created; designers add the critical dimensions</li>
+              <li><b>C4 · Machine tolerance &amp; SDI standards validation</b> — against the real Trumpf tool list. <span class="muted">POC in progress</span></li>
+            </ul>
+            <div style="margin-top:8px;font-size:12px;color:var(--ink-dim)">C1's DXF flat patterns are the direct answer to the engine's largest accuracy limiter — missing flat patterns. That capability exists today and is waiting on a seat.</div>
+          </div>
+
+          <div style="margin-top:11px;font-size:12.5px;color:var(--ink-dim)"><b style="color:var(--ink)">Behind these, R&amp;D:</b> PDF → ASM/PRT reconstruction (F1) and 3DS Max API automation (F2) are POC-pending; BOM-to-Excel using Ian's custom-property spec (F3) is flagged a quick win; electrical/AV schematic generation (F4) is at concept. All dates TBC. <b style="color:var(--ink)">Companion workstream:</b> SDI Creative Design Intelligence — brief-to-render and immersive review — sits under Phase 2 below.</div>
+        </div><div class="tag">DM API · In-house PDM · SolidWorks COM · Yogesh Kumar</div></div>
         <div class="ph reveal" style="animation-delay:.05s"><div class="ttl">Phase 2 · Design AI &amp; Immersive <span class="chip c-plan">Q3 2026</span></div><div class="dsc">Client brief → structured JSON → photorealistic renders in hours via Firefly / Midjourney. Parametric 3D generation in Fusion 360. Full-scale immersive walkthrough in NVIDIA Omniverse / Unreal Engine 5. MD Agent Phase 1 — voice + email — begins.</div><div class="tag">Brief capture · Design Omniverse · MD Agent</div></div>
         <div class="ph reveal" style="animation-delay:.1s"><div class="ttl">Phase 3 · DFM &amp; Production Scheduling <span class="chip c-plan">Q4 2026</span></div><div class="dsc">Every design AI-reviewed pre-shop-floor — flags costly features, suggests alternatives, auto-BOM straight into the estimating engine. <b>Partly proven already</b>: interference, hole-alignment, topple and weight checks all run today in the SolidWorks COM POC, so this phase starts from working code rather than from nothing. AI production scheduling POC. MD Agent Phase 2 — WhatsApp + ERP. Co-worker agents rollout begins.</div><div class="tag">DFM · Scheduling · Co-worker agents</div></div>
         <div class="ph reveal" style="animation-delay:.15s"><div class="ttl">Phase 4–5 · Scheduling &amp; First Robotic Cells <span class="chip c-plan">Q1–Q2 2027</span></div><div class="dsc">Live AI nesting (Lantek / ProNest). Robotic press brake first cell. Omniverse digital twin of the factory floor. Isaac Sim for robot programming &amp; validation. Keyence inspection on the laser station.</div><div class="tag">Nesting · Press brake · Digital twin</div></div>
@@ -2316,9 +2346,9 @@
           </div>
           <div style="position:relative;z-index:1;text-align:center">
             <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);margin:0 auto 8px;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3" width="14"><circle cx="12" cy="12" r="3"/></svg></div>
-            <div style="font-family:var(--mono);font-size:10px;color:var(--accent);font-weight:700">Q3–Q4 2026</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--accent);font-weight:700">SEP 26 – JAN 27</div>
             <div style="font-size:12px;color:var(--ink);margin-top:4px;font-weight:600">SDI Technical Design<br>Intelligence</div>
-            <div style="font-size:11px;color:var(--ink-dim)">SolidWorks API · DXF gen</div>
+            <div style="font-size:11px;color:var(--ink-dim)">DM API · In-house PDM</div>
           </div>
           <div style="position:relative;z-index:1;text-align:center">
             <div style="width:28px;height:28px;border-radius:50%;background:var(--accent);margin:0 auto 8px;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3" width="14"><circle cx="12" cy="12" r="3"/></svg></div>
@@ -2373,7 +2403,7 @@
         <span class="chip c-plan" style="margin-left:auto">Q3–Q4 2026</span>
       </div>
       <div class="panel reveal">
-        <p style="margin:0 0 14px">Direct integration with SolidWorks and the PDM vault — reading drawings natively via the SolidWorks API rather than relying on PDF/DXF exports. Where DXF files don't exist, the system generates them from GA drawings and PDFs. AI-assisted tools accelerate the design process inside SolidWorks itself.</p>
+        <p style="margin:0 0 14px">Reads SolidWorks project data natively rather than relying on PDF/DXF exports, and builds SDI its own product data management. Two threads: the <b>Document Manager API</b> tools that feed the estimating app and the shop floor (P1, P2 — live Sept 2026), then an <b>SDI in-house PDM</b> in four phases (P3.1–P3.4 — Oct 2026 to Jan 2027) built on GitLab + LFS with a DM API intelligence layer over PostgreSQL. Alongside them, four SolidWorks COM tools are POC-complete — including DXF flat-pattern generation — and held only by a SolidWorks seat.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div style="background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:14px">
             <div style="font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Capabilities</div>
@@ -2381,13 +2411,14 @@
               <li>SolidWorks API ingestion — native drawing reads, no export step</li>
               <li>Auto-generate DXFs from GA drawings and PDFs where none exist</li>
               <li>Part identification from PDF GA — extract identity, geometry, material</li>
-              <li>AI-assisted drawing tools in SolidWorks (Leo AI / equivalent)</li>
+              <li>Auto-generate SolidWorks drawings from a model — views, sheets, BOM, title block</li>
+              <li>SDI in-house PDM — check-in/out, versioning, where-used, revision approval</li>
             </ul>
           </div>
           <div style="background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:14px">
             <div style="font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Integration points</div>
             <ul style="margin:0;padding:0 0 0 16px;font-size:13px;line-height:1.8">
-              <li>SOLIDWORKS PDM vault on SDI-APP01 (10.0.0.5)</li>
+              <li>Live CAD share (W:) — read-only, looked up by project number</li>
               <li>SolidWorks API (eDrawings / SOLIDWORKS SDK)</li>
               <li>Feeds directly into Workstream 1 (AI Estimating engine)</li>
               <li>Feeds Workstream 4 (CNC/G-code generation)</li>
@@ -2395,7 +2426,8 @@
           </div>
         </div>
         <div style="background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.2);border-radius:6px;padding:12px;font-size:12px">
-          <b style="color:var(--accent)">Resource:</b> Yogesh Kumar — SolidWorks API &amp; DXF generation. PDM vault integration target confirmed on SDI-APP01.
+          <b style="color:var(--accent)">Resource:</b> Yogesh Kumar — <b>sole developer</b>. Requirement collection, development, unit testing, peer review, deployment and go-live are all hands-on and must run one at a time; only user testing overlaps. That single-resource rule, plus leave from 10 Dec 2026 to 4 Jan 2027, is what pushes the later PDM phases into the new year — the dates are a capacity constraint, not an estimate of effort.
+          <br><b style="color:var(--accent);margin-top:4px;display:block">Open dependency:</b> C1–C4 (export package, validation suite, drawing generation, tolerance checks) are POC-complete but every one is marked <i>go-live subject to SolidWorks licence</i>. Resolving a seat releases four finished tools at once — including the DXF flat-pattern generation the estimating engine most needs.
           <br><b style="color:var(--accent);margin-top:4px;display:block">Goal:</b> Accelerate the design process — faster drawing creation, higher DXF coverage, richer geometry data flowing into estimating and production.
         </div>
 
