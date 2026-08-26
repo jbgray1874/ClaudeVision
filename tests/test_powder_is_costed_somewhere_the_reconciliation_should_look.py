@@ -53,20 +53,53 @@ efpr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(efpr)
 
 
-# ── The 10575-02 line ──────────────────────────────────────────────────────────
+# ── WHAT THE FIRST VERSION OF THIS FIX GOT WRONG ──────────────────────────────
+#
+# It checked only the DESCRIPTION: powder is costed by mass, therefore any powder line is
+# "costed elsewhere". Then the 10575-02 run was actually opened:
+#
+#     "powder_material_gbp": 0.0
+#     "powder_labour_gbp":   0.0
+#     "powder_total_gbp":    0.0
+#
+# Powder really was free, on a powder-coated job. The reclassification had printed "the engine
+# carries this as powder_material_gbp" over the top of a genuine fault — replacing a false alarm
+# with a false all-clear, which is the worse of the two by a distance. A false alarm wastes an
+# hour; a false all-clear ships a wrong estimate.
+#
+# So the third category now has to be EARNED. The claim "we cost this elsewhere" is checked
+# against the engine's own number before it is made.
 
-def test_powder_is_not_reported_as_a_line_the_engine_forgot():
-    got = efpr._classify_manual_only("Powder - MN250F 610 Matt Black")
-    assert got["category"] != "genuine_miss", (
-        "the engine costs powder per part via powder_material_gbp — calling this a miss sends "
-        "somebody hunting for money that is already in the total")
+_ENGINE_COSTED_POWDER = {"estimate_summary": {"totals": {"powder_material_gbp": 37.50}}}
+_ENGINE_FREE_POWDER = {"estimate_summary": {"totals": {"powder_material_gbp": 0.0,
+                                                       "powder_total_gbp": 0.0}}}
 
 
-def test_the_issue_says_where_the_engine_actually_carries_it():
-    """A category alone is not useful. The reader needs the field name to go and check."""
-    got = efpr._classify_manual_only("Powder - MN250F 610 Matt Black")
-    assert "powder_material_gbp" in got["issue"], (
-        f"the issue must name where to look; got {got['issue']!r}")
+def test_a_zero_is_a_genuine_miss_however_it_is_spelled():
+    """The 10575-02 fault. This is the assertion that would have caught my own bad fix."""
+    got = efpr._classify_manual_only("Powder - MN250F 610 Matt Black", _ENGINE_FREE_POWDER)
+    assert got["category"] == "genuine_miss", (
+        "the engine costed powder at zero on a coated job and the report called it "
+        "'costed elsewhere' — a false all-clear over a real gap")
+
+
+def test_the_zero_is_named_in_the_issue():
+    got = efpr._classify_manual_only("Powder - MN250F", _ENGINE_FREE_POWDER)
+    assert "ZERO" in got["issue"] or "0.00" in got["issue"]
+
+
+def test_powder_the_engine_really_did_cost_is_not_a_miss():
+    """The other half. When the engine HAS the money, saying it is missing sends somebody
+    hunting for a cost that is already in the total."""
+    got = efpr._classify_manual_only("Powder - MN250F", _ENGINE_COSTED_POWDER)
+    assert got["category"] == "costed_elsewhere"
+    assert "37.50" in got["issue"], "the reader needs the number to compare against"
+
+
+def test_with_no_summary_at_all_it_assumes_nothing():
+    """Absent evidence is not evidence of costing. Defaulting the other way is how the first
+    version of this went wrong."""
+    assert efpr._classify_manual_only("Powder - MN250F")["category"] == "genuine_miss"
 
 
 @pytest.mark.parametrize("desc", [
@@ -75,8 +108,17 @@ def test_the_issue_says_where_the_engine_actually_carries_it():
     "Powder coating - satin white",
     "20KGMOQ Powder",
 ])
-def test_every_way_powder_is_written_lands_in_the_same_category(desc):
-    assert efpr._classify_manual_only(desc)["category"] == "costed_elsewhere"
+def test_every_way_powder_is_written_is_checked_the_same(desc):
+    assert efpr._classify_manual_only(desc, _ENGINE_COSTED_POWDER)["category"] == "costed_elsewhere"
+    assert efpr._classify_manual_only(desc, _ENGINE_FREE_POWDER)["category"] == "genuine_miss"
+
+
+def test_the_engine_total_is_found_wherever_it_sits():
+    """Walked, not looked up by path — the rollup has moved once already, and a lookup that
+    silently reads None is exactly how a zero gets called 'costed elsewhere'."""
+    assert efpr._engine_carries({"a": {"b": [{"powder_material_gbp": 12.5}]}},
+                                "powder_material_gbp") == 12.5
+    assert efpr._engine_carries({"nothing": 1}, "powder_material_gbp") == 0.0
 
 
 # ── The categories that must not move ──────────────────────────────────────────
@@ -85,7 +127,7 @@ def test_every_way_powder_is_written_lands_in_the_same_category(desc):
     "Delivery to site", "Euro pallet", "Misc packaging", "Carriage", "Artic overhang",
 ])
 def test_logistics_is_still_out_of_scope(desc):
-    assert efpr._classify_manual_only(desc)["category"] == "out_of_scope"
+    assert efpr._classify_manual_only(desc, _ENGINE_COSTED_POWDER)["category"] == "out_of_scope"
 
 
 @pytest.mark.parametrize("desc", [
