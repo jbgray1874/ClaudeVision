@@ -55,6 +55,20 @@ def _normalise_desc(text: Any) -> str:
     return re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()).strip()
 
 
+# Strings that appear on real drawings where a part number should be. They mean "not decided
+# yet", and every one of them matches a large slice of the catalogue. Kept in one place so the
+# next person who meets one on a drawing adds it here rather than rediscovering the problem.
+VAGUE_TOKENS = (
+    "FIXING", "FIXINGS", "FIXINGTBC", "STD PART", "STDPART", "STANDARD PART",
+    "TBC", "TBA", "NA", "N A", "SEE DRAWING", "AS REQUIRED", "ASREQ", "ITEM",
+)
+_VAGUE_NORMALISED = frozenset(_normalise_desc(t) for t in VAGUE_TOKENS if _normalise_desc(t))
+
+# A catalogue description must carry at least this much text before it is allowed to match by
+# containment. Below it the match says more about the English language than about the part.
+_MIN_CONTAINMENT_CHARS = 12
+
+
 def load_price_book_from_workbook(
     path: Any,
     sheet_name: str = "Material Price Break",
@@ -261,31 +275,82 @@ def make_price_book_pricer(
     """Drop-in bay_rollup catalogue_pricer backed by the manual-estimate price
     book. Matches the GA token's CODE directly (ELECTRICS, FIXING5, SUBPLAS72,
     ...); falls back to a normalised-description containment match. Returns a
-    None-style dict on a miss so the line is flagged, never guessed."""
+    None-style dict on a miss so the line is flagged, never guessed.
+
+    The price book is deliberately shared across jobs — that is what makes it worth having. So
+    the matching has to be strict enough that a token from one job cannot reach a row belonging
+    to another. Three rules do that work, and each exists because of a real mis-costing:
+
+    * Containment runs ONE WAY only, catalogue-description inside drawing-token. The reverse
+      let `FIXING` reach "BE2030-10 FRAGRANCE CABINET - TEST TRAY SCREW" and put a fragrance
+      cabinet's screw on a Dyson estimate.
+    * Containment needs `_MIN_CONTAINMENT_CHARS` of text and must land on word boundaries, so a
+      short token matches LESS freely than a specific one rather than more.
+    * Every candidate is gathered, not the first in dictionary order. Where they disagree on
+      price the line is refused, because picking one is a coin toss dressed up as an answer.
+    """
     by_code: Dict[str, Dict[str, Any]] = {}
-    by_desc: Dict[str, Dict[str, Any]] = {}
+    # Keyed to a LIST: two workbooks describing the same part at different prices is a
+    # disagreement worth surfacing, and the old dict silently kept whichever loaded last.
+    by_desc: Dict[str, List[Dict[str, Any]]] = {}
     for rec in price_book.values():
         if rec.get("code"):
             by_code[rec["code"].upper()] = rec
         nd = _normalise_desc(rec.get("raw_text"))
         if nd:
-            by_desc[nd] = rec
+            by_desc.setdefault(nd, []).append(rec)
+
+    def _resolve(cands: List[Dict[str, Any]]) -> Any:
+        """One record, or None when the candidates cannot agree on a price."""
+        if not cands:
+            return None
+        if len(cands) == 1:
+            return cands[0]
+        prices = {_price_for_qty(r["prices_by_qty"], order_quantity)[0] for r in cands}
+        return cands[0] if len(prices) == 1 else None
 
     def pricer(code: str, desc: str) -> Dict[str, Any]:
         c = str(code or "").strip().upper()
         rec = by_code.get(c)
         match_kind = "code"
+        ambiguous = False
         if rec is None:
             nd = _normalise_desc(f"{code} {desc}")
-            rec = by_desc.get(nd)
+
+            # "FIXING", "TBC", "STD PART" mean the draughtsman had not decided yet. They are a
+            # question, not a part number, and answering them from a catalogue invents a cost.
+            if nd in _VAGUE_NORMALISED:
+                return {
+                    "unit_cost_gbp": None,
+                    "source": "price_book_vague_token",
+                    "reason": f"{nd!r} is a placeholder, not a part — it matches too many "
+                              f"catalogue rows to price. Needs a part number.",
+                }
+
+            exact = by_desc.get(nd) or []
+            rec = _resolve(exact)
             if rec is not None:
                 match_kind = "description"
-            else:
-                for dkey, drec in by_desc.items():
-                    if dkey and (dkey in nd or nd in dkey):
-                        rec, match_kind = drec, "description"
-                        break
+            elif exact:
+                ambiguous = True
+            elif len(nd) >= _MIN_CONTAINMENT_CHARS:
+                padded = f" {nd} "
+                hits = [r for dkey, recs in by_desc.items()
+                        if dkey and f" {dkey} " in padded
+                        for r in recs]
+                rec = _resolve(hits)
+                if rec is not None:
+                    match_kind = "description_contained"
+                elif hits:
+                    ambiguous = True
         if rec is None:
+            if ambiguous:
+                return {
+                    "unit_cost_gbp": None,
+                    "source": "price_book_ambiguous",
+                    "reason": "more than one catalogue row fits this token and they disagree "
+                              "on price — flagged rather than guessed",
+                }
             return {
                 "unit_cost_gbp": None,
                 "source": "price_book_no_match",
@@ -298,7 +363,10 @@ def make_price_book_pricer(
                 "source": "price_book_no_qty",
                 "reason": "no populated qty break",
             }
-        conf = 0.85 if match_kind == "code" else 0.65
+        # A containment match is the weakest of the three — the token carried the catalogue
+        # description but also carried other words, so something on the drawing is unaccounted
+        # for. It earns its own tier rather than passing as an exact description match.
+        conf = {"code": 0.85, "description": 0.65}.get(match_kind, 0.55)
         if qty_basis and qty_basis.startswith("nearest"):
             conf -= 0.10
         elif qty_basis and qty_basis.startswith("fallback"):
