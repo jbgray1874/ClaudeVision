@@ -85,7 +85,8 @@ def _ensure_engine_on_path() -> None:
         sys.path.append(here)
 
 
-def collect(paths: List[str]) -> Tuple[List[Path], List[Tuple[Path, str]]]:
+def collect(paths: List[str], ignored: Optional[List[Path]] = None
+            ) -> Tuple[List[Path], List[Tuple[Path, str]]]:
     """Expand what the page sent into printable files and a reason for each that is not.
 
     Folders are walked, because the Drawings panel holds a job FOLDER as often as it holds
@@ -94,6 +95,12 @@ def collect(paths: List[str]) -> Tuple[List[Path], List[Tuple[Path, str]]]:
     Order is deliberate and stable: sorted by path, so the same job prints the same way twice.
     A pack whose page order changed between printings would be worse than useless for checking
     one estimate against another.
+
+    `ignored`, when a list is passed, collects the engine's own artefacts — files that belong in
+    neither returned list. They are not gaps in the pack and must stay out of the red list, but
+    they were also vanishing from the page entirely, so a reviewer who selected five files could
+    only account for four. An optional out-list rather than a third return value because a dozen
+    call sites unpack two, and none of them should have to carry a value they do not use.
     """
     printable: List[Path] = []
     skipped: List[Tuple[Path, str]] = []
@@ -102,9 +109,12 @@ def collect(paths: List[str]) -> Tuple[List[Path], List[Tuple[Path, str]]]:
     def consider(p: Path) -> None:
         key = str(p).lower()
         if key in seen:
+            # A true no-op: the file IS accounted for, once. Nothing to report.
             return
         seen.add(key)
         if p.name.lower() in ENGINE_ARTIFACTS:      # never part of the pack; not a gap in it
+            if ignored is not None:
+                ignored.append(p)
             return
         suffix = p.suffix.lower()
         if suffix in PRINTABLE:
@@ -131,7 +141,8 @@ def collect(paths: List[str]) -> Tuple[List[Path], List[Tuple[Path, str]]]:
 
 
 def _cover(doc: Any, job: Optional[str], printed: List[Path],
-           skipped: List[Tuple[Path, str]]) -> None:
+           skipped: List[Tuple[Path, str]],
+           ignored: Optional[List[Path]] = None) -> None:
     """A contents page, inserted ONLY when something could not be printed.
 
     A clean all-PDF pack prints exactly the drawings and nothing else, because an extra sheet
@@ -192,6 +203,22 @@ def _cover(doc: Any, job: Optional[str], printed: List[Path],
             line(f"    {p.name}  —  printed from {p.stem}.PDF",
                  size=9, colour=(0.45, 0.45, 0.45), gap=12)
 
+    # RECONCILIATION, NOT A WARNING.
+    #
+    # The engine's own artefacts belong in neither list above — they are not part of the pack and
+    # not gaps in it. But dropping them from the page entirely meant a reviewer who selected five
+    # files could account for four, with no way to tell whether the fifth was ignored on purpose
+    # or lost on the way. Named quietly, in the palest grey on the sheet, so the arithmetic works.
+    if ignored:
+        y += 14
+        line(f"IGNORED — {len(ignored)} file{'' if len(ignored) == 1 else 's'} the engine wrote",
+             size=10, colour=(0.55, 0.55, 0.55), gap=16)
+        line("Not part of the drawing pack and not missing from it. Listed only so every file "
+             "you selected", size=9, colour=(0.55, 0.55, 0.55), gap=11)
+        line("is accounted for.", size=9, colour=(0.55, 0.55, 0.55), gap=16)
+        for p in ignored:
+            line(f"    {p.name}", size=9, colour=(0.55, 0.55, 0.55), gap=12)
+
 
 def build(paths: List[str], out_path: str | Path,
           job: Optional[str] = None) -> Dict[str, Any]:
@@ -204,7 +231,8 @@ def build(paths: List[str], out_path: str | Path,
             "PyMuPDF is not installed on this machine, so drawings cannot be merged "
             "(pip install pymupdf).") from exc
 
-    printable, skipped = collect(paths)
+    ignored: List[Path] = []
+    printable, skipped = collect(paths, ignored=ignored)
     if not printable:
         # Say which it was, because "nothing to print" over a folder of twelve DXFs is a very
         # different situation from "nothing to print" over an empty list.
@@ -237,7 +265,7 @@ def build(paths: List[str], out_path: str | Path,
                 "Every PDF in the pack failed to open — see the job folder.")
 
         if skipped:
-            _cover(merged, job, printed, skipped)
+            _cover(merged, job, printed, skipped, ignored)
             # The cover took page 1, so every bookmark moves down by one.
             toc = [[lvl, title, page + 1] for lvl, title, page in toc]
             # Name the bookmark for what the sheet actually says. When every skipped file's
