@@ -2215,7 +2215,7 @@
         <b>Endpoint security &amp; backup present</b> — CrowdStrike Falcon, Datto backup, NinjaRMM and Sysmon across the estate. <b>Confirmed 8 Jul 2026:</b> NinjaRMM alerts on OS patches (CVSS &ge;7.0, 14+ days outstanding), device down 20 min, disk active time &gt;90% for 60 min, disk free &lt;15%, high CPU/memory, and SMART degraded status &mdash; visible to helpdesk engineers in the Ninja console. <b style="color:var(--warn)">No information available on CrowdStrike alerting/ownership.</b> Ninja covers endpoints and servers only &mdash; <b style="color:var(--warn)">network devices (switches, APs) are not monitored</b>. Windows server patching (once in full support) will be monthly via Ninja, delayed 7 days after Patch Tuesday.
       </div>
       <div class="note reveal" style="animation-delay:.1s"><h4>Other findings &amp; follow-ups</h4>
-        <b>SDI-APP01 is a critical multi-role box</b> — portal + SOLIDWORKS PDM vault + TRUMPF shop-floor stack, all production, each with its own SQL. Needs change control; the PDM vault is the SDI Technical Design Intelligence integration target.<br><br>
+        <b>SDI-APP01 is a critical multi-role box</b> — portal + SOLIDWORKS PDM vault + TRUMPF shop-floor stack, all production, each with its own SQL. Needs change control. Note that SDI Technical Design Intelligence does <b>not</b> integrate with this vault &mdash; it reads the live CAD share read-only and builds SDI its own PDM alongside it. The SolidNetWork licence server on this box is the constraint that matters: four POC-complete COM tools are held by seat availability.<br><br>
         <b>Access SupplyChain is a three-tier system</b> — database + app logic on DB01, application services + TaskCentre + LM-X licensing on APP01, IIS web front-end on WEB01. Licence keys go to the <b>LM-X server on ACCESS-APP01</b>.<br><br>
         <b>ACCESS-DB02 is a reclaimable / pending asset</b> — clean 24 GB VM doing nothing; bring into service (DB upgrade or HA replica) or decommission.<br><br>
         <b>Housekeeping:</b> SDI-APP01 runs orphan VMware Tools despite being physical (removable); RDS01 C: low (~18 GB free); <b>two ESXi hosts (SDI-ESXi01 — HPE DL380 G10, and SDI-ESXi02) plus vCenter are confirmed</b> — verify they're clustered with HA and on shared storage; assign an owner/contact per server.</div>
@@ -2966,7 +2966,7 @@
      outputs:['DFM flag report (\u00a3 impact per feature)', 'flat patterns (export-dxf, proven)', 'clash + hole-alignment + stability checks (proven)', 'BOM \u2192 estimate'],
      tech:['SOLIDWORKS COM API (POC done)', 'Document Manager API (POC done)', 'custom rules engine', 'TRUMPF tool list'],
      phase:'Phase 3 \u00b7 Q4 2026 \u2014 geometry checks already proven',
-     invoke:'Partly built. The COM POC covers the geometry and export side; what remains is the cost model per feature and the BOM handoff into estimating.'},
+     invoke:'Partly built. The COM POC covers the geometry and export side; what remains is the cost model per feature and the BOM handoff into estimating. Note the proven half is held by a SolidWorks seat — the delivery tracker marks C1–C4 go-live subject to licence — so this phase can start from working code the day that is resolved.'},
 
     {id:'scheduling', name:'AI Production Scheduling', status:'Planned', cls:'c-plan',
      desc:'Optimal job sequencing across laser, brake, weld and coat \u2014 with dynamic rescheduling.',
