@@ -74,6 +74,24 @@ def test_two_sources_merge_into_one_pack(staging, tmp_path):
 
     Two parent folders meant "those drawings come from 2 different job folders" and no run.
     Staging gives them one folder, which is the whole point.
+
+    THIS TEST IS THE SUCCESSOR TO A DELETED FILE, and the note matters more than usual because
+    the deleted one looked like a safety net. `test_drawings_from_two_jobs_are_refused.py`
+    covered the old refusal — written for 10575-02, which was queued with one stray 11650 model
+    in the list, took its job folder from `os.path.commonpath`, was pointed at the folder that
+    CONTAINS the jobs, found no drawings directly beneath it, exited cleanly and filed nothing.
+    A run that reports COMPLETE and produces no estimate.
+
+    Staging fixes that fault at the root rather than by refusing: the engine is handed a folder
+    holding exactly the chosen files, so no common parent is ever derived and there is nothing
+    for the bug to happen in. The refusal then had to go, because a DM extract and the share are
+    two parents by definition and refusing them would forbid the merge this test asserts.
+
+    The old file was still on disk and still green. It passed because it never ran — TestClient
+    needs httpx, httpx was absent, `importorskip` skipped the module — and because its own
+    assertions were satisfied by any 400 at all. Installing httpx made it fail, which is how a
+    guard for behaviour that no longer exists came to light. Do not reinstate that refusal: it
+    would break this test, and this test is the feature.
     """
     share = tmp_path / "share" / "12392-02"
     dm = tmp_path / "dmout" / "12392-02"
