@@ -811,11 +811,57 @@ def _truncate_at_drawing_note(text: str) -> str:
     return (text or "")[:match.start()] if match else (text or "")
 
 
+# A REVISION NOTE THAT REMOVES SOMETHING IS NOT A MATERIAL CALLOUT.
+#
+# On 10575-02 the note "MDF PANEL REMOVED" set the part's material to MDF and it was priced as
+# board. The note records what came OFF the drawing; the keyword scan saw only the letters.
+#
+# Same shape as the spec-legend leak above — a material word in a non-part context — so it is
+# handled the same way, by blanking before the scan rather than by second-guessing afterwards.
+_MATERIAL_NEGATION_RE = re.compile(
+    r"\b(?:REMOVED|DELETED|OMITTED|SUPERSEDED|CANCELLED|CANCELED"
+    r"|NOT\s+(?:USED|REQUIRED|APPLICABLE)"
+    r"|NO\s+LONGER\s+(?:USED|REQUIRED|APPLIES))\b",
+    re.IGNORECASE,
+)
+# How far a removal verb may sit from the material word and still be about it. Short on purpose:
+# a verb at the other end of the sheet is describing something else, and letting it reach back
+# would lose genuine callouts.
+_NEGATION_WINDOW_CHARS = 30
+
+
+def _strip_negated_materials(text: str) -> str:
+    """Blank material words that a nearby removal verb says are not there.
+
+    Only the material token is blanked, never the clause around it. A drawing carrying
+    "MATERIAL: MDF" and, separately, "REV C ALUMINIUM PANEL REMOVED" must keep MDF and drop
+    ALUMINIUM — blanking the clause would have taken both.
+
+    Proximity to a revision marker is deliberately NOT the signal. Revision blocks are where
+    material changes are recorded, and "REV D MATERIAL NOW 18MM MDF" is the most authoritative
+    statement of material on the sheet. Negation is the signal.
+    """
+    src = text or ""
+    out = list(src)
+    for match in re.finditer(MATERIAL_PATTERN, src, flags=re.IGNORECASE):
+        window = src[match.end():match.end() + _NEGATION_WINDOW_CHARS]
+        verb = _MATERIAL_NEGATION_RE.search(window)
+        if not verb:
+            continue
+        # Another material word between this one and the verb means the verb belongs to that
+        # one, not to this. Without the check a labelled callout loses to a later note.
+        if re.search(MATERIAL_PATTERN, window[:verb.start()], flags=re.IGNORECASE):
+            continue
+        for i in range(match.start(), match.end()):
+            out[i] = " "
+    return "".join(out)
+
+
 def _strip_material_boilerplate(text: str) -> str:
     """Blank out standard spec-legend phrases that carry a material word in a
     non-part context (legend headers, grade-rule bullets) so they cannot set the
     part's material family. Genuine part callouts are untouched."""
-    return _MATERIAL_BOILERPLATE_RE.sub(" ", text or "")
+    return _strip_negated_materials(_MATERIAL_BOILERPLATE_RE.sub(" ", text or ""))
 
 
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
@@ -828,6 +874,10 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     # so the spec-legend "TIMBER PRODUCTS:" header and grade bullets can never be read as
     # the part's material. This asymmetry (labelled FINISH/COLOUR but keyword MATERIAL)
     # was the source of the family leak that put TIMBER on steel detail sheets.
+    # NOT pre-stripped here: _extract_material_candidates already runs the labelled value
+    # through _strip_material_boilerplate, which now carries the negation strip. Doing it twice
+    # collapses the blanked run of spaces and brings the removal verb within reach of the
+    # labelled callout itself — "MATERIAL: MDF ... ALUMINIUM PANEL REMOVED" then lost MDF too.
     labelled_materials = _extract_material_candidates(raw_text)
     if labelled_materials:
         materials = [canonical_material(value) for value in labelled_materials]
