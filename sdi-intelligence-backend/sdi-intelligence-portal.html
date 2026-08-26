@@ -236,7 +236,13 @@
   <!-- SIDEBAR -->
   <aside class="side">
     <div class="brand">
-      <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi">
+      <!-- THE FALLBACK THE CSS ABOVE PROMISED AND THE MARKUP DID NOT HAVE.
+           /api/brand/logo never 404s - but only on a backend that HAS that route. Served by an
+           older one it 404s like anything else, and the header shows a hole. This is the same
+           plain mark app.py falls back to, so the page degrades to exactly what the endpoint
+           would have given it. onerror is cleared first so a failure here cannot loop. -->
+      <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi"
+           onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
       <div class="brand-txt">
         <div class="t1">SDI INTELLIGENCE</div>
         <div class="t2">we.are.sdi</div>

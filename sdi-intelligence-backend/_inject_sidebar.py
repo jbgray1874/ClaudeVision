@@ -26,6 +26,18 @@ PAGES = {
 START = "<!-- SDI-SIDEBAR:START -->"
 END = "<!-- SDI-SIDEBAR:END -->"
 
+# The plain mark app.py falls back to when the logo FILE is missing, as a data URI for when the
+# ROUTE is missing. Kept byte-identical to _LOGO_FALLBACK in app.py so a page served by an older
+# backend degrades to the same thing a current one would have given it, rather than to a hole.
+_LOGO_FALLBACK_URI = (
+    "data:image/svg+xml;charset=utf-8,"
+    "%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E"
+    "%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E"
+    "%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 "
+    "font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 "
+    "fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E"
+)
+
 # THE AI SERVICES, WHICH THE PORTAL RENDERS FROM JAVASCRIPT AND A COPIED SIDEBAR CANNOT.
 #
 # The first version of this nav carried Overview, Operate and Govern and stopped there — so on
@@ -158,7 +170,11 @@ CSS = """
 def _markup(current: str) -> str:
     out = [START, CSS, '<nav class="sdinav" aria-label="SDI Intelligence">',
            '  <a class="sdinav-brand" href="/">',
-           '    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi">',
+           # Same plain mark app.py serves when the logo file is missing. /api/brand/logo never
+           # 404s on a backend that HAS the route; served by an older one it does, and the rail
+           # shows a hole. onerror is cleared first so a failure here cannot loop.
+           '    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi"'
+           ' onerror="this.onerror=null;this.src=\'' + _LOGO_FALLBACK_URI + '\'">',
            '    <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>',
            '  </a>',
            # The items live in their own box so the toggle can sit beneath them and stay
