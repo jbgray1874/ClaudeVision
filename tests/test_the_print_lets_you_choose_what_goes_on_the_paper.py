@@ -37,8 +37,11 @@ def test_the_request_sends_the_chosen_paths_not_the_whole_list():
 
 
 def test_the_picker_opens_from_the_print_button():
+    """The window is generous on purpose. This asserted against the first 220 characters and
+    broke the moment the handler grew a try/catch — while the thing it protects, that the click
+    reaches the picker, was still true. A test that fails on a guard being added is noise."""
     at = _PAGE.index('$("printDrawings").onclick')
-    handler = _PAGE[at:at + 220]
+    handler = _PAGE[at:at + 900]
     assert "openPrintPicker" in handler
 
 
