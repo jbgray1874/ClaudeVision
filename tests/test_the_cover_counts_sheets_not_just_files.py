@@ -84,10 +84,10 @@ def test_a_single_sheet_from_a_single_file_does_not_say_it_twice():
 @pytest.mark.parametrize("files,pages", [(1, 3), (4, 12), (2, 2), (1, 1), (12, 40)])
 def test_the_grammar_holds_for_every_combination(files, pages):
     line = dp._cover_count_line(printed_files=files, pages=pages)
-    assert " 1 drawings" not in line and " 1 sheets" not in line, f"plural on one: {line!r}"
+    assert " 1 sheets" not in line and " 1 files" not in line, f"plural on one: {line!r}"
     for n in (files, pages):
         if n != 1:
-            assert f"{n} drawing " not in line or f"{n} drawings" in line, line
+            assert f"{n} sheet " not in line and f"{n} file " not in line, line
 
 
 def test_the_unknown_page_count_still_produces_a_sentence():
@@ -141,7 +141,7 @@ def test_a_one_sheet_pack_reads_naturally(tmp_path):
     doc = pymupdf.open(str(out))
     try:
         cover = doc[0].get_text()
-        assert "1 drawing follows this page" in cover, cover.splitlines()[1]
+        assert "1 sheet follows this page" in cover, cover.splitlines()[1]
     finally:
         doc.close()
 

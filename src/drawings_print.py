@@ -25,11 +25,36 @@ Run:
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Printable here means "has pages". Everything else in a pack is geometry or a model.
+# Everything a person could send to a printer that is not already a PDF goes through here.
+# Guarded, because drawings_print is also imported by tests that do not need the converters —
+# and a missing converter module must cost the PDFs in the pack, not the whole print.
+try:
+    from printable_converters import (CONVERTIBLE_SUFFIXES, ConversionFailed,
+                                      ConversionUnavailable, convert, describe_suffix)
+except ImportError:                     # pragma: no cover
+    CONVERTIBLE_SUFFIXES = frozenset()
+
+    class ConversionFailed(RuntimeError):
+        pass
+
+    class ConversionUnavailable(RuntimeError):
+        pass
+
+    def convert(src, out):
+        raise ConversionUnavailable("the converters module is not available")
+
+    def describe_suffix(suffix):
+        return None
+
+# Printable WITHOUT CONVERSION. Everything else that a person could send to a printer goes
+# through printable_converters — see CONVERTIBLE below — and only what no converter handles is
+# named on the cover instead.
 PRINTABLE = (".pdf",)
 # Named separately from "anything else" so the cover page can say WHY a file was left out —
 # "not a printable drawing" is a different message from "we did not recognise this".
@@ -37,7 +62,10 @@ PRINTABLE = (".pdf",)
 # and the cover reported "not printed — '.slddrw' is not a drawing". It is the drawing file. It is
 # the one absence an estimator would most want explained properly, and it was the one explained
 # with something untrue. Part, assembly and drawing are now all here together.
-KNOWN_UNPRINTABLE = (".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".sldlfp",
+# DXF and DWG used to be here. They have converters now, so they are printed rather than named —
+# and when a machine cannot render one, the converter says why in words that name the missing
+# piece, which is better than this list's single generic sentence ever was.
+KNOWN_UNPRINTABLE = (".sldprt", ".sldasm", ".slddrw", ".sldlfp",
                      ".step", ".stp", ".iges", ".igs")
 
 # THINGS THE ENGINE WROTE, WHICH WERE NEVER PART OF THE PACK.
@@ -70,12 +98,15 @@ def _cover_count_line(printed_files: int, pages: Optional[int]) -> str:
     def s(n: int, word: str) -> str:
         return f"{n} {word}{'' if n == 1 else 's'}"
 
+    # "drawing" was right when only PDFs printed. A pack now reaches the paper carrying a site
+    # photo and a finishing note, and calling those drawings is the same imprecision this
+    # function was written to fix. Sheets is what the reader holds; files is what they selected.
     if pages is None:                       # the merge could not be read back; say what we know
-        return f"{s(printed_files, 'drawing')} {'follows' if printed_files == 1 else 'follow'} this page."
+        return f"{s(printed_files, 'file')} {'follows' if printed_files == 1 else 'follow'} this page."
     if pages == printed_files:
-        return f"{s(pages, 'drawing')} {'follows' if pages == 1 else 'follow'} this page."
+        return f"{s(pages, 'sheet')} {'follows' if pages == 1 else 'follow'} this page."
     return (f"{s(pages, 'sheet')} {'follows' if pages == 1 else 'follow'} this page, "
-            f"from {s(printed_files, 'drawing')}.")
+            f"from {s(printed_files, 'file')}.")
 
 
 def _ensure_engine_on_path() -> None:
@@ -117,7 +148,11 @@ def collect(paths: List[str], ignored: Optional[List[Path]] = None
                 ignored.append(p)
             return
         suffix = p.suffix.lower()
-        if suffix in PRINTABLE:
+        if suffix in PRINTABLE or suffix in CONVERTIBLE_SUFFIXES:
+            # Convertible counts as printable HERE, and build() moves it to skipped with the
+            # real reason if the conversion turns out not to be possible on this machine. The
+            # alternative — deciding here — would mean asking Word whether it exists before we
+            # know whether the pack even contains a document.
             printable.append(p)
         elif suffix in KNOWN_UNPRINTABLE:
             skipped.append((p, "not a printable drawing — geometry or a model"))
@@ -238,20 +273,45 @@ def build(paths: List[str], out_path: str | Path,
         # different situation from "nothing to print" over an empty list.
         if skipped:
             raise PrintInputError(
-                f"None of the {len(skipped)} file(s) can be printed — a pack of models and "
-                f"geometry has no printable pages. Only PDFs can be printed.")
+                f"None of the {len(skipped)} file(s) can be printed — a pack of models "
+                f"and geometry has no printable pages.")
         raise PrintInputError("No drawings were given to print.")
 
     merged = fitz.open()
     toc = []
+    tmpdir = tempfile.mkdtemp(prefix="sdi_print_")
     try:
         for src_path in printable:
+            # WHAT GETS MERGED IS ALWAYS A PDF. Anything else is converted to one first, and a
+            # conversion that cannot happen becomes a line on the cover rather than an exception
+            # — one Word document Word will not open must not cost the eleven drawings beside it.
+            merge_path = src_path
+            if src_path.suffix.lower() not in PRINTABLE:
+                what = describe_suffix(src_path.suffix) or "this file"
+                try:
+                    merge_path = convert(
+                        src_path, Path(tmpdir) / f"{len(toc)}_{src_path.stem}.pdf")
+                except ConversionUnavailable as exc:
+                    # THIS MACHINE cannot, and the file is fine. Name the missing piece, because
+                    # that is the sentence somebody can act on.
+                    skipped.append((src_path, f"{what} — {exc}"))
+                    continue
+                except ConversionFailed as exc:
+                    # THIS FILE cannot. Different problem, different place to look.
+                    skipped.append((src_path, f"{what} — {exc}"))
+                    continue
+                except Exception as exc:                             # noqa: BLE001
+                    skipped.append((src_path,
+                                    f"{what} — could not be converted "
+                                    f"({type(exc).__name__})"))
+                    continue
             try:
-                with fitz.open(str(src_path)) as src:
+                with fitz.open(str(merge_path)) as src:
                     if src.page_count == 0:
-                        skipped.append((src_path, "the PDF has no pages"))
+                        skipped.append((src_path, "it has no pages"))
                         continue
-                    # Page 1 of this file within the merged document, for the bookmark.
+                    # Page 1 of this file within the merged document, for the bookmark. Named for
+                    # the ORIGINAL file, never the temporary PDF a converter happened to write.
                     toc.append([1, src_path.name, merged.page_count + 1])
                     merged.insert_pdf(src)
             except Exception as exc:                                 # noqa: BLE001
@@ -261,8 +321,11 @@ def build(paths: List[str], out_path: str | Path,
         printed = [p for p in printable
                    if p not in {s[0] for s in skipped}]
         if not printed:
+            # Not "every PDF" — a pack can now be all DXFs, or all Word documents, and saying
+            # PDF sends somebody looking at the wrong files. The reasons carry the detail.
+            reasons = "; ".join(sorted({why for _, why in skipped}))[:400]
             raise PrintInputError(
-                "Every PDF in the pack failed to open — see the job folder.")
+                f"Nothing in the pack could be turned into pages. {reasons}")
 
         if skipped:
             _cover(merged, job, printed, skipped, ignored)
@@ -281,6 +344,7 @@ def build(paths: List[str], out_path: str | Path,
         merged.save(str(out), garbage=3, deflate=True)
     finally:
         merged.close()
+        shutil.rmtree(tmpdir, ignore_errors=True)   # the converted PDFs are inside the merge now
 
     return {
         "pdf": str(out),

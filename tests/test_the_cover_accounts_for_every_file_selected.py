@@ -71,9 +71,14 @@ def test_collect_can_report_the_files_it_ignored(pack):
 
 def test_the_optional_argument_is_genuinely_optional(pack):
     """Twelve existing call sites unpack two values. Adding a third return would have churned
-    every one of them to carry a value they do not use."""
+    every one of them to carry a value they do not use.
+
+    Asserted on the CALL, not on a count: DXF and DWG became convertible after this was written
+    and the count moved from 1 to 3, while the property under test — that the argument may be
+    omitted — never changed."""
     printable, skipped = dp.collect([str(pack)])
-    assert len(printable) == 1
+    assert isinstance(printable, list) and isinstance(skipped, list)
+    assert "10575-02-GA - V2 Upright Vacuum Display [Rev D].PDF" in [p.name for p in printable]
 
 
 def test_the_ignored_file_is_in_neither_list(pack):

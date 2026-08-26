@@ -63,13 +63,13 @@ def test_a_job_folder_is_walked_because_that_is_what_a_pack_is(tmp_path):
 
 def test_a_model_is_named_as_unprintable_not_dropped(tmp_path):
     _pdf(tmp_path / "ga.pdf")
-    (tmp_path / "flat.dxf").write_text("0\nSECTION\n")
+    (tmp_path / "body.sldprt").write_text("0\nSECTION\n")
     (tmp_path / "part.SLDPRT").write_bytes(b"\x00")
 
     printable, skipped = drawings_print.collect([str(tmp_path)])
     assert [p.name for p in printable] == ["ga.pdf"]
     names = {p.name for p, _ in skipped}
-    assert names == {"flat.dxf", "part.SLDPRT"}
+    assert names == {"body.sldprt", "part.SLDPRT"}
     for _, why in skipped:
         assert "not a printable drawing" in why
 
@@ -111,7 +111,7 @@ def test_a_clean_pack_prints_the_drawings_and_nothing_else(tmp_path):
 def test_an_incomplete_pack_says_so_on_the_paper(tmp_path):
     """The cover page is the only warning that survives the walk to the printer."""
     _pdf(tmp_path / "ga.pdf", pages=1)
-    (tmp_path / "flat.dxf").write_text("0\n")
+    (tmp_path / "body.sldprt").write_text("0\n")
     out = tmp_path / "merged.pdf"
 
     res = drawings_print.build([str(tmp_path)], out, job="10575-02")
@@ -122,7 +122,7 @@ def test_an_incomplete_pack_says_so_on_the_paper(tmp_path):
         cover = doc[0].get_text()
         assert "10575-02" in cover
         assert "NOT PRINTED" in cover
-        assert "flat.dxf" in cover, "the missing file must be named, not merely counted"
+        assert "body.sldprt" in cover, "the missing file must be named, not merely counted"
         # The bookmarks must still point at the right pages once the cover has shifted them.
         toc = doc.get_toc()
         assert toc[0][2] == 1 and toc[1][1] == "ga.pdf" and toc[1][2] == 2
@@ -147,13 +147,18 @@ def test_one_corrupt_pdf_does_not_lose_the_others(tmp_path):
 
 def test_a_pack_with_nothing_printable_refuses_and_explains(tmp_path):
     """Silence here would produce an empty PDF, which reads as 'this job has no drawings'."""
-    (tmp_path / "flat.dxf").write_text("0\n")
+    (tmp_path / "body.sldprt").write_text("0\n")
     (tmp_path / "part.SLDPRT").write_bytes(b"\x00")
 
     with pytest.raises(drawings_print.PrintInputError) as exc:
         drawings_print.build([str(tmp_path)], tmp_path / "out.pdf")
     msg = str(exc.value)
-    assert "2 file" in msg and "Only PDFs" in msg
+    # "Only PDFs can be printed" was removed from this message deliberately: it stopped being
+    # true when text, images, DXF and Office documents gained converters, and a message naming
+    # the wrong format sends somebody to look at the wrong files.
+    assert "2 file" in msg
+    assert "Only PDFs" not in msg
+    assert "models" in msg or "geometry" in msg
 
 
 def test_nothing_at_all_is_a_different_message(tmp_path):

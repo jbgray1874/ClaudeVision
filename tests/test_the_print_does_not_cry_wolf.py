@@ -62,34 +62,53 @@ def test_the_engine_extract_is_not_printed_either(pack):
 
 def test_an_unrecognised_file_is_still_reported(pack):
     """Dropping the engine's artefact must not become dropping anything inconvenient. A file
-    nobody can account for is exactly what the list is for."""
-    (pack / "notes.txt").write_bytes(b"x")
+    nobody can account for is exactly what the list is for.
+
+    `notes.txt` used to be the example here. It is now CONVERTIBLE — text files are printed —
+    so the example moved to a suffix nothing claims. The rule under test has not changed.
+    """
+    (pack / "mystery.zzz").write_bytes(b"x")
     _, skipped = dp.collect([str(pack)])
-    assert "notes.txt" in [p.name for p, _ in skipped]
+    assert "mystery.zzz" in [p.name for p, _ in skipped]
+
+
+def test_a_text_file_is_printed_rather_than_named(pack):
+    """The rule that replaced it: a text file is something a person can print, so it prints."""
+    (pack / "finishing notes.txt").write_bytes(b"RAL 9005 matt\n")
+    printable, _ = dp.collect([str(pack)])
+    assert "finishing notes.txt" in [p.name for p in printable]
 
 
 # ── a drawing printed from its PDF twin is not missing ─────────────────────────────────
 
-def test_the_dwg_and_the_pdf_of_one_drawing_share_a_stem(pack):
-    """The mechanism the cover relies on. If this ever stops holding, the split below is
-    silently wrong rather than loudly wrong."""
+def test_the_stem_match_still_separates_a_twin_from_a_gap():
+    """The mechanism the cover relies on, tested on the shape rather than on the pack.
+
+    DXF and DWG are CONVERTIBLE now, so on a machine with ezdxf they are printed and never reach
+    the skipped list at all. The stem rule still governs everything that does reach it — a model
+    beside its own PDF is not a gap — so it is tested with a model, which no converter claims.
+    """
+    printed = [Path("10575-02-GA.PDF"), Path("10575-02-009.PDF")]
+    skipped = [Path("10575-02-GA.SLDASM"), Path("10575-02-777.SLDPRT")]
+    stems = {p.stem.lower() for p in printed}
+    covered = sorted(p.name for p in skipped if p.stem.lower() in stems)
+    gaps = sorted(p.name for p in skipped if p.stem.lower() not in stems)
+    assert covered == ["10575-02-GA.SLDASM"]
+    assert gaps == ["10575-02-777.SLDPRT"]
+
+
+def test_a_drawing_format_is_never_given_the_old_dismissal(pack):
+    """The invariant that holds whether or not this machine can render a DXF.
+
+    With ezdxf present the DXF prints. Without it, the converter says WHICH piece is missing.
+    Neither outcome may be the old catch-all sentence, and it must never simply vanish.
+    """
     printable, skipped = dp.collect([str(pack)])
-    stems = {p.stem.lower() for p in printable}
-    dwg = next(p for p, _ in skipped if p.suffix.lower() == ".dwg")
-    assert dwg.stem.lower() in stems
-
-
-def test_only_the_dxf_is_a_genuine_gap(pack):
-    """The DXF has no PDF twin; the DWG does; the SLDDRW does (same stem as the GA PDF? no -
-    10575-02-GA vs the long GA name, so it is a gap too). Asserted explicitly so the split is
-    pinned rather than assumed."""
-    printable, skipped = dp.collect([str(pack)])
-    stems = {p.stem.lower() for p in printable}
-    gaps = sorted(p.name for p, _ in skipped if p.stem.lower() not in stems)
-    covered = sorted(p.name for p, _ in skipped if p.stem.lower() in stems)
-
-    assert covered == ["10575-02-GA - V2 Upright Vacuum Display [Rev D].DWG"]
-    assert gaps == ["10575-02-009_DIBOND_3.0mm_Rev D.DXF", "10575-02-GA.SLDDRW"]
+    dxf = "10575-02-009_DIBOND_3.0mm_Rev D.DXF"
+    assert dxf in [p.name for p in printable] + [p.name for p, _ in skipped], "it vanished"
+    for p, why in skipped:
+        if p.suffix.lower() in (".dxf", ".dwg"):
+            assert "is not a drawing" not in why, f"{p.name}: {why}"
 
 
 # ── the sentence on the paper ──────────────────────────────────────────────────────────
@@ -102,8 +121,8 @@ def test_one_drawing_follows_rather_than_follow():
     grammar it exists to protect was still perfectly correct. A test that fails on a refactor and
     would pass on a regression is worse than no test.
     """
-    assert dp._cover_count_line(printed_files=1, pages=1) == "1 drawing follows this page."
-    assert dp._cover_count_line(printed_files=2, pages=2) == "2 drawings follow this page."
+    assert dp._cover_count_line(printed_files=1, pages=1) == "1 sheet follows this page."
+    assert dp._cover_count_line(printed_files=2, pages=2) == "2 sheets follow this page."
 
 
 def test_the_pack_still_prints(pack):
