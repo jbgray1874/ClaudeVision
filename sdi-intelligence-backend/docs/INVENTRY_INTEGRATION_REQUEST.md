@@ -4,6 +4,32 @@ This is the one thing blocking the BrightHR → InVentry pipeline. Everything up
 to the file is built, tested and producing real output; what has never been
 established is how InVentry *receives* it.
 
+## What we already know (found publicly, 23 Aug 2026)
+
+InVentry do have both routes — so the question is not *whether* they integrate,
+but which route carries **presence** and how we get onto it:
+
+- **An API exists, at least for partners.** timeware (a time & attendance
+  vendor) documents an API integration with InVentry, v4.11.0 onwards. Note the
+  direction though: their published description is personnel data flowing
+  *out of* InVentry into timeware. That is the opposite of what we need, so an
+  API existing does not by itself mean we can write presence *in*.
+- **A documented data import exists.** InVentry supply a spreadsheet with
+  mandatory and optional fields as part of installation, uploaded into the
+  onsite InVentry system, described in an **"InVentry Data Import Document" in
+  the Welcome pack**. Worth finding ours before emailing — it may answer the
+  format questions outright.
+- **Staff records can sync automatically** from Active Directory, Google
+  Workspace, and MIS systems. All are *roster* sync (who exists), not presence.
+- Their wording "your onsite InVentry system" suggests an on-premise server
+  component, which would make a share-based route plausible after all.
+
+**Do this first:** find the Welcome pack / InVentry Data Import Document, and
+check the admin console for an API keys or integrations page. Either may remove
+the need to ask at all.
+
+---
+
 **To:** support@inventry.co.uk
 **Phone (to chase):** 0113 322 9253, option 3
 **Subject:** Integration request — pushing staff and on-site presence data into InVentry (SDI Displays Ltd)
@@ -30,12 +56,17 @@ established is how InVentry *receives* it.
 > the on-site register and fire evacuation list reflect who is actually in the
 > building rather than relying on people remembering to sign in at the terminal.
 >
+> We understand you support integration at several levels — an API (we've seen
+> your integration with timeware), MIS and Google Workspace sync, Active
+> Directory import, and a data import spreadsheet documented in the Welcome
+> pack. We'd like to know which of those routes we should be using.
+>
 > Our questions:
 >
-> 1. **How does InVentry receive data from an external system?** Is it a folder
->    one of your services watches, a database we write into, an API we call, or
->    something else? We'd like to understand the supported route rather than
->    guess at one.
+> 1. **Is there an API we can use to write data into InVentry**, and could you
+>    send us the documentation and whatever credentials it needs? If the API is
+>    read-only or partner-only, please say so and point us at the right route
+>    instead.
 >
 > 2. **If it's a watched folder — where must that folder live?** Our data is
 >    generated on our own application server. Is there an InVentry service
@@ -60,9 +91,17 @@ established is how InVentry *receives* it.
 >    five minutes. Is that reasonable, or are there constraints we should design
 >    around?
 >
-> 7. **Is our instance on-premise or cloud-hosted, and does this need enabling
->    or licensing on our account?** We'd also like to know whether anything here
->    is affected by upgrades to our system.
+> 7. **Is our instance on-premise or cloud-hosted, which version are we on, and
+>    does this need enabling or licensing on our account?** We'd also like to
+>    know whether anything here is affected by upgrades.
+>
+> 8. **Could you re-send the InVentry Data Import Document** from our Welcome
+>    pack? We may not have it to hand, and it sounds like it covers the import
+>    format directly.
+>
+> 9. **Would Active Directory sync cover the staff roster for us?** We're on
+>    Microsoft Entra ID. If so we may only need an integration for the live
+>    on-site data, which would simplify things considerably.
 >
 > We're happy to share a sample of the data files, and a short call would work
 > well if that's easier than email.
@@ -85,6 +124,18 @@ established is how InVentry *receives* it.
 | Match identifier | Whether name + email is enough, or an ID mapping table is needed. |
 | Frequency | The Task Scheduler interval. |
 | Hosting and licensing | Network route, and whether anything must be switched on by them. |
+| API available for writes? | Whether stage 3 gets an API driver instead of a file. An API would also sidestep the network-path problem entirely. |
+| AD sync viable? | Whether stages 1–2 (the BrightHR roster pull) are needed at all — see below. |
+
+## A strategic note
+
+If InVentry can sync the staff roster straight from Entra ID / Active Directory,
+then stages 1–2 of this pipeline are redundant: the roster would maintain itself
+without BrightHR in the loop. The thing BrightHR uniquely provides is **Blip
+presence** — who is clocked in right now — which no directory can supply.
+
+That would be a good outcome: less to maintain, and the project narrows to the
+one problem it actually exists to solve, the live fire roll call.
 
 ## If presence isn't supported
 
