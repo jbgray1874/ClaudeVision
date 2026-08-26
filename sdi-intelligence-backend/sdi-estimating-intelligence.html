@@ -661,6 +661,25 @@
   </div>
 </dialog>
 
+<!-- CHOOSING WHAT GOES ON THE PAPER.
+     Print used to send the whole Drawings list, so the only way to leave a file out was the ×
+     beside it — which also removed it from the estimate run. One list was doing two jobs that
+     are not the same: you want every file in the run, and a chosen few on the paper.
+     This picks, without touching the run. -->
+<dialog id="printPick">
+  <div class="dhead">
+    <h3>Choose what to print</h3>
+    <button id="ppAll" type="button">All</button>
+    <button id="ppNone" type="button">None</button>
+    <button id="ppClose" type="button">Cancel</button>
+  </div>
+  <ul class="listing" id="ppList"></ul>
+  <div class="dfoot">
+    <span class="left" id="ppHelp"></span>
+    <button id="ppGo" type="button">Print selected</button>
+  </div>
+</dialog>
+
 <script>
 /* ══════════════════════════════════════════════════════════════════════
    BACKEND CONTRACT
@@ -2021,12 +2040,92 @@ function refreshPrint(){
   if(!drawings.length && note) note.textContent = "";
 }
 
-$("printDrawings").onclick = async () => {
-  const printDrawings = $("printDrawings"), printNote = $("printNote");
+/* WHAT THE PRINT SIDE KNOWS ABOUT A FILE, kept here rather than asked of the server, so the
+   dialog opens instantly on a click that is still a user gesture. The server remains the
+   authority — it decides what actually converts — and this only sets the ticks.
+
+   The two lists mirror printable_converters: what is turned into pages, and what the engine
+   wrote and nobody wants on paper. Kept deliberately short; being wrong here costs a tick, not
+   a wrong print. */
+const PRINTABLE_EXT = [".pdf",".dxf",".dwg",".txt",".csv",".log",".md",
+                       ".jpg",".jpeg",".png",".tif",".tiff",".bmp",".gif",".webp",
+                       ".doc",".docx",".rtf",".xls",".xlsx",".xlsm",".ppt",".pptx"];
+const ENGINE_OUTPUT_RE = [/_\d{8}_\d{6}\.xlsx?$/i, /_quote\.html?$/i, /_report\.html?$/i,
+                          /_parity[^\\\/]*\.(html?|json|csv)$/i, /^_sw_native_extract\.json$/i];
+
+function printExt(name){ const i = String(name||"").lastIndexOf("."); return i<0 ? "" : name.slice(i).toLowerCase(); }
+function isEngineOutput(name){ return ENGINE_OUTPUT_RE.some(re => re.test(String(name||""))); }
+
+/* Why a file is or is not ticked when the dialog opens. Shown beside it, because a tick box
+   with no reason is a decision somebody has to make twice. */
+function printDefault(d){
+  const name = d.name || String(d.path||"").split(/[\\\/]/).pop();
+  if(d.is_dir)            return {on:true,  why:"folder — everything printable inside it"};
+  if(isEngineOutput(name)) return {on:false, why:"the engine wrote this, not a drawing"};
+  const ext = printExt(name);
+  if(ext === ".pdf")       return {on:true,  why:""};
+  if(PRINTABLE_EXT.includes(ext)) return {on:true, why:""};
+  return {on:false, why:"not a format that can be turned into pages"};
+}
+
+let printPicked = null;          // Set of paths, or null before the dialog has been opened
+
+function openPrintPicker(){
+  const dlg = $("printPick"), list = $("ppList"), help = $("ppHelp");
+  const rows = drawings.map(d => {
+    const name = d.name || String(d.path||"").split(/[\\\/]/).pop();
+    return Object.assign({}, printDefault(d), {path:d.path, name});
+  });
+  printPicked = new Set(rows.filter(r => r.on).map(r => r.path));
+
+  const draw = () => {
+    list.innerHTML = "";
+    rows.forEach(r => {
+      const li = document.createElement("li");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = printPicked.has(r.path);
+      cb.style.marginRight = "8px";
+      cb.onchange = () => { cb.checked ? printPicked.add(r.path) : printPicked.delete(r.path); tally(); };
+      const label = document.createElement("label");
+      label.style.cursor = "pointer";
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(r.name));
+      if(r.why){
+        const em = document.createElement("span");
+        em.className = "muted"; em.style.marginLeft = "8px"; em.style.fontSize = "12px";
+        em.textContent = "· " + r.why;
+        label.appendChild(em);
+      }
+      li.appendChild(label);
+      list.appendChild(li);
+    });
+    tally();
+  };
+  const tally = () => {
+    help.textContent = printPicked.size + " of " + rows.length + " selected";
+    $("ppGo").disabled = printPicked.size === 0;
+  };
+  $("ppAll").onclick  = () => { rows.forEach(r => printPicked.add(r.path)); draw(); };
+  $("ppNone").onclick = () => { printPicked.clear(); draw(); };
+  draw();
+  dlg.showModal();
+}
+
+$("ppClose").onclick = () => $("printPick").close();
+$("ppGo").onclick = () => { $("printPick").close(); runPrint([...printPicked]); };
+
+$("printDrawings").onclick = () => {
   if(!drawings.length) return;
+  openPrintPicker();
+};
+
+async function runPrint(paths){
+  const printDrawings = $("printDrawings"), printNote = $("printNote");
+  if(!paths || !paths.length) return;
   /* THE TAB IS OPENED HERE, NOT AFTER THE AWAIT. A window.open() that happens after a network
      round-trip is not a user gesture any more and browsers block it — the button would appear
-     to do nothing, which is the one failure mode that gets a feature abandoned. */
+     to do nothing, which is the one failure mode that gets a feature abandoned. Still inside
+     the gesture: runPrint is called synchronously from the dialog's Print button. */
   const tab = window.open("", "_blank");
   printDrawings.disabled = true;
   const was = printDrawings.textContent;
@@ -2035,7 +2134,7 @@ $("printDrawings").onclick = async () => {
   try{
     const r = await api("/api/estimate/drawings/print", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({paths: drawings.map(d => d.path),
+      body: JSON.stringify({paths: paths,
                             job: (drawing.value || "").trim() || null})
     });
     if(!r.ok){
