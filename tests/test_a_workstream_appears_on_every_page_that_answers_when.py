@@ -122,3 +122,87 @@ def test_the_tracker_names_are_kept_beside_the_service_names():
     turns one set of work into two."""
     for tracker_name in ("Fixture Library", "Client Briefing"):
         assert tracker_name in _PORTAL, tracker_name
+
+
+# ── the milestone strip ────────────────────────────────────────────────────────
+#
+# The AI Programme page opens with a PROGRAMME TIMELINE strip — five nodes on a rule, which is
+# the first thing on the page and the only part most readers will look at. It had two faults
+# and only one was reported.
+#
+#   1. Creative Design was absent. Its first go-live, 25 Sep 26, is the EARLIEST fixed date in
+#      the whole programme — so the one element whose job is to say what lands when omitted
+#      the thing that lands first.
+#
+#   2. The nodes were not in date order: Sept/Oct 26, Sep 26 – Jan 27, Q3–Q4 2026, 4 Jan 27.
+#      A quarter in 2026 sat to the RIGHT of a span ending in 2027. A timeline that is not
+#      chronological is worse than no timeline, because it is read as one without being
+#      checked — nobody audits the left-to-right order of a graphic that looks finished.
+
+def _timeline_nodes():
+    """(date text, name) for each node on the strip, in the order they are drawn."""
+    strip = _VIEWS["programme"]
+    at = strip.index("Programme timeline")
+    block = strip[at:strip.index("<!-- WORKSTREAM 1", at)]
+    return re.findall(
+        r'font-weight:700">([^<]+)</div>\s*<div[^>]*font-weight:600">(.*?)</div>',
+        block, re.S)
+
+
+def test_the_strip_still_has_nodes_this_test_can_read():
+    """A markup change that this regex stopped matching would make every assertion below
+    pass on an empty list — the failure mode where a pinning test quietly stops pinning."""
+    nodes = _timeline_nodes()
+    assert len(nodes) >= 5, f"only {len(nodes)} timeline nodes parsed"
+
+
+def test_every_live_workstream_is_on_the_milestone_strip():
+    """THE ASSERTION. It is the first thing on the page and it named two of three."""
+    text = " ".join(f"{d} {n}" for d, n in _timeline_nodes()).replace("<br>", " ")
+    for ws in ("Technical Design", "Creative Design", "Estimating"):
+        assert ws in text, f"the programme timeline does not mention {ws}"
+
+
+def test_the_earliest_date_in_the_programme_is_the_first_node():
+    """25 Sep is not just present, it is FIRST — and Drawing Search at 25 Sep is preceded only
+    by Technical Design's P1 on 15 Sep. A strip that leads with the estimating engine tells a
+    reader the wrong thing about what lands first."""
+    dates = [d for d, _ in _timeline_nodes()]
+    assert "15 SEP 2026" in dates[0], f"the strip opens on {dates[0]!r}"
+    assert "25 SEP 2026" in dates[1], f"the second node is {dates[1]!r}"
+
+
+def test_the_nodes_run_in_date_order():
+    """The fault nobody would have reported, because a finished-looking graphic is not
+    audited left to right. Each node is keyed on its FIRST delivery — the only ordering a
+    reader can check against the sections below."""
+    import datetime as _dt
+    # First date of each node, as the strip states it. A node that stops being parseable here
+    # is a node whose date somebody has written in a new format, which is worth failing on.
+    known = {
+        "15 SEP 2026": _dt.date(2026, 9, 15),
+        "25 SEP 2026": _dt.date(2026, 9, 25),
+        "SEPT / OCT 2026": _dt.date(2026, 9, 30),   # the target window opens end-Sept
+        "~NOV 2026": _dt.date(2026, 11, 1),
+        "4 JAN 2027": _dt.date(2027, 1, 4),
+    }
+    dates = [d.strip() for d, _ in _timeline_nodes()]
+    unknown = [d for d in dates if d not in known]
+    assert not unknown, (
+        f"timeline node(s) with a date this test cannot order: {unknown}. Add them to `known` "
+        f"with the date they represent, so the ordering below still means something.")
+    ordered = [known[d] for d in dates]
+    assert ordered == sorted(ordered), (
+        "the programme timeline is not in date order: "
+        + " → ".join(dates))
+
+
+def test_the_page_says_how_many_dates_the_strip_carries():
+    """The lede said "four active workstreams, three fixed milestones" above a strip of four
+    nodes. Three numbers, none of which agreed with each other or with the page."""
+    strip_count = len(_timeline_nodes())
+    lede = re.search(r"([A-Za-z]+) fixed dates", _VIEWS["programme"])
+    assert lede, "the lede no longer states how many fixed dates there are"
+    words = {"three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
+    assert words.get(lede.group(1).lower()) == strip_count, (
+        f"the lede says {lede.group(1)} fixed dates and the strip draws {strip_count}")
