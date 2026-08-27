@@ -115,6 +115,28 @@ ORDER BY
 """
 
 
+def _word_match(term: str, *fields: Any) -> bool:
+    """Does the term appear as a WHOLE WORD in any of these fields?
+
+    SQL LIKE '%term%' is a substring test, and the first real run showed what that costs. A
+    search for VESA returned six rows and four were noise:
+
+        Shelf Support, Plug in, for Wooden Shel[VES A]n ...      £0.11
+        PALLET WRAP WITH COLOURED SHEL[VES A]ND RE-INFO          £0.00
+
+    "shelves and" contains "vesa". A price lookup that offers a shelf support at 11p against a
+    line for a monitor mount is worse than one that finds nothing, because £0.11 and £35.95 are
+    both plausible-looking numbers and nothing on the row says it is a coincidence.
+
+    The LIKE stays: it is the coarse, index-friendly filter the server does well. This is the
+    second pass that makes the match mean something. Same rule as bought_in_pricing._resolve --
+    a containment that is not word-boundary aligned is not a match.
+    """
+    pattern = re.compile(r"(?<![A-Za-z0-9])" + r"[\s\-_]+".join(
+        re.escape(w) for w in str(term).split()) + r"(?![A-Za-z0-9])", re.I)
+    return any(pattern.search(str(f)) for f in fields if f)
+
+
 def _rows(cur, sql: str, params: List[Any]) -> List[tuple]:
     """A source that is not present on this machine must not stop the other three. A missing
     table is a deployment fact, not an error in the question being asked."""
@@ -140,15 +162,21 @@ def search(terms: Iterable[str], *, limit: int = 12) -> Dict[str, Any]:
         term = str(term).strip()
         if not term:
             continue
-        found = {
-            "term": term,
-            "udef": _rows(cur, _UDEF_SQL, [limit, term, term]),
-            "bought_in": _rows(cur, _BOUGHT_IN_SQL, [limit, term, term]),
-            "history": _rows(cur, _HISTORY_SQL, [limit, term, term]),
+        raw = {
+            "udef": (_rows(cur, _UDEF_SQL, [limit, term, term]), (0, 1)),
+            "bought_in": (_rows(cur, _BOUGHT_IN_SQL, [limit, term, term]), (0, 1)),
+            "history": (_rows(cur, _HISTORY_SQL, [limit, term, term]), (0, 2)),
         }
+        found: Dict[str, Any] = {"term": term, "coincidences": 0}
+        for source, (rows, cols) in raw.items():
+            if rows and rows[0] and rows[0][0] == "__error__":
+                found[source] = rows                       # an unavailable source is not noise
+                continue
+            kept = [r for r in rows if _word_match(term, *(r[c] for c in cols))]
+            found["coincidences"] += len(rows) - len(kept)
+            found[source] = kept
         found["hits"] = sum(len(v) for k, v in found.items()
-                            if k != "term" and isinstance(v, list)
-                            and not (v and v[0] and v[0][0] == "__error__"))
+                            if k not in ("term", "coincidences", "hits") and isinstance(v, list))
         out["terms"].append(found)
 
     try:
@@ -205,10 +233,15 @@ def report(result: Dict[str, Any]) -> str:
     silent: List[str] = []
     for found in result["terms"]:
         if not found["hits"]:
-            silent.append(found["term"])
+            silent.append(found["term"] + (f" ({found['coincidences']} substring coincidence"
+                                           f"{'s' if found['coincidences'] != 1 else ''} discarded)"
+                                           if found.get("coincidences") else ""))
             continue
         lines.append(f"\n{found['term']}")
         lines.append("-" * max(12, len(found["term"])))
+        if found.get("coincidences"):
+            lines.append(f"  ({found['coincidences']} row(s) matched only as a substring and "
+                         f"were discarded — 'shelves and' contains 'vesa')")
 
         for row in found["udef"]:
             if row and row[0] == "__error__":

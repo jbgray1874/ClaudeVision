@@ -156,3 +156,71 @@ def test_nothing_found_is_offered_as_an_answer_not_a_failure():
                                                     "udef": [], "bought_in": [], "history": []}]})
     assert "Nothing found for" in out
     assert "needs a supplier quote" in out
+
+
+# ── "shelves and" contains "vesa" ──────────────────────────────────────────────
+#
+# THE FIRST REAL RUN. Searching VESA against UDEF returned six rows and four were coincidences:
+#
+#     Shelf Support, Plug in, for Wooden Shel[VES A]n Elite Sourcing    £0.11
+#     Shelf Support, Plug in, for Wooden Shel[VES A]n Hafele U.K. Ltd   £0.11
+#     PALLET WRAP WITH COLOURED SHEL[VES A]ND RE-INFO                   £0.00
+#     Shelf Support, Plug in, for Glass Shel[VES A]nd                   £0.00
+#
+# SQL LIKE '%VESA%' is a substring test and "shelves and" contains "vesa". A shelf support at 11p
+# offered against a line for a monitor mount is worse than finding nothing: £0.11 and £35.95 are
+# both plausible-looking numbers and nothing on the row says the match was an accident. This is
+# the same fault class as the FIXING591 containment bug in bought_in_pricing — a containment that
+# is not word-boundary aligned is not a match.
+#
+# The LIKE stays; it is the coarse, index-friendly filter the server does well. The word-boundary
+# pass is what makes the match mean something.
+
+@pytest.mark.parametrize("desc", [
+    "Shelf Support, Plug in, for Wooden Shelvesan Elite Sourcing Solutions Ltd",
+    "Shelf Support, Plug in, for Wooden Shelvesan Hafele U.K. Ltd",
+    "PALLET WRAP WITH COLOURED SHELVESAND RE-INFO",
+    "Shelf Support, Plug in, for Glass Shelvesand",
+])
+def test_shelves_and_is_not_a_vesa_mount(desc):
+    """The four rows from the first run, pinned by name."""
+    assert not phl._word_match("VESA", desc)
+
+
+@pytest.mark.parametrize("desc", [
+    "IPAD UNIT SECUTIRY MOUNT AND VESA CASE",
+    "75/100 VESA MOUNT DIA38MM",
+    "vesa mount, 100mm",
+    "Bracket (VESA)",
+])
+def test_a_real_vesa_line_still_matches(desc):
+    """The filter must be narrow. Losing the genuine hits to kill the noise would be a worse
+    trade than the noise — the whole tool exists to find these."""
+    assert phl._word_match("VESA", desc)
+
+
+def test_a_multi_word_term_survives_punctuation_between_the_words():
+    """A description writes it however it likes and all three mean the same part."""
+    for desc in ("SCREEN MOUNT WITH 300MM ELBOW ARM", "ELBOW-ARM BRACKET", "elbow_arm"):
+        assert phl._word_match("ELBOW ARM", desc), desc
+
+
+def test_a_short_term_inside_a_longer_word_is_not_a_hit():
+    assert not phl._word_match("ARM", "ALARM SOUNDER")
+    assert phl._word_match("ARM", "SWING ARM, 200MM")
+
+
+def test_the_part_code_column_is_checked_too():
+    """A code is matched on its own field, not only in the description."""
+    assert phl._word_match("TP-1113", "TP-1113")
+
+
+def test_discarded_coincidences_are_counted_rather_than_dropped_in_silence():
+    """A filter nobody is told about is its own kind of lie — and if it ever over-filters, the
+    count is the only thing that would reveal it."""
+    src = (_ROOT / "src" / "price_history_lookup.py").read_text(encoding="utf-8")
+    assert "coincidences" in src
+    assert "substring" in phl.report(
+        {"connected": True,
+         "terms": [{"term": "VESA", "hits": 0, "coincidences": 4,
+                    "udef": [], "bought_in": [], "history": []}]}).lower()
