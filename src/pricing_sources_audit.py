@@ -59,7 +59,10 @@ SOURCES = [
      "note": "Purchased lines from the parts master, matched on description token overlap."},
     {"step": 3, "name": "Bought-in catalogue", "source_key": "bought_in_parts",
      "table": "dbo.bought_in_parts", "price_col": "unit_price_gbp", "where": "is_active = 1",
-     "note": "SDI's own curated bought-in list. Exact code, or description of 5+ characters."},
+     "moved_to": "AIEstimating.vCurrentBoughtIn",
+     "note": "SDI's own curated bought-in list. Exact code, or description of 5+ characters. "
+             "SEE THE MIGRATION WARNING BELOW -- this step reads a table the catalogue was "
+             "migrated OUT of."},
     {"step": 4, "name": "Historical RAG", "source_key": "historical_quote_material_line",
      "table": "dbo.historical_quote_material_line", "price_col": "unit_price_gbp",
      "note": "Every priced line from the ingested historical jobs. Token overlap, newest first, "
@@ -106,6 +109,21 @@ def supply(cur) -> List[Dict[str, Any]]:
         rec["priced_rows"] = _scalar(
             cur, f"SELECT COUNT(*) FROM {s['table']} WHERE {priced_where}"
             + (f" AND {s['where']}" if s.get("where") else ""))
+
+        # A STEP THAT CANNOT FIRE DESERVES A REASON, NOT JUST A ZERO.
+        #
+        # dbo.bought_in_parts came back with 0 active rows on the first real run, and "0 rows"
+        # on its own reads as "we never populated it" -- which would be wrong and would send
+        # somebody off to type a catalogue in. The truth is the opposite: it WAS populated, and
+        # migrate_bought_in_catalogue.py moved it to AIEstimating.BoughtInCatalogue and then
+        # set is_active = 0 on every row it moved. The pricing service was never pointed at the
+        # new home, so it goes on reading `WHERE is_active = 1` and finding nothing.
+        #
+        # So when a step is empty and we know where its data went, go and count it there. A
+        # populated successor beside an empty source is the whole diagnosis in one line.
+        if s.get("moved_to") and not rec["priced_rows"]:
+            rec["successor"] = s["moved_to"]
+            rec["successor_rows"] = _scalar(cur, f"SELECT COUNT(*) FROM {s['moved_to']}")
         out.append(rec)
     return out
 
@@ -120,7 +138,16 @@ def demand(cur) -> Dict[str, Any]:
         cur.execute("SELECT priced_json FROM dbo.drawing_priced_estimate")
         rows = cur.fetchall()
     except Exception as exc:                                  # noqa: BLE001
-        return {"error": str(exc)[:200], "runs": 0, "parts": 0, "by_source": {}}
+        missing = "invalid object name" in str(exc).lower()
+        return {"error": str(exc)[:200], "runs": 0, "parts": 0, "by_source": {},
+                "table_missing": missing,
+                "explain": (
+                    "dbo.drawing_priced_estimate does not exist on this server, so no priced "
+                    "estimate has ever been stored and there is no record of which source won. "
+                    "The normal run path does not save (it calls _select_anchor_price_source "
+                    "directly from estimator.py); only main.py --price-from-json goes through "
+                    "calculate_estimate, whose save_to_db defaults to True and would raise here."
+                ) if missing else ""}
 
     wins: Counter = Counter()
     parts = 0
@@ -168,6 +195,11 @@ def audit() -> Dict[str, Any]:
     return result
 
 
+def _wrap(text: str, width: int = 74) -> List[str]:
+    import textwrap
+    return textwrap.wrap(text, width)
+
+
 def report(a: Dict[str, Any]) -> str:
     if not a.get("connected"):
         return f"Could not reach SDILive, so nothing was measured.\n  {a.get('error')}"
@@ -187,9 +219,15 @@ def report(a: Dict[str, Any]) -> str:
                    "CANNOT FIRE — no row carries a price" if not priced else "")
         lines.append(f"  {s['step']}. {s['name']:22} {rows:>9,} rows  {priced:>9,} priced"
                      + (f"   <-- {verdict}" if verdict else ""))
+        succ = s.get("successor_rows")
+        if s.get("successor") and isinstance(succ, int) and succ:
+            lines.append(f"        the data is in {s['successor']} ({succ:,} rows) — this step "
+                         f"reads {s['table']}, which it was migrated OUT of")
 
     lines += ["", "DID IT FIRE?  (winning source across every stored priced estimate)", "=" * 78]
-    if d.get("error"):
+    if d.get("explain"):
+        lines.append("  " + "\n  ".join(_wrap(d["explain"])))
+    elif d.get("error"):
         lines.append(f"  could not read dbo.drawing_priced_estimate: {d['error']}")
     elif not d.get("parts"):
         lines.append(f"  {d.get('runs', 0)} stored run(s), no part carried a price_source — "
