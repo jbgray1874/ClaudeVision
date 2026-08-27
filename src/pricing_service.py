@@ -196,6 +196,26 @@ class PricingService:
         """
         part_code = str(part.get("part_number") or "").strip()
         desc = str(part.get("description") or "").strip()
+
+        # A CATEGORY WORD IS NOT A CODE, AND THE GUARD IN lookup_keys DID NOT REACH HERE.
+        # Refusing FIXING as a supplier-reference key stopped the two reference arms below
+        # asking about it. It did nothing about the query at the bottom of this method, which
+        # takes part["part_number"] raw — so `[Part code] = 'FIXING'` was still being asked.
+        #
+        # THAT DID NOT MISPRICE ANYTHING, AND IT DID SOMETHING ELSE INSTEAD. The catch-all
+        # FIXING row in UDEF is priced GBP 0.00, so the price check below returns None and no
+        # figure escapes. But the query is TOP 1 ordered exact-code-first, so the £0.00 row is
+        # the ONE row that comes back and the description arm of the same query never gets to
+        # answer. A generic fixing line therefore left UDEF empty-handed whether or not its
+        # description matched something — blinded rather than mispriced. The ~900 MISC rows,
+        # all £0.00, do exactly the same to every line coded MISC.
+        #
+        # Dropping the code here restores the description arm and costs nothing: a category
+        # word could never have matched a real part by equality anyway.
+        if part_code and self._is_category_word(part_code):
+            part_code = ""
+        code_param = part_code or None
+
         if not part_code and len(desc) < 8:
             return None
 
@@ -300,7 +320,7 @@ class PricingService:
                 u.[Part code] ASC,
                 u.[Supplier name] ASC
             """,
-            [part_code, desc, desc, part_code],
+            [code_param, desc, desc, code_param],
         )
         if not row:
             return None
@@ -363,6 +383,21 @@ class PricingService:
             "wo_parity": wo_parity,
         }
 
+    @staticmethod
+    def _is_category_word(code: str) -> bool:
+        """FIXING names a drawer; FIXING41 names a screw. Only one of them is a key.
+
+        One predicate, imported rather than restated, so the code arms of this file and
+        supplier_reference.lookup_keys cannot come to disagree about what a code is. Imported
+        inside the function because part_code_conventions is an engine-side module and this
+        file is imported by the backend service too.
+        """
+        try:
+            from part_code_conventions import is_category_not_a_code   # noqa: PLC0415
+        except ImportError:                                            # pragma: no cover
+            return False
+        return is_category_not_a_code(code)
+
     # ── TOKEN OVERLAP SCORING HELPERS ────────────────────────────────────────
     @staticmethod
     def _tokenize(text: str) -> set:
@@ -409,6 +444,22 @@ class PricingService:
         """
         part_code = (part.get("part_number") or "").strip()
         description = (part.get("description") or "").strip()
+
+        # THE ARM THAT COULD ACTUALLY RETURN A WRONG FIGURE. Unlike UDEF above, this query
+        # filters PMA_COST_MAT > 0 in SQL, so a catch-all row here is not saved by being
+        # priced zero — it is EXCLUDED from being zero. If Access Supply Chain holds any row
+        # whose PMA_PART_ONLY is literally FIXING or MISC and carries a cost, the loop below
+        # takes it on the exact-code branch at score 1.0 and returns it at confidence 0.88.
+        # A socket cap screw, a button head and an aluminium rivet would all cost the same,
+        # with the strongest confidence the chain can express, because an exact code match is
+        # never ambiguous. It is just wrong.
+        #
+        # Dropping the code also takes the class word out of query_tokens below, which is
+        # right: "FIXING" scoring against PMA_DESC_3 rewards rows for being fixings.
+        if part_code and self._is_category_word(part_code):
+            part_code = ""
+        code_param = part_code or None
+
         if not part_code and not description:
             return None
 
@@ -432,7 +483,7 @@ class PricingService:
         """
         desc_keyword = description[:60] if description else part_code
         try:
-            rows = self._fetch_all_with_retry(query, [part_code, desc_keyword, part_code])
+            rows = self._fetch_all_with_retry(query, [code_param, desc_keyword, code_param])
         except Exception:
             return None
         if not rows:
