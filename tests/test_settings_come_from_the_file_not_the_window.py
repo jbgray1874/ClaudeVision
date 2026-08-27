@@ -190,8 +190,12 @@ def test_an_unrecognisable_key_is_named_with_no_guess():
 def test_the_checker_actually_asks_and_fails_on_what_it_finds(monkeypatch, capsys):
     """THE CALLER, NOT THE HELPER. A check that returns the right answer to nobody is the
     same as no check, and this suite has already been fooled that way today."""
+    # `*a` rather than a bare lambda: _dotenv_values now takes an optional path, because the
+    # backend readiness report reads sdi-intelligence-backend/.env with the same function. A
+    # stub pinned to the old arity fails on a signature change it has no opinion about, which
+    # trains people to edit the test instead of reading it.
     monkeypatch.setattr(ec, "_dotenv_values",
-                        lambda: (ROOT / ".env", {"SERP_API_KEY": "x"}))
+                        lambda *a: (ROOT / ".env", {"SERP_API_KEY": "x"}))
     monkeypatch.setattr(ec, "switches_the_code_reads",
                         lambda *a: {"SERPAPI_API_KEY": "src/web_ai_price_lookup.py"})
     monkeypatch.setattr(ec, "_every_name_the_source_mentions", lambda: {})

@@ -31,7 +31,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -136,9 +136,9 @@ def keys_nothing_reads(on_file: Dict[str, str], reads: Dict[str, str],
     return out
 
 
-def _dotenv_values() -> Tuple[Optional[Path], Dict[str, str]]:
-    """What the .env file says, without touching this process's environment."""
-    path = ROOT / ".env"
+def _dotenv_values(path: Optional[Path] = None) -> Tuple[Optional[Path], Dict[str, str]]:
+    """What a .env file says, without touching this process's environment."""
+    path = path or (ROOT / ".env")
     if not path.exists():
         return None, {}
     try:
@@ -163,6 +163,98 @@ def _show(name: str, value: Optional[str]) -> str:
     if any(t in name.upper() for t in _SECRET):
         return f"<set, {len(value)} chars>" if value else "<set but EMPTY>"
     return repr(value)
+
+
+
+# ── WHAT THE HEALTH BADGE IS ACTUALLY COMPLAINING ABOUT ────────────────────────────────
+#
+# "BACKEND DEGRADED" in the portal header is /api/health saying the service is UP but NOT
+# READY: one of five things it needs is missing. The badge shows only the summary, and until
+# now this diagnostic could not help, because it scans src/ and tools/ and the three settings
+# that decide the answer are read by the BACKEND — SDI_FILE_ROOTS and SDI_STAGING_ROOT in
+# sdi-intelligence-backend/config.py, SDI_WB_TEMPLATE straight from os.environ in app.py.
+#
+# So the tool printed "Nothing wrong found" while the header said DEGRADED. Two things that
+# both look authoritative, disagreeing, and no way from either to find out which was right.
+#
+# This computes the same five checks the endpoint does, from the same settings, without the
+# service running and without the network — so it answers the question on a machine where the
+# portal will not even start.
+
+_WB_TEMPLATE_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                        r"\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx")
+_STAGING_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                    r"\AI Estimating\AISheets\SDIIntelligenceAISheet")
+
+
+def _norm(p: str) -> str:
+    return os.path.normcase(os.path.normpath(p.strip().strip('"')))
+
+
+def report_backend_readiness(problems: List[str], notes: List[str],
+                             _db_requested: bool = False) -> None:
+    """The five checks behind the badge, named one by one."""
+    be_path, be = _dotenv_values(ROOT / "sdi-intelligence-backend" / ".env")
+    src = "sdi-intelligence-backend/.env" if be_path else "defaults (no backend .env found)"
+
+    def setting(key, default):
+        v = os.environ.get(key) or be.get(key) or ""
+        v = v.strip().strip('"')
+        return (v, True) if v else (default, False)
+
+    print()
+    print(f"BACKEND READINESS — the five checks behind the header badge   [{src}]")
+    # FOUR OF FIVE, AND SAYING SO. The database is the fifth condition and testing it needs a
+    # VPN round trip, which is what --db is for. A report that quietly covered four and read
+    # as covering five is the same fault as the all-clear this section was added to fix.
+    print("  database          "
+          + ("tested below (--db)" if _db_requested
+             else "NOT TESTED — pass --db. It is the fifth condition behind the badge."))
+
+    roots_raw, roots_set = setting("SDI_FILE_ROOTS", "")
+    roots = [r.strip() for r in roots_raw.split("|") if r.strip()]
+    if not roots:
+        print("  file roots        NOT SET")
+        problems.append("SDI_FILE_ROOTS is not set for the backend, so /api/health reports "
+                        "DEGRADED and every file the portal serves is refused.")
+    else:
+        for r in roots:
+            ok = os.path.isdir(r)
+            print(f"  file root         {'OK    ' if ok else 'MISSING'} {r}")
+            if not ok:
+                problems.append(f"file root not reachable from this machine: {r} — this alone "
+                                f"makes the header say BACKEND DEGRADED.")
+
+    staging, from_env = setting("SDI_STAGING_ROOT", _STAGING_DEFAULT)
+    reach = os.path.isdir(staging)
+    inside = any(_norm(staging).startswith(_norm(r)) for r in roots) if roots else False
+    print(f"  staging root      {'OK    ' if (reach and inside) else 'PROBLEM'} {staging}")
+    print(f"                    {'from .env' if from_env else 'DEFAULT — SDI_STAGING_ROOT not set'}"
+          f" · reachable={reach} · inside file roots={inside}")
+    if staging[:2].endswith(":"):
+        problems.append("SDI_STAGING_ROOT is a mapped drive letter. A drive letter belongs to a "
+                        "login session, so a service account has no such drive. Use the "
+                        "\\\\server\\share form.")
+    elif not reach:
+        problems.append(f"staging root not reachable: {staging} — runs are refused and the "
+                        f"header says DEGRADED.")
+    elif not inside:
+        problems.append("the staging root is not inside SDI_FILE_ROOTS, so every run is refused "
+                        "on containment even though the folder exists. Add it to the roots.")
+
+    tpl, from_env = setting("SDI_WB_TEMPLATE", _WB_TEMPLATE_DEFAULT)
+    ok = os.path.isfile(tpl)
+    print(f"  workbook template {'OK    ' if ok else 'MISSING'} {tpl}")
+    print(f"                    {'from .env' if from_env else 'DEFAULT — SDI_WB_TEMPLATE not set'}")
+    if not ok:
+        problems.append("the workbook template is not reachable. EVERY deliverable hangs off it "
+                        "— estimate, quote, job report, Decision Report, AI Provenance — so a "
+                        "run would burn its minutes and produce a summary and no estimate. Note "
+                        "the DOUBLE SPACE in 'Blank Estimate Sheet  WB 2026.xlsx' is real.")
+    if not from_env:
+        notes.append("SDI_WB_TEMPLATE is not set, so the template is looked for at one exact "
+                     "UNC path. Setting it to a copy this machine can read is the quickest way "
+                     "to clear a DEGRADED badge caused by the template.")
 
 
 def main() -> int:
@@ -273,6 +365,8 @@ def main() -> int:
                             "would come out low.")
     else:
         print("Price source (SDILive)       : not tested (pass --db)")
+
+    report_backend_readiness(problems, notes, args.db)
 
     # ── the verdict ─────────────────────────────────────────────────────────────────
     print()
