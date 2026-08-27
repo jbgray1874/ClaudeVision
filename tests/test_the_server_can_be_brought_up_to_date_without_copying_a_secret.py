@@ -65,6 +65,96 @@ def test_it_still_refuses_at_runtime_if_one_ever_is():
         "the .env check warns and continues — it must refuse, because the damage is silent")
 
 
+# ── it sends what the server runs, not the repository ────────────────────────
+
+def _include_list() -> list[str]:
+    """The $Include default, as the script declares it."""
+    at = _S.index("[string[]]$Include = @(")
+    block = _S[at:_S.index(")", at)]
+    return re.findall(r'"([^"]+)"', block)
+
+
+def _src_closure() -> set[str]:
+    """Every src module reachable from the one the SERVICE imports.
+
+    estimate_routes._scan_one does sys.path.insert on src and imports llm_scan_price — the
+    fast LLM drawing read runs on the service on purpose, because putting it on the runner
+    would file a hundred scans in behind a forty-minute estimate. Follow that import through
+    and you have the complete list of src files the server needs.
+    """
+    src = _ROOT / "src"
+    modules = {p.stem for p in src.glob("*.py")}
+
+    def imported_by(path: Path) -> set[str]:
+        import ast
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            return set()
+        out: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                out.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                out.add(node.module.split(".")[0])
+        return out
+
+    seen: set[str] = set()
+    stack = ["llm_scan_price"]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in modules:
+            continue
+        seen.add(name)
+        stack.extend(imported_by(src / f"{name}.py"))
+    return seen
+
+
+def test_the_entry_point_the_service_uses_has_not_moved():
+    """The premise the closure is computed from. If _scan_one stops importing llm_scan_price,
+    or the sys.path insert goes away, the list below is computed from the wrong root and
+    would agree with the script while both are wrong."""
+    routes = (_ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    assert "from llm_scan_price import scan_price" in routes
+    assert 'parents[1] / "src"' in routes, (
+        "the service no longer puts src on its path — recompute what it needs from scratch")
+
+
+def test_the_src_files_sent_are_exactly_the_ones_the_service_imports():
+    """THE ASSERTION, and the reason this is a test rather than a comment. Seven modules out
+    of 655. A hand-maintained list of seven is wrong within a month; one checked against the
+    imports is not."""
+    listed = {Path(p).stem for p in _include_list() if p.startswith("src/")}
+    needed = _src_closure()
+    assert listed == needed, (
+        f"the script sends {sorted(listed)} but the service imports {sorted(needed)}\n"
+        f"  missing (the scan would fail on the server): {sorted(needed - listed)}\n"
+        f"  extra   (sent for no reason):                {sorted(listed - needed)}")
+
+
+def test_it_does_not_send_the_whole_of_src_or_the_tests():
+    """The first version of this script sent all 990 tracked files. That is 183 test files,
+    several hundred one-off src/_probe_*.py scripts, a prototype for a different client and
+    a Sage X3 zip, onto a production server that runs none of them."""
+    listed = _include_list()
+    assert "src/" not in listed, "the whole of src is being sent to a machine that runs none of it"
+    for junk in ("tests/", "_archive/", "alba-pip/", "Notes/", "sagex3/"):
+        assert junk not in listed, f"{junk} has no business on the server"
+
+
+def test_what_it_does_send_is_what_the_server_serves():
+    """The backend is the thing running there; tools/start is how it gets restarted and
+    repaired; tools/diagnose is how you find out why it will not."""
+    listed = _include_list()
+    for needed in ("sdi-intelligence-backend/", "tools/start/", "tools/diagnose/"):
+        assert needed in listed, f"{needed} is not sent, so the server cannot be updated or fixed"
+
+
+def test_the_wider_copy_is_available_but_not_the_default():
+    assert "[switch]$All" in _S, "there is no way to send everything when that is genuinely wanted"
+    assert "if ($All)" in _S
+
+
 # ── it does not pretend to know what it has not compared ──────────────────────
 
 def test_it_compares_before_it_copies():

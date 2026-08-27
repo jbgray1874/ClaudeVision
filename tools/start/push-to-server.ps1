@@ -23,6 +23,12 @@
     applied to the list, but the reason the list cannot contain it. There is a belt-and-braces
     check below as well, because this one is worth being obvious about.
 
+    IT SENDS WHAT THE SERVER RUNS, NOT THE REPOSITORY. That machine serves the portal and
+    QUEUES estimates; it has no SOLIDWORKS seat, no Excel and no runner, so it needs the
+    backend, the start/repair scripts, and seven modules from src for the LLM drawing scan.
+    Not 183 test files, not several hundred one-off probe scripts, not a prototype for another
+    client. See $Include below for why those seven and no others. -All overrides it.
+
     It compares before it writes, so a run that copies nothing prints nothing alarming, and a
     run that copies six files tells you which six.
 #>
@@ -30,9 +36,39 @@
 param(
     [switch]$Apply,
     [string]$Destination = "\\10.0.0.5\C$\ClaudeVision",
-    # _archive is 677 files of history that no running process reads. Skipping it turns a
-    # slow copy over SMB into a fast one.
-    [string[]]$Skip = @("_archive/")
+
+    # WHAT THE SERVER ACTUALLY RUNS, WHICH IS NOT MUCH.
+    #
+    # SDI-APP01 serves the portal and QUEUES estimates. It does not run them: no SOLIDWORKS
+    # seat, no Excel, no runner. So it needs the backend, the scripts that start and repair
+    # it -- and, from src, exactly SEVEN modules.
+    #
+    # Those seven are not a guess. estimate_routes._scan_one does sys.path.insert on src and
+    # imports llm_scan_price, because the fast LLM drawing read runs ON THE SERVICE on
+    # purpose -- put it on the runner and a hundred scans would file in behind a forty-minute
+    # estimate. Following that import through gives the list below and nothing else.
+    #
+    # The first version of this script sent all 990 tracked files, which would have put 183
+    # test files, several hundred one-off src/_probe_*.py scripts, a prototype for a
+    # different client and a Sage X3 zip onto a production server that runs none of them.
+    # tests/test_the_server_can_be_brought_up_to_date_without_copying_a_secret.py recomputes
+    # the seven from the source and fails if this list drifts from what the code imports.
+    [string[]]$Include = @(
+        "sdi-intelligence-backend/",
+        "tools/start/",
+        "tools/diagnose/",
+        "src/llm_scan_price.py",
+        "src/llm_full_extract.py",
+        "src/config.py",
+        "src/bought_in_recogniser.py",
+        "src/part_code_conventions.py",
+        "src/department_codes.py",
+        "src/supplier_reference.py"
+    ),
+
+    # Everything tracked. Here for the day the server's job changes; not the default,
+    # because "copy the whole repo" is how a build box becomes a mystery.
+    [switch]$All
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,9 +97,15 @@ if (-not $tracked) {
     exit 2
 }
 
-$considered = $tracked | Where-Object {
-    $rel = $_
-    -not ($Skip | Where-Object { $rel.StartsWith($_) })
+if ($All) {
+    # _archive is 677 files of history no running process reads.
+    $considered = $tracked | Where-Object { -not $_.StartsWith("_archive/") }
+    Write-Host "  -All: every tracked file, not just what the server runs." -ForegroundColor Yellow
+} else {
+    $considered = $tracked | Where-Object {
+        $rel = $_
+        $Include | Where-Object { $rel -eq $_ -or $rel.StartsWith($_) }
+    }
 }
 
 # Belt and braces. A .env is untracked so it cannot be in $tracked, but this is the one
