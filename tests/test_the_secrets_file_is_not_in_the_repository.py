@@ -115,3 +115,76 @@ def test_the_secret_values_are_not_hiding_in_the_template():
             value = line.split("=", 1)[1].strip()
             assert not value or value.startswith(("<", "CHANGE", "your-")), (
                 f"{line.split('=')[0]} in the template carries what looks like a real value")
+
+
+# ── a password that cannot survive the string it is pasted into ────────────────
+#
+# SDILive's AIBot login has is_policy_checked = 1, so the new password must meet domain
+# complexity — which pushes people towards punctuation. But the password is pasted into an ODBC
+# connection string:
+#
+#     DRIVER={...};SERVER=...;UID=AIBot;PWD=<here>;Encrypt=yes;TrustServerCertificate=yes
+#
+# A SEMICOLON ENDS THE PASSWORD AND STARTS A NEW KEYWORD. The server is handed a truncated
+# password and answers "Login failed for user 'AIBot'" — which reads as the wrong password, not
+# an unusable one, and sends somebody back to SSMS to set it again. Braces delimit ODBC values;
+# a quote or a hash can be eaten by the .env parser before ODBC ever sees it.
+#
+# Checked rather than escaped: a service password is generated once and never typed, so the fix
+# is to pick a different one and the cost of being told is a minute.
+
+
+def _engine_config():
+    """src/config.py specifically.
+
+    There are TWO modules named `config` in this repository — the engine's and the backend
+    service's — and a bare `import config` in a shared test interpreter returns whichever one
+    another test imported first. Loading by path is the only way to be sure which one is under
+    test, and the ambiguity has already cost a fixture elsewhere.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_engine_config", _ROOT / "src" / "config.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_a_password_that_would_truncate_the_connection_string_is_refused():
+    engine_config = _engine_config()
+    saved = engine_config.DB_PASSWORD
+    try:
+        for hostile in ("abc;def", "ab{cd}", 'has"quote', "has'apos", "has#hash"):
+            engine_config.DB_PASSWORD = hostile
+            with pytest.raises(RuntimeError) as exc:
+                engine_config.require_db_password()
+            assert "connection string" in str(exc.value)
+    finally:
+        engine_config.DB_PASSWORD = saved
+
+
+def test_the_refusal_names_the_offending_character():
+    """"Your password is invalid" sends somebody to the domain policy. Naming the character
+    sends them to a new password, which is the actual fix."""
+    engine_config = _engine_config()
+    saved = engine_config.DB_PASSWORD
+    try:
+        engine_config.DB_PASSWORD = "abc;def"
+        with pytest.raises(RuntimeError) as exc:
+            engine_config.require_db_password()
+        assert "';'" in str(exc.value)
+        assert "semicolon" in str(exc.value).lower()
+    finally:
+        engine_config.DB_PASSWORD = saved
+
+
+def test_an_ordinary_strong_password_is_left_alone():
+    """The guard must not push people towards weak passwords. Letters and digits at length are
+    the recommendation, and they have to pass."""
+    engine_config = _engine_config()
+    saved = engine_config.DB_PASSWORD
+    try:
+        for good in ("kQ7mZp2xR9tLvB4nHs6wY3dF", "AIAgent2026Replacement", "aB3" * 8):
+            engine_config.DB_PASSWORD = good
+            assert engine_config.require_db_password() == good
+    finally:
+        engine_config.DB_PASSWORD = saved

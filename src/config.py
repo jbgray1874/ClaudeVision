@@ -988,8 +988,31 @@ DB_PASSWORD = os.getenv("SDI_DB_PASSWORD", "")
 DB_DRIVER   = os.getenv("SDI_DB_DRIVER",   "ODBC Driver 18 for SQL Server")
 
 
+# Characters that break the connection string this password is pasted into, or the .env parser
+# it is read from. The string is built as "...UID={user};PWD={password};Encrypt=yes..." so a
+# semicolon ENDS THE PASSWORD AND STARTS A NEW KEYWORD -- the server is handed a truncated
+# password and answers "Login failed for user 'AIBot'", which reads as a wrong password rather
+# than a badly-chosen one. Braces delimit ODBC values; a quote or a hash can be eaten by dotenv.
+#
+# Checked rather than escaped, because a service password is generated once and never typed. The
+# fix is to pick a different one, and being told that costs a minute, where diagnosing a
+# truncated connection string costs an afternoon.
+_PASSWORD_HOSTILE = ";{}\"'#"
+
+
 def require_db_password() -> str:
     """The one place the absence of a password becomes a sentence somebody can act on."""
+    bad = sorted({c for c in DB_PASSWORD if c in _PASSWORD_HOSTILE})
+    if bad:
+        where = str(_DOT_ENV_PATH) if _DOT_ENV_PATH else str(BASE_DIR / ".env")
+        raise RuntimeError(
+            f"SDI_DB_PASSWORD in {where} contains {' '.join(repr(c) for c in bad)}, which cannot "
+            f"survive the ODBC connection string it is pasted into.\n"
+            f"A semicolon in particular ends the password and starts a new keyword, so the server "
+            f"is handed a truncated one and answers 'Login failed' -- which reads as the wrong "
+            f"password rather than an unusable one.\n"
+            f"Choose a letters-and-digits password instead; it is generated once and never typed, "
+            f"so make it long rather than clever.")
     if not DB_PASSWORD:
         where = str(_DOT_ENV_PATH) if _DOT_ENV_PATH else str(BASE_DIR / ".env")
         raise RuntimeError(
