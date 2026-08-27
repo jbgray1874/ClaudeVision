@@ -10,13 +10,7 @@ Sources, in trust order:
 No writes. Read-only SELECTs with LIKE matching on description.
 Run: C:\ClaudeVision\.venv\Scripts\python.exe _udef_electrical_check.py
 """
-import pyodbc
-
-CONN = (
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=10.0.0.200;DATABASE=SDILive;UID=AIBot;PWD=AIAgentPW2026;"
-    "TrustServerCertificate=yes"
-)
+import config
 
 # The six note-scanned items from 1282, with search terms likely to hit ERP/catalogue descriptions.
 ITEMS = [
@@ -35,7 +29,7 @@ def q(cur, sql, params):
         return [("ERR", str(e))]
 
 def main():
-    conn = pyodbc.connect(CONN)
+    conn = config.get_connection()
     cur = conn.cursor()
 
     for label, patterns in ITEMS:

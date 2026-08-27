@@ -31,13 +31,8 @@ LOG = logging.getLogger("ingest_historical_to_db")
 
 # ── DB connection ──────────────────────────────────────────────────────────────
 def _connect():
-    import pyodbc
-    return pyodbc.connect(
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        "SERVER=10.0.0.200;DATABASE=SDILive;"
-        "UID=AIBot;PWD=AIAgentPW2026;"
-        "Encrypt=yes;TrustServerCertificate=yes;"
-    )
+    import config
+    return config.get_connection()
 
 
 # ── DDL: ensure tables exist ───────────────────────────────────────────────────

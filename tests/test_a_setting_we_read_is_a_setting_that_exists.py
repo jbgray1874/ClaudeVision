@@ -170,11 +170,19 @@ def test_the_profiler_reads_a_real_name():
 
 
 # ── and the reason the name was invented in the first place ──────────────────────────
-# THIRTEEN TRACKED SCRIPTS CARRY THE LIVE UDEF PASSWORD AS A STRING LITERAL. That is a
-# credential-in-source problem in its own right and it is reported separately, but it is
-# also why config.get_connection() was not the obvious thing to call: most of the examples
-# in the tree do not call it. This records the count so it goes DOWN and never up, and so a
-# new tool cannot add the fourteenth.
+# THIRTEEN TRACKED SCRIPTS CARRIED THE LIVE SDILive PASSWORD AS A STRING LITERAL, which is also
+# why config.get_connection() was not the obvious thing to call: most of the examples in the
+# tree did not call it. All thirteen now do, and the list below is empty.
+#
+# AND THE DETECTOR HAD A BLIND SPOT WORTH RECORDING. It looked for the literal after `PWD=` in
+# an assembled connection string, so it found thirteen files and missed four more carrying the
+# same credential in a dict or a bare variable: src/config.py (twice, inside PRICE_SOURCE_CONFIG),
+# src/extract_bom_to_sql.py and src/corrections_db.py.
+#
+# config.py was the worst of them. The ENGINE's config never read SDI_DB_PASSWORD at all, so
+# changing the SDILive password meant editing source. The backend service read it from .env and
+# the engine did not, and the two halves of one system disagreed about where the credential
+# lived. The detector now looks for the SHAPE OF A SECRET wherever it sits, not for one syntax.
 _CONNECTOR = "get_connection"
 
 
@@ -200,19 +208,51 @@ def _hand_rolled_connection_strings():
             if "PWD=" in line and "{" not in line.split("PWD=", 1)[1][:2]:
                 out.append(str(path.relative_to(ROOT)))
                 break
+        else:
+            # THE SHAPE OF A SECRET, wherever it sits. A dict entry and a bare assignment carry
+            # a credential just as effectively as a connection string does, and the PWD= form
+            # alone missed four files -- including config.py itself.
+            if _assigns_a_literal_secret(tree):
+                out.append(str(path.relative_to(ROOT)))
     return sorted(set(out))
+
+
+_SECRET_NAMES = ("password", "passwd", "pwd", "secret", "api_key", "apikey", "token")
+
+
+def _assigns_a_literal_secret(tree) -> bool:
+    """A NON-EMPTY string literal bound to a password-shaped name.
+
+    Empty is the correct form and must never be flagged: `DB_PASSWORD = os.getenv(
+    "SDI_DB_PASSWORD", "")` is exactly the fix this guard exists to push people towards, and a
+    guard that fails on its own remedy teaches people to disable it. A value read from the
+    environment is not a Constant at all, so it cannot match either.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (isinstance(key, ast.Constant) and isinstance(key.value, str)
+                        and key.value.lower() in _SECRET_NAMES
+                        and isinstance(value, ast.Constant) and isinstance(value.value, str)
+                        and value.value.strip()):
+                    return True
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if (isinstance(target, ast.Name)
+                    and target.id.lower().strip("_") in _SECRET_NAMES
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str) and node.value.value.strip()):
+                return True
+    return False
 
 
 # The known set on the day this was written. Fixing one means deleting its line here; adding
 # one fails. A bare count would let a fix and a regression cancel each other out.
-_KNOWN_LITERAL_PASSWORD_FILES = {
-    "src/EstimatingTableOutput.py", "src/Estimatingtables.py", "src/check_D.py",
-    "src/check_tube_provenance.py", "src/check_tubes.py", "src/count.py",
-    "src/find_base_table.py", "src/fix_source_url.py",
-    "src/ingest_historical_to_db.py", "src/ingest_historical_to_qdrant.py",
-    "src/migrate_bought_in_catalogue.py", "src/test_conn.py",
-    "src/_udef_electrical_check.py",
-}
+_KNOWN_LITERAL_PASSWORD_FILES = set()   # emptied when all seventeen moved to the environment
 
 
 def test_no_new_script_hard_codes_the_database_password():
@@ -230,10 +270,16 @@ def test_no_new_script_hard_codes_the_database_password():
         "\n  ".join(sorted(stale)))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "The live UDEF password is a string literal in 13 tracked source files and is therefore "
-    "in git history. It CANNOT be fixed by editing the files: history keeps it. The fix is "
-    "to rotate the SQL login, then replace every literal with config.get_connection(). Left "
-    "failing on purpose so the suite keeps saying so until the credential is rotated."))
 def test_the_database_password_is_not_in_the_source_tree():
+    """THE MARKER THAT USED TO BE HERE. A strict xfail recorded the password as a literal in
+    thirteen tracked files, said it could not be fixed by editing them because history keeps it,
+    and named the fix: rotate the SQL login, then replace every literal with
+    config.get_connection(). The second half is now done -- seventeen sites, not thirteen, once
+    the detector was widened past the PWD= form.
+
+    ROTATION IS STILL THE CURE AND IS NOT DONE BY THIS TEST PASSING. The credential is in this
+    repository's history and readable by anyone who has ever had a clone; the repo being private
+    now does not undo four months of being public. What this guard does from here is stop the
+    NEXT one going in -- including the shapes that got past it the first time.
+    """
     assert not _hand_rolled_connection_strings()

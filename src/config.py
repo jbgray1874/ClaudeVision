@@ -957,14 +957,50 @@ PRICE_SOURCE_PRIORITY = [
     "web",
 ]
 
+# ── SDILive credentials ───────────────────────────────────────────────────────
+#
+# THE PASSWORD HAS NO DEFAULT, AND THAT IS THE ENTIRE POINT OF THIS BLOCK.
+#
+# These four values were literals inside PRICE_SOURCE_CONFIG, so changing the SDILive password
+# meant editing source — which means committing it, which means it is in git history for ever.
+# It had been committed, in a repository that was public for four months. The engine's config
+# never read SDI_DB_PASSWORD at all; only the backend service did, so the two halves of the same
+# system disagreed about where the credential lived.
+#
+# Server, database and user DO keep defaults. An internal IP and a service-account name are not
+# secrets, and defaulting them means an existing machine keeps working. The password defaults to
+# NOTHING: an unset password must fail loudly and by name, because the alternative is a fallback
+# literal, and a fallback literal is the thing being removed.
+#
+# SDILive is Access Supply Chain's primary database. Sage X3 is not live.
+DB_SERVER   = os.getenv("SDI_DB_SERVER",   "10.0.0.200")
+DB_NAME     = os.getenv("SDI_DB_NAME",     "SDILive")
+DB_USER     = os.getenv("SDI_DB_USER",     "AIBot")
+DB_PASSWORD = os.getenv("SDI_DB_PASSWORD", "")
+# Driver 18 is the laptop's; SDI-APP01 carries only 17, and a missing driver reports IM002 —
+# a client-side error that reads like the server is unreachable. Settable per machine.
+DB_DRIVER   = os.getenv("SDI_DB_DRIVER",   "ODBC Driver 18 for SQL Server")
+
+
+def require_db_password() -> str:
+    """The one place the absence of a password becomes a sentence somebody can act on."""
+    if not DB_PASSWORD:
+        raise RuntimeError(
+            "SDI_DB_PASSWORD is not set, so SDILive cannot be reached. Put it in src/.env "
+            "(untracked) as SDI_DB_PASSWORD=<the password for the AIBot login>. It is "
+            "deliberately not defaulted in source: a password in a source file is in git "
+            "history the moment it is pushed, and deleting it later does not remove it.")
+    return DB_PASSWORD
+
+
 PRICE_SOURCE_CONFIG = {
     "udef_sqlserver": {
         "enabled": True,
-        "server": "10.0.0.200",
-        "database": "SDILive",
-        "username": "AIBot",
-        "password": "AIAgentPW2026",
-        "driver": "ODBC Driver 18 for SQL Server",
+        "server": DB_SERVER,
+        "database": DB_NAME,
+        "username": DB_USER,
+        "password": DB_PASSWORD,
+        "driver": DB_DRIVER,
         "encrypt": True,
         "trust_server_certificate": True,
         # UDEF-first anchor for part/bought-in system cost lookups.
@@ -1078,11 +1114,11 @@ ORDER BY
     },
     "sqlserver": {
         "enabled": True,
-        "server": "10.0.0.200",
-        "database": "SDILive",
-        "username": "AIBot",
-        "password": "AIAgentPW2026",
-        "driver": "ODBC Driver 18 for SQL Server",
+        "server": DB_SERVER,
+        "database": DB_NAME,
+        "username": DB_USER,
+        "password": DB_PASSWORD,
+        "driver": DB_DRIVER,
         "encrypt": True,
         "trust_server_certificate": True,
         # TODO: replace with your real material table query when ready.
@@ -1899,6 +1935,7 @@ def get_connection(timeout: int = 30):
     happened but didn't is worse than a loud error.
     """
     import pyodbc
+    require_db_password()
     c = PRICE_SOURCE_CONFIG.get("sqlserver", {})
     conn_str = (
         f"DRIVER={{{c.get('driver', 'ODBC Driver 18 for SQL Server')}}};"
