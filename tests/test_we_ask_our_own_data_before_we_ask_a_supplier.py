@@ -118,10 +118,21 @@ def test_a_missing_table_does_not_take_the_other_sources_with_it():
 
 
 def test_no_statement_writes():
-    """Read-only, asserted rather than intended. This runs against the live estimating database."""
-    src = (_ROOT / "src" / "price_history_lookup.py").read_text(encoding="utf-8")
-    for verb in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "TRUNCATE ", "MERGE "):
-        assert verb not in src.upper(), f"{verb.strip()} appears in a read-only tool"
+    """Read-only, asserted rather than intended. This runs against the live estimating database.
+
+    CHECKS THE SQL, NOT THE SOURCE TEXT. The sibling guard on pricing_sources_audit.py grepped
+    the whole file and failed on a comment that said "there is no INSERT anywhere" — a guard that
+    reads source as text cannot tell a statement from prose about a statement, which this
+    codebase has now been bitten by twice."""
+    import ast
+    tree = ast.parse((_ROOT / "src" / "price_history_lookup.py").read_text(encoding="utf-8"))
+    queries = [n.value for n in ast.walk(tree)
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and "SELECT " in n.value.upper() and "FROM " in n.value.upper()]
+    assert queries, "no SQL found at all — has the lookup stopped querying?"
+    for q in queries:
+        for verb in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "TRUNCATE ", "MERGE "):
+            assert verb not in q.upper(), f"{verb.strip()} in a read-only tool:\n{q[:200]}"
 
 
 # ── what it must not do ────────────────────────────────────────────────────────
