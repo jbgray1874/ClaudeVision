@@ -250,6 +250,75 @@
      (5 uses) are on the page today with no rule behind them, so eight chips render as bare text
      with no background and no border — visibly broken, and invisible to anyone who has not
      counted, because a chip with no colour still reads as a word. */
+
+  /* ── FIXTURE LIBRARY GUIDE · the tool's own screens ──────────────────────────────
+     The original guide's most useful parts are its MOCKUPS — little browser windows
+     showing what each tab actually looks like. Converting the guide to text and tables
+     kept every word and dropped all six, which is the wrong half to keep: a user guide
+     for a visual search tool that never shows the screen is a description of software
+     rather than a picture of it.
+
+     Rebuilt here rather than pasted, for the same reason as the content: the originals
+     are a light palette in Segoe UI with their own class names, and inside this portal
+     they would be white rectangles that ignore the theme toggle. Everything below is
+     tokens, so both themes work and the mockups follow the page.
+
+     PREFIXED fl- THROUGHOUT. These are one page's components, not site furniture, and
+     names like .card or .tab would collide with something eventually. */
+  .fl-mock{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:14px 0 6px}
+  .fl-chrome{background:var(--surface-2);border-bottom:1px solid var(--line);padding:9px 14px;display:flex;align-items:center;gap:7px}
+  .fl-dot{width:9px;height:9px;border-radius:50%;background:var(--line);flex-shrink:0}
+  .fl-url{flex:1;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:0 8px}
+  .fl-body{padding:18px 20px}
+  .fl-cap{font-size:11.5px;color:var(--ink-faint);margin:0 0 22px;font-style:italic}
+  .fl-tabs{display:flex;gap:4px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:4px;margin-bottom:16px;flex-wrap:wrap}
+  .fl-tab{padding:7px 15px;border-radius:6px;font-size:12.5px;font-weight:600;color:var(--ink-dim)}
+  .fl-tab.on{background:var(--accent);color:var(--bg)}
+  .fl-input{width:100%;border:1px solid var(--line);border-radius:7px;padding:9px 12px;font-size:13px;color:var(--ink);background:var(--surface);margin-bottom:12px;font-family:var(--body)}
+  .fl-found{font-size:11.5px;color:var(--ink-faint);margin-bottom:9px}
+  .fl-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:10px}
+  .fl-card{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface)}
+  .fl-thumb{height:78px;display:flex;align-items:center;justify-content:center;font-size:29px;background:linear-gradient(135deg,var(--surface-2),var(--bg-2))}
+  .fl-cbody{padding:9px 11px}
+  .fl-brand{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:3px}
+  .fl-name{font-size:12.5px;font-weight:700;color:var(--ink);margin-bottom:2px}
+  .fl-job{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-bottom:7px}
+  .fl-match{font-size:10.5px;font-weight:700;margin-bottom:6px}
+  .fl-badges{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:7px}
+  .fl-badge{font-family:var(--mono);font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink-faint);background:var(--bg-2)}
+  .fl-badge.has{background:rgba(78,201,127,.12);border-color:rgba(78,201,127,.3);color:var(--ok)}
+  .fl-badge.no{text-decoration:line-through;opacity:.55}
+  .fl-btns{display:flex;gap:4px;flex-wrap:wrap}
+  .fl-btn{font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 8px;border-radius:5px;border:1px solid var(--line);color:var(--ink-dim);background:var(--bg-2);white-space:nowrap}
+  .fl-btn.pri{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+  .fl-btn.alt{background:var(--violet);color:var(--bg);border-color:var(--violet)}
+  .fl-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px}
+  .fl-tile{border:1px solid var(--line);border-radius:9px;padding:12px;text-align:center;background:var(--surface)}
+  .fl-ticon{width:34px;height:34px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);color:var(--accent);font-family:var(--disp);font-size:14px;font-weight:800;display:flex;align-items:center;justify-content:center;margin:0 auto 7px}
+  .fl-tname{font-size:12.5px;font-weight:700;color:var(--ink)}
+  .fl-tcount{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:2px}
+  .fl-drop{border:2px dashed var(--line);border-radius:10px;padding:26px 20px;text-align:center;background:var(--bg-2);margin-bottom:12px}
+  .fl-dropt{font-size:13.5px;font-weight:700;color:var(--ink);margin-bottom:3px}
+  .fl-drops{font-size:11.5px;color:var(--ink-faint)}
+  .fl-or{display:flex;align-items:center;gap:10px;color:var(--ink-faint);font-size:11.5px;font-weight:600;margin:14px 0 10px}
+  .fl-or::before,.fl-or::after{content:'';flex:1;height:1px;background:var(--line)}
+  .fl-row{display:flex;align-items:center;gap:9px;margin-bottom:12px;flex-wrap:wrap}
+  .fl-lbl{font-size:12px;font-weight:600;color:var(--ink-dim);white-space:nowrap}
+  .fl-sel{border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--ink);background:var(--surface);font-family:var(--body)}
+  .fl-num{display:inline-block;min-width:15px;height:15px;border-radius:50%;background:var(--accent);color:var(--bg);font-family:var(--mono);font-size:9px;font-weight:800;text-align:center;line-height:15px;margin-right:4px}
+  .fl-crop{display:grid;grid-template-columns:1fr 30px 1fr;align-items:center;margin:16px 0 6px}
+  .fl-cropcard{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+  .fl-crophead{padding:8px 13px;font-size:11.5px;font-weight:700;border-bottom:1px solid var(--line)}
+  .fl-crophead.bad{background:rgba(232,84,79,.1);color:var(--fail)}
+  .fl-crophead.good{background:rgba(78,201,127,.1);color:var(--ok)}
+  .fl-cropbody{padding:16px;text-align:center}
+  .fl-dwg{border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:8px}
+  .fl-dwghead{background:var(--surface-2);border-bottom:1px solid var(--line);padding:5px 9px;font-family:var(--mono);font-size:9px;color:var(--ink-faint);display:flex;justify-content:space-between}
+  .fl-dwgin{padding:12px;display:flex;align-items:center;justify-content:center;font-size:28px;height:62px}
+  .fl-tag{font-family:var(--mono);font-size:9.5px;padding:3px 8px;border-radius:4px;display:inline-block;margin-top:4px}
+  .fl-cropnote{font-size:11.5px;color:var(--ink-dim);margin-top:7px;line-height:1.45}
+  .fl-arrow{text-align:center;font-size:18px;color:var(--ink-faint)}
+  @media(max-width:760px){.fl-crop{grid-template-columns:1fr}.fl-arrow{padding:8px 0}}
   .c-acc{background:rgba(232,163,61,.12);color:var(--accent);border:1px solid rgba(232,163,61,.28)}
   .c-ok{background:rgba(78,201,127,.13);color:var(--ok);border:1px solid rgba(78,201,127,.25)}
   .c-gate{background:rgba(232,84,79,.1);color:var(--fail);border:1px solid rgba(232,84,79,.26)}
@@ -347,7 +416,7 @@
       <a data-view="golive"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Go-Live Guide</a>
       <a data-view="testing"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2"/><line x1="8" y1="2" x2="16" y2="2"/></svg>Testing</a>
       <div class="grp">Govern</div>
-      <a data-view="architecture"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6m11-11h-6M7 12H1"/></svg>SDI Intelligence Estimating Architecture</a>
+      <a data-view="architecture"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6m11-11h-6M7 12H1"/></svg>SDI Estimating Intelligence Architecture</a>
       <a data-view="rnd"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2"/><line x1="8" y1="2" x2="16" y2="2"/><line x1="7.5" y1="13" x2="16.5" y2="13"/></svg>R&amp;D Capture</a>
       <a data-view="servers"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="11" width="20" height="6" rx="1"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="14" x2="6.01" y2="14"/></svg>Servers</a>
       <a data-view="programme"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>AI Programme</a>
@@ -1865,7 +1934,7 @@
 
     <!-- ===== ARCHITECTURE ===== -->
     <section class="view" id="architecture">
-      <div class="pagehead"><div class="kicker">Build Notes</div><h1>SDI Intelligence Estimating Architecture</h1>
+      <div class="pagehead"><div class="kicker">Build Notes</div><h1>SDI Estimating Intelligence Architecture</h1>
         <p class="sub">How the estimating engine, the portal, the database and the file shares connect. Everything server-side — the browser never touches the VPN, the shares or the DB directly.</p></div>
 
       <!-- SVG Architecture Diagram -->
@@ -3184,6 +3253,7 @@
       </div>
 
       <h2 class="reveal">The home screen &mdash; three ways to search</h2>
+      <div class="fl-mock reveal"><div class="fl-chrome"><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-url">localhost:5000</div></div><div class="fl-body"><div style="display:flex;align-items:center;gap:12px;margin-bottom:18px"><div style="width:40px;height:40px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--accent);font-family:var(--disp);font-size:8px;font-weight:900;text-align:center;line-height:1.15">WE<br>ARE<br>SDI</div><div><div style="font-size:16px;font-weight:800;color:var(--ink)">Fixture Library</div><div style="font-size:11.5px;color:var(--ink-faint)">Years of display data across every brand — now searchable</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px"><div style="flex:1;min-width:96px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 13px"><div class="big" style="font-size:18px">455,213</div><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint);margin-top:2px">Fixtures indexed</div></div><div style="flex:1;min-width:96px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 13px"><div class="big" style="font-size:18px">188</div><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint);margin-top:2px">Brands covered</div></div><div style="flex:1;min-width:96px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 13px"><div class="big" style="font-size:18px">268,895</div><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint);margin-top:2px">Images searchable</div></div><div style="flex:1;min-width:96px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 13px"><div class="big" style="font-size:18px">267,782</div><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint);margin-top:2px">SolidWorks files</div></div></div><div class="fl-tabs"><div class="fl-tab on">Search by name</div><div class="fl-tab">Browse by Brand</div><div class="fl-tab">Image search (AI)</div></div></div></div><p class="fl-cap">The home screen. Three tabs, and the counts update as the index grows.</p>
       <div class="reveal" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px" style="margin-bottom:26px">
         <div class="panel">
           <div class="chip c-prog" style="margin-bottom:9px">1 &middot; Search by name</div>
@@ -3200,6 +3270,7 @@
       </div>
 
       <h2 class="reveal">What a result card shows</h2>
+      <div class="fl-mock reveal"><div class="fl-chrome"><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-url">localhost:5000</div></div><div class="fl-body"><div class="fl-found">✓ Found <b style="color:var(--ink)">47 fixtures</b></div><div class="fl-cards"><div class="fl-card"><div class="fl-thumb">🏪</div><div class="fl-cbody"><div class="fl-brand"><span class="fl-num">1</span>Tesco</div><div class="fl-name"><span class="fl-num">2</span>Gondola Bay LED</div><div class="fl-job"><span class="fl-num">3</span>Job 10421</div><div class="fl-badges"><div class="fl-badge has"><span class="fl-num">4</span>PDF ✓</div><div class="fl-badge has">SW ✓</div><div class="fl-badge has">Max ✓</div></div><div class="fl-btns"><div class="fl-btn pri"><span class="fl-num">5</span>SW ↗</div><div class="fl-btn alt">Max ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div><div class="fl-card"><div class="fl-thumb">🗄️</div><div class="fl-cbody"><div class="fl-brand">M&amp;S</div><div class="fl-name">End Gondola Std</div><div class="fl-job">Job 09876</div><div class="fl-badges"><div class="fl-badge has">PDF ✓</div><div class="fl-badge has">SW ✓</div><div class="fl-badge no">Max</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div><div class="fl-card"><div class="fl-thumb">💊</div><div class="fl-cbody"><div class="fl-brand">Boots</div><div class="fl-name">Wall Hook Strip</div><div class="fl-job">Job 11034</div><div class="fl-badges"><div class="fl-badge no">PDF</div><div class="fl-badge no">SW</div><div class="fl-badge has">Max ✓</div></div><div class="fl-btns"><div class="fl-btn alt">Max ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div></div></div></div><p class="fl-cap">The numbers point at the five things every card carries — they are on this mockup only, not in the tool.</p>
       <p class="sub reveal" style="max-width:70ch;margin-bottom:16px">Every result is a card. It tells you which files exist for that fixture and opens them in one click.</p>
       <div class="panel reveal" style="overflow-x:auto;margin-bottom:14px">
         <table>
@@ -3228,6 +3299,7 @@
       </div>
 
       <h2 class="reveal">Tab 1 &middot; Search by name</h2>
+      <div class="fl-mock reveal"><div class="fl-chrome"><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-url">localhost:5000</div></div><div class="fl-body"><div class="fl-tabs"><div class="fl-tab on">Search by name</div><div class="fl-tab">Browse by Brand</div><div class="fl-tab">Image search (AI)</div></div><input class="fl-input" value="gondola" readonly aria-label="Search by name"><div class="fl-found">✓ Found <b style="color:var(--ink)">47 fixtures</b></div><div class="fl-cards"><div class="fl-card"><div class="fl-thumb">🏪</div><div class="fl-cbody"><div class="fl-brand">Tesco</div><div class="fl-name">Gondola Bay LED</div><div class="fl-job">Job 10421</div><div class="fl-badges"><div class="fl-badge has">PDF ✓</div><div class="fl-badge has">SW ✓</div><div class="fl-badge has">Max ✓</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn alt">Max ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div><div class="fl-card"><div class="fl-thumb">🗄️</div><div class="fl-cbody"><div class="fl-brand">M&amp;S</div><div class="fl-name">End Gondola</div><div class="fl-job">Job 09876</div><div class="fl-badges"><div class="fl-badge has">SW ✓</div><div class="fl-badge no">Max</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div><div class="fl-card"><div class="fl-thumb">🛒</div><div class="fl-cbody"><div class="fl-brand">Boots</div><div class="fl-name">Gondola Std</div><div class="fl-job">Job 11034</div><div class="fl-badges"><div class="fl-badge has">PDF ✓</div><div class="fl-badge has">SW ✓</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div></div></div></div><p class="fl-cap">Results update as you type — no Enter key.</p>
       <div class="panel reveal" style="margin-bottom:26px">
         <ol style="margin:0;padding-left:20px;line-height:2;font-size:14px">
           <li><b>Type in the search bar.</b> Results update instantly. Try a fixture name (<code>gondola</code>), a brand (<code>boots</code>) or part of a name (<code>hook str</code>) — you do not need the whole word.</li>
@@ -3237,6 +3309,7 @@
       </div>
 
       <h2 class="reveal">Tab 2 &middot; Browse by brand</h2>
+      <div class="fl-mock reveal"><div class="fl-chrome"><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-url">localhost:5000</div></div><div class="fl-body"><div class="fl-tabs"><div class="fl-tab">Search by name</div><div class="fl-tab on">Browse by Brand</div><div class="fl-tab">Image search (AI)</div></div><div class="fl-tiles"><div class="fl-tile"><div class="fl-ticon">B</div><div class="fl-tname">Boots</div><div class="fl-tcount">31,214 fixtures</div></div><div class="fl-tile"><div class="fl-ticon">H</div><div class="fl-tname">Harrods</div><div class="fl-tcount">14,726 fixtures</div></div><div class="fl-tile"><div class="fl-ticon">M</div><div class="fl-tname">Milwaukee</div><div class="fl-tcount">166,111 images</div></div><div class="fl-tile"><div class="fl-ticon">T</div><div class="fl-tname">Tesco</div><div class="fl-tcount">24,229 fixtures</div></div><div class="fl-tile"><div class="fl-ticon">U</div><div class="fl-tname">Unilever</div><div class="fl-tcount">8,901 fixtures</div></div></div><div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px"><div class="fl-row"><div style="font-size:13px;font-weight:800;color:var(--ink)">📂 Boots</div><div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">31,214 fixtures</div></div><input class="fl-input" value="" placeholder="Search inside Boots…  e.g. hook, gondola, wall bay" readonly aria-label="Search inside brand"><div class="fl-cards"><div class="fl-card"><div class="fl-thumb">💊</div><div class="fl-cbody"><div class="fl-brand">Boots</div><div class="fl-name">Wall Hook Strip</div><div class="fl-job">Job 11034</div><div class="fl-badges"><div class="fl-badge has">PDF ✓</div><div class="fl-badge has">SW ✓</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div><div class="fl-card"><div class="fl-thumb">🧴</div><div class="fl-cbody"><div class="fl-brand">Boots</div><div class="fl-name">End Cap Display</div><div class="fl-job">Job 10988</div><div class="fl-badges"><div class="fl-badge has">PDF ✓</div><div class="fl-badge has">SW ✓</div><div class="fl-badge has">Max ✓</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn alt">Max ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div></div></div></div></div><p class="fl-cap">Pick a client, then filter inside them.</p>
       <div class="panel reveal" style="margin-bottom:12px">
         <ol style="margin:0;padding-left:20px;line-height:2;font-size:14px">
           <li><b>Click any brand tile.</b> All 188 are listed A&ndash;Z; a tile opens that brand's full fixture history.</li>
@@ -3250,6 +3323,7 @@
       </div>
 
       <h2 class="reveal">Tab 3 &middot; Image search (AI)</h2>
+      <div class="fl-mock reveal"><div class="fl-chrome"><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-url">localhost:5000</div></div><div class="fl-body"><div class="fl-tabs"><div class="fl-tab">Search by name</div><div class="fl-tab">Browse by Brand</div><div class="fl-tab on">Image search (AI)</div></div><div class="fl-lbl" style="margin-bottom:7px">Looking for:</div><div class="fl-tabs" style="background:transparent;border:0;padding:0"><div class="fl-tab on" style="border:1px solid var(--accent)">SolidWorks file</div><div class="fl-tab" style="border:1px solid var(--line)">3DS Max file</div><div class="fl-tab" style="border:1px solid var(--line)">Anything</div></div><div class="fl-row" style="margin-top:12px"><div class="fl-lbl">Brand (optional):</div><select class="fl-sel" aria-label="Brand"><option>All brands</option><option>Tesco</option><option>Boots</option><option>Milwaukee</option></select><div style="font-size:11.5px;color:var(--ink-faint)">← pick a brand for much sharper results</div></div><div class="fl-drop"><div style="font-size:32px;margin-bottom:8px">📁</div><div class="fl-dropt">Click to choose an image — or drag and drop</div><div class="fl-drops">JPG · PNG · screenshot · render · drawing crop · any image</div></div><div style="font-size:11.5px;color:var(--ink-faint)">After upload — the 60 closest matches appear below, most similar first.</div></div></div><p class="fl-cap">Mode first, brand second, image last. The mode decides what comes back.</p>
       <p class="sub reveal" style="max-width:70ch;margin-bottom:16px">Drop any photo or render and the tool returns the 60 closest visual matches from the whole library. Choose the mode first — it decides what you get back.</p>
       <div class="reveal" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px" style="margin-bottom:16px">
         <div class="panel" style="border-color:rgba(78,201,127,.3)">
@@ -3275,6 +3349,7 @@
       </div>
 
       <h2 class="reveal">Tab 3, without an image &middot; describe it in words</h2>
+      <div class="fl-mock reveal"><div class="fl-chrome"><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-dot"></div><div class="fl-url">localhost:5000</div></div><div class="fl-body"><div class="fl-tabs"><div class="fl-tab">Search by name</div><div class="fl-tab">Browse by Brand</div><div class="fl-tab on">Image search (AI)</div></div><div class="fl-lbl" style="margin-bottom:7px">Looking for:</div><div class="fl-tabs" style="background:transparent;border:0;padding:0"><div class="fl-tab on" style="border:1px solid var(--accent)">SolidWorks file</div><div class="fl-tab" style="border:1px solid var(--line)">3DS Max file</div><div class="fl-tab" style="border:1px solid var(--line)">Anything</div></div><div class="fl-row" style="margin-top:12px"><div class="fl-lbl">Brand:</div><select class="fl-sel" aria-label="Brand"><option>Tesco</option></select></div><div class="fl-drop" style="opacity:.45;padding:16px 20px"><div style="font-size:22px;margin-bottom:4px">📁</div><div class="fl-dropt">Or skip the image entirely…</div></div><div class="fl-or"><span>or describe it in words</span></div><input class="fl-input" value="tesco gondola bay with LED lighting and white metal shelves" readonly aria-label="Describe the fixture"><div class="fl-found">Results:</div><div class="fl-cards"><div class="fl-card"><div class="fl-thumb">🏪</div><div class="fl-cbody"><div class="fl-brand">Tesco</div><div class="fl-name">LED Gondola End</div><div class="fl-job">Job 10421</div><div class="fl-match" style="color:var(--ok)">Very close match</div><div class="fl-badges"><div class="fl-badge has">PDF ✓</div><div class="fl-badge has">SW ✓</div><div class="fl-badge has">Max ✓</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn alt">Max ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div><div class="fl-card"><div class="fl-thumb">🛍️</div><div class="fl-cbody"><div class="fl-brand">Tesco</div><div class="fl-name">Metro Gondola</div><div class="fl-job">Job 09221</div><div class="fl-match" style="color:var(--accent)">Good match</div><div class="fl-badges"><div class="fl-badge has">SW ✓</div></div><div class="fl-btns"><div class="fl-btn pri">SW ↗</div><div class="fl-btn ">Folder ↗</div></div></div></div></div></div></div><p class="fl-cap">The match quality is shown on each card, so you can see how confident it is.</p>
       <p class="sub reveal" style="max-width:70ch;margin-bottom:16px">No photo? Describe the look — shape, colour, material, context — and the tool matches visually. Be specific.</p>
       <div class="reveal" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:26px">
         <div class="panel" style="border-color:rgba(78,201,127,.3)">
@@ -3304,6 +3379,7 @@
         revision table and the dimensions as well as the shape — and it matches on all of it. Crop
         tight to the shape and it matches on the silhouette, which is what you actually want.
       </div>
+      <div class="fl-crop reveal"><div class="fl-cropcard"><div class="fl-crophead bad">✕ Full drawing — poor results</div><div class="fl-cropbody"><div class="fl-dwg"><div class="fl-dwghead"><span>SDI Engineering · Confidential</span><span>Rev. 03</span></div><div class="fl-dwgin">📐</div></div><div class="fl-tag" style="background:rgba(232,163,61,.12);color:var(--accent)">Title block · revision table · dimensions · notes</div><div class="fl-cropnote">The tool matches on the text and annotations around the shape as well as the shape.</div></div></div><div class="fl-arrow">→</div><div class="fl-cropcard"><div class="fl-crophead good">✓ Cropped to the shape — good results</div><div class="fl-cropbody"><div class="fl-dwg" style="border-color:rgba(78,201,127,.3)"><div class="fl-dwgin" style="background:rgba(78,201,127,.06);height:84px;font-size:36px">📐</div></div><div class="fl-tag" style="background:rgba(78,201,127,.12);color:var(--ok)">Just the front elevation or isometric</div><div class="fl-cropnote">The tool matches on the silhouette, which is what you are actually looking for.</div></div></div></div>
       <div class="panel reveal" style="margin-bottom:14px">
         <ol style="margin:0;padding-left:20px;line-height:2;font-size:14px">
           <li><b>Open your drawing</b> — the PDF or drawing file you want to match.</li>
@@ -3927,7 +4003,7 @@
   const links=[...document.querySelectorAll('.nav a')];
   const views=[...document.querySelectorAll('.view')];
   const crumb=document.getElementById('crumb');
-  const labels={dashboard:'Dashboard',roadmap:'AI Roadmap',tools:'SDI Estimating Intelligence Tools',files:'Files & Directories',reports:'Status Reports',architecture:'SDI Intelligence Estimating Architecture',golive:'Go-Live Guide',rnd:'R&D Capture',servers:'Server Infrastructure',programme:'AI Programme','fixture-guide':'SDI Fixture Library Guide'};
+  const labels={dashboard:'Dashboard',roadmap:'AI Roadmap',tools:'SDI Estimating Intelligence Tools',files:'Files & Directories',reports:'Status Reports',architecture:'SDI Estimating Intelligence Architecture',golive:'Go-Live Guide',rnd:'R&D Capture',servers:'Server Infrastructure',programme:'AI Programme','fixture-guide':'SDI Fixture Library Guide'};
   function go(id,updateHash){
     if(!id||id==='undefined')return;
     links.forEach(l=>l.classList.toggle('active',l.dataset.view===id));

@@ -200,3 +200,58 @@ def test_the_estimating_tool_is_called_sdi_estimating_intelligence_in_operate(pa
         f"{page_name}'s Operate group does not call it SDI Estimating Intelligence")
     assert not re.search(r"(?<!SDI )>Estimating Intelligence</a>", block), (
         f"{page_name}'s Operate group still carries the unprefixed name")
+
+
+# ── the screens the guide is a guide to ───────────────────────────────────────
+#
+# The Fixture Library guide was converted from Muhammad's original by keeping every word and
+# dropping all six BROWSER MOCKUPS — the little windows showing what each tab actually looks
+# like. That is the wrong half to keep. A user guide for a visual search tool that never shows
+# the screen is a description of software rather than a picture of it, and the omission is
+# invisible in a diff because nothing is missing, only illustrated less.
+#
+# The originals were a light palette in Segoe UI with their own class names; pasted in they
+# would be white rectangles that ignore the theme toggle. So they are rebuilt from this site's
+# tokens — and pinned here, because "convert it to our styling" is exactly the operation that
+# loses them.
+
+_GUIDE_MOCKUPS = 6      # home · result cards · name · brand · image search · describe
+
+
+def _guide_view() -> str:
+    portal = (_BACKEND / "sdi-intelligence-portal.html").read_text(encoding="utf-8")
+    at = portal.index('id="fixture-guide"')
+    return portal[at:portal.index("</section>", at)]
+
+
+def test_every_tab_of_the_tool_is_shown_and_not_only_described():
+    guide = _guide_view()
+    found = guide.count('class="fl-mock reveal"')
+    assert found == _GUIDE_MOCKUPS, (
+        f"the Fixture Library guide shows {found} screens, expected {_GUIDE_MOCKUPS}. Each tab "
+        f"needs its own mockup — the words alone were what the first conversion kept.")
+
+
+def test_the_crop_demo_shows_both_sides():
+    """The single most useful picture in the guide: a full drawing next to a cropped one. It
+    only teaches anything as a comparison, so half of it is worse than none."""
+    guide = _guide_view()
+    assert guide.count('class="fl-cropcard"') == 2, "the crop demo is not a before-and-after"
+    assert "fl-crophead bad" in guide and "fl-crophead good" in guide
+
+
+def test_the_mockups_are_built_from_theme_tokens_not_fixed_colours():
+    """The reason they were rebuilt rather than pasted. A literal here is a rectangle that
+    stays dark when the page goes light — the same fault the palette audit exists for."""
+    guide = _guide_view()
+    literals = re.findall(r"(?<!&)#[0-9a-fA-F]{3,8}\b", guide)
+    assert not literals, f"the guide's mockups carry fixed colours: {sorted(set(literals))}"
+
+
+def test_the_numbered_callouts_are_marked_as_annotation():
+    """The card mockup carries ①–⑤ pointing at its five parts. They are on the MOCKUP, not in
+    the tool, and a reader looking for them on screen would not find them."""
+    guide = _guide_view()
+    assert guide.count('class="fl-num"') == 5, "the result-card callouts are not all present"
+    assert "not in the tool" in guide, (
+        "nothing tells the reader the numbers are annotation rather than part of the screen")
