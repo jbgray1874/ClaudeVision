@@ -194,6 +194,20 @@ def test_it_distinguishes_python_from_html_afterwards():
         "the restart advice must come first; it is the one that blocks everything else")
 
 
+def test_a_changed_manifest_is_called_out_before_the_restart():
+    """The only follow-up here that does not degrade the service but PREVENTS IT STARTING.
+    FastAPI raises at startup if an upload endpoint is declared without python-multipart, so
+    a copy that looked fine is followed by a service that will not come up — and the obvious
+    reading of that is "the copy broke it", which sends you to revert rather than to pip."""
+    tail = _S[_S.index("# WHAT NOW NEEDS DOING"):]
+    assert "pip install -r" in tail, (
+        "a changed requirements.txt is not called out, so the server can be left with code "
+        "that imports a package its virtualenv does not have")
+    assert tail.index("pip install -r") < tail.index("restart-service.ps1"), (
+        "the install must be advised BEFORE the restart — after it, the service is already "
+        "down and the reason looks like the copy rather than the manifest")
+
+
 def test_the_port_is_the_servers_and_not_the_laptops():
     """8072 is the laptop. 8071 is SDI-APP01. This script only ever talks about the server."""
     assert "8071" in _S

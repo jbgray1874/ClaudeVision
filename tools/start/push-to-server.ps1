@@ -177,6 +177,21 @@ Write-Host ""
 # serving its own cached copy, which looks exactly the same as a copy that did not happen.
 $code = $changed | Where-Object { $_.Rel -like "*.py" }
 $html = $changed | Where-Object { $_.Rel -like "*.html" }
+$reqs = $changed | Where-Object { $_.Rel -like "*requirements.txt" }
+
+# THIS ONE FIRST, BECAUSE IT IS THE ONE THAT STOPS THE SERVICE COMING BACK.
+#
+# A changed manifest means the server's virtualenv may be missing something the copied code
+# imports. FastAPI raises AT STARTUP if an upload endpoint is declared without
+# python-multipart -- so the service does not misbehave, it refuses to start, immediately
+# after a copy that looked like it worked. Install before restarting, not after.
+if ($reqs) {
+    Write-Host "  requirements.txt changed. INSTALL BEFORE RESTARTING, on the server:" -ForegroundColor Yellow
+    Write-Host "      cd C:\ClaudeVision" -ForegroundColor Yellow
+    Write-Host "      .\.venv\Scripts\python.exe -m pip install -r sdi-intelligence-backend\requirements.txt" -ForegroundColor Yellow
+    Write-Host "  A missing package here does not degrade the service, it prevents it starting." -ForegroundColor Yellow
+    Write-Host ""
+}
 
 if ($code) {
     Write-Host "  Python changed, so the service must be restarted ON THE SERVER before any" -ForegroundColor Yellow
