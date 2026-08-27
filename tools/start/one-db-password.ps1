@@ -76,8 +76,30 @@ if ($null -eq $beVal) {
     Write-Host ""
     return
 }
+# A MACHINE WITH ONE .env HAS NOTHING TO DE-DUPLICATE, AND TELLING IT OTHERWISE IS WRONG.
+#
+# SDI-APP01 has no repo-root .env at all -- it serves the portal and queues estimates, and its
+# whole configuration lives beside the service. Run there, this script said "put the current
+# password in the repo-root .env FIRST", which would CREATE the second copy that the rest of
+# it exists to remove. Advice that is confidently wrong is worse than none: it was followed
+# once on a live machine before anybody questioned it.
+#
+# The distinction is whether the root file EXISTS. Missing entirely = a single-file machine,
+# already in the state we want. Present but not setting the key = a real half-configured
+# machine, where falling through would leave no password at all, and the refusal stands.
+if (-not (Test-Path -LiteralPath $rootEnv)) {
+    Write-Host "  Nothing to do - there is no repo-root .env on this machine, so there is no" -ForegroundColor Green
+    Write-Host "  second copy and nothing to fall through to. One file already means one place" -ForegroundColor Green
+    Write-Host "  to rotate. DO NOT create a repo-root .env here to satisfy this script - that" -ForegroundColor Green
+    Write-Host "  would manufacture the split it exists to remove." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  If the login is still failing, the password in the file above is wrong or the" -ForegroundColor Yellow
+    Write-Host "  service has not been restarted since it changed - .env is read once at start." -ForegroundColor Yellow
+    Write-Host ""
+    return
+}
 if ($null -eq $rootVal -or $rootVal -eq "") {
-    Write-Host "  STOP. The repo-root .env does not set $Key." -ForegroundColor Red
+    Write-Host "  STOP. The repo-root .env exists but does not set $Key." -ForegroundColor Red
     Write-Host "  Removing the service's copy would leave it with no password at all. Put the" -ForegroundColor Red
     Write-Host "  current one in the repo-root .env FIRST, then run this again." -ForegroundColor Red
     Write-Host ""

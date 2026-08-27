@@ -70,6 +70,32 @@ def test_it_stops_the_only_way_this_could_do_harm():
         "the guard does not actually stop — it must refuse, not warn and continue")
 
 
+def test_a_machine_with_one_env_is_told_it_is_already_right():
+    """SDI-APP01 has no repo-root .env — its whole configuration lives beside the service. Run
+    there, this script told you to "put the current one in the repo-root .env FIRST", which
+    would CREATE the second copy the rest of it exists to remove. It said so twice on a live
+    machine before anybody questioned it, which is the cost of advice that is confidently
+    wrong rather than absent."""
+    assert 'if (-not (Test-Path -LiteralPath $rootEnv))' in _S, (
+        "the script does not distinguish a single-file machine from a half-configured one")
+    at = _S.index('if (-not (Test-Path -LiteralPath $rootEnv))')
+    branch = _S[at:at + 1200]
+    assert "Nothing to do" in branch, "a single-file machine is not told it is already correct"
+    assert "DO NOT create" in branch, (
+        "nothing warns against creating a repo-root .env to satisfy the script — which is the "
+        "exact wrong move, and the one the old message asked for")
+    assert "restarted" in branch, (
+        "on the machine where this branch fires, the remaining cause is a wrong value or a "
+        "process that has not re-read the file; saying nothing sends somebody back to the file")
+
+
+def test_the_refusal_still_stands_for_a_root_file_that_exists_but_is_silent():
+    """The guard that was there for a reason. A root .env PRESENT but not setting the key is a
+    genuinely half-configured machine: falling through would leave no password at all."""
+    at = _S.index("STOP. The repo-root .env exists")
+    assert "exit 2" in _S[at:at + 600], "the real harmful case no longer refuses"
+
+
 def test_it_backs_the_file_up_before_touching_it():
     edit = _S.index("# ── change it")
     write = _S.index("WriteAllLines")
