@@ -246,8 +246,8 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       </div>
       <div class="stamp">
         <div>ISSUED &nbsp;<b>27 AUG 2026</b></div>
-        <div>WORKSTREAMS &nbsp;<b>3</b> &nbsp;· &nbsp;OWNERS <b>3</b></div>
-        <div>PREPARED BY &nbsp;<b>J. GRAY</b></div>
+        <div>OWNERS &nbsp;<b>J. GRAY</b> &nbsp;·&nbsp; <b>Y. KUMAR</b> &nbsp;·&nbsp; <b>M. YAZIR</b></div>
+        <div>COMPILED BY &nbsp;<b>J. GRAY</b></div>
       </div>
     </div>
 
@@ -786,6 +786,16 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
     <p class="subhead">Ordered by what it costs to leave alone. Recorded here rather than left to
     be rediscovered.</p>
 
+    <div class="callout plainbox">
+      <h3>Read the balance of this list carefully</h3>
+      <p>Most of what follows sits on Workstream 1, and that is <b>not</b> a statement about which
+      workstream is in the best shape. It reflects how each is reported: Workstream 1 is reported
+      from its own source code, where a defect can be found by looking; Workstreams 2 and 3 are
+      reported from delivery trackers, which record phases and dates rather than faults. The two
+      are not comparable, and a workstream with fewer entries here has not been shown to have
+      fewer problems — only fewer that this method can see.</p>
+    </div>
+
     <div class="item" style="border-left-color:var(--crit)">
       <h3>A published API secret has never been rotated<span class="pill p-stop">Act</span></h3>
       <p>The BrightHR client secret has been in the estimating repository's history since its
@@ -870,6 +880,42 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       build phases. This is a schedule shape rather than a defect, and it is the single most
       likely place for the programme's first go-live to slip.</p>
       <div class="why"><b>Workstream 3.</b> A decision for the owner, not a fix.</div>
+    </div>
+
+    <div class="item">
+      <h3>Workstream 2 has one developer and no cover<span class="pill p-open">Open</span></h3>
+      <p>Requirement collection, development, unit testing, peer review, deployment and go-live
+      are all hands-on and run one at a time; only user testing overlaps. Leave from 10 December
+      to 4 January sits inside the PDM phases. Every date from P3.1 onwards depends on one person
+      being available, and there is no second pair of hands to move work to.</p>
+      <div class="why"><b>Workstream 2.</b> A capacity constraint, not an estimate of effort —
+      which means it cannot be recovered by re-planning.</div>
+    </div>
+
+    <div class="item">
+      <h3>The PDM requirement register is still open<span class="pill p-open">Open</span></h3>
+      <p>Around 50 requirements have been captured from design, engineering and directors, and
+      the register has not been closed. The four PDM phases carry dates against a scope that can
+      still grow.</p>
+      <div class="why"><b>Workstream 2.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>The indexing finding has not yet been re-verified<span class="pill p-open">Open</span></h3>
+      <p>Integration testing round 1 found the Renders folders were not indexed — roughly 162,000
+      of 268,000 images. Round 2 (15–20 Sep) has to confirm all ~268,000 are searchable and all
+      three models accurate. Until it does, the 25 Sep go-live rests on a fix that has been made
+      but not yet proven, and it is the same test that caught the problem the first time.</p>
+      <div class="why"><b>Workstream 3.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Client Briefing is building to a document not yet signed<span class="pill p-open">Open</span></h3>
+      <p>Requirements gathering ends 21 September and development starts on the 25th. The scope
+      document has to be agreed in those four days, and the entire build is specified by it. A
+      week's delay in sign-off is a week off the front of a three-week build, not a week added
+      to the end.</p>
+      <div class="why"><b>Workstream 3.</b></div>
     </div>
 
     <div class="item">
