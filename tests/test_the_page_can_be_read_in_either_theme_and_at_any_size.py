@@ -84,6 +84,43 @@ def test_the_only_bare_colours_left_are_ones_that_mean_the_same_in_both_themes()
 
 # ── the light palette is complete ──────────────────────────────────────────────
 
+def test_no_ground_or_ink_is_written_as_an_rgba_literal():
+    """THE ONE THE HEX PASS COULD NOT SEE, and it was the worst-placed of the lot.
+
+    The sticky header's own background was `rgba(10,10,11,.82)` and the table row hover was
+    `rgba(255,255,255,.015)`. Neither is a hex value, so tokenising 214 hex literals walked
+    straight past both — leaving a near-black bar across the top of the light page, which is
+    the first thing anybody would see, and a hover state invisible on a light ground.
+
+    Accent washes are fine and are the reason this test looks at the CHANNELS rather than
+    banning rgba outright: `rgba(232,163,61,.06)` is amber at 6% and works on either ground.
+    What cannot be a literal is a colour that is nearly black or nearly white, because those
+    ARE the ground and the ink.
+    """
+    # The palette blocks are where literal values BELONG — a token has to hold a real colour
+    # somewhere, and that somewhere is the two `:root` blocks. Scanning them would flag the
+    # definitions this test exists to insist on, which is the test marking its own fix wrong.
+    scan = _CSS
+    for block in (":root{", ':root[data-theme="light"]{'):
+        at = scan.index(block)
+        scan = scan[:at] + " " * (scan.index("}", at) + 1 - at) + scan[scan.index("}", at) + 1:]
+
+    offenders = []
+    for m in re.finditer(r"rgba\((\d+),\s*(\d+),\s*(\d+),\s*[\d.]+\)", scan):
+        r, g, b = (int(m.group(i)) for i in (1, 2, 3))
+        if max(r, g, b) <= 40 or min(r, g, b) >= 215:
+            line = scan[:m.start()].count("\n") + 1
+            # Shadows are the exception: black at low alpha is a shadow in any theme, and a
+            # shadow that flipped to white would glow rather than fall.
+            context = scan[max(0, m.start() - 90):m.start()]
+            if "shadow" in context.lower():
+                continue
+            offenders.append(f"line {line}: {m.group(0)}")
+    assert not offenders, (
+        "grounds and inks written as rgba() are beyond the theme switch:\n  "
+        + "\n  ".join(offenders))
+
+
 def test_light_redefines_every_token_dark_defines():
     """A token the light block forgets inherits the dark value — a near-black hairline on a
     white panel, which reads as a rendering fault rather than a missing line of CSS."""
@@ -161,6 +198,24 @@ def test_the_sizes_the_buttons_offer_are_the_sizes_the_script_accepts():
     allowed = sorted(int(m) for m in
                      re.search(r"ZOOMS\s*=\s*\[([\d,\s]+)\]", _PORTAL).group(1).split(","))
     assert buttons == allowed == [100, 125, 150, 175, 200]
+
+
+def test_the_size_control_survives_the_width_of_an_actual_laptop():
+    """IT DID NOT, AND THIS IS WHY THE FIRST REPORT WAS "I CAN'T SEE THE RESIZING".
+
+    The control was hidden below 1100px. A 1366-wide laptop screen at 125% Windows scaling —
+    the ordinary setup — reports 1093 CSS pixels, so the control vanished on exactly the
+    machine it was asked for, and looked like it had never been built.
+
+    A breakpoint that hides a feature is a decision about who gets it. 820px is below the
+    width where the sidebar itself goes, and a phone has pinch-zoom anyway.
+    """
+    hides = [int(m.group(1)) for m in
+             re.finditer(r"@media \(max-width:(\d+)px\)\{[^}]*\.vc-zoom\{display:none", _CSS)]
+    assert hides, "no rule hides the zoom control — check this test still matches the CSS"
+    assert max(hides) <= 900, (
+        f"the zoom control disappears below {max(hides)}px. Laptops are narrower than that "
+        f"once Windows scaling is applied.")
 
 
 def test_the_page_is_scaled_rather_than_the_text_alone():
