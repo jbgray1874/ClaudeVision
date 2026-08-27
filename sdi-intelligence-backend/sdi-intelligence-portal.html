@@ -599,7 +599,9 @@
         <!-- Phases, refs and dates below are the delivery tracker's own (Yogesh Kumar, P1–P3.4,
              C1–C4, F1–F4). Two things this page previously got wrong and which matter: the PDM is
              an SDI in-house build, not integration with the SOLIDWORKS PDM vault; and DXF
-             generation is already POC-proven, held by a licence rather than by development. -->
+             generation is already POC-proven. It WAS held by a licence; a permanent seat is now
+             installed on the estimating laptop, so that sentence is written in the past tense
+             here and everywhere else it appeared. Only the seat-per-machine question is open. -->
         <div class="ph prog reveal" style="animation-delay:.03s"><div class="ttl">Parallel · SDI Technical Design Intelligence <span class="chip c-plan">Sep 2026 → Jan 2027</span></div><div class="dsc">Runs <i>alongside</i> Phase 1, not after it — the first deliverable feeds the estimating engine that is in parallel run now. Owner: <b>Yogesh Kumar</b>, and he is the sole developer, so the phases below run one at a time rather than in parallel with each other. Dates exclude weekends, England &amp; Wales bank holidays and leave from 10 Dec 2026 to 4 Jan 2027 — which is why the later PDM phases land in the new year.
           <div style="margin-top:13px;display:flex;flex-direction:column;gap:9px">
             <div style="display:flex;align-items:flex-start;gap:10px"><span class="chip c-prog" style="font-size:10px;flex-shrink:0;min-width:86px;text-align:center">15 Sep 26</span><div><b>P1 · DM API — Design Files Extraction Tool.</b> Pulls the correct drawing pack and manufacturing files for a project straight into the SDI estimating app. In progress, 60% done; the endpoint went live for the estimating app on 24 Aug 2026. Reads without a SolidWorks seat — Document Manager SDK and licence only, read-only, <b>no writes to the live CAD share</b>.</div></div>
@@ -611,7 +613,7 @@
           </div>
 
           <div style="margin-top:13px;padding:11px 13px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px">
-            <b style="color:var(--accent)">Proven, but held by a licence.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B, yet every one carries <i>go-live subject to SolidWorks licence</i> — the constraint is a seat, not development effort:
+            <b style="color:var(--ok)">Proven, and the licence is no longer the blocker.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B. Every one carried <i>go-live subject to SolidWorks licence</i> — and a <b>permanent seat is now installed on the estimating laptop</b>, so they can run there. What is still open is which other machines get a seat, not whether the tools work:
             <ul style="margin:8px 0 0 17px;line-height:1.8;font-size:13px">
               <li><b>C1 · Multi-format export package</b> — one-click release set: <b>DXF flat patterns</b>, PDF/DWG drawings, STEP per part, IGES per body, mirroring the project folder structure</li>
               <li><b>C2 · Design validation suite</b> — topple, weight, interference and cross-part hole alignment in one pass, one report. Topple validated on a live assembly (12173-02-GA, ~25.9°)</li>
@@ -2591,7 +2593,7 @@
         </div>
         <div style="background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.2);border-radius:6px;padding:12px;font-size:12px">
           <b style="color:var(--accent)">Resource:</b> Yogesh Kumar — <b>sole developer</b>. Requirement collection, development, unit testing, peer review, deployment and go-live are all hands-on and must run one at a time; only user testing overlaps. That single-resource rule, plus leave from 10 Dec 2026 to 4 Jan 2027, is what pushes the later PDM phases into the new year — the dates are a capacity constraint, not an estimate of effort.
-          <br><b style="color:var(--accent);margin-top:4px;display:block">Open dependency:</b> C1–C4 (export package, validation suite, drawing generation, tolerance checks) are POC-complete but every one is marked <i>go-live subject to SolidWorks licence</i>. Resolving a seat releases four finished tools at once — including the DXF flat-pattern generation the estimating engine most needs.
+          <br><b style="color:var(--ok);margin-top:4px;display:block">Dependency cleared, in part:</b> C1–C4 (export package, validation suite, drawing generation, tolerance checks) are POC-complete and every one was marked <i>go-live subject to SolidWorks licence</i>. A <b>permanent seat is now installed on the estimating laptop</b>, which releases four finished tools there — including the DXF flat-pattern generation the estimating engine most needs. The open question is now seats on the other machines, which is a decision rather than a constraint.
           <br><b style="color:var(--accent);margin-top:4px;display:block">Goal:</b> Accelerate the design process — faster drawing creation, higher DXF coverage, richer geometry data flowing into estimating and production.
         </div>
 
@@ -3400,7 +3402,7 @@
      desc:'Reads SolidWorks project data natively, and builds SDI its own PDM — Sept 2026 to Jan 2027.',
      detail:'Two threads run under one workstream. The <b>Document Manager API</b> tools (P1, P2) pull the correct drawing pack for a project straight into the estimating app and into the shop-floor Production folder — reading without a SolidWorks seat, read-only, never writing to the live CAD share. Then an <b>SDI in-house PDM</b> (P3.1–P3.4) gives engineering trustworthy file management, CAD-awareness, revision control and release workflows. It is built on GitLab + LFS with a DM API intelligence layer over PostgreSQL — it is <b>not</b> an integration with the SOLIDWORKS PDM vault.'
        +'<div style="margin-top:20px;padding:14px 16px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.24);border-radius:6px">'
-       +'<b style="color:var(--accent)">Proven, but held by a licence.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B — C1 multi-format export (including <b>DXF flat patterns</b>), C2 the topple / weight / interference / hole-alignment check suite, C3 drawing generation from a model, C4 machine-tolerance validation against the TRUMPF tool list (in progress). Every one is marked <i>go-live subject to SolidWorks licence</i>. Resolving one seat releases four finished tools — among them the DXF generation that answers the estimating engine’s largest accuracy limiter.</div>'
+       +'<b style="color:var(--ok)">Proven, and the seat is now installed.</b> Four SolidWorks COM tools are POC-complete and demoed to Ed Cooper and Ian B — C1 multi-format export (including <b>DXF flat patterns</b>), C2 the topple / weight / interference / hole-alignment check suite, C3 drawing generation from a model, C4 machine-tolerance validation against the TRUMPF tool list (in progress). Every one carried <i>go-live subject to SolidWorks licence</i>, and a <b>permanent seat is now installed on the estimating laptop</b> — so all four can run there, among them the DXF generation that answers the estimating engine’s largest accuracy limiter. Seats on the other machines are the remaining question.</div>'
        +'<div style="margin-top:14px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;font-size:13px">'
        +'<b>Why the dates run to January.</b> Yogesh is the sole developer. Requirement collection, development, unit testing, peer review, deployment and go-live are all hands-on and must run one at a time — only user testing overlaps. That, plus leave from 10 Dec 2026 to 4 Jan 2027, is what pushes P3.3 and P3.4 into the new year. The dates are a capacity constraint, not an estimate of effort.</div>',
      sections:[{title:'Delivery phases · tracker refs P1–P3.4', body:
@@ -3424,7 +3426,7 @@
      tech:['Document Manager SDK', 'SOLIDWORKS COM API', 'GitLab + LFS', 'PostgreSQL', 'REST + MCP tools', 'Windows service'],
      phase:'Workstream 2 · SEP 2026 → JAN 2027',
      invoke:'P1’s REST endpoint is already wired into the estimating page — Extract Drawing Pack. P2 offers an operator UI. The COM tools ship as an installable tray app. Full phase detail is on the <b>AI Programme</b> and <b>AI Roadmap</b> pages.',
-     next:'Resolve a SolidWorks seat — it is the single constraint holding C1–C4, and it releases DXF flat-pattern generation into the estimating engine.'},
+     next:'Decide which machines beyond the estimating laptop get a SolidWorks seat. The laptop’s seat already releases C1–C4 there, including DXF flat-pattern generation into the estimating engine; the rest of the department is a licensing decision, not a technical one.'},
 
     // --- WORKSTREAM 3 — CREATIVE DESIGN ---
     //
