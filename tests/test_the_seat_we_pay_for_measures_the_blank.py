@@ -173,6 +173,49 @@ def test_nothing_is_written_to_any_file():
     assert "nothing is written" in doc.lower()
 
 
+# ── the analyser is launched by an interpreter that can talk to SolidWorks ────
+#
+# Everything above is moot if the subprocess never gets as far as a COM call.
+
+def test_the_analyser_runs_under_the_interpreter_that_is_already_running():
+    """THE OTHER WAY THIS SILENTLY DOES NOT FIRE, and it has nothing to do with flags.
+
+    The engine is started as `.venv\\Scripts\\python.exe src\\main.py`. `_run_analyser`
+    resolved its interpreter as
+
+        exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or "python"
+
+    so with SDI_PYTHON_EXE unset it launched the analyser as bare `python` — a DIFFERENT
+    interpreter, the system one or none at all, with no pywin32 in it. Every COM call then
+    fails on a machine with a perfectly good seat, and invariants reports "the analyser had a
+    problem" when the real problem is which python ran it.
+
+    sw_batch_health.py, in the same directory, already resolved this correctly. Two ways of
+    finding the interpreter is the same defect as two copies of an exclusion list, and it is
+    invisible for the same reason: on a machine where bare `python` HAPPENS to be the venv,
+    nothing goes wrong at all.
+    """
+    body = _run_analyser_source()
+    m = re.search(r"exe\s*=\s*(.+)", body)
+    assert m, "_run_analyser no longer resolves an interpreter"
+    resolution = m.group(1)
+    assert "sys.executable" in resolution, (
+        f"the analyser is launched as {resolution.strip()} — without sys.executable it can "
+        f"reach an interpreter that has no pywin32, and no COM call will succeed")
+    assert resolution.index("sys.executable") < resolution.index('"python"'), (
+        "bare \"python\" is tried before the running interpreter")
+
+
+def test_both_launchers_resolve_the_interpreter_the_same_way():
+    """The drift that caused it. If these two ever disagree again, one of them is wrong and
+    nothing will say which."""
+    health = (_ROOT / "tools" / "solidworks" / "sw_batch_health.py").read_text(encoding="utf-8")
+    for source, name in ((_run_analyser_source(), "_run_analyser"),
+                         (health, "sw_batch_health")):
+        assert "SDI_PYTHON_EXE" in source and "sys.executable" in source, (
+            f"{name} does not resolve the interpreter the same way as its sibling")
+
+
 # ── the connector still parses and the analyser still imports cleanly ─────────
 
 @pytest.mark.parametrize("path", [_ANALYSER_PATH, _CONNECTOR_PATH],

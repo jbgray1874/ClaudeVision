@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -895,7 +896,18 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
     continued on PDF+DXF and said nothing. The caller records the reason."""
     if analyser is None:
         analyser = Path(__file__).resolve().parents[2] / "tools" / "solidworks" / "sw_native_analyse.py"
-    exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or "python"
+    # THE INTERPRETER THAT IS ALREADY RUNNING, not whatever `python` means on PATH.
+    #
+    # The engine is started as `.venv\Scripts\python.exe src\main.py`. Launching the
+    # analyser as bare "python" hands it to a DIFFERENT interpreter — the system one, or
+    # nothing at all — and that one has no pywin32, so every COM call fails on a machine
+    # with a perfectly good SolidWorks seat. The failure is reported rather than silent
+    # (invariants raises on analyser_error), but it is reported as "the analyser had a
+    # problem" when the actual problem is which python ran it.
+    #
+    # sw_batch_health.py beside it already resolved this correctly; two ways of finding the
+    # interpreter is the same defect as two copies of an exclusion list.
+    exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or sys.executable or "python"
     produced = produced if produced is not None else []
     cmd = [exe, str(analyser), str(folder)]
     # THE MEASUREMENT A SEAT IS ACTUALLY FOR, and it had never run from here.
