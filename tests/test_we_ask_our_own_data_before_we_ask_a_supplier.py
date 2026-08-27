@@ -224,3 +224,43 @@ def test_discarded_coincidences_are_counted_rather_than_dropped_in_silence():
         {"connected": True,
          "terms": [{"term": "VESA", "hits": 0, "coincidences": 4,
                     "udef": [], "bought_in": [], "history": []}]}).lower()
+
+
+# ── a zero is not a price ──────────────────────────────────────────────────────
+#
+# UDEF carries plenty of rows with no system cost — a catalogue entry that exists but was never
+# priced. The first run showed four of them rendered as "£0.00" in a column beside a real £35.95:
+#
+#     UDEF  £0.00  PSL04-MONITOR    56 / 60 inch monitor with adjustable stand
+#     UDEF  £0.00  ELEC-221         49 Video Wall LCD Monitor Set
+#
+# A 60-inch monitor is not free. The engine's own UDEF anchor already refuses these
+# (`AND u.[System cost per] > 0`), so no estimate was ever built on one — this is purely about
+# a person reading the column and taking the number at face value, which is exactly what the
+# powder-at-£0.00 fault turned out to be.
+
+def test_a_missing_price_does_not_render_as_free():
+    assert phl._money(0) == "no price"
+    assert phl._money(0.0) == "no price"
+
+
+def test_a_real_price_is_still_money():
+    assert phl._money(35.95) == "£35.95"
+    assert phl._money(0.11) == "£0.11"
+    assert phl._money(1827.6) == "£1,827.60"
+
+
+def test_an_absent_value_is_neither():
+    assert phl._money(None) == "—"
+    assert phl._money("") == "—"
+
+
+def test_the_discard_note_does_not_explain_one_term_with_another_terms_example():
+    """It printed "'shelves and' contains 'vesa'" under a MONITOR search — true in general,
+    false about the row in front of the reader. Small wrongness costs trust in the rest."""
+    out = phl.report({"connected": True,
+                      "terms": [{"term": "MONITOR", "hits": 1, "coincidences": 1,
+                                 "udef": [("X", "Monitor Bracket", 10.0, "S", "EA")],
+                                 "bought_in": [], "history": []}]})
+    assert "vesa" not in out.lower()
+    assert "substring" in out.lower()

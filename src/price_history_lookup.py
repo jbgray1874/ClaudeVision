@@ -216,10 +216,18 @@ def terms_from_bom(pdf_path: str) -> List[str]:
 # ── reporting ──────────────────────────────────────────────────────────────────
 
 def _money(v: Any) -> str:
+    """£0.00 IS NOT A PRICE AND MUST NOT LOOK LIKE ONE.
+
+    UDEF carries plenty of rows with no system cost — a catalogue entry that exists but has
+    never been priced. Rendered as "£0.00" beside a real £35.95 it reads as free, and free is a
+    number somebody can put on a quote. The engine's own UDEF anchor already refuses these
+    (`AND u.[System cost per] > 0`), so this only has to stop a HUMAN misreading them.
+    """
     try:
-        return f"£{float(v):,.2f}"
+        f = float(v)
     except (TypeError, ValueError):
         return "—"
+    return "no price" if f == 0 else f"£{f:,.2f}"
 
 
 def report(result: Dict[str, Any]) -> str:
@@ -240,8 +248,12 @@ def report(result: Dict[str, Any]) -> str:
         lines.append(f"\n{found['term']}")
         lines.append("-" * max(12, len(found["term"])))
         if found.get("coincidences"):
-            lines.append(f"  ({found['coincidences']} row(s) matched only as a substring and "
-                         f"were discarded — 'shelves and' contains 'vesa')")
+            # NAMED GENERICALLY. The first version printed "'shelves and' contains 'vesa'" under
+            # every term, so a MONITOR search explained itself with a VESA example — a sentence
+            # that is true in general and false about the row in front of you, which is the kind
+            # of small wrongness that makes a reader distrust the rest of the output.
+            lines.append(f"  ({found['coincidences']} row(s) matched only as a substring of a "
+                         f"longer word and were discarded)")
 
         for row in found["udef"]:
             if row and row[0] == "__error__":
