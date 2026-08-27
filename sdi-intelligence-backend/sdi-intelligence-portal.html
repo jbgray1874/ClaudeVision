@@ -559,9 +559,52 @@
             <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--ok);text-transform:uppercase;margin-bottom:6px">Workstream 1 · Live</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Estimating Intelligence</div>
             <div class="muted" style="font-size:12.5px;line-height:1.6">Deterministic engine in parallel run with Tim, Howard and Tony. Go-live contingent on testing, adoption and holiday-period cover.</div>
-            <div style="display:flex;align-items:baseline;gap:14px;margin-top:10px;flex-wrap:wrap">
-              <div class="big acc" id="dleft" style="font-size:38px;line-height:1">—</div>
-              <div class="muted" style="font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase">Target GO-LIVE</div>
+            <div style="display:flex;align-items:baseline;gap:12px;margin-top:10px;flex-wrap:wrap">
+              <div class="big acc" id="dleft" style="font-size:26px;line-height:1">—</div>
+              <div class="muted" style="font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase">Target GO-LIVE</div>
+            </div>
+
+            <!-- THE PHASES, BECAUSE THIS CARD HAD NONE AND THE OTHER TWO DID.
+                 Workstream 1 sat as a headline date beside two workstreams showing dated phase
+                 lists, which read as "this one has no plan" rather than "this one is reported
+                 differently". It has a plan and the portal already stated it -- the Estimating
+                 service page carries these same five phases as a Gantt.
+
+                 SAME FIVE, SAME DATES, DELIBERATELY. Writing a second set here would give the
+                 site two accounts of one schedule and no way to tell which was current; the
+                 next edit would correct one of them. test_a_workstream_appears_on_every_page_
+                 that_answers_when.py is what keeps them in step. -->
+            <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-done" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">1 May 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>Build &amp; calibrate</b> <span class="muted">&mdash; 80 workbook formulas reverse-engineered; price chain and parity harness built.</span></div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-done" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">26 May 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>Estimator passive validation</b> <span class="muted">&mdash; engine run alongside completed jobs, compared cell by cell.</span></div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-prog" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">15 Jun 26</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>Active estimator review</b> <span class="muted">&mdash; Tim, Howard and Tony working the output on live enquiries. In progress.</span></div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">Next</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>AI-assisted live estimating</b> <span class="muted">&mdash; the engine's workbook becomes the starting point rather than the check.</span></div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <span class="chip c-plan" style="font-size:10px;flex-shrink:0;min-width:78px;text-align:center">Buffer</span>
+                <div style="font-size:12.5px;line-height:1.5"><b>Stabilisation</b> <span class="muted">&mdash; deliberate slack before go-live, covering the holiday period.</span></div>
+              </div>
+            </div>
+
+            <!-- WHAT "RELEASE 1" MEANS, which the card asserted a date for without ever saying.
+                 A target with no scope cannot be assessed by anybody reading it. -->
+            <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11.5px;line-height:1.6" class="muted">
+              <b style="color:var(--ink)">Release 1 scope.</b> Drawing pack in, costed five-tab workbook out,
+              with a cell-level parity report and source and confidence on every priced line. Command-line
+              invocation during the parallel run; UI-triggered runs follow go-live.
+              <b style="color:var(--ink)">Still open before it:</b> supplier price lists loaded,
+              price-chain rungs 3 and 4 repointed at populated tables, and the Dyson-pack costing faults closed.
             </div>
           </div>
 
