@@ -206,3 +206,84 @@ def test_the_page_says_how_many_dates_the_strip_carries():
     words = {"three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
     assert words.get(lede.group(1).lower()) == strip_count, (
         f"the lede says {lede.group(1)} fixed dates and the strip draws {strip_count}")
+
+
+# ── the dashboard has to hold three of them ───────────────────────────────────
+#
+# The AI Programme panel sat in the NARROW half of a 1.5fr/1fr grid, with its workstreams
+# stacked vertically. With two that was merely tight. With three it measured 1,383px against a
+# left-hand panel carrying about 250px of content — and CSS grid stretches siblings to match,
+# so roughly 1,100px of the dashboard was empty white space beside a column too long to read
+# without scrolling.
+#
+# That is a layout consequence of a CONTENT change, which is the kind nobody plans for: adding
+# the third workstream was correct everywhere and broke the page in one place.
+
+def _dashboard() -> str:
+    at = _PORTAL.index('id="dashboard"')
+    return _PORTAL[at:_PORTAL.index('<section class="view" id="aisvc"')]
+
+
+def test_the_programme_panel_is_full_width_not_a_grid_column():
+    """THE FIX, pinned. Inside a grid2 it is half a page wide; the three workstreams need the
+    whole width to sit side by side.
+
+    Walks the dashboard keeping a stack of the elements still open, so the question asked is
+    the real one — "is a grid2 open at the point the panel starts?" — rather than a count of
+    tags before it, which the first version of this test got wrong.
+    """
+    dash = _dashboard()
+    prog_at = dash.index("<h3>AI Programme</h3>")
+    stack = []
+    for m in re.finditer(r"<(/?)div\b([^>]*?)(/?)>", dash[:prog_at]):
+        if m.group(3) == "/":                       # self-closing
+            continue
+        if m.group(1):                              # closing tag
+            if stack:
+                stack.pop()
+        else:
+            stack.append("grid2" in m.group(2))
+    assert not any(stack), (
+        "the AI Programme panel is inside a grid2 column — it renders at half width and grid "
+        "stretches its sibling to match its height, which is how 1,100px of the dashboard "
+        "became empty space beside an unreadably long column")
+
+
+def test_the_check_can_tell_a_grid_column_from_a_full_width_panel():
+    """A guard on the guard: the walk above must actually detect nesting, or it would pass on
+    any markup at all. The end-to-end panel IS a grid column, so it must come out true."""
+    dash = _dashboard()
+    at = dash.index("<h3>We are uniquely end-to-end</h3>")
+    stack = []
+    for m in re.finditer(r"<(/?)div\b([^>]*?)(/?)>", dash[:at]):
+        if m.group(3) == "/":
+            continue
+        if m.group(1):
+            if stack:
+                stack.pop()
+        else:
+            stack.append("grid2" in m.group(2))
+    assert any(stack), "the walk cannot see that this panel sits inside a grid2"
+
+
+def test_the_three_workstreams_are_columns_not_a_stack():
+    """Side by side they read as peers. Stacked, the third is a footnote to the first two —
+    which is the opposite of what the programme is."""
+    dash = _dashboard()
+    prog = dash[dash.index("<h3>AI Programme</h3>"):]
+    grid = re.search(r'<div style="display:grid;grid-template-columns:repeat\(auto-fit,'
+                     r'minmax\((\d+)px,1fr\)\)[^"]*"', prog)
+    assert grid, "the workstreams are not laid out in a multi-column grid"
+    assert int(grid.group(1)) <= 320, (
+        f"the columns need {grid.group(1)}px each to appear — too wide to fit three, so they "
+        f"would wrap back into a stack on any normal screen")
+
+
+def test_each_workstream_column_carries_its_own_colour():
+    """Green live, amber in build, violet creative — the same coding as the roadmap strip and
+    the status report. Three identical boxes would lose the one thing the colour says."""
+    dash = _dashboard()
+    prog = dash[dash.index("<h3>AI Programme</h3>"):]
+    for colour in ("var(--ok)", "var(--accent)", "var(--violet)"):
+        assert f"border-top:3px solid {colour}" in prog, (
+            f"no workstream column is marked {colour}")

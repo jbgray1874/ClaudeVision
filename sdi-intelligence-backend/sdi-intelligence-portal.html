@@ -497,7 +497,7 @@
         <p><b>SDI Intelligence</b> is the operational hub for artificial intelligence across SDI Displays — a single place that brings together our AI tools, system integrations and business intelligence in service of one goal: designing and making better brand experiences, faster. From the AI estimating engine that reads engineering drawings and produces costed estimates automatically, to the co-worker agents supporting each part of the business, to a live view of our AI programme roadmap and a continuous scan of the wider AI marketplace, the portal turns emerging technology into practical advantage on the shop floor and in the studio. It connects to our core systems — estimating, production, HR and finance — and grows as each capability moves from pilot to production. Built around our belief that <i>Experiences are Designed &amp; Made</i>, SDI Intelligence is how we put the best of AI to work for our clients and our people.</p>
       </div>
 
-      <div class="grid2" style="margin-bottom:28px">
+            <div class="grid2 reveal">
         <div class="panel reveal">
           <h3>We are uniquely end-to-end</h3>
           <p>Everything your brand needs to create exceptional experiences for your customers — from first creative spark to fully built and installed.</p>
@@ -512,12 +512,50 @@
             <a class="run" style="display:inline-block;text-decoration:none;background:transparent;color:var(--ink);border:1px solid var(--line)" href="https://wearesdi.com/our-work" target="_blank" rel="noopener">See our work ↗</a>
           </div>
         </div>
-        <div class="panel reveal" style="animation-delay:.08s">
-          <h3>AI Programme</h3>
-          <p>Two workstreams are live and running <b>in parallel</b>, not in sequence, and a third is in build alongside them. The wider AI &amp; Robotics programme runs through Q3 2027.</p>
+        <div class="panel reveal" style="animation-delay:.14s">
+        <h3>Trusted by</h3>
+        <p class="muted" style="margin-bottom:10px">A selection of the brands SDI works with — retail, hospitality, luxury and lifestyle.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+          <span class="chip c-plan">Boots</span>
+          <span class="chip c-plan">Costa</span>
+          <span class="chip c-plan">Dior</span>
+          <span class="chip c-plan">Diageo</span>
+          <span class="chip c-plan">Dyson</span>
+          <span class="chip c-plan">Harrods</span>
+          <span class="chip c-plan">Heal's</span>
+          <span class="chip c-plan">Kurt Geiger</span>
+          <span class="chip c-plan">LG</span>
+          <span class="chip c-plan">Liz Earle</span>
+          <span class="chip c-plan">Lindt</span>
+          <span class="chip c-plan">M&amp;S</span>
+          <span class="chip c-plan">Milwaukee</span>
+          <span class="chip c-plan">New Balance</span>
+          <span class="chip c-plan">Next</span>
+          <span class="chip c-plan">Rab</span>
+          <span class="chip c-plan">Selfridges</span>
+          <span class="chip c-plan">Superdrug</span>
+          <span class="chip c-plan">Tesco</span>
+          <span class="chip c-plan">The Perfume Shop</span>
+          <span class="chip c-plan">Tom Ford</span>
+        </div>
+      </div>
+      </div>
+      <!-- AI PROGRAMME · FULL WIDTH, THREE COLUMNS.
+           It used to sit in the NARROW half of a 1.5fr/1fr grid, stacked vertically. With
+           two workstreams that was merely tight; with three it ran to 1,383px against a
+           left-hand panel of about 250px of content — the grid stretched that panel to match,
+           so roughly 1,100px of the dashboard was empty white space beside a column nobody
+           could read without scrolling.
 
-          <!-- TRACK 1 — ESTIMATING. #dleft is written by the script at load; leave the id alone. -->
-          <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+           Full width with one column per workstream fixes both at once: the page evens up,
+           and the three read as PEERS rather than as one plus two crammed underneath — which
+           is the same reason the status report puts them on one axis. Each keeps its own
+           colour: green live, amber in build, violet creative. -->
+      <div class="panel reveal" style="margin-bottom:22px">
+        <h3>AI Programme</h3>
+        <p>Two workstreams are live and running <b>in parallel</b>, not in sequence, and a third is in build alongside them. The wider AI &amp; Robotics programme runs through Q3 2027.</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:16px">
+          <div style="background:var(--bg-2);border:1px solid var(--line);border-top:3px solid var(--ok);border-radius:var(--r);padding:16px 18px">
             <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--ok);text-transform:uppercase;margin-bottom:6px">Workstream 1 · Live</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Estimating Intelligence</div>
             <div class="muted" style="font-size:12.5px;line-height:1.6">Deterministic engine in parallel run with Tim, Howard and Tony. Go-live contingent on testing, adoption and holiday-period cover.</div>
@@ -531,7 +569,7 @@
                (Yogesh Kumar, ref P1–P3.4). Note the PDM is an SDI in-house build — GitLab + LFS
                with a DM API intelligence layer — NOT integration with the SOLIDWORKS PDM vault.
                Getting that wrong changes what the work is, so it is stated explicitly below. -->
-          <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+          <div style="background:var(--bg-2);border:1px solid var(--line);border-top:3px solid var(--accent);border-radius:var(--r);padding:16px 18px">
             <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Workstream 2 · In build · Yogesh Kumar</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Technical Design Intelligence</div>
             <div class="muted" style="font-size:12.5px;line-height:1.6">Two DM API tools into the estimating app, then an <b>SDI in-house PDM</b> built in four phases. Sole developer, so the phases run one after another.</div>
@@ -575,7 +613,7 @@
                Dates transcribed from the All Projects delivery tracker (owner Muhammad Yazir).
                Full phase detail and a Gantt are on the AI Roadmap page; this panel carries the
                two go-lives, because that is what the panel is for. -->
-          <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+          <div style="background:var(--bg-2);border:1px solid var(--line);border-top:3px solid var(--violet);border-radius:var(--r);padding:16px 18px">
             <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--violet);text-transform:uppercase;margin-bottom:6px">Workstream 3 · In build · Muhammad Yazir</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Creative Design Intelligence</div>
             <div class="muted" style="font-size:12.5px;line-height:1.6">Index what SDI has already drawn, then put it in front of the people who need it. Two projects, both past proof of concept, both live inside 2026.</div>
@@ -598,41 +636,15 @@
               <b style="color:var(--accent)">No buffer on the first go-live.</b> Drawing Search rolls out studio-wide on 25 Sep, the same day UAT ends, while Development Round 2 and Integration Testing Round 2 still overlap UAT. Anything found in the last week of testing lands on the rollout date directly.
             </div>
           </div>
-
-          <div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">
+        </div>
+        <div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">
             <a class="run" style="display:inline-block;text-decoration:none;cursor:pointer" data-view="roadmap">View AI Roadmap →</a>
             <a class="run" style="display:inline-block;text-decoration:none;background:transparent;color:var(--ink);border:1px solid var(--line);cursor:pointer" data-view="aisvc">AI Services →</a>
           </div>
-        </div>
       </div>
 
-      <div class="panel reveal" style="animation-delay:.14s">
-        <h3>Trusted by</h3>
-        <p class="muted" style="margin-bottom:10px">A selection of the brands SDI works with — retail, hospitality, luxury and lifestyle.</p>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
-          <span class="chip c-plan">Boots</span>
-          <span class="chip c-plan">Costa</span>
-          <span class="chip c-plan">Dior</span>
-          <span class="chip c-plan">Diageo</span>
-          <span class="chip c-plan">Dyson</span>
-          <span class="chip c-plan">Harrods</span>
-          <span class="chip c-plan">Heal's</span>
-          <span class="chip c-plan">Kurt Geiger</span>
-          <span class="chip c-plan">LG</span>
-          <span class="chip c-plan">Liz Earle</span>
-          <span class="chip c-plan">Lindt</span>
-          <span class="chip c-plan">M&amp;S</span>
-          <span class="chip c-plan">Milwaukee</span>
-          <span class="chip c-plan">New Balance</span>
-          <span class="chip c-plan">Next</span>
-          <span class="chip c-plan">Rab</span>
-          <span class="chip c-plan">Selfridges</span>
-          <span class="chip c-plan">Superdrug</span>
-          <span class="chip c-plan">Tesco</span>
-          <span class="chip c-plan">The Perfume Shop</span>
-          <span class="chip c-plan">Tom Ford</span>
-        </div>
-      </div>
+
+      
 
       <div class="grid2" style="margin-top:28px">
         <div class="panel reveal" style="animation-delay:.18s">
