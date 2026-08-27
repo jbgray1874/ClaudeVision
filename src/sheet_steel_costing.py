@@ -98,7 +98,17 @@ def powder_qty_kg(length_mm: float, width_mm: float, qty: float = 1.0,
 #       8-10mm         -> 1 m/min    -> 127 bars/hr
 #   Max 5 items per bar. Hang envelope 2200(L) x 1950(H) x 1350(D) mm.
 #   Powder coverage 1 kg per 6 m^2 (confirms POWDER_COVERAGE_M2_PER_KG = 6 above).
-POWDER_PRICE_GBP_PER_KG = 12.50        # standard (special = 16.00)
+# NOT THE LIVE POWDER RATE, AND NOTHING IN src/ IMPORTS THIS MODULE.
+#
+# The rate an estimate actually uses is config.POWDER_COST_PER_KG = 9.73, evidenced from Tim's
+# manual sheets on jobs 1303A and 1304 and applied by wb_populate. powder_total_cost() below has
+# no callers anywhere in the tree.
+#
+# Left in place rather than deleted because the formula it encodes -- area x coverage x rate,
+# with a 16.00 special -- is the record of how powder is costed, and 12.50 may be a real
+# historical standard rate somebody will want to date. But it is NOT what a job is priced at,
+# and reading it as a competing figure has cost an hour more than once.
+POWDER_PRICE_GBP_PER_KG = 12.50        # historical standard (special = 16.00) -- SEE ABOVE
 POWDER_BARS_PER_HOUR = {"standard": 319, "thick_3mm_plus": 191, "thick_8_10mm": 127}
 POWDER_MAX_ITEMS_PER_BAR = 5
 POWDER_HANG_LENGTH_MM = 2200.0

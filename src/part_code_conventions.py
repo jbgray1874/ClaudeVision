@@ -31,7 +31,8 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-__all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base", "material_suffix"]
+__all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base", "material_suffix",
+           "is_category_not_a_code"]
 
 # A trailing material letter, and only after a digit — so "11350-01-01M" yields
 # "11350-01-01" while a code that simply ends in a letter ("...-GA") is left alone.
@@ -139,6 +140,65 @@ def bare_code(identity: str) -> str:
     being unavailable — nor stay honest if either side ever edits its own copy.
     """
     return re.sub(r"[\s\-]+", "", str(identity or "").upper())
+
+
+# ── a category word standing where a code should be ─────────────────────────────────
+#
+# SDI drawings put a CLASS in the part-code column when the item has no specific code:
+#
+#     29  FIXING            M6x16.0mm SOCKET CAP SCREW, BZP         16
+#     30  SPRING WASHER     M6 SPRING WASHER                        16
+#     31  FIXING41          M6x16.0mm BUTTON HEAD SCREW; BZP        12
+#     32  FIXING513         4.0x10.0mm DOME RIVET, BLACK ANODIZED   51
+#
+# Rows 31 and 32 carry real SDI codes -- FIXING41 and FIXING513 exist in the parts master, and
+# Elite Sourcing quote against them by name, which is why an estimator can find those and cannot
+# find row 29. Row 29's "FIXING" is not a code at all. It is the word for what the thing is, and
+# the identity is entirely in the description.
+#
+# WHY THAT IS DANGEROUS RATHER THAN MERELY UNHELPFUL. A category word is a PREFIX of every real
+# code in its family, and it is long enough to pass the length guards that stop short keys being
+# looked up. So it reaches the catalogue as though it were an identifier, and the worst case is
+# not "no match" -- it is a catch-all row. If the parts master holds any row coded literally
+# FIXING, every generic fixing line on every drawing prices at that one figure, whatever its
+# description says: a socket cap screw, a button head and a rivet all costed the same and none
+# of them flagged.
+#
+# The engine's ambiguity rules stop the description path (two matches, refuse) but NOT the exact
+# part-code path, which is tried first and takes one row without asking whether the code was
+# specific enough to mean anything.
+#
+# So a category word is refused AS A CODE, which routes the line to description matching -- where
+# "M6x16.0mm SOCKET CAP SCREW, BZP" is a far better key than "FIXING" ever was. Same shape as
+# is_cross_reference_note: a value that looks like an answer, is not one, and must be removed
+# rather than believed.
+#
+# Deliberately NARROW. The cost of a false positive is a real code refused and a part unpriced,
+# so a code is only a category when it is a KNOWN class word with nothing distinguishing after
+# it. FIXING41 keeps its 41; ELECTRICS2 keeps its 2.
+_CATEGORY_CODES = frozenset("""
+FIXING FIXINGS FASTENER FASTENERS SCREW SCREWS BOLT BOLTS NUT NUTS RIVET RIVETS
+WASHER WASHERS SPRINGWASHER SPRINGWASHERS STUD STUDS INSERT INSERTS NUTSERT NUTSERTS
+ELECTRICS ELECTRICAL WIRING CABLE CABLES LOOM LOOMS
+GRAPHIC GRAPHICS VINYL PRINT LABEL LABELS
+FOAM TAPE ADHESIVE GLUE SEALANT
+MISC MISCELLANEOUS SUNDRY SUNDRIES CONSUMABLE CONSUMABLES
+PART PARTS ITEM ITEMS COMPONENT COMPONENTS STDPART STANDARD
+PACKAGING PALLET PALLETS BOX BOXES
+""".split())
+
+
+def is_category_not_a_code(identity: str) -> bool:
+    """True when the part-code column holds a CLASS of thing rather than an identifier.
+
+    "FIXING" is a category. "FIXING41" is a code. The distinction is the whole point: one of
+    them names a specific screw the buyer can order and the other names a drawer.
+
+    Compared on the bare form, so "SPRING WASHER", "SPRING-WASHER" and "springwasher" are all
+    recognised -- a CAD text extractor re-spaces these unpredictably and the same cell comes
+    back differently from two readers.
+    """
+    return bare_code(identity) in _CATEGORY_CODES
 
 
 def is_mirror_code(identity: str) -> bool:

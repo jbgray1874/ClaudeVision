@@ -1526,8 +1526,18 @@ _OUT_OF_SCOPE_RE = re.compile(
 #
 # The manual estimate buys powder as a catalogue item — one row, "Powder - MN250F 610 Matt Black",
 # coded 20KGMOQ to record the 20 kg minimum order. The engine never emits that row: it prices
-# powder BY MASS inside each part (sheet_steel_costing.powder_total_cost -> estimator's
-# powder_material_gbp) and rolls it up. Same money, different shape.
+# powder BY MASS inside each part -- area x coverage x config.POWDER_COST_PER_KG, written into
+# powder_material_gbp by wb_populate -- and rolls it up. Same money, different shape.
+#
+# THIS USED TO NAME sheet_steel_costing.powder_total_cost, WHICH NOTHING CALLS. That module is
+# not imported at runtime by anything in src/, and its POWDER_PRICE_GBP_PER_KG = 12.50 is dead
+# with it. The live rate is config.POWDER_COST_PER_KG = 9.73, set from Tim's manual sheets on
+# jobs 1303A and 1304, which both priced powder at that figure.
+#
+# The two constants were read as a live disagreement more than once -- including in this
+# session, twice -- and each time somebody went looking for which one fires. Neither did any
+# harm; the cost was entirely in the chasing. A pointer to dead code inside an explanation is
+# worse than no pointer, because it reads as the answer.
 #
 # Before this existed the code match failed and the line fell through to genuine_miss, telling the
 # estimator "the engine should have produced this. Investigate." On 10575-02 that sent us looking

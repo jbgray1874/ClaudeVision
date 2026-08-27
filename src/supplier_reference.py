@@ -85,6 +85,15 @@ def synthesise_key(phrase: Any) -> str:
     return SYNTHESISED_KEY_PREFIX + re.sub(r"[^A-Z0-9]", "", str(phrase or "").upper())[:18]
 
 
+def _is_category(code: Any) -> bool:
+    """A class word standing where an identifier should be -- see part_code_conventions."""
+    try:
+        from part_code_conventions import is_category_not_a_code   # noqa: PLC0415
+    except ImportError:                                            # pragma: no cover
+        return False
+    return is_category_not_a_code(code)
+
+
 def is_synthesised_key(code: Any) -> bool:
     """True when this part number was minted by this engine rather than read off a drawing."""
     return str(code or "").strip().upper().startswith(SYNTHESISED_KEY_PREFIX)
@@ -329,13 +338,25 @@ def lookup_keys(part: Dict[str, Any]) -> List[str]:
     """
     keys: List[str] = []
     code = str(part.get("part_number") or "").strip()
-    if code and not is_synthesised_key(code):
+    # A CATEGORY WORD IS NOT A KEY. "FIXING" in the code column names a drawer, not a screw --
+    # the identity of that line is entirely in its description ("M6x16.0mm SOCKET CAP SCREW,
+    # BZP"). Left in, it is long enough to pass every length guard and is a PREFIX of every real
+    # code in its family, so it reaches the catalogue looking like an identifier. The worst case
+    # is not a miss: if the parts master holds any row coded literally FIXING, every generic
+    # fixing line on every drawing prices at that one figure regardless of description.
+    #
+    # Dropped here rather than at each caller, because this is the one function that decides what
+    # a part is looked up BY, and a rule applied at three call sites is a rule that will be
+    # applied at two.
+    if code and not is_synthesised_key(code) and not _is_category(code):
         keys.append(code)
     for ref in part.get("supplier_references") or []:
         value = str((ref or {}).get("reference") or "").strip()
         if value and value not in keys:
             keys.append(value)
-    if code and code not in keys:
+    # The last-resort append of the part's own code is skipped for a category too: a minted key
+    # is a bad key, and a category word is a WRONG one -- it can match something specific.
+    if code and code not in keys and not _is_category(code):
         keys.append(code)
     return keys
 
