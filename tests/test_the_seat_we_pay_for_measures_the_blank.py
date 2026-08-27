@@ -222,3 +222,68 @@ def test_both_launchers_resolve_the_interpreter_the_same_way():
                          ids=["analyser", "connector"])
 def test_the_file_still_parses(path):
     ast.parse(path.read_text(encoding="utf-8"))
+
+
+# ── the measurement has to be findable once it is taken ───────────────────────
+#
+# Every analyser note was promoted to the part's `review_flags` — the list whose only job is
+# to say "a person should look at this line". That included the analyser's own COM traces,
+# which appear on every SolidWorks part. Turning flattening on adds more of them (one per
+# rejected bend-state candidate), so switching the measurement on without filtering would
+# have traded a silent gap for a noisy report.
+
+import sys as _sys                                                         # noqa: E402
+if str(_ROOT / "src") not in _sys.path:
+    _sys.path.insert(0, str(_ROOT / "src"))
+from source_connectors.solidworks import _is_com_trace                     # noqa: E402
+
+
+@pytest.mark.parametrize("note", [
+    "mdoc_wrapped=CDispatch",
+    "first_feature=obj",
+    "features_visited=47",
+    "weldment_section=Square tube",
+])
+def test_com_plumbing_does_not_reach_an_estimator(note):
+    """A review flag that fires on every part tells you nothing about any of them."""
+    assert _is_com_trace(note, flatten_succeeded=False)
+
+
+@pytest.mark.parametrize("note", [
+    "REJECTED flat 126.39x82.2mm — part is FOLDED",
+    "flat pattern MEASURED by flattening in memory: 132.39x88.2mm",
+    "cutlist_err: COMError(...)",
+    "material_name_err: AttributeError(...)",
+    "feature_walk_error: RuntimeError(...)",
+    "likely bought-in (imported body, no fabrication features)",
+])
+def test_findings_and_failures_still_reach_one(note):
+    """An error is a finding: it is the difference between "we did not read a blank" and
+    "we tried to read one and could not"."""
+    assert not _is_com_trace(note, flatten_succeeded=False)
+
+
+def test_a_rejected_bend_state_is_noise_once_another_one_worked():
+    """Self-verification trying several states and discarding the wrong ones is the design
+    working. It is only worth reporting when NONE of them worked — then it is the evidence
+    for why this part has no blank."""
+    attempt = "flatten attempt (state 2) rejected: box 126.4x82.2x14.0mm"
+    assert _is_com_trace(attempt, flatten_succeeded=True)
+    assert not _is_com_trace(attempt, flatten_succeeded=False)
+
+
+def test_the_filter_is_applied_where_the_notes_are_promoted():
+    """Defined and not called is the failure mode this whole file exists to catch."""
+    body = _CONNECTOR[_CONNECTOR.index("for _n in nat.notes:") - 400:]
+    assert "_is_com_trace(_n, flatten_succeeded=" in body[:900], (
+        "the notes loop does not consult the filter")
+    assert 'any("MEASURED by flattening" in _n for _n in nat.notes)' in body[:900], (
+        "flatten_succeeded is not computed from the part's own notes")
+
+
+def test_a_blank_that_was_measured_is_still_announced():
+    """The point of the filter is to make this one visible, not to hide it with the rest."""
+    assert not _is_com_trace(
+        "flat pattern MEASURED by flattening in memory: 132.39x88.2mm "
+        "(folded envelope was 126.39x82.2mm; blank is one sheet thick at 2mm) — bend state 2",
+        flatten_succeeded=True)

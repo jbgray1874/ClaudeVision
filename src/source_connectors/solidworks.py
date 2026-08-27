@@ -51,6 +51,48 @@ RELIABILITY = 1.0
 EXTRACT_FILENAME = "_sw_native_extract.json"
 
 
+# ── COM PLUMBING IS NOT AN ESTIMATOR'S PROBLEM ────────────────────────────────────────
+#
+# The analyser writes 29 different notes, and every one of them was being promoted to the
+# part's `review_flags` — the list whose entire job is to say "a person should look at this
+# line". Most of them are traces the analyser keeps for its own debugging:
+#
+#     SolidWorks: mdoc_wrapped=CDispatch
+#     SolidWorks: first_feature=obj
+#     SolidWorks: features_visited=47
+#
+# None of those is a finding. They appear on EVERY SolidWorks part, so the flags that are
+# findings — a flat blank rejected as a folded box, a blank measured by flattening — sit at
+# the bottom of a list nobody reads to the end of. A review flag that fires on everything
+# tells you nothing about anything, and it makes the ones that matter cost more to find.
+#
+# THIS BECAME URGENT WITH FLATTENING ON. Self-verification tries several bend states and
+# notes each rejection, so a formed part can now add three or four more lines of the same
+# kind. Turning the measurement on without this would have traded one silent gap for a
+# noisy report — a worse deal than it looks, because noise is how the last defect stayed
+# hidden in plain sight.
+#
+# ERRORS ARE KEPT. `cutlist_err`, `material_name_err`, `feature_walk_error` mean something
+# was tried and failed, which is a finding: it is the difference between "we did not read a
+# blank" and "we tried to read one and could not".
+_COM_TRACE_PREFIXES = ("mdoc_wrapped=", "first_feature=", "features_visited=",
+                       "weldment_section=")
+
+
+def _is_com_trace(note: str, *, flatten_succeeded: bool) -> bool:
+    """Is this note the analyser talking to itself rather than to an estimator?"""
+    n = str(note or "").strip()
+    if n.startswith(_COM_TRACE_PREFIXES):
+        return True
+    # A rejected bend-state candidate is the self-verification WORKING: the state was tried,
+    # the resulting box failed the grow/thickness test, and the next one was tried. Worth
+    # keeping only when none of them succeeded — then it is the evidence for why this part
+    # has no blank, and somebody will want it.
+    if n.startswith("flatten attempt (state") and flatten_succeeded:
+        return True
+    return False
+
+
 def _material_source_token(nat: "NativePart") -> str:
     """Which waterfall source a native part's MATERIAL is submitted under. A material the
     model carries only as a library appearance ('applied_library') enters below the drawing
@@ -1658,7 +1700,10 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         # thickness) must reach the estimator. Discarding it silently leaves the part
         # looking merely un-measured, when in fact we READ something and judged it wrong —
         # which is a different thing, and the estimator needs to know which.
+        _measured = any("MEASURED by flattening" in _n for _n in nat.notes)
         for _n in nat.notes:
+            if _is_com_trace(_n, flatten_succeeded=_measured):
+                continue
             if _n not in flags:
                 flags.append(f"SolidWorks: {_n}")
                 if "REJECTED" in _n:
