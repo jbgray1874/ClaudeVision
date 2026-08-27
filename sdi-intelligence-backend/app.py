@@ -258,7 +258,31 @@ def db_status() -> dict:
             conn.cursor().execute("SELECT 1").fetchone()
         return {"status": "ok", "server": config.DB_SERVER, "database": config.DB_NAME}
     except Exception as exc:  # noqa: BLE001 — surface the reason, but never the secrets
-        return {"status": "error", "detail": str(exc)[:300]}
+        out = {"status": "error", "detail": str(exc)[:300],
+               "user": config.DB_USER, "server": config.DB_SERVER}
+        # WHICH FILE SUPPLIED THE PASSWORD, because "Login failed for user 'AIBot'" does not
+        # say and that is the entire question.
+        #
+        # This service reads sdi-intelligence-backend\.env FIRST and the repo-root .env
+        # second, with override=False — so the value beside the service SHADOWS the shared
+        # one. The engine reads them the other way round and stops at the first. So after a
+        # rotation applied to the root .env only, the ENGINE connects and the SERVICE does
+        # not, on the same machine, as the same user, against the same server — and the
+        # header says DEGRADED with no way to tell why from the message.
+        #
+        # Never the value: the layer list is filenames, which is exactly what is needed and
+        # nothing that is a secret.
+        layers = getattr(config, "ENV_LAYERS", None)
+        if layers:
+            out["credential_from"] = layers
+            if "Login failed" in out["detail"]:
+                out["note"] = (
+                    "The password came from the FIRST of these files that set it. This "
+                    "service reads its own .env before the repo-root one, so a rotation "
+                    "applied only at the root is shadowed here. Update the first file that "
+                    "sets SDI_DB_PASSWORD, then RESTART the service — .env is read once at "
+                    "start.")
+        return out
 
 
 @app.get("/api/db/ping")

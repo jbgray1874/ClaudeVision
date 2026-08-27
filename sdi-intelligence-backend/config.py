@@ -69,6 +69,12 @@ for _path, _what in _layers:
 print("[config] " + (" <- ".join(_loaded) if _loaded
                      else "NO configuration files found; using defaults and the environment"))
 
+# THE SAME LIST, KEPT, SO A FAILURE CAN NAME IT. Printed at startup it scrolls away; by the
+# time a credential is being argued about, the line is long gone and the only visible fact is
+# "Login failed". Which of two files called .env supplied the value is the whole question, and
+# it has now cost time twice.
+ENV_LAYERS = list(_loaded)
+
 
 def _req(name: str) -> str:
     val = os.getenv(name, "").strip()
