@@ -18,12 +18,47 @@
        inherit and `background:var(--good)` fell back to transparent — which is why the two
        "Done" bars on the estimating timeline rendered as empty tracks. */
     --acc:#e8a33d; --good:#4ec97f;
+    /* The creative-design workstream's colour, and the avatar gradient. Both were inline
+       literals in a dozen places, which is fine on a page with one palette and impossible
+       on a page with two. */
+    --violet:#a78bfa;
+    --avatar-a:#2a2a30; --avatar-b:#3a3a44;
     --r:4px;
     --mono:'JetBrains Mono',ui-monospace,monospace;
     --serif:'Spectral','Source Serif 4',Georgia,serif;
     --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   }
+
+  /* ── LIGHT MODE ────────────────────────────────────────────────────────────────────
+     This page was dark-only, and not by design so much as by never having been asked.
+     Two hundred and fourteen palette values were written as literal hex INSIDE the page
+     — #6a6a72 forty-two times, #26262b thirty-one — so there was nothing a theme could
+     switch. Those are now the tokens they always should have been, and this block is the
+     whole of light mode: nine ground and ink values, flipped.
+
+     THE ACCENTS DO NOT FLIP. Amber, green, red, blue and violet mean something — a chip
+     that is amber is in progress, on either ground — so they keep their hue and only the
+     two that could not carry it are darkened enough to hold contrast on white.
+
+     Opt-in only, never automatic: the estimating floor works in a dark room and half of
+     these screens are on a wall. A page that changed underneath somebody because their
+     OS clock rolled past sunset would be worse than one that never offered the choice.
+     So there is no prefers-color-scheme rule here — only what the user picked. */
+  :root[data-theme="light"]{
+    --bg:#f4f4f2; --bg-2:#ecebe8; --surface:#ffffff; --surface-2:#f7f7f5;
+    --line:#d9d8d3; --line-soft:#e6e5e1;
+    --ink:#17171a; --ink-dim:#5b5b63; --ink-faint:#83838c;
+    --accent:#a9701a; --accent-deep:#8a5a12;
+    --ok:#1f7a45; --warn:#a9701a; --fail:#c0342f; --info:#2b6cb0;
+    --acc:#a9701a; --good:#1f7a45;
+    --violet:#6b4fa8;
+    --avatar-a:#4a4a54; --avatar-b:#6a6a76;
+  }
+  /* Tells the browser which way round the page is, so form controls, scrollbars and the
+     default focus ring come out the right colour rather than fighting the page. */
+  :root{color-scheme:dark}
+  :root[data-theme="light"]{color-scheme:light}
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
   body{
@@ -41,7 +76,7 @@
 
   /* ---------- Sidebar ---------- */
   .side{
-    border-right:1px solid var(--line); background:linear-gradient(180deg,#101013,#0a0a0b);
+    border-right:1px solid var(--line); background:linear-gradient(180deg,var(--bg-2),var(--bg));
     display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
   }
   .brand{padding:22px 22px 20px;border-bottom:1px solid var(--line-soft);display:flex;gap:12px;align-items:center}
@@ -119,8 +154,39 @@
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(78,201,127,.5)}70%{box-shadow:0 0 0 6px rgba(78,201,127,0)}100%{box-shadow:0 0 0 0 rgba(78,201,127,0)}}
   .ext{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-dim);font-weight:500}
   .ext:hover{color:var(--accent)}
+  /* ── View controls ───────────────────────────────────────────────────────────────
+     Same visual weight as the user chip beside them and the same divider, because they
+     are peers: things about the person looking, not about the thing being looked at. */
+  .viewctl{display:flex;align-items:center;gap:8px;padding-left:14px;border-left:1px solid var(--line)}
+  .vc-btn{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+          background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+          color:var(--ink-dim);font-family:var(--body);font-size:11.5px;font-weight:600;
+          cursor:pointer;white-space:nowrap}
+  .vc-btn:hover{color:var(--ink);border-color:var(--ink-faint)}
+  .vc-btn .ic-sun{display:none}
+  /* The button offers the theme you are NOT in, so the icon and the word have to swap
+     together — a sun labelled "Light" while the page is already light is a button that
+     lies about what pressing it does. */
+  :root[data-theme="light"] .vc-btn .ic-sun{display:none}
+  :root[data-theme="light"] .vc-btn .ic-moon{display:block}
+  :root:not([data-theme="light"]) .vc-btn .ic-moon{display:none}
+  :root:not([data-theme="light"]) .vc-btn .ic-sun{display:block}
+  .vc-zoom{display:flex;align-items:center;gap:1px;height:28px;padding:0 7px;
+           background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+           color:var(--ink-faint)}
+  .vc-zoom svg{margin-right:4px;flex-shrink:0}
+  .vc-z{min-width:30px;height:20px;padding:0 4px;background:transparent;border:0;border-radius:2px;
+        color:var(--ink-faint);font-family:var(--mono);font-size:10.5px;font-weight:600;cursor:pointer}
+  .vc-z:hover{color:var(--ink);background:var(--line-soft)}
+  .vc-z[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+  .vc-btn:focus-visible,.vc-z:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  /* Below the width where the header starts to crowd, the zoom steps are the first thing
+     to go — on a phone the browser's own pinch does the same job better. */
+  @media (max-width:1100px){.vc-zoom{display:none}}
+  @media (max-width:820px){.vc-btn .vc-lbl{display:none}.vc-btn{padding:0 8px}}
+
   .user{display:flex;align-items:center;gap:9px;padding-left:14px;border-left:1px solid var(--line)}
-  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#2a2a30,#3a3a44);
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--avatar-a),var(--avatar-b));
           display:grid;place-items:center;font-family:var(--disp);font-weight:800;font-size:12px;color:var(--accent)}
   .user .nm{font-size:12.5px;font-weight:600;line-height:1.1}
   .user .rl{font-size:10px;color:var(--ink-faint);letter-spacing:.04em}
@@ -189,13 +255,13 @@
   .tool .th{display:flex;align-items:center;justify-content:space-between}
   .tool .nm{font-family:var(--disp);font-weight:700;font-size:14.5px}
   .tool .ds{font-size:12.5px;color:var(--ink-dim);min-height:34px}
-  .tool code{font-family:var(--mono);font-size:11px;color:var(--accent);background:#0a0a0c;border:1px solid var(--line-soft);
+  .tool code{font-family:var(--mono);font-size:11px;color:var(--accent);background:var(--bg);border:1px solid var(--line-soft);
              padding:7px 9px;border-radius:3px;display:block;overflow:auto;white-space:nowrap}
   .run{font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;
        background:var(--accent);color:#000;border:0;border-radius:3px;padding:9px 12px;cursor:pointer;transition:.15s;align-self:flex-start}
   .run:hover{background:#fff} .run:disabled{opacity:.5;cursor:wait}
 
-  .console{margin-top:16px;background:#08080a;border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;
+  .console{margin-top:16px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;
            font-family:var(--mono);font-size:12px;color:var(--ink-dim);min-height:70px;white-space:pre-wrap;line-height:1.6;display:none}
   .console.show{display:block}
   .console .g{color:var(--ok)} .console .y{color:var(--accent)} .console .d{color:var(--ink-faint)}
@@ -299,6 +365,30 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           wearesdi.com
         </a>
+        <!-- VIEW CONTROLS, at the same level as the user chip because that is the level a
+             person looks at when they want to change how the page treats THEM. Both are
+             preferences rather than navigation, so they sit with the identity, not in it. -->
+        <div class="viewctl">
+          <button type="button" id="theme-btn" class="vc-btn" aria-pressed="false"
+                  title="Switch between light and dark">
+            <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            <svg class="ic-sun" width="15" height="15" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 1.8v2.6M12 19.6v2.6M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M1.8 12h2.6M19.6 12h2.6M4.6 19.4l1.9-1.9M17.5 6.5l1.9-1.9"/></svg>
+            <span class="vc-lbl" id="theme-lbl">Light</span>
+          </button>
+          <div class="vc-zoom" role="group" aria-label="Page size">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3M8 11h6M11 8v6"/></svg>
+            <button type="button" class="vc-z" data-zoom="100" aria-pressed="true">100</button>
+            <button type="button" class="vc-z" data-zoom="125" aria-pressed="false">125</button>
+            <button type="button" class="vc-z" data-zoom="150" aria-pressed="false">150</button>
+            <button type="button" class="vc-z" data-zoom="175" aria-pressed="false">175</button>
+            <button type="button" class="vc-z" data-zoom="200" aria-pressed="false">200</button>
+          </div>
+        </div>
         <div class="user">
           <div class="avatar">JG</div>
           <div><div class="nm">James Gray</div><div class="rl">Owner · Admin</div></div>
@@ -398,7 +488,7 @@
                Full phase detail and a Gantt are on the AI Roadmap page; this panel carries the
                two go-lives, because that is what the panel is for. -->
           <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
-            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:#a78bfa;text-transform:uppercase;margin-bottom:6px">Workstream 3 · In build · Muhammad Yazir</div>
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--violet);text-transform:uppercase;margin-bottom:6px">Workstream 3 · In build · Muhammad Yazir</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Creative Design Intelligence</div>
             <div class="muted" style="font-size:12.5px;line-height:1.6">Index what SDI has already drawn, then put it in front of the people who need it. Two projects, both past proof of concept, both live inside 2026.</div>
             <div style="margin-top:11px;display:flex;flex-direction:column;gap:6px">
@@ -1729,163 +1819,163 @@
       <div class="panel reveal" style="padding:32px 24px;overflow-x:auto">
         <svg viewBox="0 0 860 540" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;display:block;margin:0 auto;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
           <defs>
-            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#6a6a72"/></marker>
-            <marker id="arr-acc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#e8a33d"/></marker>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="var(--ink-faint)"/></marker>
+            <marker id="arr-acc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="var(--accent)"/></marker>
           </defs>
 
           <!-- ── BROWSER ZONE ── -->
-          <rect x="10" y="10" width="200" height="140" rx="6" fill="#121214" stroke="#26262b" stroke-width="1"/>
-          <text x="110" y="30" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2" font-weight="600">BROWSER</text>
-          <rect x="30" y="40" width="160" height="44" rx="4" fill="#17171a" stroke="#26262b"/>
-          <text x="110" y="58" text-anchor="middle" font-size="11" fill="#f0efec" font-weight="600">SDI Intelligence Portal</text>
-          <text x="110" y="73" text-anchor="middle" font-size="10" fill="#9b9ba3">sdi-intelligence-portal.html</text>
-          <rect x="30" y="94" width="72" height="28" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="66" y="112" text-anchor="middle" font-size="10" fill="#9b9ba3">James / Admin</text>
-          <rect x="118" y="94" width="72" height="28" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="154" y="107" text-anchor="middle" font-size="9" fill="#9b9ba3">Estimating</text>
-          <text x="154" y="118" text-anchor="middle" font-size="8" fill="#6a6a72">no login · not rolled out</text>
-          <rect x="30" y="132" width="160" height="1" fill="#26262b"/>
+          <rect x="10" y="10" width="200" height="140" rx="6" fill="var(--surface)" stroke="var(--line)" stroke-width="1"/>
+          <text x="110" y="30" text-anchor="middle" font-size="9" fill="var(--ink-faint)" letter-spacing="2" font-weight="600">BROWSER</text>
+          <rect x="30" y="40" width="160" height="44" rx="4" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="110" y="58" text-anchor="middle" font-size="11" fill="var(--ink)" font-weight="600">SDI Intelligence Portal</text>
+          <text x="110" y="73" text-anchor="middle" font-size="10" fill="var(--ink-dim)">sdi-intelligence-portal.html</text>
+          <rect x="30" y="94" width="72" height="28" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="66" y="112" text-anchor="middle" font-size="10" fill="var(--ink-dim)">James / Admin</text>
+          <rect x="118" y="94" width="72" height="28" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="154" y="107" text-anchor="middle" font-size="9" fill="var(--ink-dim)">Estimating</text>
+          <text x="154" y="118" text-anchor="middle" font-size="8" fill="var(--ink-faint)">no login · not rolled out</text>
+          <rect x="30" y="132" width="160" height="1" fill="var(--line)"/>
 
           <!-- ── SERVER ZONE ── -->
-          <rect x="10" y="170" width="200" height="180" rx="6" fill="#121214" stroke="#e8a33d" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <rect x="10" y="170" width="200" height="180" rx="6" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3"/>
           <!-- Not a server. The engine and portal run on James Gray's laptop and will do through
                testing, per the 2 September procedure and the 19 Aug status report. -->
-          <text x="110" y="190" text-anchor="middle" font-size="9" fill="#e8a33d" letter-spacing="2" font-weight="600">JAMES GRAY'S LAPTOP · NOT A SERVER</text>
-          <rect x="26" y="198" width="168" height="50" rx="4" fill="#17171a" stroke="#e8a33d" stroke-width="1"/>
-          <text x="110" y="218" text-anchor="middle" font-size="11" fill="#e8a33d" font-weight="700">FastAPI Backend</text>
-          <text x="110" y="233" text-anchor="middle" font-size="10" fill="#9b9ba3">app.py · port 8072</text>
-          <text x="38" y="248" font-size="9" fill="#6a6a72">/api/health · /api/files · /api/file · /api/db/ping</text>
+          <text x="110" y="190" text-anchor="middle" font-size="9" fill="var(--accent)" letter-spacing="2" font-weight="600">JAMES GRAY'S LAPTOP · NOT A SERVER</text>
+          <rect x="26" y="198" width="168" height="50" rx="4" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1"/>
+          <text x="110" y="218" text-anchor="middle" font-size="11" fill="var(--accent)" font-weight="700">FastAPI Backend</text>
+          <text x="110" y="233" text-anchor="middle" font-size="10" fill="var(--ink-dim)">app.py · port 8072</text>
+          <text x="38" y="248" font-size="9" fill="var(--ink-faint)">/api/health · /api/files · /api/file · /api/db/ping</text>
 
-          <rect x="26" y="258" width="76" height="40" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="64" y="274" text-anchor="middle" font-size="10" fill="#f0efec" font-weight="600">Estimating</text>
-          <text x="64" y="288" text-anchor="middle" font-size="10" fill="#9b9ba3">Engine</text>
+          <rect x="26" y="258" width="76" height="40" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="64" y="274" text-anchor="middle" font-size="10" fill="var(--ink)" font-weight="600">Estimating</text>
+          <text x="64" y="288" text-anchor="middle" font-size="10" fill="var(--ink-dim)">Engine</text>
 
-          <rect x="118" y="258" width="76" height="40" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="156" y="274" text-anchor="middle" font-size="10" fill="#f0efec" font-weight="600">BrightHR →</text>
-          <text x="156" y="288" text-anchor="middle" font-size="10" fill="#9b9ba3">InVentry</text>
+          <rect x="118" y="258" width="76" height="40" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="156" y="274" text-anchor="middle" font-size="10" fill="var(--ink)" font-weight="600">BrightHR →</text>
+          <text x="156" y="288" text-anchor="middle" font-size="10" fill="var(--ink-dim)">InVentry</text>
 
-          <rect x="26" y="308" width="168" height="32" rx="3" fill="#0d0d0f" stroke="#26262b"/>
-          <text x="110" y="329" text-anchor="middle" font-size="10" fill="#6a6a72">C:\ClaudeVision\src\ · Python 3.10 venv</text>
+          <rect x="26" y="308" width="168" height="32" rx="3" fill="var(--bg-2)" stroke="var(--line)"/>
+          <text x="110" y="329" text-anchor="middle" font-size="10" fill="var(--ink-faint)">C:\ClaudeVision\src\ · Python 3.10 venv</text>
 
           <!-- ── FILE SHARES ── -->
-          <rect x="250" y="170" width="175" height="180" rx="6" fill="#121214" stroke="#26262b"/>
-          <text x="337" y="190" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2" font-weight="600">FILE SHARES · VPN</text>
-          <rect x="266" y="198" width="143" height="34" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="337" y="213" text-anchor="middle" font-size="10" fill="#f0efec">K:\Estimating\</text>
-          <text x="337" y="226" text-anchor="middle" font-size="9" fill="#6a6a72">AI Estimating · job folders · DXFs</text>
-          <rect x="266" y="240" width="143" height="34" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="337" y="255" text-anchor="middle" font-size="10" fill="#f0efec">K:\IT\AI &amp; Automation\</text>
-          <text x="337" y="268" text-anchor="middle" font-size="9" fill="#6a6a72">StatusReporting · reports</text>
-          <rect x="266" y="282" width="143" height="34" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="337" y="297" text-anchor="middle" font-size="10" fill="#f0efec">C:\ClaudeVision\output\</text>
-          <text x="337" y="310" text-anchor="middle" font-size="9" fill="#6a6a72">Estimate workbooks · JSON · logs</text>
-          <rect x="266" y="324" width="143" height="20" rx="3" fill="#0d0d0f" stroke="#26262b"/>
-          <text x="337" y="338" text-anchor="middle" font-size="9" fill="#6a6a72">Served via /api/files — read-only</text>
+          <rect x="250" y="170" width="175" height="180" rx="6" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="337" y="190" text-anchor="middle" font-size="9" fill="var(--ink-faint)" letter-spacing="2" font-weight="600">FILE SHARES · VPN</text>
+          <rect x="266" y="198" width="143" height="34" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="337" y="213" text-anchor="middle" font-size="10" fill="var(--ink)">K:\Estimating\</text>
+          <text x="337" y="226" text-anchor="middle" font-size="9" fill="var(--ink-faint)">AI Estimating · job folders · DXFs</text>
+          <rect x="266" y="240" width="143" height="34" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="337" y="255" text-anchor="middle" font-size="10" fill="var(--ink)">K:\IT\AI &amp; Automation\</text>
+          <text x="337" y="268" text-anchor="middle" font-size="9" fill="var(--ink-faint)">StatusReporting · reports</text>
+          <rect x="266" y="282" width="143" height="34" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="337" y="297" text-anchor="middle" font-size="10" fill="var(--ink)">C:\ClaudeVision\output\</text>
+          <text x="337" y="310" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Estimate workbooks · JSON · logs</text>
+          <rect x="266" y="324" width="143" height="20" rx="3" fill="var(--bg-2)" stroke="var(--line)"/>
+          <text x="337" y="338" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Served via /api/files — read-only</text>
 
           <!-- ── DATABASE ── -->
-          <rect x="460" y="10" width="390" height="520" rx="6" fill="#121214" stroke="#26262b"/>
-          <text x="655" y="32" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2" font-weight="600">10.0.0.200 · SDILIVE SQL SERVER</text>
+          <rect x="460" y="10" width="390" height="520" rx="6" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="655" y="32" text-anchor="middle" font-size="9" fill="var(--ink-faint)" letter-spacing="2" font-weight="600">10.0.0.200 · SDILIVE SQL SERVER</text>
 
           <!-- dbo — confirmed 24 Jun 2026 -->
-          <rect x="476" y="42" width="170" height="268" rx="4" fill="#0d0d0f" stroke="#26262b"/>
-          <text x="561" y="60" text-anchor="middle" font-size="9" fill="#6a6a72" letter-spacing="2">dbo · READ-ONLY</text>
-          <rect x="488" y="68" width="146" height="30" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1.5"/>
-          <text x="561" y="84" text-anchor="middle" font-size="10" fill="#4ec97f">UDEF_PARTS_TABLE</text>
-          <text x="561" y="97" text-anchor="middle" font-size="9" fill="#4ec97f">20k rows · 15k priced · Tier 1 + Catalogue</text>
-          <rect x="488" y="106" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="561" y="124" text-anchor="middle" font-size="10" fill="#9b9ba3">PMA_TBL</text>
-          <text x="561" y="136" text-anchor="middle" font-size="9" fill="#6a6a72">Parts master · Tier 1.5</text>
-          <rect x="488" y="140" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="561" y="158" text-anchor="middle" font-size="10" fill="#9b9ba3">labour_rates</text>
-          <text x="561" y="170" text-anchor="middle" font-size="9" fill="#6a6a72">38 ops · all departments</text>
-          <rect x="488" y="174" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="561" y="192" text-anchor="middle" font-size="10" fill="#9b9ba3">material_prices · estimating_tube_rate</text>
-          <text x="561" y="204" text-anchor="middle" font-size="9" fill="#6a6a72">19 materials · 3 tube rows pending Tony</text>
-          <rect x="488" y="208" width="146" height="30" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="561" y="224" text-anchor="middle" font-size="10" fill="#9b9ba3">historical_quote_header + 3 detail tables</text>
-          <text x="561" y="238" text-anchor="middle" font-size="9" fill="#6a6a72">1,982 jobs · M&amp;S 777 / Boots 333 / TTI 316</text>
-          <rect x="488" y="246" width="146" height="18" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="561" y="259" text-anchor="middle" font-size="9" fill="#6a6a72">estimating_supplier_catalog_url · 138 rows</text>
+          <rect x="476" y="42" width="170" height="268" rx="4" fill="var(--bg-2)" stroke="var(--line)"/>
+          <text x="561" y="60" text-anchor="middle" font-size="9" fill="var(--ink-faint)" letter-spacing="2">dbo · READ-ONLY</text>
+          <rect x="488" y="68" width="146" height="30" rx="3" fill="var(--surface-2)" stroke="var(--ok)" stroke-width="1.5"/>
+          <text x="561" y="84" text-anchor="middle" font-size="10" fill="var(--ok)">UDEF_PARTS_TABLE</text>
+          <text x="561" y="97" text-anchor="middle" font-size="9" fill="var(--ok)">20k rows · 15k priced · Tier 1 + Catalogue</text>
+          <rect x="488" y="106" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="561" y="124" text-anchor="middle" font-size="10" fill="var(--ink-dim)">PMA_TBL</text>
+          <text x="561" y="136" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Parts master · Tier 1.5</text>
+          <rect x="488" y="140" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="561" y="158" text-anchor="middle" font-size="10" fill="var(--ink-dim)">labour_rates</text>
+          <text x="561" y="170" text-anchor="middle" font-size="9" fill="var(--ink-faint)">38 ops · all departments</text>
+          <rect x="488" y="174" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="561" y="192" text-anchor="middle" font-size="10" fill="var(--ink-dim)">material_prices · estimating_tube_rate</text>
+          <text x="561" y="204" text-anchor="middle" font-size="9" fill="var(--ink-faint)">19 materials · 3 tube rows pending Tony</text>
+          <rect x="488" y="208" width="146" height="30" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="561" y="224" text-anchor="middle" font-size="10" fill="var(--ink-dim)">historical_quote_header + 3 detail tables</text>
+          <text x="561" y="238" text-anchor="middle" font-size="9" fill="var(--ink-faint)">1,982 jobs · M&amp;S 777 / Boots 333 / TTI 316</text>
+          <rect x="488" y="246" width="146" height="18" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="561" y="259" text-anchor="middle" font-size="9" fill="var(--ink-faint)">estimating_supplier_catalog_url · 138 rows</text>
 
           <!-- AIEstimating -->
-          <rect x="664" y="42" width="170" height="340" rx="4" fill="#0d0d0f" stroke="#6da8e8" stroke-width="1"/>
-          <text x="749" y="60" text-anchor="middle" font-size="9" fill="#6da8e8" letter-spacing="2">AIEstimating · WRITABLE</text>
-          <rect x="676" y="68" width="146" height="26" rx="3" fill="#17171a" stroke="#6da8e8" stroke-width="1"/>
-          <text x="749" y="86" text-anchor="middle" font-size="10" fill="#6da8e8">vCurrentBoughtIn</text>
-          <text x="749" y="98" text-anchor="middle" font-size="9" fill="#6a6a72">48 rows · Tier 3</text>
-          <rect x="676" y="104" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="749" y="122" text-anchor="middle" font-size="10" fill="#9b9ba3">LabourRateCard</text>
-          <text x="749" y="134" text-anchor="middle" font-size="9" fill="#6a6a72">staging → dbo.labour_rates</text>
-          <rect x="676" y="140" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="749" y="158" text-anchor="middle" font-size="10" fill="#9b9ba3">JobBoughtInMaterials</text>
-          <text x="749" y="170" text-anchor="middle" font-size="9" fill="#6a6a72">staging → UDEF_PARTS_TABLE</text>
-          <rect x="676" y="176" width="146" height="26" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1"/>
-          <text x="749" y="194" text-anchor="middle" font-size="10" fill="#4ec97f">PartKnowledge</text>
-          <text x="749" y="206" text-anchor="middle" font-size="9" fill="#6a6a72">learning · pre_scan inject</text>
-          <rect x="676" y="212" width="146" height="26" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1"/>
-          <text x="749" y="230" text-anchor="middle" font-size="10" fill="#4ec97f">Corrections</text>
-          <text x="749" y="242" text-anchor="middle" font-size="9" fill="#6a6a72">estimator feedback</text>
-          <rect x="676" y="248" width="146" height="26" rx="3" fill="#17171a" stroke="#4ec97f" stroke-width="1"/>
-          <text x="749" y="266" text-anchor="middle" font-size="10" fill="#4ec97f">LiveOverrides</text>
-          <text x="749" y="278" text-anchor="middle" font-size="9" fill="#6a6a72">auto-promoted at ×3</text>
-          <rect x="676" y="284" width="146" height="26" rx="3" fill="#17171a" stroke="#26262b"/>
-          <text x="749" y="302" text-anchor="middle" font-size="10" fill="#9b9ba3">ScanLog</text>
-          <text x="749" y="314" text-anchor="middle" font-size="9" fill="#6a6a72">audit trail · every run</text>
-          <rect x="676" y="320" width="146" height="26" rx="3" fill="#17171a" stroke="#e8a33d" stroke-width="1"/>
-          <text x="749" y="338" text-anchor="middle" font-size="10" fill="#e8a33d">HistoricalEstimates</text>
-          <text x="749" y="350" text-anchor="middle" font-size="9" fill="#6a6a72">304 jobs · pending reload</text>
-          <rect x="676" y="356" width="146" height="20" rx="3" fill="#0d0d0f" stroke="#26262b"/>
+          <rect x="664" y="42" width="170" height="340" rx="4" fill="var(--bg-2)" stroke="var(--info)" stroke-width="1"/>
+          <text x="749" y="60" text-anchor="middle" font-size="9" fill="var(--info)" letter-spacing="2">AIEstimating · WRITABLE</text>
+          <rect x="676" y="68" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--info)" stroke-width="1"/>
+          <text x="749" y="86" text-anchor="middle" font-size="10" fill="var(--info)">vCurrentBoughtIn</text>
+          <text x="749" y="98" text-anchor="middle" font-size="9" fill="var(--ink-faint)">48 rows · Tier 3</text>
+          <rect x="676" y="104" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="749" y="122" text-anchor="middle" font-size="10" fill="var(--ink-dim)">LabourRateCard</text>
+          <text x="749" y="134" text-anchor="middle" font-size="9" fill="var(--ink-faint)">staging → dbo.labour_rates</text>
+          <rect x="676" y="140" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="749" y="158" text-anchor="middle" font-size="10" fill="var(--ink-dim)">JobBoughtInMaterials</text>
+          <text x="749" y="170" text-anchor="middle" font-size="9" fill="var(--ink-faint)">staging → UDEF_PARTS_TABLE</text>
+          <rect x="676" y="176" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--ok)" stroke-width="1"/>
+          <text x="749" y="194" text-anchor="middle" font-size="10" fill="var(--ok)">PartKnowledge</text>
+          <text x="749" y="206" text-anchor="middle" font-size="9" fill="var(--ink-faint)">learning · pre_scan inject</text>
+          <rect x="676" y="212" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--ok)" stroke-width="1"/>
+          <text x="749" y="230" text-anchor="middle" font-size="10" fill="var(--ok)">Corrections</text>
+          <text x="749" y="242" text-anchor="middle" font-size="9" fill="var(--ink-faint)">estimator feedback</text>
+          <rect x="676" y="248" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--ok)" stroke-width="1"/>
+          <text x="749" y="266" text-anchor="middle" font-size="10" fill="var(--ok)">LiveOverrides</text>
+          <text x="749" y="278" text-anchor="middle" font-size="9" fill="var(--ink-faint)">auto-promoted at ×3</text>
+          <rect x="676" y="284" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="749" y="302" text-anchor="middle" font-size="10" fill="var(--ink-dim)">ScanLog</text>
+          <text x="749" y="314" text-anchor="middle" font-size="9" fill="var(--ink-faint)">audit trail · every run</text>
+          <rect x="676" y="320" width="146" height="26" rx="3" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1"/>
+          <text x="749" y="338" text-anchor="middle" font-size="10" fill="var(--accent)">HistoricalEstimates</text>
+          <text x="749" y="350" text-anchor="middle" font-size="9" fill="var(--ink-faint)">304 jobs · pending reload</text>
+          <rect x="676" y="356" width="146" height="20" rx="3" fill="var(--bg-2)" stroke="var(--line)"/>
           <!-- The service account's PASSWORD was printed here, on a page anyone with the portal
                open can read. Rotation is a separate outstanding action; displaying it is not. -->
-          <text x="749" y="370" text-anchor="middle" font-size="9" fill="#6a6a72">AIBot · credential in .env · ODBC 18</text>
+          <text x="749" y="370" text-anchor="middle" font-size="9" fill="var(--ink-faint)">AIBot · credential in .env · ODBC 18</text>
 
           <!-- Promotion arrows inside DB zone -->
-          <line x1="664" y1="81" x2="634" y2="81" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
-          <line x1="664" y1="117" x2="634" y2="189" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
-          <line x1="664" y1="153" x2="634" y2="81" stroke="#e8a33d" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
+          <line x1="664" y1="81" x2="634" y2="81" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
+          <line x1="664" y1="117" x2="634" y2="189" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
+          <line x1="664" y1="153" x2="634" y2="81" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr-acc)"/>
 
           <!-- ── ANTHROPIC API ── -->
-          <rect x="476" y="390" width="358" height="52" rx="4" fill="#0d0d0f" stroke="#26262b"/>
+          <rect x="476" y="390" width="358" height="52" rx="4" fill="var(--bg-2)" stroke="var(--line)"/>
           <!-- Vision extraction is xAI Grok, not Anthropic. The page had it the wrong way round. -->
-          <text x="655" y="408" text-anchor="middle" font-size="10" fill="#9b9ba3" font-weight="600">xAI Grok vision (api.x.ai) · Anthropic API (Opus 4.8)</text>
-          <text x="655" y="422" text-anchor="middle" font-size="9" fill="#6a6a72">xAI: drawing vision — rank 40 coverage net, cached per page · XAI_API_KEY</text>
-          <text x="655" y="434" text-anchor="middle" font-size="9" fill="#6a6a72">Anthropic: bought-in price fallback · Tech Radar web search · ANTHROPIC_API_KEY</text>
+          <text x="655" y="408" text-anchor="middle" font-size="10" fill="var(--ink-dim)" font-weight="600">xAI Grok vision (api.x.ai) · Anthropic API (Opus 4.8)</text>
+          <text x="655" y="422" text-anchor="middle" font-size="9" fill="var(--ink-faint)">xAI: drawing vision — rank 40 coverage net, cached per page · XAI_API_KEY</text>
+          <text x="655" y="434" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Anthropic: bought-in price fallback · Tech Radar web search · ANTHROPIC_API_KEY</text>
 
           <!-- ── ARROWS ── -->
           <!-- Browser ↔ FastAPI -->
-          <line x1="110" y1="150" x2="110" y2="168" stroke="#6a6a72" stroke-width="1.5" marker-end="url(#arr)"/>
-          <text x="115" y="162" font-size="9" fill="#6a6a72">HTTP · same-origin</text>
+          <line x1="110" y1="150" x2="110" y2="168" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="115" y="162" font-size="9" fill="var(--ink-faint)">HTTP · same-origin</text>
 
           <!-- FastAPI → File Shares -->
-          <line x1="210" y1="248" x2="248" y2="280" stroke="#6a6a72" stroke-width="1.5" marker-end="url(#arr)"/>
-          <text x="215" y="270" font-size="9" fill="#6a6a72">read UNC</text>
+          <line x1="210" y1="248" x2="248" y2="280" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="215" y="270" font-size="9" fill="var(--ink-faint)">read UNC</text>
 
           <!-- FastAPI → DB -->
-          <line x1="210" y1="228" x2="458" y2="190" stroke="#e8a33d" stroke-width="1.5" marker-end="url(#arr-acc)"/>
-          <text x="300" y="200" font-size="9" fill="#e8a33d">pyodbc · VPN · port 1433</text>
+          <line x1="210" y1="228" x2="458" y2="190" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arr-acc)"/>
+          <text x="300" y="200" font-size="9" fill="var(--accent)">pyodbc · VPN · port 1433</text>
 
           <!-- Engine → DB -->
-          <line x1="102" y1="350" x2="458" y2="260" stroke="#4ec97f" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
-          <text x="240" y="330" font-size="9" fill="#4ec97f">read dbo · write AIEstimating</text>
+          <line x1="102" y1="350" x2="458" y2="260" stroke="var(--ok)" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
+          <text x="240" y="330" font-size="9" fill="var(--ok)">read dbo · write AIEstimating</text>
 
           <!-- Engine → Anthropic -->
-          <line x1="102" y1="350" x2="476" y2="410" stroke="#9b9ba3" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+          <line x1="102" y1="350" x2="476" y2="410" stroke="var(--ink-dim)" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
 
           <!-- Engine → File Shares (writes output) -->
-          <line x1="100" y1="350" x2="280" y2="348" stroke="#6a6a72" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
-          <text x="160" y="364" font-size="9" fill="#6a6a72">writes xlsx · JSON · logs</text>
+          <line x1="100" y1="350" x2="280" y2="348" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+          <text x="160" y="364" font-size="9" fill="var(--ink-faint)">writes xlsx · JSON · logs</text>
 
           <!-- Legend -->
-          <rect x="476" y="456" width="358" height="62" rx="4" fill="#0d0d0f" stroke="#26262b"/>
-          <text x="493" y="473" font-size="9" fill="#6a6a72" letter-spacing="1.5" font-weight="600">LEGEND</text>
-          <line x1="493" y1="486" x2="520" y2="486" stroke="#e8a33d" stroke-width="1.5" marker-end="url(#arr-acc)"/>
-          <text x="526" y="490" font-size="9" fill="#9b9ba3">DB query / promotion</text>
-          <line x1="493" y1="503" x2="520" y2="503" stroke="#4ec97f" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
-          <text x="526" y="507" font-size="9" fill="#9b9ba3">Engine → DB (read dbo / write AIEstimating)</text>
-          <line x1="650" y1="486" x2="677" y2="486" stroke="#6a6a72" stroke-width="1.5" marker-end="url(#arr)"/>
-          <text x="683" y="490" font-size="9" fill="#9b9ba3">HTTP / file read</text>
-          <line x1="650" y1="503" x2="677" y2="503" stroke="#e8a33d" stroke-width="1" stroke-dasharray="4 3"/>
-          <text x="683" y="507" font-size="9" fill="#9b9ba3">Staging → live promotion</text>
+          <rect x="476" y="456" width="358" height="62" rx="4" fill="var(--bg-2)" stroke="var(--line)"/>
+          <text x="493" y="473" font-size="9" fill="var(--ink-faint)" letter-spacing="1.5" font-weight="600">LEGEND</text>
+          <line x1="493" y1="486" x2="520" y2="486" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arr-acc)"/>
+          <text x="526" y="490" font-size="9" fill="var(--ink-dim)">DB query / promotion</text>
+          <line x1="493" y1="503" x2="520" y2="503" stroke="var(--ok)" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
+          <text x="526" y="507" font-size="9" fill="var(--ink-dim)">Engine → DB (read dbo / write AIEstimating)</text>
+          <line x1="650" y1="486" x2="677" y2="486" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="683" y="490" font-size="9" fill="var(--ink-dim)">HTTP / file read</text>
+          <line x1="650" y1="503" x2="677" y2="503" stroke="var(--accent)" stroke-width="1" stroke-dasharray="4 3"/>
+          <text x="683" y="507" font-size="9" fill="var(--ink-dim)">Staging → live promotion</text>
         </svg>
       </div>
 
@@ -2144,53 +2234,53 @@
       <div class="panel reveal" style="overflow-x:auto">
         <svg viewBox="0 0 760 460" xmlns="http://www.w3.org/2000/svg" style="width:100%;min-width:620px;height:auto;font-family:var(--mono)">
           <defs>
-            <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6a6a72"/></marker>
+            <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--ink-faint)"/></marker>
           </defs>
           <!-- Domain tier -->
-          <rect x="290" y="24" width="180" height="58" rx="5" fill="#17171a" stroke="#e8a33d" stroke-width="1.4"/>
-          <text x="380" y="46" text-anchor="middle" font-size="13" fill="#f0efec" font-weight="700">SDI-DC01</text>
-          <text x="380" y="62" text-anchor="middle" font-size="9.5" fill="#9b9ba3">Domain Controller</text>
-          <text x="380" y="74" text-anchor="middle" font-size="9" fill="#6a6a72">AD · DNS · DHCP · 10.0.0.4</text>
+          <rect x="290" y="24" width="180" height="58" rx="5" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.4"/>
+          <text x="380" y="46" text-anchor="middle" font-size="13" fill="var(--ink)" font-weight="700">SDI-DC01</text>
+          <text x="380" y="62" text-anchor="middle" font-size="9.5" fill="var(--ink-dim)">Domain Controller</text>
+          <text x="380" y="74" text-anchor="middle" font-size="9" fill="var(--ink-faint)">AD · DNS · DHCP · 10.0.0.4</text>
           <!-- Data tier -->
-          <text x="150" y="135" text-anchor="middle" font-size="10" fill="#6da8e8" font-weight="700" letter-spacing="1">DATA TIER</text>
-          <rect x="40" y="148" width="170" height="56" rx="5" fill="#17171a" stroke="#6da8e8" stroke-width="1.2"/>
-          <text x="125" y="170" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-DB01</text>
-          <text x="125" y="184" text-anchor="middle" font-size="9" fill="#9b9ba3">SQL · SDILive · 10.0.0.200</text>
-          <text x="125" y="196" text-anchor="middle" font-size="8.5" fill="#4ec97f">⬤ engine database</text>
-          <rect x="40" y="216" width="170" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
-          <text x="125" y="236" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-DB02</text>
-          <text x="125" y="250" text-anchor="middle" font-size="9" fill="#9b9ba3">SQL secondary · 10.0.0.201</text>
+          <text x="150" y="135" text-anchor="middle" font-size="10" fill="var(--info)" font-weight="700" letter-spacing="1">DATA TIER</text>
+          <rect x="40" y="148" width="170" height="56" rx="5" fill="var(--surface-2)" stroke="var(--info)" stroke-width="1.2"/>
+          <text x="125" y="170" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">ACCESS-DB01</text>
+          <text x="125" y="184" text-anchor="middle" font-size="9" fill="var(--ink-dim)">SQL · SDILive · 10.0.0.200</text>
+          <text x="125" y="196" text-anchor="middle" font-size="8.5" fill="var(--ok)">⬤ engine database</text>
+          <rect x="40" y="216" width="170" height="46" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+          <text x="125" y="236" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">ACCESS-DB02</text>
+          <text x="125" y="250" text-anchor="middle" font-size="9" fill="var(--ink-dim)">SQL secondary · 10.0.0.201</text>
           <!-- ERP app/web tier -->
-          <text x="380" y="135" text-anchor="middle" font-size="10" fill="#e8a33d" font-weight="700" letter-spacing="1">ERP APP / WEB TIER</text>
-          <rect x="295" y="148" width="170" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
-          <text x="380" y="168" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-APP01</text>
-          <text x="380" y="182" text-anchor="middle" font-size="9" fill="#9b9ba3">ERP app tier · 10.0.0.202</text>
-          <rect x="295" y="206" width="170" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
-          <text x="380" y="226" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">ACCESS-WEB01</text>
-          <text x="380" y="240" text-anchor="middle" font-size="9" fill="#9b9ba3">ERP web tier · 10.0.0.52</text>
+          <text x="380" y="135" text-anchor="middle" font-size="10" fill="var(--accent)" font-weight="700" letter-spacing="1">ERP APP / WEB TIER</text>
+          <rect x="295" y="148" width="170" height="46" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+          <text x="380" y="168" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">ACCESS-APP01</text>
+          <text x="380" y="182" text-anchor="middle" font-size="9" fill="var(--ink-dim)">ERP app tier · 10.0.0.202</text>
+          <rect x="295" y="206" width="170" height="46" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+          <text x="380" y="226" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">ACCESS-WEB01</text>
+          <text x="380" y="240" text-anchor="middle" font-size="9" fill="var(--ink-dim)">ERP web tier · 10.0.0.52</text>
           <!-- App + RDS tier -->
-          <text x="610" y="135" text-anchor="middle" font-size="10" fill="#4ec97f" font-weight="700" letter-spacing="1">APP / RDS TIER</text>
-          <rect x="525" y="148" width="180" height="56" rx="5" fill="#17171a" stroke="#4ec97f" stroke-width="1.4"/>
-          <text x="615" y="170" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">SDI-APP01</text>
-          <text x="615" y="184" text-anchor="middle" font-size="9" fill="#9b9ba3">App host · 10.0.0.5</text>
-          <text x="615" y="196" text-anchor="middle" font-size="8.5" fill="#e8a33d">⬤ SDI Intelligence portal :8071</text>
-          <rect x="525" y="216" width="180" height="46" rx="5" fill="#121214" stroke="#26262b" stroke-width="1.2"/>
-          <text x="615" y="236" text-anchor="middle" font-size="12" fill="#f0efec" font-weight="700">SDI-RDS01</text>
-          <text x="615" y="250" text-anchor="middle" font-size="9" fill="#9b9ba3">Remote Desktop · 10.0.0.8</text>
+          <text x="610" y="135" text-anchor="middle" font-size="10" fill="var(--ok)" font-weight="700" letter-spacing="1">APP / RDS TIER</text>
+          <rect x="525" y="148" width="180" height="56" rx="5" fill="var(--surface-2)" stroke="var(--ok)" stroke-width="1.4"/>
+          <text x="615" y="170" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">SDI-APP01</text>
+          <text x="615" y="184" text-anchor="middle" font-size="9" fill="var(--ink-dim)">App host · 10.0.0.5</text>
+          <text x="615" y="196" text-anchor="middle" font-size="8.5" fill="var(--accent)">⬤ SDI Intelligence portal :8071</text>
+          <rect x="525" y="216" width="180" height="46" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+          <text x="615" y="236" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">SDI-RDS01</text>
+          <text x="615" y="250" text-anchor="middle" font-size="9" fill="var(--ink-dim)">Remote Desktop · 10.0.0.8</text>
           <!-- Connectors -->
-          <line x1="380" y1="82" x2="380" y2="148" stroke="#6a6a72" stroke-width="1" marker-end="url(#ar)"/>
-          <line x1="290" y1="55" x2="210" y2="160" stroke="#6a6a72" stroke-width="1" marker-end="url(#ar)"/>
-          <line x1="470" y1="55" x2="540" y2="160" stroke="#6a6a72" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="380" y1="82" x2="380" y2="148" stroke="var(--ink-faint)" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="290" y1="55" x2="210" y2="160" stroke="var(--ink-faint)" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="470" y1="55" x2="540" y2="160" stroke="var(--ink-faint)" stroke-width="1" marker-end="url(#ar)"/>
           <!-- portal -> DB link -->
-          <line x1="525" y1="178" x2="210" y2="178" stroke="#e8a33d" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar)"/>
-          <text x="360" y="172" text-anchor="middle" font-size="8.5" fill="#e8a33d">portal → SQL (engine)</text>
+          <line x1="525" y1="178" x2="210" y2="178" stroke="var(--accent)" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+          <text x="360" y="172" text-anchor="middle" font-size="8.5" fill="var(--accent)">portal → SQL (engine)</text>
           <!-- Virtualisation host band -->
-          <rect x="40" y="300" width="665" height="120" rx="6" fill="#101013" stroke="#26262b" stroke-width="1.2" stroke-dasharray="5 4"/>
-          <text x="372" y="322" text-anchor="middle" font-size="11" fill="#6a6a72" font-weight="700" letter-spacing="1">CONFIRMED ESTATE — 2 PHYSICAL + 5 VMware VMs</text>
-          <text x="372" y="344" text-anchor="middle" font-size="9.5" fill="#9b9ba3">Physical: SDI-DC01 &amp; SDI-APP01 — HPE ProLiant DL380 Gen11, 32 GB, Server 2022</text>
-          <text x="372" y="362" text-anchor="middle" font-size="9.5" fill="#9b9ba3">Virtual: DB01/DB02/APP01/WEB01/RDS01 — VMware, Xeon Gold 6242, Server 2019</text>
-          <text x="372" y="386" text-anchor="middle" font-size="9" fill="#e8a33d" font-style="italic">Confirmed 8 Jul 2026: 2 ESXi hosts running STANDALONE, not clustered &mdash; no HA/vMotion failover</text>
-          <text x="372" y="404" text-anchor="middle" font-size="9" fill="#e8a33d" font-style="italic">⚠ Production DB (DB01) raised to 32 GB Aug 2026, but still a single VM with no SQL replica — DB02 idle with 24 GB</text>
+          <rect x="40" y="300" width="665" height="120" rx="6" fill="var(--bg-2)" stroke="var(--line)" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="372" y="322" text-anchor="middle" font-size="11" fill="var(--ink-faint)" font-weight="700" letter-spacing="1">CONFIRMED ESTATE — 2 PHYSICAL + 5 VMware VMs</text>
+          <text x="372" y="344" text-anchor="middle" font-size="9.5" fill="var(--ink-dim)">Physical: SDI-DC01 &amp; SDI-APP01 — HPE ProLiant DL380 Gen11, 32 GB, Server 2022</text>
+          <text x="372" y="362" text-anchor="middle" font-size="9.5" fill="var(--ink-dim)">Virtual: DB01/DB02/APP01/WEB01/RDS01 — VMware, Xeon Gold 6242, Server 2019</text>
+          <text x="372" y="386" text-anchor="middle" font-size="9" fill="var(--accent)" font-style="italic">Confirmed 8 Jul 2026: 2 ESXi hosts running STANDALONE, not clustered &mdash; no HA/vMotion failover</text>
+          <text x="372" y="404" text-anchor="middle" font-size="9" fill="var(--accent)" font-style="italic">⚠ Production DB (DB01) raised to 32 GB Aug 2026, but still a single VM with no SQL replica — DB02 idle with 24 GB</text>
         </svg>
       </div>
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:26px 0 8px">Server inventory</h3>
@@ -2540,18 +2630,18 @@
 
       <!-- WORKSTREAM 3 — IMMERSIVE DESIGN -->
       <div style="display:flex;align-items:center;gap:10px;margin:32px 0 12px">
-        <div style="width:4px;height:36px;background:#a78bfa;border-radius:2px;flex-shrink:0"></div>
+        <div style="width:4px;height:36px;background:var(--violet);border-radius:2px;flex-shrink:0"></div>
         <div>
-          <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:#a78bfa;text-transform:uppercase">Workstream 3 · In build</div>
+          <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--violet);text-transform:uppercase">Workstream 3 · In build</div>
           <h2 style="font-family:var(--disp);font-weight:800;font-size:22px;margin:2px 0 0">Immersive Design &amp; Visualisation</h2>
         </div>
-        <span class="chip c-plan" style="margin-left:auto;background:rgba(167,139,250,.15);color:#a78bfa;border-color:rgba(167,139,250,.3)">Q3–Q4 2026</span>
+        <span class="chip c-plan" style="margin-left:auto;background:rgba(167,139,250,.15);color:var(--violet);border-color:rgba(167,139,250,.3)">Q3–Q4 2026</span>
       </div>
       <div class="panel reveal">
         <p style="margin:0 0 14px">Photorealistic, real-time visualisation of retail display designs using Unreal Engine 5 and NVIDIA Omniverse — giving clients an immersive experience of their installation before any steel is cut. SolidWorks models connect directly to Omniverse via the SolidWorks connector, enabling live design changes to propagate instantly into the visualisation environment.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
           <div style="background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:14px">
-            <div style="font-family:var(--mono);font-size:10px;color:#a78bfa;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Platform</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--violet);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Platform</div>
             <ul style="margin:0;padding:0 0 0 16px;font-size:13px;line-height:1.8">
               <li>Unreal Engine 5</li>
               <li>NVIDIA Omniverse</li>
@@ -2560,7 +2650,7 @@
             </ul>
           </div>
           <div style="background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:14px">
-            <div style="font-family:var(--mono);font-size:10px;color:#a78bfa;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Deliverables</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--violet);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Deliverables</div>
             <ul style="margin:0;padding:0 0 0 16px;font-size:13px;line-height:1.8">
               <li>Photoreal client concept renders</li>
               <li>Real-time 3D walkthroughs</li>
@@ -2569,7 +2659,7 @@
             </ul>
           </div>
           <div style="background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:14px">
-            <div style="font-family:var(--mono);font-size:10px;color:#a78bfa;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Future path</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--violet);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Future path</div>
             <ul style="margin:0;padding:0 0 0 16px;font-size:13px;line-height:1.8">
               <li>Factory digital twin (Omniverse)</li>
               <li>VR client review (Quest / Vision Pro)</li>
@@ -2594,7 +2684,7 @@
              it is a deliberate hold and wants saying, because nothing else on the row implies
              it. -->
         <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
-          <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:#a78bfa;text-transform:uppercase;margin-bottom:8px">Within this workstream · two projects, both in build</div>
+          <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--violet);text-transform:uppercase;margin-bottom:8px">Within this workstream · two projects, both in build</div>
           <p style="margin:0 0 14px">Before anything is rendered, the studio needs to find what it has already drawn — and a client asking for something SDI has built before should be shown it rather than sold a concept of it. Two projects, one owner, both past proof of concept and both with a go-live inside 2026.</p>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px">
@@ -2883,8 +2973,8 @@
           </div>
         </div>
         <div style="background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.2);border-radius:6px;padding:12px;font-size:12px;margin-top:14px">
-          <b style="color:#a78bfa">Resource:</b> New team member — Unreal Engine, 3D &amp; creative design.
-          <br><b style="color:#a78bfa;margin-top:4px;display:block">Goal:</b> Give clients photorealistic, immersive experiences of retail display designs before manufacture — and build the visualisation foundation for the factory digital twin.
+          <b style="color:var(--violet)">Resource:</b> New team member — Unreal Engine, 3D &amp; creative design.
+          <br><b style="color:var(--violet);margin-top:4px;display:block">Goal:</b> Give clients photorealistic, immersive experiences of retail display designs before manufacture — and build the visualisation foundation for the factory digital twin.
         </div>
       </div>
 
@@ -3699,6 +3789,60 @@
   /* What a browser can genuinely render. Everything else — the workbook above all — is
      saved with its name so the application that owns it can open it. */
   const _INLINE_EXT = new Set(['.html','.htm','.pdf','.svg','.png','.jpg','.jpeg','.gif']);
+
+  /* ── THEME AND PAGE SIZE ──────────────────────────────────────────────────────────
+     Both remembered per browser, for the same reason the rail toggle is: a preference
+     that resets on every page is not a preference. localStorage is wrapped in try/catch
+     throughout — a private window, or a policy that blocks site data, throws on access,
+     and a page that will not render because it could not read a cosmetic setting is a
+     bad trade.
+
+     WHY ZOOM AND NOT FONT-SIZE. This page is laid out in pixels — panel widths, chip
+     heights, the Gantt bars, the sidebar rail. Scaling the root font size would grow the
+     text and leave every one of those where it was, which reads as broken rather than
+     bigger. `zoom` scales the whole layout and reflows it, so 150% is the same page at
+     150%, and it is what Ctrl+= does natively. Applied to the root element so fixed and
+     sticky children scale with it.
+
+     There is no automatic light mode. See the palette block for why. */
+  (function(){
+    const root=document.documentElement;
+    const T_KEY='sdi.view.theme', Z_KEY='sdi.view.zoom';
+    const ZOOMS=[100,125,150,175,200];
+
+    function setTheme(light){
+      if(light) root.setAttribute('data-theme','light'); else root.removeAttribute('data-theme');
+      const b=document.getElementById('theme-btn'), l=document.getElementById('theme-lbl');
+      if(b){
+        b.setAttribute('aria-pressed', String(light));
+        /* The label names the destination, not the current state — it is a button, and a
+           button says what it will do. */
+        b.title = light ? 'Switch to dark' : 'Switch to light';
+        b.setAttribute('aria-label', b.title);
+      }
+      if(l) l.textContent = light ? 'Dark' : 'Light';
+      try{ localStorage.setItem(T_KEY, light?'light':'dark'); }catch(e){}
+    }
+
+    function setZoom(pc){
+      pc = ZOOMS.indexOf(pc)===-1 ? 100 : pc;
+      root.style.zoom = pc===100 ? '' : (pc/100);
+      document.querySelectorAll('.vc-z').forEach(b =>
+        b.setAttribute('aria-pressed', String(Number(b.dataset.zoom)===pc)));
+      try{ localStorage.setItem(Z_KEY, String(pc)); }catch(e){}
+    }
+
+    let light=false, zoom=100;
+    try{ light = localStorage.getItem(T_KEY)==='light'; }catch(e){}
+    try{ const z=parseInt(localStorage.getItem(Z_KEY),10); if(ZOOMS.indexOf(z)!==-1) zoom=z; }catch(e){}
+    setTheme(light); setZoom(zoom);
+
+    const tb=document.getElementById('theme-btn');
+    if(tb) tb.addEventListener('click', () =>
+      setTheme(root.getAttribute('data-theme')!=='light'));
+    document.querySelectorAll('.vc-z').forEach(b =>
+      b.addEventListener('click', () => setZoom(Number(b.dataset.zoom))));
+  })();
 
   /* ── THE RAIL TOGGLE ──────────────────────────────────────────────────────────────
      Remembered per browser, because a preference that resets on every page is not a
