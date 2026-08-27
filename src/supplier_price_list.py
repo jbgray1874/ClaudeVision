@@ -325,6 +325,32 @@ def parse(path: Path, supplier: str, *, material_class: str = "",
             "source_file": path.name,
             "line": n,
         })
+    # DOES THIS EVEN LOOK LIKE A PRICE LIST?
+    #
+    # Pointed at the SUPPLIER SURVEY spreadsheet -- a list of merchants, contacts and "how you get
+    # the price today" -- this happily reported "1 priceable row, 23 rejected" and offered to
+    # commit it. The sniffer had done as it was told: column D is headed "How you get the price
+    # today (email / PDF / portal / phone)", which contains the word "price", and column G is
+    # "Their part codes on the quote?", which contains "part code". Every mapping was defensible
+    # and the answer was nonsense.
+    #
+    # A tool that produces confident output from the wrong file is the same fault as a £0.00 that
+    # reads as free: the output looks like an answer. So when almost everything is rejected, the
+    # conclusion is about the FILE, not about its rows -- a real price list from a real merchant
+    # does not have 96% unquotable lines.
+    total = len(out) + len(rejected)
+    if total and len(out) / total < 0.25 and len(out) < 10:
+        header_text = " | ".join(str(c or "")[:40] for c in rows[header_at] if str(c or "").strip())
+        return {"rows": [], "rejected": rejected, "mapping": mapping, "header_row": header_at,
+                "error": (
+                    f"{len(rejected)} of {total} rows carry no usable price, so this does not look "
+                    f"like a supplier price list.\n"
+                    f"  the row taken as the header was: {header_text[:180]}\n"
+                    f"  if that is a summary or survey sheet rather than the merchant's own price "
+                    f"file, you want the file THEY sent.\n"
+                    f"  if it really is a price list, name the columns yourself: "
+                    f"--map net_gbp=<col>,description=<col>")}
+
     return {"rows": out, "rejected": rejected, "mapping": mapping,
             "header_row": header_at, "error": None}
 

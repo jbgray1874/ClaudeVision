@@ -246,3 +246,67 @@ def test_it_does_not_touch_udef():
     """This loads rung 3. UDEF is the spine and a contract price still beats a list price."""
     src = (_ROOT / "src" / "supplier_price_list.py").read_text(encoding="utf-8")
     assert "UDEF_PARTS_TABLE_FOR_ESTIMATING" not in src
+
+
+# ── the wrong file entirely ────────────────────────────────────────────────────
+#
+# Pointed at the SUPPLIER SURVEY spreadsheet — merchants, contacts, "how you get the price today"
+# — the first version reported "1 priceable row, 23 rejected" and offered to commit it. The
+# sniffer had done exactly as told: column D is headed "How you get the price today (email / PDF /
+# portal / phone)", which contains the word "price"; column G is "Their part codes on the quote?",
+# which contains "part code". Every mapping was defensible and the output was nonsense.
+#
+# A tool that produces confident output from the wrong file is the same fault as a £0.00 that
+# reads as free: it looks like an answer. When almost every row is rejected the conclusion is
+# about the FILE, not its rows — a real merchant's price list does not have 96% unquotable lines.
+
+_SURVEY = [
+    [],
+    ["", "Material class", "Supplier you actually use", "How you get the price today (email",
+     "Portal login? Whose account?", "Contract / discount vs list?",
+     "Their part codes on the quote?", "Changes how often?", "Who we'd speak to"],
+    ["", "Sheet steel / metal", "CJ UPTON & SONS LIMITED", "Jason.Sale@uptonsteel.com", "N/A",
+     "Price worked from tonne rate", "their parts", "quartely", "Jason Sale"],
+    ["", "Wire", "Barnfather Wire (Midlands) Ltd", "timd@barnfatherwire.co.uk", "N/A", "",
+     "their parts", "every few months", "Tim Dalley"],
+    ["", "Powder", "Thermaset Limited", "donna@thermaset.co.uk", "N/A", "price list available",
+     "their parts", "steady", "Donna"],
+]
+
+
+def test_a_survey_sheet_is_refused_rather_than_half_parsed(tmp_path):
+    """THE ASSERTION. It must not offer to commit an email address as a price."""
+    parsed = spl.parse(_xlsx(tmp_path, "survey.xlsx", _SURVEY), "Elite Sourcing")
+    assert parsed["error"], "a sheet with no prices in it was accepted as a price list"
+    assert parsed["rows"] == []
+
+
+def test_the_refusal_says_which_row_it_read_as_the_header(tmp_path):
+    """Without it the reader cannot see WHY it went wrong, and the natural next move is to
+    force it through with --map, which would load the nonsense deliberately."""
+    parsed = spl.parse(_xlsx(tmp_path, "survey.xlsx", _SURVEY), "X")
+    assert "How you get the price today" in parsed["error"]
+    assert "--map" in parsed["error"]
+
+
+def test_a_short_but_genuine_price_list_still_passes(tmp_path):
+    """The gate must not refuse a real merchant who sent four lines. It keys on the PROPORTION
+    rejected, not on being small — a file that parses cleanly is fine at any size."""
+    rows = [["Code", "Description", "Net Price"],
+            ["A1", "Cam lock 20mm", "3.85"],
+            ["A2", "Cam lock 25mm", "4.10"],
+            ["A3", "Escutcheon", "0.92"]]
+    parsed = spl.parse(_xlsx(tmp_path, "small.xlsx", rows), "Hafele")
+    assert not parsed["error"] and len(parsed["rows"]) == 3
+
+
+def test_a_big_list_with_many_poa_lines_is_not_refused(tmp_path):
+    """A real catalogue can carry plenty of POA lines and still be a real catalogue. The gate
+    needs both a low acceptance rate AND almost nothing accepted, or it starts rejecting the
+    files it exists to load."""
+    rows = [["Code", "Description", "Net Price"]]
+    rows += [[f"P{i}", f"Part {i}", "POA"] for i in range(40)]
+    rows += [[f"Q{i}", f"Priced part {i}", "1.25"] for i in range(12)]
+    parsed = spl.parse(_xlsx(tmp_path, "mixed.xlsx", rows), "Essentra")
+    assert not parsed["error"], "a genuine catalogue with many POA lines was refused"
+    assert len(parsed["rows"]) == 12
