@@ -188,7 +188,10 @@ $reqs = $changed | Where-Object { $_.Rel -like "*requirements.txt" }
 if ($reqs) {
     Write-Host "  requirements.txt changed. INSTALL BEFORE RESTARTING, on the server:" -ForegroundColor Yellow
     Write-Host "      cd C:\ClaudeVision" -ForegroundColor Yellow
-    Write-Host "      .\.venv\Scripts\python.exe -m pip install -r sdi-intelligence-backend\requirements.txt" -ForegroundColor Yellow
+    Write-Host "      .\sdi-intelligence-backend\.venv\Scripts\python.exe -m pip install -r sdi-intelligence-backend\requirements.txt" -ForegroundColor Yellow
+    Write-Host "  THE SERVICE'S virtualenv, not the repo-root one. The root .venv is the ENGINE," -ForegroundColor Yellow
+    Write-Host "  which the server does not have because it never runs an estimate - installing" -ForegroundColor Yellow
+    Write-Host "  there fails with 'the term is not recognized', which looks like a typo." -ForegroundColor Yellow
     Write-Host "  A missing package here does not degrade the service, it prevents it starting." -ForegroundColor Yellow
     Write-Host ""
 }
