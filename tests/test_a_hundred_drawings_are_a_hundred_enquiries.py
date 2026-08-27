@@ -418,8 +418,12 @@ def test_the_page_script_parses():
         pytest.skip("node is not installed here")
     blocks = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", _page(), re.S)
     assert blocks, "the page has no script block at all"
-    assert len(blocks) == 2, (
-        f"the page has {len(blocks)} script blocks, not the 2 this expects — if that is "
+    # THREE SINCE 2026-08-27: the sidebar toggle, the page's own script, and the theme/size
+    # controls added when this page gained a light mode. Deliberate, and the count is updated
+    # rather than loosened — the assertion exists so a new block cannot arrive unchecked, and
+    # it did its job: it caught the third the moment it was added.
+    assert len(blocks) == 3, (
+        f"the page has {len(blocks)} script blocks, not the 3 this expects — if that is "
         f"deliberate, update the count; it is here so a new block cannot go unchecked")
     for i, src in enumerate(blocks):
         proc = subprocess.run([node, "--check", "-"], input=src,

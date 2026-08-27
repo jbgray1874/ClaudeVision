@@ -285,3 +285,89 @@ def test_the_page_script_still_parses():
         path = fh.name
     out = subprocess.run(["node", "--check", path], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
+
+
+# ── the same choice on every page a person actually opens ─────────────────────
+#
+# The controls went on the portal only. So 10.0.0.5:8071/estimating and /guide — the two pages
+# an estimator spends the day in — stayed dark-only with no size control, and the answer to
+# "can I have it lighter" depended on which page you happened to be on.
+#
+# These two pages carry their own stylesheet and their own token names (--bg, --panel, --line,
+# --ink, --muted, --dim, --brand), so this is not the portal's palette reused; it is the same
+# treatment applied to a second and third design system.
+
+_ESTIMATING_PAGES = ("sdi-estimating-intelligence.html", "sdi-estimating-guide.html")
+
+
+def _page(name: str) -> str:
+    return (_ROOT / "sdi-intelligence-backend" / name).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("page_name", _ESTIMATING_PAGES)
+def test_the_estimating_pages_have_the_same_controls(page_name):
+    """THE REPORT. "only appears in black and doesn't have the choice to go white or adjust
+    the percentage sizes.\""""
+    page = _page(page_name)
+    assert 'id="theme-btn"' in page, f"{page_name} has no theme toggle"
+    zooms = sorted(int(m) for m in re.findall(r'data-zoom="(\d+)"', page))
+    assert zooms == [100, 125, 150, 175, 200], f"{page_name} offers {zooms}"
+
+
+@pytest.mark.parametrize("page_name", _ESTIMATING_PAGES)
+def test_each_page_defines_a_complete_light_palette(page_name):
+    """Their tokens are NOT the portal's — --panel and --muted here, --surface and --ink-dim
+    there. A light block copied from the portal would define names this page never reads and
+    leave its own at their dark values, which looks like the toggle half-working."""
+    page = _page(page_name)
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", page, re.S))
+    def tokens(sel):
+        at = css.index(sel)
+        return {m.group(1) for m in re.finditer(r"(--[a-z0-9-]+)\s*:", css[at:css.index("}", at)])}
+    dark = {t for t in tokens(":root{")
+            if not t.startswith(("--r", "--mono", "--serif", "--disp", "--body"))}
+    missing = dark - tokens(':root[data-theme="light"]{')
+    assert not missing, f"{page_name} light mode does not redefine: {', '.join(sorted(missing))}"
+
+
+@pytest.mark.parametrize("page_name", _ESTIMATING_PAGES)
+def test_no_palette_literal_survives_below_the_root_block(page_name):
+    """Same audit as the portal's, on a smaller scale: 20 and 17 literals were sitting in
+    these stylesheets where no [data-theme] rule could reach them."""
+    page = _page(page_name)
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", page, re.S))
+    at = css.index(":root{")
+    below = css[css.index("}", at) + 1:]
+    # The light block is allowed to hold literals — that is what it is for.
+    lat = below.index(':root[data-theme="light"]{')
+    below = below[:lat] + below[below.index("}", lat) + 1:]
+    for literal in ("#0d0d0f", "#121214", "#17171a", "#26262b", "#f0efec", "#9b9ba3",
+                    "#6a6a72", "#e8a33d", "#4ec97f", "#6da8e8", "#ff6b6b"):
+        assert literal not in below.lower(), (
+            f"{page_name} still writes {literal} as a literal — the theme cannot reach it")
+
+
+def test_all_three_pages_remember_the_choice_under_the_same_keys():
+    """A preference that resets when you click from the dashboard into /estimating is not a
+    preference. Three pages with three independent toggles would be worse than one page with
+    a toggle, because it would look broken rather than absent."""
+    keys = []
+    for name in ("sdi-intelligence-portal.html",) + _ESTIMATING_PAGES:
+        page = _page(name)
+        keys.append(set(re.findall(r"['\"](sdi\.view\.(?:theme|zoom))['\"]", page)))
+    assert keys[0] == keys[1] == keys[2] == {"sdi.view.theme", "sdi.view.zoom"}, (
+        f"the three pages do not share storage keys: {keys}")
+
+
+@pytest.mark.parametrize("page_name", _ESTIMATING_PAGES)
+def test_storage_is_wrapped_on_the_estimating_pages_too(page_name):
+    page = _page(page_name)
+    for m in re.finditer(r"localStorage\.(?:get|set)Item", page):
+        assert "try{" in page[max(0, m.start() - 120):m.start()], (
+            f"{page_name}: unwrapped localStorage near ...{page[m.start()-50:m.start()+50]}...")
+
+
+@pytest.mark.parametrize("page_name", _ESTIMATING_PAGES)
+def test_light_mode_is_opt_in_here_as_well(page_name):
+    assert not re.search(r"@media[^{]*prefers-color-scheme", _page(page_name)), (
+        f"{page_name} infers the theme from the operating system")
