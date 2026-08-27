@@ -33,6 +33,7 @@ on PDF + DXF exactly as before.
 | `SDI_APPLY_SOLIDWORKS=1` | force on; says so loudly if the extract is missing |
 | `SDI_SW_EXTRACT_JSON=<path>` | read the extract from an explicit path (models on a CAD share, job folder elsewhere) |
 | `SDI_SW_RUN_ANALYSER=0` | never invoke COM; consume an existing extract only |
+| `SDI_SW_FLATTEN=0` | do not flatten-and-measure a formed part with no cut-list blank (default **on**) |
 
 **You do not normally run this tool by hand.** When a job folder holds `.SLDPRT` / `.SLDASM`
 and there is no extract — or the extract is older than the models — the estimate invokes the

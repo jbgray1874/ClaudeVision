@@ -86,7 +86,7 @@ EXTRACT_SCHEMA_VERSION = 3
 # the cut-list property route yields nothing usable. Off by default because it rebuilds
 # every affected model. Read-only either way — the bend state is restored and the document
 # closed without saving.
-ALLOW_FLATTEN = False
+ALLOW_FLATTEN = True
 
 # SW sheet-metal feature type names that each add a bend line (lower-cased). SMBaseFlange
 # (flat base) and UnFold/Fold (model flatten/refold ops) are intentionally excluded.
@@ -266,6 +266,16 @@ class SolidWorksSession:
         # only as a console line — and that is the one caveat this extract
         # carries that a freshness fingerprint cannot see.
         self.borrowed_seen: List[str] = []
+        # WHETHER THE DOCUMENT open() LAST RETURNED CAME OUT OF SOMEBODY'S SESSION.
+        # Flattening is read-only in intent — it restores the bend state and closes without
+        # saving — but on a BORROWED document that all happens inside the window a designer
+        # is looking at: their part visibly unfolds and refolds, and the rebuild marks their
+        # document dirty even though nothing of ours is written. On a document we opened,
+        # nobody sees it and nobody is asked to save it on the way out.
+        #
+        # This is the same distinction close_all() already draws, for the same reason, and
+        # it is why acquisition could be turned back on at all.
+        self.last_open_borrowed: bool = False
 
     def open(self, path: str):
         path = os.path.abspath(path) if not path.startswith("\\\\") else path
@@ -273,6 +283,7 @@ class SolidWorksSession:
         doctype = DOCTYPE.get(ext)
         if doctype is None:
             raise ValueError(f"Unsupported extension: {ext}")
+        self.last_open_borrowed = False
         errs = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         warns = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
         # OWNERSHIP. SolidWorks does not open a document twice: if a designer already has
@@ -288,6 +299,7 @@ class SolidWorksSession:
         _existing = self._get_open_document(path, _trace)
         if _existing is not None:
             self._borrowed_titles.append(_safe_str(_get0(_existing, "GetTitle")) or path)
+            self.last_open_borrowed = True
             print(f"[reused] {os.path.basename(path)} was already open "
                   f"({'; '.join(_trace)}) — read in place, not reopened")
             return _existing, doctype
@@ -305,6 +317,7 @@ class SolidWorksSession:
                 if doc is not None:
                     print(f"[recovered] already-open document reused ({'; '.join(_trace)})")
                     self._borrowed_titles.append(_safe_str(_get0(doc, "GetTitle")) or path)
+                    self.last_open_borrowed = True
                     return doc, doctype
                 # Say what was tried. A bare "failed" told us nothing last time and cost a
                 # whole run to learn no more than that.
@@ -317,6 +330,7 @@ class SolidWorksSession:
                 f"OpenDoc6 failed: {path}  errs={errs.value} warns={warns.value}"
             )
         _t = _safe_str(_get0(doc, "GetTitle"))
+        self.last_open_borrowed = bool(_already)
         if _t and not _already:
             self._open_titles.append(_t)
         elif _already:
@@ -1109,7 +1123,7 @@ def infer_thickness_from_bbox(bbox_mm, is_sheet_metal: bool, bend_count: int = 0
     return None
 
 
-def sheet_metal_signals(doc) -> RouteSignals:
+def sheet_metal_signals(doc, allow_flatten: Optional[bool] = None) -> RouteSignals:
     """Feature walk for sheet-metal / hole / weldment hints on a part doc."""
     sig = RouteSignals(part_number=_safe_str(_get0(doc, "GetTitle")))
     # Wrap with the generated IModelDoc2 class so FirstFeature() resolves by DISPID (late
@@ -1416,9 +1430,18 @@ def sheet_metal_signals(doc) -> RouteSignals:
     # ── Flat pattern by MEASUREMENT, when the property route gave nothing usable ───
     # Reached when the part is formed but we have no blank — either the cut list was
     # silent, or its "flat" was rejected as the folded envelope. Flattening and measuring
-    # cannot be fooled by a property name, so it is the authoritative fallback. Opt-in
-    # (--flatten) because it rebuilds each model in memory and costs time.
-    if (ALLOW_FLATTEN and sig.is_sheet_metal
+    # cannot be fooled by a property name, so it is the authoritative fallback.
+    #
+    # ON BY DEFAULT FROM THE PIPELINE SINCE 2026-08-27, and the reason it was not is worth
+    # keeping: "opt-in because it rebuilds each model in memory and costs time". True, and
+    # the wrong trade. This fires ONLY on a formed sheet-metal part for which the cut list
+    # gave no usable blank — which is precisely the case that makes the engine infer
+    # geometry, and inferred geometry is its single largest source of inaccuracy. Paying
+    # seconds of rebuild to stop guessing a blank size is not a close call.
+    #
+    # It never runs on a BORROWED document. See SolidWorksSession.last_open_borrowed.
+    _may_flatten = ALLOW_FLATTEN if allow_flatten is None else allow_flatten
+    if (_may_flatten and sig.is_sheet_metal
             and (sig.bend_count or sig.formed_but_no_bend_features)
             and not (sig.flat_length_mm and sig.flat_width_mm)):
         _fp = flat_pattern_by_flatten(doc, sig.bbox_mm, sig.thickness_mm, sig.notes)
@@ -1846,7 +1869,12 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
         elif doctype == SW_DRW:
             result["bom"] = [asdict(b) for b in drawing_bom_tables(doc)]
         elif doctype == SW_PART:
-            sig = sheet_metal_signals(doc)
+            # NEVER FLATTEN SOMEBODY ELSE'S OPEN DOCUMENT. Read-only in intent is not
+            # the same as invisible: on a borrowed document the part visibly unfolds and
+            # refolds in front of the designer, and the rebuild dirties their file. On a
+            # document this process opened, neither happens.
+            sig = sheet_metal_signals(
+                doc, allow_flatten=ALLOW_FLATTEN and not session.last_open_borrowed)
             sig.part_number = result["title"] or sig.part_number
             result["route_signals"] = asdict(sig)
             props = result["custom_properties"]
@@ -1986,16 +2014,24 @@ def explain_no_files(root: str) -> str:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--flatten]")
+        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--no-flatten]")
         sys.exit(2)
     argv = list(sys.argv[1:])
     global ALLOW_FLATTEN
+    # --flatten is kept and does nothing new; it is in scripts and in people's notes, and a
+    # flag that starts erroring is a worse answer than a flag that agrees with the default.
     if "--flatten" in argv:
-        ALLOW_FLATTEN = True
         argv.remove("--flatten")
-        print("[flatten] ON — formed parts with no usable cut-list blank will be flattened "
-              "IN MEMORY and measured. The model is restored and closed WITHOUT SAVING.",
+    if "--no-flatten" in argv:
+        ALLOW_FLATTEN = False
+        argv.remove("--no-flatten")
+        print("[flatten] OFF — a formed part with no usable cut-list blank will report NO "
+              "flat pattern rather than being measured. Its blank will be inferred downstream.",
               flush=True)
+    else:
+        print("[flatten] ON — formed parts with no usable cut-list blank are flattened IN "
+              "MEMORY and measured. The model is restored and closed WITHOUT SAVING, and a "
+              "document already open in somebody's session is never flattened.", flush=True)
     out_override = None
     if "--out" in argv:
         i = argv.index("--out")
@@ -2005,7 +2041,7 @@ def main():
         out_override = argv[i + 1]
         del argv[i:i + 2]
     if not argv:
-        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--flatten]")
+        print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--no-flatten]")
         sys.exit(2)
     target = argv[0]
 

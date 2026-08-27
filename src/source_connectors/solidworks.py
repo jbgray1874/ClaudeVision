@@ -898,6 +898,24 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
     exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or "python"
     produced = produced if produced is not None else []
     cmd = [exe, str(analyser), str(folder)]
+    # THE MEASUREMENT A SEAT IS ACTUALLY FOR, and it had never run from here.
+    #
+    # The analyser can flatten a formed sheet-metal part in memory and MEASURE its blank,
+    # which is the only route that cannot be fooled by SolidWorks reusing the property name
+    # 'Bounding Box Length' for both a flat pattern and a weldment's folded envelope. On
+    # 12120-01-01M the property route returned 126.39x82.2 where the true blank is
+    # 132.39x88.2 — material under-bought, silently, on a part that looked fully sourced.
+    #
+    # It was gated behind --flatten, and nothing in the pipeline ever passed it. So on every
+    # automated estimate the strongest geometry a SolidWorks seat can produce was skipped,
+    # and the engine inferred the blank instead — which is its single largest source of
+    # inaccuracy. The analyser now defaults it on and refuses to flatten a document somebody
+    # already has open, so the cost of running it here is seconds of rebuild per formed part
+    # that has no cut-list blank, and nothing else.
+    #
+    #   SDI_SW_FLATTEN=0   go back to inferring the blank
+    if os.getenv("SDI_SW_FLATTEN", "").strip().lower() in {"0", "false", "no", "off"}:
+        cmd.append("--no-flatten")
     if out_path:
         # Tell it where to write, and read back where it ACTUALLY wrote. The analyser falls
         # back to the working directory when the target is a read-only CAD share, so the
