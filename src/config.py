@@ -17,6 +17,10 @@ from pathlib import Path
 # default now comes from a file rather than from nothing, and a shell value that DISAGREES
 # with the file is said out loud instead of quietly deciding the estimate.
 _DOT_ENV_LOADED = False
+# WHICH .env was actually read. Two are tried -- the repo root, then src/ -- and the FIRST one
+# found wins and the other is never opened. An error message that names the wrong one sends
+# somebody to edit a file nothing reads, which is exactly what happened.
+_DOT_ENV_PATH = None
 
 
 def load_dot_env(announce: bool = True, root=None) -> bool:
@@ -57,6 +61,8 @@ def load_dot_env(announce: bool = True, root=None) -> bool:
         load_dotenv(candidate)
         if root is None:
             _DOT_ENV_LOADED = True
+        global _DOT_ENV_PATH
+        _DOT_ENV_PATH = candidate
         print(f"[env] Loaded {candidate}", flush=True)
         return True
     return False
@@ -985,11 +991,14 @@ DB_DRIVER   = os.getenv("SDI_DB_DRIVER",   "ODBC Driver 18 for SQL Server")
 def require_db_password() -> str:
     """The one place the absence of a password becomes a sentence somebody can act on."""
     if not DB_PASSWORD:
+        where = str(_DOT_ENV_PATH) if _DOT_ENV_PATH else str(BASE_DIR / ".env")
         raise RuntimeError(
-            "SDI_DB_PASSWORD is not set, so SDILive cannot be reached. Put it in src/.env "
-            "(untracked) as SDI_DB_PASSWORD=<the password for the AIBot login>. It is "
-            "deliberately not defaulted in source: a password in a source file is in git "
-            "history the moment it is pushed, and deleting it later does not remove it.")
+            f"SDI_DB_PASSWORD is not set, so SDILive cannot be reached. Add it to {where} "
+            f"as SDI_DB_PASSWORD=<the password for the SDILive login>.\n"
+            f"That is the .env this process actually loaded -- the repo root is tried before "
+            f"src/, and only the first one found is read, so editing the other has no effect.\n"
+            f"It is deliberately not defaulted in source: a password in a source file is in git "
+            f"history the moment it is pushed, and deleting it later does not remove it.")
     return DB_PASSWORD
 
 
