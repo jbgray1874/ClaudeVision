@@ -352,3 +352,70 @@ def test_the_reader_still_hands_the_unit_over():
     reader = (_ROOT / "src" / "supplier_price_list.py").read_text(encoding="utf-8")
     assert '"uom": r["unit"]' in reader, (
         "the reader no longer passes the unit it worked out, so every row falls back to each")
+
+
+# ── a unit that argues with its own description ──────────────────────────────
+#
+# FIXING1784 is live in the bought-in catalogue right now:
+#
+#     Edging Seal Strip 10m Roll (Rubusec)    uom = metre    £29.80
+#
+# £29.80 is the ROLL. Per metre it is £2.98. A part needing two metres is costed at £59.60
+# instead of £5.96 — and it is a `migrated:` row, so rung 3 serves it. It was the only
+# non-`each` row among the twenty-two the allowlist admits, which says the migration never
+# carried real units at all.
+#
+# parse_unit is already careful about WHERE it read the unit. This is the other half: a unit
+# can be read correctly from the file and still contradict what the description says is being
+# sold. It cannot be resolved automatically — "10m Roll ... per metre" is either a roll price
+# with the wrong unit or a metre price mentioning the roll size, and only the supplier knows
+# — so it flags and does not fix.
+
+import supplier_price_list as _spl                                  # noqa: E402
+
+
+@pytest.mark.parametrize("description,unit", [
+    ("Edging Seal Strip 10m Roll (Rubusec)", "metre"),      # the live 10x row
+    ("Edging Seal Strip 10m Roll (Rubusec)", "m"),          # and its canonical spelling
+    ("Wire 25kg Coil Bright Drawn", "kg"),
+    ("Black RAL 9005 Gloss", "each"),                       # a finish, priced each
+    ("Powder Anthracite Grey RAL 7016 Semi Gloss", "each"),
+])
+def test_a_pack_priced_by_its_contents_is_flagged(description, unit):
+    assert _spl.unit_conflicts(description, unit), (
+        f"{description!r} at /{unit} is not flagged, and it is wrong by a whole multiple")
+
+
+@pytest.mark.parametrize("description,unit", [
+    ("No.8 x 16mm Pan Head Wood Screw Pozi", "each"),
+    ("M6 x 10mm Flange Button Head Screw Black", "each"),   # has 10mm, no container
+    ("Tube 60x30x2mm 933mm (Top Frame Side)", "each"),
+    ("ABS sheet white textured 2mm", "m2"),
+    ("Egger H3131 Natural Davos Oak MFC 2800x2070x19mm sheet", "sheet"),
+    ("RAL9005 Gloss Black Powder Coated Steel Bracket 200mm", "each"),
+    ("Powder coated shelf 400x300", "each"),
+])
+def test_healthy_rows_are_left_alone(description, unit):
+    """THE HALF THAT DECIDES WHETHER THIS SURVIVES. SDI powder-coats most of what it makes,
+    so "coating word + each" alone would flag a large share of a good file — and a checker
+    that cries wolf on real rows gets switched off in the week it would have mattered. A
+    powder-coated BRACKET is a bracket, priced each, correctly."""
+    assert not _spl.unit_conflicts(description, unit), (
+        f"{description!r} at /{unit} is correct and was flagged")
+
+
+def test_the_units_the_database_actually_uses_are_understood():
+    """The live row says "metre", not the canonical "m". A checker that only speaks its own
+    vocabulary passes the exact row it was written for — which the first version did."""
+    assert _spl.unit_conflicts("Edging Seal Strip 10m Roll", "metre"), (
+        "the alias table does not cover the spelling in the catalogue today")
+
+
+def test_the_report_shows_them_before_anyone_commits():
+    """Not rejected — the price may be right and the unit wrong. But a rejected row costs
+    nothing and one of these costs a multiple on every line that uses it."""
+    src = (_ROOT / "src" / "supplier_price_list.py").read_text(encoding="utf-8")
+    at = src.index("def report") if "def report" in src else 0
+    assert "UNIT CONTRADICTS THE DESCRIPTION" in src[at:], (
+        "the parse report does not surface unit conflicts, so they arrive silently")
+    assert "Ask before --commit" in src, "nothing tells the reader what to do about them"
