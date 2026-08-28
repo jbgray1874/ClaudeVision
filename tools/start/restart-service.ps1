@@ -53,6 +53,40 @@ if (-not $Root) {
 
 Write-Host "Restarting the SDI Intelligence service on port $Port" -ForegroundColor Cyan
 
+# -- 0. IS THIS THE MACHINE THAT SERVES THAT PORT? ------------------------------------
+#
+# THE FAILURE THIS PREVENTS, WHICH ALREADY HAPPENED. `-Port 8071` was run on the LAPTOP,
+# which serves 8072. The port only drove the kill and the health check; the scheduled task
+# is machine-wide and was restarted regardless. So it stopped the running service, started
+# it again, then looked at a port nothing on that machine has ever served and reported
+#
+#     NOT answering on 8071.
+#
+# A restart that succeeded, reported as a failure, on the wrong computer -- and the reader's
+# reasonable conclusion is that the SERVER is broken, which sends them to a log on a machine
+# where nothing is wrong. Both boxes have a C:\ClaudeVision, so the prompt is identical and
+# there is nothing on screen to tell them apart.
+#
+# Checked BEFORE anything is stopped. Refusing after the kill would leave the same mess.
+$serving = @()
+foreach ($candidate in @(8071, 8072, 8073)) {
+    $listening = @(Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue)
+    if ($listening.Count -gt 0) { $serving += $candidate }
+}
+if ($serving.Count -gt 0 -and ($serving -notcontains $Port)) {
+    $me = [System.Net.Dns]::GetHostName()
+    Write-Host ""
+    Write-Host ("  STOP. {0} is not serving {1} - nothing is listening on it here." -f $me, $Port) -ForegroundColor Red
+    Write-Host ("  This machine is listening on {0}." -f ($serving -join ", ")) -ForegroundColor Red
+    Write-Host "  The estimating laptop serves 8072; SDI-APP01 serves 8071. Both have a" -ForegroundColor Red
+    Write-Host "  C:\ClaudeVision, so the prompt looks the same on either." -ForegroundColor Red
+    Write-Host ""
+    Write-Host ("  Either re-run here with -Port {0}, or run this ON the other machine." -f $serving[0]) -ForegroundColor Yellow
+    Write-Host "  Nothing has been stopped." -ForegroundColor Green
+    Write-Host ""
+    exit 2
+}
+
 # -- 1. STOP THE TASK, IF THERE IS ONE ------------------------------------------------
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {
