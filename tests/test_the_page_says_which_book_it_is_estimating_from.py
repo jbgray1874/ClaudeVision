@@ -35,8 +35,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
     encoding="utf-8")
-SCRIPT = PAGE[PAGE.index("<script>"):PAGE.index("</script>")]
-MARKUP = PAGE[:PAGE.index("<script>")]
+# ALL THE SCRIPT, AND ALL THE MARKUP — NOT "BEFORE THE FIRST <script>".
+#
+# These were PAGE[:index("<script>")] and PAGE[index("<script>"):index("</script>")], which
+# assumed the page has exactly one script block and that it comes last. It has three, and the
+# theme-and-size control added this session goes FIRST, at offset 20,483. `bStop` is at
+# 46,351. So MARKUP became the header and the nav, SCRIPT became a thirty-line bootstrap, and
+# four tests failed on markup that was correct and present — they were reading the wrong part
+# of the file.
+#
+# Counting blocks would fix it until somebody adds a fourth. Splitting on the tag does not
+# care how many there are or where they sit: markup is everything that is not script, script
+# is everything that is. A negative assertion ("nothing can reach the China button") also
+# gets STRICTER by searching every block rather than one.
+_SCRIPT_BLOCK = re.compile(r"<script[^>]*>(.*?)</script>", re.S | re.I)
+SCRIPT = "\n".join(_SCRIPT_BLOCK.findall(PAGE))
+MARKUP = _SCRIPT_BLOCK.sub(" ", PAGE)
 
 # Every card that starts work. `stop` is the control that ends the UK run on that card; it sits
 # between the two so the live pair reads together and the dead one sits under them both.
