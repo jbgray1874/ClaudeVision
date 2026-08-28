@@ -137,3 +137,72 @@ def test_it_stays_read_only():
     src = (ROOT / "tools" / "pricing" / "udef_supplier_profile.py").read_text(encoding="utf-8")
     for verb in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "MERGE ", "TRUNCATE "):
         assert verb not in src.upper(), f"{verb.strip()} appears in a read-only tool"
+
+
+# ── a ranking that cannot be acted on has to say so ──────────────────────────
+#
+# The first live run printed:
+#
+#   supplier                        bought    spend £   unpriceable £   ref  what to do
+#   (no supplier recorded)     273862,207,650,244,1852,207,650,244,185   27%  PRICE FILE
+#   100 PERCENT GROUP LIMITED        0          0              0    0%  too few lines
+#   1st SAFETY LIMITED               0          0              0  100%  too few lines
+#   ... 23 more, alphabetically
+#
+# Three things were wrong at once and none of them announced itself:
+#
+#   no supplier   every quoted line had an empty supplier_name, so every named merchant
+#                 scored zero on both sort keys and the ALPHABETICAL TIE-BREAK became the
+#                 ranking. The sort was correct. The data made it meaningless.
+#   the money     £2,207,650,244,185 across 27,386 lines is £80m a line. line_total_gbp is
+#                 not the column this assumes.
+#   the join      unpriceable exactly equalled spend, meaning not one quoted part code
+#                 matched a UDEF code — a join that does not join, read as "nothing can be
+#                 priced".
+#
+# And the columns were too narrow, so the absurd figure arrived as a wall of digits that
+# read as noise rather than as a number worth doubting.
+#
+# This tool exists to aim a month of somebody's work at the right supplier. A ranking it
+# cannot support must be labelled, not printed straight-faced.
+
+_PROFILE_SRC = (ROOT / "tools" / "pricing" / "udef_supplier_profile.py").read_text(
+    encoding="utf-8")
+
+
+def test_it_refuses_to_present_a_ranking_built_on_unattributed_spend():
+    """THE ASSERTION. Most of the money having no supplier is a real finding — and it is not
+    a ranking of suppliers."""
+    assert "NO SUPPLIER NAME" in _PROFILE_SRC
+    assert "cannot be acted on yet" in _PROFILE_SRC.lower(), (
+        "nothing tells the reader the table below is not a priority order")
+
+
+def test_an_impossible_line_total_is_challenged_not_printed():
+    """£80m a line is not a line total. Believing it silently makes every £ in the report,
+    and the ORDER those £ produce, meaningless."""
+    assert "mean_line > 100_000" in _PROFILE_SRC
+    assert "line_total_gbp is not the column" in _PROFILE_SRC
+
+
+def test_a_join_that_matches_nothing_is_called_a_join_and_not_an_answer():
+    """"Not one code matches" reads as "we can price nothing", which would aim the whole
+    programme at the wrong problem."""
+    assert "NOT ONE quoted part code" in _PROFILE_SRC
+    assert "join that does not" in _PROFILE_SRC
+
+
+def test_the_columns_are_wide_enough_to_show_a_wrong_number_as_a_number():
+    """The figure that should have stopped the run arrived as `273862,207,650,244,185` —
+    three columns with no space between them. A number nobody can read is a number nobody
+    can doubt."""
+    assert "{'spend £':>18}" in _PROFILE_SRC, "the spend column is too narrow again"
+    assert "{'unpriceable £':>18}" in _PROFILE_SRC
+
+
+def test_suppliers_we_have_never_bought_from_are_hidden_by_default():
+    """Twenty-five rows of catalogue names with nothing bought against any of them filled the
+    screen where the answer should have been."""
+    assert '"--min-bought"' in _PROFILE_SRC
+    assert "default=1" in _PROFILE_SRC, (
+        "the default shows names we have never quoted, which is what buried the finding")

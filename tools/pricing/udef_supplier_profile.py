@@ -48,6 +48,9 @@ def _rows(cur):
                (str(supplier or "").strip() or "(no supplier recorded)"), float(cost or 0))
 
 
+NO_SUPPLIER = "(no supplier recorded)"
+
+
 def _used_rows(cur):
     """What we have ACTUALLY BOUGHT, from the historical quotes.
 
@@ -68,7 +71,7 @@ def _used_rows(cur):
         "LEFT JOIN dbo.historical_quote_header hh ON hml.quote_id = hh.quote_id "
         "WHERE hml.unit_price_gbp IS NOT NULL AND hml.unit_price_gbp > 0")
     for supplier, code, total, when in cur.fetchall():
-        yield ((str(supplier or "").strip() or "(no supplier recorded)"),
+        yield ((str(supplier or "").strip() or NO_SUPPLIER),
                str(code or "").strip().upper(), float(total or 0), when)
 
 
@@ -120,6 +123,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=25, help="suppliers to print (default 25)")
     ap.add_argument("--csv", help="write the full ranking here")
+    # A SUPPLIER WE HAVE NEVER QUOTED CANNOT BE A PRIORITY. The first run printed 25 rows
+    # of catalogue names with nothing bought against any of them -- alphabetical noise
+    # occupying the whole screen where the answer should have been.
+    ap.add_argument("--min-bought", type=int, default=1,
+                    help="hide suppliers with fewer quoted lines than this (default 1; "
+                         "0 shows catalogue-only names too)")
     args = ap.parse_args()
 
     import config
@@ -217,14 +226,68 @@ def main() -> int:
                                              -used_spend.get(s, 0.0), s))
     print(f"\n{total:,} catalogue line(s); {sum(used_lines.values()):,} line(s) actually "
           f"quoted, across {len(everyone):,} supplier(s)\n")
-    print(f"{'supplier':<32}{'bought':>8}{'spend £':>11}{'unpriceable £':>15}"
+
+    # ── CAN THIS REPORT ANSWER THE QUESTION AT ALL? ────────────────────────────────────
+    #
+    # The first live run produced a ranking that was A-Z and a spend of £2,207,650,244,185.
+    # Neither was a bug in the sort: every named supplier scored zero on both keys, so the
+    # alphabetical tie-break was all that was left, and the money column was simply believed.
+    # The report was confidently wrong three ways at once and said nothing, which is the one
+    # outcome a tool built to aim a month of work must not produce.
+    #
+    # So the degenerate cases are now named BEFORE the table, and the table is labelled
+    # unusable when they fire. A ranking nobody can act on is fine; a ranking that looks
+    # actionable and is not costs whatever it aims.
+    quoted_lines = sum(used_lines.values())
+    quoted_spend = sum(used_spend.values())
+    blank = used_spend.get(NO_SUPPLIER, 0.0)
+    matched_lines = quoted_lines - sum(uncovered_lines.values())
+    faults = []
+
+    if quoted_lines and blank / max(quoted_spend, 0.01) > 0.5:
+        faults.append(
+            f"{blank / max(quoted_spend, 0.01) * 100:.0f}% of quoted spend has NO SUPPLIER NAME.\n"
+            "     historical_quote_material_line.supplier_name is empty on those rows, so this\n"
+            "     cannot rank merchants -- it can only say that most of the money is\n"
+            "     unattributed. That is a real finding and it is not a ranking: filling that\n"
+            "     column is an Estimating/ERP job, not a supplier conversation.")
+
+    if quoted_lines:
+        mean_line = quoted_spend / quoted_lines
+        if mean_line > 100_000:
+            faults.append(
+                f"the mean quoted line is £{mean_line:,.0f}, which is not a line total.\n"
+                "     line_total_gbp is not the column this assumes -- pence, a running total,\n"
+                "     or a join fanning rows out. Every £ figure below is meaningless until\n"
+                "     that is established, and the ORDER is meaningless with it.")
+
+    if quoted_lines and matched_lines == 0:
+        faults.append(
+            "NOT ONE quoted part code matches a UDEF code. That is a join that does not\n"
+            "     join -- different padding, prefixes or case -- not a catalogue that cannot\n"
+            "     price anything. Taken at face value it says every penny is unpriceable,\n"
+            "     which would aim the whole programme at the wrong problem.")
+
+    if faults:
+        print("THIS RANKING CANNOT BE ACTED ON YET")
+        for fault in faults:
+            print(f"  *  {fault}")
+        print("\n  The table below is printed so the shape can be seen. Do not email anyone\n"
+              "  from it, and do not read the order as a priority.\n")
+
+    # WIDE ENOUGH FOR THE NUMBER, because the columns ran together and turned an absurd
+    # figure into a wall of digits nobody could see was absurd.
+    print(f"{'supplier':<32}{'bought':>8}{'spend £':>18}{'unpriceable £':>18}"
           f"{'ref':>6}  what to do")
-    print("-" * 120)
-    for s in ranked[:args.top]:
+    print("-" * 132)
+    shown = [s for s in ranked if used_lines.get(s, 0) >= args.min_bought]
+    if not shown:
+        print("  (nothing quoted -- every supplier has 0 bought lines at this threshold)")
+    for s in shown[:args.top]:
         n = max(1, lines.get(s, 0))
         share = with_ref.get(s, 0) / n
-        print(f"{s[:31]:<32}{used_lines.get(s, 0):>8}{used_spend.get(s, 0.0):>11,.0f}"
-              f"{uncovered_spend.get(s, 0.0):>15,.0f}{share*100:>5.0f}%  "
+        print(f"{s[:31]:<32}{used_lines.get(s, 0):>8}{used_spend.get(s, 0.0):>18,.0f}"
+              f"{uncovered_spend.get(s, 0.0):>18,.0f}{share*100:>5.0f}%  "
               + recommend(used_lines.get(s, 0), uncovered_spend.get(s, 0.0), share,
                           _months_since(last_used.get(s))))
 
