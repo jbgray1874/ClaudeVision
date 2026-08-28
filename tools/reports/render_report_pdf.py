@@ -52,6 +52,82 @@ def _chromium() -> str | None:
     return None                      # let Playwright find its own; it may well have one
 
 
+def _readable(source: str) -> str:
+    """The document's words, normalised so two renderings of them compare equal.
+
+    Case is folded because the stylesheet uppercases chips and headings, and punctuation and
+    spacing are dropped because a PDF's text layer breaks lines where the layout did, not
+    where the sentence does.
+    """
+    import html as _html
+    import re
+
+    body = re.sub(r"<(script|style)\b.*?</\1>", " ", source, flags=re.S | re.I)
+    body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
+    body = re.sub(r"<[^>]+>", " ", body)
+    return re.sub(r"[^a-z0-9]+", "", _html.unescape(body).casefold())
+
+
+def verify(html: Path, pdf: Path) -> list[str]:
+    """Return the passages that are in the source and not in the PDF.
+
+    WHY THIS EXISTS. The August landscape report rendered cleanly, reported its byte count and
+    was sent out with FOURTEEN TABLE CELLS MISSING — the Verdict column, the Worth-a-look
+    column, and every "Why now" cell in the action list, which is the justification for the
+    whole page. Nothing failed. `overflow-x:auto` scrolls on a screen and CLIPS on paper, and
+    Chromium does not paint what it clips, so the words were not shortened, they were absent.
+
+    A renderer that silently drops a column is worse than one that crashes, because a PDF that
+    looks finished gets forwarded. So the output is now checked against its own input.
+    """
+    import re
+
+    try:
+        import pymupdf                                     # noqa: PLC0415
+    except ImportError:                                    # pragma: no cover
+        try:
+            import fitz as pymupdf                         # noqa: PLC0415
+        except ImportError:
+            return []                                      # cannot check; do not pretend to
+
+    doc = pymupdf.open(str(pdf))
+    raw = " ".join(p.get_text() for p in doc).casefold()
+    doc.close()
+    words = set(re.findall(r"[a-z0-9]+", raw))
+    # AND THE SAME TEXT WITH EVERY GAP CLOSED, for the letter-spaced headings. The eyebrow is
+    # set at letter-spacing .18em, which makes Chromium place each glyph separately, and the
+    # text layer comes back "S D I D I S P L AY S LT D" — present, correct, and not a word.
+    # Checked second so a genuinely absent word still fails: it is in neither form.
+    flat = re.sub(r"[^a-z0-9]+", "", raw)
+
+    # WORDS, NOT PASSAGES, and that is not a weakening — it is the only comparison that
+    # survives a table. A PDF's text layer is in LAYOUT order, so once a cell wraps onto two
+    # lines its second line is emitted after the neighbouring column's first. Searching for
+    # the passage as a contiguous string then fails on text that is present and correct: the
+    # first version of this check reported five such passages missing, and all five were on
+    # the page, wrapped. A check that cries wolf is one people learn to skip past.
+    #
+    # Long words are the discriminating ones. A cell that was clipped away takes its nouns
+    # with it; short words ("the", "and", "now") appear all over the document and would mask
+    # the loss.
+    import html as _html
+    source = html.read_text(encoding="utf-8")
+    body = re.sub(r"<(script|style)\b.*?</\1>", " ", source, flags=re.S | re.I)
+    body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
+
+    missing: list[str] = []
+    for chunk in re.split(r"<[^>]+>", body):
+        text = re.sub(r"\s+", " ", _html.unescape(chunk)).strip()
+        if len(text) < 25:                    # too short to locate reliably
+            continue
+        wanted = {w for w in re.findall(r"[a-z0-9]{5,}", text.casefold())}
+        gone = {w for w in wanted if w not in words and w not in flat}
+        if gone:
+            shown = text if len(text) <= 90 else text[:87] + "..."
+            missing.append(f"{shown}   [not in PDF: {', '.join(sorted(gone)[:4])}]")
+    return missing
+
+
 def render(html: Path, pdf: Path | None = None, *, title: str = "") -> Path:
     from playwright.sync_api import sync_playwright
 
@@ -101,6 +177,20 @@ def main() -> int:
               "`playwright install`)")
         return 1
     print(f"{written}  ({written.stat().st_size:,} bytes)")
+
+    lost = verify(src, written)
+    if lost:
+        print(f"\n  WARNING: {len(lost)} passage(s) are in the HTML and NOT in the PDF.")
+        print("  Text wider than the printed page is CLIPPED, and Chromium does not paint what")
+        print("  it clips — so this is missing content, not shortened content. The usual cause")
+        print("  is a table inside overflow-x:auto, which scrolls on screen and truncates on")
+        print("  paper. Give the document an @media print block that lets those cells wrap.\n")
+        for item in lost[:12]:
+            print(f"    - {item}")
+        if len(lost) > 12:
+            print(f"    ... and {len(lost) - 12} more")
+        return 1
+    print("  verified: every passage in the HTML is present in the PDF")
     return 0
 
 

@@ -84,6 +84,25 @@
            font-size:11px; color:var(--dim); line-height:1.9; }
   @media (max-width:700px){ header,main,footer{padding-left:18px;padding-right:18px;}
     .run-meta{text-align:left;} }
+
+  /* PRINT — WHERE overflow-x:auto STOPS BEING A KINDNESS AND STARTS DELETING THINGS.
+     On screen a table wider than its container scrolls, so nothing is lost. On paper there
+     is nowhere to scroll to: Chromium clips at the container and the overflow is never
+     painted, so the words are not truncated, they are ABSENT FROM THE FILE. A4 less 12mm
+     margins is ~703px of content, and all three tables here are wider than that, which cost
+     the last column of each — Verdict, Worth a look?, and the whole Why now column of the
+     action list. Fourteen cells, gone, in a document that reported itself rendered.
+     The nowrap rules are what force the width, so print releases them and pins the layout. */
+  @media print {
+    .table-wrap { overflow: visible; }
+    table { table-layout: fixed; width: 100%; }
+    /* normal, NOT break-word: breaking mid-word would split a noun across two lines and put
+       half of it in the PDF's text layer as a separate token, which is how a searchable
+       document stops being searchable. Wrapping between words is all this needs. */
+    thead th, tbody td.name, tbody td.endpoint { white-space: normal; }
+    tbody td, thead th { padding-left: 8px; padding-right: 8px; }
+    .card, .callout, .item { break-inside: avoid; }
+  }
 </style>
 </head>
 <body>
