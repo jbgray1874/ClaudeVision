@@ -46,6 +46,10 @@ class PricingService:
         self._connection_factory = connection_factory or self._get_db_connection
         self.conn = conn or self._connection_factory()
         self._web_ai_calls = 0        # per-job budget counter for the web/LLM price fallback
+        # CATALOGUE ROWS REFUSED FOR A BAD UNIT, so the refusal is visible rather than
+        # merely correct. Falling through silently looks exactly like an empty catalogue,
+        # and would send somebody chasing price files that are already loaded.
+        self.catalogue_quarantine: List[str] = []
 
     def __enter__(self) -> "PricingService":
         return self
@@ -828,6 +832,34 @@ class PricingService:
         price = float(row[2] or 0.0)
         if price <= 0:
             return None
+
+        # QUARANTINE A ROW WHOSE UNIT ARGUES WITH ITS OWN DESCRIPTION.
+        #
+        # FIXING1784 is in this table now: "Edging Seal Strip 10m Roll (Rubusec)", uom
+        # "metre", GBP 29.80. That figure is the ROLL. Per metre it is GBP 2.98, so two
+        # metres of edging cost GBP 59.60 instead of GBP 5.96 -- and nothing downstream
+        # questions it, because the price and the unit are each plausible and only wrong
+        # together. It is a migrated: row, so the allowlist admits it.
+        #
+        # DONE HERE AND NOT ONLY IN THE LOADER. The loader guards what it writes; these
+        # twenty-two rows were written by a migration long before it existed. A check only
+        # the importer runs cannot protect a table that was filled before the importer was.
+        #
+        # It FALLS THROUGH rather than raising. The next rung is historical comparables --
+        # where this line went yesterday and where it goes again. A worse answer than a good
+        # catalogue row, and a far better one than a tenfold overcharge.
+        try:
+            from unit_parsing import unit_conflicts
+            why = unit_conflicts(str(row[1] or ""), str(row[4] or ""))
+        except Exception:                                        # noqa: BLE001
+            why = ""                                             # never fail a price over this
+        if why:
+            note = (f"{row[0]}: {why}. Priced from the next source instead -- correct the "
+                    f"uom or the price in AIEstimating.BoughtInCatalogue.")
+            if note not in self.catalogue_quarantine:
+                self.catalogue_quarantine.append(note)
+            return None
+
         matched = str(row[0] or "").strip().upper()
         base_confidence = 0.93 if part_code.strip().upper() == matched else 0.80
         return {

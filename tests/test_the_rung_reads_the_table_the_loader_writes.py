@@ -196,3 +196,119 @@ def test_the_fallback_fetch_sorts_by_recency_like_the_primary_one():
         "the fallback fetch still cannot see a quote date")
     assert "hh.quote_date DESC" in fallback, (
         "the fallback does not prefer recent quotes, which is what freshness already values")
+
+
+# ── the guard refuses, rather than merely being present ──────────────────────
+#
+# Everything above reads source text, which pins intent and cannot prove behaviour. These
+# two drive the actual code paths with the row that is wrong in the live table today:
+#
+#     FIXING1784  Edging Seal Strip 10m Roll (Rubusec)  uom=metre  £29.80
+#
+# £29.80 is the roll. Two metres of edging costs £59.60 instead of £5.96. Delete the guard
+# and these fail; weaken it to a warning and these fail.
+
+import sys                                                          # noqa: E402
+sys.path.insert(0, str(_ROOT / "src"))
+
+
+def _service():
+    """A service with a stub connection.
+
+    PricingService opens one in __init__ unless it is handed one, and pyodbc is not installed
+    here. Every query below is monkeypatched, so the object only has to be truthy — the point
+    of these tests is the decision the rung makes about a row, not how the row was fetched.
+    """
+    from pricing_service import PricingService                      # noqa: PLC0415
+    return PricingService(conn=_FakeConn())
+
+
+_BAD_ROW = ("FIXING1784", "Edging Seal Strip 10m Roll (Rubusec)", 29.80, "Rubusec", "metre")
+_GOOD_ROW = ("FIXING636", "No.8 x 16mm Pan Head Wood Screw Pozi", 0.03, "Elite", "each")
+
+
+def test_rung_three_refuses_the_row_that_is_wrong_by_ten(monkeypatch):
+    """THE ASSERTION, driven not asserted. The migration wrote this row years before the
+    loader existed, so a guard only the importer runs could never have caught it."""
+    svc = _service()
+    monkeypatch.setattr(svc, "_fetch_one_with_retry", lambda *a, **k: _BAD_ROW)
+    out = svc._get_bought_in_part({"part_number": "FIXING1784", "description": "edging strip"})
+    assert out is None, (
+        "rung 3 served a roll price as a metre price — every line using it is out by 10x")
+
+
+def test_the_refusal_is_visible_and_names_the_row_to_fix():
+    """A silent fall-through looks exactly like an empty catalogue, and would send somebody
+    chasing price files that are already loaded."""
+    svc = _service()
+    svc._fetch_one_with_retry = lambda *a, **k: _BAD_ROW           # noqa: SLF001
+    svc._get_bought_in_part({"part_number": "FIXING1784", "description": "edging strip"})
+    notes = " ".join(svc.catalogue_quarantine)
+    assert "FIXING1784" in notes, "the quarantined row is not named"
+    assert "BoughtInCatalogue" in notes, "nothing says where to correct it"
+
+
+def test_a_healthy_row_still_prices(monkeypatch):
+    """The half that decides whether this survives contact with a real job. A guard that
+    also refuses good rows empties the rung it was added to protect."""
+    svc = _service()
+    monkeypatch.setattr(svc, "_fetch_one_with_retry", lambda *a, **k: _GOOD_ROW)
+    out = svc._get_bought_in_part({"part_number": "FIXING636", "description": "wood screw"})
+    assert out and out["unit_price_gbp"] == pytest.approx(0.03)
+    assert out["confidence"] == pytest.approx(0.93), "an exact code match lost its confidence"
+    assert svc.catalogue_quarantine == [], "a healthy row was quarantined"
+
+
+def test_the_loader_will_not_write_another_one(monkeypatch):
+    """FIXING1784 entered the table by this route. Elite's file is the first one large enough
+    for that to happen at scale without anybody reading every row."""
+    import catalogue_loader as cl                                   # noqa: PLC0415
+    import supplier_price_list as spl                               # noqa: PLC0415
+
+    written = []
+    monkeypatch.setattr(cl, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(cl, "upsert_catalogue",
+                        lambda cur, line, source, today: written.append(line) or "insert x")
+
+    parsed = {"rows": [
+        {"description": "Edging Seal Strip 10m Roll (Rubusec)", "unit": "metre",
+         "net_gbp": 29.80, "supplier": "Rubusec", "class": "edging",
+         "their_sku": "FIXING1784", "our_sku": ""},
+        {"description": "No.8 x 16mm Pan Head Wood Screw Pozi", "unit": "each",
+         "net_gbp": 0.03, "supplier": "Elite", "class": "fixing",
+         "their_sku": "FIXING636", "our_sku": ""},
+    ]}
+    out = spl.commit(parsed, source_label="supplier_file:test.xlsx")
+    assert len(written) == 1, "the conflicting row was written to the catalogue"
+    assert written[0]["description"].startswith("No.8"), "the wrong row was kept"
+    assert out["refused"] and "FIXING1784" in out["refused"][0]
+
+
+def test_it_can_still_be_overridden_by_somebody_who_checked(monkeypatch):
+    """The supplier may confirm the file is right and the checker is being conservative. That
+    has to be possible — and it has to be typed on the run that writes, so the record shows a
+    person decided rather than that nobody looked."""
+    import catalogue_loader as cl                                   # noqa: PLC0415
+    import supplier_price_list as spl                               # noqa: PLC0415
+
+    written = []
+    monkeypatch.setattr(cl, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(cl, "upsert_catalogue",
+                        lambda cur, line, source, today: written.append(line) or "insert x")
+    parsed = {"rows": [
+        {"description": "Edging Seal Strip 10m Roll (Rubusec)", "unit": "metre",
+         "net_gbp": 29.80, "supplier": "Rubusec", "class": "edging",
+         "their_sku": "FIXING1784", "our_sku": ""}]}
+    spl.commit(parsed, source_label="supplier_file:test.xlsx", allow_unit_conflicts=True)
+    assert len(written) == 1, "the override does not work, so a correct file cannot be loaded"
+
+
+class _FakeConn:
+    def cursor(self):
+        return self
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
