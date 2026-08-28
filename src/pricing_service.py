@@ -613,7 +613,13 @@ class PricingService:
                 ORDER BY
                     CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
                     hh.quote_date DESC,
-                    COALESCE(hml.line_total_gbp, 0) DESC
+                    -- NOT line_total_gbp. That column is unit_price multiplied by something
+                    -- that is not a quantity: 1.8568 x 259,061,659,935, and the multiplier
+                    -- 7,350,844 is a PART NUMBER -- 7350845 is a lens cover in our own
+                    -- catalogue. Ordering by it resolves a same-date tie in favour of
+                    -- whichever line has the bigger part code, which is a coin toss wearing
+                    -- a suit. The unit price is at least a real number about this part.
+                    COALESCE(hml.unit_price_gbp, 0) DESC
                 """,
                 [_CANDIDATES] + like_tokens,
             )
@@ -693,7 +699,13 @@ class PricingService:
                 ORDER BY
                     CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
                     hh.quote_date DESC,
-                    COALESCE(hml.line_total_gbp, 0) DESC
+                    -- NOT line_total_gbp. That column is unit_price multiplied by something
+                    -- that is not a quantity: 1.8568 x 259,061,659,935, and the multiplier
+                    -- 7,350,844 is a PART NUMBER -- 7350845 is a lens cover in our own
+                    -- catalogue. Ordering by it resolves a same-date tie in favour of
+                    -- whichever line has the bigger part code, which is a coin toss wearing
+                    -- a suit. The unit price is at least a real number about this part.
+                    COALESCE(hml.unit_price_gbp, 0) DESC
                 """,
                 [fetch_n, search_term],
             )
@@ -701,13 +713,29 @@ class PricingService:
             try:
                 rows = self._fetch_all_with_retry(
                     """
+                    -- THE HEADER IS JOINED HERE TOO, AND IT WAS NOT BEFORE.
+                    --
+                    -- This fallback took TOP (n) ordered by line_total_gbp, which is the only
+                    -- sort key -- so it did not merely break a tie, it decided which rows were
+                    -- CONSIDERED AT ALL before any token scoring happened. And that column is
+                    -- unit_price multiplied by a part number, so the candidate pool was ranked
+                    -- by part-code magnitude. A comparable that never gets fetched cannot be
+                    -- scored, and nothing downstream could tell it had been passed over.
+                    --
+                    -- Recency is what the primary query already sorts by, and what
+                    -- _freshness_adjustment already values. Same rule in both places.
                     SELECT TOP (?)
-                        line_description, unit_price_gbp, line_total_gbp,
-                        part_code, NULL, NULL, NULL, qty_per_unit, supplier_name
-                    FROM dbo.historical_quote_material_line
-                    WHERE unit_price_gbp IS NOT NULL AND unit_price_gbp > 0
-                      AND UPPER(line_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
-                    ORDER BY COALESCE(line_total_gbp, 0) DESC
+                        hml.line_description, hml.unit_price_gbp, hml.line_total_gbp,
+                        hml.part_code, NULL, hh.quote_date, NULL, hml.qty_per_unit,
+                        hml.supplier_name
+                    FROM dbo.historical_quote_material_line hml
+                    LEFT JOIN dbo.historical_quote_header hh ON hml.quote_id = hh.quote_id
+                    WHERE hml.unit_price_gbp IS NOT NULL AND hml.unit_price_gbp > 0
+                      AND UPPER(hml.line_description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
+                    ORDER BY
+                        CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
+                        hh.quote_date DESC,
+                        COALESCE(hml.unit_price_gbp, 0) DESC
                     """,
                     [fetch_n, search_term],
                 )

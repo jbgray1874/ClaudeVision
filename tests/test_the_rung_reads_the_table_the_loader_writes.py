@@ -150,3 +150,49 @@ def test_the_unit_comes_back_with_the_price():
     per kg today."""
     body = _rung_three()
     assert "uom" in body, "the rung drops the unit, so a per-sheet price reads as per-each"
+
+
+# ── the historical rung is not ordered by a corrupt column ───────────────────
+#
+# dbo.historical_quote_material_line.line_total_gbp is unit_price multiplied by something
+# that is not a quantity:
+#
+#     unit £    line_total_gbp        implied "qty"
+#     1.8568    481,025,690,167.31    259,061,659,935
+#     5.0000    410,759,110,550.00     82,151,822,110
+#    17.2500        126,802,059.00          7,350,844   <- a PART NUMBER. 7350845 is a
+#                                                          lens cover in our own catalogue.
+#
+# It never becomes a price — the price is unit_price_gbp, which is sane — and no other
+# module reads the key. But it was the ONLY sort key on the fallback fetch, so it decided
+# which comparables were CONSIDERED before token scoring ran. A candidate that is never
+# fetched cannot be scored, and nothing downstream could tell it had been passed over.
+
+def _historical() -> str:
+    at = _PRICING.index("def _get_historical_rag")
+    end = _PRICING.index("def _get_bought_in_part", at)
+    return "\n".join(" " * len(ln) if ln.lstrip().startswith(("#", "--")) else ln
+                     for ln in _PRICING[at:end].splitlines())
+
+
+def test_no_comparable_is_chosen_by_a_column_that_holds_a_part_number():
+    """THE ASSERTION. Not that the column is fixed — it is not, and fixing it is a database
+    job — but that nothing in the price chain ranks on it."""
+    body = _historical()
+    assert "line_total_gbp" not in body.split("ORDER BY", 1)[-1] or \
+           "COALESCE(hml.line_total_gbp" not in body, (
+        "the historical rung still orders by line_total_gbp, so its comparables are ranked "
+        "by part-code magnitude")
+    for bad in ("COALESCE(line_total_gbp, 0) DESC", "COALESCE(hml.line_total_gbp, 0) DESC"):
+        assert bad not in body, f"still ordering by the corrupt column: {bad}"
+
+
+def test_the_fallback_fetch_sorts_by_recency_like_the_primary_one():
+    """It had no header join at all, so it could not sort by date even if it wanted to. Two
+    queries answering the same question by different rules is how they drift."""
+    body = _historical()
+    fallback = body[body.index("SELECT TOP (?)"):]
+    assert "historical_quote_header" in fallback, (
+        "the fallback fetch still cannot see a quote date")
+    assert "hh.quote_date DESC" in fallback, (
+        "the fallback does not prefer recent quotes, which is what freshness already values")
