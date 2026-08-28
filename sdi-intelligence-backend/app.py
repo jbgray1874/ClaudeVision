@@ -60,6 +60,27 @@ def _resolve_commit() -> str:
                 return out.stdout.strip()
         except Exception:                                        # noqa: BLE001
             continue
+    # A DEPLOYED COPY IS NOT A WORKING TREE. SDI-APP01 has no git AND no .git directory -- it
+    # is not a clone, it is files copied onto it -- so neither branch above can ever answer
+    # there, and /api/health reported "unknown" on a server that was perfectly current.
+    #
+    # push-to-server.ps1 runs on the laptop, which has both, and leaves the short hash in
+    # .sdi-commit beside the code it copied. Read here rather than only in the start script,
+    # because a service that can name its build ONLY when launched one particular way loses
+    # it the moment anything else starts it -- which is exactly what happened: the stamp was
+    # in place, correct, and the answer was still "unknown".
+    #
+    # AFTER git, deliberately. On a real checkout HEAD is the truth and a stale stamp beside
+    # it is not; this is the fallback for machines where there is nothing to ask.
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        try:
+            stamp = _where / ".sdi-commit"
+            if stamp.is_file():
+                written = stamp.read_text(encoding="utf-8").strip().splitlines()
+                if written and written[0].strip():
+                    return written[0].strip()[:40]
+        except Exception:                                        # noqa: BLE001
+            continue
     return "unknown"
 
 
