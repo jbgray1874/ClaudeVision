@@ -18,6 +18,27 @@ except ImportError:  # pragma: no cover
     pyodbc = None
 
 
+# WHICH ROWS IN THE BOUGHT-IN CATALOGUE ARE A PRICE WE ACTUALLY PAY.
+#
+# The table holds more than supplier prices. A live inspection before rung 3 was repointed at
+# it found real net rows sitting beside web guesses, figures lifted from a single historical
+# workbook, SDI's own estimates, and one row at GBP 0.0000 marked PRICE UNCONFIRMED.
+#
+# Rung 3 answers at 0.93 for an exact code and 0.80 otherwise -- above historical comparables
+# and far above the 0.68 the web/LLM rung is deliberately capped at. Letting an indication in
+# here would relabel it as firm and rank it above real evidence, which is the opposite of what
+# the ceiling exists to do.
+#
+# AN ALLOWLIST, BECAUSE IT FAILS CLOSED. A denylist would silently admit the next indicative
+# source somebody adds. A missing entry here shows up as a rung that answers nothing, which
+# somebody notices; a wrongly admitted one shows up as a confident price on a quote, which
+# nobody does.
+_FIRM_CATALOGUE_SOURCES = (
+    "migrated:",        # carried over from dbo.bought_in_parts, the old real catalogue
+    "supplier_file:",   # written by supplier_price_list.py from a supplier's own price list
+)
+
+
 class PricingService:
     """Workbook-first pricing engine with joined source provenance."""
 
@@ -726,22 +747,53 @@ class PricingService:
         desc = str(part.get("description") or "").strip()
         if not part_code and len(desc) < 5:
             return None
+        # THE TABLE THE INGESTER ACTUALLY WRITES TO.
+        #
+        # This read dbo.bought_in_parts, which a migration emptied by setting every row
+        # is_active = 0. The successor is AIEstimating.BoughtInCatalogue, and that is where
+        # supplier_price_list.py -> catalogue_loader.upsert_catalogue puts every price file.
+        # So the rung was reading one table while the only thing that fills it wrote to
+        # another: load Elite, Eagle and Thermaset perfectly and rung 3 still returns
+        # nothing, silently, with the work feeling done.
+        #
+        # WHY THE SOURCE FILTER IS NOT OPTIONAL. Inspecting the successor's live rows before
+        # repointing found four kinds of price sitting side by side:
+        #
+        #     migrated:dbo.bip                 real net, carried over from the old table
+        #     supplier_file:<name>             a supplier's own price list
+        #     web_indicative:<date>            A WEB GUESS
+        #     rag_fallback:workbook:<job>      a figure lifted from one historical workbook
+        #     sdi_estimate:<date>              our own estimate of what something costs
+        #     parallel-run:<job> ? UNCONFIRMED and one of these at GBP 0.0000
+        #
+        # Rung 3 answers at 0.93 / 0.80 -- above historical comparables, and far above the
+        # 0.68 ceiling the web/LLM rung is deliberately capped at. Serving those last four
+        # here would launder an indication into a firm price and rank it above real evidence.
+        # This table is supposed to mean WHAT WE PAY.
+        #
+        # An ALLOWLIST, which fails closed. A denylist would admit the next indicative source
+        # somebody adds, and admit it silently; a missing allowlist entry shows up as a rung
+        # that answers nothing, which is visible. _FIRM_CATALOGUE_SOURCES is the one place.
+        firm = "(" + " OR ".join(["c.source LIKE ?"] * len(_FIRM_CATALOGUE_SOURCES)) + ")"
         row = self._fetch_one_with_retry(
-            """
-            SELECT TOP 1 part_code, description, unit_price_gbp, supplier_name
-            FROM dbo.bought_in_parts
-            WHERE is_active = 1
+            f"""
+            SELECT TOP 1 c.supplier_sku, c.description, c.unit_price_gbp, s.name, c.uom
+            FROM AIEstimating.BoughtInCatalogue c
+            LEFT JOIN AIEstimating.Supplier s ON s.supplier_id = c.supplier_id
+            WHERE c.effective_to IS NULL
+              AND c.unit_price_gbp > 0
+              AND {firm}
               AND (
-                  UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?)))
-                  OR (LEN(LTRIM(RTRIM(?))) >= 5 AND UPPER(description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%')
+                  UPPER(LTRIM(RTRIM(c.supplier_sku))) = UPPER(LTRIM(RTRIM(?)))
+                  OR (LEN(LTRIM(RTRIM(?))) >= 5 AND UPPER(c.description) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%')
               )
             ORDER BY
-                CASE WHEN UPPER(LTRIM(RTRIM(part_code))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
-                effective_date DESC,
-                unit_price_gbp ASC,
-                bought_in_id ASC
+                CASE WHEN UPPER(LTRIM(RTRIM(c.supplier_sku))) = UPPER(LTRIM(RTRIM(?))) THEN 0 ELSE 1 END,
+                c.effective_from DESC,
+                c.unit_price_gbp ASC,
+                c.item_id ASC
             """,
-            [part_code, desc, desc, part_code],
+            [*(f"{s}%" for s in _FIRM_CATALOGUE_SOURCES), part_code, desc, desc, part_code],
         )
         if not row or row[2] is None:
             return None
@@ -751,11 +803,17 @@ class PricingService:
         matched = str(row[0] or "").strip().upper()
         base_confidence = 0.93 if part_code.strip().upper() == matched else 0.80
         return {
+            # The KEY stays "bought_in_parts" -- it names the RUNG, and the parity report,
+            # the audit and the provenance icons all key off it. The human-readable line
+            # names the table actually read, so nobody hunts for this row in the empty one.
             "source": "bought_in_parts",
             "unit_price_gbp": price,
-            "provenance": f"Bought-in: {row[0]} ({row[1]}) supplier={row[3]}",
+            "provenance": (f"Bought-in catalogue: {row[0]} ({row[1]}) "
+                           f"supplier={row[3] or 'unrecorded'} per {row[4] or 'each'} "
+                           f"[AIEstimating.BoughtInCatalogue]"),
             "confidence": base_confidence,
             "supplier_name": row[3] or "Unknown",
+            "uom": row[4] or "each",
         }
 
     def _get_supplier_catalog(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
