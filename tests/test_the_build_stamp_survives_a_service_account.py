@@ -48,11 +48,24 @@ def test_an_already_set_value_is_not_overwritten():
     assert "if (-not $env:SDI_COMMIT)" in _START
 
 
+def _resolver() -> str:
+    """The body of Get-HeadCommit.
+
+    These three tests used to scope on a byte window after `if (-not $env:SDI_COMMIT)`,
+    because the git lookup was written inline there. It was written inline TWICE in this
+    file, and the two copies drifted — only one of them ever learned to read the .sdi-commit
+    stamp, so a machine without git got a build number or "unknown" depending on which path
+    ran. They are now one function, and these assertions follow it rather than a byte offset
+    that happened to contain it.
+    """
+    at = _START.index("function Get-HeadCommit")
+    return _START[at:_START.index("\n}\n", at)]
+
+
 def test_git_is_found_by_path_and_by_location():
     """PATH first, because that is right when it works; explicit locations after, because the
     account the task runs as is exactly the one whose PATH may not carry git."""
-    at = _START.index("if (-not $env:SDI_COMMIT)")
-    block = _START[at:at + 1400]
+    block = _resolver()
     assert "Get-Command git" in block
     assert "Program Files\\Git\\cmd\\git.exe" in block
 
@@ -64,18 +77,19 @@ def test_it_asks_about_the_repo_root_not_the_script_folder():
 
 def test_a_missing_git_never_stops_the_service():
     """A version string is not worth refusing to serve over. It degrades to the old behaviour."""
-    at = _START.index("if (-not $env:SDI_COMMIT)")
-    block = _START[at:at + 1600]
+    block = _resolver()
     assert "SilentlyContinue" in block
     assert "catch { }" in block
-    assert "unresolved" in block, "it must say so rather than failing silently"
+    # The message stays with the caller, which is the thing that knows a blank result means
+    # the site will say "unknown".
+    at = _START.index("if (-not $env:SDI_COMMIT)")
+    assert "unresolved" in _START[at:at + 900], "it must say so rather than failing silently"
 
 
 def test_the_stop_on_error_default_is_restored():
     """PowerShell 5.1 turns the first stderr line into a terminating error under EAP=Stop, which
     is what killed this service once already. The guard must be scoped, not left switched off."""
-    at = _START.index("if (-not $env:SDI_COMMIT)")
-    block = _START[at:at + 1600]
+    block = _resolver()
     assert 'ErrorActionPreference = "Continue"' in block
     assert "finally { $ErrorActionPreference = $prevEA }" in block
 

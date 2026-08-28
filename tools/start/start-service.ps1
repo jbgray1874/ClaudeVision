@@ -80,6 +80,54 @@ $app    = Join-Path $Root "sdi-intelligence-backend\app.py"
 if (-not (Test-Path $python)) { throw "No service virtualenv at $python" }
 if (-not (Test-Path $app))    { throw "No app.py at $app" }
 
+# -- WHAT COMMIT IS THIS CHECKOUT AT, ON A MACHINE THAT MAY NOT HAVE GIT --------------
+#
+# `& git ...` was called directly here, and SDI-APP01 has no git. With
+# $ErrorActionPreference = "Stop" that is a CommandNotFoundException BEFORE the command
+# runs, so the `2>$null` never gets a chance -- a red CommandNotFoundException in the
+# middle of a restart that had, in fact, worked:
+#
+#     restart-service.ps1 : The term 'git' is not recognized ...
+#
+# and then the service answered ok on the next line. An error printed by a step that did
+# not fail is how a working deploy gets rolled back.
+#
+# THE FALLBACK IS THE INTERESTING HALF. Without git that machine could never name its own
+# build, so /api/health reported "commit": "unknown" and no one could tell a current server
+# from a stale one -- which is the exact question this whole restart exists to answer.
+# push-to-server.ps1 runs on the laptop, WHICH HAS GIT, and leaves the sha in .sdi-commit
+# beside the code it copied. So the answer travels with the deploy instead of being
+# recomputed somewhere it cannot be.
+function Get-HeadCommit([string]$RepoRoot) {
+    $exe = (Get-Command git -ErrorAction SilentlyContinue).Source
+    if (-not $exe) {
+        foreach ($cand in @("C:\Program Files\Git\cmd\git.exe",
+                            "C:\Program Files (x86)\Git\cmd\git.exe")) {
+            if (Test-Path -LiteralPath $cand) { $exe = $cand; break }
+        }
+    }
+    if ($exe) {
+        # A PRESENT git CAN STILL THROW. safe.directory refuses a repository cloned by
+        # somebody else, and under $ErrorActionPreference = "Stop" that stops the script --
+        # so the service does not start because a VERSION STRING could not be resolved.
+        # Never worth it: the stamp is diagnostic, the service is the point.
+        $prevEA = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $sha = (& $exe -C $RepoRoot rev-parse --short HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $sha) { return "$sha".Trim() }
+        } catch { }
+        finally { $ErrorActionPreference = $prevEA }
+    }
+    $stamp = Join-Path $RepoRoot ".sdi-commit"
+    if (Test-Path -LiteralPath $stamp) {
+        $written = (Get-Content -LiteralPath $stamp -TotalCount 1)
+        if ($written) { return "$written".Trim() }
+    }
+    return ""
+}
+
+
 # -- STAMP THE BUILD, FROM THE SHELL RATHER THAN FROM THE SERVICE ----------------------
 #
 # app.py resolves its own commit by shelling out to git, and on SDI-APP01 that came back
@@ -96,22 +144,12 @@ if (-not (Test-Path $app))    { throw "No app.py at $app" }
 # hash keeps reporting a build that stopped running at the next deploy, and reports it
 # confidently. A wrong answer here costs an afternoon; an absent one costs a question.
 if (-not $env:SDI_COMMIT) {
-    $gitExe = (Get-Command git -ErrorAction SilentlyContinue).Source
-    if (-not $gitExe) {
-        foreach ($cand in @("C:\Program Files\Git\cmd\git.exe",
-                            "C:\Program Files (x86)\Git\cmd\git.exe")) {
-            if (Test-Path $cand) { $gitExe = $cand; break }
-        }
-    }
-    if ($gitExe) {
-        $prevEA = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            $sha = (& $gitExe -C $Root rev-parse --short HEAD 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $sha) { $env:SDI_COMMIT = "$sha".Trim() }
-        } catch { }                       # never stop the service over a version string
-        finally { $ErrorActionPreference = $prevEA }
-    }
+    # ONE RESOLVER, USED TWICE. This block used to repeat the git lookup inline, and
+    # the copy below it drifted: only one of the two ever learned to read .sdi-commit,
+    # so a machine without git got a build number from one path and "unknown" from
+    # the other depending on which ran.
+    $resolved = Get-HeadCommit $Root
+    if ($resolved) { $env:SDI_COMMIT = $resolved }
     if ($env:SDI_COMMIT) {
         Write-Host "  build $($env:SDI_COMMIT)" -ForegroundColor DarkGray
     } else {
@@ -167,6 +205,7 @@ if ($held.Count -gt 0) {
 # Set HERE, so this window cannot disagree with itself about which port it meant.
 $env:SDI_PORT = "$Port"
 
+
 # STAMP THE COMMIT THE SERVICE IS ABOUT TO RUN, resolved HERE where git is on the PATH.
 #
 # The service reports its own version as X-SDI-Commit on every response, so "which code is
@@ -181,14 +220,16 @@ $env:SDI_PORT = "$Port"
 # This shell HAS git. Resolve it here and hand it over, so the answer is always the truth about
 # the code on disk at the moment of starting. SDI_COMMIT already takes precedence in the
 # resolver precisely for deploys that cannot reach git.
-$commit = (& git -C $Root rev-parse --short HEAD 2>$null)
-if ($LASTEXITCODE -eq 0 -and $commit) {
-    $env:SDI_COMMIT = "$commit".Trim()
+$commit = Get-HeadCommit $Root
+if ($commit) {
+    $env:SDI_COMMIT = $commit
 } else {
     # Never leave a STALE value from a previous run in this window standing in for the truth.
     Remove-Item Env:\SDI_COMMIT -ErrorAction SilentlyContinue
     Write-Host "git could not name the commit here - /api/health will report 'unknown'." -ForegroundColor Yellow
 }
+
+
 
 Write-Host "SDI Intelligence service" -ForegroundColor Cyan
 Write-Host "    http://localhost:$Port/estimating" -ForegroundColor Cyan

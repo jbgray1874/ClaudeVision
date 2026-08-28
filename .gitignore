@@ -73,3 +73,4 @@ Thumbs.db
 # history, on an external code host. The exception is removed and the ignore above stands.
 corpus/
 cache/
+.sdi-commit

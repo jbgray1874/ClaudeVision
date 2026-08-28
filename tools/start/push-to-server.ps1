@@ -167,6 +167,26 @@ foreach ($c in $changed) {
     Copy-Item -LiteralPath $c.Src -Destination $c.Dst -Force
 }
 Write-Host ("  copied {0} files" -f $changed.Count) -ForegroundColor Green
+
+# -- LEAVE THE COMMIT BEHIND, BECAUSE THE SERVER CANNOT WORK IT OUT --------------------
+#
+# /api/health on SDI-APP01 reported "commit": "unknown", so nothing could distinguish a
+# current server from one serving files copied weeks ago -- which is the single question
+# anybody asks after a deploy. app.py resolves its commit by shelling out to git, and there
+# is no git on that machine.
+#
+# THIS script runs on the laptop, which has one. So the answer travels with the deploy
+# rather than being recomputed where it cannot be. start-service.ps1 reads this file when
+# git is unavailable and hands it over as SDI_COMMIT, which app.py already prefers.
+#
+# Written AFTER the copy: a stamp written before it would name a commit the server does not
+# yet have if the copy then failed, which is worse than "unknown".
+Push-Location $root
+try { $sha = (& git rev-parse --short HEAD).Trim() } finally { Pop-Location }
+if ($sha) {
+    [System.IO.File]::WriteAllText((Join-Path $Destination ".sdi-commit"), "$sha`n")
+    Write-Host "  stamped   $Destination\.sdi-commit  ($sha)"
+}
 Write-Host ""
 
 # WHAT NOW NEEDS DOING, WHICH DEPENDS ON WHAT MOVED.

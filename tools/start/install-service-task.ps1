@@ -64,6 +64,53 @@ if (-not $Root) {
     $Root = (Resolve-Path (Join-Path $here "..\..")).Path
 }
 
+# -- WHAT COMMIT IS THIS CHECKOUT AT, ON A MACHINE THAT MAY NOT HAVE GIT --------------
+#
+# `& git ...` was called directly here, and SDI-APP01 has no git. With
+# $ErrorActionPreference = "Stop" that is a CommandNotFoundException BEFORE the command
+# runs, so the `2>$null` never gets a chance -- a red CommandNotFoundException in the
+# middle of a restart that had, in fact, worked:
+#
+#     restart-service.ps1 : The term 'git' is not recognized ...
+#
+# and then the service answered ok on the next line. An error printed by a step that did
+# not fail is how a working deploy gets rolled back.
+#
+# THE FALLBACK IS THE INTERESTING HALF. Without git that machine could never name its own
+# build, so /api/health reported "commit": "unknown" and no one could tell a current server
+# from a stale one -- which is the exact question this whole restart exists to answer.
+# push-to-server.ps1 runs on the laptop, WHICH HAS GIT, and leaves the sha in .sdi-commit
+# beside the code it copied. So the answer travels with the deploy instead of being
+# recomputed somewhere it cannot be.
+function Get-HeadCommit([string]$RepoRoot) {
+    $exe = (Get-Command git -ErrorAction SilentlyContinue).Source
+    if (-not $exe) {
+        foreach ($cand in @("C:\Program Files\Git\cmd\git.exe",
+                            "C:\Program Files (x86)\Git\cmd\git.exe")) {
+            if (Test-Path -LiteralPath $cand) { $exe = $cand; break }
+        }
+    }
+    if ($exe) {
+        # A PRESENT git CAN STILL THROW. safe.directory refuses a repository cloned by
+        # somebody else, and under $ErrorActionPreference = "Stop" that stops the script --
+        # so the service does not start because a VERSION STRING could not be resolved.
+        # Never worth it: the stamp is diagnostic, the service is the point.
+        $prevEA = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $sha = (& $exe -C $RepoRoot rev-parse --short HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $sha) { return "$sha".Trim() }
+        } catch { }
+        finally { $ErrorActionPreference = $prevEA }
+    }
+    $stamp = Join-Path $RepoRoot ".sdi-commit"
+    if (Test-Path -LiteralPath $stamp) {
+        $written = (Get-Content -LiteralPath $stamp -TotalCount 1)
+        if ($written) { return "$written".Trim() }
+    }
+    return ""
+}
+
 $starter = Join-Path $Root "tools\start\start-service.ps1"
 if (-not (Test-Path $starter)) {
     throw ("$Root does not look like the ClaudeVision checkout - no " +
@@ -186,11 +233,16 @@ try {
         # heard of - which reads as a broken feature, not a stale process. That cost an
         # afternoon once and most of another today.
         #
-        # git is on the PATH in THIS shell, so the comparison can be made here and nowhere
-        # else. Reported, never acted on: killing whatever holds the port is a decision for
-        # the person standing in front of the machine.
-        $headHere = (& git -C $Root rev-parse --short HEAD 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $headHere -and $health.commit -and
+        # Reported, never acted on: killing whatever holds the port is a decision for the
+        # person standing in front of the machine.
+        #
+        # NOT `& git` directly. SDI-APP01 has no git, and under $ErrorActionPreference =
+        # "Stop" that is a CommandNotFoundException BEFORE the command runs, so the 2>$null
+        # never applies -- a red error in the middle of an install that worked. Get-HeadCommit
+        # also falls back to the .sdi-commit stamp push-to-server.ps1 leaves there, which is
+        # the only way that machine can name its own build at all.
+        $headHere = Get-HeadCommit $Root
+        if ($headHere -and $health.commit -and
             $health.commit -ne "unknown" -and ("$headHere".Trim() -ne "$($health.commit)".Trim())) {
             Write-Host ""
             Write-Host "    WARNING: the site is serving commit $($health.commit), but this" -ForegroundColor Red
