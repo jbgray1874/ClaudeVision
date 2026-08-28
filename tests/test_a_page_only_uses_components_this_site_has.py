@@ -164,12 +164,23 @@ def test_the_copied_sidebars_point_only_at_views_the_portal_defines(page_name):
 
 # ── the new guide is reachable and is called the same thing everywhere ────────
 
+# ONE PLACE, BECAUSE IT HAS ALREADY BEEN RENAMED ONCE. It went in as "SDI Fixture Library
+# Guide" and became "SDI Drawing Search Intelligence Guide" — the project it belongs to, and
+# consistent with the SDI Estimating Intelligence Guide sitting directly above it.
+#
+# The tool ITSELF is still called the Fixture Library: that is the name in its own title bar,
+# in the delivery tracker, and on the mockups in the guide. Those are deliberately unchanged.
+# What was renamed is how this SITE refers to the guide, which is a different thing from what
+# Muhammad's application is called — and conflating the two is how a rename goes too far.
+_GUIDE_NAME = "SDI Drawing Search Intelligence Guide"
+
+
 @pytest.mark.parametrize("page_name", _PAGES)
-def test_the_fixture_library_guide_is_in_every_sidebar(page_name):
+def test_the_drawing_search_guide_is_in_every_sidebar(page_name):
     """It sits under the estimating guide in Operate, on all three, or the three navigations
     disagree about what the site contains — which is the bargain these copies were allowed on."""
     page = (_BACKEND / page_name).read_text(encoding="utf-8")
-    assert "SDI Fixture Library Guide" in page, f"{page_name} has no Fixture Library Guide entry"
+    assert _GUIDE_NAME in page, f"{page_name} has no {_GUIDE_NAME} entry"
 
 
 def test_the_guide_sits_directly_below_the_estimating_guide():
@@ -180,9 +191,9 @@ def test_the_guide_sits_directly_below_the_estimating_guide():
         # appears first in its own <title>, which is not a nav entry and is 28 links away.
         nav = page[page.index(">Operate<"):]
         est = nav.index("SDI Estimating Intelligence Guide")
-        fix = nav.index("SDI Fixture Library Guide")
+        fix = nav.index(_GUIDE_NAME)
         page = nav
-        assert est < fix, f"{page_name} lists the Fixture Library guide above the estimating one"
+        assert est < fix, f"{page_name} lists the drawing-search guide above the estimating one"
         between = page[est:fix]
         assert between.count("</a>") == 1, (
             f"{page_name} has other entries between the two guides")
