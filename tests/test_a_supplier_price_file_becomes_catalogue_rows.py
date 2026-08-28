@@ -310,3 +310,45 @@ def test_a_big_list_with_many_poa_lines_is_not_refused(tmp_path):
     parsed = spl.parse(_xlsx(tmp_path, "mixed.xlsx", rows), "Essentra")
     assert not parsed["error"], "a genuine catalogue with many POA lines was refused"
     assert len(parsed["rows"]) == 12
+
+
+# ── the unit survives the write ──────────────────────────────────────────────
+#
+# The reader works out the unit deliberately — from the unit column, then the price heading,
+# then the description — and says which of the three it used, because a price without a unit
+# is not a price. It passed that through as `uom`, and the writer inserted the literal
+# "each" and never read it.
+#
+# For fixings that is invisible: a castor IS priced each. It stops being invisible on the
+# first sheet material. Acrylic at £30/m², MFC at £22/sheet and powder at £9.73/kg would each
+# be stored as £30 EACH — a plausible number, a complete-looking row, and a 2.5m x 1.25m
+# sheet costed as one item. Which is the fault this engine keeps finding: not a crash, a
+# confident wrong number.
+
+def test_the_unit_the_reader_found_is_the_unit_that_is_stored():
+    """THE ASSERTION. Wave 2 of the supplier plan is entirely sheet materials — Perspex,
+    Lawcris, Eagle — and every one of them prices per m² or per sheet."""
+    loader = (_ROOT / "src" / "catalogue_loader.py").read_text(encoding="utf-8")
+    at = loader.index("INSERT INTO AIEstimating.BoughtInCatalogue")
+    insert = loader[at:loader.index("return (f\"reprice", at)]
+    assert 'line.get("uom")' in insert, (
+        "the catalogue writer ignores the unit the reader determined, so a price per square "
+        "metre is stored as a price each")
+    assert '"each",' not in insert.replace('or "each"', ""), (
+        "the unit is still hardcoded on the insert")
+
+
+def test_each_is_still_the_default_when_nothing_said_otherwise():
+    """An unmarked bought-in line is priced each, and that must not become NULL."""
+    loader = (_ROOT / "src" / "catalogue_loader.py").read_text(encoding="utf-8")
+    at = loader.index("INSERT INTO AIEstimating.BoughtInCatalogue")
+    assert 'or "each"' in loader[at:at + 1600], (
+        "a line with no unit would be stored with none, which is worse than assuming each")
+
+
+def test_the_reader_still_hands_the_unit_over():
+    """The other half of the contract. If supplier_price_list stops passing uom, the writer's
+    fallback silently restores the old behaviour for every row."""
+    reader = (_ROOT / "src" / "supplier_price_list.py").read_text(encoding="utf-8")
+    assert '"uom": r["unit"]' in reader, (
+        "the reader no longer passes the unit it worked out, so every row falls back to each")
