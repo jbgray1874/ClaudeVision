@@ -287,3 +287,82 @@ def test_each_workstream_column_carries_its_own_colour():
     for colour in ("var(--ok)", "var(--accent)", "var(--violet)"):
         assert f"border-top:3px solid {colour}" in prog, (
             f"no workstream column is marked {colour}")
+
+
+# ── the count in the prose matches the cards under it ────────────────────────
+#
+# SDI Manufacturing Intelligence was added to the AI Programme panel as a fourth card, and
+# the paragraph above it still read "a third is in build alongside them" while four were
+# shown. Nobody would be misled for long, but a page that miscounts what is directly beneath
+# it is a page a reader stops checking things against — and this one is the site's summary of
+# where the whole programme stands.
+
+def _programme_panel() -> str:
+    """The AI Programme panel on the dashboard.
+
+    Bounded by the next <h3> where there is one, and otherwise by the end of the view. The
+    first version ended it at a button label that does not exist on this page, which made
+    four tests fail on markup that was correct.
+    """
+    page = _VIEWS["dashboard"]
+    at = page.index("<h3>AI Programme</h3>")
+    nxt = re.search(r"<h3>", page[at + 10:])
+    return page[at:at + 10 + nxt.start()] if nxt else page[at:]
+
+
+def _manufacturing_card(panel: str) -> str:
+    """The card itself, found by the coloured border that opens it.
+
+    NOT by its name. The summary paragraph above the grid now names the workstream too, so
+    `panel.index("SDI Manufacturing Intelligence")` returns the sentence rather than the card
+    — which made three of these tests fail on markup that was right. The card is the only
+    thing in the panel with an --info border.
+    """
+    at = panel.index("border-top:3px solid var(--info)")
+    nxt = panel.find("border-top:3px solid var(--", at + 30)
+    return panel[at:nxt] if nxt != -1 else panel[at:]
+
+
+def test_the_manufacturing_card_is_between_estimating_and_technical_design():
+    """Where it was asked to go, and the order the work actually flows in: estimate, design,
+    then something gets cut."""
+    panel = _programme_panel()
+    grid = panel[panel.index('<div style="display:grid'):]      # the cards, not the prose
+    est = grid.index("SDI Estimating Intelligence")
+    mfg = grid.index("SDI Manufacturing Intelligence")
+    tech = grid.index("SDI Technical Design Intelligence")
+    assert est < mfg < tech, (
+        "the manufacturing card is not between estimating and technical design")
+
+
+def test_the_manufacturing_card_says_what_it_is_for():
+    """The three things it does, in the words they were given in. A card that names a
+    workstream and describes nothing is a heading."""
+    panel = _programme_panel()
+    card = _manufacturing_card(panel)
+    for claim in ("G-code streaming", "DXF", "production report", "Sage X3"):
+        assert claim in card, f"the manufacturing card does not mention {claim}"
+
+
+def test_it_is_not_dressed_up_as_work_in_flight():
+    """It has no delivery tracker, no dates and no percentage. The other three carry those
+    because somebody is measuring them. Giving this one a progress figure to make the row
+    look consistent would be the site asserting something nobody has measured."""
+    panel = _programme_panel()
+    card = _manufacturing_card(panel)
+    assert "Planned" in card, "the manufacturing card is not labelled Planned"
+    assert not re.search(r"\b\d{1,3}%", card), (
+        "the manufacturing card carries a percentage complete, which nothing measures")
+
+
+def test_the_summary_sentence_counts_the_cards_below_it():
+    """The paragraph claimed three while four were shown."""
+    panel = _programme_panel()
+    intro = panel[:panel.index("<div style=\"display:grid")]
+    # Counted by the coloured top border every card carries, not by "Workstream N" — the
+    # manufacturing card deliberately has no number, because a 4 in the second slot reads as
+    # a mistake rather than as an ordering.
+    cards = len(re.findall(r"border-top:3px solid var\(--", panel))
+    assert cards == 4, f"expected four workstream cards, found {cards}"
+    assert "fourth" in intro, (
+        "the summary paragraph does not account for the fourth card directly beneath it")

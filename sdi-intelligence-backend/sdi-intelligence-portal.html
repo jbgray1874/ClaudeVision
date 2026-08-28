@@ -553,7 +553,12 @@
            colour: green live, amber in build, violet creative. -->
       <div class="panel reveal" style="margin-bottom:22px">
         <h3>AI Programme</h3>
-        <p>Two workstreams are live and running <b>in parallel</b>, not in sequence, and a third is in build alongside them. The wider AI &amp; Robotics programme runs through Q3 2027.</p>
+        <!-- COUNTED, NOT ESTIMATED. This sentence has to match the cards below it: it said
+             "a third is in build" while four cards were shown, which is the kind of small
+             wrongness that makes a reader stop trusting the rest of the page. Manufacturing
+             is named as PLANNED rather than folded into the count, because it has no tracker
+             and no dates and should not be read as work in flight. -->
+        <p>Two workstreams are live and running <b>in parallel</b>, not in sequence, and a third is in build alongside them. A fourth, <b>SDI Manufacturing Intelligence</b>, is planned and not yet started. The wider AI &amp; Robotics programme runs through Q3 2027.</p>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:16px">
           <div style="background:var(--bg-2);border:1px solid var(--line);border-top:3px solid var(--ok);border-radius:var(--r);padding:16px 18px">
             <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--ok);text-transform:uppercase;margin-bottom:6px">Workstream 1 · Live</div>
@@ -605,6 +610,39 @@
               invocation during the parallel run; UI-triggered runs follow go-live.
               <b style="color:var(--ink)">Still open before it:</b> supplier price lists loaded,
               price-chain rungs 3 and 4 repointed at populated tables, and the Dyson-pack costing faults closed.
+            </div>
+          </div>
+
+          <!-- SDI MANUFACTURING INTELLIGENCE. Placed here, between Estimating and Technical
+               Design, because that is the order the work flows in: an estimate is made, a
+               design is drawn, and then something gets cut. It reads as the middle of a chain
+               rather than an appendix at the end of the row.
+
+               NO DATES AND NO PERCENTAGE, deliberately. The other three carry them because
+               they come from delivery trackers; this one has no tracker yet, and inventing a
+               "15%" to make the card match its neighbours would be the site asserting progress
+               nobody has measured. Blue rather than green or amber, so it is not read as live
+               or in build at a glance.
+
+               NO WORKSTREAM NUMBER EITHER. The other three run 1, 2, 3 in the order they are
+               shown; a "4" sitting in the second slot reads as a mistake in the page rather
+               than as a deliberate ordering. The cards are in the order the work flows -
+               estimate, make, design - and this one is the only one with no tracker to number
+               it against, so it says what it is instead.
+
+               Distinct from the SDI Manufacture & Robotics Intelligence service page, which
+               covers the wider robotics programme through Q3 2027. This is the estimating-
+               adjacent part: DXF to G-code, the production report, and the actuals coming
+               back the other way. -->
+          <div style="background:var(--bg-2);border:1px solid var(--line);border-top:3px solid var(--info);border-radius:var(--r);padding:16px 18px">
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--info);text-transform:uppercase;margin-bottom:6px">Planned &middot; not yet started</div>
+            <div style="font-weight:700;font-size:15px;margin-bottom:4px">SDI Manufacturing Intelligence</div>
+            <div class="muted" style="font-size:12.5px;line-height:1.6">Automated G-code streaming using SOLIDWORKS (part auto-generated) DXF drawing inputs, to help accelerate the CNC programming and execution of manufacture.</div>
+            <div class="muted" style="font-size:12.5px;line-height:1.6;margin-top:10px">AI engineering assistance with the creation of the production report. Integration with Sage X3, and actual manufacturing process inputs to help with SDI Estimating Intelligence.</div>
+            <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11.5px;line-height:1.6" class="muted">
+              <b style="color:var(--ink)">It closes the loop.</b> Every other workstream feeds the
+              estimate forwards; this one is the only one that sends what actually happened on the
+              shop floor back to it.
             </div>
           </div>
 
