@@ -880,8 +880,39 @@ def _should_run(extract_path: Path, folder: str | Path) -> bool:
     # we can now read out of the same unchanged models has moved on.
     if _extract_schema_version(extract_path) < _MIN_EXTRACT_SCHEMA_VERSION:
         return True
+    # THE FINGERPRINT, NOT THE TIMESTAMP, WHEN THERE IS ONE.
+    #
+    # These two questions -- "is this extract stale" and "should I regenerate it" -- were
+    # answered by DIFFERENT signals, and they disagreed on a real job. Staleness compares the
+    # manifest's recorded fingerprint against the files on disk, which is exact. This compared
+    # mtimes.
+    #
+    # Copy-Item PRESERVES LastWriteTime. Twenty-eight models copied into a job folder to build
+    # a pack arrived carrying their original 2023 timestamps -- older than the extract already
+    # sitting beside them. So the fingerprint said STALE, this said "nothing newer", the
+    # analyser was never launched, and the estimate was built on an extract describing a
+    # different set of files. The run reported the staleness and gave no hint that the fix had
+    # been declined.
+    #
+    # A deleted or renamed model is invisible to a timestamp too, and that is the same fault
+    # in its other direction.
     try:
-        return native_files_state(folder)["newest_mtime"] > extract_path.stat().st_mtime
+        state = native_files_state(folder)
+    except Exception:
+        return False
+    try:
+        payload = json.loads(extract_path.read_text(encoding="utf-8"))
+        manifest = payload.get("_manifest")
+        recorded = manifest.get("native_files_fingerprint") if isinstance(manifest, dict) else None
+    except Exception:                                        # noqa: BLE001
+        recorded = None
+    if recorded and state.get("fingerprint"):
+        # An empty current fingerprint means the folder could not be read -- a VPN down, a
+        # share not mapped -- and re-running the analyser against files it cannot see would
+        # replace a good extract with an empty one. Fall through to the timestamp instead.
+        return recorded != state["fingerprint"]
+    try:
+        return state["newest_mtime"] > extract_path.stat().st_mtime
     except Exception:
         return False
 
