@@ -4170,7 +4170,22 @@
 
   // ---- Live Files browser + health (backend serves this page, so same-origin) ----
   const API_BASE = "";   // same-origin
-  const API_KEY  = "2ff633ca8aeb4c54bfe4e2af56e82a48c791a47b05ba412d90d60558235f532c";   // set ONLY if your backend has SDI_API_KEY; leave blank for local
+  /* NOT IN THE FILE. A 64-character key sat here as a literal, in a tracked file, in a repo
+     whose history is not private. It was doing nothing: the backend's X-SDI-Key check is
+     written but SDI_API_KEY is blank, so the gate is off and the service says so at startup —
+     this page's own Security section says it too, two thousand lines up.
+
+     A key in the markup cannot be secret ANYWAY. The page is served to the browser; anyone who
+     can open the portal can read it with View Source, so the only thing the literal bought was
+     a secret in git. It is read from this browser's own storage instead, which keeps it out of
+     the repo and off every other machine.
+
+     TO TURN THE GATE ON: set SDI_API_KEY in the backend .env, then once, in this browser's
+     console:  localStorage.setItem("SDI_API_KEY", "<the key>")
+     Blank is the correct value everywhere the gate is off, and _hdr() already sends no header
+     when it is blank. THE OLD KEY MUST BE ROTATED regardless — it has been in a git history. */
+  const API_KEY  = (() => { try { return localStorage.getItem("SDI_API_KEY") || ""; }
+                            catch (e) { return ""; } })();
   function _hdr(){ return API_KEY ? {"X-SDI-Key": API_KEY} : {}; }
   async function _get(p){ const r=await fetch(API_BASE+p,{headers:_hdr()}); if(!r.ok) throw new Error(r.status+" "+(await r.text()).slice(0,160)); return r.json(); }
   function _sz(b){ if(b==null)return""; const u=["B","KB","MB","GB"];let i=0,n=b;while(n>=1024&&i<3){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+u[i]; }
