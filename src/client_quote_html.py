@@ -35,7 +35,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # ── config ──────────────────────────────────────────────────────────────────
-ASSETS_LOGOS = r"C:\ClaudeVision\assets\customer_logos"
+# BESIDE THE REPO, NOT AT A HARDCODED WINDOWS PATH. This was
+# r"C:\ClaudeVision\assets\customer_logos" — the same literal that put a directory named
+# exactly that into the working tree when the extract cache used one, and which resolves to
+# nothing on the 8071 service box unless it happens to have the same drive layout. A logo
+# folder that silently is not there produces a quote with a text fallback and no error, which
+# is exactly how "the Dyson logo is missing" gets read as a missing FILE when it may be a
+# missing FOLDER.
+#
+# SDI_CUSTOMER_LOGOS relocates it; the Windows install still resolves to the same place.
+ASSETS_LOGOS = os.environ.get("SDI_CUSTOMER_LOGOS") or str(
+    Path(__file__).resolve().parents[1] / "assets" / "customer_logos")
 SDI_LOGO_KEY = "wearesdi"          # SDI's own logo file (left header), in the same folder
 MARKUP_FACTOR = 1.0                # 1.0 = show computed cost as-is (JG). >1.0 later for sell price.
 VALID_DAYS = 30
@@ -787,6 +797,40 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
 </html>"""
 
 
+LLM_ONLY_BANNER = """
+<div style="background:#B00020;color:#fff;padding:14px 18px;font:600 14px/1.45 system-ui,
+     -apple-system,'Segoe UI',Arial,sans-serif;letter-spacing:.01em">
+  <div style="font-size:16px;font-weight:800;letter-spacing:.06em;margin-bottom:5px">
+    LLM-ONLY MEASUREMENT RUN &mdash; NOT A QUOTATION
+  </div>
+  This pack was read by the vision model alone. The deterministic BOM reader, the DXF flat
+  patterns and the SolidWorks extract were all switched off, so no figure below is corroborated
+  by a second reader and no folded part has a measured blank. The document is produced in the
+  same form as a real quotation <b>so the two can be compared</b> &mdash; that is what it is
+  for. <b>Do not send it to a customer and do not quote its total.</b>
+</div>
+"""
+
+
+def _stamp_llm_only(html_str: str) -> str:
+    """Put the banner where the page starts, not where the reader gives up.
+
+    ABOVE THE LETTERHEAD. A warning under the total is read after somebody has already decided
+    what the document is; a red block before the SDI logo is the first thing on the page and
+    survives being printed, screenshotted from the top, or pasted into an email.
+
+    Inserted after <body> when there is one, and prepended when there is not, so a change to
+    the quote's own markup cannot silently drop it.
+    """
+    lower = html_str.lower()
+    at = lower.find("<body")
+    if at != -1:
+        end = html_str.find(">", at)
+        if end != -1:
+            return html_str[:end + 1] + LLM_ONLY_BANNER + html_str[end + 1:]
+    return LLM_ONLY_BANNER + html_str
+
+
 def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem: Optional[str] = None,
                          manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> Optional[str]:
     jp = Path(json_path)
@@ -808,28 +852,44 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
     # the file and always returned a path. A safety documented at the call site and absent
     # from the callee is worse than no safety, because it stops anyone looking.
     #
-    # SUPPRESSED, NOT STAMPED. A stamped quote can be forwarded, screenshotted, or have its
-    # banner scrolled past; a file that was never written cannot be sent. An LLM-only run
-    # exists to measure the model, and a measurement has no customer.
+    # STAMPED AND WRITTEN, NOT SUPPRESSED.
     #
-    # BOTH SIGNALS, because this function is also a CLI entry point run against a JSON long
+    # This withheld the file. James overruled it, and the reason is the one that matters:
+    # "we absolutely need to generate the same documents... everyone knows it's an LLM only
+    # run but we still run them." An LLM-only run exists to be COMPARED against a full one,
+    # and a comparison where the two runs produce different sets of documents is not a
+    # comparison. Withholding the quote also hides the very thing being measured — what a
+    # customer-facing document would have said off a one-reader BOM.
+    #
+    # So it is marked instead, in the two places a file can be identified without opening it
+    # and reading to the end:
+    #   the FILENAME  — ..._quote_LLM-ONLY.html, so it is distinguishable on the share, in a
+    #                   folder listing, and in an email attachment box
+    #   the FIRST THING ON THE PAGE — above the letterhead, not below the total
+    #
+    # BOTH SIGNALS FOR THE RUN, because this is also a CLI entry point run against a JSON long
     # after the process that made it has gone: the environment answers for the run in flight,
     # the summary key answers for every reader afterwards.
     _llm_only = bool(summary.get("llm_only")) or (
         os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"})
-    if _llm_only:
-        print("   [deliverables] client quote NOT WRITTEN — this run read the pack with the "
-              "vision model alone. It is a measurement of the model, not an estimate, and a "
-              "document on SDI letterhead quoting its total must not exist. The workbook and "
-              "the Decision Report carry the figures.", flush=True)
-        return None
 
     stem = job_stem or summary.get("job_output_stem") or jp.stem
-    html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook, customer=customer)
+    html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook,
+                                customer=customer)
+    if _llm_only:
+        html_str = _stamp_llm_only(html_str)
+        print("   [deliverables] client quote written and STAMPED — this run read the pack "
+              "with the vision model alone, so the file is named _quote_LLM-ONLY.html and "
+              "says so above the letterhead. It is a measurement, not a quotation.",
+              flush=True)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
-    out_path = out_dir_p / f"{safe}_quote.html"
+    # IN THE NAME, because a file is identified from a folder listing far more often than it
+    # is opened. A quote off a measurement run and a quote off a real estimate sitting in one
+    # directory as "10575-02_quote.html" twice is how the wrong one gets attached.
+    out_path = out_dir_p / (f"{safe}_quote_LLM-ONLY.html" if _llm_only
+                            else f"{safe}_quote.html")
     out_path.write_text(html_str, encoding="utf-8")
     return str(out_path)
 
