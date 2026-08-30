@@ -133,3 +133,16 @@ def test_nothing_on_this_path_deletes_a_cache_file():
                 f"{name} names the {cache} cache. Neither of them can see the runner's disk, "
                 f"and those files are every other job's settled answer — the engine is asked "
                 f"to bypass them, nobody reaches for them")
+
+
+def test_the_control_says_the_word_somebody_will_look_for():
+    """JAMES ASKED TO "CLEAR THE CACHE" AND THEN COULD NOT FIND THE CONTROL, which was on his
+    screen. The label said "reusing the answers held for this pack" — accurate, careful, and
+    missing the only word he was scanning for. A control nobody can find is a control that
+    does not exist, and the page is read by people hunting for a word, not by people reading
+    it start to finish."""
+    at = MARKUP.index('id="freshRead"')
+    block = MARKUP[at:MARKUP.index("</label>", at)]
+    assert "cache" in block.lower(), (
+        "the fresh-read control never says 'cache', which is the word somebody looking for it "
+        "will search the page for")

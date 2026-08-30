@@ -461,10 +461,12 @@
            OFF BY DEFAULT, because the honest reason to press the button most of the time is
            to look at a pack, and a cached read is the same read for a fraction of the cost. -->
       <label class="note" style="display:block;margin:-4px 0 10px">
-        <input type="checkbox" id="freshRead"> <b>Fresh read</b> — ask the model again instead
-        of reusing the answers held for this pack. Slower and it costs API calls; the answer
-        may differ from the last run, and <b>that difference is the measurement</b>. Leave it
-        off to re-read a pack the model has already seen.</label>
+        <input type="checkbox" id="freshRead"> <b>Fresh read — ignore the cached answers for
+        this pack</b> and ask the model again. Every page goes back to Grok instead of being
+        replayed from cache, so it costs API calls; the answer may differ from the last run,
+        and <b>that difference is the measurement</b>. Nothing is deleted — the cache is on
+        the runner's machine and holds every other job's answers; this run just doesn't use
+        it. Leave it off to re-read a pack the model has already seen.</label>
 
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
