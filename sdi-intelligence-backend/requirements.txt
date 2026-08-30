@@ -1,0 +1,41 @@
+# SDI Intelligence — backend service dependencies.
+#
+# The service had no manifest: fastapi, uvicorn and pydantic are imported and
+# were declared nowhere, so "python app.py" on a machine that had not happened
+# to install them failed at the first import with nothing to point at.
+#
+# Bounds are the ones already proven on the live machine — an upper bound on a
+# major version is what stops a silent breaking upgrade landing on a service
+# nobody is watching.
+#
+# INSTALL INTO THE SERVICE'S OWN VIRTUALENV. There are two on a machine that runs
+# estimates, and they are not interchangeable:
+#
+#   sdi-intelligence-backend\.venv   the SERVICE. start-service.ps1 runs app.py
+#                                    with this one and throws if it is absent.
+#   .venv  (repo root)               the ENGINE. estimate_routes shells out to it
+#                                    to run an estimate (SDI_ENGINE_PYTHON).
+#
+# This file is the service's manifest, so it goes in the service's. SDI-APP01 has
+# no engine virtualenv at all -- it queues estimates and never runs one -- so
+# installing at the repo root there fails with "the term is not recognized",
+# which reads as a broken command rather than as the wrong environment.
+#
+#   cd C:\ClaudeVision
+#   .\sdi-intelligence-backend\.venv\Scripts\python.exe -m pip install -r sdi-intelligence-backend\requirements.txt
+#   .\tools\start\start-service.ps1
+
+fastapi>=0.115,<1.0    # the API itself
+uvicorn[standard]>=0.32,<1.0  # the server app.py starts in __main__
+pydantic>=2.9          # request models (estimate_routes.EstimateRequest)
+python-multipart>=0.0.9 # file upload on POST /api/estimate/override (estimator manual override)
+python-dotenv>=1.0,<2.0 # config.py reads .env
+requests>=2.31,<3.0    # hr_brighthr talks to BrightHR
+
+# Optional. The database endpoints report "not configured" without it rather
+# than failing, so a machine that only needs the estimating page can skip it.
+pyodbc>=5.0,<6.0       # /api/db/ping, SQL Server via ODBC Driver 18
+
+# Optional. tech_radar.py imports this lazily inside a function, so the service
+# starts and every endpoint works without it; only the radar feature needs it.
+anthropic               # tech_radar.py

@@ -1,0 +1,76 @@
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments (never commit these)
+venv/
+.venv/
+# Anchored to the repo root. An unanchored env/ matches at ANY depth, which
+# silently swallowed sdi-intelligence-backend/env/ — configuration, not a
+# virtualenv — and a file that cannot be committed is a file nobody can deploy.
+/env/
+.env
+!config/*.example.env
+
+# ── Output data (VERY IMPORTANT) ─────────────────────────────────────────
+output/
+*.json
+*.jsonl
+*.log
+*.txt
+
+# ── Input data (drawings, spreadsheets) ──────────────────────────────────
+input/
+
+# PDFs, images and workbooks (CRITICAL — job data, never commit)
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.xls
+*.xlsx
+
+# ── Backups / scratch ────────────────────────────────────────────────────
+*.bak
+*.bak_*
+*.backup
+*~
+
+# SQL dumps (schema lives in versioned .sql under sql/ if needed)
+*.sql
+
+# ── OS ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Explicit keeps (override the broad ignores above) ────────────────────
+# A BROAD IGNORE PLUS ONE EXCEPTION IS A TRAP FOR THE NEXT FILE. `*.txt` above
+# means every new .txt is invisible to `git add -A`, which reports nothing —
+# requirements-dev.txt was written, committed, pushed and merged before anybody
+# noticed it had never left the machine it was created on. Anything meant to be
+# kept has to be named here.
+!requirements.txt
+!requirements-dev.txt
+# CLIENT QUOTATION DATA IS NOT SOURCE CODE.
+# This line used to read "!corpus/*.jsonl" -- an explicit exception that put the client
+# corpora BACK after the *.jsonl rule above had excluded them. With src/corpus.jsonl that
+# was 104,386 quotation records in the repository: customer names, job numbers, sell
+# prices, cost breakdowns, rebate fractions, derived overhead divisors, and the names of
+# the 39 estimators who prepared them, spanning 2006-2036 and 488 customers.
+#
+# Nothing reads them at estimate time. They are an INTERMEDIATE ARTEFACT: corpus_ingest.py
+# writes one from the K: spreadsheets, and ingest_historical_to_db.py / _to_qdrant.py read
+# it once to load SQL Server and the vector store. Both take the path as an argument and
+# default to a RELATIVE corpus.jsonl, not to anything committed here. The engine's
+# corpus-derived numbers are constants in config.py, with the corpus named in a comment as
+# their provenance -- the file itself is not consulted.
+#
+# So it bought nothing and put SDI's own margin structure, and its clients' pricing
+# history, on an external code host. The exception is removed and the ignore above stands.
+corpus/
+cache/
+.sdi-commit

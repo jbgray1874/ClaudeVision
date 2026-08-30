@@ -1,0 +1,5 @@
+
+# PowerShell: CRLF, and never touched by text normalisation. Windows
+# PowerShell 5.1 parses a .ps1 in the system codepage unless it carries a BOM,
+# so these files are ASCII-only with a BOM and must arrive byte for byte.
+*.ps1 text eol=crlf working-tree-encoding=UTF-8

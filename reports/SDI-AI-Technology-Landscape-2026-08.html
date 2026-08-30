@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDI Intelligence — AI &amp; Technology Landscape August 2026</title>
+<style>
+  :root {
+    --steel:#1C2B3A; --cut:#00C2FF; --fold:#FF6B35; --rule:#2E4257;
+    --dim:#6B8BA4; --good:#22C55E; --warn:#F59E0B; --gap:#EF4444;
+    --text:#E8EEF4; --subtext:#94B0C8; --card:#1E3248; --border:#2A4160;
+    --local:#A78BFA;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--steel); color:var(--text);
+         font-family:'Inter','Segoe UI',system-ui,sans-serif; font-size:14px; line-height:1.6; }
+  header { border-bottom:1px solid var(--cut); padding:28px 40px 20px;
+           display:flex; align-items:flex-end; justify-content:space-between; gap:24px; flex-wrap:wrap; }
+  .logo-block { display:flex; flex-direction:column; gap:4px; }
+  .logo-eyebrow { font-size:10px; letter-spacing:.18em; text-transform:uppercase;
+                  color:var(--cut); font-weight:600; }
+  .logo-title { font-size:22px; font-weight:700; letter-spacing:-.02em; }
+  .logo-sub { font-size:12px; color:var(--subtext); margin-top:2px; }
+  .run-meta { text-align:right; font-size:11px; color:var(--dim); line-height:1.8; }
+  .run-meta strong { color:var(--subtext); }
+  main { padding:32px 40px; max-width:1400px; }
+  .section-label { display:flex; align-items:center; gap:12px; margin:44px 0 16px; flex-wrap:wrap; }
+  .section-label .notch { width:4px; height:22px; background:var(--cut); border-radius:2px; flex-shrink:0; }
+  .section-label h2 { font-size:13px; letter-spacing:.12em; text-transform:uppercase;
+                      color:var(--cut); font-weight:700; }
+  .section-label p { font-size:12px; color:var(--subtext); margin-left:auto; }
+  .section-label:first-of-type { margin-top:0; }
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { background:var(--rule); padding:10px 14px; text-align:left; font-size:10px;
+             letter-spacing:.1em; text-transform:uppercase; color:var(--subtext);
+             font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; }
+  tbody tr { border-bottom:1px solid var(--border); }
+  tbody tr:hover { background:rgba(0,194,255,.05); }
+  tbody td { padding:11px 14px; vertical-align:top; }
+  tbody td.name { font-weight:600; white-space:nowrap; }
+  tbody td.desc { color:var(--subtext); font-size:12px; }
+  tbody td.endpoint { font-family:'Courier New',monospace; font-size:11px; color:var(--cut); white-space:nowrap; }
+  .chip { display:inline-block; padding:2px 9px; border-radius:20px; font-size:10px;
+          font-weight:700; letter-spacing:.06em; text-transform:uppercase; white-space:nowrap; }
+  .chip-live    { background:rgba(34,197,94,.15);  color:var(--good);  border:1px solid rgba(34,197,94,.3); }
+  .chip-current { background:rgba(0,194,255,.12);  color:var(--cut);   border:1px solid rgba(0,194,255,.3); }
+  .chip-try     { background:rgba(245,158,11,.12); color:var(--warn);  border:1px solid rgba(245,158,11,.3); }
+  .chip-explore { background:rgba(239,68,68,.10);  color:var(--gap);   border:1px solid rgba(239,68,68,.25); }
+  .chip-local   { background:rgba(167,139,250,.14);color:var(--local); border:1px solid rgba(167,139,250,.35); }
+  .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px;
+          padding:20px; display:flex; flex-direction:column; gap:10px; }
+  .card.flag { border-color:rgba(167,139,250,.45); }
+  .card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .card-title { font-weight:700; font-size:14px; }
+  .card-body { font-size:12px; color:var(--subtext); line-height:1.75; }
+  .card-body strong { color:var(--text); }
+  .card-action { margin-top:auto; font-size:11px; color:var(--cut); font-weight:600;
+                 letter-spacing:.05em; text-transform:uppercase; line-height:1.6; }
+  .card-tags { display:flex; flex-wrap:wrap; gap:6px; }
+  .tag { font-size:10px; padding:2px 8px; border-radius:4px;
+         background:rgba(255,255,255,.06); color:var(--subtext); font-weight:500; }
+  .rule { border:none; border-top:1px solid var(--border); margin:36px 0; }
+  code { font-family:'Courier New',monospace; font-size:11px;
+         background:rgba(0,194,255,.08); padding:1px 5px; border-radius:3px; color:var(--cut); }
+  .lede { font-size:12.5px; color:var(--subtext); line-height:1.8; max-width:96ch; }
+  .lede strong { color:var(--text); }
+  .callout { border:1px solid var(--border); border-left:3px solid var(--warn);
+             background:rgba(245,158,11,.06); border-radius:6px; padding:16px 20px; margin:18px 0; }
+  .callout.purple { border-left-color:var(--local); background:rgba(167,139,250,.07); }
+  .callout.cyan   { border-left-color:var(--cut);   background:rgba(0,194,255,.06); }
+  .callout h4 { font-size:14px; font-weight:700; margin-bottom:6px; }
+  .callout p { font-size:12.5px; color:var(--subtext); line-height:1.75; }
+  .callout p + p { margin-top:9px; }
+  .callout strong { color:var(--text); }
+  ul.pl { margin:8px 0 0 18px; font-size:12.5px; color:var(--subtext); line-height:1.8; }
+  ul.pl strong { color:var(--text); }
+  .conf { font-size:10px; letter-spacing:.06em; text-transform:uppercase; font-weight:700;
+          padding:1px 6px; border-radius:3px; white-space:nowrap; }
+  .c-vendor { background:rgba(34,197,94,.12);  color:var(--good); }
+  .c-second { background:rgba(245,158,11,.12); color:var(--warn); }
+  footer { margin-top:56px; border-top:1px solid var(--border); padding:20px 40px;
+           font-size:11px; color:var(--dim); line-height:1.9; }
+  @media (max-width:700px){ header,main,footer{padding-left:18px;padding-right:18px;}
+    .run-meta{text-align:left;} }
+
+  /* PRINT — WHERE overflow-x:auto STOPS BEING A KINDNESS AND STARTS DELETING THINGS.
+     On screen a table wider than its container scrolls, so nothing is lost. On paper there
+     is nowhere to scroll to: Chromium clips at the container and the overflow is never
+     painted, so the words are not truncated, they are ABSENT FROM THE FILE. A4 less 12mm
+     margins is ~703px of content, and all three tables here are wider than that, which cost
+     the last column of each — Verdict, Worth a look?, and the whole Why now column of the
+     action list. Fourteen cells, gone, in a document that reported itself rendered.
+     The nowrap rules are what force the width, so print releases them and pins the layout. */
+  @media print {
+    .table-wrap { overflow: visible; }
+    table { table-layout: fixed; width: 100%; }
+    /* normal, NOT break-word: breaking mid-word would split a noun across two lines and put
+       half of it in the PDF's text layer as a separate token, which is how a searchable
+       document stops being searchable. Wrapping between words is all this needs. */
+    thead th, tbody td.name, tbody td.endpoint { white-space: normal; }
+    tbody td, thead th { padding-left: 8px; padding-right: 8px; }
+    .card, .callout, .item { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-block">
+    <span class="logo-eyebrow">SDI Displays Ltd — SDI Intelligence</span>
+    <span class="logo-title">AI &amp; Technology Landscape — August 2026</span>
+    <span class="logo-sub">Frontier models, CAD tooling, PDM build notes and estimating-adjacent software — mapped to what we are actually building</span>
+  </div>
+  <div class="run-meta">
+    <strong>Issued:</strong> 26 August 2026<br>
+    <strong>Owner:</strong> James Gray<br>
+    <strong>Covers:</strong> SDI Estimating Intelligence · SDI Technical Design Intelligence
+  </div>
+</header>
+
+<main>
+
+  <p class="lede">
+    This month the report widens. July covered frontier models only; this one adds <strong>the CAD and
+    design tooling Yogesh is working alongside</strong>, <strong>build notes for the in-house PDM</strong>,
+    <strong>the SOLIDWORKS partner marketplace</strong>, and <strong>the tooling layer inside the
+    estimating engine itself</strong> — because the useful question is no longer
+    "which model is best" but "what is now buyable, buildable, or already sitting inside a licence we hold".
+  </p>
+  <p class="lede" style="margin-top:12px;">
+    Two entries below are worth your time before the rest. <strong>SOLIDWORKS LEO already does PDF-to-parametric-3D</strong>,
+    which is F1 on the technical design roadmap and currently marked "POC pending" — it may not need building.
+    And <strong>Qwen3.8-27B is an open-weight vision model that fits a single 24&nbsp;GB card</strong>, which
+    changes what on-premise drawing vision costs from pence-per-call to nothing.
+  </p>
+  <p class="lede" style="margin-top:12px;">
+    <strong>On sourcing.</strong> Entries marked <span class="conf c-vendor">Vendor</span> come from the
+    vendor's own documentation. Entries marked <span class="conf c-second">Secondary</span> come from
+    third-party write-ups and should be confirmed against vendor pricing pages before anything is committed —
+    figures in this class move, and several of the August pricing numbers are introductory rates with end dates.
+  </p>
+
+  <!-- ══════════════ THE MONTH IN ONE SCREEN ══════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>The month in one screen</h2>
+    <p>What shipped, and whether it changes anything for us</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Date</th><th>What</th><th>Who</th><th>Why it matters here</th><th>Verdict</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="endpoint">12 Aug</td>
+          <td class="name">Grok 4.6</td><td>xAI</td>
+          <td class="desc">Multimodal across text, image and audio; 500K context; built for long-running agents. Direct successor to the Grok line the engine already calls for drawing vision.</td>
+          <td><span class="chip chip-current">One-line swap</span></td>
+        </tr>
+        <tr>
+          <td class="endpoint">13 Aug</td>
+          <td class="name">Gemini 3.7 Flash</td><td>Google</td>
+          <td class="desc">Introductory $0.75/$3.75 per 1M to 31 Dec 2026, then $1.50/$7.50. Cheapest capable vision route for rasterised drawing pages.</td>
+          <td><span class="chip chip-try">Trial</span></td>
+        </tr>
+        <tr>
+          <td class="endpoint">14 Aug</td>
+          <td class="name">Qwen3.8-27B</td><td>Alibaba / Qwen</td>
+          <td class="desc">Apache-2.0, 27B dense, <strong>vision encoder</strong>, 262K native context. Runs 4-bit on a single 24&nbsp;GB card. No per-call cost, no drawings leaving the building.</td>
+          <td><span class="chip chip-local">Look at this</span></td>
+        </tr>
+        <tr>
+          <td class="endpoint">24 Jul</td>
+          <td class="name">Claude Opus 5</td><td>Anthropic</td>
+          <td class="desc">$5/$25 per 1M, 1M context, 128K output, effort toggle. Near-Fable-5 capability at half Fable's price. Already wired — <code>_call_anthropic_llm</code> exists.</td>
+          <td><span class="chip chip-live">Swap now</span></td>
+        </tr>
+        <tr>
+          <td class="endpoint">2026 SP1</td>
+          <td class="name">SOLIDWORKS LEO</td><td>Dassault</td>
+          <td class="desc">Agentic assistant in the Labs tab. Converts a 2D drawing or PDF into an editable parametric model; auto-generates drawings; rebuilds STEP/IGES as parametric parts.</td>
+          <td><span class="chip chip-explore">Check our seat</span></td>
+        </tr>
+        <tr>
+          <td class="endpoint">—</td>
+          <td class="name">GPT-5.7</td><td>OpenAI</td>
+          <td class="desc">Does not exist. GPT-5.6 (9 Jul) remains current; Luna became the ChatGPT free-tier default during August. Nothing to act on.</td>
+          <td><span class="chip chip-explore">No change</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ══════════════ THE LOCAL ONE ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--local);"></div>
+    <h2 style="color:var(--local);">The one that changes the shape of the problem — on-premise vision</h2>
+    <p><span class="chip chip-local">Qwen3.8-27B · Apache-2.0 · released 14 Aug 2026</span></p>
+  </div>
+
+  <div class="callout purple">
+    <h4>Why this is first and not buried under the frontier models</h4>
+    <p>Every drawing-vision call the engine makes today leaves the building and costs money per page.
+    That is a per-job cost, a per-job latency, and a standing question about sending customer drawings
+    to a third party. Qwen3.8-27B is the first open-weight model that plausibly removes all three at once:
+    <strong>Apache-2.0 licence, a built-in vision encoder, and small enough to run on one graphics card.</strong></p>
+    <p>SDI already runs its own tin. This is the kind of thing that fits how the business is set up, not
+    a subscription bolted onto it.</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card flag">
+      <div class="card-head"><span class="card-title">What it is</span><span class="conf c-second">Secondary</span></div>
+      <div class="card-tags">
+        <span class="tag">27–28B dense</span><span class="tag">Vision encoder</span>
+        <span class="tag">262K native context</span><span class="tag">Apache-2.0</span>
+      </div>
+      <p class="card-body">
+        Announced 3 August alongside Qwen3.8-Max, weights published 13–14 August on Hugging Face under
+        Apache&nbsp;2.0. A dense 27B model with hybrid attention and — the part that matters for us — a
+        <strong>vision encoder</strong>, so it reads images, not just text. Native 262K context, reported
+        extensible to 1M.
+        <br><br>
+        Reported benchmarks put it at 61.7 on SWE-bench Pro and 52 on the Artificial Analysis Intelligence
+        Index, a 14-point jump over Qwen3.6-27B. Simon Willison's write-up is positive but flags that it
+        <em>defaults to wildly overthinking things</em> — worth knowing before you measure latency.
+      </p>
+    </div>
+
+    <div class="card flag">
+      <div class="card-head"><span class="card-title">What it would take to run here</span></div>
+      <p class="card-body">
+        Full BF16 weights are around 55.6&nbsp;GB. <strong>Quantised to 4-bit it fits a 24&nbsp;GB card —
+        an RTX 3090 or 4090.</strong> Reported throughput on modest hardware: 24.5 tokens/sec on a Ryzen AI
+        Max+ 395, 51.8 tokens/sec on a Radeon AI PRO R9700 with 32&nbsp;GB.
+        <br><br>
+        That is one workstation-class card, not a server rack. Against the current estimating box — which
+        already needs a machine capable of running SOLIDWORKS COM — this is an incremental purchase rather
+        than a new class of infrastructure.
+      </p>
+    </div>
+
+    <div class="card flag">
+      <div class="card-head"><span class="card-title">Where it would slot into the engine</span></div>
+      <div class="card-tags"><span class="tag">Source rank 40</span><span class="tag">Drawing vision</span><span class="tag">Note scan</span></div>
+      <p class="card-body">
+        The price chain currently puts <strong>vision at rank 40</strong> — the weakest source, used to fill
+        gaps the deterministic readers leave. That is exactly the right place to trial a local model: the
+        arbitration already treats its output as low-confidence and will not let it override a DXF or a
+        title-block read.
+        <br><br>
+        <strong>The honest test:</strong> take the 10575-02 pack, run the same pages through the current
+        vision path and through a local Qwen3.8, and compare against the manual estimate. If it holds, the
+        per-job vision cost goes to zero and the drawings stop leaving the network. If it does not, we have
+        lost a day and learned the ceiling.
+      </p>
+      <p class="card-action">→ Next: one card, one afternoon, 10575-02 as the benchmark — before committing to anything</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">The caveats, stated plainly</span></div>
+      <p class="card-body">
+        <strong>Everything above is from secondary sources.</strong> Benchmark figures, quantised memory
+        footprints and throughput numbers all come from third-party write-ups, not from a vendor page.
+        Confirm against the official model card before buying hardware.
+        <br><br>
+        <strong>A 27B model is not Opus 5.</strong> It will be worse at ambiguous drawings, and the failure
+        mode of a local model is the same as a hosted one — a confident wrong answer. Rank 40 and the
+        credibility gate are what make trialling it safe.
+        <br><br>
+        <strong>Running your own inference is a job.</strong> Model updates, driver updates, and somebody
+        who owns it. That is a real cost against "no per-call fee", and on a team where one developer is
+        already the constraint it deserves saying out loud.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ══════════════ FRONTIER ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">Frontier models — what actually shipped</h2>
+    <p>Mid-August was the densest release window of the year</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Claude Opus 5</span><span class="chip chip-live">24 Jul 2026</span></div>
+      <div class="card-tags">
+        <span class="tag">$5 / $25 per 1M</span><span class="tag">1M context</span>
+        <span class="tag">128K output</span><span class="tag">Effort toggle</span>
+      </div>
+      <p class="card-body">
+        Anthropic's near-frontier model: roughly Fable-5-level capability at half Fable's price, same sticker
+        as Opus 4.8. API string <code>claude-opus-5</code>. 1M context both default and maximum; 128K output
+        in standard requests, up to 300K through the Batches API with a beta header.
+        <br><br>
+        The new thing is a <strong>low / medium / high effort toggle per request</strong> — you trade cost
+        against capability call by call rather than picking a model tier up front. For the engine that maps
+        cleanly: low effort for high-volume classification, high effort for the handful of parts that decide
+        whether an estimate is right.
+        <br><br>
+        <strong>Why this is the cheapest change on the page:</strong> <code>_call_anthropic_llm</code> already
+        exists in <code>web_ai_price_lookup.py</code> and the key is already configured. This is a model-string
+        change, not an integration.
+      </p>
+      <p class="card-action">→ Now: point the Anthropic path at claude-opus-5; re-run the determinism proof</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">Grok 4.6</span><span class="chip chip-current">12 Aug 2026</span></div>
+      <div class="card-tags">
+        <span class="tag">Multimodal: text · image · audio</span><span class="tag">500K context</span>
+        <span class="tag">Long-running agents</span>
+      </div>
+      <p class="card-body">
+        Direct successor on the line the engine already uses for drawing vision. Multimodal across text,
+        image and audio, 500K context, positioned for long-running agent work and reported around half the
+        price of rival frontier models.
+        <br><br>
+        Same API shape and auth as the Grok model already configured, so this is the other one-line change
+        available this month. <strong>Do the two swaps separately</strong> — changing the vision model and the
+        Anthropic model in the same run means a shifted number tells you nothing about which caused it.
+        <br><br>
+        <em>Unverified:</em> UK/EU API availability was an open question on the previous Grok release and has
+        not been re-confirmed here. Check console.x.ai before deploying.
+      </p>
+      <p class="card-action">→ Now: bump the xAI model string; re-run 10575-02 three times; confirm item counts hold</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">Gemini 3.7 Flash</span><span class="chip chip-try">13 Aug 2026</span></div>
+      <div class="card-tags">
+        <span class="tag">$0.75 / $3.75 intro</span><span class="tag">to 31 Dec 2026</span>
+        <span class="tag">then $1.50 / $7.50</span>
+      </div>
+      <p class="card-body">
+        Google cut 3.6 Flash to the same introductory rate when 3.7 launched, so both sit at $0.75/$3.75 per
+        1M until the end of the year and revert to $1.50/$7.50 after. 3.6 Flash (21 Jul) remains a listed
+        stable model — 1,048,576 input tokens, 65,536 output — and is the sensible target if you want a
+        version that will not move under you while testing.
+        <br><br>
+        The reason to care is unchanged from July: <strong>native image input</strong>. Rasterise a drawing
+        page at 300&nbsp;DPI, send it, ask for structured JSON. The model sees the drawn flat-pattern, the
+        dimension callouts and the fold arrows rather than inferring from vector paths.
+        <br><br>
+        <strong>Note the date.</strong> Introductory pricing to 31 December means any cost case built on
+        $0.75 needs a line saying what happens in January.
+      </p>
+      <p class="card-action">→ Compare head-to-head with local Qwen3.8 on the same pages before choosing a vision route</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">OpenAI — nothing new</span><span class="chip chip-explore">No action</span></div>
+      <p class="card-body">
+        <strong>There is no GPT-5.7.</strong> GPT-5.6 from 9 July remains current across Sol, Terra and Luna.
+        The only August movement was Luna becoming the ChatGPT free-tier default, which is a consumer change
+        and does not touch us.
+        <br><br>
+        Forecasters put Q3 2026 as the heaviest frontier release window of the year, with several launches
+        expected between mid-August and late September. Three have now landed. If OpenAI is in that group,
+        the next report is where it shows up.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ══════════════ CAD TOOLING ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--good);"></div>
+    <h2 style="color:var(--good);">CAD and design tooling — inside the licence we already hold</h2>
+    <p>SOLIDWORKS 2026 shipped three AI companions. One of them overlaps the roadmap directly.</p>
+  </div>
+
+  <div class="callout cyan">
+    <h4>F1 may already exist</h4>
+    <p>The technical design roadmap carries <strong>F1 · PDF → ASM/PRT reconstruction</strong> as
+    <em>POC pending</em>, with dates to be confirmed — rebuilding 3D parts and assemblies from PDF drawings,
+    described as the furthest-reaching item on the list.</p>
+    <p><strong>LEO does this today.</strong> It converts a 2D drawing or PDF into an editable parametric
+    model, and it is shipping in SOLIDWORKS 2026 SP1 through the SOLIDWORKS Labs tab in the Task Pane.
+    Before any work is scoped against F1, somebody should open that tab on a seat we already pay for and try
+    it on a real legacy drawing. If it works even partially, F1 changes from a build to an evaluation.</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">LEO — the engineer's companion</span><span class="conf c-vendor">Vendor</span></div>
+      <div class="card-tags"><span class="tag">SW2026 SP1 / FD01</span><span class="tag">Labs tab</span><span class="tag">Agentic</span></div>
+      <p class="card-body">
+        Reverse-engineers BREP bodies and 2D drawings into parametric models. Generates manufacturable parts
+        from sketch inputs. Builds assemblies from natural-language prompts. Auto-generates drawings — with
+        control over sheet sizes, drawing standards and which template to use. Sets up SIMULIA Abaqus
+        simulations from a prompt. Will attempt to rebuild a single-body STEP or IGES as an editable
+        parametric part.
+        <br><br>
+        <strong>Overlaps two roadmap items, not one.</strong> The PDF-to-parametric work is F1. The
+        drawing generation overlaps <strong>C3 · Drawing generation from ASM/PRT</strong>, which is already
+        POC-complete in-house and waiting on a licence. Worth understanding which of the two SDI would rather
+        own, because they are not both needed.
+      </p>
+      <p class="card-action">→ This week: open SOLIDWORKS Labs on an existing seat; try one legacy PDF; report back</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">AURA — and what it deliberately cannot do</span><span class="conf c-vendor">Vendor</span></div>
+      <p class="card-body">
+        AURA is the knowledge and governance companion — connects SOLIDWORKS users to company knowledge via
+        the 3DEXPERIENCE platform, and can explore and analyse web knowledge.
+        <br><br>
+        <strong>The important line for us:</strong> AURA <em>does not access your PDM or PLM vault data</em>
+        and does not retrieve engineering knowledge from your organisation's history. That is a direct answer
+        to a question the PDM phases would otherwise raise — Dassault's own AI is not going to read the vault
+        for you, so P3.1&ndash;P3.4 are not about to be made redundant by the tool vendor.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">MARIE — probably not for us</span><span class="conf c-vendor">Vendor</span></div>
+      <p class="card-body">
+        The scientific companion: materials science, hypothesis development, microbiology, chemistry,
+        laboratory analysis. Aimed at design validation with deeper scientific reasoning.
+        <br><br>
+        Recorded for completeness. Retail and hospitality display work does not obviously need a microbiology
+        companion, and nothing here suggests chasing it.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ══════════════ PDM BUILD NOTES ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--warn);"></div>
+    <h2 style="color:var(--warn);">Build notes for the in-house PDM</h2>
+    <p>P3.1 starts 8 September. One known problem is worth designing around now, not in October.</p>
+  </div>
+
+  <div class="callout">
+    <h4>SolidWorks files churn at the binary level — every open and save</h4>
+    <p>The single most repeated warning in the CAD-version-control literature is this:
+    <strong>a SOLIDWORKS assembly changes at the binary level every time it is opened and saved, even if
+    nothing was moved.</strong></p>
+    <p>For a PDM built on GitLab and LFS that has a direct consequence. Every open-and-close produces a new
+    LFS object of full file size, with no meaningful diff. Storage grows with <em>activity</em> rather than
+    with <em>change</em>, and history fills with revisions that record nothing. On a vault of assemblies that
+    compounds quickly.</p>
+    <p><strong>This is a design question for P3.1, not a defect.</strong> It is answerable — content-hash the
+    meaningful payload rather than the file, or gate commits on an explicit check-in rather than on save, or
+    prune unreferenced LFS objects on a schedule. But it is far cheaper to answer in the MVP than to retrofit
+    once there is a year of vault history.</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Prior art worth an hour</span><span class="conf c-second">Secondary</span></div>
+      <p class="card-body">
+        Not as alternatives to building — the in-house decision is made — but because each has met the same
+        problems and their documentation says how they landed:
+        <ul class="pl">
+          <li><strong>Anchorpoint</strong> — Git plus LFS positioned explicitly as a lightweight SOLIDWORKS
+          PDM alternative for smaller teams. Closest thing to the architecture P3.1 describes.</li>
+          <li><strong>DocDokuPLM</strong> and <strong>openPLM</strong> — open-source PLM. Heavier than needed,
+          but their data models are worth reading before designing ours.</li>
+          <li><strong>lakeFS</strong>, <strong>git-annex</strong>, <strong>ArtiVC</strong> — large-file
+          versioning approaches other than Git LFS, if the churn problem above bites harder than expected.</li>
+          <li><strong>SVN with TortoiseSVN</strong> — the old answer. Reliable, no CAD intelligence, manual
+          link management. Useful mainly as the baseline the new thing has to beat.</li>
+        </ul>
+      </p>
+      <p class="card-action">→ Before P3.1 development starts on 16 Sep: read how Anchorpoint handles binary churn</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">What this does not change</span></div>
+      <p class="card-body">
+        The case for building rather than buying is unchanged and is worth restating, because a landscape
+        report is exactly where somebody reasonably asks "why are we writing our own?".
+        <br><br>
+        The in-house PDM is being built with a <strong>Document Manager intelligence layer over
+        PostgreSQL</strong> — it knows what is inside the files, not just that they changed. Nothing on the
+        list above does that, and it is the part that feeds the estimating engine. A generic version-control
+        product would solve check-in and check-out and leave the reason we are doing this untouched.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ══════════════ ESTIMATING ADJACENT ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--cut);"></div>
+    <h2>Estimating-adjacent software — what the market has, and what it does not</h2>
+    <p>Worth knowing what exists before anyone asks why we built our own</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-head"><span class="card-title">The AI takeoff market</span><span class="conf c-second">Secondary</span></div>
+      <div class="card-tags"><span class="tag">Togal.AI</span><span class="tag">Quotr.ai</span><span class="tag">TheTakeoff.AI</span><span class="tag">Autodesk Takeoff</span></div>
+      <p class="card-body">
+        A real and maturing category: computer vision reading drawing sets and pulling priced quantities
+        automatically. Togal.AI classifies rooms and measures footprints from floor plans. Quotr.ai claims
+        95–99% vector accuracy feeding a live cost matrix. TheTakeoff.AI reads a full drawing set and pulls
+        line lists, valve counts, instrument counts. Autodesk Takeoff does quantities from 2D sheets and 3D
+        models inside Construction Cloud.
+        <br><br>
+        <strong>All of it is construction.</strong> Floor plans, rooms, valves, instruments — quantities from
+        architectural and MEP drawing sets. None of it does sheet-metal flat patterns, bend counts, weld
+        sequences, powder coverage by mass, or a five-tier price chain against a company's own historical
+        job corpus.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">What that tells us</span></div>
+      <p class="card-body">
+        Two things, and they point in opposite directions.
+        <br><br>
+        <strong>The approach is validated.</strong> Reading drawings with vision and producing priced
+        quantities is not speculative — there is a competitive market doing it at scale in an adjacent
+        industry. That is reassuring about the direction.
+        <br><br>
+        <strong>Nobody is coming to do ours.</strong> The gap between "measure a floor plan" and "cost a
+        laser-cut, folded, welded and powder-coated display unit against 1,982 historical jobs" is the whole
+        product. No vendor in that list is going to close it, which means the build-versus-buy question does
+        not really exist for us — but it also means the accuracy work is ours alone.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">Research worth tracking</span><span class="conf c-second">Secondary</span></div>
+      <p class="card-body">
+        Academic work on <strong>fine-tuned document-understanding transformers for parsing engineering
+        drawings into structured information</strong> is active and published. This is closer to our problem
+        than the construction takeoff vendors are — parsing a title block, a BOM table and a revision block
+        into fields is exactly what <code>extractor_patterns.py</code> does with regexes today.
+        <br><br>
+        Not an action. A direction: if the deterministic readers plateau, a small fine-tuned document model
+        over SDI's own drawing corpus is the route that does not depend on any vendor.
+      </p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <hr class="rule">
+
+  <!-- ══════════════ SOLIDWORKS MARKETPLACE ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--good);"></div>
+    <h2 style="color:var(--good);">The wider SOLIDWORKS marketplace — what is buyable rather than buildable</h2>
+    <p>Partner add-ins and native tools that overlap the technical design roadmap</p>
+  </div>
+
+  <div class="callout cyan">
+    <h4>An add-in already batch-exports DXF with bend lines</h4>
+    <p>The estimating engine's largest single source of inaccuracy is drawings arriving without flat
+    patterns. <strong>CADshift is a SOLIDWORKS add-in that batch-exports laser-ready DXF files with
+    bend lines, metadata and BOM quantities</strong> — which is the output C1 was built in-house to
+    produce.</p>
+    <p><strong>It does not dodge the licence problem.</strong> An add-in runs inside SOLIDWORKS and
+    needs a seat, exactly as C1 does. So this is not a way around the constraint. What it might be is
+    a way to stop <em>maintaining</em> that capability ourselves — the seat gets resolved once and
+    then the flat-pattern export is somebody else's product to keep working.</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tool</th><th>What it does</th><th>Overlaps</th><th>Worth a look?</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="name">CADshift</td>
+          <td class="desc">Batch DXF export with <strong>bend lines</strong>, metadata and BOM quantities. Laser-ready output from assemblies.</td>
+          <td class="desc">C1 · export-dxf</td>
+          <td><span class="chip chip-try">Yes — price it</span></td>
+        </tr>
+        <tr>
+          <td class="name">SOLIDWORKS Costing</td>
+          <td class="desc">Native. Model-based manufacturing cost estimates from the part geometry. Included, not an add-on purchase.</td>
+          <td class="desc">The estimating engine, partially</td>
+          <td><span class="chip chip-explore">Know what it does</span></td>
+        </tr>
+        <tr>
+          <td class="name">DriveWorksXpress</td>
+          <td class="desc">Native. Automates repetitive design tasks and product variants from rules.</td>
+          <td class="desc">Configurable display families</td>
+          <td><span class="chip chip-explore">Already own it</span></td>
+        </tr>
+        <tr>
+          <td class="name">BatchProcess</td>
+          <td class="desc">Export to 28+ formats — DXF, DWG, IGES, STEP — plus automatic printing and custom-property management.</td>
+          <td class="desc">C1 · export-package</td>
+          <td><span class="chip chip-explore">Comparator</span></td>
+        </tr>
+        <tr>
+          <td class="name">ToolXperts</td>
+          <td class="desc">DXF generation, drawing creation, BOM calculations and <strong>linear nesting</strong>.</td>
+          <td class="desc">C1, C3 · and Phase 4 nesting</td>
+          <td><span class="chip chip-explore">Comparator</span></td>
+        </tr>
+        <tr>
+          <td class="name">CAMWorks</td>
+          <td class="desc">Fully integrated CNC programming inside SOLIDWORKS.</td>
+          <td class="desc">Workstream 4 · CNC / G-code</td>
+          <td><span class="chip chip-try">Relevant later</span></td>
+        </tr>
+        <tr>
+          <td class="name">Xometry Add-In</td>
+          <td class="desc">Instant quotes and lead times without leaving CAD — for parts bought out rather than made.</td>
+          <td class="desc">Bought-in pricing</td>
+          <td><span class="chip chip-explore">Note only</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card-grid" style="margin-top:16px;">
+    <div class="card">
+      <div class="card-head"><span class="card-title">SOLIDWORKS Costing — worth understanding before anyone else finds it</span></div>
+      <p class="card-body">
+        Dassault ship a costing tool in the box. Somebody will eventually ask why SDI built an
+        estimating engine when SOLIDWORKS does costing, so it is worth having the answer ready.
+        <br><br>
+        SOLIDWORKS Costing prices <strong>one modelled part from its geometry against a rate
+        template</strong>. It needs a model. It does not read a PDF pack, does not resolve a
+        GA-to-sub-assembly-to-detail BOM tree, does not price against 1,982 historical SDI jobs,
+        does not carry a five-tier source waterfall with confidence per line, and does not mirror
+        the SDI estimating workbook to the cell.
+        <br><br>
+        <strong>It is a calculator; the engine is an estimator.</strong> Both true, and the
+        distinction only sounds defensive if it has not been said in advance.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">The honest read on buy-versus-build here</span></div>
+      <p class="card-body">
+        Nothing in this table replaces the estimating engine. Several things in it overlap
+        <strong>C1 and C3</strong>, which are POC-complete in-house and licence-blocked.
+        <br><br>
+        That is the interesting question, and it is Yogesh's to answer rather than mine: given four
+        finished tools waiting on a seat, is the flat-pattern export worth owning, or is it worth
+        buying so the effort goes to the parts nobody sells — the PDM, the DXF generation from a GA
+        where no model exists, and the estimating integration?
+        <br><br>
+        <em>Nobody sells that last one.</em> Which is roughly the argument for buying the first.
+      </p>
+      <p class="card-action">→ Worth 20 minutes with Yogesh before P2 development starts on 27 Aug</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- ══════════════ ENGINE TOOLING ══════════════ -->
+  <div class="section-label">
+    <div class="notch" style="background:var(--fold);"></div>
+    <h2 style="color:var(--fold);">Inside the estimating engine — the tooling layer</h2>
+    <p>Not models. The libraries and approaches the pipeline is built out of.</p>
+  </div>
+
+  <div class="card-grid">
+    <div class="card flag">
+      <div class="card-head"><span class="card-title">Paperless Parts — the closest thing to a competitor</span><span class="conf c-second">Secondary</span></div>
+      <div class="card-tags">
+        <span class="tag">62 geometric attributes</span><span class="tag">Sheet metal specific</span>
+        <span class="tag">$300–750 / month</span>
+      </div>
+      <p class="card-body">
+        Unlike the construction takeoff vendors, this one is <strong>actually in our industry</strong>.
+        It detects 62 geometric attributes from a 3D CAD model, unfolds parts to get dimensions and
+        thickness, and identifies cuts, bends, pierces, cut length and etchings as costing variables.
+        It quotes assemblies including underlying components and purchased hardware as a single line
+        rather than part by part. Growth tier $300/month, Professional $750/month.
+        <br><br>
+        <strong>Read that list again against our own faults.</strong> Bends, cut length, unfolding,
+        assemblies-with-bought-ins — that is the same problem space, solved commercially.
+        <br><br>
+        <strong>And here is why it does not solve ours.</strong> It prices <em>from a 3D CAD model</em>.
+        SDI's defining problem is the packs that arrive <em>without</em> models or flat patterns — which
+        is why F1 and C1 exist at all. And it prices against its own rate configuration, not against
+        1,982 historical SDI jobs, the UDEF anchor, PMA_TBL, or the SDI workbook it has to mirror to
+        the cell.
+        <br><br>
+        <em>Worth knowing it exists, and worth being able to say precisely why we are not buying it.</em>
+      </p>
+      <p class="card-action">→ No action. Ammunition for the question "why did we build this?"</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">Document AI has moved past pdfplumber</span><span class="conf c-second">Secondary</span></div>
+      <div class="card-tags"><span class="tag">Surya</span><span class="tag">LLMWhisperer</span><span class="tag">Camelot</span></div>
+      <p class="card-body">
+        The category now calls itself <strong>Agentic Document Processing</strong> — multimodal models
+        plus layout awareness plus semantic reconstruction, rather than rule-based parsing.
+        <br><br>
+        The distinction that matters to us: tools that <em>dump</em> table data versus tools that produce
+        <strong>structured, labelled</strong> output — knowing that one column holds part numbers,
+        another quantities, another unit prices. That is precisely what
+        <code>bom_table_extractor.py</code> is trying to do with rules.
+        <br><br>
+        <strong>The specific gap:</strong> pdfplumber and Camelot work well on digital PDFs with visible
+        borders and <em>fail on scanned documents and borderless tables</em>. Layout-model tools like
+        <strong>Surya</strong> and <strong>LLMWhisperer</strong> handle both. If any part of the
+        BOM-table extraction is imperfect on customer-supplied or scanned packs, that is the shape of
+        the fix — not a better regex.
+      </p>
+      <p class="card-action">→ When a BOM table reads badly, check first whether it is scanned or borderless</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-title">The architecture is already the recommended one</span><span class="chip chip-live">No change needed</span></div>
+      <p class="card-body">
+        The current best-practice advice for document extraction is a <strong>hybrid</strong>: rule-based
+        parsers for structured, predictable fields, and models reserved for free-form content and edge
+        cases where rigid rules fail.
+        <br><br>
+        <strong>That is the engine.</strong> Deterministic readers hold ranks 70–90, vision sits at rank
+        40 filling gaps, and the arbitration rule is fill-a-gap-always, replace-a-stronger-source-never.
+        <br><br>
+        Worth stating plainly because it is the sort of thing that gets questioned in a year when
+        somebody suggests replacing the readers with a model. The industry consensus is that this would
+        be the wrong move, and we already do the right one.
+      </p>
+    </div>
+  </div>
+
+  <!-- ══════════════ ACTIONS ══════════════ -->
+  <div class="section-label">
+    <div class="notch"></div>
+    <h2>What to actually do</h2>
+    <p>In order. Nothing here is more than a day's work.</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Action</th><th>Effort</th><th>Why now</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="endpoint">1</td>
+          <td class="name">Open SOLIDWORKS Labs, try LEO on a legacy PDF</td>
+          <td class="desc">An hour</td>
+          <td class="desc">F1 is on the roadmap as "POC pending". If LEO does it on a seat we already hold, that changes what gets built. Cheapest possible test of the most expensive roadmap item.</td>
+        </tr>
+        <tr>
+          <td class="endpoint">2</td>
+          <td class="name">Point the Anthropic path at <code>claude-opus-5</code></td>
+          <td class="desc">One line</td>
+          <td class="desc">Already wired, already keyed. Better instruction-following on the price fallback, and the effort toggle gives per-call cost control we do not have today.</td>
+        </tr>
+        <tr>
+          <td class="endpoint">3</td>
+          <td class="name">Bump the xAI model string to Grok 4.6</td>
+          <td class="desc">One line</td>
+          <td class="desc">Same API shape. Do it <em>after</em> action 2 has been measured, not alongside — two changes in one run tells you nothing.</td>
+        </tr>
+        <tr>
+          <td class="endpoint">4</td>
+          <td class="name">Read how Anchorpoint handles SolidWorks binary churn</td>
+          <td class="desc">An hour</td>
+          <td class="desc">P3.1 development starts 16 September. This is a storage-architecture decision that is cheap now and expensive in January.</td>
+        </tr>
+        <tr>
+          <td class="endpoint">5</td>
+          <td class="name">Price a 24&nbsp;GB card; benchmark Qwen3.8-27B on 10575-02</td>
+          <td class="desc">A day</td>
+          <td class="desc">The only item here that costs money. It is also the only one that could remove per-call vision cost permanently and keep customer drawings on the network.</td>
+        </tr>
+        <tr>
+          <td class="endpoint">6</td>
+          <td class="name">Price CADshift against keeping C1's DXF export in-house</td>
+          <td class="desc">20 minutes</td>
+          <td class="desc">A partner add-in already batch-exports laser-ready DXF with bend lines. It still needs a seat, so it is not a way round the licence &mdash; but it may mean not maintaining that half ourselves.</td>
+        </tr>
+        <tr>
+          <td class="endpoint">7</td>
+          <td class="name">Note the Gemini introductory pricing end date</td>
+          <td class="desc">Minutes</td>
+          <td class="desc">$0.75/$3.75 reverts to $1.50/$7.50 on 31 December 2026. Any cost case built on the intro rate needs a January line.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout" style="margin-top:24px;">
+    <h4>What is deliberately not in this report</h4>
+    <p>Nothing here proposes changing the engine's architecture, and nothing proposes replacing a
+    deterministic reader with a model. The price chain works because steps 1 to 6 are reproducible and step 7
+    is flagged; every item above either sits at rank 40 where it cannot override a stronger source, or is a
+    like-for-like model-string swap. <strong>The interesting technology this month does not change that
+    rule, and should not.</strong></p>
+  </div>
+
+</main>
+
+<footer>
+  <div><strong>SDI Intelligence — AI &amp; Technology Landscape, August 2026.</strong> Issued 26 August 2026 · James Gray.</div>
+  <div style="margin-top:8px;">
+    Compiled from web research on 26 August 2026. Vendor-sourced entries: solidworks.com (LEO, AURA, MARIE).
+    Secondary sources include llm-stats.com, aireleasetracker.com, simonwillison.net, benchlm.ai, codersera.com,
+    yottalabs.ai, hawkridgesys.com, goengineer.com, anchorpoint.app, cadshift.com, digitalapplied.com,
+    constructconnect.com and arxiv.org.
+  </div>
+  <div style="margin-top:8px;">
+    <strong>Figures marked Secondary are third-party reports and are not vendor-confirmed.</strong>
+    Model pricing and availability move quickly; confirm against the vendor's own pricing page before
+    committing spend or hardware. Introductory rates carry end dates.
+  </div>
+</footer>
+
+</body>
+</html>

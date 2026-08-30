@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+ 
+# Output data (VERY IMPORTANT) 
+output /
+*.json
+*.log
+*.txt
+
+# Input data ( optional but recommended )
+input/
+
+#PDFs and images (CRITICAL)
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# OS
+.DS_Store
+Thumbs.db
+
+output/
+*.bak
+*.xlsx
+
+*.sql

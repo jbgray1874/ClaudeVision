@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Intelligence — Worked Example</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a0b;--bg2:#0d0d0f;--surface:#121214;--surface2:#17171a;--line:#26262b;--ink:#f0efec;--dim:#9b9ba3;--faint:#6a6a72;--acc:#e8a33d;--ok:#4ec97f;--warn:#e8a33d;--fail:#e8544f;--info:#6da8e8;--disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;
+    --serif:'Spectral','Source Serif 4',Georgia,serif;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;padding:0 0 80px}
+.hdr{background:linear-gradient(135deg,#101013,#121214);border-bottom:2px solid var(--acc);padding:36px 60px 32px}
+.mark{width:38px;height:38px;background:var(--acc);border-radius:4px;display:grid;place-items:center;margin-bottom:14px}
+.mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:22px;letter-spacing:-1px}
+.hdr h1{font-family:var(--disp);font-weight:800;font-size:24px;letter-spacing:-.02em;margin-bottom:4px}
+.hdr .sub{color:var(--dim);font-size:13px}
+.body{max-width:960px;margin:0 auto;padding:44px 60px 0}
+h2{font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:.05em;color:var(--acc);text-transform:uppercase;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:15px;font-weight:600;margin:20px 0 8px}
+p{margin-bottom:12px;color:var(--dim)}
+p b{color:var(--ink)}
+ul,ol{margin:8px 0 14px 20px;color:var(--dim)}
+li{margin-bottom:6px}
+li b{color:var(--ink)}
+code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--acc)}
+.chip{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 8px;border-radius:100px;border:1px solid;vertical-align:middle;margin-left:4px}
+.c-ok{background:rgba(78,201,127,.12);color:var(--ok);border-color:rgba(78,201,127,.3)}
+.c-acc{background:rgba(232,163,61,.1);color:var(--acc);border-color:rgba(232,163,61,.3)}
+.c-warn{background:rgba(232,163,61,.12);color:var(--warn);border-color:rgba(232,163,61,.3)}
+.c-fail{background:rgba(232,84,79,.12);color:var(--fail);border-color:rgba(232,84,79,.3)}
+.c-info{background:rgba(109,168,232,.12);color:var(--info);border-color:rgba(109,168,232,.3)}
+.note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:0 6px 6px 0;padding:14px 18px;margin:16px 0;font-size:13.5px;color:var(--dim)}
+.note b{color:var(--ink)}
+.note.green{border-left-color:var(--ok)}
+.note.red{border-left-color:var(--fail)}
+.note.blue{border-left-color:var(--info)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:20px 22px;margin:16px 0}
+/* step flow */
+.steps{display:grid;grid-template-columns:40px 1fr;gap:0 16px;margin:16px 0}
+.step-num{width:40px;height:40px;background:var(--acc);border-radius:50%;display:grid;place-items:center;font-family:var(--disp);font-weight:800;color:#000;font-size:16px;margin-top:2px}
+.step-body{padding-bottom:28px;border-bottom:1px solid var(--line);margin-bottom:0}
+.steps > .step-body:last-child{border-bottom:none}
+/* parts table */
+.tbl{border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:16px 0}
+.tbl table{width:100%;border-collapse:collapse}
+.tbl th{background:var(--surface2);font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}
+.tbl td{padding:9px 12px;font-size:12.5px;color:var(--dim);border-bottom:1px solid var(--line);background:var(--surface);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl td b{color:var(--ink)}
+.tbl td.ok{color:var(--ok)}
+.tbl td.warn{color:var(--warn)}
+.tbl td.fail{color:var(--fail)}
+/* cost bar */
+.cost-bar{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0}
+.cost-cell{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+.cost-cell .lbl{font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--faint);text-transform:uppercase;margin-bottom:6px}
+.cost-cell .val{font-family:var(--disp);font-weight:700;font-size:20px;color:var(--ink)}
+.cost-cell .sub{font-size:11px;color:var(--faint);margin-top:3px}
+/* callout annotation */
+.callout{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:16px 18px;margin:12px 0;position:relative;padding-left:44px}
+.callout::before{content:attr(data-icon);position:absolute;left:14px;top:15px;font-size:18px}
+.callout .ttl{font-size:13.5px;font-weight:600;color:var(--ink);margin-bottom:4px}
+.callout .dsc{font-size:12.5px;color:var(--dim)}
+.footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:11px;color:var(--faint)}
+
+  /* we.are.sdi — served by /api/brand/logo from the SAME folder the client quote reads, so the
+     portal header and the customer's quotation can never show different marks. The logo stands on
+     its own; .mark is kept only as the fallback when the endpoint is unreachable (a page opened
+     off the share rather than through the portal). */
+  .brandlogo{height:28px;width:auto;max-width:132px;display:block;flex:none}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi">
+  <h1>SDI Intelligence — Worked Example</h1>
+  <div class="sub">How the engine processes a real job end to end &nbsp;·&nbsp; Flat-Pack Trestle &nbsp;·&nbsp; 11 June 2026</div>
+</div>
+<div class="body">
+
+<div class="note blue" style="margin-top:32px"><b>About this example:</b> This walks through a real engine run on an actual SDI job — a flat-pack trestle with mixed timber, mild steel and MDF parts. The engine produced a suppressed result on this job (44% credible) because only 7 of 17 parts have individual DXFs. That makes it an ideal example — it shows both what the engine gets right and exactly why and how it suppresses when it doesn't have enough information.</div>
+
+<!-- ── Step 1: Input ── -->
+<h2>Step 1 — What Goes In</h2>
+<p>The estimator (or James) points the engine at a job folder on the K: drive. The folder contains the SolidWorks drawing pack — a GA drawing plus individual part drawings, some as DXF flat patterns, some as PDFs only.</p>
+<div class="steps">
+  <div class="step-num">1</div>
+  <div class="step-body">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">Run the engine</div>
+    <code style="display:block;padding:10px 14px;border-radius:4px;font-size:12px;margin-bottom:8px">python -u main.py --search-root "K:\Estimating\Jobs\[job folder]" --folder-as-job</code>
+    <p>The engine scans every file in the folder — PDFs, DXFs, images. It identifies drawing files, matches parts to drawings, and builds a canonical JSON description of the job before any pricing happens.</p>
+  </div>
+  <div class="step-num">2</div>
+  <div class="step-body">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">What the engine found on this job</div>
+    <div class="tbl"><table>
+      <tr><th>File type</th><th>Count</th><th>What the engine did with them</th></tr>
+      <tr><td>DXF flat patterns</td><td><b>7</b></td><td>Exact geometry — cut lengths, fold lines, areas measured precisely</td></tr>
+      <tr><td>PDF drawings</td><td><b>10+</b></td><td>Dimensions extracted from text — less precise, inflation risk flagged</td></tr>
+      <tr><td>GA drawing</td><td><b>1</b></td><td>Job-level context — quantity, description, drawing number</td></tr>
+    </table></div>
+    <p><b>17 fabricated parts identified.</b> Only 7 have DXF files (41%). This is why the job suppresses — not enough precise geometry to produce a number the engine would stand behind.</p>
+  </div>
+</div>
+
+<!-- ── Step 2: Part classification ── -->
+<h2>Step 2 — How the Engine Classifies Each Part</h2>
+<p>Before any pricing, the engine must determine what each part is made of and how it is manufactured. It reads material and thickness from three sources in priority order: the DXF filename → the PDF drawing → inference from part number patterns.</p>
+
+<div class="tbl"><table>
+  <tr><th>Part</th><th>Description</th><th>Material decision</th><th>How decided</th><th>Confidence</th></tr>
+  <tr><td><b>01J</b></td><td>Table Top Assembly</td><td class="ok">TIMBER</td><td>✅ DXF filename: "PRE LAM MDF 19.6mm" — explicit</td><td class="ok">95%</td></tr>
+  <tr><td><b>02J</b></td><td>Lower Shelf Timber Panel</td><td class="ok">TIMBER</td><td>✅ DXF filename: "PRE LAM MDF 19.6mm" — explicit</td><td class="ok">95%</td></tr>
+  <tr><td><b>03M</b></td><td>Header Strike Plate</td><td class="ok">MILD STEEL</td><td>✅ Part number suffix '-M' → Mild Steel (SDI naming convention)</td><td class="ok">High</td></tr>
+  <tr><td><b>04M</b></td><td>Lower Shelf Stiffener</td><td class="ok">MILD STEEL</td><td>✅ DXF filename contains '_MS_' — explicit material token</td><td class="ok">High</td></tr>
+  <tr><td><b>05M</b></td><td>Top Frame Side Tube</td><td class="ok">MILD STEEL</td><td>✅ Part number suffix '-M' — but no DXF, so thickness unknown</td><td class="warn">Medium</td></tr>
+  <tr><td><b>101</b></td><td>Angled End Frame WA</td><td class="warn">TIMBER</td><td>⚡ AI inference — description mentions "frame", PDF context</td><td class="warn">Medium</td></tr>
+  <tr><td><b>102</b></td><td>Table Top ASM</td><td class="warn">TIMBER</td><td>⚡ AI inference — assembly, 8mm thickness from PDF</td><td class="warn">Medium</td></tr>
+  <tr><td><b>B-17</b></td><td>(MDF panel)</td><td class="ok">MDF</td><td>✅ Part number pattern — B-prefix = board/MDF at SDI</td><td class="ok">High</td></tr>
+</table></div>
+
+<div class="callout" data-icon="✅"><div class="ttl">What ✅ means — high confidence source</div><div class="dsc">The engine found explicit material information in the DXF filename or part number — a naming convention SDI uses consistently. These decisions are reliable.</div></div>
+<div class="callout" data-icon="⚡"><div class="ttl">What ⚡ means — AI inference</div><div class="dsc">No explicit token found. The engine inferred material from description text, drawing context or assembly structure. These are lower confidence and worth checking on the Decision Report.</div></div>
+<div class="callout" data-icon="⚠"><div class="ttl">What ⚠ means — data missing</div><div class="dsc">A required value (usually thickness) couldn't be determined. The engine uses a tolerance-table fallback. Flag for manual check if the part is high-cost.</div></div>
+
+<!-- ── Step 3: Pricing ── -->
+<h2>Step 3 — How Each Part Is Priced</h2>
+<p>With material and geometry known, the engine calculates cost in two parts: <b>material cost</b> (weight × rate or area × rate from the price book) and <b>labour cost</b> (operation × time × rate from the rate card).</p>
+
+<h3>Material cost — this job</h3>
+<div class="cost-bar">
+  <div class="cost-cell"><div class="lbl">Timber / MDF</div><div class="val">£108.35</div><div class="sub">7 parts · CNC-routed panels</div></div>
+  <div class="cost-cell"><div class="lbl">Mild Steel</div><div class="val">£89.05</div><div class="sub">8 parts · laser cut + folded</div></div>
+  <div class="cost-cell"><div class="lbl">MDF</div><div class="val">£11.45</div><div class="sub">1 part · B-17 panel</div></div>
+</div>
+
+<h3>Labour cost — this job by department</h3>
+<div class="tbl"><table>
+  <tr><th>Department</th><th>Code</th><th>Minutes</th><th>Rate (£/hr)</th><th>Cost (£)</th><th>What it covers</th></tr>
+  <tr><td><b>Weld (CO2)</b></td><td>WELD</td><td>271.6</td><td>£41.77</td><td><b>£63.02</b></td><td>Welding on steel and timber frame assemblies — the biggest single labour line</td></tr>
+  <tr><td><b>CNC Route</b></td><td>CNC</td><td>172.7</td><td>£43.39</td><td><b>£41.62</b></td><td>Timber panel routing — B-17, shelf and frame assemblies</td></tr>
+  <tr><td><b>Laser (Metal)</b></td><td>LASM</td><td>51.3</td><td>£68.19</td><td><b>£19.45</b></td><td>Laser cutting on steel flat parts</td></tr>
+  <tr><td><b>Handle / Pack</b></td><td>PACM</td><td>40.8</td><td>£31.18</td><td><b>£7.14</b></td><td>Handling and assembly time — applied to every part</td></tr>
+  <tr><td><b>Diamond Polish</b></td><td>DPOL</td><td>69.9</td><td>£31.18</td><td><b>£12.28</b></td><td>Surface finishing on timber panels</td></tr>
+  <tr><td><b>Fold</b></td><td>FOLD</td><td>8.2</td><td>£31.29</td><td><b>£1.43</b></td><td>Folding on steel sheet parts</td></tr>
+  <tr><td><b>Powder Coat</b></td><td>P/C</td><td>1.5</td><td>£355.43</td><td><b>£3.02</b></td><td>Powder coating on steel parts — <span style="color:var(--warn)">note: throughput model pending wiring</span></td></tr>
+  <tr><td colspan="4" style="text-align:right;font-weight:600;color:var(--ink)">Total Labour</td><td><b>£151.29</b></td><td></td></tr>
+</table></div>
+
+<!-- ── Step 4: Suppression ── -->
+<h2>Step 4 — Why This Job Was Suppressed</h2>
+<p>The engine checks credibility before printing a headline total. On this job, only 7 of 17 parts have DXF flat patterns — 41% coverage. The threshold for a reliable estimate is ~60%. The engine suppresses and explains exactly why.</p>
+
+<div class="note red"><b>⚠ INSUFFICIENT DATA — PROVISIONAL, NOT FOR QUOTING</b><br><br>
+Credible: <b>44%</b> &nbsp;·&nbsp; Part DXFs: <b>7 / 17</b> fabricated parts &nbsp;·&nbsp; Provisional unit: £237.97 (suppressed)<br><br>
+The following parts have no individual DXF and may be inflated from PDF geometry:<br>
+<span style="font-family:var(--mono);font-size:11px;line-height:2;display:block;margin-top:8px">
+✗ 05M — TOP FRAME SIDE TUBE · £13.68 · no_part_dxf<br>
+✗ 08M — LH SLOPING LEG TUBE · £3.64 · no_part_dxf, pdf_geometry_inflation_suspected<br>
+✗ 09M — RH SLOPING LEG TUBE · £3.13 · no_part_dxf, pdf_geometry_inflation_suspected<br>
+✗ 101 — ANGLED END FRAME WA · £32.58 · no_part_dxf<br>
+✗ 102 — TABLE TOP ASM · £31.63 · no_part_dxf<br>
+✗ 103 — SHELF ASSEMBLY · £6.22 · no_part_dxf, pdf_geometry_inflation_suspected<br>
+✗ 104 — TOP FRAME WA · £6.22 · no_part_dxf, pdf_geometry_inflation_suspected<br>
+✗ 10M — ANGLED END FRAME TOP TUBE · £5.46 · no_part_dxf<br>
+✗ 11M — LOWER TIE TUBE · £2.59 · no_part_dxf, pdf_geometry_inflation_suspected<br>
+✗ B-17 — MDF PANEL · £11.45 · no_part_dxf, pdf_geometry_inflation_suspected
+</span>
+</div>
+
+<div class="callout" data-icon="💡"><div class="ttl">What to do with a suppressed result</div><div class="dsc">Request individual part DXFs from the drawing office for the parts listed above. Once those DXFs are added to the job folder and the engine is re-run, credibility will rise above 60% and the headline will be released. The parts that are already correct (the ✅ DXF-backed ones) do not need to be re-done.</div></div>
+
+<!-- ── Step 5: The workbook ── -->
+<h2>Step 5 — Reading the Output Workbook</h2>
+<p>The five-sheet workbook is the deliverable. Here is what to look at on each sheet and in what order.</p>
+
+<div class="tbl"><table>
+  <tr><th>Sheet</th><th>Open it when…</th><th>Key things to check</th></tr>
+  <tr><td><b>1. Estimate</b></td><td>First — always</td><td>Row 5: unit cost and quantity. Row 7: suppression banner (if present). Bottom: cost breakdown by material type. <b>If row 7 shows ⚠ INSUFFICIENT DATA, do not use the unit cost in row 5 for quoting.</b></td></tr>
+  <tr><td><b>2. Labour</b></td><td>When labour looks high or low</td><td>Department totals at the top — check weld time, CNC time, laser time feel right for the job complexity. Then the per-part per-operation detail below.</td></tr>
+  <tr><td><b>3. Material Price Break</b></td><td>When material cost looks wrong</td><td>Price per part, supplier, price date. Check bought-in items especially — Wanzl/UPC prices may need updating if the price date is old.</td></tr>
+  <tr><td><b>4. Decision Report</b></td><td>When anything looks wrong</td><td>The engine's reasoning — material, thickness, operations and WHY for every part. This is the first place to look when a number seems off. The confidence column and flags column tell you which parts to focus on.</td></tr>
+  <tr><td><b>5. AI Provenance</b></td><td>For audit / deep investigation</td><td>Full audit trail — geometry source, price source, rate source per part. Rate/source column (col N) shows exactly where each price came from: Config rate card / Price book / Historical RAG / ⚠ No price source.</td></tr>
+</table></div>
+
+<!-- ── Step 6: What the estimator does ── -->
+<h2>Step 6 — What the Estimator Does With It</h2>
+<p>The engine's output is a <b>starting point</b>, not a final answer. The estimator's job is to review it, correct what's wrong, and use their knowledge of SDI's capabilities and the customer's requirements to arrive at a quotable number.</p>
+<ol>
+  <li><b>Check the suppression banner first.</b> If suppressed — is the reason valid? If the job has DXFs you know exist, check the folder structure and re-run. If it's genuinely no-DXF, the engine is right to suppress.</li>
+  <li><b>Check the Decision Report for red flags.</b> Any part flagged ⚡ AI inference on material, or ⚠ on thickness, is worth a second look. Cross-check against the drawing title block.</li>
+  <li><b>Check the headline variance.</b> If the engine is within 15% of your manual estimate on a DXF-backed steel job — that's a pass. If it's outside 15%, use the Decision Report to find which line is driving the gap.</li>
+  <li><b>Log any corrections.</b> Part number, field, what the engine said, what it should be. Hand to James. The correction goes into the learning engine and fires automatically on future jobs.</li>
+</ol>
+
+<div class="note green"><b>Remember:</b> the engine knows what it doesn't know. A suppressed result is the engine being honest — it is not a failure. A confident wrong number would be far more dangerous. If the engine suppresses and the reason is valid, trust it and get the missing DXFs.</div>
+
+<div class="footer">
+  <span>SDI Intelligence · Worked Example · Flat-Pack Trestle · 11 June 2026</span>
+  <span>James Gray · AI &amp; Systems Controller · SDI Displays Ltd</span>
+</div>
+</div>
+</body>
+</html>

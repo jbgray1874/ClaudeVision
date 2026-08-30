@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Programme Status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────────────────────
+   Palette borrowed from the thing itself: a drawing sheet. Pale blueprint
+   grey-blue ground, ink that is not quite black, hairline rules, and SDI's
+   amber used only where something needs pointing at.
+   ───────────────────────────────────────────────────────────────────────── */
+:root{
+  --paper:#eceff2; --sheet:#f7f9fa; --panel:#e3e8ec;
+  --ink:#14191d; --ink-2:#3f4a53; --ink-3:#6b7883;
+  --rule:#c2ccd4; --rule-soft:#d6dee4;
+  --blue:#1f4e79; --amber:#c47d12; --amber-wash:rgba(196,125,18,.10);
+  --good:#2c7a52; --good-wash:rgba(44,122,82,.10);
+  --warn:#9a5f05; --warn-wash:rgba(154,95,5,.11);
+  --crit:#a33232; --crit-wash:rgba(163,50,50,.10);
+  --violet:#6b4fa8; --violet-wash:rgba(107,79,168,.10);
+  --shadow:0 1px 2px rgba(20,25,29,.06),0 8px 28px rgba(20,25,29,.07);
+  --disp:"Barlow Condensed",-apple-system,"Segoe UI",sans-serif;
+  --body:"Source Sans 3",-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#12171b; --sheet:#1a2026; --panel:#222a31;
+    --ink:#e6ecf1; --ink-2:#aab8c3; --ink-3:#7d8b97;
+    --rule:#333f49; --rule-soft:#2a343d;
+    --blue:#7fb0dd; --amber:#e8a33d; --amber-wash:rgba(232,163,61,.12);
+    --good:#5cc98a; --good-wash:rgba(92,201,138,.12);
+    --warn:#dfa03a; --warn-wash:rgba(223,160,58,.13);
+    --crit:#e07272; --crit-wash:rgba(224,114,114,.12);
+    --violet:#a78bfa; --violet-wash:rgba(167,139,250,.12);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 34px rgba(0,0,0,.34);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12171b; --sheet:#1a2026; --panel:#222a31;
+  --ink:#e6ecf1; --ink-2:#aab8c3; --ink-3:#7d8b97;
+  --rule:#333f49; --rule-soft:#2a343d;
+  --blue:#7fb0dd; --amber:#e8a33d; --amber-wash:rgba(232,163,61,.12);
+  --good:#5cc98a; --good-wash:rgba(92,201,138,.12);
+  --warn:#dfa03a; --warn-wash:rgba(223,160,58,.13);
+  --crit:#e07272; --crit-wash:rgba(224,114,114,.12);
+  --violet:#a78bfa; --violet-wash:rgba(167,139,250,.12);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 34px rgba(0,0,0,.34);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);
+     font-size:16.5px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:940px;margin:0 auto;padding:34px 22px 90px}
+
+.sheet{background:var(--sheet);border:1.5px solid var(--rule);box-shadow:var(--shadow)}
+.titleblock{display:grid;grid-template-columns:1fr auto;gap:26px;align-items:end;
+            padding:26px 28px 20px;border-bottom:1.5px solid var(--rule)}
+.eyebrow{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.16em;
+         text-transform:uppercase;color:var(--amber);margin-bottom:9px}
+h1{font-family:var(--disp);font-weight:700;font-size:clamp(34px,6.2vw,52px);line-height:1.02;
+   letter-spacing:-.005em;margin:0;text-wrap:balance}
+h1 span{display:block;color:var(--ink-3);font-weight:600;font-size:.52em;letter-spacing:.02em;margin-top:7px}
+.stamp{font-family:var(--mono);font-size:11.5px;line-height:1.85;color:var(--ink-2);
+       text-align:right;white-space:nowrap}
+.stamp b{color:var(--ink);font-weight:600}
+.lede{padding:20px 28px 24px;border-bottom:1.5px solid var(--rule);font-size:17.5px;
+      color:var(--ink-2);max-width:68ch}
+.lede b{color:var(--ink);font-weight:600}
+
+.tablewrap{overflow-x:auto}
+table.rev{width:100%;border-collapse:collapse;font-size:14.5px;font-variant-numeric:tabular-nums}
+table.rev th{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+             text-transform:uppercase;color:var(--ink-3);text-align:left;padding:11px 16px;
+             border-bottom:1.5px solid var(--rule);background:var(--panel);white-space:nowrap}
+table.rev td{padding:11px 16px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+table.rev tr:last-child td{border-bottom:none}
+table.rev td.ref{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);white-space:nowrap}
+table.rev td.who{color:var(--ink-2);white-space:nowrap}
+table.rev.phases td{font-size:14.5px}
+table.rev.phases td.bold{color:var(--ink);font-weight:600;font-size:13px}
+
+section{margin-top:40px}
+h2{font-family:var(--disp);font-weight:700;font-size:29px;line-height:1.12;letter-spacing:.004em;
+   margin:0 0 4px;padding-bottom:9px;border-bottom:1.5px solid var(--rule);display:flex;
+   align-items:baseline;gap:12px;text-wrap:balance}
+h2 .n{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.1em;
+      color:var(--amber);flex-shrink:0}
+.subhead{color:var(--ink-3);font-size:15px;margin:10px 0 20px;max-width:70ch}
+
+.item{background:var(--sheet);border:1px solid var(--rule-soft);border-left:3px solid var(--rule);
+      padding:16px 20px;margin-bottom:12px}
+.item.hi{border-left-color:var(--amber)}
+.item.ok{border-left-color:var(--good)}
+.item h3{font-family:var(--body);font-weight:700;font-size:16.5px;margin:0 0 5px;color:var(--ink);
+         text-wrap:balance}
+.item p{margin:0;color:var(--ink-2);font-size:15.5px}
+.item p+p{margin-top:9px}
+.item .why{margin-top:10px;padding-top:9px;border-top:1px dashed var(--rule-soft);
+           font-size:14.5px;color:var(--ink-3)}
+.item .why b{color:var(--ink-2);font-weight:600}
+
+code{font-family:var(--mono);font-size:.87em;background:var(--panel);padding:1px 5px;
+     border-radius:2px;color:var(--ink)}
+
+.pill{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;
+      letter-spacing:.1em;text-transform:uppercase;padding:2.5px 8px;border-radius:2px;
+      vertical-align:2px;margin-left:8px;white-space:nowrap}
+.p-new{background:var(--amber-wash);color:var(--amber);border:1px solid var(--amber)}
+.p-fix{background:var(--good-wash);color:var(--good);border:1px solid var(--good)}
+.p-open{background:var(--warn-wash);color:var(--warn);border:1px solid var(--warn)}
+.p-stop{background:var(--crit-wash);color:var(--crit);border:1px solid var(--crit)}
+.p-prog{background:var(--amber-wash);color:var(--amber);border:1px solid var(--amber);margin-left:0}
+.p-plan{background:var(--panel);color:var(--ink-3);border:1px solid var(--rule);margin-left:0}
+.p-done{background:var(--good-wash);color:var(--good);border:1px solid var(--good);margin-left:0}
+.item h3 .pill,.callout h3 .pill{vertical-align:2px}
+
+.callout{border:1px solid var(--rule);border-left:3px solid var(--amber);background:var(--amber-wash);
+         padding:16px 20px;margin:20px 0}
+.callout.warnbox{border-left-color:var(--warn);background:var(--warn-wash)}
+.callout.goodbox{border-left-color:var(--good);background:var(--good-wash)}
+.callout.plainbox{border-left-color:var(--ink-3);background:var(--panel)}
+.callout h3{font-family:var(--body);font-weight:700;font-size:16px;margin:0 0 6px}
+.callout p{margin:0;color:var(--ink-2);font-size:15.5px}
+.callout p+p{margin-top:9px}
+
+ul.plain{margin:10px 0 0;padding-left:20px;color:var(--ink-2);font-size:15.5px}
+ul.plain li{margin:5px 0}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.dim{color:var(--ink-3);font-size:13px}
+.minihead{font-family:var(--disp);font-weight:600;font-size:21px;letter-spacing:.01em;
+          margin:30px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--rule-soft);color:var(--ink-2)}
+
+/* ── Workstream banner ────────────────────────────────────────────────── */
+.wsband{display:flex;align-items:center;gap:22px;flex-wrap:wrap;background:var(--panel);
+        border:1px solid var(--rule);border-left:4px solid var(--blue);padding:13px 18px;margin:22px 0 18px}
+.wsband.w2{border-left-color:var(--amber)}
+.wsband.w3{border-left-color:var(--violet)}
+.wsband .k{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.15em;
+           text-transform:uppercase;color:var(--ink-3)}
+.wsband .v{font-family:var(--disp);font-weight:700;font-size:21px;line-height:1.1}
+.wsband .r{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);text-align:right}
+.wsband .r b{color:var(--ink)}
+
+.contents{display:flex;flex-direction:column;gap:1px;background:var(--rule-soft);
+          border:1.5px solid var(--rule);margin-top:26px}
+.ctitle{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+        text-transform:uppercase;color:var(--ink-3);background:var(--panel);padding:11px 18px}
+.contents a{display:flex;align-items:baseline;gap:12px;background:var(--sheet);padding:11px 18px;
+            color:var(--ink-2);text-decoration:none;font-size:15.5px}
+.contents a b{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.1em;
+              color:var(--ink-3);flex-shrink:0}
+.contents a:hover{background:var(--panel);color:var(--ink)}
+.contents a.feature{color:var(--ink);font-weight:600;box-shadow:inset 3px 0 0 var(--amber)}
+.contents a.feature b{color:var(--amber)}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+/* ── Gantt ────────────────────────────────────────────────────────────── */
+.gantt-frame{background:var(--sheet);border:1.5px solid var(--rule);padding:20px 22px 16px;margin:22px 0}
+.gantt-title{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+             text-transform:uppercase;color:var(--ink-3);margin-bottom:20px}
+.gantt-scroll{overflow-x:auto}
+.gantt{position:relative;min-width:600px;padding-top:20px;padding-bottom:20px}
+.months{position:absolute;top:0;left:186px;right:44px;height:16px}
+.months span{position:absolute;font-family:var(--mono);font-size:10px;font-weight:600;
+             letter-spacing:.1em;color:var(--ink-3);transform:translateX(-2px)}
+.gridlines{position:absolute;top:18px;bottom:6px;left:186px;right:44px}
+.gridlines i{position:absolute;top:0;bottom:0;width:1px;background:var(--rule-soft)}
+.leaveband{position:absolute;top:0;bottom:0;
+  background:repeating-linear-gradient(45deg,var(--panel),var(--panel) 4px,transparent 4px,transparent 8px);
+  border-left:1px dashed var(--rule);border-right:1px dashed var(--rule)}
+.today{position:absolute;top:0;bottom:0;width:2px;background:var(--amber);z-index:3}
+.today span{position:absolute;bottom:-17px;left:50%;transform:translateX(-50%);font-family:var(--mono);
+            font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--amber);white-space:nowrap;
+            background:var(--sheet);padding:0 4px}
+.row{display:grid;grid-template-columns:186px 1fr 44px;align-items:center;height:32px;
+     position:relative;z-index:2}
+.lbl{font-size:12.5px;color:var(--ink-2);padding-right:14px;white-space:nowrap;overflow:hidden;
+     text-overflow:ellipsis}
+.lbl b{color:var(--ink);font-weight:600}
+.track{position:relative;height:100%}
+.bar{position:absolute;top:8px;height:16px;background:var(--blue);opacity:.55;border-radius:2px}
+.bar.pdm{background:var(--ink-3);opacity:.45}
+.bar.prog{background:var(--amber);opacity:.85}
+.bar.done{background:var(--good);opacity:.6}
+.bar.creative{background:var(--violet);opacity:.6}
+.bar.pend{background:transparent;border:1px solid var(--rule);opacity:1}
+.mile{position:absolute;top:9px;width:13px;height:13px;margin-left:-6.5px;background:var(--amber);
+      transform:rotate(45deg);border-radius:2px;z-index:4}
+.mile.creative{background:var(--violet)}
+.rowend{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink-3);
+        text-align:right;white-space:nowrap}
+.gsep{grid-column:1/-1;height:auto;display:block;font-family:var(--mono);font-size:9.5px;
+      font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3);
+      padding:14px 0 5px;position:relative;z-index:4}
+.gantt-key{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:16px;padding-top:13px;
+           border-top:1px solid var(--rule-soft);font-family:var(--mono);font-size:10px;
+           letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.gantt-key span{display:flex;align-items:center;gap:6px}
+.gantt-key i{width:16px;height:9px;border-radius:2px;flex-shrink:0}
+.k-prog{background:var(--amber);opacity:.85}
+.k-done{background:var(--good);opacity:.6}
+.k-dm{background:var(--blue);opacity:.55}
+.k-pdm{background:var(--ink-3);opacity:.45}
+.k-creative{background:var(--violet);opacity:.6}
+.k-pend{background:transparent;border:1px solid var(--rule)}
+.k-mile{background:var(--amber);width:9px;height:9px;transform:rotate(45deg);border-radius:1px}
+.k-leave{background:repeating-linear-gradient(45deg,var(--panel),var(--panel) 3px,transparent 3px,transparent 6px);
+         border:1px dashed var(--rule)}
+
+footer{margin-top:52px;padding-top:20px;border-top:1.5px solid var(--rule);font-family:var(--mono);
+       font-size:11.5px;line-height:1.9;color:var(--ink-3)}
+a{color:var(--blue);text-decoration-thickness:1px;text-underline-offset:2px}
+a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+
+@media (max-width:620px){
+  .titleblock{grid-template-columns:1fr;align-items:start;gap:16px}
+  .stamp{text-align:left}
+  .wrap{padding:22px 15px 60px}
+  .wsband .r{margin-left:0;text-align:left}
+}
+@media print{
+  body{background:#fff}
+  .wrap{max-width:none;padding:0}
+  section{break-inside:auto;page-break-inside:auto}
+  .item,.callout,.gantt-frame{break-inside:avoid;page-break-inside:avoid}
+  .contents{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="sheet">
+    <div class="titleblock">
+      <div>
+        <div class="eyebrow">Combined status report</div>
+        <h1>SDI Programme Status<span>Three workstreams · one calendar</span></h1>
+      </div>
+      <div class="stamp">
+        <div>ISSUED &nbsp;<b>27 AUG 2026</b></div>
+        <div>OWNERS &nbsp;<b>J. GRAY</b> &nbsp;·&nbsp; <b>Y. KUMAR</b> &nbsp;·&nbsp; <b>M. YAZIR</b></div>
+        <div>COMPILED BY &nbsp;<b>J. GRAY</b></div>
+      </div>
+    </div>
+
+    <div class="lede">
+      Status across <b>SDI Estimating Intelligence</b>, <b>SDI Technical Design Intelligence</b>
+      and <b>SDI Creative Design Intelligence</b> in one document. They run <b>in parallel, not
+      in sequence</b>, under three different owners, with no shared critical path — which is why
+      they had never been drawn against the same calendar until now, and why doing so is the
+      first thing in this report.
+    </div>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead>
+          <tr><th>Workstream</th><th>What it delivers</th><th>Owner</th><th>Next date</th><th>State</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ref">1 · ESTIMATING</td>
+            <td><b>SDI Estimating Intelligence</b><br><span class="dim">Drawings in, costed workbook out</span></td>
+            <td class="who">J. Gray</td>
+            <td class="ref bold">Sep / Oct 26</td>
+            <td><span class="pill p-prog">Parallel run</span></td>
+          </tr>
+          <tr>
+            <td class="ref">2 · TECH DESIGN</td>
+            <td><b>SDI Technical Design Intelligence</b><br><span class="dim">Document Manager tools, then an in-house PDM</span></td>
+            <td class="who">Y. Kumar</td>
+            <td class="ref bold">15 Sep 26</td>
+            <td><span class="pill p-prog">P1 · 60%</span></td>
+          </tr>
+          <tr>
+            <td class="ref">3 · CREATIVE</td>
+            <td><b>SDI Creative Design Intelligence</b><br><span class="dim">Drawing search, client briefing, print studio</span></td>
+            <td class="who">M. Yazir</td>
+            <td class="ref bold">25 Sep 26</td>
+            <td><span class="pill p-prog">50% · 25%</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <nav class="contents" aria-label="Contents">
+    <span class="ctitle">In this report</span>
+    <a href="#programme" class="feature"><b>01</b> The programme on one axis</a>
+    <a href="#w1"><b>02</b> Workstream 1 &mdash; SDI Estimating Intelligence</a>
+    <a href="#w2"><b>03</b> Workstream 2 &mdash; SDI Technical Design Intelligence</a>
+    <a href="#w3"><b>04</b> Workstream 3 &mdash; SDI Creative Design Intelligence</a>
+    <a href="#open"><b>05</b> Open across the programme</a>
+  </nav>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       01 — ONE AXIS. The reason this document exists. Three trackers,
+       three owners, three date formats, and no single place where they
+       were drawn against the same calendar. Bar positions are computed
+       from the tracker dates against a 1 Jul 26 – 31 Jan 27 span.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="programme"><span class="n">01</span> The programme on one axis</h2>
+    <p class="subhead">Three workstreams, three owners, one calendar.</p>
+
+    <div class="gantt-frame">
+      <div class="gantt-title">All workstreams · 1 Jul 2026 → 31 Jan 2027</div>
+      <div class="gantt-scroll">
+        <div class="gantt">
+          <div class="months" aria-hidden="true">
+            <span style="left:0%">JUL</span><span style="left:14.49%">AUG</span>
+            <span style="left:28.97%">SEP</span><span style="left:42.99%">OCT</span>
+            <span style="left:57.48%">NOV</span><span style="left:71.5%">DEC</span>
+            <span style="left:85.98%">JAN</span>
+          </div>
+          <div class="gridlines" aria-hidden="true">
+            <i style="left:14.49%"></i><i style="left:28.97%"></i><i style="left:42.99%"></i>
+            <i style="left:57.48%"></i><i style="left:71.5%"></i><i style="left:85.98%"></i>
+            <div class="leaveband" style="left:75.7%;width:11.68%"></div>
+            <div class="today" style="left:26.64%"><span>TODAY</span></div>
+          </div>
+
+          <div class="gsep" style="color:var(--blue)">Workstream 1 · Estimating · J. Gray</div>
+          <div class="row"><div class="lbl"><b>Parallel run</b> · Tim, Howard, Tony</div>
+            <div class="track"><div class="bar prog" style="left:0%;width:49.53%"></div></div>
+            <div class="rowend">SEP/OCT</div></div>
+
+          <div class="gsep" style="color:var(--amber)">Workstream 2 · Technical Design · Y. Kumar</div>
+          <div class="row"><div class="lbl">P1 &middot; Design files extraction</div>
+            <div class="track"><div class="bar prog" style="left:2.34%;width:33.18%"></div></div>
+            <div class="rowend">15 SEP</div></div>
+          <div class="row"><div class="lbl">P2 &middot; Production folder</div>
+            <div class="track"><div class="bar" style="left:25.7%;width:14.02%"></div></div>
+            <div class="rowend">24 SEP</div></div>
+          <div class="row"><div class="lbl">P3.1 &middot; PDM &mdash; MVP</div>
+            <div class="track"><div class="bar pdm" style="left:32.24%;width:23.83%"></div></div>
+            <div class="rowend">29 OCT</div></div>
+          <div class="row"><div class="lbl">P3.2 &middot; PDM &mdash; CAD-aware</div>
+            <div class="track"><div class="bar pdm" style="left:44.86%;width:20.56%"></div></div>
+            <div class="rowend">18 NOV</div></div>
+          <div class="row"><div class="lbl">P3.3 &middot; PDM &mdash; revisions</div>
+            <div class="track"><div class="bar pdm" style="left:57.94%;width:29.91%"></div></div>
+            <div class="rowend">5 JAN</div></div>
+          <div class="row"><div class="lbl">P3.4 &middot; PDM &mdash; release flows</div>
+            <div class="track"><div class="bar pdm" style="left:68.22%;width:23.83%"></div></div>
+            <div class="rowend">14 JAN</div></div>
+
+          <div class="gsep" style="color:var(--violet)">Workstream 3 · Creative Design · M. Yazir</div>
+          <div class="row"><div class="lbl"><b>Drawing Search</b> &middot; Fixture Library</div>
+            <div class="track"><div class="bar creative" style="left:0%;width:40.19%"></div>
+              <div class="mile creative" style="left:40.19%"></div></div>
+            <div class="rowend">25 SEP</div></div>
+          <div class="row"><div class="lbl"><b>Client Briefing</b> &middot; Stuart, Bec</div>
+            <div class="track"><div class="bar creative" style="left:11.21%;width:46.26%"></div>
+              <div class="mile creative" style="left:57.48%"></div></div>
+            <div class="rowend">NOV</div></div>
+          <div class="row"><div class="lbl">Image Upscaler &middot; print studio</div>
+            <div class="track"><div class="bar done" style="left:0%;width:14.02%"></div></div>
+            <div class="rowend">PAUSED</div></div>
+        </div>
+      </div>
+      <div class="gantt-key">
+        <span><i class="k-prog"></i>In progress</span>
+        <span><i class="k-done"></i>Delivered</span>
+        <span><i class="k-dm"></i>Document Manager tools</span>
+        <span><i class="k-pdm"></i>In-house PDM</span>
+        <span><i class="k-creative"></i>Creative design</span>
+        <span><i class="k-mile"></i>Go live</span>
+        <span><i class="k-leave"></i>Developer leave · 10 Dec – 4 Jan</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <h3>What one axis shows that three trackers did not</h3>
+      <p><b>Four go-lives inside five weeks.</b> Technical Design P1 on 15 Sep and P2 on 24 Sep,
+      Drawing Search on 25 Sep, and the estimating engine targeting September / October. Four
+      releases into the same business, from three owners who do not share a plan, inside the same
+      month — and two of them land on consecutive days.</p>
+      <p><b>The first go-live is not the one everybody is watching.</b> Drawing Search rolls out
+      on 25 Sep, ahead of the estimating engine that every status report leads with.</p>
+      <p><b>Nothing blocks anything</b> — worth stating plainly, because it is the good news. No
+      workstream waits on another, so a slip in one does not move the others. The exposure is not
+      dependency, it is <b>attention</b>: the same estimators and designers are the users for
+      more than one of these, and all four land at once.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       02 — WORKSTREAM 1
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="w1"><span class="n">02</span> Workstream 1 &mdash; SDI Estimating Intelligence</h2>
+
+    <div class="wsband">
+      <div><div class="k">Status</div><div class="v">Parallel run</div></div>
+      <div><div class="k">Owner</div><div class="v">J. Gray</div></div>
+      <div><div class="k">Users</div><div class="v">Tim · Howard · Tony</div></div>
+      <div class="r">TARGET GO-LIVE<br><b>SEPTEMBER / OCTOBER 2026</b><br>
+        <span class="dim">contingent on testing, adoption and holiday cover</span></div>
+    </div>
+
+    <p class="subhead">Deterministic cost-estimating engine — SolidWorks PDF and DXF drawings in,
+    a costed five-tab workbook out, mirroring the manual estimating workbook to the cell. All 80
+    workbook formulas reverse-engineered; a growing store of historical SDI jobs feeds comparables
+    on material, labour and operations.</p>
+
+    <h3 class="minihead">Where it is</h3>
+    <p class="subhead" style="margin-top:-4px">In parallel run. The engine produces the workbook;
+    the parity report compares it to the manually completed one cell by cell. What has changed
+    this period is mostly about <b>trust</b> — several things reported success when they had not
+    succeeded, and those now fail honestly.</p>
+
+    <div class="item hi">
+      <h3>A run that produces no workbook now says so<span class="pill p-fix">Fixed</span></h3>
+      <p>A job ran for sixteen minutes, reported <em>done</em>, and produced nothing. One missing
+      template file silently took out the estimate, the quote, the job report, the Decision Report
+      and the AI Provenance sheet at once, while the runner still reported success. The run now
+      fails with an explanation, and the template is checked <em>before</em> the run starts.</p>
+    </div>
+
+    <div class="item hi">
+      <h3>The parity report shows what it actually compared<span class="pill p-fix">Fixed</span></h3>
+      <p>The HTML report was not always written; where it was, the variance column was calculated
+      from a different pair of numbers than the difference column beside it. It is now written on
+      every run, and every figure comes from the same source as the figure next to it.</p>
+      <div class="why"><b>Three files per comparison, not two</b> — and the HTML one is the one
+      to read.</div>
+    </div>
+
+    <div class="item ok">
+      <h3>The price chain, stated as it is wired<span class="pill p-new">Documented</span></h3>
+      <p>Seven sources, strictly ordered, first hit wins — no scoring across sources.
+      <b>UDEF parts master</b> (exact code 0.95, fuzzy 0.82) → <b>ERP parts master</b> (purchased
+      items, 0.55–0.88) → <b>bought-in catalogue</b> → <b>historical comparables</b> → <b>supplier
+      catalogue</b> → <b>standard commodity</b> → <b>web / LLM</b> (capped 0.68).</p>
+      <p>The first six are reproducible; the seventh is not, which is why it is last and capped.
+      <b>A zero is never a price</b> at any step.</p>
+    </div>
+
+    <div class="item hi">
+      <h3>A category word was being used as a part code<span class="pill p-fix">Fixed</span></h3>
+      <p>Raised by Tim. He can find <code>FIXING41</code>, <code>FIXING513</code> and
+      <code>FIXING1122</code> in the parts master; he cannot find <code>FIXING</code>, because
+      that is the word for what the thing <em>is</em>. The engine was asking the catalogue for it
+      as though it were a code — which in the ERP parts master would have returned one price for
+      every generic fixing on every drawing, at the highest confidence the chain can express.
+      Class words are now refused as identifiers, and the line prices from its description.</p>
+    </div>
+
+    <div class="item ok">
+      <h3>Two things closed today<span class="pill p-fix">Done</span></h3>
+      <p><b>The SDILive password is rotated</b> and verified against the live catalogue, and the
+      credential is out of the source tree — it had been a literal in seventeen tracked files,
+      with the environment file itself tracked by git, so "put the new password in .env only"
+      would have committed it straight back into the same exposure.</p>
+      <p><b>A permanent SolidWorks seat is installed</b> on the estimating laptop. That unblocks
+      four finished tools in Workstream 2, including the DXF flat-pattern generation this engine
+      most needs — see below.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       03 — WORKSTREAM 2
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="w2"><span class="n">03</span> Workstream 2 &mdash; SDI Technical Design Intelligence</h2>
+
+    <div class="wsband w2">
+      <div><div class="k">Status</div><div class="v">P1 · 60%</div></div>
+      <div><div class="k">Owner</div><div class="v">Y. Kumar</div></div>
+      <div><div class="k">Resource</div><div class="v">Sole developer</div></div>
+      <div class="r">NEXT GO-LIVE<br><b>15 SEPTEMBER 2026</b><br>
+        <span class="dim">phases run in sequence, not in parallel</span></div>
+    </div>
+
+    <div class="callout">
+      <h3>What it is, in one paragraph</h3>
+      <p>Two threads. First the <b>Document Manager tools</b> — they read SolidWorks project data
+      without needing a SolidWorks seat, and pull the right drawing pack for a job straight into
+      the estimating app and into the shop-floor Production folder. Then an <b>SDI in-house
+      PDM</b>, in four phases, giving engineering proper file management, revision control and
+      release workflows.</p>
+      <p>This is <b>not</b> integration with the SOLIDWORKS PDM vault. SDI is building its own,
+      and the Document Manager tools read the live CAD share <em>read-only</em>. Getting that
+      wrong changes what the work is.</p>
+    </div>
+
+    <div class="tablewrap" style="margin-top:26px">
+      <table class="rev phases">
+        <thead>
+          <tr><th>Ref</th><th>Phase</th><th>What it gives you</th><th>Go-live</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="ref">P1</td>
+            <td><b>Design files extraction</b><br><span class="dim">Document Manager API</span></td>
+            <td>Pulls the correct drawing pack and manufacturing files for a job straight into the
+                estimating app. Serving the estimating app since 24 August.</td>
+            <td class="ref bold">15 Sep 26</td><td><span class="pill p-prog">60% done</span></td></tr>
+          <tr><td class="ref">P2</td>
+            <td><b>Production folder auto-extraction</b><br><span class="dim">Document Manager API</span></td>
+            <td>Collects the shop-floor drawing pack on its own. Picks the latest revision by
+                reading <em>inside</em> the file rather than trusting the filename, and reports
+                near-misses instead of guessing.</td>
+            <td class="ref bold">24 Sep 26</td><td><span class="pill p-plan">Not started</span></td></tr>
+          <tr><td class="ref">P3.1</td>
+            <td><b>PDM &mdash; trustworthy files</b><br><span class="dim">In-house, phase 1</span></td>
+            <td>Check-in and check-out, versioning, locking and history — so engineers can work on
+                the same job without treading on each other.</td>
+            <td class="ref bold">29 Oct 26</td><td><span class="pill p-plan">Not started</span></td></tr>
+          <tr><td class="ref">P3.2</td>
+            <td><b>PDM &mdash; CAD-aware</b><br><span class="dim">In-house, phase 2</span></td>
+            <td>The system understands how models link together: where a part is used, what
+                references are missing, whether versions are consistent.</td>
+            <td class="ref bold">18 Nov 26</td><td><span class="pill p-plan">Not started</span></td></tr>
+          <tr><td class="ref">P3.3</td>
+            <td><b>PDM &mdash; engineering revisions</b><br><span class="dim">In-house, phase 3</span></td>
+            <td>Revision control with approval: work in progress → pending approval → released,
+                not approved, or obsolete.</td>
+            <td class="ref bold">5 Jan 27</td><td><span class="pill p-plan">Not started</span></td></tr>
+          <tr><td class="ref">P3.4</td>
+            <td><b>PDM &mdash; release workflows</b><br><span class="dim">In-house, phase 4</span></td>
+            <td>Separate release routes for work in progress, prototype and production components.</td>
+            <td class="ref bold">14 Jan 27</td><td><span class="pill p-plan">Not started</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="subhead" style="margin-top:10px">Built on GitLab and LFS with a Document Manager
+    intelligence layer over PostgreSQL. Around 50 requirements captured from design, engineering
+    and directors; the register is still open.</p>
+
+    <div class="callout warnbox">
+      <h3>Why it runs into January, and it is not the amount of work</h3>
+      <p>There is <b>one developer</b>. Requirement collection, development, unit testing, peer
+      review, deployment and go-live are all hands-on and have to run one at a time — only user
+      testing overlaps, because users do that. Add leave from 10 December to 4 January and the
+      last two PDM phases land in the new year.</p>
+      <p>The dates are a capacity constraint, not an estimate of effort. If they need to come
+      forward, the lever is a second pair of hands, not a tighter plan.</p>
+    </div>
+
+    <div class="callout goodbox">
+      <h3>Four finished tools were held by a licence &mdash; the seat is now installed<span class="pill p-fix">Changed</span></h3>
+      <p>These were never planned work. They are <b>built and demoed to Ed Cooper and Ian B</b>,
+      and every one carried <em>go-live subject to SolidWorks licence</em>. A permanent seat is
+      now on the estimating laptop, so the constraint is lifted there; the remaining question is
+      which machines get a seat, not whether the tools can run.</p>
+      <ul class="plain">
+        <li><b>C1 · Multi-format export pack</b> — one click from a finished design to
+        <b>DXF flat patterns</b>, PDF and DWG drawings, STEP per part and IGES per body.</li>
+        <li><b>C2 · Design validation suite</b> — topple, weight, interference and cross-part hole
+        alignment in one pass. Topple checked on a live assembly at ~25.9°.</li>
+        <li><b>C3 · Drawing generation</b> — views, sheets, BOM and title block from a finished
+        model; designers add the critical dimensions.</li>
+        <li><b>C4 · Machine tolerance checks</b> — against the real TRUMPF tool list and SDI
+        standards. <span class="dim">Still in proof of concept.</span></li>
+      </ul>
+      <p><b>Why C1 matters most.</b> The estimating engine's single largest source of inaccuracy
+      is drawings arriving without flat patterns — with no DXF it has to infer geometry, and that
+      is where the wrong numbers come from. C1 generates them, and it works today.</p>
+    </div>
+
+    <h3 class="minihead">Behind the plan · research pipeline, no dates yet</h3>
+    <div class="grid2">
+      <div class="item">
+        <h3>PDF → 3D reconstruction<span class="pill p-plan">POC pending</span></h3>
+        <p>Rebuild SolidWorks parts and assemblies from PDF drawings — it would close the gap on
+        every legacy job that has drawings but no model.</p>
+      </div>
+      <div class="item">
+        <h3>BOM to Excel<span class="pill p-new">Quick win</span></h3>
+        <p>Export a bill of materials from any model or drawing using Ian's custom property spec,
+        normalised with anomalies flagged.</p>
+      </div>
+      <div class="item">
+        <h3>3DS Max automation<span class="pill p-plan">POC pending</span></h3>
+        <p>Drive 3DS Max through its API so the creative side feeds the same pipeline the
+        engineering side uses.</p>
+      </div>
+      <div class="item">
+        <h3>Electrical &amp; AV schematics<span class="pill p-plan">Concept</span></h3>
+        <p>Schematic layouts connecting power, cabling, LED strips, displays and drivers at the
+        top level of a job.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       04 — WORKSTREAM 3. Transcribed from the All Projects delivery
+       tracker. The tracker's own project names are kept alongside the SDI
+       service names so the two documents can be read side by side.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="w3"><span class="n">04</span> Workstream 3 &mdash; SDI Creative Design Intelligence</h2>
+
+    <div class="wsband w3">
+      <div><div class="k">Status</div><div class="v">In build</div></div>
+      <div><div class="k">Owner</div><div class="v">M. Yazir</div></div>
+      <div><div class="k">Projects</div><div class="v">2 live · 1 paused</div></div>
+      <div class="r">FIRST GO-LIVE<br><b>~25 SEPTEMBER 2026</b><br>
+        <span class="dim">the earliest in the whole programme</span></div>
+    </div>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead>
+          <tr><th>Service name</th><th>Tracker name</th><th>For</th><th>Start</th><th>Live</th><th>Done</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><b>SDI Drawing Search Intelligence</b></td><td class="ref">Fixture Library</td>
+            <td class="who">Ed, Stuart</td><td class="ref">1 Jul 26</td>
+            <td class="ref bold">~25 Sep 26</td><td><span class="pill p-prog">50%</span></td></tr>
+          <tr><td><b>SDI Client Briefing Intelligence</b></td><td class="ref">Client Briefing</td>
+            <td class="who">Stuart, Bec</td><td class="ref">31 Jul 26</td>
+            <td class="ref bold">~Nov 26</td><td><span class="pill p-prog">25%</span></td></tr>
+          <tr><td><b>Image Upscaler</b></td><td class="ref">Image Upscaler</td>
+            <td class="who">Sarah, Dean</td><td class="ref">1 Jul 26</td>
+            <td class="ref">Paused Aug 26</td><td><span class="pill p-plan">56%</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="gantt-frame">
+      <div class="gantt-title">Workstream 3 · phase detail · 1 Jul → 30 Nov 2026</div>
+      <div class="gantt-scroll">
+        <div class="gantt">
+          <div class="months" aria-hidden="true">
+            <span style="left:0%">JUL</span><span style="left:20.39%">AUG</span>
+            <span style="left:40.79%">SEP</span><span style="left:60.53%">OCT</span>
+            <span style="left:80.92%">NOV</span>
+          </div>
+          <div class="gridlines" aria-hidden="true">
+            <i style="left:20.39%"></i><i style="left:40.79%"></i>
+            <i style="left:60.53%"></i><i style="left:80.92%"></i>
+            <div class="today" style="left:37.5%"><span>TODAY</span></div>
+          </div>
+
+          <div class="gsep" style="color:var(--violet)">SDI Drawing Search Intelligence · Fixture Library</div>
+          <div class="row"><div class="lbl">01 &middot; Proof of concept</div>
+            <div class="track"><div class="bar done" style="left:0%;width:0.9%"></div></div>
+            <div class="rowend">1 JUL</div></div>
+          <div class="row"><div class="lbl">02 &middot; Development — round 1</div>
+            <div class="track"><div class="bar done" style="left:0.66%;width:19.08%"></div></div>
+            <div class="rowend">31 JUL</div></div>
+          <div class="row"><div class="lbl">03 &middot; Unit testing</div>
+            <div class="track"><div class="bar done" style="left:20.39%;width:0.9%"></div></div>
+            <div class="rowend">2 AUG</div></div>
+          <div class="row"><div class="lbl">04 &middot; Integration testing — 1</div>
+            <div class="track"><div class="bar done" style="left:21.71%;width:2.63%"></div></div>
+            <div class="rowend">7 AUG</div></div>
+          <div class="row"><div class="lbl">05 &middot; Development — round 2</div>
+            <div class="track"><div class="bar prog" style="left:40.79%;width:9.21%"></div></div>
+            <div class="rowend">15 SEP</div></div>
+          <div class="row"><div class="lbl">06 &middot; Integration testing — 2</div>
+            <div class="track"><div class="bar pend" style="left:50%;width:3.29%"></div></div>
+            <div class="rowend">20 SEP</div></div>
+          <div class="row"><div class="lbl">07 &middot; UAT &middot; studio designers</div>
+            <div class="track"><div class="bar pend" style="left:43.42%;width:13.16%"></div></div>
+            <div class="rowend">25 SEP</div></div>
+          <div class="row"><div class="lbl"><b>08 &middot; Go live</b> &middot; studio-wide</div>
+            <div class="track"><div class="mile creative" style="left:56.58%"></div></div>
+            <div class="rowend">25 SEP</div></div>
+
+          <div class="gsep" style="color:var(--violet)">SDI Client Briefing Intelligence · Client Briefing</div>
+          <div class="row"><div class="lbl">01 &middot; Proof of concept</div>
+            <div class="track"><div class="bar done" style="left:15.79%;width:3.95%"></div></div>
+            <div class="rowend">31 JUL</div></div>
+          <div class="row"><div class="lbl">02 &middot; Requirements gathering</div>
+            <div class="track"><div class="bar prog" style="left:26.32%;width:27.63%"></div></div>
+            <div class="rowend">21 SEP</div></div>
+          <div class="row"><div class="lbl">03 &middot; Development</div>
+            <div class="track"><div class="bar pend" style="left:56.58%;width:13.16%"></div></div>
+            <div class="rowend">15 OCT</div></div>
+          <div class="row"><div class="lbl">04 &middot; Unit &amp; integration test</div>
+            <div class="track"><div class="bar pend" style="left:69.74%;width:6.58%"></div></div>
+            <div class="rowend">25 OCT</div></div>
+          <div class="row"><div class="lbl">05 &middot; UAT</div>
+            <div class="track"><div class="bar pend" style="left:69.74%;width:9.87%"></div></div>
+            <div class="rowend">30 OCT</div></div>
+          <div class="row"><div class="lbl"><b>06 &middot; Go live</b> &middot; production</div>
+            <div class="track"><div class="mile creative" style="left:80.92%"></div></div>
+            <div class="rowend">NOV</div></div>
+        </div>
+      </div>
+      <div class="gantt-key">
+        <span><i class="k-done"></i>Done</span>
+        <span><i class="k-prog"></i>In progress</span>
+        <span><i class="k-pend"></i>Pending</span>
+        <span><i class="k-mile"></i>Go live</span>
+      </div>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>Three overlaps worth knowing about before they bite</h3>
+      <ul class="plain">
+        <li><b>Drawing Search — UAT starts before the build it is testing is finished.</b> UAT runs
+        5–25 Sep; development round 2 runs to 15 Sep and integration round 2 to 20 Sep. Studio
+        designers are on a build still being hardened, so early feedback may be against code that
+        changes underneath them.</li>
+        <li><b>Drawing Search — go-live is the day UAT ends.</b> ~25 Sep, nothing between sign-off
+        and studio-wide rollout. Anything found in the final week lands on the rollout date.</li>
+        <li><b>Client Briefing — four days between requirements sign-off and development.</b>
+        Requirements end 21 Sep, development starts 25 Sep, and the scope document has to be
+        agreed in between. The entire build is specified by it.</li>
+      </ul>
+      <p style="margin-top:11px">Client Briefing also runs unit &amp; integration testing (15–25
+      Oct) and UAT (15–30 Oct) concurrently rather than in sequence — a deliberate compression on
+      a client-facing release, worth knowing as the plan rather than discovering as a slip.</p>
+    </div>
+
+    <h3 class="minihead">SDI Drawing Search Intelligence &middot; phase detail</h3>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th>#</th><th>Phase</th><th>Start</th><th>End</th><th>Duration</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="ref">01</td><td><b>Proof of concept</b><br><span class="dim">Stakeholder validation</span></td><td class="ref">1 Jul 26</td><td class="ref">1 Jul 26</td><td>1 day</td><td><span class="pill p-done">Done</span></td><td>Prototype demoed to Ed &amp; Stuart. Green light received.</td></tr>
+          <tr><td class="ref">02</td><td><b>Development — round 1</b><br><span class="dim">Full build</span></td><td class="ref">2 Jul 26</td><td class="ref">31 Jul 26</td><td>4 weeks</td><td><span class="pill p-done">Done</span></td><td>CLIP search, PDF indexing, GPU support, Flask UI, scan cache.</td></tr>
+          <tr><td class="ref">03</td><td><b>Unit testing</b><br><span class="dim">Internal — developer</span></td><td class="ref">1 Aug 26</td><td class="ref">2 Aug 26</td><td>2 days</td><td><span class="pill p-done">Done</span></td><td>Search accuracy, edge cases, GPU fallback, network safety.</td></tr>
+          <tr><td class="ref">04</td><td><b>Integration testing — round 1</b><br><span class="dim">Live data test</span></td><td class="ref">3 Aug 26</td><td class="ref">7 Aug 26</td><td>5 days</td><td><span class="pill p-done">Done</span></td><td><b>Finding:</b> Renders folders not indexed. Image count incomplete (~162k of ~268k). Sent back to dev.</td></tr>
+          <tr><td class="ref">05</td><td><b>Development — round 2</b><br><span class="dim">Fixes &amp; hardening</span></td><td class="ref">1 Sep 26</td><td class="ref">15 Sep 26</td><td>2 weeks</td><td><span class="pill p-prog">In progress</span></td><td>Indexing ~446k remaining images (running). Wider rules, security review, user guide.</td></tr>
+          <tr><td class="ref">06</td><td><b>Integration testing — round 2</b><br><span class="dim">Re-test after fixes</span></td><td class="ref">15 Sep 26</td><td class="ref">20 Sep 26</td><td>5 days</td><td><span class="pill p-plan">Pending</span></td><td>Verify all ~268k images searchable. Confirm all 3 models accurate.</td></tr>
+          <tr><td class="ref">07</td><td><b>UAT</b><br><span class="dim">User acceptance testing</span></td><td class="ref">5 Sep 26</td><td class="ref">25 Sep 26</td><td>3 weeks</td><td><span class="pill p-plan">Pending</span></td><td>Studio designers test on real projects. Feedback + sign-off.</td></tr>
+          <tr><td class="ref">08</td><td><b>Go live</b><br><span class="dim">Studio-wide rollout</span></td><td class="ref bold">~25 Sep 26</td><td class="ref">—</td><td>—</td><td><span class="pill p-plan">Pending</span></td><td>IIS/nginx deploy. AD authentication, index copy to K: drive.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="item" style="margin-top:14px">
+      <h3>What it actually does, since the name does not say</h3>
+      <p>Image and drawing search for the design studio. <b>CLIP-based visual search</b> with PDF
+      indexing over roughly 268,000 images, GPU-accelerated with a CPU fallback, behind a Flask UI
+      with a scan cache. SDI has drawn the same bracket, the same shelf and the same plinth many
+      times over, and until now the only index of that was what a designer happened to remember.</p>
+      <p><b>It is not the estimating engine's description matching pointed at a different table.</b>
+      That scores word overlap between two pieces of text; this searches the <em>images</em>, which
+      is why it can find a fixture whose description never said what it looked like. The two may
+      meet later — a drawing found here carries a part code, and a part code is a key the price
+      chain already understands — but they are separate pieces of work today.</p>
+    </div>
+
+    <h3 class="minihead">SDI Client Briefing Intelligence &middot; phase detail</h3>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th>#</th><th>Phase</th><th>Start</th><th>End</th><th>Duration</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="ref">01</td><td><b>Proof of concept</b><br><span class="dim">Stakeholder approval</span></td><td class="ref">25 Jul 26</td><td class="ref">31 Jul 26</td><td>1 week</td><td><span class="pill p-done">Done</span></td><td>POC presented and approved by Stuart &amp; Bec. Proceed to full project.</td></tr>
+          <tr><td class="ref">02</td><td><b>Requirements gathering</b><br><span class="dim">Stuart's large job, needs detail</span></td><td class="ref">10 Aug 26</td><td class="ref">21 Sep 26</td><td>6 weeks</td><td><span class="pill p-prog">In progress</span></td><td>Detailed requirements sessions with Stuart. Scope doc — sign-off before dev.</td></tr>
+          <tr><td class="ref">03</td><td><b>Development</b><br><span class="dim">Full build</span></td><td class="ref">25 Sep 26</td><td class="ref">15 Oct 26</td><td>3 weeks</td><td><span class="pill p-plan">Pending</span></td><td>Build all features from approved requirements.</td></tr>
+          <tr><td class="ref">04</td><td><b>Unit &amp; integration testing</b><br><span class="dim">Developer-led</span></td><td class="ref">15 Oct 26</td><td class="ref">25 Oct 26</td><td>10 days</td><td><span class="pill p-plan">Pending</span></td><td>Unit + integration tests. Bug fixes. Test report.</td></tr>
+          <tr><td class="ref">05</td><td><b>UAT</b><br><span class="dim">User acceptance testing</span></td><td class="ref">15 Oct 26</td><td class="ref">30 Oct 26</td><td>2 weeks</td><td><span class="pill p-plan">Pending</span></td><td>Client/studio team tests on real scenarios. Sign-off from Stuart &amp; Bec.</td></tr>
+          <tr><td class="ref">06</td><td><b>Go live</b><br><span class="dim">Production release</span></td><td class="ref bold">~Nov 26</td><td class="ref">—</td><td>—</td><td><span class="pill p-plan">Pending</span></td><td>Deploy to production. Handover &amp; training if needed.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout plainbox">
+      <h3>Image Upscaler<span class="pill p-plan">Paused Aug 26 · 56%</span></h3>
+      <p>Print Studio — AI image upscaling and RGB→CMYK conversion (FOGRA39 ICC) for large-format
+      print. Proof of concept, full build, unit testing and stakeholder review all complete and
+      signed off; the colour bug found during build was fixed and <b>independently verified by
+      Sarah</b> before handover. Review recorded CMYK ✓, TIFF ✓, workflow praised.</p>
+      <p><b>Paused because other studio priorities took precedence, not because anything failed</b>
+      — and the CMYK conversion it produced remains in active daily use. Restartable when capacity
+      allows.</p>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>One date not taken as given</h3>
+      <p>The Client Briefing go-live has been described in passing as <b>November 2027</b>. The
+      tracker says <b>~Nov 2026</b>, and every date feeding it agrees — development ends 15 Oct 26
+      and UAT ends 30 Oct 26, so a 2027 release would leave a twelve-month gap after sign-off.
+      <b>2026 is used throughout this report.</b> If 2027 is a deliberate hold it wants saying,
+      because nothing else on the plan implies it.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="open"><span class="n">05</span> Open across the programme</h2>
+    <p class="subhead">Ordered by what it costs to leave alone. Recorded here rather than left to
+    be rediscovered.</p>
+
+    <div class="callout plainbox">
+      <h3>Read the balance of this list carefully</h3>
+      <p>Most of what follows sits on Workstream 1, and that is <b>not</b> a statement about which
+      workstream is in the best shape. It reflects how each is reported: Workstream 1 is reported
+      from its own source code, where a defect can be found by looking; Workstreams 2 and 3 are
+      reported from delivery trackers, which record phases and dates rather than faults. The two
+      are not comparable, and a workstream with fewer entries here has not been shown to have
+      fewer problems — only fewer that this method can see.</p>
+    </div>
+
+    <div class="item" style="border-left-color:var(--crit)">
+      <h3>A published API secret has never been rotated<span class="pill p-stop">Act</span></h3>
+      <p>The BrightHR client secret has been in the estimating repository's history since its
+      first commit in April, and the repository was public for four months. It is now private and
+      the environment files are untracked — <b>neither of those undoes history</b>. Anyone who has
+      ever cloned it still has the value. Rotating the credential is the only cure. The SDILive
+      database password has been rotated and verified; this one has not.</p>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>The new database password is not yet on the server<span class="pill p-open">Open</span></h3>
+      <p>The laptop runs on the rotated login, verified against the live catalogue. SDI-APP01's
+      two environment files still carry the old value and the service needs restarting after they
+      are updated. Worth checking the SQL error log for failed logins a day or two afterwards, to
+      find any consumer nobody remembered.</p>
+      <div class="why"><b>Workstream 1.</b> One trap: the password is pasted into an ODBC
+      connection string, where a semicolon ends the value and starts a new keyword — the server
+      then answers <em>"Login failed"</em>, which reads as the wrong password rather than an
+      unusable one. The engine now refuses such a password up front and names the character.</div>
+    </div>
+
+    <div class="item">
+      <h3>The server cannot report which build it is running<span class="pill p-open">Open</span></h3>
+      <p>The health check shows <code>commit: unknown</code> on SDI-APP01, and parity runs there
+      need one setting pointed at the right Python. A configuration script fixing both is written
+      and <b>not yet run on the server</b>. This is the one host where two portals can drift
+      apart, which is what the field exists to catch.</p>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Three costing faults on the Dyson pack<span class="pill p-open">Open</span></h3>
+      <ul class="plain">
+        <li><b>Cross-job contamination</b> — a fixing from an unrelated fragrance-cabinet job was
+        costed onto a Dyson estimate. <span class="dim">The test guarding this was found to be
+        vacuous and removed; the guard itself needs rebuilding.</span></li>
+        <li><b>Prose read as a part number</b> — a draughtsman's name and date in a title block was
+        read as a part, given a material from a revision note saying the panel had been
+        <em>removed</em>, and costed anyway.</li>
+        <li><b>Powder coating at £0.00</b> on a powder-coated job. <span class="dim">The rate is
+        settled — £9.73/kg, evidenced from the manual sheets on jobs 1303A and 1304; a second
+        £12.50 constant was traced and is dead code with no callers. What remains open is policy:
+        whether an unstated finish defaults to powder with a visible assumption flag, or is a
+        required estimator decision.</span></li>
+      </ul>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Two price sources are wired to tables that are empty<span class="pill p-open">Open</span></h3>
+      <p>Rung 3 of the price chain reads the bought-in catalogue where rows are active. A
+      migration moved that catalogue to a new table and set every migrated row inactive, so the
+      rung returns nothing — the successor holds 44 rows. And the table where a priced estimate is
+      meant to be saved <b>does not exist</b>: no run has ever recorded which source won a price.</p>
+      <div class="why"><b>Workstream 1.</b> Two small decisions: repoint rung 3 at the successor
+      table, and either create the results table or remove the save.</div>
+    </div>
+
+    <div class="item">
+      <h3>Size is not weighted in description matching<span class="pill p-open">Open</span></h3>
+      <p>Historical price matching scores word overlap and has no idea which word is the size, so
+      a wrong-size line of the same family can outscore the right part written with different
+      punctuation. Recorded as a deliberately failing test so it cannot be forgotten. Fixing it
+      changes matching for every priced line, so it wants doing on its own.</p>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Supplier price lists are not loaded<span class="pill p-open">Open</span></h3>
+      <p>The ingester is built and tested — it turns a supplier's spreadsheet into catalogue rows,
+      reads the unit from the column then the price heading then the description and says which of
+      the three it used, and refuses a file that is not a price list rather than half-parsing one.
+      It needs the actual files: <b>Elite</b> (Tim Allen), <b>Eagle</b> (Cameron) and
+      <b>Thermaset</b> (Donna).</p>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Drawing Search go-live has no buffer<span class="pill p-open">Open</span></h3>
+      <p>Studio-wide rollout on 25 Sep is the same day UAT ends, and UAT overlaps both remaining
+      build phases. This is a schedule shape rather than a defect, and it is the single most
+      likely place for the programme's first go-live to slip.</p>
+      <div class="why"><b>Workstream 3.</b> A decision for the owner, not a fix.</div>
+    </div>
+
+    <div class="item">
+      <h3>Workstream 2 has one developer and no cover<span class="pill p-open">Open</span></h3>
+      <p>Requirement collection, development, unit testing, peer review, deployment and go-live
+      are all hands-on and run one at a time; only user testing overlaps. Leave from 10 December
+      to 4 January sits inside the PDM phases. Every date from P3.1 onwards depends on one person
+      being available, and there is no second pair of hands to move work to.</p>
+      <div class="why"><b>Workstream 2.</b> A capacity constraint, not an estimate of effort —
+      which means it cannot be recovered by re-planning.</div>
+    </div>
+
+    <div class="item">
+      <h3>The PDM requirement register is still open<span class="pill p-open">Open</span></h3>
+      <p>Around 50 requirements have been captured from design, engineering and directors, and
+      the register has not been closed. The four PDM phases carry dates against a scope that can
+      still grow.</p>
+      <div class="why"><b>Workstream 2.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>The indexing finding has not yet been re-verified<span class="pill p-open">Open</span></h3>
+      <p>Integration testing round 1 found the Renders folders were not indexed — roughly 162,000
+      of 268,000 images. Round 2 (15–20 Sep) has to confirm all ~268,000 are searchable and all
+      three models accurate. Until it does, the 25 Sep go-live rests on a fix that has been made
+      but not yet proven, and it is the same test that caught the problem the first time.</p>
+      <div class="why"><b>Workstream 3.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Client Briefing is building to a document not yet signed<span class="pill p-open">Open</span></h3>
+      <p>Requirements gathering ends 21 September and development starts on the 25th. The scope
+      document has to be agreed in those four days, and the entire build is specified by it. A
+      week's delay in sign-off is a week off the front of a three-week build, not a week added
+      to the end.</p>
+      <div class="why"><b>Workstream 3.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Which machines get a SolidWorks seat<span class="pill p-open">Open</span></h3>
+      <p>The estimating laptop now has one, which lifts the constraint on C1–C4 there. Nothing has
+      been decided about the other machines — and it is the difference between four finished tools
+      running for one person and running for the department.</p>
+      <div class="why"><b>Workstreams 1 and 2.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>DWG drawings are silently ignored<span class="pill p-open">Parked</span></h3>
+      <p>No converter is configured, so a DWG in a pack contributes nothing and says nothing.
+      Parked deliberately, recorded so it is not rediscovered as a surprise.</p>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+  </section>
+
+  <footer>
+    SDI PROGRAMME STATUS · COMBINED REPORT · ISSUED 27 AUGUST 2026<br>
+    SOURCES · SDI INTELLIGENCE RELEASE NOTES · ALL PROJECTS DELIVERY TRACKER · PORTAL DASHBOARD<br>
+    ESTIMATING GO-LIVE TARGET · SEPTEMBER / OCTOBER 2026 — CONTINGENT ON TESTING, ADOPTION AND HOLIDAY-PERIOD COVER<br>
+    SDI DISPLAYS · LOUGHBOROUGH · WE.ARE.SDI
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# Test-only dependencies. Deliberately NOT in requirements.txt: the service and the
+# runner do not need them, and the estimating venv on a production machine should
+# carry what it runs, not what verifies it.
+#
+#   .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+#
+# pytest-randomly shuffles the order every run. It is here because 90 tests once
+# passed in one order and failed in another, through state one of them left behind
+# in sys.modules — a suite that only passes in collection order has not been run.
+pytest>=8.0
+pytest-randomly>=4.0
+
+# fastapi's TestClient needs httpx, and WITHOUT IT EVERY ROUTE TEST SKIPS. Fifteen of them did,
+# for long enough that one was still asserting a refusal the code had deliberately stopped
+# making — a test file for a guard that no longer existed, green because `importorskip` had
+# quietly turned the whole module off. A skip is not a pass, and a suite that reports 24 of them
+# is not saying so loudly enough to notice.
+httpx>=0.27

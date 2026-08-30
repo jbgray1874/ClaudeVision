@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Estimating Intelligence Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --panel:#121214; --line:#26262b; --ink:#f0efec; --muted:#9b9ba3;
+    --dim:#6a6a72; --brand:#e8a33d; --ok:#4ec97f; --info:#6da8e8; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+    --serif:'Spectral','Source Serif 4',Georgia,serif; --r:10px;
+  }
+  /* ── LIGHT MODE ──────────────────────────────────────────────────────────
+     Added so these two pages follow the same choice as the portal. They were
+     dark-only for the same reason it was — never asked — and they carried the
+     same defect: palette values written as literals INSIDE the stylesheet,
+     which no [data-theme] rule can reach. Those are tokens now.
+
+     THE PREFERENCE IS SHARED. Same localStorage keys as the portal
+     (sdi.view.theme / sdi.view.zoom), so choosing light on the dashboard and
+     clicking through to /estimating does not change the lights on you. Three
+     pages with three independent toggles would be worse than none.
+
+     No prefers-color-scheme here either — opt-in only, same reasoning. */
+  :root[data-theme="light"]{
+    --bg:#f4f4f2; --panel:#ffffff; --panel-2:#f7f7f5; --line:#d9d8d3;
+    --ink:#17171a; --muted:#5b5b63; --dim:#83838c;
+    --brand:#a9701a; --ok:#1f7a45; --info:#2b6cb0; --warn:#a9701a; --bad:#c0342f;
+    --tint:#00000008; --scrim:rgba(0,0,0,.42);
+  }
+  :root{color-scheme:dark}
+  :root[data-theme="light"]{color-scheme:light}
+
+  /* ── View controls · same component and same behaviour as the portal ──── */
+  .viewctl{display:flex;align-items:center;gap:8px;margin-left:auto;align-self:flex-end}
+  .vc-btn{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+          background:var(--panel-2,var(--panel));border:1px solid var(--line);border-radius:6px;
+          color:var(--muted);font-family:var(--body);font-size:11.5px;font-weight:600;
+          cursor:pointer;white-space:nowrap}
+  .vc-btn:hover{color:var(--ink);border-color:var(--dim)}
+  :root[data-theme="light"] .vc-btn .ic-sun{display:none}
+  :root[data-theme="light"] .vc-btn .ic-moon{display:block}
+  :root:not([data-theme="light"]) .vc-btn .ic-moon{display:none}
+  :root:not([data-theme="light"]) .vc-btn .ic-sun{display:block}
+  .vc-zoom{display:flex;align-items:center;gap:1px;height:28px;padding:0 7px;
+           background:var(--panel-2,var(--panel));border:1px solid var(--line);border-radius:6px;color:var(--dim)}
+  .vc-zoom svg{margin-right:4px;flex-shrink:0}
+  .vc-z{min-width:30px;height:20px;padding:0 4px;background:transparent;border:0;border-radius:2px;
+        color:var(--dim);font-family:var(--mono);font-size:10.5px;font-weight:600;cursor:pointer}
+  .vc-z:hover{color:var(--ink);background:var(--line)}
+  .vc-z[aria-pressed="true"]{background:var(--brand);color:var(--bg)}
+  .vc-btn:focus-visible,.vc-z:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+  @media (max-width:1180px){.vc-z{min-width:26px;font-size:10px;padding:0 2px}.vc-zoom{gap:0;padding:0 5px}}
+  @media (max-width:1040px){.vc-btn .vc-lbl{display:none}.vc-btn{padding:0 8px}}
+  @media (max-width:820px){.vc-zoom{display:none}}
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);line-height:1.55}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--brand);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:900;font-size:34px;margin:6px 0 8px}
+  h1 span{color:var(--brand)}
+  h2{font-family:var(--disp);font-weight:800;font-size:22px;margin:34px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+  h3{font-family:var(--disp);font-weight:700;font-size:16px;margin:22px 0 6px}
+  p{margin:8px 0}
+  .lead{color:var(--muted);font-size:15px;max-width:74ch}
+  .muted{color:var(--muted)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin:14px 0}
+  .panel.brand{border-left:3px solid var(--brand)}
+  .panel.warn{border-left:3px solid var(--warn)}
+  .panel.ok{border-left:3px solid var(--ok)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--disp);font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  td.k{white-space:nowrap;font-weight:600}
+  code,.mono{font-family:var(--mono);font-size:12.5px;background:#1e1e24;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#e8e7e2}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  .toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:18px 0 6px}
+  .toc a{display:block;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--brand);
+    border-radius:var(--r);padding:11px 13px;color:var(--ink);text-decoration:none}
+  .toc a:hover{border-color:var(--brand)}
+  .toc b{font-family:var(--disp);display:block;font-size:14px}
+  .toc span{color:var(--dim);font-size:12.5px}
+  .tag{font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap}
+  .tag.ok{color:var(--ok);border-color:#2c5340}.tag.warn{color:var(--warn);border-color:#5a4126}
+  .tag.bad{color:var(--bad);border-color:#5a2e2e}
+  .tag.info{color:var(--info);border-color:#2b4566}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--info)}
+  .cell{display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:-2px;margin-right:6px;border:1px solid #0006}
+</style>
+</head>
+<body>
+<!-- SDI-SIDEBAR:START -->
+
+<style id="sdi-sidebar-css">
+  /* The portal's own tokens are already defined on these pages, so this inherits the look. */
+  :root{ --sdinav-w:250px; }
+  body{ padding-left:var(--sdinav-w); }
+  /* ── COLLAPSED ────────────────────────────────────────────────────────────────────
+     The whole layout is already driven by --sdinav-w, so collapsing is one variable.
+     These items carry no icons -- unlike the portal's rail, which collapses to icons --
+     so there is nothing useful to show at 46px. It becomes a strip with the toggle on
+     it: the screen goes back to the form, and one click brings the menu back. */
+  body.nav-collapsed{ --sdinav-w:56px; }
+  body.nav-collapsed .sdinav-grp,
+  body.nav-collapsed .sdinav-item,
+  body.nav-collapsed .sdinav-brand span{ display:none; }
+  /* The word stays. An arrow alone asks the reader to work out which way it points and
+     what that does; "Expand" does not. Stacked under the chevron, because it will not sit
+     beside it at this width. */
+  body.nav-collapsed .sdinav-toggle{ flex-direction:column; gap:4px; font-size:9px;
+     letter-spacing:.08em; text-transform:uppercase; padding:10px 0 11px; }
+  body.nav-collapsed .sdinav-brand{ padding:14px 0; justify-content:center; }
+  body.nav-collapsed .sdinav-logo{ max-width:26px; }
+  .sdinav{ display:flex; flex-direction:column; }
+  .sdinav-body{ flex:1; }
+  .sdinav-toggle{
+    display:flex; align-items:center; gap:9px; width:100%;
+    padding:10px 16px; border:0; border-top:1px solid var(--line,var(--line));
+    background:transparent; color:var(--muted,var(--muted)); cursor:pointer;
+    font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
+    position:sticky; bottom:0; transition:.16s;
+  }
+  .sdinav-toggle:hover{ color:var(--ink,var(--ink)); background:var(--tint); }
+  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand,var(--brand)); outline-offset:-2px; }
+  body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
+  .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
+  body.nav-collapsed .sdinav-toggle .chev{ transform:rotate(180deg); }
+  /* LEFT-ALIGNED, not centred in what is left over. These pages centre their content with
+     margin:0 auto, which was fine full-width and wrong once a 250px rail took the left of the
+     screen: the content drifted toward the middle and sat away from the menu beside it. Keep the
+     measure (long lines are hard to read) and pin it to the left instead. */
+  .wrap{ margin-left:0 !important; margin-right:auto !important; }
+  .sdinav{
+    position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
+    background:var(--panel,var(--panel)); border-right:1px solid var(--line,var(--line));
+    z-index:900; padding-bottom:24px;
+  }
+  .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
+    text-decoration:none; color:inherit; }
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,var(--brand));
+    color:var(--bg); font-weight:900; font-size:17px; display:flex; align-items:center;
+    justify-content:center; font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); }
+  /* we.are.sdi, served by /api/brand/logo from the SAME folder the client quote reads. The
+     lettered .sdinav-mark above is only the fallback for a page opened off the share, where
+     there is no backend to ask. */
+  .sdinav-logo{ height:24px; width:auto; max-width:70px; display:block; flex:none; }
+  .sdinav-brand b{ font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); font-size:12.5px;
+    letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
+  .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
+    color:var(--dim,var(--dim)); display:block; }
+  .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--dim,var(--dim)); padding:16px 16px 6px; }
+  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,var(--muted));
+    text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
+  .sdinav a.sdinav-item:hover{ color:var(--ink,var(--ink)); background:var(--tint); }
+  .sdinav a.sdinav-item.is-here{ color:var(--ink,var(--ink)); border-left-color:var(--brand,var(--brand));
+    background:#ffffff0a; font-weight:600; }
+  @media (max-width:900px){
+    body{ padding-left:0; }
+    .sdinav{ position:static; width:auto; height:auto; border-right:0;
+      border-bottom:1px solid var(--line,var(--line)); }
+  }
+</style>
+
+<nav class="sdinav" aria-label="SDI Intelligence">
+  <a class="sdinav-brand" href="/">
+    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
+    <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
+  </a>
+  <div class="sdinav-body">
+  <div class="sdinav-grp">Overview</div>
+  <a class="sdinav-item" href="/#dashboard">Dashboard</a>
+  <div class="sdinav-grp">AI Services</div>
+  <a class="sdinav-item" href="/#aisvc">Overview</a>
+  <a class="sdinav-item" href="/#aisvc-estimating">SDI Estimating Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-technical-design">SDI Technical Design Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-drawing-search">SDI Drawing Search Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-client-briefing">SDI Client Briefing Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-brief">SDI Brief &amp; Concept Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-omniverse">SDI Immersive Design Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-dfm">SDI Design for Manufacture Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-scheduling">SDI Production Scheduling Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-manufacture">SDI Manufacture &amp; Robotics Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-inspection">SDI Quality Inspection Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-md-agent">SDI Chief of Staff Agent</a>
+  <a class="sdinav-item" href="/#aisvc-sales-agent">SDI Sales Agent</a>
+  <a class="sdinav-item" href="/#aisvc-design-agent">SDI Design Support Agent</a>
+  <a class="sdinav-item" href="/#aisvc-production-agent">SDI Production Control Agent</a>
+  <a class="sdinav-item" href="/#aisvc-finance-agent">SDI Finance Agent</a>
+  <a class="sdinav-item" href="/#aisvc-chatbots">SDI ChatBot Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-voice">SDI Voice Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-brighthr">SDI People Data Intelligence · BrightHR</a>
+  <a class="sdinav-item" href="/#aisvc-wearesdi">SDI Web Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-x3">SDI ERP Intelligence · Sage X3</a>
+  <a class="sdinav-item" href="/#aisvc-obs">SDI Recording Intelligence · OBS</a>
+  <a class="sdinav-item" href="/#aisvc-tech-radar">SDI Tech Radar Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-roadmap">SDI AI Roadmap</a>
+  <div class="sdinav-grp">Operate</div>
+  <a class="sdinav-item" href="/estimating">SDI Estimating Intelligence</a>
+  <a class="sdinav-item is-here" href="/guide">SDI Estimating Intelligence Guide</a>
+  <a class="sdinav-item" href="/#fixture-guide">SDI Drawing Search Intelligence Guide</a>
+  <a class="sdinav-item" href="/#tools">SDI Estimating Intelligence Tools</a>
+  <a class="sdinav-item" href="/#files">Files &amp; Directories</a>
+  <a class="sdinav-item" href="/#reports">Status Reports</a>
+  <a class="sdinav-item" href="/#golive">Go-Live Guide</a>
+  <a class="sdinav-item" href="/#testing">Testing</a>
+  <div class="sdinav-grp">Govern</div>
+  <a class="sdinav-item" href="/#architecture">SDI Estimating Intelligence Architecture</a>
+  <a class="sdinav-item" href="/#rnd">R&amp;D Capture</a>
+  <a class="sdinav-item" href="/#servers">Servers</a>
+  <a class="sdinav-item" href="/#programme">AI Programme</a>
+</div>
+<button class="sdinav-toggle" id="sdinav-toggle" type="button"
+        aria-label="Collapse the navigation" aria-expanded="true">
+  <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+  <span>Collapse</span>
+</button>
+</nav>
+<script>(function(){
+  var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
+  if(!t) return;
+  document.querySelectorAll(".sdinav-item").forEach(function(a){
+    var s=(a.textContent||"").trim(); if(s && !a.title) a.title=s; });
+  function set(on){
+    b.classList.toggle("nav-collapsed", on);
+    t.setAttribute("aria-expanded", String(!on));
+    t.setAttribute("aria-label", on ? "Expand the navigation" : "Collapse the navigation");
+    t.title = on ? "Expand the navigation" : "Collapse the navigation";
+    var l=t.querySelector("span"); if(l) l.textContent = on ? "Expand" : "Collapse";
+    try{ localStorage.setItem(K, on?"1":"0"); }catch(e){}
+  }
+  var start=false; try{ start = localStorage.getItem(K)==="1"; }catch(e){}
+  if(start) set(true);
+  t.addEventListener("click", function(){ set(!b.classList.contains("nav-collapsed")); });
+})();</script>
+<!-- SDI-SIDEBAR:END -->
+
+<div class="wrap">
+
+  <header style="display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;margin-bottom:4px">
+    <div style="flex:1">
+      <div class="kicker">SDI Intelligence</div>
+      <h1 style="margin-bottom:0">SDI Estimating Intelligence <span>Guide</span></h1>
+    </div>
+    <div class="viewctl">
+      <button type="button" id="theme-btn" class="vc-btn" aria-pressed="false" title="Switch between light and dark">
+        <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="ic-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 1.8v2.6M12 19.6v2.6M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M1.8 12h2.6M19.6 12h2.6M4.6 19.4l1.9-1.9M17.5 6.5l1.9-1.9"/></svg>
+        <span class="vc-lbl" id="theme-lbl">Light</span>
+      </button>
+      <div class="vc-zoom" role="group" aria-label="Page size">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3M8 11h6M11 8v6"/></svg>
+        <button type="button" class="vc-z" data-zoom="100" aria-pressed="true">100</button>
+        <button type="button" class="vc-z" data-zoom="125" aria-pressed="false">125</button>
+        <button type="button" class="vc-z" data-zoom="150" aria-pressed="false">150</button>
+        <button type="button" class="vc-z" data-zoom="175" aria-pressed="false">175</button>
+        <button type="button" class="vc-z" data-zoom="200" aria-pressed="false">200</button>
+      </div>
+    </div>
+  </header>
+  <p class="lead">What each deliverable is for, what the numbers on it mean, and what the engine
+  is asking you to decide. Every run produces the same set: a workbook you edit, two tabs that
+  explain it, and a report that tells you how much of it to trust.</p>
+
+  <div class="toc">
+    <a href="#start"><b>Start here</b><span>The one rule</span></a>
+    <a href="#run"><b>Running a job</b><span>Units, drawings, go</span></a>
+    <a href="#estimate"><b>Estimate sheet</b><span>The workbook you edit</span></a>
+    <a href="#provenance"><b>AI Provenance tab</b><span>Where each number came from</span></a>
+    <a href="#decisions"><b>Decision Report tab</b><span>What the engine had to choose</span></a>
+    <a href="#report"><b>Job report (HTML)</b><span>How much to trust it</span></a>
+    <a href="#missing"><b>Missing drawings</b><span>Priced from what we have</span></a>
+    <a href="#quote"><b>Client quote</b><span>What the customer sees</span></a>
+    <a href="#regen"><b>Amended sheet</b><span>Re-issuing after your edits</span></a>
+    <a href="#parity"><b>Parity report</b><span>Your estimate against the engine's</span></a>
+  </div>
+
+  <h2 id="start">Start here — the one rule</h2>
+  <div class="panel brand">
+    <p style="margin:0"><b>Everything the engine produces is an estimate, not a quotation.</b>
+    It prices what the drawings actually show, states plainly what it could not read, and never
+    invents a number to fill a gap. Where it cannot price something it says so rather than
+    quietly costing it at zero — a line at £0 and a line nobody has priced look identical on a
+    sheet, and only one of them is an under-charge.</p>
+  </div>
+  <p>So your job reading these documents is not to check arithmetic. It is to answer the
+  questions the engine could not: which material is it really, which gauge, is that price still
+  good, and does the offcut go on this job or to stock.</p>
+
+  <h2 id="run">Running a job</h2>
+  <p class="lead">On the estimating page: fill in <b>number of units, drawing number and client</b>,
+  add the drawings, and press <b>SDI (UK) Intelligence Estimator</b>.</p>
+  <table>
+    <tr><th>Step</th><th>What to know</th></tr>
+    <tr><td class="k">Number of units</td><td><b>State it.</b> With none given the engine assumes a
+      default, and quantity drives real money — setup is spread across the order, and a one-off
+      buys a whole sheet to make one part. A job priced at the wrong quantity is wrong by a lot,
+      not a little.</td></tr>
+    <tr><td class="k">Extract DesignDrawingPack</td><td><b>Asks Document Manager to build the pack.</b>
+      A panel opens with the project number, customer and assembly folder already filled in from the
+      Job panel — <code>10575-02</code> for Dyson gives <code>10575 / Dyson / 10575-02</code>. Check
+      the project is right before pressing Extract; that split is a guess at your numbering, not a
+      rule. It takes <b>minutes</b>, on their host, and reports progress while it works. When it
+      finishes the pack opens for you to choose from — it does not import everything, because the
+      extract also writes candidate files and a selection report you would not want priced.
+      <br><span class="muted">If the Document Manager API is not configured, this button browses
+      the shares as it used to, and its tooltip says which of the two it will do.</span></td></tr>
+    <tr><td class="k">Add job folder…</td><td>The share browse. Point it at the job's own folder and
+      every drawing in it is added. Not every job comes through Document Manager, and Document
+      Manager is not always up.</td></tr>
+    <tr><td class="k">Add drawing files…</td><td>Use for a partial pack, or to add to what is
+      already listed. <b>Only the drawings on the list are priced</b> — see below.</td></tr>
+    <tr><td class="k">Add from Document Manager…</td><td>A second source. Drawings from a Document
+      Manager extract, merged into the same list. <b>Same filename replaces</b>, so a Document
+      Manager copy lands on top of an older one from the share.</td></tr>
+    <tr><td class="k">The ✕ beside a file</td><td>Removes it from the list, whichever source it came
+      from. A drawing you remove is not priced, and is not carried over if you run again.</td></tr>
+    <tr><td class="k">Print drawings…</td><td>Every drawing on the list as <b>one PDF</b>, bookmarked
+      by filename, for checking the estimate against the pack. If something on the list cannot be
+      printed — a DXF, a model — a cover sheet names it, so a part-pack is never mistaken for the
+      whole one.</td></tr>
+    <tr><td class="k">Estimating runner</td><td>Must show <b>ready</b>. The run happens on a machine
+      with SOLIDWORKS and Excel; this page queues it.</td></tr>
+    <tr><td class="k">Running the same job twice</td><td><b>Refused while the first is still going</b>,
+      and refused <em>before</em> anything is deleted. Staging clears this job's folder to fill it, so
+      a second press would empty the folder the first run is reading and refill it with a different
+      pack — the estimate would then price some mixture of the two, and the sheet would look entirely
+      ordinary. A <em>different</em> drawing still queues freely.</td></tr>
+    <tr><td class="k">Waiting behind another run</td><td>One estimate at a time per machine: SOLIDWORKS
+      and Excel are driven on one desktop. The page says what it is waiting for and how long that has
+      been running. If that run is <b>dead</b> — the machine slept, the runner was closed — its claim
+      holds the queue for up to fifteen minutes, so <b>Release the run in front of this one</b> frees
+      it. That releases the queue; it does not reach into a runner that is genuinely still
+      working.</td></tr>
+    <tr><td class="k">Output folder</td><td>Written to the estimating share, in a dated sub-folder,
+      so re-running never overwrites an earlier estimate.</td></tr>
+  </table>
+
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>What gets priced is what is on the list — nothing more.</b></p>
+    <p style="margin:0">When you press the estimate button, the drawings on the list are copied into
+    a folder of their own under <code>AISheets\SDIIntelligenceAISheet\&lt;client&gt;\&lt;drawing&gt;\</code>,
+    and the engine reads that folder. The run log says so: <code>Staged 7 drawing(s) into …</code>.
+    <b>Check that number matches your list.</b></p>
+    <p style="margin:6px 0 0 0">Run the same job again and that folder is <b>emptied and refilled</b>
+    — so a drawing you took off the list cannot come back and be priced a second time. It also means
+    the folder is a permanent record of exactly which drawings produced a given estimate, which is
+    what you want when somebody asks about a number six weeks later.</p>
+  </div>
+
+  <h2 id="estimate">1 · The Estimate sheet — the workbook you edit</h2>
+  <p class="lead">This is the working surface. It is the estimating template you already know,
+  populated. Every figure is an Excel formula, so it recalculates when you change an input.</p>
+
+  <h3>The blocks, top to bottom</h3>
+  <table>
+    <tr><th>Block</th><th>What lands here</th></tr>
+    <tr><td class="k">Bill of Materials</td><td>Bought-in parts — fixings, castors, pallets,
+      packaging, delivery, powder. Priced per each, times the quantity per unit, plus scrap.</td></tr>
+    <tr><td class="k">Wire</td><td>Wire, bar and tube sections, costed by length. <b>An empty Wire
+      block means one of two things, and they are not the same.</b> If the job genuinely has no
+      sections, empty is correct. If the general arrangement shows a tube frame and this block is
+      still empty, the sections were <i>not read</i> — check whether the pack included the models
+      or detail drawings for them, because the frame is then not in the total.</td></tr>
+    <tr><td class="k">Sheet Steel</td><td>Fabricated metal. Blank length and width, gauge, how
+      many nest out of a sheet, cost per part.</td></tr>
+    <tr><td class="k">Other Sheet Material</td><td>Board and plastic — ply, MDF, acrylic, Dibond.
+      Same nesting arithmetic, different stock sizes.</td></tr>
+    <tr><td class="k">Labour</td><td>Operations grouped by process and material. Setup is booked
+      <b>once per tooling group</b>, not once per part.</td></tr>
+    <tr><td class="k">Rate calculators</td><td>Laser, CNC and Powder — the template's own
+      calculators, filled with the blank size, hole count and cut distance the engine measured.</td></tr>
+  </table>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>Fabricated parts appear twice, and that is deliberate.</b></p>
+    <p style="margin:0">A part costed in Sheet Steel also appears in the Bill of Materials at
+    <b>£0.00</b>, labelled <i>"costed in Sheet Steel below"</i>. It is listed so the BOM is a
+    complete parts list; pricing it in both places would double the material.</p>
+  </div>
+
+  <h3>What wants your attention</h3>
+  <table>
+    <tr><th>You'll see</th><th>It means</th></tr>
+    <tr><td class="k"><span class="cell" style="background:#ffeb9c"></span>Shaded cells</td>
+      <td>An <b>estimator input</b>. The engine has no rate and no input you supply elsewhere will
+      fix it. Type the figure in and the sheet completes itself.</td></tr>
+    <tr><td class="k">PROVISIONAL beside Unit Cost / Sell Price</td>
+      <td>Outstanding inputs remain. The totals compute, but they are not a firm price until
+      those are filled.</td></tr>
+    <tr><td class="k">MATERIAL UNPRICED on a line</td>
+      <td>That item has no rate anywhere the engine can reach. Enter a unit rate, or confirm it is
+      something already in the catalogue under another code.</td></tr>
+    <tr><td class="k">Margin 0%</td>
+      <td>No commercial decision has been made yet. Sell Price equals cost until you set one.</td></tr>
+    <tr><td class="k">AI ESTIMATE · INDICATIVE on a line</td>
+      <td>A real figure, from a market estimate rather than a catalogue. It is <b>not a quote and
+      nobody has agreed it</b> — it is there so the line is not £0 while you find the real price.
+      Overwrite it before quoting firm.</td></tr>
+  </table>
+  <div class="panel warn">
+    <p style="margin:0"><b>A part is costed once, in one place.</b> Fabricated parts are costed in
+    Sheet Steel or Other Sheet Material and appear in the BOM at £0; bought-in parts are costed in
+    the BOM and appear nowhere else. If you add a price to a fabricated part's BOM line, the job
+    pays for its material twice.</p>
+  </div>
+
+  <h2 id="provenance">2 · The AI Provenance tab — where each number came from</h2>
+  <p class="lead">One row per part, naming the source behind every value and how strong that
+  source is. This is where you go when a figure looks wrong and you want to know why it is what
+  it is.</p>
+
+  <h3>The strength words</h3>
+  <table>
+    <tr><th>Word</th><th>Meaning</th><th>Weight</th></tr>
+    <tr><td class="k">CONFIRMED</td><td>An estimator has already agreed this, and it was
+      remembered.</td><td><span class="tag ok">strongest</span></td></tr>
+    <tr><td class="k">MEASURED</td><td>Read off the SolidWorks model or a DXF flat pattern — a
+      measurement, not a reading.</td><td><span class="tag ok">strong</span></td></tr>
+    <tr><td class="k">REPORTED</td><td>Printed on the drawing or in the BOM. Reliable, but it is
+      what someone typed.</td><td><span class="tag info">good</span></td></tr>
+    <tr><td class="k">ASSUMED</td><td>A default or an inference is standing in. Worth a
+      glance.</td><td><span class="tag warn">weak</span></td></tr>
+    <tr><td class="k">UNKNOWN</td><td>Nothing supplied it. On a price this means nobody has
+      priced it yet.</td><td><span class="tag bad">gap</span></td></tr>
+  </table>
+
+  <div class="panel ok">
+    <p style="margin:0 0 6px 0"><b>The summary line separates two different questions.</b></p>
+    <p style="margin:0"><span class="mono">Engine read the drawing &amp; model: 18 measured · 3
+    reported · 1 needs a look &nbsp;|&nbsp; Pricing: 13 priced · 9 awaiting your rate</span></p>
+    <p style="margin:6px 0 0 0">How well the engine <b>read</b> the job is not the same as how
+    much of it has been <b>priced</b>. An estimate is expected to arrive with prices outstanding —
+    that is your half of the work, not a fault in the reading.</p>
+  </div>
+
+  <h2 id="decisions">3 · The Decision Report tab — what the engine had to choose</h2>
+  <p class="lead">Most values decide themselves: one strongest source, nothing contradicting it.
+  This tab shows the ones that did not, because those are where your judgement is worth most.</p>
+
+  <h3>Two blocks below the part table</h3>
+  <table>
+    <tr><th>Block</th><th>What it lists</th></tr>
+    <tr><td class="k">Decisions that required resolution</td>
+      <td><b>Operations.</b> Two equally-ranked sources disagreed about whether an operation
+      applies, and the arbiter settled it. The losing claim is named so you can check it.</td></tr>
+    <tr><td class="k">What the part is — where two sources disagreed</td>
+      <td><b>Material and gauge.</b> The costlier arguments. Material sets the rate <i>and</i>
+      whether the part has a rate at all; gauge sets the rate <i>and</i> steps the cut time — so a
+      part costed on the wrong one is wrong twice. Widest disagreement first.</td></tr>
+  </table>
+  <p>The higher-ranked source was used and the figure stands. What you are being asked is simply:
+  <b>confirm which is right before this goes out firm.</b></p>
+
+  <h2 id="report">4 · The job report (HTML) — how much to trust it</h2>
+  <p class="lead">The narrative version, and the best single document for judging whether an
+  estimate is safe to quote from.</p>
+  <table>
+    <tr><th>Section</th><th>Use it for</th></tr>
+    <tr><td class="k">At a glance</td><td>Unit cost, material and labour split, quantity.</td></tr>
+    <tr><td class="k">Drawings this estimate<br>was built from</td><td><b>The files that produced the
+      number, named.</b> Every drawing read, what each contributed, and — marked in red — any file that
+      was <b>present in the pack and not read</b>. A DWG nobody could convert is not a neutral fact: it
+      is geometry that sat in the folder and reached no number. This is the fastest way to catch the
+      expensive mistake, because somebody who knows the job reads six filenames and sees the seventh
+      is missing.</td></tr>
+    <tr><td class="k">What went right</td><td>The checks that passed — cost streams separated,
+      each part costed once, bought-ins recognised.</td></tr>
+    <tr><td class="k">Review items &amp; limitations</td><td>Per part: what to verify and why.
+      Every row names the part it is about.</td></tr>
+    <tr><td class="k">Drawing pack</td><td>What the pack contained and what it lacked —
+      <b>including drawings named on the BOM that were not supplied</b>.</td></tr>
+    <tr><td class="k">Estimating review</td><td>Everything outstanding, sorted into
+      <i>confirm or overwrite</i> (yours) and <i>missing or broken inputs</i>.</td></tr>
+  </table>
+
+  <h2 id="missing">5 · "Drawings missing — priced from what we have"</h2>
+  <div class="panel brand">
+    <p style="margin:0"><b>An incomplete pack is priced, not refused.</b> The engine costs every
+    line it can read, leaves the undrawn assemblies uncosted rather than inventing metal and weld
+    for parts nobody has seen, and states the gap in several places. The total is real for what
+    was supplied — it is not a price for the whole product.</p>
+  </div>
+  <table>
+    <tr><th>Where it shows</th><th>What you see</th></tr>
+    <tr><td class="k">Job report — Drawing pack</td><td>The fullest account: which drawings the
+      BOM names that the pack does not contain.</td></tr>
+    <tr><td class="k">Job report — Estimating review</td><td>Listed with the part numbers and
+      descriptions. <span class="muted">These used to be marked "blocking". That word has gone: it
+      set one internal flag, three rules raised it on every job regardless, and it read as a refusal
+      the engine was not entitled to make. The engine reports the BOMs, the routes and the prices
+      with their sources — the judgement is yours.</span></td></tr>
+    <tr><td class="k">Estimate sheet</td><td>A red block below the estimator-input checklist:
+      <b>DRAWINGS MISSING FROM THIS PACK (N)</b> — each part named, with
+      <i>"priced from what was supplied; these are NOT in the total above"</i>. The sheet also
+      stays marked PROVISIONAL.</td></tr>
+    <tr><td class="k">AI Provenance</td><td>A line stating <b>which parts the tab is not about</b> —
+      a part with no drawing has no row worth reading, so it is named rather than left out
+      silently.</td></tr>
+    <tr><td class="k">Decision Report</td><td><b>DRAWINGS MISSING FROM THIS PACK — NOTHING DECIDED,
+      NOTHING COSTED.</b> Every other block on that tab describes a decision made from evidence;
+      these parts had none.</td></tr>
+    <tr><td class="k">Run log</td><td>Named at the end of the run in the invariants block.</td></tr>
+    <tr><td class="k">Client quote</td><td><b>Nothing.</b> The customer's page carries the price and
+      the specification, labelled indicative. What they are told about scope is yours to say, in
+      your words.</td></tr>
+  </table>
+  <p><b>What to do:</b> quote provisionally on what is priced and say which assemblies are
+  excluded, or ask for the detail pack and re-run. A thin total on an incomplete pack is an
+  incomplete pack — not a cheap job.</p>
+
+  <h2 id="quote">6 · The client quote — what the customer sees</h2>
+  <p class="lead">Deliberately the plainest document of the set. It carries the price, the
+  specification, what is included, and nothing about how the engine reached it.</p>
+  <ul>
+    <li>The price is labelled <b>indicative</b> everywhere it appears.</li>
+    <li>Internal reasoning — invariant names, confidence, engine workings — never appears on it.</li>
+    <li>It is generated from the job, so the material, finish and operations shown are the
+      engine's reading of the drawings.</li>
+  </ul>
+
+  <h2 id="regen">7 · Re-issuing a quote after you have edited the sheet</h2>
+  <p class="lead">When you have amended the workbook — filled the rates, corrected a price, set a
+  margin — the portal can turn your version into a fresh client quote.</p>
+  <ol>
+    <li><b>Edit and save in Excel.</b> This matters: the totals are formulas, and the values are
+      only stored once Excel has recalculated and saved them.</li>
+    <li>On the estimating page, fill in <b>units, drawing number and client</b>.</li>
+    <li><b>Choose amended workbook…</b> and pick your saved file.</li>
+    <li>Press <b>Estimator Client Report Regen</b>.</li>
+  </ol>
+  <p>You get a client quote carrying <b>your</b> figure — Sell Price if you set one, otherwise
+  Unit Cost — plus a copy of your sheet saved as the manual-override record. No drawings are
+  needed and none are re-read; the engine does not run again. The job report and provenance tab
+  are left as they were, because they describe the engine's estimate, not yours.</p>
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>If the quote comes back saying "As drawing" everywhere, this is
+    why.</b></p>
+    <p style="margin:0 0 8px 0">The regenerated quote keeps the material, finish, operations and
+    the GA image by reloading <b>the original run's saved job file</b>. It looks that up by the job's
+    stem and by the workbook's own name, so a renamed sheet usually still resolves — but the original
+    run's output must be on this machine. Where it cannot find the job you still get a quote, and the
+    page now <b>says so in amber</b>, names the <code>.json</code> it looked for, and tells you it
+    lives on the machine that ran the estimate. Check that before sending: a thin quote renders
+    exactly like a complete one.</p>
+    <p style="margin:0"><b>Two ways to name the sheet.</b> <i>Choose from share…</i> browses the
+    AISheets folder — the estimate workbooks this engine wrote are already there, under the client
+    and job, and that is the usual route. <i>Upload…</i> is for a sheet that is not on the share: one
+    that came back by email, or one kept locally.</p>
+  </div>
+
+  <div class="foot">
+    <b>we.are.sdi</b> · SDI Estimating Intelligence · This guide describes the deliverables the
+    engine produces. Anything it prices is an estimate until an estimator has cleared the
+    outstanding items on it.
+  </div>
+</div>
+
+<script>
+/* Theme and page size — the same behaviour, and deliberately the SAME STORAGE KEYS, as the
+   portal. A preference that resets when you click from the dashboard into /estimating is not a
+   preference; three pages with three independent toggles would be worse than none.
+   Every localStorage access is wrapped: a private window or a policy that blocks site data
+   throws on access, and a page that will not render because it could not read a cosmetic
+   setting is a bad trade. Zoom rather than font-size because these layouts are in pixels. */
+(function(){
+  var root=document.documentElement, T='sdi.view.theme', Z='sdi.view.zoom', ZOOMS=[100,125,150,175,200];
+  function setTheme(light){
+    if(light) root.setAttribute('data-theme','light'); else root.removeAttribute('data-theme');
+    var b=document.getElementById('theme-btn'), l=document.getElementById('theme-lbl');
+    if(b){ b.setAttribute('aria-pressed',String(light));
+           b.title = light ? 'Switch to dark' : 'Switch to light';
+           b.setAttribute('aria-label', b.title); }
+    if(l) l.textContent = light ? 'Dark' : 'Light';
+    try{ localStorage.setItem(T, light?'light':'dark'); }catch(e){}
+  }
+  function setZoom(pc){
+    pc = ZOOMS.indexOf(pc)===-1 ? 100 : pc;
+    root.style.zoom = pc===100 ? '' : (pc/100);
+    var bs=document.querySelectorAll('.vc-z');
+    for(var i=0;i<bs.length;i++) bs[i].setAttribute('aria-pressed', String(Number(bs[i].dataset.zoom)===pc));
+    try{ localStorage.setItem(Z, String(pc)); }catch(e){}
+  }
+  var light=false, zoom=100;
+  try{ light = localStorage.getItem(T)==='light'; }catch(e){}
+  try{ var z=parseInt(localStorage.getItem(Z),10); if(ZOOMS.indexOf(z)!==-1) zoom=z; }catch(e){}
+  setTheme(light); setZoom(zoom);
+  var tb=document.getElementById('theme-btn');
+  if(tb) tb.addEventListener('click', function(){ setTheme(root.getAttribute('data-theme')!=='light'); });
+  var bs=document.querySelectorAll('.vc-z');
+  for(var i=0;i<bs.length;i++) (function(b){ b.addEventListener('click', function(){ setZoom(Number(b.dataset.zoom)); }); })(bs[i]);
+})();
+</script>
+</body>
+</html>
+
+  <h2 id="parity">8 · Parity — your estimate against the engine's</h2>
+  <p class="lead">The one report that answers "is this thing any good?". It compares the engine's
+  own reading of a job against a manual estimate for the same job — not sheet against sheet, but
+  the engine's full working against your number, so you see where the two part company rather
+  than only that they do.</p>
+
+  <p>It reports the <b>unit cost each side arrived at</b>, the gap between them in pounds and per
+  cent, and then the part that matters more: <b>how many money cells and route lines agree</b>.
+  Two totals landing close together while thirty cells underneath disagree is a coincidence, not
+  a validation, and the counts are what tell them apart.</p>
+
+  <h3>Two ways in, and which to use</h3>
+  <table>
+    <tr><th>You are…</th><th>Use</th></tr>
+    <tr><td class="k">About to run a job you have a manual estimate for</td>
+      <td>On the Job panel, <b>Choose manual estimate…</b> before you press the estimate button.
+      The comparison is produced with the rest of the deliverables — you name one file, because
+      the engine is about to produce the other.</td></tr>
+    <tr><td class="k">Looking at a job already estimated, maybe months ago</td>
+      <td>The <b>Parity report</b> card. Name both sides, because both already exist. No re-run, no
+      drawings, no runner — this is how the back catalogue gets compared.</td></tr>
+  </table>
+
+  <p>On the card, the <b>AI estimate</b> can be the engine's workbook rather than its
+  <code>.json</code>: the summary is found from the workbook's filename, so the spreadsheet you were
+  sent is enough. <b>Do not rename it</b> — that is how it finds the job. The <b>manual estimate</b>
+  can be <code>.xls</code>; most of the back catalogue is.</p>
+
+  <p>You are not asked for units. The quantity is read off the manual sheet and both sides are
+  compared at that quantity, so nothing you type can disagree with the sheet.</p>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>"Unit costs could not both be read" is not a failure — it is the
+    honest answer.</b></p>
+    <p style="margin:0">A workbook the engine wrote and nobody has opened in Excel holds
+    <b>formulas with no calculated values</b>. There is genuinely no number in the cell to compare.
+    Rather than show £0.00 — which looks like a real figure and would make the engine appear
+    infinitely over — it says it could not read them. Either tick <b>Resolve formulas through
+    Excel</b>, or open each sheet in Excel and save it once, which fixes it permanently.</p>
+  </div>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>Check the quantities match before reading much into a gap.</b></p>
+    <p style="margin:0">If the manual estimate was priced at 45 off and the engine ran at 10, the
+    comparison still works and normalises to 45 — but the engine's figure carries 10-off setup
+    spread across it. The difference you are looking at is then partly quantity, not accuracy.</p>
+  </div>
+

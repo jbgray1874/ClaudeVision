@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Intelligence — Technical Reference</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a0b;--bg2:#0d0d0f;--surface:#121214;--surface2:#17171a;--line:#26262b;--ink:#f0efec;--dim:#9b9ba3;--faint:#6a6a72;--acc:#e8a33d;--ok:#4ec97f;--warn:#e8a33d;--fail:#e8544f;--info:#6da8e8;--disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;
+    --serif:'Spectral','Source Serif 4',Georgia,serif;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;padding:0 0 80px}
+.hdr{background:linear-gradient(135deg,#101013,#121214);border-bottom:2px solid var(--acc);padding:36px 60px 32px}
+.mark{width:38px;height:38px;background:var(--acc);border-radius:4px;display:grid;place-items:center;margin-bottom:14px}
+.mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:22px;letter-spacing:-1px}
+.hdr h1{font-family:var(--disp);font-weight:800;font-size:24px;letter-spacing:-.02em;margin-bottom:4px}
+.hdr .sub{color:var(--dim);font-size:13px}
+.body{max-width:960px;margin:0 auto;padding:44px 60px 0}
+h2{font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:.05em;color:var(--acc);text-transform:uppercase;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:14px;font-weight:600;margin:20px 0 6px;color:var(--acc);font-family:var(--mono);letter-spacing:.04em}
+p{margin-bottom:10px;color:var(--dim)}
+p b{color:var(--ink)}
+ul{margin:6px 0 12px 18px;color:var(--dim)}
+li{margin-bottom:5px}
+li b{color:var(--ink)}
+code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--acc)}
+.chip{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:2px 7px;border-radius:100px;border:1px solid;vertical-align:middle;margin-left:4px}
+.c-ok{background:rgba(78,201,127,.12);color:var(--ok);border-color:rgba(78,201,127,.3)}
+.c-acc{background:rgba(232,163,61,.1);color:var(--acc);border-color:rgba(232,163,61,.3)}
+.c-warn{background:rgba(232,163,61,.12);color:var(--warn);border-color:rgba(232,163,61,.3)}
+.c-info{background:rgba(109,168,232,.12);color:var(--info);border-color:rgba(109,168,232,.3)}
+.note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:0 6px 6px 0;padding:14px 18px;margin:14px 0;font-size:13px;color:var(--dim)}
+.note b{color:var(--ink)}
+/* module cards */
+.modules{display:grid;gap:10px;margin:16px 0}
+.mod{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
+.mod .fn{font-family:var(--mono);font-size:12.5px;color:var(--acc);font-weight:500;margin-bottom:6px}
+.mod .desc{font-size:13px;color:var(--dim);margin-bottom:8px}
+.mod .desc b{color:var(--ink)}
+.mod .calls{font-size:11.5px;color:var(--faint)}
+.mod .calls b{color:var(--dim)}
+/* library table */
+.tbl{border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:14px 0}
+.tbl table{width:100%;border-collapse:collapse}
+.tbl th{background:var(--surface2);font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;padding:9px 12px;text-align:left;border-bottom:1px solid var(--line)}
+.tbl td{padding:10px 12px;font-size:12.5px;color:var(--dim);border-bottom:1px solid var(--line);background:var(--surface);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl td b{color:var(--ink)}
+.tbl td:first-child{font-family:var(--mono);font-size:11px;color:var(--acc);white-space:nowrap}
+/* pipeline flow */
+.pipe{display:flex;flex-direction:column;gap:0;margin:16px 0}
+.pipe-step{display:grid;grid-template-columns:28px 1fr;gap:12px;align-items:start}
+.pipe-dot{width:28px;height:28px;border-radius:50%;background:var(--surface2);border:2px solid var(--acc);display:grid;place-items:center;font-family:var(--mono);font-size:10px;color:var(--acc);font-weight:600;flex:none;margin-top:2px;z-index:1}
+.pipe-body{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:12px 16px;margin-bottom:8px}
+.pipe-body .ttl{font-size:13.5px;font-weight:600;color:var(--ink);margin-bottom:4px}
+.pipe-body .dsc{font-size:12.5px;color:var(--dim)}
+.pipe-body code{font-size:10.5px}
+.footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:11px;color:var(--faint)}
+
+  /* we.are.sdi — served by /api/brand/logo from the SAME folder the client quote reads, so the
+     portal header and the customer's quotation can never show different marks. The logo stands on
+     its own; .mark is kept only as the fallback when the endpoint is unreachable (a page opened
+     off the share rather than through the portal). */
+  .brandlogo{height:28px;width:auto;max-width:132px;display:block;flex:none}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <img class="brandlogo" src="/api/brand/logo" alt="we.are.sdi">
+  <h1>SDI Intelligence — Technical Reference</h1>
+  <div class="sub">Python modules · Libraries · LLM integration · AI Tech Radar &nbsp;·&nbsp; 11 June 2026</div>
+</div>
+<div class="body">
+
+<!-- ── Pipeline overview ── -->
+<h2>Engine Pipeline</h2>
+<p>The engine runs as a linear pipeline. Each stage hands its output to the next. Understanding the order matters — a fix in an early stage can be overwritten by a later one.</p>
+<div class="pipe">
+  <div class="pipe-step"><div class="pipe-dot">1</div><div class="pipe-body"><div class="ttl">File discovery</div><div class="dsc"><code>main.py</code> walks the job folder, finds PDFs and DXFs, groups them into a job structure.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">2</div><div class="pipe-body"><div class="ttl">Drawing scan + extraction</div><div class="dsc"><code>file_scan.py</code> reads each drawing — extracts part descriptions, dimensions, materials, thicknesses. Calls <code>extractor_patterns.py</code> for regex/pattern matching and <code>json_normaliser.py</code> to normalise output.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">3</div><div class="pipe-body"><div class="ttl">DXF geometry</div><div class="dsc"><code>file_scan.py</code> parses DXF flat patterns — measures cut perimeter, area, fold lines, hole counts using <code>ezdxf</code>.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">4</div><div class="pipe-body"><div class="ttl">Job merge</div><div class="dsc"><code>drawing_job_merge.py</code> binds child parts to parent assemblies, resolves geometry inheritance, applies fallback logic for parts with no DXF.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">5</div><div class="pipe-body"><div class="ttl">Learning injection (pre_scan)</div><div class="dsc"><code>learning_engine.py</code> checks <code>AIEstimating.PartKnowledge</code> — injects known-correct values at confidence ≥ 0.8 before pricing.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">6</div><div class="pipe-body"><div class="ttl">Pricing</div><div class="dsc"><code>estimator.py</code> calculates material cost (via <code>pricing_service.py</code> — the 6-tier RAG chain) and labour cost (geometry × rate card). Applies credibility scoring, assembly guards, suppression logic.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">7</div><div class="pipe-body"><div class="ttl">Output generation</div><div class="dsc"><code>xlsx_output.py</code> writes the five-sheet workbook. <code>estimation_report.py</code> adds the AI Provenance sheet. <code>job_decision_report.py</code> adds the Decision Report sheet.</div></div></div>
+  <div class="pipe-step"><div class="pipe-dot">8</div><div class="pipe-body"><div class="ttl">Learning post-scan</div><div class="dsc"><code>learning_engine.py</code> scans output for anomaly patterns, logs to <code>AIEstimating.Corrections</code>.</div></div></div>
+</div>
+
+<!-- ── Python modules ── -->
+<h2>Python Modules — What Each File Does</h2>
+
+<h3>Core engine</h3>
+<div class="modules">
+  <div class="mod"><div class="fn">main.py</div><div class="desc"><b>Entry point and orchestrator.</b> Parses command-line arguments, walks the job folder, coordinates the full pipeline from file discovery through to output generation. Handles UTF-8 encoding for Windows console, manages the scan log, and routes errors without crashing the run.</div><div class="calls"><b>Run with:</b> <code>python -u main.py --search-root "&lt;folder&gt;" --folder-as-job</code></div></div>
+  <div class="mod"><div class="fn">file_scan.py</div><div class="desc"><b>Drawing reader and part extractor.</b> The most complex module. Reads PDFs (via pdfplumber or pypdf) and DXF files, extracts part descriptions, quantities, materials, thicknesses and dimensions. Applies the DXF-filename material override logic, calls <code>json_normaliser.py</code> to normalise output, and runs <code>augment_summary_with_dxf</code> to attach flat-pattern geometry to parts.</div><div class="calls"><b>Note:</b> <code>normalise_json(summary)</code> runs at line ~1600 — after all per-part overrides. Any material fix must be in <code>json_normaliser.py</code> to survive this call.</div></div>
+  <div class="mod"><div class="fn">estimator.py</div><div class="desc"><b>The cost engine.</b> Takes the normalised job JSON and calculates material and labour cost for every part. Manages the assembly/child hierarchy, applies weldment guards, calculates credibility scores, runs the suppression check, and produces the final estimate summary. Calls <code>pricing_service.py</code> for every material price lookup.</div></div>
+  <div class="mod"><div class="fn">pricing_service.py</div><div class="desc"><b>The RAG price chain.</b> Executes the 6-tier lookup for every part — UDEF → PMA_TBL → bought_in_parts (dead) → vCurrentBoughtIn → historical_quote_material_line (Jaccard RAG) → supplier catalogue URLs → web/AI fallback. Tags every price with source, supplier, confidence and price date. Returns a structured price result with full provenance.</div></div>
+  <div class="mod"><div class="fn">json_normaliser.py</div><div class="desc"><b>Material and operation normaliser.</b> Defines <code>normalise_material_for_part()</code> — the authoritative function that determines each part's final material. Also normalises operation names, thicknesses and geometry values to canonical forms. <b>This runs last in the scan pipeline — any material fix belongs here, not in file_scan.py.</b></div></div>
+  <div class="mod"><div class="fn">drawing_job_merge.py</div><div class="desc"><b>Assembly tree builder.</b> Binds child parts to parent assemblies (-WA, -SA suffixes). Handles geometry fallback — if a parent has no DXF, checks if children can provide geometry. Resolves the has_children guard that preserves prior pick-best behaviour for assemblies.</div></div>
+  <div class="mod"><div class="fn">extractor_patterns.py</div><div class="desc"><b>Regex pattern library.</b> Contains all regular expressions for extracting dimensions, materials, part numbers, thicknesses and quantities from PDF text. Centralised here so pattern changes affect all extraction without touching the main scan logic.</div></div>
+  <div class="mod"><div class="fn">operation_normaliser.py</div><div class="desc"><b>Operation name mapper.</b> Translates between the three operation name vocabularies: AI names (e.g. <code>laser_cutting</code>), SDI workbook codes (e.g. <code>LASM</code>), and historical free-text (e.g. "Laser (Metal)"). Used by both the estimator and corpus ingest to ensure consistent operation matching.</div></div>
+</div>
+
+<h3>Output generation</h3>
+<div class="modules">
+  <div class="mod"><div class="fn">xlsx_output.py</div><div class="desc"><b>Workbook writer.</b> Generates the Estimate, Labour and Material Price Break sheets. Applies SDI formatting, formula cells, the suppression banner logic, and the cost ladder. The three-sheet base that the provenance and decision report modules extend.</div></div>
+  <div class="mod"><div class="fn">estimation_report.py</div><div class="desc"><b>AI Provenance sheet.</b> Adds sheet 5 to the workbook — 14 columns covering part number, description, quantity, material, material source, confidence, thickness, thickness source, geometry source, cut length, operations, unit cost, extended cost, and Rate/source. The full audit trail.</div></div>
+  <div class="mod"><div class="fn">estimate_full_parity_report.py / estimate_parity_pretty_report.py</div><div class="desc"><b>Parity reports.</b> Compare engine output against a reference manual estimate. Calculates variance per line and headline. Used for the formal parity runs (Vue Cinemas, Boots UK, ongoing benchmarks).</div></div>
+</div>
+
+<h3>Data ingestion</h3>
+<div class="modules">
+  <div class="mod"><div class="fn">corpus_ingest.py</div><div class="desc"><b>Historical spreadsheet ingester.</b> Reads SDI's historical estimate workbooks (xls/xlsx), normalises them to a JSONL comparables corpus — one job record and one part record per detail part. Feeds <code>dbo.historical_quote_material_line</code> (the Tier 4 RAG layer). Run against the full historical-estimates share to maximise RAG coverage.</div><div class="calls"><b>Run with:</b> <code>python corpus_ingest.py --glob "K:\Estimating\**\*.xls*"</code></div></div>
+  <div class="mod"><div class="fn">tim_rate_card_ingest.py / tim_standard_materials_ingest.py / tim_assembly_labour_ingest.py</div><div class="desc"><b>Rate card and materials ingestion.</b> Reads Tim's rate card workbooks and standard materials lists, normalises them to the <code>AIEstimating.LabourRateCard</code> and <code>AIEstimating.JobBoughtInMaterials</code> staging tables, ready for promotion to the live <code>dbo</code> tables.</div></div>
+</div>
+
+<h3>Portal and services</h3>
+<div class="modules">
+  <div class="mod"><div class="fn">app.py</div><div class="desc"><b>FastAPI backend.</b> Serves the portal HTML at <code>/</code>, provides the file browse and download API (<code>/api/files</code>, <code>/api/file</code>), DB health endpoint (<code>/api/db/ping</code>), and the BrightHR → InVentry HR pipeline routes. Every request validated by <code>X-SDI-Key</code> header. Path traversal prevention on all file endpoints.</div><div class="calls"><b>Running at:</b> <code>http://10.0.16.151:8071</code></div></div>
+  <div class="mod"><div class="fn">config.py</div><div class="desc"><b>Configuration loader.</b> Reads <code>.env</code>, validates required values at startup, exposes typed attributes. Fails loudly on missing config rather than running with defaults. Single source of truth for all service configuration.</div></div>
+  <div class="mod"><div class="fn">tech_radar.py</div><div class="desc"><b>AI Tech Radar.</b> Uses Claude Opus 4.8 with web search to scan the live AI marketplace. Assesses new LLMs, libraries and tools against SDI's specific use cases (vision extraction, geometry, estimating, ERP, 3D/generative design). Tags each as ADOPT / TRIAL / ASSESS / HOLD. Writes a dated HTML report to the reports folder, browsable from the portal under Status Reports.</div><div class="calls"><b>Run with:</b> <code>python tech_radar.py</code> or <code>python tech_radar.py --full</code> for all 10 areas</div></div>
+</div>
+
+<!-- ── Libraries ── -->
+<h2>Libraries and Dependencies</h2>
+<div class="tbl"><table>
+  <tr><th>Library</th><th>Version</th><th>What it does in SDI Intelligence</th></tr>
+  <tr><td>fastapi</td><td>≥0.115</td><td><b>Backend API framework.</b> Powers the portal backend — routing, middleware, request validation, CORS, file streaming. Chosen for async performance and automatic API documentation.</td></tr>
+  <tr><td>uvicorn</td><td>≥0.32</td><td><b>ASGI server.</b> Runs the FastAPI app. The <code>[standard]</code> extras include websocket support and the watchfiles reloader.</td></tr>
+  <tr><td>pyodbc</td><td>≥5.0</td><td><b>SQL Server connectivity.</b> The bridge between Python and SDILive (10.0.0.200). Uses ODBC Driver 18 for SQL Server. All DB reads (UDEF, PMA, labour rates, historical RAG) and writes (AIEstimating schema) go through pyodbc.</td></tr>
+  <tr><td>python-dotenv</td><td>≥1.0</td><td><b>Environment config.</b> Loads <code>.env</code> into environment variables at startup. Keeps credentials out of source code.</td></tr>
+  <tr><td>openpyxl</td><td>—</td><td><b>Excel workbook generation.</b> Writes the five-sheet output workbooks — cells, formatting, formulas, merged cells, column widths, the suppression banner. The primary output format.</td></tr>
+  <tr><td>ezdxf</td><td>—</td><td><b>DXF geometry parser.</b> Reads SolidWorks DXF flat patterns. Extracts LINE, ARC, CIRCLE, SPLINE entities to calculate cut perimeter, enclosed area, fold lines and hole counts. The most technically critical library — without it, the engine has no geometry.</td></tr>
+  <tr><td>pdfplumber</td><td>—</td><td><b>PDF text extraction (primary).</b> Reads drawing PDFs, extracts text blocks and tables. Used to pull part descriptions, dimensions, title block data and BOM content. Falls back to pypdf if unavailable.</td></tr>
+  <tr><td>pypdf</td><td>—</td><td><b>PDF text extraction (fallback).</b> Used when pdfplumber is unavailable. Less accurate on complex drawing layouts but provides coverage.</td></tr>
+  <tr><td>anthropic</td><td>—</td><td><b>Anthropic Python SDK.</b> Used in <code>tech_radar.py</code> and the web/AI fallback pricing path. Makes calls to the Anthropic API for vision extraction on complex PDFs and AI-assisted pricing when all database tiers miss.</td></tr>
+  <tr><td>requests</td><td>≥2.31</td><td><b>HTTP client.</b> Used in the tech radar for web fetching and in supplier catalogue URL lookups (Tier 5).</td></tr>
+</table></div>
+
+<!-- ── LLM integration ── -->
+<h2>LLM Integration — Claude in the Engine</h2>
+<p>The engine uses Claude (via the Anthropic API) in two specific, bounded roles. The cost calculation itself is entirely deterministic — Claude is never in the pricing loop.</p>
+
+<div class="modules">
+  <div class="mod"><div class="fn">Role 1 — Drawing extraction (vision)</div><div class="desc"><b>When PDFs are ambiguous or non-standard,</b> the engine can call Claude with vision capability to extract part descriptions, material callouts, dimensions and finish specifications from drawing images. This handles layouts that defeat the regex/pattern extractor — unusual title block formats, hand-annotated drawings, non-SolidWorks sources. <b>Model: Claude Sonnet (cost-efficient for extraction volume).</b></div></div>
+  <div class="mod"><div class="fn">Role 2 — Pricing fallback (Tier 6)</div><div class="desc"><b>When all six database tiers miss</b> (no price book match, no RAG match, no catalogue URL), the engine can call Claude with web search enabled to look up a current market price for an unknown bought-in component. <b>This is a last resort — flagged in the AI Provenance sheet as "⚠ Web/AI fallback — verify" and never treated as high confidence.</b> Disabled by default; enabled per job via config flag.</div></div>
+  <div class="mod"><div class="fn">Role 3 — AI Tech Radar (tech_radar.py)</div><div class="desc"><b>Autonomous market scanning.</b> Claude Opus 4.8 with web search scans the AI landscape across 10 categories (LLMs, OCR, geometry, vision, ERP AI, 3D/generative, simulation, robotics, manufacturing AI, cloud infrastructure). Assesses each finding against SDI's actual capabilities and needs. Produces a dated HTML report with ADOPT / TRIAL / ASSESS / HOLD ratings. <b>Model: Claude Opus 4.8 — the most capable model for broad multi-domain assessment.</b></div></div>
+</div>
+
+<div class="note"><b>Architecture principle:</b> Claude handles language and ambiguity. The deterministic rules engine handles maths. Keeping these separate means the estimate is always auditable — every number traces to a rate card entry, a geometry measurement, or a price book row. Never to "the AI said so".</div>
+
+<!-- ── Tech Radar ── -->
+<h2>AI Tech Radar — What It Covers</h2>
+<p>The Tech Radar runs on demand and produces an HTML report saved to the Status Reports folder. It monitors ten areas relevant to SDI's AI programme:</p>
+
+<div class="tbl"><table>
+  <tr><th>Area</th><th>What it watches</th><th>SDI relevance</th></tr>
+  <tr><td>LLMs</td><td>New frontier models — Claude, GPT, Gemini, Llama, Mistral</td><td>Extraction quality, cost per token, context window for large drawing packs</td></tr>
+  <tr><td>OCR / Document AI</td><td>PaddleOCR, Tesseract, Azure Document Intelligence, Google DocAI</td><td>Improving PDF extraction accuracy on non-standard drawing formats</td></tr>
+  <tr><td>Computer Vision</td><td>Florence-2, SAM2, CLIP variants, vision-language models</td><td>Part identification from photos, drawing image understanding</td></tr>
+  <tr><td>Geometry / CAD AI</td><td>Neural geometry processing, DXF/STEP AI tools, SolidWorks AI features</td><td>Better flat-pattern analysis, 3D geometry estimation without DXF</td></tr>
+  <tr><td>Mathematical Estimating</td><td>Symbolic AI, constraint solvers, probabilistic cost models</td><td>Alternative approaches to the cost model for complex assemblies</td></tr>
+  <tr><td>3D &amp; Generative Design</td><td>Autodesk Forma, nTop, generative CAD tools</td><td>Longer-term: AI-assisted design for SDI's engineering team</td></tr>
+  <tr><td>Simulation / Digital Twin</td><td>NVIDIA Omniverse, Siemens Xcelerator AI, digital factory tools</td><td>Production planning, capacity simulation</td></tr>
+  <tr><td>ERP / Business AI</td><td>Sage AI features, Microsoft Copilot for ERP, AI-native ERPs</td><td>Sage X3 AI integration, AI-assisted purchasing and planning</td></tr>
+  <tr><td>Manufacturing AI</td><td>Quality inspection AI, predictive maintenance, scheduling AI</td><td>SDI production floor applications post go-live</td></tr>
+  <tr><td>Cloud Infrastructure</td><td>GPU cloud pricing, vector DB services, MLOps platforms</td><td>Future scaling of the engine if local compute becomes a bottleneck</td></tr>
+</table></div>
+
+<div class="note"><b>Run the Tech Radar:</b> <code>python tech_radar.py</code> (6 priority areas, ~2 min) or <code>python tech_radar.py --full</code> (all 10 areas, ~5 min). Output saved to <code>C:\ClaudeVision\output\reports\</code> and visible in the portal immediately.</div>
+
+<div class="footer">
+  <span>SDI Intelligence · Technical Reference · 11 June 2026</span>
+  <span>James Gray · AI &amp; Systems Controller · SDI Displays Ltd</span>
+</div>
+</div>
+</body>
+</html>

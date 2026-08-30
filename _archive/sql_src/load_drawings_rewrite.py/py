@@ -1,0 +1,90 @@
+import json
+import sys
+from pathlib import Path
+from decimal import Decimal, InvalidOperation
+from datetime import datetime
+import uuid
+
+import pyodbc
+
+
+def first_scalar(value):
+    if isinstance(value, list):
+        for item in value:
+            if item not in (None, '', []):
+                return item
+        return None
+    return value
+
+
+def join_list(value):
+    if value is None:
+        return None
+    if isinstance(value, list):
+        out = []
+        for v in value:
+            if isinstance(v, (dict, list)):
+                continue
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                out.append(s)
+        return ' | '.join(dict.fromkeys(out)) or None
+    if isinstance(value, (dict, tuple, set)):
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+def to_decimal(value):
+    value = first_scalar(value)
+    if value in (None, '', 'null'):
+        return None
+    try:
+        return Decimal(str(value).replace(',', '').strip())
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def to_int(value):
+    d = to_decimal(value)
+    return int(d) if d is not None else None
+
+
+def to_str(value):
+    value = first_scalar(value)
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+def get_ci(d, *keys):
+    if not isinstance(d, dict):
+        return None
+    lower = {str(k).lower(): v for k, v in d.items()}
+    for k in keys:
+        if k.lower() in lower:
+            return lower[k.lower()]
+    return None
+
+
+def json_text(value):
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def parse_uuid(value):
+    s = to_str(value)
+    if not s:
+        return None
+    return str(uuid.UUID(s))
+
+
+def upsert_json_file(cur, data, source_name=None):
+    runmeta = data.get('runmetadata', {}) or {}
+    doc = data.get('documentanalysis', {}) or {}
+    primary = doc.get('primaryfields', {}) or {}
+    conf = do

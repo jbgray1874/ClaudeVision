@@ -1,0 +1,2587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Estimating Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  /* ── House tokens, taken from sdi-intelligence-portal.html ────────────── */
+  :root{
+    --bg:#0d0d0f; --panel:#121214; --panel-2:#17171a; --line:#26262b;
+    --ink:#f0efec; --muted:#9b9ba3; --dim:#6a6a72;
+    --brand:#e8a33d; --ok:#4ec97f; --info:#6da8e8; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+    --serif:'Spectral','Source Serif 4',Georgia,serif;
+    --tint:#ffffff08; --scrim:rgba(0,0,0,.66);
+    --r:10px;
+  }
+  /* ── LIGHT MODE ──────────────────────────────────────────────────────────
+     Added so these two pages follow the same choice as the portal. They were
+     dark-only for the same reason it was — never asked — and they carried the
+     same defect: palette values written as literals INSIDE the stylesheet,
+     which no [data-theme] rule can reach. Those are tokens now.
+
+     THE PREFERENCE IS SHARED. Same localStorage keys as the portal
+     (sdi.view.theme / sdi.view.zoom), so choosing light on the dashboard and
+     clicking through to /estimating does not change the lights on you. Three
+     pages with three independent toggles would be worse than none.
+
+     No prefers-color-scheme here either — opt-in only, same reasoning. */
+  :root[data-theme="light"]{
+    --bg:#f4f4f2; --panel:#ffffff; --panel-2:#f7f7f5; --line:#d9d8d3;
+    --ink:#17171a; --muted:#5b5b63; --dim:#83838c;
+    --brand:#a9701a; --ok:#1f7a45; --info:#2b6cb0; --warn:#a9701a; --bad:#c0342f;
+    --tint:#00000008; --scrim:rgba(0,0,0,.42);
+  }
+  :root{color-scheme:dark}
+  :root[data-theme="light"]{color-scheme:light}
+
+  /* ── View controls · same component and same behaviour as the portal ──── */
+  .viewctl{display:flex;align-items:center;gap:8px;margin-left:auto;align-self:flex-end}
+  .vc-btn{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+          background:var(--panel-2,var(--panel));border:1px solid var(--line);border-radius:6px;
+          color:var(--muted);font-family:var(--body);font-size:11.5px;font-weight:600;
+          cursor:pointer;white-space:nowrap}
+  .vc-btn:hover{color:var(--ink);border-color:var(--dim)}
+  :root[data-theme="light"] .vc-btn .ic-sun{display:none}
+  :root[data-theme="light"] .vc-btn .ic-moon{display:block}
+  :root:not([data-theme="light"]) .vc-btn .ic-moon{display:none}
+  :root:not([data-theme="light"]) .vc-btn .ic-sun{display:block}
+  .vc-zoom{display:flex;align-items:center;gap:1px;height:28px;padding:0 7px;
+           background:var(--panel-2,var(--panel));border:1px solid var(--line);border-radius:6px;color:var(--dim)}
+  .vc-zoom svg{margin-right:4px;flex-shrink:0}
+  .vc-z{min-width:30px;height:20px;padding:0 4px;background:transparent;border:0;border-radius:2px;
+        color:var(--dim);font-family:var(--mono);font-size:10.5px;font-weight:600;cursor:pointer}
+  .vc-z:hover{color:var(--ink);background:var(--line)}
+  .vc-z[aria-pressed="true"]{background:var(--brand);color:var(--bg)}
+  .vc-btn:focus-visible,.vc-z:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+  @media (max-width:1180px){.vc-z{min-width:26px;font-size:10px;padding:0 2px}.vc-zoom{gap:0;padding:0 5px}}
+  @media (max-width:1040px){.vc-btn .vc-lbl{display:none}.vc-btn{padding:0 8px}}
+  @media (max-width:820px){.vc-zoom{display:none}}
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px}
+
+  header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px;display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+  h1{font-family:var(--disp);font-size:clamp(24px,3.4vw,34px);font-weight:700;letter-spacing:-.02em;margin:0}
+  h1 .mark{color:var(--brand)}
+  .sub{color:var(--muted);font-size:14px;margin:4px 0 0}
+  .mono{font-family:var(--mono)}
+  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--brand);margin:0 0 6px}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px}
+  .card h2{font-family:var(--disp);font-size:15px;font-weight:600;margin:0 0 2px;letter-spacing:-.01em}
+  .card .hint{color:var(--dim);font-size:12.5px;margin:0 0 16px}
+
+  label{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+  input[type=text],input[type=number]{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;color:var(--ink);font:inherit;padding:10px 12px}
+  input:focus{outline:2px solid var(--brand);outline-offset:1px;border-color:transparent}
+  input::placeholder{color:var(--dim)}
+  .field+.field{margin-top:14px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:520px){.row2{grid-template-columns:1fr}}
+  .req{color:var(--warn);font-size:11px;font-family:var(--mono);margin-top:5px;min-height:14px}
+
+  button{font:inherit;font-weight:600;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);padding:9px 14px;cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--dim)}
+  button:disabled{opacity:.42;cursor:not-allowed}
+  button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .btn-run{width:100%;background:var(--brand);color:#191900;border-color:var(--brand);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
+  .btn-run:hover:not(:disabled){filter:brightness(1.08)}
+  .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
+  /* The second book, sitting under the first rather than beside it — same size, so it reads
+     as the same kind of thing, but it never lights up because nothing is behind it. */
+  .btn-soon{margin-top:0;cursor:not-allowed}
+  /* A MEASUREMENT, NOT AN ESTIMATE, AND IT MUST NOT LOOK LIKE ONE. Same size and position
+     as the run button so it is findable, deliberately different in colour so nobody
+     presses it meaning to price a job. */
+  .btn-measure{margin-top:0;background:transparent;border:1px dashed var(--warn);
+               color:var(--warn)}
+  .btn-measure:hover:not(:disabled){background:rgba(232,163,61,.10)}
+  /* THE NOTE HAS TO BELONG TO THE BUTTON IT IS ABOUT. It explains why CHINA is disabled and
+     ends "use the UK estimator above" — but sitting loose under both buttons it was the only
+     prose near either, and read as though the whole block were switched off. Boxing the pair
+     makes the ownership visual instead of something you have to read to the end to discover. */
+  .soon-block{margin-top:16px;padding:12px 14px 2px;border:1px dashed var(--line);
+              border-radius:6px;background:var(--bg)}
+  .soon-block .note{margin-top:8px}
+  /* Deliberately not styled like the run button. Stop is destructive and rare; it should
+     not be the thing a hand reaches for by muscle memory. */
+  .btn-stop{width:100%;background:transparent;color:#ff9b9b;border:1px solid #7d3a3a;padding:11px 18px;font-size:14px;font-weight:600;margin-top:9px;border-radius:7px;cursor:pointer}
+  .btn-stop:hover:not(:disabled){background:#3a1f1f}
+  .btn-stop:disabled{opacity:.5;cursor:default}
+
+  /* ── drawings list ─────────────────────────────────────────────────── */
+  .files{list-style:none;margin:0 0 12px;padding:0;max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel-2)}
+  .files:empty{display:none}
+  .files li{display:flex;gap:10px;align-items:center;padding:8px 11px;border-bottom:1px solid var(--line);font-size:13px}
+  .files li:last-child{border-bottom:none}
+  .files .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px}
+  .files .kind{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .files .x{background:none;border:none;color:var(--dim);padding:2px 6px}
+  .files .x:hover{color:var(--bad)}
+  .empty{color:var(--dim);font-size:13px;padding:14px 0 4px}
+
+  /* ── destination ───────────────────────────────────────────────────── */
+  .dest{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:0 7px 7px 0;padding:12px 14px;margin-top:6px}
+  .dest .k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:5px}
+  .dest .p{font-family:var(--mono);font-size:12.5px;word-break:break-all;color:var(--ink)}
+  .dest .p .pending{color:var(--dim)}
+  .dest .note{color:var(--dim);font-size:11.5px;margin-top:7px}
+
+  /* ── run state ─────────────────────────────────────────────────────── */
+  .status{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.run{background:var(--brand);animation:p 1.1s ease-in-out infinite}
+  .dot.ok{background:var(--ok)} .dot.err{background:var(--bad)}
+  @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+  @media(prefers-reduced-motion:reduce){.dot.run{animation:none}}
+  .log{margin-top:12px;background:#0e0e11;border:1px solid var(--line);border-radius:7px;padding:12px 13px;font-family:var(--mono);font-size:11.5px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+  .log:empty{display:none}
+  .log .w{color:var(--warn)} .log .e{color:var(--bad)} .log .g{color:var(--ok)}
+  .out{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px}
+  .out a{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;color:var(--info);text-decoration:none;background:var(--panel-2)}
+  .out a:hover{border-color:var(--info)}
+
+  /* ── browser modal ─────────────────────────────────────────────────── */
+  dialog{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);color:var(--ink);padding:0;max-width:760px;width:calc(100% - 40px)}
+  dialog::backdrop{background:var(--scrim)}
+  .dhead{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .dhead h3{font-family:var(--disp);font-size:15px;margin:0;flex:1}
+  .crumbs{padding:10px 20px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted);word-break:break-all}
+  .crumbs button{background:none;border:none;color:var(--info);padding:0 2px;font-family:var(--mono);font-size:11.5px}
+  .listing{list-style:none;margin:0;padding:0;max-height:52vh;overflow:auto}
+  .listing li{display:flex;align-items:center;gap:11px;padding:9px 20px;border-bottom:1px solid var(--line);cursor:pointer}
+  .listing li:hover{background:var(--panel-2)}
+  .listing .ic{width:16px;text-align:center;color:var(--dim)}
+  .listing .dir .ic{color:var(--brand)}
+  .listing .nm{flex:1;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .listing .meta{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  .listing li[aria-selected=true]{background:rgba(232,163,61,.09)}
+  .dfoot{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line)}
+  .dfoot .left{margin-right:auto;color:var(--dim);font-size:12px;align-self:center}
+</style>
+</head>
+<body>
+<!-- SDI-SIDEBAR:START -->
+
+<style id="sdi-sidebar-css">
+  /* The portal's own tokens are already defined on these pages, so this inherits the look. */
+  :root{ --sdinav-w:250px; }
+  body{ padding-left:var(--sdinav-w); }
+  /* ── COLLAPSED ────────────────────────────────────────────────────────────────────
+     The whole layout is already driven by --sdinav-w, so collapsing is one variable.
+     These items carry no icons -- unlike the portal's rail, which collapses to icons --
+     so there is nothing useful to show at 46px. It becomes a strip with the toggle on
+     it: the screen goes back to the form, and one click brings the menu back. */
+  body.nav-collapsed{ --sdinav-w:56px; }
+  body.nav-collapsed .sdinav-grp,
+  body.nav-collapsed .sdinav-item,
+  body.nav-collapsed .sdinav-brand span{ display:none; }
+  /* The word stays. An arrow alone asks the reader to work out which way it points and
+     what that does; "Expand" does not. Stacked under the chevron, because it will not sit
+     beside it at this width. */
+  body.nav-collapsed .sdinav-toggle{ flex-direction:column; gap:4px; font-size:9px;
+     letter-spacing:.08em; text-transform:uppercase; padding:10px 0 11px; }
+  body.nav-collapsed .sdinav-brand{ padding:14px 0; justify-content:center; }
+  body.nav-collapsed .sdinav-logo{ max-width:26px; }
+  .sdinav{ display:flex; flex-direction:column; }
+  .sdinav-body{ flex:1; }
+  .sdinav-toggle{
+    display:flex; align-items:center; gap:9px; width:100%;
+    padding:10px 16px; border:0; border-top:1px solid var(--line,var(--line));
+    background:transparent; color:var(--muted,var(--muted)); cursor:pointer;
+    font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
+    position:sticky; bottom:0; transition:.16s;
+  }
+  .sdinav-toggle:hover{ color:var(--ink,var(--ink)); background:var(--tint); }
+  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand,var(--brand)); outline-offset:-2px; }
+  body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
+  .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
+  body.nav-collapsed .sdinav-toggle .chev{ transform:rotate(180deg); }
+  /* LEFT-ALIGNED, not centred in what is left over. These pages centre their content with
+     margin:0 auto, which was fine full-width and wrong once a 250px rail took the left of the
+     screen: the content drifted toward the middle and sat away from the menu beside it. Keep the
+     measure (long lines are hard to read) and pin it to the left instead. */
+  .wrap{ margin-left:0 !important; margin-right:auto !important; }
+  .sdinav{
+    position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
+    background:var(--panel,var(--panel)); border-right:1px solid var(--line,var(--line));
+    z-index:900; padding-bottom:24px;
+  }
+  .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
+    text-decoration:none; color:inherit; }
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,var(--brand));
+    color:var(--bg); font-weight:900; font-size:17px; display:flex; align-items:center;
+    justify-content:center; font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); }
+  /* we.are.sdi, served by /api/brand/logo from the SAME folder the client quote reads. The
+     lettered .sdinav-mark above is only the fallback for a page opened off the share, where
+     there is no backend to ask. */
+  .sdinav-logo{ height:24px; width:auto; max-width:70px; display:block; flex:none; }
+  .sdinav-brand b{ font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); font-size:12.5px;
+    letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
+  .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
+    color:var(--dim,var(--dim)); display:block; }
+  .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--dim,var(--dim)); padding:16px 16px 6px; }
+  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,var(--muted));
+    text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
+  .sdinav a.sdinav-item:hover{ color:var(--ink,var(--ink)); background:var(--tint); }
+  .sdinav a.sdinav-item.is-here{ color:var(--ink,var(--ink)); border-left-color:var(--brand,var(--brand));
+    background:#ffffff0a; font-weight:600; }
+  @media (max-width:900px){
+    body{ padding-left:0; }
+    .sdinav{ position:static; width:auto; height:auto; border-right:0;
+      border-bottom:1px solid var(--line,var(--line)); }
+  }
+</style>
+
+<nav class="sdinav" aria-label="SDI Intelligence">
+  <a class="sdinav-brand" href="/">
+    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
+    <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
+  </a>
+  <div class="sdinav-body">
+  <div class="sdinav-grp">Overview</div>
+  <a class="sdinav-item" href="/#dashboard">Dashboard</a>
+  <div class="sdinav-grp">AI Services</div>
+  <a class="sdinav-item" href="/#aisvc">Overview</a>
+  <a class="sdinav-item" href="/#aisvc-estimating">SDI Estimating Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-technical-design">SDI Technical Design Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-drawing-search">SDI Drawing Search Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-client-briefing">SDI Client Briefing Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-brief">SDI Brief &amp; Concept Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-omniverse">SDI Immersive Design Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-dfm">SDI Design for Manufacture Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-scheduling">SDI Production Scheduling Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-manufacture">SDI Manufacture &amp; Robotics Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-inspection">SDI Quality Inspection Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-md-agent">SDI Chief of Staff Agent</a>
+  <a class="sdinav-item" href="/#aisvc-sales-agent">SDI Sales Agent</a>
+  <a class="sdinav-item" href="/#aisvc-design-agent">SDI Design Support Agent</a>
+  <a class="sdinav-item" href="/#aisvc-production-agent">SDI Production Control Agent</a>
+  <a class="sdinav-item" href="/#aisvc-finance-agent">SDI Finance Agent</a>
+  <a class="sdinav-item" href="/#aisvc-chatbots">SDI ChatBot Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-voice">SDI Voice Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-brighthr">SDI People Data Intelligence · BrightHR</a>
+  <a class="sdinav-item" href="/#aisvc-wearesdi">SDI Web Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-x3">SDI ERP Intelligence · Sage X3</a>
+  <a class="sdinav-item" href="/#aisvc-obs">SDI Recording Intelligence · OBS</a>
+  <a class="sdinav-item" href="/#aisvc-tech-radar">SDI Tech Radar Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-roadmap">SDI AI Roadmap</a>
+  <div class="sdinav-grp">Operate</div>
+  <a class="sdinav-item is-here" href="/estimating">SDI Estimating Intelligence</a>
+  <a class="sdinav-item" href="/guide">SDI Estimating Intelligence Guide</a>
+  <a class="sdinav-item" href="/#fixture-guide">SDI Drawing Search Intelligence Guide</a>
+  <a class="sdinav-item" href="/#tools">SDI Estimating Intelligence Tools</a>
+  <a class="sdinav-item" href="/#files">Files &amp; Directories</a>
+  <a class="sdinav-item" href="/#reports">Status Reports</a>
+  <a class="sdinav-item" href="/#golive">Go-Live Guide</a>
+  <a class="sdinav-item" href="/#testing">Testing</a>
+  <div class="sdinav-grp">Govern</div>
+  <a class="sdinav-item" href="/#architecture">SDI Estimating Intelligence Architecture</a>
+  <a class="sdinav-item" href="/#rnd">R&amp;D Capture</a>
+  <a class="sdinav-item" href="/#servers">Servers</a>
+  <a class="sdinav-item" href="/#programme">AI Programme</a>
+</div>
+<button class="sdinav-toggle" id="sdinav-toggle" type="button"
+        aria-label="Collapse the navigation" aria-expanded="true">
+  <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+  <span>Collapse</span>
+</button>
+</nav>
+<script>(function(){
+  var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
+  if(!t) return;
+  document.querySelectorAll(".sdinav-item").forEach(function(a){
+    var s=(a.textContent||"").trim(); if(s && !a.title) a.title=s; });
+  function set(on){
+    b.classList.toggle("nav-collapsed", on);
+    t.setAttribute("aria-expanded", String(!on));
+    t.setAttribute("aria-label", on ? "Expand the navigation" : "Collapse the navigation");
+    t.title = on ? "Expand the navigation" : "Collapse the navigation";
+    var l=t.querySelector("span"); if(l) l.textContent = on ? "Expand" : "Collapse";
+    try{ localStorage.setItem(K, on?"1":"0"); }catch(e){}
+  }
+  var start=false; try{ start = localStorage.getItem(K)==="1"; }catch(e){}
+  if(start) set(true);
+  t.addEventListener("click", function(){ set(!b.classList.contains("nav-collapsed")); });
+})();</script>
+<!-- SDI-SIDEBAR:END -->
+
+<div class="wrap">
+
+  <header>
+    <div style="flex:1">
+      <p class="eyebrow">SDI Intelligence</p>
+      <h1>SDI Estimating <span class="mark">Intelligence</span></h1>
+      <p class="sub">Drawings in, costed estimate out. Every run writes a complete deliverable set to the shared estimating folder.
+        &nbsp;<a href="/guide" target="_blank" rel="noopener"
+           style="color:var(--brand);text-decoration:none;border-bottom:1px solid currentColor">
+           SDI Estimating Intelligence Guide →</a></p>
+    </div>
+    <div class="viewctl">
+      <button type="button" id="theme-btn" class="vc-btn" aria-pressed="false" title="Switch between light and dark">
+        <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="ic-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 1.8v2.6M12 19.6v2.6M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M1.8 12h2.6M19.6 12h2.6M4.6 19.4l1.9-1.9M17.5 6.5l1.9-1.9"/></svg>
+        <span class="vc-lbl" id="theme-lbl">Light</span>
+      </button>
+      <div class="vc-zoom" role="group" aria-label="Page size">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3M8 11h6M11 8v6"/></svg>
+        <button type="button" class="vc-z" data-zoom="100" aria-pressed="true">100</button>
+        <button type="button" class="vc-z" data-zoom="125" aria-pressed="false">125</button>
+        <button type="button" class="vc-z" data-zoom="150" aria-pressed="false">150</button>
+        <button type="button" class="vc-z" data-zoom="175" aria-pressed="false">175</button>
+        <button type="button" class="vc-z" data-zoom="200" aria-pressed="false">200</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- ══ JOB ══════════════════════════════════════════════════════ -->
+    <section class="card">
+      <h2>Job</h2>
+      <p class="hint">All three are required before an estimate can be run.</p>
+
+      <div class="row2">
+        <div class="field">
+          <label for="units">Number of units</label>
+          <input id="units" type="number" min="1" step="1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="drawing">Drawing number</label>
+          <input id="drawing" type="text" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label for="client">Client</label>
+        <input id="client" type="text" autocomplete="off">
+      </div>
+      <p class="req" id="req"></p>
+
+      <div class="dest" id="runnerBox" style="border-left-color:var(--dim);margin-bottom:14px">
+        <span class="k">Estimating runner</span>
+        <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
+        <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
+           queues the job; the runner does the work and files the result.</p>
+      </div>
+
+      <div class="dest">
+        <span class="k">Output folder</span>
+        <div class="p" id="destPath"><span class="pending">Enter a client and drawing number</span></div>
+        <p class="note">Created automatically if it does not exist. Written to the share, never to a
+           local disk. Each run files into its own dated sub-folder here, so re-running a drawing
+           never overwrites an earlier estimate.</p>
+      </div>
+
+      <!-- THE PARITY PARTNER, ATTACHED UP FRONT AND OPTIONAL.
+           The comparison an estimator actually wants is "is the engine near my number?", and
+           until now that meant running the estimate, waiting, then remembering to run a second
+           thing from a command line. Attaching the manual sheet here makes the bundle part of
+           the deliverables — produced at the moment somebody is looking at the job, which is
+           the only moment it gets read.
+
+           A SHARE PATH, NOT AN UPLOAD, and that is not a UI preference. The runner executes on
+           a different machine from this service; a file uploaded to this box does not exist on
+           that one. So the sheet must be somewhere both can see. The standalone parity card
+           below takes uploads, because nothing there leaves this box. -->
+      <div class="dest" id="parityAttachBox" style="border-left-color:var(--dim)">
+        <span class="k">Compare THIS run against a manual estimate <em style="color:var(--dim);
+              font-style:normal">— optional</em></span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <button id="pickRunManual" type="button">Choose manual estimate…</button>
+          <span class="p" id="runManualName"><span class="pending">None — no parity report</span></span>
+          <button id="clearRunManual" type="button" hidden>Clear</button>
+        </div>
+        <p class="note">Attach the manual estimate for this job and a <strong>parity report</strong>
+           is produced with the estimate, comparing the two. It must sit on a share the runner can
+           read. Leave it empty and the run is unchanged.</p>
+      </div>
+
+      <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
+           button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
+           work placed in China is a different set of numbers, and the two must not be told
+           apart by remembering which one the unlabelled button was. -->
+      <button class="btn-run" id="run" disabled>SDI (UK) Intelligence Estimator</button>
+
+      <!-- LLM-ONLY: A MEASUREMENT, AND IT HAS TO LOOK LIKE ONE.
+           UNDER THE PACK ESTIMATOR, WHICH IS THE BUTTON IT IS AN ALTERNATIVE TO. Same job,
+           same Drawings panel, same endpoint, same output folder — one reader instead of
+           four. A choice reads as a choice when the two options sit together, and the run it
+           starts is gated, logged and stopped by this card's controls.
+           IT WENT IN BESIDE THE WRONG LIST FIRST: next to "Estimate every drawing", which is
+           the MULTI-DRAWING enquiry — a hundred drawings treated as a hundred separate jobs.
+           It reads the same Drawings panel this button does, so pressing it there would have
+           pooled a hundred enquiries into ONE job and produced a confident estimate of a
+           different question.
+           Deliberately NOT styled btn-run. A workbook produced this way is indistinguishable
+           from a real estimate once it is on the share — same template, same tabs, same
+           totals column — so the only place a reader can be warned is before they press it.
+           On 10575-02 it read the BOM and the routes correctly and costed one steel part out
+           of nine, because a folded part's developed size is not printed on any drawing.
+           IT SAID "NOT A PRICE", WHICH WAS FALSE AND THE WRONG WAY ROUND. It produces a
+           price — a costed workbook with a figure in the total cell, on the same template as
+           a real one. Telling an estimator there is no price in the file invites them to
+           treat the file as harmless, which is the opposite of the truth: the danger is
+           precisely that there IS a number, and that a week later nothing on the sheet says
+           where it came from. So the button states the number exists and must not leave the
+           building. -->
+      <button class="btn-run btn-measure" id="bRunLLM" disabled
+              title="Reads this pack with the vision model alone — no deterministic BOM reader, no DXF, no SolidWorks">
+        LLM read only (Grok / xAI) — BOM and routes; it gives a total, do NOT quote it</button>
+      <p class="note" id="bLLMNote">A <b>measurement of the model</b>, not an estimate — but it
+         does produce a full costed workbook with a total, on the same template as a real run.
+         That is the danger, not a reassurance. The deterministic BOM reader, the DXF flat
+         patterns and the SolidWorks extract are all switched off and every page goes to Grok.
+         It reads the parts list and the routes well; it cannot size a folded part, because the
+         developed blank is not printed on the drawing — so the total is right about the work
+         it could see and silently short of the material it could not. <b>The total it produces
+         must not be quoted, and must not be compared with a normal run's.</b> Reads the
+         drawings in the <b>Drawings</b> panel — one drawing or a whole pack — and files into
+         the same folder, and reports into the same run log, as the estimator above it.</p>
+      <!-- ASK THE MODEL AGAIN, RATHER THAN REPLAYING WHAT IT SAID LAST TIME.
+           The first LLM read through this page sent NOTHING to Grok: "0 page(s) sent to the
+           model, 22 from cache" and "reusing the cached read for this pack". It proved the
+           plumbing and measured nothing about the model, which is the whole point of the
+           button above.
+           The caches are right to exist and are not being deleted — 2085 returned a route
+           with welding on one run and without it on the next and the unit cost halved. The
+           engine is simply told to bypass them for THIS run, so no other job loses its
+           settled answer, and nothing has to reach the runner's disk from a web page.
+           OFF BY DEFAULT, because the honest reason to press the button most of the time is
+           to look at a pack, and a cached read is the same read for a fraction of the cost. -->
+      <label class="note" style="display:block;margin:-4px 0 10px">
+        <input type="checkbox" id="freshRead"> <b>Fresh read — ignore the cached answers for
+        this pack</b> and ask the model again. Every page goes back to Grok instead of being
+        replayed from cache, so it costs API calls; the answer may differ from the last run,
+        and <b>that difference is the measurement</b>. Nothing is deleted — the cache is on
+        the runner's machine and holds every other job's answers; this run just doesn't use
+        it. Leave it off to re-read a pack the model has already seen.</label>
+
+      <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
+           Stopping was possible only by provoking a 409 from a SECOND run and taking the
+           release offered in the refusal, or by POSTing by hand. So an accidental double
+           start meant fifteen minutes of SOLIDWORKS and Excel doing work nobody would read,
+           with a queue behind it, twice in one afternoon. -->
+      <button class="btn-stop" id="stop" hidden>Stop this estimate</button>
+
+      <!-- AND THE RUN IN FRONT OF YOURS, WHICH STOP CANNOT REACH.
+           Stop acts on THIS tab's run. When your job is queued behind somebody else's -- or
+           behind a claim whose runner has died, which looks identical from here and lasts
+           the full 900-second lease -- there was nothing on screen to press. The release
+           existed only in the 409 refusal, and letting jobs queue instead of refusing them
+           orphaned that path entirely. Shown only while something is actually in front. -->
+      <button class="btn-stop" id="release" hidden>Release the run in front of this one</button>
+
+      <!-- THE BUTTON IS HERE; THE BOOK BEHIND IT IS NOT. It is deliberately inert and stays
+           inert: there is no China endpoint, no China rate set, no China route. A control
+           that quietly did nothing would be read as a run that produced no file, so it is
+           disabled and it says why in words, not by being greyed out and unexplained. It is
+           NOT wired into refresh() — nothing that enables the UK button may reach it. -->
+      <div class="soon-block">
+        <button class="btn-run btn-soon" id="runChina" disabled aria-disabled="true"
+                title="Not connected yet — there is no China estimating endpoint behind this button">
+          SDI (China) Intelligence Estimator</button>
+        <p class="note" id="chinaNote"><b>This button only.</b> Not connected yet — there is no
+           China estimating endpoint, rate set or route behind it, so pressing it would do
+           nothing and it is held disabled until there is. The UK estimator above is unaffected
+           and runs as normal.</p>
+      </div>
+    </section>
+
+    <!-- ══ DRAWINGS ═════════════════════════════════════════════════ -->
+    <section class="card">
+      <h2>Drawings</h2>
+      <p class="hint">Add a job folder, or individual PDFs, DXFs, DWGs and SolidWorks models. Add as many times as you need.</p>
+
+      <ul class="files" id="fileList"></ul>
+      <p class="empty" id="fileEmpty">No drawings added yet.</p>
+      <p class="req" id="printNote"></p>
+      <p class="req" id="dmNote"></p>
+
+      <!-- THE THREE FACTS DOCUMENT MANAGER LOOKS A PROJECT UP BY, shown rather than guessed.
+           projectNumber is the only required one; customer and assemblyFolder narrow the
+           search and make it faster and less ambiguous. They are PREFILLED from the Job panel
+           because 10575-02 for Dyson means project 10575, customer Dyson, assembly 10575-02 —
+           but they are editable, because a numbering convention is a habit and not a rule, and
+           a form that silently derives the wrong project is worse than one that asks. -->
+      <div class="dest" id="dmExtractBox" hidden style="border-left-color:var(--info);margin-top:10px">
+        <span class="k">Extract from Document Manager</span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
+          <label style="display:block">PROJECT
+            <input id="dmProject" style="width:120px" placeholder="10575"></label>
+          <label style="display:block">CUSTOMER <span style="opacity:.6">(optional)</span>
+            <input id="dmCustomer" style="width:150px" placeholder="Dyson"></label>
+          <label style="display:block">ASSEMBLY FOLDER <span style="opacity:.6">(optional)</span>
+            <input id="dmAssembly" style="width:140px" placeholder="10575-02"></label>
+          <button class="btn-run" id="dmGo" style="margin:0">Extract</button>
+          <button id="dmCancel" style="margin:0">Cancel</button>
+        </div>
+        <p class="note" id="dmProgress" style="margin-top:8px"></p>
+      </div>
+
+      <div style="display:flex;gap:9px;flex-wrap:wrap">
+        <!-- THE ENDPOINT IT WAS RENAMED FOR, NOW BEHIND IT. This asks Document Manager to walk
+             the SOLIDWORKS references for a project and build a file pack, then opens the pack
+             it wrote so the drawings can be chosen from it. Minutes of COM work on their host,
+             so it reports progress rather than appearing to hang.
+             It falls back to browsing the shares when the DM API is not configured — the
+             behaviour this button had before — because a machine without the API set up still
+             needs a way to add a job folder. -->
+        <button id="addFolder" title="Ask Document Manager to extract this project's drawing pack.">Extract DesignDrawingPack</button>
+        <button id="addFiles">Add drawing files…</button>
+        <!-- THE SHARE, WHEN THE BUTTON ABOVE IS TALKING TO DOCUMENT MANAGER. Adding a whole job
+             folder off the share is what that button used to do, and it is still wanted: not
+             every job goes through DM, and DM is not always up. -->
+        <button id="addShareFolder">Add job folder…</button>
+        <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
+             tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
+             folder copy of the same drawing and leaves the rest alone. Removing one is the
+             same ✕ as any other. -->
+        <button id="addFromDm" disabled title="Checking…">Add from Document Manager…</button>
+        <!-- THE PACK, ON PAPER. Checking an estimate means having the drawings in front of you,
+             and that meant opening the job folder on the share and printing twelve files one at
+             a time. One button, one PDF, bookmarked per drawing. -->
+        <button id="printDrawings" disabled>Print drawings…</button>
+        <button id="clearFiles" style="margin-left:auto">Clear</button>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- ══ RUN ════════════════════════════════════════════════════════ -->
+    <!-- ══ PARITY ═══════════════════════════════════════════════════
+         THE COMPARISON, FOR A JOB ALREADY RUN. The card above regenerates a quote; this one
+         answers a different question — how close was the engine to the estimator? Neither side
+         is re-run and no drawing is read: two spreadsheets go in and a parity bundle comes out.
+
+         It needs no runner, no SOLIDWORKS seat and no queue, because it is arithmetic over two
+         files. That is why it can be done on any machine, at any time, including for jobs
+         issued months ago — which is the only way the back catalogue ever gets compared. -->
+    <section class="card">
+      <h2>Parity report — for a job already estimated</h2>
+      <p class="hint">Compare a job the engine has <b>already</b> estimated against the manual
+         estimate for the same job. Both sides have to be named here because both already exist;
+         either can come from the share or be uploaded. Nothing is re-run and no drawings are
+         needed, so this works for jobs estimated months ago.</p>
+      <p class="note" style="margin-top:0">
+         <b>Running a fresh estimate instead?</b> Don't use this card — attach the manual sheet on
+         the Job panel before you run, and the comparison is produced with the deliverables. You
+         name one file there rather than two, because the engine is about to produce the other.</p>
+
+      <div class="dest" style="border-left-color:var(--brand)">
+        <span class="k">AI estimate</span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <button id="pickParityAi" type="button">Choose from share…</button>
+          <button id="uploadParityAi" type="button">Upload…</button>
+          <span class="p" id="parityAiName"><span class="pending">Nothing chosen</span></span>
+          <input id="parityAiFile" type="file" accept=".json,.xlsx,.xlsm" hidden>
+        </div>
+        <!-- "THE SPREADSHEET YOU WERE SENT IS ENOUGH" WAS A PROMISE THIS CANNOT KEEP.
+             Parity reads the engine's JSON, not its workbook; the workbook is only used to
+             work out the JSON's name. So the spreadsheet is enough exactly when that JSON is
+             on THIS machine - and it is written to output\json on whichever machine ran the
+             job, which for anything estimated elsewhere it will not be. Better to say the
+             condition than to let it fail and read as a broken form. -->
+        <p class="note">The engine's own estimate workbook, or its summary <code>.json</code>.
+           Given the workbook, the summary is found by name — so the spreadsheet is enough
+           <em>provided that job's <code>.json</code> is on this machine</em>. It is written to
+           <code>output\json</code> by whichever machine ran the estimate, so for a job run
+           elsewhere, copy the JSON across or point at it directly. The refusal names the file
+           it looked for.</p>
+      </div>
+
+      <div class="dest" style="border-left-color:var(--info)">
+        <span class="k">Manual estimate</span>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          <button id="pickParityManual" type="button">Choose from share…</button>
+          <button id="uploadParityManual" type="button">Upload…</button>
+          <span class="p" id="parityManualName"><span class="pending">Nothing chosen</span></span>
+          <input id="parityManualFile" type="file" accept=".xlsx,.xlsm,.xls" hidden>
+        </div>
+        <p class="note">The estimator's workbook. <code>.xls</code> is accepted — most of the
+           back catalogue is in it.</p>
+      </div>
+
+      <label style="display:flex;gap:9px;align-items:flex-start;margin-top:12px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+        <input id="parityExcel" type="checkbox" style="margin-top:3px">
+        <!-- IT APPLIES TO THE MANUAL SHEET, AND THIS SAID THE ENGINE'S.
+             Only one workbook is ever opened on this path. The AI side is read from the job's
+             summary JSON - the engine's .xlsx is used solely to find that JSON by name and is
+             never opened at all - so a tick can do nothing whatever to it. The text described
+             the one file the switch cannot reach, which is worse than saying nothing: somebody
+             ticks it for the AI sheet, pays the Excel round trip, and still gets blanks from
+             the manual one. -->
+        <span class="note" style="margin:0">
+          <strong>Resolve formulas through Excel — applies to the MANUAL sheet only.</strong>
+          An <code>.xlsx</code> whose formulas have never been calculated stores no values, so
+          its totals read as blank. That happens when nobody has opened and saved it since it
+          was written. Tick this to have Excel compute them.
+          <br><span style="opacity:.75">Not needed for the AI side: that is read from the job's
+          summary JSON, not from a spreadsheet. Not needed for <code>.xls</code> either — a
+          different reader handles those and ignores this. Needs Excel on the machine running
+          the service, and it is slower, so leave it off unless the totals come back blank.</span>
+        </span>
+      </label>
+
+      <button class="btn-run" id="parityRun" disabled style="margin-top:12px">
+        Run parity report — AI against manual</button>
+      <p class="req" id="parityReq"></p>
+      <ul class="out" id="parityOut"></ul>
+    </section>
+
+    <!-- ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════
+         A SEPARATE PATH, DELIBERATELY. The estimate above is the engine's; this is the
+         estimator's. Tim opens the workbook, edits it, saves it, and — hours or days later —
+         comes back with that amended sheet. Nothing is re-read and no drawing is needed: the
+         sheet IS the answer, and this turns it into a client quote. Only the CLIENT QUOTE is
+         regenerated; the AI job report and provenance stay as the engine wrote them, so the
+         two accounts of the job never get mixed up. -->
+    <section class="card">
+      <h2>Regenerate a client quote from an amended sheet</h2>
+      <p class="hint">Already edited an estimate workbook? Name it here with the units, drawing
+         number and client, and it becomes a fresh client quote — saved to the AI Estimating
+         share along with the amended sheet, kept as the manual-override record.</p>
+      <!-- STATED AS A REQUIREMENT, NOT AS AN ASIDE. "No drawings needed" was the last clause
+           of a paragraph, while the Job panel above says in red that a drawing and a runner
+           are "still needed" - and the red line wins every time. Somebody with a sheet to
+           re-quote and no drawings to hand concluded twice that they could not proceed. -->
+      <p class="note" style="margin:0 0 10px">
+         <strong>Needs only units, drawing number and client.</strong> No drawings, and no
+         estimating runner: this never re-runs the engine or re-reads a drawing, so it works
+         on a machine that has never run an estimate, months after the job.</p>
+
+      <!-- TWO WAYS TO NAME THE SHEET, AND THE SHARE IS THE USUAL ONE.
+           This offered an upload and nothing else, so regenerating a quote from a run's own
+           workbook meant going and finding it in Explorer first — for a file this service
+           wrote, into a folder it can browse, and lists further down this very page. The
+           parity card directly above has "Choose from share" on both its sides, which made
+           this panel read as though it had lost something it never had. -->
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <button id="pickOverrideShare">Choose from share…</button>
+        <button id="pickOverride">Upload…</button>
+        <span class="p" id="overrideName"><span class="pending">No workbook chosen</span></span>
+        <input id="overrideFile" type="file" accept=".xlsx" hidden>
+      </div>
+      <p class="note" style="margin-top:6px">The estimate workbooks this engine wrote are on
+         the share, under the client and job — the same folder <em>Completed estimates</em>
+         lists at the bottom of this page. Open one, edit it, save it, then choose it here.
+         <strong>Upload…</strong> is for a sheet that is not on the share: one that came back
+         by email, or one kept locally.</p>
+
+      <p class="note" style="margin-top:10px">Uses the <strong>units, drawing number and
+         client</strong> entered at the top of this page. The workbook must have been opened and
+         <strong>saved in Excel</strong> at least once, so its totals are calculated.</p>
+
+      <!-- NO RATE BOOK IS NAMED HERE BECAUSE NONE IS USED, and that is the point. Every other
+           estimating button on this page must say UK or China, because it reads a book of rates
+           and two unlabelled estimates are indistinguishable afterwards. This button reads no
+           book at all: the price comes off the estimator's OWN saved sheet, whichever rates it
+           was built from and whatever they have since changed by hand. Labelling it "UK" would
+           claim a provenance it does not have. It says whose number it is instead. -->
+      <button class="btn-run" id="regen" disabled style="margin-top:10px">
+        Estimator Client Report Regen — from your amended sheet</button>
+      <p class="req" id="regenReq"></p>
+      <ul class="out" id="regenOut"></ul>
+    </section>
+
+  <section class="card" style="margin-top:18px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">Run</h2>
+      <div class="status"><span class="dot" id="dot"></span><span id="statusText">Idle</span></div>
+    </div>
+    <div class="log" id="log"></div>
+    <ul class="out" id="out"></ul>
+  </section>
+
+  <!-- ══ MULTI-DRAWING ENQUIRY ══════════════════════════════════════
+       A SEPARATE SECTION BECAUSE IT IS A DIFFERENT QUESTION, not a bulk version of the
+       one above. The Job panel asks "what does this pack cost", pooling every drawing in
+       it into one BOM and one estimate — that is 11650. This asks "what does each of
+       these cost", one estimate per drawing, which is what arrives when a customer sends
+       a hundred unrelated PDFs. Putting them in one control would make the difference a
+       checkbox, and getting a checkbox wrong here does not fail: it returns a confident
+       estimate of a question nobody asked. -->
+  <section class="card" style="margin-top:18px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">Multi-drawing enquiry</h2>
+      <div class="status"><span class="dot" id="bDot"></span><span id="bStatus">Idle</span></div>
+    </div>
+    <p class="hint">One estimate per PDF, priced one at a time. Each drawing files into its
+      own folder under the client — <span class="mono" id="bWhere">…/AISheets/&lt;client&gt;/&lt;drawing&gt;/</span>.
+      Uses the client and number of units from the Job panel above.</p>
+
+    <ul class="files" id="bList"></ul>
+    <p class="empty" id="bEmpty">No drawings added yet.</p>
+
+    <p class="hint" style="margin:-6px 0 12px">
+      <label style="display:inline;margin-right:14px"><input type="radio" name="bMethod"
+        value="both" checked> Both — LLM scan now, full estimate behind it</label>
+      <label style="display:inline;margin-right:14px"><input type="radio" name="bMethod"
+        value="llm"> LLM scan only</label>
+      <label style="display:inline"><input type="radio" name="bMethod"
+        value="engine"> Full estimate only</label><br>
+      <span style="color:var(--warn)">The LLM figure is a read of the drawing by Grok. It is
+      NOT a quote, not from our rate tables, and not reproducible — it is there to compare
+      against the engine, and a hundred full estimates take days.</span>
+    </p>
+
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button id="bAdd">Add PDFs…</button>
+      <button id="bClear">Clear</button>
+    </div>
+
+    <!-- THE SAME TWO BOOKS AS THE JOB CARD, laid out the same way, because they are the same
+         choice asked about a hundred drawings instead of one. This is the button that would
+         hurt most if it were the unlabelled one: a hundred estimates arrive at once, filed
+         under a hundred folders, and nothing in the output would say which set of rates
+         somebody was reading. -->
+    <button class="btn-run" id="bRun" disabled>SDI (UK) Intelligence — Estimate every drawing</button>
+    <button class="btn-stop" id="bStop" hidden>Stop the rest</button>
+
+
+    <button class="btn-run btn-soon" id="bRunChina" disabled aria-disabled="true"
+            title="Not connected yet — there is no China estimating endpoint behind this button">
+      SDI (China) Intelligence — Estimate every drawing</button>
+    <p class="note" id="bChinaNote">Not connected yet. There is no China estimating endpoint,
+       rate set or route behind this button — pressing it would do nothing, so it is held
+       disabled until there is. Use the UK enquiry above.</p>
+
+    <div id="bProgress" hidden>
+      <p class="hint" id="bCount"></p>
+      <ul class="out" id="bRows"></ul>
+    </div>
+  </section>
+
+  <!-- ══ COMPLETED ESTIMATES ════════════════════════════════════════ -->
+  <section class="card" style="margin-top:18px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">Completed estimates</h2>
+      <button id="openRoot">Browse…</button>
+    </div>
+    <p class="hint" style="margin-top:6px">\Estimating\Completed\AI Estimating\AISheets — open a client to reach its drawings.</p>
+  </section>
+</div>
+
+<!-- ══ EXPLORER ═════════════════════════════════════════════════════ -->
+<dialog id="browser">
+  <div class="dhead">
+    <h3 id="dTitle">Select a job folder</h3>
+    <button id="dUp" title="Up one level (Backspace)">↑ Up</button>
+    <button id="dClose">Close</button>
+  </div>
+  <div class="crumbs" id="crumbs"></div>
+  <ul class="listing" id="listing"></ul>
+  <div class="dfoot">
+    <span class="left" id="dHelp"></span>
+    <button id="dAll">Add all</button>
+    <button id="dChoose">Use this folder</button>
+  </div>
+</dialog>
+
+<!-- CHOOSING WHAT GOES ON THE PAPER.
+     Print used to send the whole Drawings list, so the only way to leave a file out was the ×
+     beside it — which also removed it from the estimate run. One list was doing two jobs that
+     are not the same: you want every file in the run, and a chosen few on the paper.
+     This picks, without touching the run. -->
+<dialog id="printPick">
+  <div class="dhead">
+    <h3>Choose what to print</h3>
+    <button id="ppAll" type="button">All</button>
+    <button id="ppNone" type="button">None</button>
+    <button id="ppClose" type="button">Cancel</button>
+  </div>
+  <ul class="listing" id="ppList"></ul>
+  <div class="dfoot">
+    <span class="left" id="ppHelp"></span>
+    <button id="ppGo" type="button">Print selected</button>
+  </div>
+</dialog>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   BACKEND CONTRACT
+
+   Existing (app.py):
+     GET  /api/roots                    -> {roots:[{name,path}]}
+     GET  /api/files?path=<abs>         -> {path, items:[{name,path,is_dir,ext,size_bytes,modified}]}
+     GET  /api/file?path=<abs>          -> streams one allowed file
+
+   NEW — required for this page:
+     POST /api/estimate
+          {client, drawing_number, units, job_folder?, files:[abs,...]}
+       -> {run_id, output_path}
+     GET  /api/estimate/<run_id>
+       -> {status:"running"|"done"|"error", log:[str,...],
+           output_path, deliverables:[{name,path}], error?}
+
+   CORS in app.py is allow_methods=["GET"] and MUST include "POST".
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The share root. Z:\Estimating\... in Explorer is this UNC path — a mapped
+   drive letter does not exist for a service account, so the UNC form is the
+   only one that works both on a laptop now and on the server later. */
+const OUTPUT_ROOT = "\\\\sdi-dc01\\shareddata$\\Shared\\Estimating\\Completed\\AI Estimating\\AISheets";
+const API_KEY = "";                       // set if SDI_API_KEY is enabled
+const api = (p,o={}) => fetch(p,{...o,headers:{"X-SDI-Key":API_KEY,...(o.headers||{})}});
+
+/* WHAT THE SERVICE SAID, IN WORDS, WHATEVER SHAPE IT SAID IT IN.
+   Three call sites did `j.detail || "Failed (" + r.status + ")"`, which is right for the
+   only shape we write ourselves -- HTTPException(detail="a sentence"). FastAPI's own
+   validation failure is a different shape: detail is a LIST of objects, one per field, so
+   the concatenation renders the literal text [object Object] and the estimator is told
+   nothing at all. That is precisely the case you most need words for, because a 422 means
+   the PAGE and the SERVICE disagree about the request -- almost always a service running
+   code from before the last pull, which is invisible from the browser.
+   So: a string passes through, a validation list becomes "field: message", and anything
+   else falls back to the status rather than to punctuation. */
+function detailText(j, r, fallback){
+  const d = j && j.detail;
+  if(typeof d === "string" && d.trim()) return d;
+  if(Array.isArray(d) && d.length){
+    return d.map(e => {
+      const where = Array.isArray(e.loc) ? e.loc.filter(x => x !== "body").join(".") : "";
+      return (where ? where + ": " : "") + (e.msg || "invalid");
+    }).join("; ")
+      + (r && r.status === 422
+          ? "  —  the service is rejecting a field this page sent. It is usually running "
+            + "code from before the last pull; restart it and try again."
+          : "");
+  }
+  if(d && typeof d === "object"){ try{ return JSON.stringify(d); }catch(e){} }
+  return fallback + (r ? " (" + r.status + ")" : "");
+}
+
+const $ = id => document.getElementById(id);
+const units=$("units"), client=$("client"), drawing=$("drawing");
+const runBtn=$("run"), stopBtn=$("stop"), destPath=$("destPath"), req=$("req");
+const runnerBox=$("runnerBox"), runnerText=$("runnerText");
+const fileList=$("fileList"), fileEmpty=$("fileEmpty");
+const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
+// BOUND EXPLICITLY, not leaned on. A browser exposes elements with an id as globals, so
+// this file would work without these lines -- right up until a variable name collides with
+// one and the failure is a silent wrong element rather than an error.
+const bList=$("bList"), bEmpty=$("bEmpty"), bWhere=$("bWhere"), bRun=$("bRun"),
+      bStop=$("bStop"), bProgress=$("bProgress"), bCount=$("bCount"), bRows=$("bRows"),
+      bDot=$("bDot"), bStatus=$("bStatus");
+/* THE LLM READ BELONGS TO THE JOB PANEL, not to the enquiry — it reads `drawings`, it posts
+   to the pooling endpoint, and it reports into THIS panel's log. The `b` prefix is the one
+   thing left over from where it first went in. */
+const bRunLLM=$("bRunLLM"), freshRead=$("freshRead");
+
+let drawings = [];      // {path, name, is_dir}
+let running  = false;
+let poll     = null;
+/* THE RUN THE STOP BUTTON WOULD STOP. It lived inside the start handler, so the moment that
+   handler returned the page no longer knew what was running — a run id the page cannot name
+   is a run the page cannot stop, however many buttons it grows. */
+let runId    = null;
+/* THE RUN IN FRONT OF THIS ONE, if the service said there was one when it accepted the job.
+   Declared up here with the rest of the run state and NOT beside its button: a `const` read
+   from a function that runs before the declaration is a temporal-dead-zone ReferenceError,
+   which is what silently killed "Add all" and took the rest of the script with it. */
+let blockedBy = "";
+/* Named rather than typed as a bare number. The runner beats at lease/6 capped to 30s, so
+   telling somebody "stopping now" when it is up to half a minute away is how a stop that IS
+   working gets pressed three more times. */
+const BEAT_HINT = 30;
+
+/* ── a folder name must survive being a folder name ─────────────────── */
+/* THE SERVER'S RULE, STEP FOR STEP. estimate_routes.safe_segment decides what the folder
+   is actually called; this only decides what the page SAYS it will be called, and the two
+   drifting apart shows an estimator a destination that is not where their work went.
+   They already had: this trimmed before substituting and the server after, this stripped
+   only trailing dots where the server strips dots AND spaces, and the server capped at 120
+   characters where this did not — so "M & S .." previewed as "M & S " and filed as "M & S".
+   Order, character class and cap all match deliberately; tests/test_the_page_and_the_server
+   _agree_on_a_folder_name.py runs both implementations over the same names. */
+const safe = s => String(s||"").replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").trim()
+                               .replace(/\s+/g," ").replace(/[. ]+$/,"").slice(0,120);
+
+let runDest = null;          // the dated run folder the server stamped, once known
+
+/* ── DOES THE DRAWING NUMBER MATCH THE DRAWINGS? ──────────────────────
+   A transposed digit — 12242-24 for 12422-24 — files a real estimate under a
+   drawing number that does not exist, and nothing downstream ever objects: the
+   folder is created on demand, the engine reads the pack it was given, and the
+   number only has to be right for a human to find it again. It is discovered
+   weeks later by somebody who cannot find an estimate they know was run.
+
+   The page already holds both facts and was not comparing them. Compared on
+   alphanumerics only, because 12422-24 and 12422_24 and 1242224 are the same
+   drawing and the difference is a typing convention, not a disagreement.
+
+   A WARNING, NOT A BLOCK. There are honest reasons for a mismatch — a job
+   folder named after the enquiry, a customer's own numbering — and a page that
+   refuses to proceed on a guess is worse than one that raises an eyebrow. */
+const alnum = t => String(t||"").toUpperCase().replace(/[^A-Z0-9]/g, "");
+function drawingNumberLooksWrong(){
+  const want = alnum(drawing.value);
+  if(want.length < 4 || !drawings.length) return false;   // too short to be evidence
+  return !drawings.some(d => alnum(d.name).includes(want) || alnum(d.path).includes(want));
+}
+
+function destination(){
+  const c = safe(client.value), d = safe(drawing.value);
+  return (c && d) ? `${OUTPUT_ROOT}\\${c}\\${d}` : "";
+}
+
+/* ── THE BUTTON IS THE GATE ──────────────────────────────────────────
+   Disabled until every input is present AND at least one drawing is
+   added, and disabled again for the whole of a run. A second click on a
+   job already running is how two estimates end up writing one folder. */
+function refresh(){
+  // The enquiry panel reads the same client and quantity, so whatever changes one changes
+  // the other's gate. Asking here is how they cannot get out of step.
+  if(typeof renderBatch === "function") renderBatch();
+  const missing = [];
+  if(!(parseInt(units.value,10) > 0)) missing.push("number of units");
+  if(!safe(client.value))             missing.push("client");
+  if(!safe(drawing.value))            missing.push("drawing number");
+  if(!drawings.length)                missing.push("at least one drawing");
+  if(!runnersOnline)                  missing.push("an estimating runner (none connected)");
+
+  // Once a run has started, keep showing the folder the SERVER stamped — that is
+  // where the files actually are, and "where did it go?" is the first question
+  // after a run. It falls away by itself when the client or drawing changes,
+  // because the guessed path is no longer a prefix of it.
+  const d = destination();
+  const show = (runDest && d && runDest.startsWith(d + "\\")) ? runDest : d;
+  destPath.innerHTML = show ? show : '<span class="pending">Enter a client and drawing number</span>';
+
+  runBtn.disabled = running || missing.length > 0;
+  /* THE SAME GATE AS THE PACK ESTIMATOR, because it is the same job, the same Drawings
+     panel and the same endpoint — only the reader differs. Gating it separately is how one
+     button becomes pressable in a state the other has already refused. `running` covers
+     both directions: an LLM read holds the machine exactly as an estimate does, so neither
+     button can start while the other is working. */
+  bRunLLM.disabled = running || missing.length > 0;
+  bRunLLM.title = missing.length ? "Still needed: " + missing.join(", ")
+                : "Reads this pack with Grok alone — a measurement, not an estimate";
+  runBtn.textContent = running ? "Estimating…" : "SDI (UK) Intelligence Estimator";
+  // Offered only while there is something to stop, so it cannot be pressed against a run
+  // that has already finished and read as having done something.
+  stopBtn.hidden = !running;
+  stopBtn.disabled = false;
+  if(running){
+    req.textContent = ""; req.style.color = "";
+  }else if(missing.length){
+    /* SAY WHICH BUTTON THIS BLOCKS, because it does not block them all.
+       "Still needed: ... at least one drawing, an estimating runner" is about running an
+       ESTIMATE. It sits at the top of the page in red, so it reads as the whole page being
+       unavailable - and the two panels below it, Parity and Regenerate, need neither a
+       drawing nor a runner. An estimator with a sheet to re-quote and no drawings to hand
+       reads that line and reasonably concludes they cannot proceed.
+
+       AND THE FIRST ATTEMPT AT SAYING SO CONTRADICTED ITSELF. It read "need none of this —
+       only units, client and drawing number", while the missing list it followed routinely
+       BEGINS with units, client and drawing number. It also lumped the two panels together
+       when they differ: parity needs nothing at all from this panel, regeneration needs the
+       three text fields. Naming them separately is the only version that is true of both. */
+    req.textContent = "Still needed to RUN AN ESTIMATE: " + missing.join(", ")
+                    + ". This does not block the two panels below — the parity report needs "
+                    + "nothing from this panel at all, and regenerating a client quote needs "
+                    + "the units, client and drawing number but no drawing file and no runner.";
+    req.style.color = "";
+  }else if(drawingNumberLooksWrong()){
+    req.textContent = "Check the drawing number — " + safe(drawing.value)
+                    + " does not appear in any drawing you have added";
+    req.style.color = "var(--bad)";
+  }else{
+    req.textContent = ""; req.style.color = "";
+  }
+}
+[units,client,drawing].forEach(el => el.addEventListener("input", refresh));
+
+/* ── IS THERE ANYTHING TO RUN THE JOB? ────────────────────────────────
+   The work happens on a runner, not here. If none is connected, pressing
+   the button would put a job on a queue nobody is draining — which looks
+   exactly like working until somebody goes looking for the estimate. So
+   the page asks, says so plainly, and keeps the button disabled. */
+let runnersOnline = 0;
+async function checkRunners(){
+  let r;
+  try{
+    r = await api("/api/estimate/runners");
+  }catch(e){
+    // The fetch itself failed: the service is not answering at all.
+    runnersOnline = 0;
+    runnerBox.style.borderLeftColor = "var(--bad)";
+    runnerText.innerHTML = '<span style="color:var(--bad)">Cannot reach the service</span>';
+    refresh(); return;
+  }
+  if(!r.ok){
+    // A REPLY IS NOT A FAILURE TO REPLY, and saying so wastes somebody's morning.
+    // This page is served fresh from disk on every request but estimate_routes is
+    // imported once at start-up, so after a merge the page can be newer than the
+    // service it is talking to. The old route table has no /runners and matches it
+    // as a run id instead — a 404 that means "restart me", not "I am not here".
+    runnersOnline = 0;
+    runnerBox.style.borderLeftColor = "var(--bad)";
+    runnerText.innerHTML = r.status === 404
+      ? '<span style="color:var(--bad)">This page is newer than the service — '
+        + 'restart app.py to pick up the runner queue</span>'
+      : `<span style="color:var(--bad)">The service answered ${r.status}</span>`;
+    refresh(); return;
+  }
+  try{
+    const d = await r.json();
+    runnersOnline = d.online || 0;
+    const live = (d.runners||[]).filter(x => x.online);
+    if(runnersOnline){
+      /* "READY" IS A CLAIM ABOUT THE MACHINE, AND IT HAS TO BE TRUE.
+         This said "ready" whenever a runner was online and nothing was QUEUED — it never
+         looked at run_id, which the API already returns and which is precisely "this
+         runner is mid-estimate". So a runner 67 seconds into 11650-00 read "ready", the
+         button was pressed, and the service refused with "An estimate is already running".
+         The page and the service disagreeing about one fact leaves the operator to work
+         out which of them is lying, and the answer is not obvious from either screen. */
+      const busy = live.filter(x => x.running);
+      runnerBox.style.borderLeftColor = busy.length ? "var(--warn)" : "var(--ok)";
+      const who = live.map(x => x.hostname || x.runner_id).join(", ");
+      let state;
+      if(busy.length){
+        const b = busy[0].running;
+        state = `  ·  busy — ${b.drawing_number} for ${b.client}, ${b.seconds}s in`
+              + (d.queued ? `, ${d.queued} queued behind it` : "");
+      }else{
+        state = d.queued ? `  ·  ${d.queued} queued` : "  ·  ready";
+      }
+      runnerText.textContent = who + state;
+    }else{
+      runnerBox.style.borderLeftColor = "var(--bad)";
+      runnerText.innerHTML = '<span style="color:var(--bad)">No runner connected — '
+        + 'estimates cannot be run</span>';
+    }
+  }catch(e){
+    runnersOnline = 0;
+    runnerBox.style.borderLeftColor = "var(--bad)";
+    runnerText.innerHTML = '<span style="color:var(--bad)">Cannot reach the service</span>';
+  }
+  refresh();
+}
+checkRunners();
+setInterval(checkRunners, 15000);
+
+/* ══ MERGING TWO SOURCES OF DRAWINGS ══════════════════════════════════════════════════
+   Drawings can now arrive from two places — the estimating shares, and a Document Manager
+   extract — and the same drawing can legitimately arrive from both.
+
+   THE RULE IS OVERRIDE BY NAME, NOT DEDUPE BY PATH. Two files called 12392-02-01.pdf are the
+   same drawing whatever folder each came from, and the one added LAST wins. That is what makes
+   the second button worth having: pulling a job from Document Manager over the top of a folder
+   copy replaces the stale sheets and leaves everything else alone. Deduping by path instead
+   would keep both, and the pack would carry one drawing twice — priced twice, if the two
+   disagreed.
+
+   Each entry remembers where it came from, so an override is visible in the list rather than
+   silent. */
+function mergeIntoDrawings(items){
+  let added = 0, replaced = 0;
+  items.forEach(it => {
+    if(!it || !it.path) return;
+    const key = (it.name || "").toLowerCase();
+    const at = drawings.findIndex(d => (d.name || "").toLowerCase() === key && !d.is_dir);
+    if(at >= 0 && !it.is_dir){ drawings[at] = it; replaced++; }
+    else if(at < 0){ drawings.push(it); added++; }
+  });
+  renderFiles(); refresh();
+  return {added, replaced};
+}
+
+function renderFiles(){
+  fileList.innerHTML = "";
+  drawings.forEach((f,i) => {
+    const li = document.createElement("li");
+    /* WHERE IT CAME FROM, because two sources can now supply the same drawing and the later
+       one silently replaces the earlier. An override nobody can see is an override nobody can
+       check. */
+    const src = f.source === "dm" ? '<span class="kind" style="border-color:var(--info);'
+                                  + 'color:var(--info)" title="From a Document Manager '
+                                  + 'extract">DM</span>' : "";
+    li.innerHTML = `<span class="kind">${f.is_dir?"folder":(f.name.split(".").pop()||"file").toUpperCase()}</span>`
+                 + src
+                 + `<span class="nm" title="${f.path}">${f.name}</span>`;
+    const x = document.createElement("button");
+    x.className="x"; x.textContent="✕"; x.title="Remove";
+    x.onclick = () => { drawings.splice(i,1); renderFiles(); refresh(); };
+    li.appendChild(x); fileList.appendChild(li);
+  });
+  fileEmpty.style.display = drawings.length ? "none" : "";
+  refreshPrint();
+}
+$("clearFiles").onclick = () => { drawings = []; renderFiles(); refresh(); };
+
+/* ══ EXPLORER ═════════════════════════════════════════════════════════
+   A browser cannot open the machine's own Explorer window and hand back a
+   path — the sandbox forbids it, and a page that could would be a security
+   hole. This is the server-side equivalent: it lists the real shares
+   through /api/files, so the paths it returns are paths the ENGINE can
+   open. That distinction is the whole point — a native picker would give
+   file contents the estimator cannot re-read from disk. */
+const dlg=$("browser"), listing=$("listing"), crumbs=$("crumbs"),
+      dTitle=$("dTitle"), dHelp=$("dHelp"), dChoose=$("dChoose"), dAll=$("dAll"),
+      dUp=$("dUp");
+let mode="folder", cwd="", roots=[], selected=null;
+// ONE FILE, RETURNED TO WHOEVER ASKED. The picker could select many files for a job or
+// open one for reading, but nothing could say "give me the path of exactly one file",
+// which is what a parity side and an attached manual sheet each need.
+let pickOne = null;
+// Which SOURCE the next selection should be tagged with. Set only by the Document
+// Manager button and cleared on every other open, so a later ordinary pick cannot
+// inherit a DM badge from the last one.
+let dmPick = false;
+let shown=[];                 // the listable FILES in the folder on screen
+
+async function openBrowser(m, opts){
+  mode = m; selected = null;
+  dmPick = !!(opts && opts.dm);
+  // opts.title / opts.help let a caller say WHY this picker opened, for the case where the
+  // button pressed was not called "browse" — see the Document Manager fallback.
+  dTitle.textContent = (opts && opts.title) ? opts.title
+                     : m==="folder" ? "Select a job folder"
+                     : m==="files"  ? "Select drawing files"
+                     : m==="batch"  ? "Select the drawings in this enquiry"
+                     : m==="pickone"? (pickOne ? pickOne.title : "Select a file")
+                     : "Completed estimates";
+  dChoose.style.display = (m==="output" || m==="pickone") ? "none" : "";
+  dAll.style.display = (m==="files" || m==="batch") ? "" : "none";
+  dHelp.textContent = (opts && opts.help) ? opts.help
+                    : (m==="files" || m==="batch")
+                    ? "Click files to select. Click a folder to open it."
+                    : m==="folder" ? "Open a folder, then Use this folder."
+                    : m==="pickone" ? "Click the file to choose it. Click a folder to open it."
+                    : "Click a file to open it. Reports open in a tab; workbooks download.";
+  if(!roots.length){
+    try{ roots = (await (await api("/api/roots")).json()).roots || []; }
+    catch(e){ roots = []; }
+  }
+  const start = (m==="output")
+    ? (roots.find(r => r.path.toUpperCase().includes("AISHEETS"))?.path || OUTPUT_ROOT)
+    : null;
+  dlg.showModal();
+  start ? navigate(start) : showRoots();
+}
+function showRoots(){
+  cwd=""; crumbs.textContent="Shares";
+  shown=[]; refreshAddAll(); refreshUp();
+  listing.innerHTML="";
+  roots.forEach(r => {
+    const li=document.createElement("li"); li.className="dir";
+    li.innerHTML=`<span class="ic">▸</span><span class="nm">${r.name}</span>`
+                +`<span class="meta">${r.path}</span>`;
+    li.onclick=()=>navigate(r.path); listing.appendChild(li);
+  });
+}
+function containingRoot(path){
+  // The longest configured root this path sits inside, or null if it sits in none.
+  const p = (path || "").toUpperCase();
+  let best = null;
+  roots.forEach(r => {
+    const R = (r.path || "").toUpperCase();
+    if(R && (p === R || p.startsWith(R + "\\")))
+      if(!best || r.path.length > best.length) best = r.path;
+  });
+  return best;
+}
+function within(path, root){
+  const p = (path||"").toUpperCase(), r = (root||"").toUpperCase();
+  return p === r || p.startsWith(r + "\\");
+}
+
+function parentOf(path){
+  // null means "there is no folder above this one" — the share list, not an error.
+  const p = (path || "").replace(/\\+$/, "");
+  if(!p) return null;
+
+  // A SHARE HAS A TOP, AND IT IS NOT THE TOP OF THE SERVER. Above
+  // ...\AI Estimating\AISheets is ...\AI Estimating, which is not a configured
+  // root and which the service refuses to read. Walking up into it turned "go
+  // back" into "Path is outside the allowed roots" — the same being-stuck the
+  // crumbs were meant to cure, one level higher. The list of shares is the real
+  // parent of a share, so say so and let the caller show it.
+  const root = containingRoot(p);
+  if(root && within(p, root) && p.toUpperCase() === root.toUpperCase()) return null;
+  const parts = p.split("\\").filter(Boolean);
+  let up;
+  if(p.startsWith("\\\\")){
+    // \\server\share is the shallowest LISTABLE folder on a UNC path. Above it
+    // is not \\server — that is a machine, and nothing on this page can read it.
+    if(parts.length <= 2) return null;
+    up = "\\\\" + parts.slice(0, -1).join("\\");
+  } else {
+    if(parts.length <= 1) return null;
+    up = parts.slice(0, -1).join("\\");
+    if(/^[A-Za-z]:$/.test(up)) up += "\\";        // C: is not a folder; C:\ is
+  }
+  // Belt and braces for a root reached by a deeper path than the one we started
+  // from: if the step lands outside every share, it is not a step back.
+  if(root && !within(up, root)) return null;
+  return up;
+}
+function refreshUp(){
+  // At a share root there IS still somewhere to go — back to the list of shares.
+  // Only the share list itself has nothing above it.
+  dUp.style.display = cwd ? "" : "none";
+  dUp.disabled = !cwd;
+}
+dUp.onclick = () => { if(cwd){ const up = parentOf(cwd); up ? navigate(up) : showRoots(); } };
+
+// Backspace is what Explorer does, and the dialog has no text field to steal it.
+dlg.addEventListener("keydown", ev => {
+  const typing = /^(INPUT|TEXTAREA)$/.test(ev.target.tagName || "");
+  if(typing) return;
+  if(ev.key === "Backspace" || (ev.altKey && ev.key === "ArrowLeft")){
+    ev.preventDefault(); dUp.onclick();
+  }
+});
+
+function renderCrumbs(path){
+  crumbs.innerHTML = "";
+  // Segments ABOVE the share this path lives in are shown but not offered. They
+  // are part of the path and the estimator should see them; they are also not
+  // readable by this service, and a crumb that answers a click with "Path is
+  // outside the allowed roots" is worse than one that never invited it.
+  // The crumbs are built from the share root downwards, so a segment is reachable
+  // exactly when it is at or below the configured root — i.e. no shorter than it.
+  const root = containingRoot(path);
+  const reachable = acc => !root || acc.length >= root.length;
+
+  const step = (label, target) => {
+    if (target && !reachable(target)){
+      crumbs.appendChild(Object.assign(document.createElement("span"),
+        {textContent: label, title: target + " — above the shared folder",
+         style: "color:var(--dim)"}));
+      return;
+    }
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.title = target || "All shares";
+    b.onclick = target ? () => navigate(target) : showRoots;
+    crumbs.appendChild(b);
+  };
+  const sep = () => crumbs.appendChild(
+    Object.assign(document.createElement("span"),
+                  {textContent: " › ", style: "color:var(--dim)"}));
+
+  step("Shares", null);
+  const parts = path.replace(/\\+$/, "").split("\\").filter(Boolean);
+  if (!parts.length) return;
+  // A UNC share root is TWO segments (\\server\share) and is not navigable in
+  // halves — \\sdi-dc01 on its own is not a folder anybody can list.
+  let acc, next;
+  if (path.startsWith("\\\\") && parts.length > 1){
+    acc = "\\\\" + parts[0] + "\\" + parts[1]; next = 2;
+  } else {
+    acc = parts[0]; next = 1;
+  }
+  sep(); step(acc, acc);
+  for (let i = next; i < parts.length; i++){
+    acc += "\\" + parts[i];
+    sep(); step(parts[i], acc);
+  }
+}
+
+async function navigate(path){
+  cwd = path; selected = null;
+  listing.innerHTML = '<li><span class="nm" style="color:var(--dim)">Reading…</span></li>';
+  shown = []; refreshAddAll(); refreshUp();
+  // TWO WAYS BACK, because they answer different questions. Up answers "that was
+  // the wrong folder" — one step, the same reflex as Explorer. The crumbs answer
+  // "take me to the client" from four levels down without four clicks. Neither
+  // depends on the listing having anything in it: an empty folder deep in a CAD
+  // vault is exactly where you get stuck if the only way out is a row to click.
+  renderCrumbs(path);
+  let data;
+  try{ const r = await api("/api/files?path=" + encodeURIComponent(path));
+       if(!r.ok) throw new Error(await r.text()); data = await r.json(); }
+  catch(e){ listing.innerHTML = `<li><span class="nm" style="color:var(--bad)">Cannot read this folder — ${e.message}</span></li>`; return; }
+
+  listing.innerHTML="";
+  shown = (data.items||[]).filter(it => !it.is_dir);
+  refreshAddAll();
+  if(!(data.items||[]).length)
+    listing.innerHTML='<li><span class="nm" style="color:var(--dim)">Empty</span></li>';
+  (data.items||[]).forEach(it => {
+    const li=document.createElement("li");
+    if(it.is_dir) li.className="dir";
+    const size = it.is_dir ? "" : (it.size_bytes>1e6 ? (it.size_bytes/1e6).toFixed(1)+" MB"
+                                                     : Math.max(1,Math.round(it.size_bytes/1024))+" KB");
+    li.innerHTML=`<span class="ic">${it.is_dir?"▸":"·"}</span><span class="nm">${it.name}</span>`
+                +`<span class="meta">${size}</span>`;
+    li.onclick = () => {
+      if(it.is_dir){ navigate(it.path); return; }
+      // BROWSING FINISHED WORK MEANS READING IT. Listing an estimate you cannot
+      // open is a directory listing, not a deliverable — the quote and the
+      // decision report render in a tab, the workbook downloads for Excel.
+      if(mode==="output"){
+        window.open("/api/file?path="+encodeURIComponent(it.path), "_blank", "noopener");
+        return;
+      }
+      if(mode==="pickone"){
+        /* The path is the server's, resolved by the listing — never typed, so it cannot be a
+           path this service will refuse when it comes back. */
+        if(pickOne && pickOne.accept && !pickOne.accept.some(x => it.name.toLowerCase().endsWith(x))){
+          dHelp.textContent = "That is not a " + pickOne.accept.join(" / ") + " file.";
+          return;
+        }
+        if(pickOne) pickOne.done(it);
+        dlg.close();
+        return;
+      }
+      if(mode!=="files" && mode!=="batch") return;
+      /* ONE PICKER, TWO LISTS. The multi-drawing enquiry selects files exactly as the
+         Job panel does — same shares, same containment rule, same server-resolved paths.
+         A second copy of this browser would be a second place for the path rules to
+         drift, and the paths are the one thing that must mean the same to the engine. */
+      const on = li.getAttribute("aria-selected")==="true";
+      li.setAttribute("aria-selected", on ? "false" : "true");
+      if(on){
+        pickSet(pickList().filter(d => d.path !== it.path));
+      }else if(mode === "batch"){
+        // A hundred separate enquiries: a repeated filename is two different jobs, so no
+        // override here — see mergeIntoDrawings.
+        if(!pickList().some(d => d.path===it.path))
+          pickList().push({path:it.path, name:it.name, is_dir:false});
+      }else{
+        mergeIntoDrawings([{path:it.path, name:it.name, is_dir:false,
+                          source: dmPick ? "dm" : "share"}]);
+      }
+      pickRender(); refreshAddAll();
+    };
+    listing.appendChild(li);
+  });
+}
+function refreshAddAll(){
+  // NAMES THE NUMBER, so nobody presses it wondering what it will do. A folder of
+  // twelve DXFs is the ordinary case and clicking twelve times is not a workflow.
+  const pending = shown.filter(it => !pickList().some(d => d.path === it.path));
+  dAll.textContent = pending.length ? `Add all ${pending.length}` : "Add all";
+  dAll.disabled = !pending.length;
+}
+
+dAll.onclick = () => {
+  shown.forEach(it => {
+    /* The enquiry list is a list of separate jobs, not one pack, so a name collision there is
+       two different enquiries and must NOT override. Only the pack merges by name. */
+    if(mode === "batch"){
+      if(!pickList().some(d => d.path === it.path))
+        pickList().push({path: it.path, name: it.name, is_dir: false});
+    }else{
+      mergeIntoDrawings([{path: it.path, name: it.name, is_dir: false,
+                          source: dmPick ? "dm" : "share"}]);
+    }
+  });
+  // The rows already on screen must agree with what was just added.
+  [...listing.children].forEach(li => {
+    if(!li.classList.contains("dir")) li.setAttribute("aria-selected","true");
+  });
+  pickRender(); refreshAddAll();
+};
+
+dChoose.onclick = () => {
+  if(mode==="folder" && cwd){
+    if(!drawings.some(d => d.path===cwd))
+      drawings.push({path:cwd, name:cwd.split("\\").pop(), is_dir:true});
+    renderFiles(); refresh();
+  }
+  dlg.close();
+};
+$("dClose").onclick = () => dlg.close();
+$("addShareFolder").onclick = () => openBrowser("folder");
+$("addFiles").onclick  = () => openBrowser("files");
+
+/* ══ DOCUMENT MANAGER EXTRACT ═════════════════════════════════════════════════════════
+   Ask DM to build a file pack for a project, then open the folder it wrote.
+
+   IT OPENS THE PACK RATHER THAN IMPORTING IT WHOLE, and that is deliberate. DM writes
+   possible_candidates/ and selection_report.html alongside the drawings (includeCandidates
+   defaults to true), so "add everything it produced" would put files into an estimate that
+   the estimator never chose and would not expect to be priced. The picker they already know
+   shows the pack; the same merge-by-name rule applies as for any other source.
+
+   POLLED, NOT WAITED ON. The extract is minutes of COM work on their host. A request held
+   open that long is one dropped connection from reporting failure on work that is going
+   fine — and a second press queues behind the first, because DM does one heavy extract at
+   a time. */
+let dmPoll = null;
+let dmApiReady = false;                 // set by checkDm(); no API means fall back to the share
+
+function dmSay(text, cls){
+  const el = $("dmProgress");
+  el.textContent = text || "";
+  el.style.color = cls === "e" ? "var(--bad)" : cls === "w" ? "var(--warn,var(--brand))"
+                 : cls === "ok" ? "var(--ok)" : "";
+}
+
+function dmStopPolling(){
+  if(dmPoll){ clearInterval(dmPoll); dmPoll = null; }
+  $("dmGo").disabled = false;
+  $("dmGo").textContent = "Extract";
+}
+
+$("addFolder").onclick = () => {
+  /* No API configured means this button keeps the job it has always had. Silently browsing
+     when somebody expected an extract would be worse, so the note says which one happened.
+
+     IT DID NOT SAY SO. dmSay() writes into #dmProgress, which lives INSIDE #dmExtractBox —
+     the panel this branch never opens. So the explanation went into a hidden element and the
+     button appeared to ignore its own label: press "Extract DesignDrawingPack", get an
+     unexplained "Select a job folder". #dmNote is the one that is actually on screen, and
+     the picker now says it in its own title too, where somebody who missed the note will
+     still see it. */
+  if(!dmApiReady){
+    dmSay("");
+    const n = $("dmNote");
+    if(n) n.textContent =
+      "Document Manager is not configured on this machine (DOCMGR_BASE_URL / DOCMGR_ACCESS_SECRET), "
+      + "so Extract DesignDrawingPack cannot ask for a pack. The share browser opened instead — "
+      + "pick the job folder there.";
+    openBrowser("folder", {
+      title: "Select a job folder — Document Manager not configured",
+      help:  "DM could not be asked for a pack, so this is the share. Open a folder, then Use this folder."});
+    return;
+  }
+  const box = $("dmExtractBox");
+  box.hidden = false;
+  /* CONFIGURED IS NOT REACHABLE, and the difference is a settings problem versus a switched-off
+     desktop. Both used to present as a ready button: the panel opened, a project number was
+     typed, Extract was pressed, and only then did a ConnectTimeout come back. The health call
+     is asked HERE rather than only at page load because a desktop that was off when the page
+     opened can be on by now — and because a reading taken minutes ago is not evidence about
+     the press happening now. It never blocks the form; it says what is true beside it. */
+  dmSay("Checking the Document Manager is up…");
+  api("/api/estimate/dm/health").then(r => r.json()).then(h => {
+    if(h.reachable && h.com_available !== false){
+      dmSay("Document Manager is up at " + (h.api_base || "its host") + ". Enter the project.", "ok");
+    }else{
+      /* Not an error style for com_available — the host answered, so this is a CAD problem on
+         their side that its owner fixes, and it may clear without anybody touching this page. */
+      dmSay(h.reason || "The Document Manager did not answer.", h.reachable ? "w" : "e");
+    }
+  }).catch(() => dmSay("Could not ask whether the Document Manager is up. Extract will say.", "w"));
+  /* 10575-02 -> project 10575, assembly 10575-02. Prefilled, never forced: a numbering
+     convention is a habit, and a form that quietly derives the wrong project is worse than
+     one that asks. Only filled when empty, so a correction survives reopening the panel. */
+  const dn = safe(drawing.value).trim();
+  if(!$("dmProject").value)  $("dmProject").value  = (dn.split("-")[0] || "").trim();
+  if(!$("dmCustomer").value) $("dmCustomer").value = safe(client.value).trim();
+  if(!$("dmAssembly").value) $("dmAssembly").value = dn;
+  $("dmProject").focus();
+};
+
+$("dmCancel").onclick = () => {
+  /* Stops US watching. It does NOT stop their host — one extract at a time is running there
+     whatever this page does, and saying otherwise would have somebody press Extract again
+     into a queue. */
+  dmStopPolling();
+  $("dmExtractBox").hidden = true;
+  dmSay("");
+};
+
+$("dmGo").onclick = async () => {
+  const project = $("dmProject").value.trim();
+  if(!project){ dmSay("A project number is needed — it is what DM looks the job up by.", "e"); return; }
+  $("dmGo").disabled = true; $("dmGo").textContent = "Extracting…";
+  dmSay("Asking Document Manager for the pack…");
+  let jobId = null;
+  try{
+    const r = await api("/api/estimate/dm/extract", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({project_number: project,
+                            customer: $("dmCustomer").value.trim(),
+                            assembly_folder: $("dmAssembly").value.trim()})});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ dmSay(detailText(j, r, "Document Manager refused the request"), "e"); dmStopPolling(); return; }
+    jobId = j.job_id;
+    dmSay("Extract queued on the Document Manager host (job " + jobId + "). This takes minutes.");
+  }catch(e){
+    dmSay("Could not reach the service — " + e.message, "e"); dmStopPolling(); return;
+  }
+
+  dmPoll = setInterval(async () => {
+    let s;
+    try{
+      const r = await api("/api/estimate/dm/extract/" + encodeURIComponent(jobId));
+      s = await r.json().catch(() => ({}));
+      if(!r.ok){ dmSay(detailText(s, r, "Lost track of the extract"), "e"); dmStopPolling(); return; }
+    }catch(e){ return; }               // a dropped poll is not a failed extract
+
+    if(!s.finished){
+      dmSay("Document Manager is working… (" + (s.status || "running")
+            + (s.progress ? " · " + s.progress : "") + ")");
+      return;
+    }
+    dmStopPolling();
+
+    if(!s.ok){
+      dmSay("The extract failed on the Document Manager host: "
+            + (s.error || "no reason given") + ".", "e");
+      return;
+    }
+    /* SUCCEEDED IS NOT THE SAME AS USABLE. The pack is written on their host; if the folder
+       is not readable from here the extract worked and the drawings are still out of reach,
+       and the service says which. */
+    if(!s.readable_here){
+      dmSay(s.note || ("The extract wrote " + (s.file_count || "?") + " file(s) to "
+            + (s.output_dir || "an unknown folder") + ", which this machine cannot read."), "e");
+      return;
+    }
+    dmSay("Extract finished — " + (s.file_count != null ? s.file_count + " file(s) in " : "")
+          + s.output_dir + ". Choose the drawings for this estimate.", "ok");
+    openBrowser("files", {dm: true}).then(() => navigate(s.output_dir));
+  }, 4000);
+};
+
+$("openRoot").onclick  = () => openBrowser("output");
+
+/* ══ MULTI-DRAWING ENQUIRY ════════════════════════════════════════════
+   A HUNDRED PDFs THAT ARE A HUNDRED QUESTIONS, not one pack. Every drawing becomes an
+   ordinary queued run — the same queue, the same runner, the same engine — so nothing
+   here decides anything about an estimate. The server queues one run per drawing and
+   hands them out one at a time, because two Excel automations against one desktop is not
+   a supported thing to do. This screen is a list and a progress table. */
+let batchFiles = [], batchId = null, batchPoll = null;
+
+function pickList(){ return mode === "batch" ? batchFiles : drawings; }
+function pickSet(list){ if(mode === "batch") batchFiles = list; else drawings = list; }
+function pickRender(){
+  if(mode === "batch"){ renderBatch(); } else { renderFiles(); refresh(); }
+}
+
+function renderBatch(){
+  bList.innerHTML = "";
+  batchFiles.forEach((f,i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="kind">${(f.name.split(".").pop()||"file").toUpperCase()}</span>`
+                 + `<span class="nm" title="${f.path}">${f.name}</span>`;
+    const x = document.createElement("button");
+    x.className="x"; x.textContent="✕"; x.title="Remove";
+    x.onclick = () => { batchFiles.splice(i,1); renderBatch(); };
+    li.appendChild(x); bList.appendChild(li);
+  });
+  bEmpty.style.display = batchFiles.length ? "none" : "";
+  bWhere.textContent = `…\\AISheets\\${safe(client.value) || "<client>"}\\<drawing>\\`;
+  /* THE SAME GATE AS THE JOB BUTTON, and for the same reason. A hundred jobs queued
+     against a client nobody typed files a hundred estimates under a folder called
+     nothing, and un-filing them is manual. */
+  const why = [];
+  if(!safe(client.value))              why.push("client");
+  if(!(parseInt(units.value,10) > 0))  why.push("number of units");
+  if(!batchFiles.length)               why.push("at least one drawing");
+  if(!runnersOnline)                   why.push("a connected runner");
+  bRun.disabled = why.length > 0 || batchId !== null;
+  bRun.title = why.length ? "Still needed: " + why.join(", ") : "";
+
+}
+
+function bSet(cls, text){ bDot.className = "dot " + cls; bStatus.textContent = text; }
+
+$("bAdd").onclick   = () => openBrowser("batch");
+$("bClear").onclick = () => { batchFiles = []; renderBatch(); };
+
+/* LLM-ONLY. The SAME endpoint as a normal run, with one word changed.
+   POST /api/estimate takes a folder or a list of files and pools them into ONE job, so a
+   single drawing and a whole pack are the same call — which is why this belongs here and
+   not on /api/estimate/batch, where every file is a separate enquiry and the answer is one
+   price per drawing with no BOM and no routes. */
+$("bRunLLM").onclick = async () => {
+  if(running || bRunLLM.disabled) return;
+  /* ASKED, BECAUSE THE OUTPUT CANNOT BE TOLD APART AFTERWARDS. The workbook this produces
+     carries the same template, tabs and totals as a real estimate. */
+  if(!confirm("LLM read only.\n\nThe vision model reads the pack alone — no deterministic "
+            + "BOM reader, no DXF flat patterns, no SolidWorks. It reads the parts list and "
+            + "the routes; it CANNOT size a folded part.\n\nThe workbook it produces looks "
+            + "like an estimate and is not one. Do not quote its total.\n\nRun it?")) return;
+  /* THE JOB PANEL'S OWN STATE, not the enquiry's. This first reported into bSet/bRows/bCount
+     because that is where the button first sat — press it up here and the log appeared in a
+     different card halfway down the page, while the panel it was launched from sat idle.
+     Taking `running` also makes it STOPPABLE: it is the same queue, the same lease and the
+     same desktop as an estimate, and a twenty-page pack is minutes of vision calls. */
+  blockedBy = ""; $("release").hidden = true;
+  runDest = null;
+  running = true; refresh();
+  log.innerHTML = ""; out.innerHTML = "";
+  setStatus("run","LLM read");
+  line("LLM READ ONLY · "+safe(drawing.value)+" · "+safe(client.value)+" · "+units.value+" off");
+  line("UNVERIFIED: Grok alone — no deterministic BOM reader, no DXF, no SolidWorks. A "
+     + "measurement of the model, NOT an estimate. Do not quote its total.");
+  /* WHICH OF THE TWO THIS IS, on the run's own log. A cached read and a fresh one produce the
+     same workbook in the same folder and are told apart by nothing else — and the whole value
+     of a fresh one is that its number may have moved. */
+  line(freshRead.checked
+       ? "FRESH READ: the caches are bypassed — every page is being sent to the model again."
+       : "Cached read: pages the model has already seen are replayed from cache, so this "
+       + "measures the plumbing rather than the model. Tick 'Fresh read' to ask it again.");
+  line("Output → "+destination());
+  const folder = drawings.find(d => d.is_dir);
+  try{
+    const r = await api("/api/estimate", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      /* THE SAME BODY AS THE PACK ESTIMATOR, one word different. A folder goes in job_folder
+         and files in files — sending a directory path in `files` is how a pack of one shows
+         up empty. And it is the DRAWINGS panel's list: batchFiles belongs to the
+         multi-drawing enquiry, where each file is its own job; sending those here would pool
+         a hundred separate enquiries into one confident answer to a different question. */
+      body: JSON.stringify({client: safe(client.value), drawing_number: safe(drawing.value),
+                            units: parseInt(units.value,10),
+                            job_folder: folder ? folder.path : null,
+                            files: drawings.filter(d => !d.is_dir).map(d => d.path),
+                            output_root: OUTPUT_ROOT, deliverables: true,
+                            method: "llm", fresh_read: !!freshRead.checked})});
+    if(!r.ok) throw new Error((await r.text()).slice(0,300));
+    const started = await r.json();
+    runId = started.run_id;
+    if(started.output_path){ runDest = started.output_path; refresh(); }
+    watchOneRun(runId);
+  }catch(e){
+    setStatus("err","Failed to start");
+    line("Could not start the LLM read — " + String(e.message || e).slice(0,300));
+    running = false; refresh();
+  }
+};
+
+$("bRun").onclick = async () => {
+  if(bRun.disabled) return;
+  bRun.disabled = true;
+  bSet("run","Queueing");
+  bProgress.hidden = false; bRows.innerHTML = "";
+  try{
+    const r = await api("/api/estimate/batch", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({client: safe(client.value), units: parseInt(units.value,10),
+                            files: batchFiles.map(f => f.path), output_root: OUTPUT_ROOT,
+                            method: (document.querySelector("input[name=bMethod]:checked")
+                                     || {}).value || "both"})});
+    if(!r.ok) throw new Error((await r.text()).slice(0,300));
+    const started = await r.json();
+    batchId = started.batch_id;
+    bWhere.textContent = started.client_folder;
+    /* REFUSED DRAWINGS ARE NAMED, not silently dropped. A hundred submitted and
+       ninety-seven queued is a fact the estimator has to be told at the moment it
+       happens — three missing answers are invisible in a list of ninety-seven. */
+    (started.refused||[]).forEach(f =>
+      bCount.textContent = `${(started.refused||[]).length} drawing(s) could NOT be queued — `
+                         + started.refused.map(x => x.file.split("\\").pop()+" ("+x.why+")").join("; "));
+    bStop.hidden = false;
+    watchBatch();
+  }catch(e){
+    bSet("err","Failed to queue"); bCount.textContent = String(e.message||e);
+    batchId = null; renderBatch();
+  }
+};
+
+$("bStop").onclick = async () => {
+  if(!batchId) return;
+  if(!confirm("Stop the drawings that have not finished?\n\nFinished estimates are kept. "
+            + "The one being worked on now is stopped too — the runner ends the engine on "
+            + "its next heartbeat, up to " + BEAT_HINT + " seconds.")) return;
+  const r = await api(`/api/estimate/batch/${batchId}/abandon`, {method:"POST"});
+  if(!r.ok){ bSet("err","Could not stop"); bCount.textContent =
+      "The enquiry could not be stopped: " + (await r.text()).slice(0,200); return; }
+  /* SAID OUT LOUD, LIKE THE SINGLE-RUN STOP. A button that appears to do nothing for half a
+     minute is a button somebody presses three more times. */
+  const done = await r.json();
+  bCount.textContent = `Stopped — ${done.released} drawing(s) released. Anything already `
+                     + `finished is kept.`;
+};
+
+/* ONE RUN, POLLED. watchBatch follows an enquiry of many drawings; GET /api/estimate/{id}
+   answers for a single job, which is what the LLM read queues. Written rather than reused
+   because a batch watcher fed one run id would poll an endpoint that does not know it and
+   report "not found" as a failure of the run. */
+function watchOneRun(runId){
+  if(!runId) return;
+  let seen = 0;
+  const tick = async () => {
+    let j, r;
+    try{
+      r = await api("/api/estimate/" + encodeURIComponent(runId));
+      j = await r.json();
+    }catch(e){ setTimeout(tick, 4000); return; }   // a dropped poll is not a failed run
+    /* THE SERVICE FORGETTING A RUN IS NOT THE RUN FAILING — the same 404 the estimate poll
+       learned about. The runner is another process on another machine and will still file. */
+    if(r.status === 404){
+      running = false; refresh();
+      setStatus("warn","Lost track of this run");
+      line("The service restarted and no longer holds this run. That is NOT the same as it "
+         + "failing — look under Completed estimates before running it again.");
+      return;
+    }
+    if(!j || !j.status){ setTimeout(tick, 4000); return; }
+    (j.log || []).slice(seen).forEach(line); seen = (j.log || []).length;
+    if(j.status === "queued"){ setStatus("run","Queued — LLM read"); setTimeout(tick, 4000); return; }
+    if(j.status === "running"){
+      setStatus("run", j.runner ? "LLM read on " + j.runner : "LLM read");
+      setTimeout(tick, 4000); return;
+    }
+    /* THE RUN IS OVER — and `running` is what re-opens BOTH buttons, through refresh(), so
+       neither can come back pressable in a state the page has otherwise refused. */
+    running = false; refresh();
+    if(j.status === "done"){
+      setStatus("warn","LLM read complete — not an estimate");
+      (j.deliverables || []).forEach(d => {
+        const a = document.createElement("a");
+        a.href = "/api/file?path=" + encodeURIComponent(d.path);
+        a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        const li = document.createElement("li"); li.appendChild(a); out.appendChild(li);
+      });
+      line("UNVERIFIED — read by the vision model alone. Its total must not be quoted and "
+         + "must not be compared with a normal run's.");
+    }else{
+      setStatus("err","Failed"); if(j.error) line(j.error);
+    }
+  };
+  tick();
+}
+
+function watchBatch(){
+  clearInterval(batchPoll);
+  batchPoll = setInterval(async () => {
+    let s, r;
+    try{ r = await api("/api/estimate/batch/"+batchId); s = await r.json(); }
+    catch(e){ return; }                      /* a dropped poll is not a failed enquiry */
+    if(r.status === 404){
+      clearInterval(batchPoll); batchPoll = null; batchId = null; bStop.hidden = true;
+      bSet("warn","Lost track of this enquiry");
+      bCount.textContent = "The service restarted and no longer holds this enquiry. Estimates "
+                         + "that had finished are still filed — look under Completed estimates.";
+      renderBatch(); return;
+    }
+    if(!s || !s.runs) return;
+
+    bRows.innerHTML = "";
+    s.runs.forEach(row => {
+      const li = document.createElement("li");
+      const mark = row.status === "done" ? "✓" : row.status === "error" ? "✕"
+                 : row.status === "running" ? "▸" : "·";
+      const colour = row.status === "done" ? "var(--ok)" : row.status === "error" ? "var(--bad)"
+                   : row.status === "running" ? "var(--brand)" : "var(--dim)";
+      li.style.cssText = "display:block;width:100%;font-family:var(--mono);font-size:11.5px;"
+                       + "padding:4px 0;color:var(--muted)";
+      /* TWO NUMBERS ON ONE ROW, AND WHICH IS WHICH SAID EVERY TIME.
+         The LLM figure is prefixed "AI" and coloured as a warning wherever it appears. A
+         column of bare pound signs, half of them from Grok and half from the engine, is one
+         copy-and-paste away from a quote going out on a number nobody costed. Where both
+         are present the variance is shown, because that gap is the whole reason for
+         running two methods rather than the faster one. */
+      const eng = row.engine_price_gbp;
+      const ai  = row.llm_price_gbp;
+      let money = "";
+      if(ai != null)  money += ` <span style="color:var(--warn)" title="${row.llm_basis||""}">`
+                             + `AI £${ai.toFixed(2)}</span>`;
+      if(eng != null) money += ` <span style="color:var(--ok)">engine £${eng.toFixed(2)}</span>`;
+      if(ai != null && eng != null && ai > 0)
+        money += ` <span style="color:var(--dim)">(${(((eng-ai)/ai)*100).toFixed(0)}% apart)</span>`;
+      li.innerHTML = `<span style="color:${colour}">${mark}</span> `
+                   + `<span style="color:var(--ink)">${row.drawing_number}</span> `
+                   + `<span style="color:var(--dim)">${row.status}`
+                   + (row.status === "running" ? ` ${Math.round(row.seconds)}s` : "")
+                   + `</span>` + money;
+      if(row.error) li.innerHTML += ` <span style="color:var(--bad)">${row.error}</span>`;
+      (row.deliverables||[]).forEach(d => {
+        const a = document.createElement("a");
+        a.href = "/api/file?path=" + encodeURIComponent(d.path);
+        a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        a.style.cssText = "margin-left:8px;font-size:11px";
+        li.appendChild(a);
+      });
+      bRows.appendChild(li);
+    });
+    bCount.textContent = `${s.finished} of ${s.total} finished`
+                       + (s.failed ? `, ${s.failed} failed` : "");
+
+    if(s.finished >= s.total){
+      clearInterval(batchPoll); batchPoll = null; batchId = null; bStop.hidden = true;
+      bSet(s.failed ? "err" : "ok",
+           s.failed ? `${s.total - s.failed} of ${s.total} estimated` : "All estimated");
+      renderBatch();
+    }else{
+      bSet("run", `${s.finished} of ${s.total}`);
+    }
+  }, 2000);
+}
+
+/* ══ RUN ══════════════════════════════════════════════════════════════ */
+function line(t){
+  const s=document.createElement("span");
+  const u=String(t);
+  s.className = /BLOCKING|ERROR|Traceback/.test(u) ? "e"
+              : /UNVERIFIED|⚠|WARN/.test(u)       ? "w"
+              : /0 blocking|complete|saved/i.test(u) ? "g" : "";
+  s.textContent = u + "\n"; log.appendChild(s); log.scrollTop = log.scrollHeight;
+}
+function setStatus(cls, text){ dot.className = "dot " + cls; statusText.textContent = text; }
+
+/* STOP MEANS BOTH HALVES. Abandoning frees the queue; the ENGINE is a separate process on
+   another machine and would keep driving SOLIDWORKS and Excel until its runner is told. The
+   service records the cancellation and answers the runner's next heartbeat with it, so one
+   press does what a person means by "stop" rather than only what the service can see. */
+stopBtn.onclick = async () => {
+  if(!runId || stopBtn.disabled) return;
+  if(!confirm("Stop this estimate?\n\nThe run is abandoned and the runner is told to end the "
+            + "engine. Nothing is filed. Anything already written to the output folder stays "
+            + "where it is.")) return;
+  stopBtn.disabled = true;
+  try{
+    const r = await api("/api/estimate/" + runId + "/abandon", {method:"POST"});
+    if(r.ok){
+      line("Stop requested. The runner ends the engine on its next heartbeat — up to "
+         + BEAT_HINT + " seconds, not instantly.", "w");
+    }else{
+      line("Could not stop it: " + (await r.text()).slice(0,200), "e");
+      stopBtn.disabled = false;
+    }
+  }catch(e){
+    line("Could not stop it — " + e.message, "e");
+    stopBtn.disabled = false;
+  }
+};
+
+/* Elements looked up INSIDE the handler, for the reason given at `blockedBy`. */
+$("release").onclick = async () => {
+  const btn = $("release");
+  if(!blockedBy || btn.disabled) return;
+  if(!confirm("Release the estimate in front of this one?\n\nUse this when that run is dead "
+            + "— the runner was closed, crashed, or the machine slept — and its claim is "
+            + "holding the desktop until the 15-minute lease runs out.\n\nIt frees the queue "
+            + "so your job can start. It does NOT reach into a runner that is genuinely "
+            + "still working: that one carries on, and its result is refused when it "
+            + "reports.")) return;
+  btn.disabled = true;
+  try{
+    const r = await api("/api/estimate/" + blockedBy + "/abandon", {method:"POST"});
+    if(r.ok){
+      line("Released the run in front. This job should be claimed within a few seconds.", "w");
+      blockedBy = ""; btn.hidden = true;
+    }else{
+      /* 409 here means it finished on its own between the page offering this and the click,
+         which is a good outcome and must not read as a failure. */
+      const detail = (await r.text()).slice(0,200);
+      line(/already (done|error|finished)/i.test(detail)
+             ? "It finished on its own — nothing to release."
+             : "Could not release it: " + detail,
+           /already/i.test(detail) ? "w" : "e");
+      blockedBy = ""; btn.hidden = true;
+    }
+  }catch(e){
+    line("Could not release it — " + e.message, "e");
+    btn.disabled = false;
+  }
+};
+
+runBtn.onclick = async () => {
+  if(running || runBtn.disabled) return;
+  blockedBy = ""; $("release").hidden = true;   // last run's blocker is not this run's
+  runDest = null;              // the previous run's folder is not this run's
+  running = true; refresh();
+  log.innerHTML=""; out.innerHTML="";
+  setStatus("run","Running");
+  line("Job "+safe(drawing.value)+" · "+safe(client.value)+" · "+units.value+" off");
+  line("Output → "+destination());
+
+  const folder = drawings.find(d => d.is_dir);
+  const body = {
+    client: safe(client.value),
+    drawing_number: safe(drawing.value),
+    units: parseInt(units.value,10),
+    job_folder: folder ? folder.path : null,
+    files: drawings.filter(d => !d.is_dir).map(d => d.path),
+    output_root: OUTPUT_ROOT,
+    deliverables: true,                   // --deliverables, always
+    // The optional parity partner. null means no comparison was asked for and the run is
+    // exactly as it was before this existed.
+    manual_workbook: runManual ? runManual.path : null
+  };
+  try{
+    const r = await api("/api/estimate",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    /* A BLOCKED QUEUE WITH NO WAY OUT IS WHAT MADE THE LEASE TOO SHORT.
+       The refusal names the run that is holding the machine; the person reading it is
+       standing in front of that machine and knows whether it is working. Offer them the
+       release here rather than leaving them to wait out a lease or POST by hand. */
+    if(r.status === 409){
+      const detail = (await r.text()).slice(0,400);
+      const stuck = (detail.match(/estimate\/([0-9a-f]{6,})\/abandon/) || [])[1];
+      line(detail, "e");
+      if(stuck && confirm("An estimate is already running on that machine.\n\n" + detail +
+                          "\n\nRelease it and run this job instead? This does NOT stop the "
+                          + "other run — if it is still working it will be refused when it "
+                          + "reports.")){
+        const rel = await api(`/api/estimate/${stuck}/abandon`, {method:"POST"});
+        if(rel.ok){ line("Released the stuck run. Press the button again.", "w"); }
+        else { line("Could not release it: " + (await rel.text()).slice(0,200), "e"); }
+      }
+      throw new Error(detail);
+    }
+    if(!r.ok) throw new Error((await r.text()).slice(0,300));
+    const started = await r.json();
+    runId = started.run_id;
+    // The SERVER decides where this run files — it stamps the folder with the
+    // start time, and the page must show the folder that exists rather than the
+    // one it guessed a second earlier.
+    if(started.output_path){ runDest = started.output_path; refresh(); }
+    /* A RUN HOLDING THE DESKTOP THAT NOTHING ON SCREEN CAN RELEASE.
+       The lease is 900s, deliberately, so a quiet engine is not killed mid-estimate. The
+       cost is that a runner which has actually DIED leaves its claim looking busy for a
+       full fifteen minutes, and the queue waits behind a process that no longer exists.
+       Stop only ever acted on THIS tab's run, so there was nothing to press: the release
+       existed solely on the 409 path, and allowing jobs to queue orphaned it.
+       The person reading this is standing in front of the machine and knows whether it is
+       working, which the service cannot. So offer it, and say what it does not do. */
+    blockedBy = started.waiting_behind || "";
+    if(blockedBy){ $("release").hidden = false; }
+  }catch(e){
+    setStatus("err","Failed to start"); line("Could not start the run — "+e.message);
+    running=false; refresh(); return;
+  }
+
+  let seen = 0;
+  poll = setInterval(async () => {
+    let s, r;
+    try{ r = await api("/api/estimate/"+runId); s = await r.json(); }
+    catch(e){ return; }                    // a dropped poll is not a failed run
+    /* THE SERVICE FORGETTING A RUN IS NOT THE RUN FAILING.
+       Run history lives in memory, so restarting app.py loses it — and a 404 does not
+       throw here: the body parses, s.status comes back undefined, and the code below fell
+       straight through to "Failed" with no reason attached. Meanwhile the runner is another
+       process on another machine, still working, and it will file a complete estimate to
+       the share. A finished estimate reported to an estimator as a bare failure is the
+       worst answer available: they re-run it, and a SOLIDWORKS seat does the whole job
+       twice. */
+    if(r.status === 404){
+      clearInterval(poll); poll=null; running=false; refresh();
+      setStatus("warn","Lost track of this run");
+      line("The service restarted and no longer holds this run. That is NOT the same as the "
+         + "estimate failing — the runner is a separate process and may well have finished "
+         + "it. Look under Completed estimates before running it again.", "w");
+      return;
+    }
+    if(!s || !s.status){
+      /* An answer nobody can parse is not a verdict either. Keep polling rather than
+         declaring a failure the service never reported. */
+      return;
+    }
+    (s.log||[]).slice(seen).forEach(line); seen = (s.log||[]).length;
+    // "Queued" is a real state now and the estimator should see it rather than a
+    // spinner that means nothing: the job is waiting for a runner to take it.
+    if(s.status === "queued"){ setStatus("run","Queued"); return; }
+    /* Past queued means the desktop is ours, so whatever was in front has gone. Leaving the
+       release button up would invite somebody to abandon THEIR OWN running estimate. */
+    if(blockedBy){ blockedBy = ""; $("release").hidden = true; }
+    if(s.status === "running"){
+      setStatus("run", s.runner ? "Running on " + s.runner : "Running");
+      return;
+    }
+    clearInterval(poll); poll=null; running=false; refresh();
+    if(s.status === "done"){
+      setStatus("ok","Complete");
+      (s.deliverables||[]).forEach(d => {
+        const a=document.createElement("a");
+        a.href="/api/file?path="+encodeURIComponent(d.path);
+        a.textContent=d.name; a.target="_blank"; a.rel="noopener";
+        const li=document.createElement("li"); li.appendChild(a); out.appendChild(li);
+      });
+    }else{
+      setStatus("err","Failed"); if(s.error) line(s.error);
+    }
+  }, 2000);
+};
+
+/* ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════════════════════
+   Upload the amended workbook + the three fields already on this page, POST it, and show
+   the regenerated client quote. Deliberately independent of the run state: this path needs
+   no runner, no drawings and no engine — an estimator can do it days after the estimate, on
+   a machine that has never run one. Only the client quote is regenerated. */
+const overrideFile=$("overrideFile"), overrideName=$("overrideName"),
+      regen=$("regen"), regenReq=$("regenReq"), regenOut=$("regenOut");
+
+/* THE SHEET NAMED ON THE SHARE, if that is how it was chosen. Declared here with the rest of
+   this block's state rather than beside its button — a `const` read by a function that runs
+   before the declaration is a temporal-dead-zone ReferenceError, which is what killed "Add
+   all" and took the remainder of the script with it. */
+let overrideShare = null;                  // {path, name} or null
+
+/* EXACTLY ONE SOURCE AT A TIME. The route refuses both-or-neither, so choosing one here
+   clears the other rather than letting the page hold two and the server pick. */
+function setOverrideShare(v){
+  overrideShare = v;
+  if(v) overrideFile.value = "";
+  renderOverrideName();
+}
+function renderOverrideName(){
+  const f = overrideFile.files[0];
+  if(overrideShare) overrideName.textContent = overrideShare.name + "  (share)";
+  else if(f)        overrideName.textContent = f.name + "  (upload)";
+  else              overrideName.innerHTML = '<span class="pending">No workbook chosen</span>';
+}
+
+$("pickOverrideShare").onclick = () =>
+  /* accept is a LIST of suffixes the picker tests with .some(), and done receives the
+     listing ITEM — not two arguments. Both are easy to get wrong from the call site and
+     neither fails until somebody clicks: a string accept throws on .some, and (path, name)
+     silently binds path to the whole object. */
+  chooseOneFile("Choose the amended estimate workbook", [".xlsx"], (it) => {
+    setOverrideShare({path: it.path, name: it.name});
+    refreshRegen();
+  });
+
+$("pickOverride").onclick = () => overrideFile.click();
+overrideFile.addEventListener("change", () => {
+  if(overrideFile.files[0]) overrideShare = null;   // an upload replaces a share pick
+  renderOverrideName();
+  refreshRegen();
+});
+
+/* The same three facts the quote needs, read off the fields at the top of the page. Named
+   rather than inferred: a workbook saved days ago cannot be trusted to still carry them. */
+function refreshRegen(){
+  const missing=[];
+  if(!overrideFile.files[0] && !overrideShare) missing.push("an amended workbook");
+  if(!(parseInt(units.value,10) > 0)) missing.push("the number of units");
+  if(!drawing.value.trim()) missing.push("a drawing number");
+  if(!client.value.trim()) missing.push("a client");
+  regen.disabled = missing.length > 0;
+  regenReq.textContent = missing.length ? "Needs " + missing.join(", ") + "." : "";
+}
+[units, client, drawing].forEach(el => el.addEventListener("input", refreshRegen));
+
+regen.onclick = async () => {
+  const f = overrideFile.files[0];
+  if(!f && !overrideShare) return;
+  regen.disabled = true; regenOut.innerHTML = "";
+  const was = regen.textContent; regen.textContent = "Regenerating…";
+  try{
+    const fd = new FormData();
+    /* ONE OR THE OTHER, never both — the route refuses both-or-neither rather than
+       choosing for us, so the page must not send two. A share path costs no upload: the
+       engine opens the sheet where it already is. */
+    if(overrideShare) fd.append("share_path", overrideShare.path);
+    else              fd.append("file", f);
+    fd.append("units", String(parseInt(units.value,10)));
+    fd.append("drawing", drawing.value.trim());
+    fd.append("client", client.value.trim());
+    const r = await api("/api/estimate/override", {method:"POST", body:fd});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      /* The service explains itself — an uncalculated sheet, a wrong file type — so show
+         its words rather than a status code. */
+      regenOut.innerHTML = '<li><span style="color:var(--bad)">'
+        + detailText(j, r, "Regeneration failed") + '</span></li>';
+      return;
+    }
+    const price = (typeof j.price === "number")
+      ? "£" + j.price.toFixed(2) + (j.price_source ? " (" + j.price_source + ")" : "") : "";
+    const head = document.createElement("li");
+    head.innerHTML = '<span style="color:var(--ok)">Client quote regenerated from your amended '
+      + 'sheet' + (price ? " at " + price + " per unit" : "") + '.</span>';
+    regenOut.appendChild(head);
+
+    /* A THIN QUOTE LOOKS EXACTLY LIKE A FINISHED ONE, WHICH IS WHY THIS HAS TO BE SAID.
+       When the job's own summary is not found, the quotation still renders: correct branding,
+       correct price, correct customer — and no GA image, "Material: As drawing" and two
+       generic operations in place of the real ones. Nothing on the page or the document
+       distinguishes that from a complete quotation, so an estimator sends it. */
+    if(j.source_summary_found === false){
+      const warn = document.createElement("li");
+      warn.innerHTML = '<span style="color:var(--warn,var(--brand))">This quote carries your price '
+        + 'but NOT the engine\'s reading of the drawings — no general-arrangement image, '
+        + '"Material: As drawing", and a generic operations list. The saved summary for '
+        + '<b>' + (j.source_summary_stem || j.drawing || "this job") + '</b> was not found on '
+        + 'this machine, so there was nothing to carry over. It is the original run\'s '
+        + '<b>' + (j.source_summary_stem || "&lt;job&gt;") + '.json</b>: it is only on the '
+        + 'machine that ran the estimate. Check before sending.</span>';
+      regenOut.appendChild(warn);
+    }
+
+    [{path:j.quote_html, name:"Client quote (regenerated)"},
+     {path:j.override_xlsx, name:"Amended workbook (manual override record)"}]
+      .filter(d => d.path).forEach(d => {
+        const a=document.createElement("a");
+        a.href="/api/file?path="+encodeURIComponent(d.path);
+        a.textContent=d.name; a.target="_blank"; a.rel="noopener";
+        const li=document.createElement("li"); li.appendChild(a); regenOut.appendChild(li);
+      });
+  }catch(e){
+    regenOut.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service — '
+      + 'check it is running.</span></li>';
+  }finally{
+    regen.textContent = was; refreshRegen();
+  }
+};
+
+renderFiles(); refresh(); setStatus("","Idle"); renderBatch(); bSet("","Idle"); refreshRegen();
+
+/* ══ PARITY ═══════════════════════════════════════════════════════════════════════════
+   Two entry points to one comparison.
+
+   (1) ATTACHED TO A FRESH RUN. A share path, handed to the runner, which passes it to the
+       engine as --parity-workbook so the bundle files with the deliverables. It must be a
+       share path and not an upload: the runner is a different machine, and a file uploaded
+       to this service does not exist there.
+
+   (2) STANDALONE, for a job already estimated. Either side may be a share path OR an upload,
+       because a manual estimate is usually still in somebody's mail. This runs on the service
+       box — no runner, no SOLIDWORKS, no queue — so an upload is fine and nothing waits. */
+
+function chooseOneFile(title, accept, done){
+  pickOne = {title, accept, done};
+  openBrowser("pickone");
+}
+
+/* ── (1) the parity partner attached to a fresh run ─────────────────────────────────── */
+let runManual = null;                      // {path, name} or null
+const runManualName = $("runManualName"), clearRunManual = $("clearRunManual");
+
+function renderRunManual(){
+  if(runManual){
+    runManualName.textContent = runManual.name;
+    runManualName.title = runManual.path;
+    clearRunManual.hidden = false;
+    $("parityAttachBox").style.borderLeftColor = "var(--brand)";
+  }else{
+    runManualName.innerHTML = '<span class="pending">None — no parity report</span>';
+    runManualName.title = "";
+    clearRunManual.hidden = true;
+    $("parityAttachBox").style.borderLeftColor = "var(--dim)";
+  }
+}
+$("pickRunManual").onclick = () => chooseOneFile(
+  "Select the manual estimate for this job", [".xlsx",".xlsm",".xls"],
+  it => { runManual = {path:it.path, name:it.name}; renderRunManual(); });
+clearRunManual.onclick = () => { runManual = null; renderRunManual(); };
+renderRunManual();
+
+/* ── (2) the standalone comparison ──────────────────────────────────────────────────── */
+const paritySides = {
+  ai:     {path:null, file:null, label:$("parityAiName"),     input:$("parityAiFile")},
+  manual: {path:null, file:null, label:$("parityManualName"), input:$("parityManualFile")},
+};
+
+function renderParity(side){
+  const s = paritySides[side];
+  if(s.file)       { s.label.textContent = s.file.name + "  (uploaded)"; s.label.title = ""; }
+  else if(s.path)  { s.label.textContent = s.path.split("\\").pop(); s.label.title = s.path; }
+  else             { s.label.innerHTML = '<span class="pending">Nothing chosen</span>'; }
+  refreshParity();
+}
+/* ONE SIDE, ONE SOURCE. Picking from the share clears an upload and vice versa, so the two
+   can never both be set and leave the estimator guessing which one was actually compared. */
+function setParityPath(side, path){ const s=paritySides[side]; s.path=path; s.file=null; s.input.value=""; renderParity(side); }
+function setParityFile(side, file){ const s=paritySides[side]; s.file=file; s.path=null; renderParity(side); }
+
+$("pickParityAi").onclick = () => chooseOneFile(
+  "Select the AI estimate (workbook or summary JSON)", [".json",".xlsx",".xlsm"],
+  it => setParityPath("ai", it.path));
+$("pickParityManual").onclick = () => chooseOneFile(
+  "Select the manual estimate", [".xlsx",".xlsm",".xls"],
+  it => setParityPath("manual", it.path));
+$("uploadParityAi").onclick = () => paritySides.ai.input.click();
+$("uploadParityManual").onclick = () => paritySides.manual.input.click();
+paritySides.ai.input.addEventListener("change", e => setParityFile("ai", e.target.files[0] || null));
+paritySides.manual.input.addEventListener("change", e => setParityFile("manual", e.target.files[0] || null));
+
+const parityRun = $("parityRun"), parityReq = $("parityReq"), parityOut = $("parityOut");
+function have(side){ const s = paritySides[side]; return !!(s.path || s.file); }
+function refreshParity(){
+  const missing = [];
+  if(!have("ai"))     missing.push("the AI estimate");
+  if(!have("manual")) missing.push("the manual estimate");
+  parityRun.disabled = missing.length > 0;
+  parityReq.textContent = missing.length ? "Needs " + missing.join(" and ") + "." : "";
+}
+refreshParity();
+
+parityRun.onclick = async () => {
+  parityRun.disabled = true; parityOut.innerHTML = "";
+  const was = parityRun.textContent; parityRun.textContent = "Comparing…";
+  try{
+    const fd = new FormData();
+    if(paritySides.ai.file)     fd.append("ai_file", paritySides.ai.file);
+    else                        fd.append("ai_path", paritySides.ai.path);
+    if(paritySides.manual.file) fd.append("manual_file", paritySides.manual.file);
+    else                        fd.append("manual_path", paritySides.manual.path);
+    fd.append("read_via_excel", $("parityExcel").checked ? "true" : "false");
+
+    const r = await api("/api/estimate/parity", {method:"POST", body:fd});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      /* The service explains itself in words an estimator can act on — a missing summary, the
+         wrong file type — so show those rather than a status code. */
+      parityOut.innerHTML = '<li><span style="color:var(--bad)">'
+        + detailText(j, r, "Parity failed") + '</span></li>';
+      return;
+    }
+    const h = j.headline || {};
+    const li = document.createElement("li");
+
+    if(typeof h.ai_unit_cost_gbp === "number" && typeof h.manual_unit_cost_gbp === "number"){
+      /* The engine's own verdict against its configured thresholds — not one computed here,
+         so this line and the bundle can never disagree. */
+      const colour = h.status === "match" ? "var(--ok)"
+                   : h.status === "warning" ? "var(--warn)" : "var(--bad)";
+      const pct = (typeof h.pct_variance === "number")
+        ? " (" + (h.pct_variance > 0 ? "+" : "") + h.pct_variance.toFixed(1) + "%)" : "";
+      li.innerHTML = '<span style="color:' + colour + '">'
+        + (h.status ? String(h.status).toUpperCase() : "COMPARED") + '</span> — unit cost: AI £'
+        + h.ai_unit_cost_gbp.toFixed(2) + ' vs manual £' + h.manual_unit_cost_gbp.toFixed(2)
+        + ' &nbsp;gap £' + (h.gap_gbp ?? 0).toFixed(2) + pct;
+    }else{
+      /* NOT A ZERO. An empty value cache is not a £0 estimate, and showing one as the other
+         is the single most dangerous thing this card could do.
+
+         BUT THE REMEDY ONLY APPLIES TO ONE READER. Ticking "Resolve formulas through Excel"
+         does nothing for an .xls: xlrd returns the computed values that are already in the
+         file, which is what the card's own help text says two paragraphs above. Offering it
+         anyway sends an estimator to press a box that cannot change the outcome, and implies
+         the fault is theirs for not having opened the sheet. */
+      const viaXlrd = String(h.workbook_read_mode || "").toLowerCase() === "xlrd";
+      li.innerHTML = '<span style="color:var(--warn)">Unit costs could not both be read</span>'
+        + ' — the workbook was read via ' + (h.workbook_read_mode || "openpyxl") + '. '
+        + (viaXlrd
+           ? 'That reader returns the values already computed in the file, so this is not a '
+             + 'calculation problem and <em>Resolve formulas through Excel</em> will not change '
+             + 'it — the sheet has no unit-cost cell where one was expected. Open the bundle '
+             + 'below: the money-cell rows show what was read.'
+           : 'A sheet nobody has opened in Excel holds no calculated values. Tick '
+             + '<em>Resolve formulas through Excel</em> and run it again.');
+    }
+    parityOut.appendChild(li);
+
+    const counts = document.createElement("li");
+    counts.innerHTML = 'Money cells: <strong>' + (h.money_match ?? "?") + '</strong> match · '
+      + (h.money_warning ?? "?") + ' warning · ' + (h.money_fail ?? "?") + ' fail'
+      + ' &nbsp;·&nbsp; labour route: <strong>' + (h.labour_route_match ?? "?") + '</strong> match · '
+      + (h.labour_route_issues ?? "?") + ' issues';
+    parityOut.appendChild(counts);
+
+    /* HTML FIRST, BECAUSE IT IS THE ONE A PERSON READS. The JSON is the record and the CSV is
+       for Excel; leading with either sends an estimator into a 2,000-line file to answer
+       "why did these two differ". */
+    [{url:j.bundle_html_url, name:"Parity report (HTML — read this one)"},
+     {url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
+     {url:j.bundle_csv_url,  name:"Parity comparison (CSV)"}]
+      .filter(d => d.url).forEach(d => {
+        const a = document.createElement("a");
+        a.href = d.url; a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        const l = document.createElement("li"); l.appendChild(a); parityOut.appendChild(l);
+      });
+  }catch(e){
+    parityOut.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service — '
+      + 'check it is running.</span></li>';
+  }finally{
+    parityRun.textContent = was; refreshParity();
+  }
+};
+
+
+/* ══ PRINT THE DRAWINGS ═══════════════════════════════════════════════════════════════
+   An estimate is checked against the drawings. Printing them meant opening the job folder on
+   the share and printing twelve files one at a time, and reviewing is the thing the whole
+   parallel run depends on.
+
+   One PDF, bookmarked per drawing, opened in a tab where Ctrl+P does the rest. Folders in the
+   list are walked by the service, so "print the drawings" works whether the estimator added a
+   job folder or the files inside it. */
+/* ELEMENTS LOOKED UP WHEN NEEDED, NOT CAPTURED IN A const HERE.
+   renderFiles() calls refreshPrint(), and renderFiles runs while the page is still being set
+   up — before execution ever reaches this line. A `const` handle declared here is in its
+   temporal dead zone at that moment, so the first render threw
+   "Cannot access 'printDrawings' before initialization", which killed the rest of the script
+   and left Add-all adding exactly one file of five. Resolving inside the function removes the
+   ordering dependency altogether: it does not matter where in the file this block sits. */
+function refreshPrint(){
+  const btn = $("printDrawings"), note = $("printNote");
+  if(!btn) return;
+  btn.disabled = drawings.length === 0;
+  if(!drawings.length && note) note.textContent = "";
+}
+
+/* WHAT THE PRINT SIDE KNOWS ABOUT A FILE, kept here rather than asked of the server, so the
+   dialog opens instantly on a click that is still a user gesture. The server remains the
+   authority — it decides what actually converts — and this only sets the ticks.
+
+   The two lists mirror printable_converters: what is turned into pages, and what the engine
+   wrote and nobody wants on paper. Kept deliberately short; being wrong here costs a tick, not
+   a wrong print. */
+const PRINTABLE_EXT = [".pdf",".dxf",".dwg",".txt",".csv",".log",".md",
+                       ".jpg",".jpeg",".png",".tif",".tiff",".bmp",".gif",".webp",
+                       ".doc",".docx",".rtf",".xls",".xlsx",".xlsm",".ppt",".pptx"];
+const ENGINE_OUTPUT_RE = [/_\d{8}_\d{6}\.xlsx?$/i, /_quote\.html?$/i, /_report\.html?$/i,
+                          /_parity[^\\\/]*\.(html?|json|csv)$/i, /^_sw_native_extract\.json$/i];
+
+function printExt(name){ const i = String(name||"").lastIndexOf("."); return i<0 ? "" : name.slice(i).toLowerCase(); }
+function isEngineOutput(name){ return ENGINE_OUTPUT_RE.some(re => re.test(String(name||""))); }
+
+/* Why a file is or is not ticked when the dialog opens. Shown beside it, because a tick box
+   with no reason is a decision somebody has to make twice. */
+function printDefault(d){
+  const name = d.name || String(d.path||"").split(/[\\\/]/).pop();
+  if(d.is_dir)            return {on:true,  why:"folder — everything printable inside it"};
+  if(isEngineOutput(name)) return {on:false, why:"the engine wrote this, not a drawing"};
+  const ext = printExt(name);
+  if(ext === ".pdf")       return {on:true,  why:""};
+  if(PRINTABLE_EXT.includes(ext)) return {on:true, why:""};
+  return {on:false, why:"not a format that can be turned into pages"};
+}
+
+let printPicked = null;          // Set of paths, or null before the dialog has been opened
+
+function openPrintPicker(){
+  const dlg = $("printPick"), list = $("ppList"), help = $("ppHelp");
+  const rows = drawings.map(d => {
+    const name = d.name || String(d.path||"").split(/[\\\/]/).pop() || String(d.path||"");
+    /* One unrecognisable row must not cost the dialog. Ticked, because the server decides what
+       actually converts and an unknown here is better offered than silently dropped. */
+    let def; try { def = printDefault(d); } catch(e){ def = {on:true, why:""}; }
+    return Object.assign({}, def, {path:d.path, name});
+  });
+  printPicked = new Set(rows.filter(r => r.on).map(r => r.path));
+
+  const draw = () => {
+    list.innerHTML = "";
+    rows.forEach(r => {
+      const li = document.createElement("li");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = printPicked.has(r.path);
+      cb.style.marginRight = "8px";
+      cb.onchange = () => { cb.checked ? printPicked.add(r.path) : printPicked.delete(r.path); tally(); };
+      const label = document.createElement("label");
+      label.style.cursor = "pointer";
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(r.name));
+      if(r.why){
+        const em = document.createElement("span");
+        em.className = "muted"; em.style.marginLeft = "8px"; em.style.fontSize = "12px";
+        em.textContent = "· " + r.why;
+        label.appendChild(em);
+      }
+      li.appendChild(label);
+      list.appendChild(li);
+    });
+    tally();
+  };
+  const tally = () => {
+    help.textContent = printPicked.size + " of " + rows.length + " selected";
+    $("ppGo").disabled = printPicked.size === 0;
+  };
+  $("ppAll").onclick  = () => { rows.forEach(r => printPicked.add(r.path)); draw(); };
+  $("ppNone").onclick = () => { printPicked.clear(); draw(); };
+  draw();
+  dlg.showModal();
+}
+
+$("ppClose").onclick = () => $("printPick").close();
+$("ppGo").onclick = () => { $("printPick").close(); runPrint([...printPicked]); };
+
+/* A CLICK MUST NEVER DO NOTHING.
+   The old handler opened a tab on the click itself, so even a failure was visible. Routing
+   through a dialog put a silent path in the middle: anything thrown inside openPrintPicker —
+   a missing element, a bad row, a browser that will not showModal — left the button looking
+   dead, which is indistinguishable from a broken service and is how a feature gets abandoned.
+   So: try the picker, say so on the page if it fails, and fall back to printing everything,
+   which is what the button did before the picker existed. */
+$("printDrawings").onclick = () => {
+  if(!drawings.length) return;
+  const note = $("printNote");
+  try{
+    const dlg = $("printPick");
+    if(!dlg || typeof dlg.showModal !== "function")
+      throw new Error("this browser cannot open the chooser");
+    openPrintPicker();
+  }catch(e){
+    if(note) note.textContent =
+      "The chooser could not open (" + (e && e.message ? e.message : e) +
+      ") — printing everything in the list instead.";
+    runPrint(drawings.map(d => d.path));
+  }
+};
+
+async function runPrint(paths){
+  const printDrawings = $("printDrawings"), printNote = $("printNote");
+  if(!paths || !paths.length) return;
+  /* THE TAB IS OPENED HERE, NOT AFTER THE AWAIT. A window.open() that happens after a network
+     round-trip is not a user gesture any more and browsers block it — the button would appear
+     to do nothing, which is the one failure mode that gets a feature abandoned. Still inside
+     the gesture: runPrint is called synchronously from the dialog's Print button. */
+  const tab = window.open("", "_blank");
+  printDrawings.disabled = true;
+  const was = printDrawings.textContent;
+  printDrawings.textContent = "Preparing…";
+  printNote.textContent = "";
+  try{
+    const r = await api("/api/estimate/drawings/print", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({paths: paths,
+                            job: (drawing.value || "").trim() || null})
+    });
+    if(!r.ok){
+      const j = await r.json().catch(() => ({}));
+      printNote.textContent = detailText(j, r, "Could not build the print");
+      if(tab) tab.close();
+      return;
+    }
+    /* WHAT WAS LEFT OUT IS SAID ON THE PAGE AS WELL AS ON THE COVER SHEET. The cover tells
+       whoever picks the paper up; this tells the estimator now, while they can still do
+       something about a DXF that has no printable drawing beside it. */
+    const printed = r.headers.get("X-SDI-Printed"), skipped = r.headers.get("X-SDI-Skipped"),
+          pages = r.headers.get("X-SDI-Pages");
+    printNote.textContent = printed
+      ? (printed + " drawing" + (printed === "1" ? "" : "s") + ", " + pages + " page"
+         + (pages === "1" ? "" : "s")
+         + (skipped && skipped !== "0"
+            ? " — " + skipped + " file" + (skipped === "1" ? "" : "s")
+              + " could not be printed and are named on the cover sheet."
+            : "."))
+      : "";
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    if(tab) tab.location = url; else window.open(url, "_blank");
+    /* Revoked late: revoking immediately can pull the file out from under a viewer that has
+       not finished loading it. */
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }catch(e){
+    printNote.textContent = "Could not reach the service — check it is running.";
+    if(tab) tab.close();
+  }finally{
+    printDrawings.textContent = was; refreshPrint();
+  }
+};
+refreshPrint();
+
+
+/* ══ DOCUMENT MANAGER EXTRACTS ════════════════════════════════════════════════════════
+   A SECOND SOURCE OF DRAWINGS, FEEDING THE SAME LIST. Yogesh's DM tool extracts a job's CAD
+   files out of Document Manager onto an output share; this imports the pack it left behind.
+
+   The two buttons are equals: both merge by name, so pulling a job from Document Manager over
+   the top of a folder copy replaces the stale sheets and leaves everything else alone, and the
+   ✕ removes a file whichever source it came from.
+
+   The button reports what is wrong rather than doing nothing. An unset share, a share this
+   service may not read, a share that is not mounted — each has a different fix, and the
+   estimator is told which. */
+let dmRoot = null;
+
+async function checkDm(){
+  /* Looked up inside, for the same reason refreshPrint does. */
+  const addFromDm = $("addFromDm"), dmNote = $("dmNote");
+  if(!addFromDm) return;
+  try{
+    const r = await api("/api/estimate/dm/status");
+    if(!r.ok) throw new Error(String(r.status));
+    const j = await r.json();
+    dmRoot = j.root || null;
+    addFromDm.disabled = !j.configured;
+    addFromDm.title = j.configured
+      ? ("Import drawings from " + j.root)
+      : (j.reason || "Document Manager import is not configured.");
+
+    /* TWO SETTINGS, TWO CAPABILITIES, AND THEY ARE INDEPENDENT.
+       SDI_DM_OUTPUT_ROOT lets you pick up a pack that already exists. The API lets you ASK
+       for one — and the API needs no output root at all, because DM reports where it wrote
+       each pack. Treating them as one switch would disable the extract on a machine that is
+       perfectly able to run it. */
+    dmApiReady = !!j.api_configured;
+    const addFolder = $("addFolder");
+    if(addFolder){
+      addFolder.title = dmApiReady
+        ? ("Ask Document Manager (" + (j.api_base || "configured") + ") to extract this "
+           + "project's drawing pack.")
+        : "Add the job folder for this estimate from the share. The Document Manager extract "
+          + "API is not configured, so this browses rather than extracting.";
+    }
+    /* Said once, quietly, under the list — not as an error. Not being configured yet is a
+       deployment step, not a fault, and the page should not shout about it every visit.
+
+       AND THE OUTPUT ROOT IS ONLY MENTIONED WHEN THERE IS NOTHING BETTER. Asking DM for a pack
+       needs no output root: DM reports where it wrote each pack and we read that back. Nagging
+       for a share setting on a machine that can already ask the API sends somebody hunting for
+       a setting the API's own author had never heard of. That happened, and it cost an
+       afternoon. */
+    if(dmNote){
+      const gaps = [];
+      if(!dmApiReady){
+        gaps.push("asking for a pack needs DOCMGR_BASE_URL and DOCMGR_ACCESS_SECRET");
+        if(!j.configured) gaps.push("importing one that already exists needs "
+                                    + (j.reason || "SDI_DM_OUTPUT_ROOT"));
+      }
+      dmNote.textContent = gaps.length ? ("Document Manager: " + gaps.join("; ") + ".") : "";
+
+      /* CONFIGURED SAYS THE SETTINGS ARE THERE. IT SAYS NOTHING ABOUT THE HOST BEING ON.
+         Asked second and without being waited on, so the note is right immediately from the
+         settings and gets more right a moment later — a page that holds a blank line for a
+         ten-second timeout is worse than one that fills in. */
+      if(dmApiReady){
+        api("/api/estimate/dm/health").then(r => r.json()).then(h => {
+          if(h.reachable && h.com_available !== false) return;   // nothing to say is the goal
+          dmNote.textContent = "Document Manager: " + (h.reason || "its host did not answer.");
+        }).catch(() => {});
+      }
+    }
+  }catch(e){
+    addFromDm.disabled = true;
+    dmApiReady = false;
+    addFromDm.title = "Could not ask the service whether Document Manager is configured.";
+    if(dmNote) dmNote.textContent = "";
+  }
+}
+
+$("addFromDm").onclick = () => {
+  if(!dmRoot) return;
+  /* The ordinary picker, started at the DM output share. Same containment rule, same
+     server-resolved paths — a second file browser would be a second place for the path rules
+     to drift, and the paths are the one thing that must mean the same to the engine. */
+  openBrowser("files", {dm: true}).then(() => navigate(dmRoot));
+};
+checkDm();
+
+</script>
+
+<script>
+/* Theme and page size — the same behaviour, and deliberately the SAME STORAGE KEYS, as the
+   portal. A preference that resets when you click from the dashboard into /estimating is not a
+   preference; three pages with three independent toggles would be worse than none.
+   Every localStorage access is wrapped: a private window or a policy that blocks site data
+   throws on access, and a page that will not render because it could not read a cosmetic
+   setting is a bad trade. Zoom rather than font-size because these layouts are in pixels. */
+(function(){
+  var root=document.documentElement, T='sdi.view.theme', Z='sdi.view.zoom', ZOOMS=[100,125,150,175,200];
+  function setTheme(light){
+    if(light) root.setAttribute('data-theme','light'); else root.removeAttribute('data-theme');
+    var b=document.getElementById('theme-btn'), l=document.getElementById('theme-lbl');
+    if(b){ b.setAttribute('aria-pressed',String(light));
+           b.title = light ? 'Switch to dark' : 'Switch to light';
+           b.setAttribute('aria-label', b.title); }
+    if(l) l.textContent = light ? 'Dark' : 'Light';
+    try{ localStorage.setItem(T, light?'light':'dark'); }catch(e){}
+  }
+  function setZoom(pc){
+    pc = ZOOMS.indexOf(pc)===-1 ? 100 : pc;
+    root.style.zoom = pc===100 ? '' : (pc/100);
+    var bs=document.querySelectorAll('.vc-z');
+    for(var i=0;i<bs.length;i++) bs[i].setAttribute('aria-pressed', String(Number(bs[i].dataset.zoom)===pc));
+    try{ localStorage.setItem(Z, String(pc)); }catch(e){}
+  }
+  var light=false, zoom=100;
+  try{ light = localStorage.getItem(T)==='light'; }catch(e){}
+  try{ var z=parseInt(localStorage.getItem(Z),10); if(ZOOMS.indexOf(z)!==-1) zoom=z; }catch(e){}
+  setTheme(light); setZoom(zoom);
+  var tb=document.getElementById('theme-btn');
+  if(tb) tb.addEventListener('click', function(){ setTheme(root.getAttribute('data-theme')!=='light'); });
+  var bs=document.querySelectorAll('.vc-z');
+  for(var i=0;i<bs.length;i++) (function(b){ b.addEventListener('click', function(){ setZoom(Number(b.dataset.zoom)); }); })(bs[i]);
+})();
+</script>
+</body>
+</html>
