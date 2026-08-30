@@ -203,6 +203,11 @@ class Run:
     # instead of four. main.py --llm-only turns off the deterministic BOM reader, the DXF
     # flat patterns and the SolidWorks extract, and says so on every run it produces.
     llm_only: bool = False
+    # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
+    # comes back on the log without the flag this run asked for; see _check_the_engine_was
+    # _told below. It forces the outcome to a failure whatever the runner reports, because a
+    # run that produced the wrong kind of workbook did not succeed at what was asked.
+    llm_only_refused: bool = False
     # STOP MEANS STOP, NOT "LOOK STOPPED". Abandoning a run frees the queue and leaves the
     # engine running -- SOLIDWORKS and Excel carry on driving a desktop nobody is watching,
     # for the fifteen minutes the job had left, and the next run queues behind work that has
@@ -476,6 +481,50 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
     }}
 
 
+def _check_the_engine_was_told(run: "Run", text: str) -> None:
+    """THE RUNNER IS A LONG-LIVED PROCESS AND `git pull` DOES NOT RELOAD IT.
+
+    This cost a live run on 10575-02. The service was current: it set llm_only, put it in the
+    claim and printed its LLM-ONLY banner on the run's own log. The runner had been up since
+    before --llm-only existed, so it built the command from the module it loaded at start —
+    without the flag — and the engine did the ordinary thing: eleven DXF flat patterns, the
+    SolidWorks extract applied, the hierarchy applied, Path A and Path B both reading.
+
+    A full four-reader estimate came back wearing an LLM-only label, into a folder named for
+    an LLM-only run, with the page saying UNVERIFIED over the top of it. That is the precise
+    file this whole feature exists to stop existing, and NOTHING caught it. It was found by
+    reading a command echo in a log by eye.
+
+    So the service checks that the instruction it gave was carried out. It cannot inspect the
+    runner's code, but the runner echoes the command it is about to run, and that echo is the
+    ground truth about what the engine was told. Wrong reader means STOP — cancelled on the
+    next heartbeat, before Excel writes anything, rather than fifteen minutes later.
+
+    ONLY THE COMMAND ECHO, and only for a run that asked. `startswith("$ ")` is the runner's
+    own convention for it; the LLM-ONLY banner and this guard's own words are prose on the
+    same log and must not be mistaken for it."""
+    if not run.llm_only or run.llm_only_refused:
+        return
+    line = text.strip()
+    if not line.startswith("$ ") or "main.py" not in line:
+        return
+    if "--llm-only" in line:
+        return
+    run.llm_only_refused = True
+    run.cancel_requested = True
+    run.error = ("This run asked for an LLM-ONLY read and the engine was NOT told to do one. "
+                 "The command the runner built has no --llm-only, so all four readers ran and "
+                 "the workbook would be an ordinary estimate carrying an LLM-only label. "
+                 "Stopped rather than filed.")
+    run.line("STOPPED — THE ENGINE WAS NOT TOLD TO READ WITH THE MODEL ALONE.")
+    run.line("The command above has no --llm-only, so the deterministic BOM reader, the DXF "
+             "flat patterns and the SolidWorks extract all ran. What that produces is a "
+             "NORMAL estimate that would be filed and labelled as an LLM read.")
+    run.line("The usual cause is a runner process started before --llm-only existed: it holds "
+             "the module it loaded at start, and git pull does not reload it. Restart the "
+             "runner on that machine and run this again.")
+
+
 @router.post("/runner/{run_id}/progress")
 def progress(run_id: str, req: ProgressRequest,
              x_sdi_key: Optional[str] = Header(default=None)):
@@ -492,6 +541,7 @@ def progress(run_id: str, req: ProgressRequest,
             raise HTTPException(409, f"That run is {run.status}, not running.")
         for text in req.lines:
             run.line(text)
+            _check_the_engine_was_told(run, text)
         run.lease_until = now + LEASE_SECONDS
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
@@ -518,8 +568,21 @@ def complete(run_id: str, req: CompleteRequest,
             raise HTTPException(409, "That run is claimed by a different runner.")
         for text in req.lines:
             run.line(text)
+            _check_the_engine_was_told(run, text)
         run.status = "done" if req.status == "done" else "error"
         run.error = req.error
+        # A RUN THAT PRODUCED THE WRONG KIND OF WORKBOOK DID NOT SUCCEED, whatever the runner
+        # thinks. The engine exits 0 either way — it was never told there was a second kind of
+        # run — so the runner reports "done" in perfect good faith, and "done" on this page is
+        # what makes an estimator open the file and believe it. Overridden last, so nothing
+        # after this can put the reassuring word back.
+        if run.llm_only_refused:
+            run.status = "error"
+            run.error = ("This run asked for an LLM-ONLY read and the engine was not told to "
+                         "do one — all four readers ran. Restart the runner on "
+                         f"{run.runner or 'that machine'} and run it again. Anything already "
+                         "written to the output folder is an ORDINARY estimate: it is not an "
+                         "LLM read and must not be filed as one.")
         if req.unit_cost_gbp is not None:
             try:
                 run.engine_price_gbp = round(float(req.unit_cost_gbp), 2)
