@@ -685,8 +685,28 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         # number and is deliberately not quoted here.
         _mat, _lab = _totals.get("material_gbp"), _totals.get("labour_gbp")
         _col_mat = sum(float(p.get("extended_cost") or 0) for p in provenance)
-        _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
-                    f"sheet's £{float(_mat):,.2f}. " if _mat is not None else "")
+        # NAME THE GAP. This printed both figures and stopped — "the material column above
+        # sums to £70.27 against the sheet's £144.40" — leaving the reader to decide which of
+        # the two was wrong. Neither is. The column is PER-PART material and only that; the
+        # sheet's material total also carries the purchased items on the Bill of Materials,
+        # the packaging and delivery lines, and the scrap uplift added to every line.
+        #
+        # An unexplained £74 between two tabs of one workbook is not a rounding note. It is
+        # the reader's first real test of whether this tab can be trusted, and on 10575-02 it
+        # was 51% of the material total sitting in a difference nothing accounted for.
+        if _mat is None:
+            _mat_txt = ""
+        else:
+            _gap = float(_mat) - _col_mat
+            _gap_txt = ""
+            if abs(_gap) >= 0.01:
+                _gap_txt = (f"The £{abs(_gap):,.2f} difference is material the SHEET carries "
+                            f"and this column does not: purchased items on the Bill of "
+                            f"Materials, packaging and delivery, and the scrap uplift added "
+                            f"per line. Neither figure is wrong — this column is per-part "
+                            f"provenance, the sheet is the money. ")
+            _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
+                        f"sheet's £{float(_mat):,.2f}. {_gap_txt}")
         _lab_txt = (f"Labour is £{float(_lab):,.2f}, charged per department row across "
                     f"every part in that setup — see 'Priced by' for the rows and "
                     f"decisions behind each part. " if _lab is not None else "")
