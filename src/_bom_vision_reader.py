@@ -36,6 +36,7 @@ import glob
 import io
 import json
 import os
+import threading
 import re
 import sys
 import hashlib
@@ -303,8 +304,19 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
                 "raw_response": raw,
                 "parsed": parsed,
             }
-            with open(path, "w", encoding="utf-8") as fh:
+            # WRITTEN WHOLE OR NOT AT ALL. The key is a hash of the page IMAGE, so two
+            # identical pages in a pack — a repeated title block, the same GA sheet in two
+            # PDFs — share one cache file. Read sequentially that never mattered. Read
+            # concurrently, two threads can be part-way through writing it while a third
+            # reads, and json.dump into an open handle is not atomic.
+            #
+            # The existing reader catches a corrupt entry and re-fetches, so the worst case
+            # was a wasted call rather than a wrong answer. os.replace is atomic on Windows
+            # and POSIX alike, which removes the window instead of tolerating it.
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(entry, fh, indent=2, ensure_ascii=False)
+            os.replace(tmp, path)
         except Exception as exc:
             print(f"  [cache write failed for {pdf_name} p{page_index}: {exc}]")
 

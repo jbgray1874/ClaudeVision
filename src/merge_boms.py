@@ -396,6 +396,35 @@ def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]
                            "detail": f"vision BOM reader unavailable ({PATH_B_IMPORT_ERROR})"})
         return out
     force_all = args.refresh or args.force_llm
+
+    # ── EVERY PAGE AT ONCE, BECAUSE EVERY PAGE IS A SEPARATE ROUND TRIP ──────────────
+    #
+    # This read the pages one at a time. On 10575-02 that was NINETEEN sequential calls
+    # to the vision model, each one a network round trip of several seconds, and it is
+    # the largest single block in a run -- the estimator watching it has no way to tell
+    # a slow model from a stuck one.
+    #
+    # Nothing made it sequential. Each page is independent, the cache is keyed per page,
+    # and the results are collected rather than accumulated into shared state. The work
+    # is entirely WAITING on an API, so threads are the right tool: the GIL is released
+    # for the whole of it, and processes would pay to pickle a PNG per page.
+    #
+    # ORDER IS PRESERVED DELIBERATELY. Results used to arrive in page order and something
+    # downstream may lean on that without saying so; a reordering that only shows up on a
+    # pack with two GAs is not a debugging session anybody wants. So the work is indexed
+    # and the output rebuilt in the original sequence.
+    #
+    # SDI_VISION_WORKERS bounds it. Default 6: enough to turn minutes into tens of
+    # seconds, low enough not to trip a rate limit on the shared xAI key and turn a slow
+    # run into a failed one. 1 restores exactly the old behaviour, which is the first
+    # thing to try if the model starts refusing.
+    try:
+        _workers = int(os.environ.get("SDI_VISION_WORKERS", "6"))
+    except ValueError:
+        _workers = 6
+    _workers = max(1, min(_workers, 16))
+
+    jobs: List[Tuple[str, str, int, bool, bool]] = []
     for p in pdf_paths:
         this_refresh = force_all or (
             args.refresh_file is not None and args.refresh_file.lower() in os.path.basename(p).lower()
@@ -411,41 +440,65 @@ def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]
         for pi in range(n):
             _name = os.path.basename(p)
             _pay = force_all or worth_paying_for is None or worth_paying_for.get((_name, pi), False)
-            try:
-                png = pathB.render_page_to_png(p, pi, dpi=args.dpi, max_side=args.max_side)
-                res = pathB.get_vision_bom_cached(
-                    png, model=args.model, pdf_name=_name, page_index=pi,
-                    cache_dir=args.cache_dir, use_cache=not args.no_cache, refresh=this_refresh,
-                    cache_only=not _pay,
-                )
-            except Exception as exc:
-                print(f"  [Path B error] {_name} p{pi}: {exc}")
-                if unread is not None:
-                    unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
-                                   "detail": f"{type(exc).__name__}: {exc}"})
-                continue
-            if spend is not None:
-                if res.get("skipped"):
-                    spend["skipped"] = spend.get("skipped", 0) + 1
-                elif res.get("cache_hit"):
-                    spend["cached"] = spend.get("cached", 0) + 1
-                else:
-                    spend["paid"] = spend.get("paid", 0) + 1
+            jobs.append((p, _name, pi, _pay, this_refresh))
+
+    def _one(job: Tuple[str, str, int, bool, bool]) -> Dict[str, Any]:
+        p, _name, pi, _pay, this_refresh = job
+        try:
+            png = pathB.render_page_to_png(p, pi, dpi=args.dpi, max_side=args.max_side)
+            res = pathB.get_vision_bom_cached(
+                png, model=args.model, pdf_name=_name, page_index=pi,
+                cache_dir=args.cache_dir, use_cache=not args.no_cache, refresh=this_refresh,
+                cache_only=not _pay,
+            )
+            return {"name": _name, "page": pi, "res": res}
+        except Exception as exc:                                 # noqa: BLE001
+            # RETURNED, NOT RAISED. One page the model refuses must not take the other
+            # eighteen with it -- the sequential version continued, and so does this.
+            return {"name": _name, "page": pi, "error": f"{type(exc).__name__}: {exc}"}
+
+    results: List[Optional[Dict[str, Any]]] = [None] * len(jobs)
+    if jobs:
+        import concurrent.futures as _futures                    # noqa: PLC0415
+        with _futures.ThreadPoolExecutor(max_workers=_workers) as ex:
+            for idx, out_one in zip(range(len(jobs)), ex.map(_one, jobs)):
+                results[idx] = out_one
+
+    # The bookkeeping stays on ONE thread, in page order. Counters incremented from six
+    # threads is how a "paid" total quietly stops matching the bill.
+    for entry in results:
+        if entry is None:
+            continue
+        _name, pi = entry["name"], entry["page"]
+        if "error" in entry:
+            print(f"  [Path B error] {_name} p{pi}: {entry['error']}")
+            if unread is not None:
+                unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
+                               "detail": entry["error"]})
+            continue
+        res = entry["res"]
+        if spend is not None:
             if res.get("skipped"):
-                # Not an error and not an empty page — a page nobody looked at. Recorded
-                # so "no BOM here" is never inferred from a call that was never made.
-                if unread is not None:
-                    unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
-                                   "detail": "not read by the vision model: the page does not "
-                                             "talk like a parts list and the deterministic "
-                                             "reader found no table on it",
-                                   "reason": "not_selected"})
-                continue
-            parsed = res["parsed"]
-            if parsed and parsed.get("rows"):
-                parsed["page_index"] = pi
-                parsed["pdf_name"] = os.path.basename(p)
-                out.append(parsed)
+                spend["skipped"] = spend.get("skipped", 0) + 1
+            elif res.get("cache_hit"):
+                spend["cached"] = spend.get("cached", 0) + 1
+            else:
+                spend["paid"] = spend.get("paid", 0) + 1
+        if res.get("skipped"):
+            # Not an error and not an empty page — a page nobody looked at. Recorded
+            # so "no BOM here" is never inferred from a call that was never made.
+            if unread is not None:
+                unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
+                               "detail": "not read by the vision model: the page does not "
+                                         "talk like a parts list and the deterministic "
+                                         "reader found no table on it",
+                               "reason": "not_selected"})
+            continue
+        parsed = res["parsed"]
+        if parsed and parsed.get("rows"):
+            parsed["page_index"] = pi
+            parsed["pdf_name"] = _name
+            out.append(parsed)
     return out
 
 
