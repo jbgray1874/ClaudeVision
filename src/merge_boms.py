@@ -522,7 +522,7 @@ def reconcile_job(
     model=None,
     cache_dir=None,
     no_cache=False,
-    refresh=False,
+    refresh=None,
     force_llm=False,
     refresh_file=None,
     verbose=False,
@@ -543,6 +543,23 @@ def reconcile_job(
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
     if cache_dir is None:
         cache_dir = pathB.DEFAULT_CACHE_DIR if pathB is not None else ""
+    # BOTH RESOLVED BEFORE _args IS BUILT, and that ordering is the whole of it. `refresh`
+    # is read out of this Namespace by run_path_b; resolving it four lines LOWER puts None in
+    # there, which is falsy, so --fresh-read would set the variable, the variable would be
+    # read, and every page would still come from cache. Nothing would fail — the run would
+    # simply go on answering the question it was asked last week, which is the one thing the
+    # flag exists to stop.
+    #
+    # DEFAULTED FROM THE ENVIRONMENT so the flags do not have to be threaded through
+    # file_scan's signature and bom_pipeline's **opts to reach here. SDI_SW_FLATTEN and
+    # SDI_SW_EXTRACT already work this way, and main.py sets both of these for the process.
+    # An explicit argument still wins, so a caller that knows what it wants is not
+    # second-guessed by a variable somebody left set in a shell.
+    if llm_only is None:
+        llm_only = os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
+    if refresh is None:
+        refresh = os.environ.get("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
+                                                                              "yes", "on"}
     _args = argparse.Namespace(
         pdf=None, pdf_dir=None, dpi=dpi, max_side=max_side, model=model,
         cache_dir=cache_dir, no_cache=no_cache, refresh=refresh,
@@ -550,13 +567,6 @@ def reconcile_job(
     )
     unread: List[Dict[str, Any]] = []
     survey: Dict[Tuple[str, int], bool] = {}
-    # DEFAULTED FROM THE ENVIRONMENT so the flag does not have to be threaded through
-    # file_scan's signature and bom_pipeline's **opts to reach here. SDI_SW_FLATTEN and
-    # SDI_SW_EXTRACT already work this way, and main.py --llm-only sets it for the process.
-    # An explicit argument still wins, so a caller that knows what it wants is not
-    # second-guessed by a variable somebody left set in a shell.
-    if llm_only is None:
-        llm_only = os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
 
     spend: Dict[str, int] = {"paid": 0, "cached": 0, "skipped": 0}
 

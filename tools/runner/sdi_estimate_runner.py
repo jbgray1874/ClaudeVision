@@ -204,7 +204,7 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
 def engine_command(engine_root: Path, engine_python: Path, job: Path,
                    units: int, client: str, pdf: Optional[Path] = None,
                    manual_workbook: Optional[Path] = None,
-                   llm_only: bool = False) -> List[str]:
+                   llm_only: bool = False, fresh_read: bool = False) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
     promises a complete set every time, so it is not a flag the caller can forget.
 
@@ -240,6 +240,11 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         # -- it simply reads with one source instead of four, and main.py says so on every
         # line of output it produces.
         ["--llm-only"] if llm_only else []
+    ) + (
+        # ASK THE MODEL AGAIN. Both LLM caches bypassed for this run only. Not a default and
+        # not a tidy-up: the caches are what make two runs of one pack agree, and 2085 halved
+        # its own unit cost between identical runs before they existed.
+        ["--fresh-read"] if fresh_read else []
     )
 
 
@@ -787,7 +792,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     before = snapshot(engine_root)
     cmd = engine_command(engine_root, engine_python, folder, int(job["units"]),
                          job["client"], pdf=pdf, manual_workbook=manual_wb,
-                         llm_only=bool(job.get("llm_only")))
+                         llm_only=bool(job.get("llm_only")),
+                         fresh_read=bool(job.get("fresh_read")))
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 

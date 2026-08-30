@@ -203,11 +203,27 @@ class Run:
     # instead of four. main.py --llm-only turns off the deterministic BOM reader, the DXF
     # flat patterns and the SolidWorks extract, and says so on every run it produces.
     llm_only: bool = False
+    # ASK THE MODEL AGAIN, FOR THIS RUN ONLY. The two LLM caches are keyed on content, so a
+    # pack that has not changed replays its stored answers and never reaches Grok -- which is
+    # right for an estimate and wrong for a measurement of the model. Nothing is deleted: the
+    # engine is told to bypass them, so no other job loses its settled answer.
+    fresh_read: bool = False
     # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
-    # comes back on the log without the flag this run asked for; see _check_the_engine_was
-    # _told below. It forces the outcome to a failure whatever the runner reports, because a
-    # run that produced the wrong kind of workbook did not succeed at what was asked.
-    llm_only_refused: bool = False
+    # comes back on the log without a flag this run asked for -- either of them; see
+    # _check_the_engine_was_told below. It forces the outcome to a failure whatever the runner
+    # reports, because a run that answered a different question did not succeed at this one.
+    #
+    # NOT NAMED llm_only_refused ANY MORE. It was, while --llm-only was the only flag that
+    # could go missing; a second one arrived within the hour, and a field whose name covers
+    # half of what it means is how the second case ends up with its own parallel flag and its
+    # own half of the check.
+    instruction_refused: bool = False
+    # AND THE REASON, KEPT SEPARATELY FROM `error`. /complete assigns `run.error = req.error`
+    # unconditionally — the runner's own verdict, which on this path is None, because the
+    # engine exited 0 and the runner has nothing to complain about. Holding the reason only in
+    # `error` meant the guard wrote a full explanation and the completion handler blanked it
+    # one line later, leaving a failed run with no stated cause.
+    refusal_reason: str = ""
     # STOP MEANS STOP, NOT "LOOK STOPPED". Abandoning a run frees the queue and leaves the
     # engine running -- SOLIDWORKS and Excel carry on driving a desktop nobody is watching,
     # for the fifteen minutes the job had left, and the next run queues behind work that has
@@ -372,6 +388,10 @@ class EstimateRequest(BaseModel):
     # no branching. That is why it belongs here rather than on the batch endpoint, which has
     # to keep treating every file as a separate enquiry.
     method: str = "both"
+    # ASK THE MODEL AGAIN, rather than replaying what it said about this pack last time.
+    # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
+    # which has three other readers and does not want its one reproducible source moving.
+    fresh_read: bool = False
 
 
 class BatchRequest(BaseModel):
@@ -478,6 +498,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         # from the runner's machine, never a temp file from this service's disk.
         "manual_workbook": run.manual_workbook,
         "llm_only": bool(run.llm_only),
+        "fresh_read": bool(run.fresh_read),
     }}
 
 
@@ -503,24 +524,36 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
     ONLY THE COMMAND ECHO, and only for a run that asked. `startswith("$ ")` is the runner's
     own convention for it; the LLM-ONLY banner and this guard's own words are prose on the
     same log and must not be mistaken for it."""
-    if not run.llm_only or run.llm_only_refused:
+    wanted = [f for f, asked in (("--llm-only", run.llm_only),
+                                 ("--fresh-read", run.fresh_read)) if asked]
+    if not wanted or run.instruction_refused:
         return
     line = text.strip()
     if not line.startswith("$ ") or "main.py" not in line:
         return
-    if "--llm-only" in line:
+    missing = [f for f in wanted if f not in line]
+    if not missing:
         return
-    run.llm_only_refused = True
+    run.instruction_refused = True
     run.cancel_requested = True
-    run.error = ("This run asked for an LLM-ONLY read and the engine was NOT told to do one. "
-                 "The command the runner built has no --llm-only, so all four readers ran and "
-                 "the workbook would be an ordinary estimate carrying an LLM-only label. "
-                 "Stopped rather than filed.")
-    run.line("STOPPED — THE ENGINE WAS NOT TOLD TO READ WITH THE MODEL ALONE.")
-    run.line("The command above has no --llm-only, so the deterministic BOM reader, the DXF "
-             "flat patterns and the SolidWorks extract all ran. What that produces is a "
-             "NORMAL estimate that would be filed and labelled as an LLM read.")
-    run.line("The usual cause is a runner process started before --llm-only existed: it holds "
+    # WHAT EACH MISSING FLAG ACTUALLY COSTS, rather than one message covering both. They fail
+    # differently and an estimator reading the log has to know which happened.
+    _why = {
+        "--llm-only": "the deterministic BOM reader, the DXF flat patterns and the SolidWorks "
+                      "extract all ran, so what this produces is a NORMAL estimate that would "
+                      "be filed and labelled as an LLM read",
+        "--fresh-read": "the LLM caches were used, so the model was never asked — the run "
+                        "replays the answer held for this pack and would be reported as a "
+                        "fresh reading of it",
+    }
+    run.refusal_reason = ("This run asked for " + " and ".join(missing) + " and the engine was "
+                          "NOT told to do it. Stopped rather than filed.")
+    run.error = run.refusal_reason
+    run.line("STOPPED — THE ENGINE WAS NOT TOLD TO DO WHAT THIS RUN ASKED FOR.")
+    for _flag in missing:
+        run.line(f"The command above has no {_flag}, so " + _why.get(_flag, "the run would not "
+                 "have been the one that was asked for") + ".")
+    run.line("The usual cause is a runner process started before that flag existed: it holds "
              "the module it loaded at start, and git pull does not reload it. Restart the "
              "runner on that machine and run this again.")
 
@@ -576,13 +609,12 @@ def complete(run_id: str, req: CompleteRequest,
         # run — so the runner reports "done" in perfect good faith, and "done" on this page is
         # what makes an estimator open the file and believe it. Overridden last, so nothing
         # after this can put the reassuring word back.
-        if run.llm_only_refused:
+        if run.instruction_refused:
             run.status = "error"
-            run.error = ("This run asked for an LLM-ONLY read and the engine was not told to "
-                         "do one — all four readers ran. Restart the runner on "
-                         f"{run.runner or 'that machine'} and run it again. Anything already "
-                         "written to the output folder is an ORDINARY estimate: it is not an "
-                         "LLM read and must not be filed as one.")
+            run.error = run.refusal_reason + (
+                f" Restart the runner on {run.runner or 'that machine'} and run it again. "
+                "Anything already written to the output folder is the ORDINARY kind of run: "
+                "it is not what was asked for and must not be filed as though it were.")
         if req.unit_cost_gbp is not None:
             try:
                 run.engine_price_gbp = round(float(req.unit_cost_gbp), 2)
@@ -721,7 +753,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out),
                   manual_workbook=manual_wb, queued_at=queued_at,
-                  llm_only=(method == "llm"))
+                  llm_only=(method == "llm"),
+                  fresh_read=bool(req.fresh_read))
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
@@ -734,6 +767,13 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
+    if run.fresh_read:
+        # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
+        # answer exactly; this one may not, and "the number moved and nothing changed" is
+        # otherwise the most alarming thing this page can show an estimator.
+        run.line("FRESH READ: both LLM caches bypassed — every page goes to the model again. "
+                 "The answer may differ from the last run on the same pack; that difference "
+                 "is the measurement.")
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))

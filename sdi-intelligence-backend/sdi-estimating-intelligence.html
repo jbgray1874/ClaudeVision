@@ -449,6 +449,22 @@
          must not be quoted, and must not be compared with a normal run's.</b> Reads the
          drawings in the <b>Drawings</b> panel — one drawing or a whole pack — and files into
          the same folder, and reports into the same run log, as the estimator above it.</p>
+      <!-- ASK THE MODEL AGAIN, RATHER THAN REPLAYING WHAT IT SAID LAST TIME.
+           The first LLM read through this page sent NOTHING to Grok: "0 page(s) sent to the
+           model, 22 from cache" and "reusing the cached read for this pack". It proved the
+           plumbing and measured nothing about the model, which is the whole point of the
+           button above.
+           The caches are right to exist and are not being deleted — 2085 returned a route
+           with welding on one run and without it on the next and the unit cost halved. The
+           engine is simply told to bypass them for THIS run, so no other job loses its
+           settled answer, and nothing has to reach the runner's disk from a web page.
+           OFF BY DEFAULT, because the honest reason to press the button most of the time is
+           to look at a pack, and a cached read is the same read for a fraction of the cost. -->
+      <label class="note" style="display:block;margin:-4px 0 10px">
+        <input type="checkbox" id="freshRead"> <b>Fresh read</b> — ask the model again instead
+        of reusing the answers held for this pack. Slower and it costs API calls; the answer
+        may differ from the last run, and <b>that difference is the measurement</b>. Leave it
+        off to re-read a pack the model has already seen.</label>
 
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
@@ -859,7 +875,7 @@ const bList=$("bList"), bEmpty=$("bEmpty"), bWhere=$("bWhere"), bRun=$("bRun"),
 /* THE LLM READ BELONGS TO THE JOB PANEL, not to the enquiry — it reads `drawings`, it posts
    to the pooling endpoint, and it reports into THIS panel's log. The `b` prefix is the one
    thing left over from where it first went in. */
-const bRunLLM=$("bRunLLM");
+const bRunLLM=$("bRunLLM"), freshRead=$("freshRead");
 
 let drawings = [];      // {path, name, is_dir}
 let running  = false;
@@ -1598,6 +1614,13 @@ $("bRunLLM").onclick = async () => {
   line("LLM READ ONLY · "+safe(drawing.value)+" · "+safe(client.value)+" · "+units.value+" off");
   line("UNVERIFIED: Grok alone — no deterministic BOM reader, no DXF, no SolidWorks. A "
      + "measurement of the model, NOT an estimate. Do not quote its total.");
+  /* WHICH OF THE TWO THIS IS, on the run's own log. A cached read and a fresh one produce the
+     same workbook in the same folder and are told apart by nothing else — and the whole value
+     of a fresh one is that its number may have moved. */
+  line(freshRead.checked
+       ? "FRESH READ: the caches are bypassed — every page is being sent to the model again."
+       : "Cached read: pages the model has already seen are replayed from cache, so this "
+       + "measures the plumbing rather than the model. Tick 'Fresh read' to ask it again.");
   line("Output → "+destination());
   const folder = drawings.find(d => d.is_dir);
   try{
@@ -1613,7 +1636,7 @@ $("bRunLLM").onclick = async () => {
                             job_folder: folder ? folder.path : null,
                             files: drawings.filter(d => !d.is_dir).map(d => d.path),
                             output_root: OUTPUT_ROOT, deliverables: true,
-                            method: "llm"})});
+                            method: "llm", fresh_read: !!freshRead.checked})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;

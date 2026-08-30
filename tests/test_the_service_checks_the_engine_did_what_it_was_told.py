@@ -70,7 +70,7 @@ TOLD = STALE + " --llm-only"
 def test_the_run_that_asked_and_was_not_obeyed_is_stopped(routes):
     run = _run(routes, llm_only=True)
     routes._check_the_engine_was_told(run, STALE)
-    assert run.llm_only_refused, "the missing flag was not noticed"
+    assert run.instruction_refused, "the missing flag was not noticed"
     assert run.cancel_requested, (
         "the engine is left running: fifteen minutes of SOLIDWORKS and Excel producing the "
         "one workbook that must not exist")
@@ -80,7 +80,7 @@ def test_the_run_that_asked_and_was_not_obeyed_is_stopped(routes):
 def test_the_run_that_was_obeyed_is_left_alone(routes):
     run = _run(routes, llm_only=True)
     routes._check_the_engine_was_told(run, TOLD)
-    assert not run.llm_only_refused
+    assert not run.instruction_refused
     assert not run.cancel_requested, "a correct LLM-only run is being cancelled"
 
 
@@ -89,7 +89,7 @@ def test_an_ordinary_estimate_is_never_touched(routes):
     those than of these. A guard that fired on them would stop the estimating."""
     run = _run(routes, llm_only=False)
     routes._check_the_engine_was_told(run, STALE)
-    assert not run.llm_only_refused
+    assert not run.instruction_refused
     assert not run.cancel_requested
 
 
@@ -136,7 +136,56 @@ def test_the_outcome_cannot_come_back_done():
     open the file and believe it."""
     at = CODE.index("def complete(")
     body = CODE[at:CODE.index("\n@router", at)]
-    assert "llm_only_refused" in body, "a refused run can still be reported as complete"
-    assert body.index("run.error = req.error") < body.index("if run.llm_only_refused"), (
+    assert "instruction_refused" in body, "a refused run can still be reported as complete"
+    assert body.index("run.error = req.error") < body.index("if run.instruction_refused"), (
         "the runner's own error message is applied AFTER the override and would replace the "
         "reason with a blank")
+
+
+# ── the second flag, which arrived within the hour ───────────────────────────
+
+FRESH = STALE + " --fresh-read"
+BOTH = STALE + " --llm-only --fresh-read"
+
+
+def test_a_fresh_read_that_was_not_asked_for_is_caught_too(routes):
+    """THE FIELD WAS CALLED llm_only_refused UNTIL THIS EXISTED. A second flag that can go
+    missing the same way, for the same reason, arrived within the hour of the first — which is
+    why the check is over "the flags this run asked for" and not over one named flag.
+
+    It fails differently and less loudly: nothing is mislabelled as a different KIND of run,
+    the run simply replays the answer it gave last week and is reported as a fresh reading of
+    it. Which is the only question the button was pressed to answer."""
+    run = _run(routes, llm_only=True, fresh_read=True)
+    routes._check_the_engine_was_told(run, TOLD)          # has --llm-only, not --fresh-read
+    assert run.instruction_refused, "a missing --fresh-read went past"
+    assert "--fresh-read" in run.refusal_reason
+    assert "--llm-only" not in run.refusal_reason, (
+        "it names a flag that WAS on the command, which sends somebody looking in the wrong "
+        "place")
+
+
+def test_both_flags_present_is_left_alone(routes):
+    run = _run(routes, llm_only=True, fresh_read=True)
+    routes._check_the_engine_was_told(run, BOTH)
+    assert not run.instruction_refused
+    assert not run.cancel_requested
+
+
+def test_a_run_that_asked_for_neither_is_never_checked(routes):
+    run = _run(routes, llm_only=False, fresh_read=False)
+    routes._check_the_engine_was_told(run, STALE)
+    assert not run.instruction_refused
+
+
+def test_the_reason_survives_the_completion_handler():
+    """/complete assigns `run.error = req.error` unconditionally — the runner's own verdict,
+    which on this path is None, because the engine exited 0 and the runner has nothing to
+    complain about. Holding the reason only in `error` meant the guard wrote a full
+    explanation and the completion handler blanked it one line later, leaving a failed run
+    with no stated cause on a page whose entire job is to say why."""
+    at = CODE.index("def complete(")
+    body = CODE[at:CODE.index("\n@router", at)]
+    assert "run.refusal_reason" in body, (
+        "the completion handler does not use the kept reason, so whatever the guard explained "
+        "is replaced by the runner's empty one")

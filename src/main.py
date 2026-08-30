@@ -100,6 +100,18 @@ def parse_args() -> argparse.Namespace:
              "reason. Works on one drawing or a whole folder -- a pack of one PDF is a pack.",
     )
     parser.add_argument(
+        "--fresh-read",
+        action="store_true",
+        help="ASK THE MODEL AGAIN. Both LLM caches are bypassed: every page goes to the "
+             "vision model and the whole-pack read is re-driven, instead of replaying the "
+             "answers held for this pack. The caches exist because 2085 returned a route with "
+             "welding on one run and without it on the next and the unit cost halved -- so a "
+             "normal estimate should NOT use this. It is for the one question the cache makes "
+             "unanswerable: what does the model say about this pack TODAY. Note this does not "
+             "make a cached run slow or a fresh one slow: the page rendering and the pack text "
+             "extraction happen either way, because the cache KEY is computed from them.",
+    )
+    parser.add_argument(
         "--folder-as-job",
         action="store_true",
         help="Group all PDFs in each folder into one pooled BOM + single bay estimate (overrides config default).",
@@ -605,6 +617,20 @@ def main() -> None:
         print("   produces must not be quoted or compared with a normal run's totals.")
         print("   " + "=" * 68)
         print("")
+
+    # ── --fresh-read: ASK THE MODEL AGAIN ───────────────────────────────────────────
+    # SET AS ENVIRONMENT, like SDI_LLM_ONLY, because the two caches sit at opposite ends of
+    # the pipeline -- one inside the per-page vision reader, one inside the whole-pack
+    # extract -- and threading a flag through file_scan's signature and bom_pipeline's
+    # **opts to reach both is how the argument gets dropped on one path and nobody notices
+    # for a month.
+    if getattr(args, "fresh_read", False):
+        os.environ["SDI_VISION_REFRESH"] = "1"
+        os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
+        print("   [fresh-read] both LLM caches bypassed — every page goes to the model and "
+              "the whole-pack read is re-driven. The answer may differ from the last run: "
+              "that is what is being measured, and it is why a normal estimate does not do "
+              "this.", flush=True)
     dxf_only_primary = bool(dxf_from_cli and not drawing_arg)
     job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     folder_as_job = bool(job_cfg.get("folder_as_job", False))

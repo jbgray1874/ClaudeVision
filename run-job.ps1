@@ -89,7 +89,8 @@ param(
     # not a quote, is not reproducible, and must not be compared with a normal run's
     # totals -- the source waterfall ranks an LLM read LAST, capped at 0.68, for exactly
     # the reasons this makes visible.
-    [switch] $LlmOnly
+    [switch] $LlmOnly,
+    [switch] $FreshRead
 )
 
 $root   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -473,6 +474,12 @@ if ($OrderQty -gt 0) {
 if ($LlmOnly) {
     $estArgs += '--llm-only'
     Write-Host "LLM-ONLY: the vision model is the only reader. Not an estimate." -ForegroundColor Yellow
+}
+if ($FreshRead) {
+    # ASK THE MODEL AGAIN. Both LLM caches bypassed for this run only; nothing is deleted, so
+    # no other pack loses its settled answer.
+    $estArgs += '--fresh-read'
+    Write-Host "FRESH READ: both LLM caches bypassed. Slower, and it costs API calls." -ForegroundColor Yellow
 }
 
 function Invoke-Run([string] $label) {
