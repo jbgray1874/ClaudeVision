@@ -245,11 +245,27 @@ def test_both_icons_swap_with_the_label():
 def test_every_storage_access_is_wrapped():
     """A private window, or a policy that blocks site data, THROWS on access. A portal that
     will not render because it could not read a cosmetic preference is a bad trade — the same
-    reasoning already applied to the rail toggle, and the same wrapping."""
-    for m in re.finditer(r"localStorage\.(?:get|set)Item", _PORTAL):
-        window = _PORTAL[max(0, m.start() - 120):m.start()]
-        assert "try{" in window, (
-            f"unwrapped localStorage access near: ...{_PORTAL[m.start()-60:m.start()+60]}...")
+    reasoning already applied to the rail toggle, and the same wrapping.
+
+    IT SCANNED THE COMMENTS TOO, AND THAT IS HOW IT FAILED. The comment above the API_KEY
+    declaration tells a reader the one line to type in the console to turn the gate on — which
+    is, necessarily, a literal localStorage.setItem call. The guard found it, looked for a
+    `try` in the prose above it, and reported an unwrapped access in a sentence. Eighth time in
+    this repository that a text search has matched the explanation of the thing it searches
+    for; comments are blanked first now.
+
+    AND `try{` WITHOUT A SPACE WAS NEVER THE RULE — it was just how the two existing call sites
+    happened to be written. The real API_KEY reader is `try {`, correctly wrapped, and would
+    have been reported as naked. A guard that only recognises one brace style teaches people to
+    format around it."""
+    src = re.sub(r"//[^\n]*", " ", re.sub(r"/\*.*?\*/", " ", _PORTAL, flags=re.S))
+    seen = 0
+    for m in re.finditer(r"localStorage\.(?:get|set)Item", src):
+        seen += 1
+        window = src[max(0, m.start() - 120):m.start()]
+        assert re.search(r"\btry\s*\{", window), (
+            f"unwrapped localStorage access near: ...{src[m.start()-60:m.start()+60]}...")
+    assert seen, "no storage access left on the page — this guard is looking at nothing"
 
 
 def test_the_two_preferences_are_remembered_separately():
