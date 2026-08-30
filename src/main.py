@@ -89,6 +89,17 @@ def parse_args() -> argparse.Namespace:
         help="Do not auto-discover flat DXFs beside the PDF / input/drawings/DXF when scanning a GA PDF.",
     )
     parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="MEASUREMENT, NOT ESTIMATING. Read the pack with the vision model alone: the "
+             "deterministic BOM reader, the DXF flat patterns and the SolidWorks extract are "
+             "all switched off, and every page is sent to the model. Answers 'what does Grok "
+             "make of this pack by itself' -- which cannot be asked while three other readers "
+             "are quietly supplying half the rows. The result is not a quote and not "
+             "reproducible; the source waterfall ranks an LLM read LAST for exactly this "
+             "reason. Works on one drawing or a whole folder -- a pack of one PDF is a pack.",
+    )
+    parser.add_argument(
         "--folder-as-job",
         action="store_true",
         help="Group all PDFs in each folder into one pooled BOM + single bay estimate (overrides config default).",
@@ -561,6 +572,39 @@ def main() -> None:
     _apply_web_ai_pricing_fallback_from_args(args)
 
     auto_discover_dxf = not args.no_dxf_augment
+
+    # ── --llm-only: EVERY OTHER READER OFF ──────────────────────────────────────────
+    #
+    # Composed from switches that already exist rather than a new code path, so the normal
+    # run is untouched: this changes nothing unless the flag is passed.
+    #
+    #   deterministic BOM reader  SDI_LLM_ONLY -> merge_boms skips Path A
+    #   DXF flat patterns         auto_discover_dxf = False
+    #   SolidWorks native extract SDI_APPLY_SOLIDWORKS = 0
+    #
+    # SAID OUT LOUD, EVERY TIME. A run that reads a pack with one source and prices it is
+    # indistinguishable in the output from a run that had all four and agreed -- the flags
+    # look the same, the workbook looks the same. The one thing that must never happen is
+    # somebody finding this spreadsheet in six months and taking it for an estimate.
+    if getattr(args, "llm_only", False):
+        os.environ["SDI_LLM_ONLY"] = "1"
+        # SDI_APPLY_SOLIDWORKS=0 is the documented force-off; SDI_SW_RUN_ANALYSER=0
+        # stops it invoking COM to build one, so an LLM-only run neither reads an
+        # existing extract nor spends four minutes and a seat making a new one.
+        os.environ["SDI_APPLY_SOLIDWORKS"] = "0"
+        os.environ["SDI_SW_RUN_ANALYSER"] = "0"
+        auto_discover_dxf = False
+        print("")
+        print("   " + "=" * 68)
+        print("   LLM-ONLY RUN. The vision model is the only reader.")
+        print("   Deterministic BOM reader: OFF.  DXF flat patterns: OFF.")
+        print("   SolidWorks native extract: OFF.  Every page is sent to the model.")
+        print("")
+        print("   Nothing corroborates anything. This is a MEASUREMENT of what the")
+        print("   model reads unaided -- it is not an estimate, and the numbers it")
+        print("   produces must not be quoted or compared with a normal run's totals.")
+        print("   " + "=" * 68)
+        print("")
     dxf_only_primary = bool(dxf_from_cli and not drawing_arg)
     job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     folder_as_job = bool(job_cfg.get("folder_as_job", False))

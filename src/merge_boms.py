@@ -527,6 +527,7 @@ def reconcile_job(
     refresh_file=None,
     verbose=False,
     select_pages=True,
+    llm_only=None,
 ):
     """Dual-path BOM reconcile for a set of PDFs (library entry point).
 
@@ -549,17 +550,57 @@ def reconcile_job(
     )
     unread: List[Dict[str, Any]] = []
     survey: Dict[Tuple[str, int], bool] = {}
+    # DEFAULTED FROM THE ENVIRONMENT so the flag does not have to be threaded through
+    # file_scan's signature and bom_pipeline's **opts to reach here. SDI_SW_FLATTEN and
+    # SDI_SW_EXTRACT already work this way, and main.py --llm-only sets it for the process.
+    # An explicit argument still wins, so a caller that knows what it wants is not
+    # second-guessed by a variable somebody left set in a shell.
+    if llm_only is None:
+        llm_only = os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
+
     spend: Dict[str, int] = {"paid": 0, "cached": 0, "skipped": 0}
-    if verbose:
-        print("\nRunning Path A (deterministic extract_words)...")
-    a_boms = run_path_a(pdf_paths, unread, survey)
-    if verbose:
-        print(f"  Path A found {len(a_boms)} BOM table(s).")
+
+    # ── llm_only: THE MODEL ON ITS OWN, WITH NOTHING TO CORROBORATE IT ──────────────
+    #
+    # Path A is the deterministic reader and the auditable base; Path B is the coverage
+    # net. The whole design is that they check each other, and reconcile_page records
+    # which of them saw a row. Turning A off deliberately breaks that — every row becomes
+    # B_ONLY and nothing disputes it.
+    #
+    # WHICH IS THE POINT, and only for measuring. "What does Grok make of this pack by
+    # itself" cannot be answered while a deterministic reader is quietly supplying half
+    # the rows and correcting the other half. It is a diagnostic, never a way to estimate:
+    # an LLM-only read is exactly the thing this engine's source waterfall exists to rank
+    # LAST, at confidence 0.68 and capped.
+    #
+    # The survey is still built, because page selection reads it — and with A off, every
+    # page it would have skipped now has no other reader, so all of them are paid for.
+    if llm_only:
+        a_boms: List[Dict[str, Any]] = []
+        if unread is not None:
+            unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
+                           "detail": "deterministic BOM reader DISABLED by --llm-only: this "
+                                     "read is the vision model alone and nothing corroborates "
+                                     "it"})
+        if verbose:
+            print("  Path A SKIPPED (--llm-only): the model is on its own.")
+    else:
+        if verbose:
+            print("\nRunning Path A (deterministic extract_words)...")
+        a_boms = run_path_a(pdf_paths, unread, survey)
+        if verbose:
+            print(f"  Path A found {len(a_boms)} BOM table(s).")
 
     # A page earns a paid vision call when Path A found a table on it (corroborate the
     # money) or when the page's own words name parts-list columns and Path A found
     # nothing (the coverage gap). `select_pages=False` restores every-page behaviour.
-    if select_pages:
+    if llm_only:
+        # EVERY PAGE, PAID FOR. Selection exists to spend the model's time only where the
+        # deterministic reader left a gap. With A off the whole document is a gap, and a
+        # page skipped here would look in the output like a page with no BOM on it.
+        worth = None  # type: ignore[assignment]
+        why = {}
+    elif select_pages:
         worth: Dict[Tuple[str, int], bool] = {k: v[0] for k, v in survey.items()}
         why: Dict[Tuple[str, int], str] = {k: v[1] for k, v in survey.items()}
         # Belt and braces. survey_page already returns True for a page it read a table
