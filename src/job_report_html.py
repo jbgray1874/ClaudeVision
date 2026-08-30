@@ -631,10 +631,74 @@ def bought_in_strength_row(bi: List[Dict[str, Any]]) -> str:
             f'<td><b>Bought-in items recognised.</b> {len(bi)} bought-in part(s) {note}</td></tr>')
 
 
+# THE FINDINGS THAT MAKE "WHAT THE ENGINE GOT RIGHT" THE WRONG HEADING.
+#
+# Not a severity list — these are the specific ones that undercut this section's SUBJECT. Every
+# claim in here is about how the costed BOM hangs together: streams separated, nothing counted
+# twice, bought-ins recognised. All of that reasons over the lines the engine has. It says
+# nothing about whether those lines are the job's real lines, and these findings say they may
+# not be.
+_UNDERCUTS_STRUCTURE = {
+    # The BOM was read once. Nothing corroborates any line, so a missing parent BOM looks
+    # exactly like a job that has none.
+    "bom_reader_never_ran",
+    # Lines only one reader could see, carrying most of the material value.
+    "uncorroborated_bom_line_costed",
+    # A part with no defensible owner in the hierarchy — its quantity is a guess.
+    "canonical_route_bom_node_disconnected",
+    "bom_node_disconnected",
+}
+
+
+def _structure_is_unverified(summary: Dict[str, Any]) -> List[str]:
+    """The messages, if this job's BOM structure is not corroborated well enough to praise."""
+    inv = summary.get("invariants")
+    if not isinstance(inv, dict):
+        return []
+    out = []
+    for v in inv.get("violations") or ():
+        if isinstance(v, dict) and str(v.get("code") or "") in _UNDERCUTS_STRUCTURE:
+            out.append(str(v.get("message") or v.get("code")))
+    return out
+
+
 def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
-    """Section 2 — verify claims from the data rather than assert fixed ones."""
+    """Section 2 — verify claims from the data rather than assert fixed ones.
+
+    AND SAY NOTHING WHEN THE SUBJECT IS NOT ESTABLISHED. On the 10575-02 LLM-only run this
+    section told an estimator the job was "structurally sound" with "no double-counting", while
+    section 13 of the same document recorded that 94% of the material total came from BOM lines
+    only one reader could see and that a part was priced from a 90 x 10 mm blank with a
+    10,846 mm cut path through it.
+
+    Both were true of what they described. Section 2 reasons over the lines the engine HAS —
+    are they separated, is anything counted twice — and that is a real question with a real
+    answer. It is simply not the question an estimator is asking when they read a heading that
+    says the engine got things right, and it is the first section they read.
+
+    So when the BOM itself is uncorroborated, this section leads with that and withholds the
+    strengths. Not because they are false: because "each part is in exactly one cost stream" is
+    a statement about bookkeeping, and offering it as reassurance about a BOM read once is how
+    a document comes to disagree with itself eleven sections later.
+    """
     rows = ""
     parts = _extract_parts(summary)
+
+    _unverified = _structure_is_unverified(summary)
+    if _unverified:
+        _lines = "".join(f"<li>{_esc(m)}</li>" for m in _unverified[:4])
+        return f"""<h2>2 &nbsp;What the engine got right</h2>
+<div class="card"><table><tbody>
+<tr><td><span class="tag t-bad">Not established</span></td><td>
+<b>This section is withheld on this job, because what it would tell you rests on a bill of
+materials that has not been corroborated.</b>
+<ul>{_lines}</ul>
+The engine costs the lines it read, and how it costed them can be checked — that is sections 3
+onwards, and the Decision Report and AI Provenance tabs. What cannot be checked from here is
+whether those are the job's real lines. A statement that nothing is counted twice is about
+bookkeeping over the lines present; it is not evidence the pack was read correctly, and it is
+not what a reader takes from a heading like this one.</td></tr>
+</tbody></table></div>"""
 
     # material streams separated?
     stream_names = [s["name"] for s in streams if s.get("count")]
@@ -643,11 +707,37 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
                  f'The engine costed {len(stream_names)} distinct streams ({_esc(", ".join(stream_names))}) — '
                  f'each material costed on its own basis, none mis-routed into another.</td></tr>')
 
-    # no double-counting: a part shouldn't be in both a fabricated stream and bought-in
-    dup = 0  # the streams are mutually exclusive by construction here
-    rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>No double-counting.</b> '
-             'Each part is assigned to exactly one cost stream — fabricated parts to their material, '
-             'purchased items to the bill of materials.</td></tr>')
+    # NO DOUBLE-COUNTING — CHECKED, NOT ASSERTED.
+    #
+    # This was `dup = 0  # the streams are mutually exclusive by construction here`, a variable
+    # computed as a literal and then never read, above a row that told the estimator the
+    # property held. "By construction" is the claim that most needs testing: the whole reason
+    # a part can be counted twice is that something upstream put it in two places, and a
+    # report that assumes it cannot is blind to the only case worth reporting.
+    #
+    # So it looks. A part number in a fabricated stream that also appears as a bought-in is
+    # counted twice, and if any are found the row says so and stops being a strength.
+    try:
+        from bought_in_policy import is_bought_in as _bi_test
+    except ImportError:
+        def _bi_test(p):
+            return str(p.get("part_number") or "").upper().startswith("BI-")
+    _fab_nums = {str(p.get("part_number") or "").strip().upper()
+                 for p in parts if not _bi_test(p)} - {""}
+    _bi_nums = {str(p.get("part_number") or "").strip().upper()
+                for p in parts if _bi_test(p)} - {""}
+    _both = sorted(_fab_nums & _bi_nums)
+    if _both:
+        rows += (f'<tr><td><span class="tag t-bad">Counted twice</span></td><td>'
+                 f'<b>{len(_both)} part(s) appear in two cost streams.</b> '
+                 f'{_esc(", ".join(_both[:6]))} are costed as fabricated material AND listed as '
+                 f'a purchased item, so their cost is in the total twice. Remove one of the two '
+                 f'lines before quoting.</td></tr>')
+    else:
+        rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>No double-counting.</b> '
+                 'Every part number appears in exactly one cost stream — fabricated parts against '
+                 'their material, purchased items on the bill of materials. Checked, not assumed.'
+                 '</td></tr>')
 
     # estimate status — READ THE SAME GATE THE QUOTE READS.
     # estimate_status is the DATA-SUFFICIENCY verdict: did the engine have enough to reach a
