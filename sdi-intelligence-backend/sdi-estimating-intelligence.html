@@ -415,27 +415,41 @@
       <button class="btn-run" id="run" disabled>SDI (UK) Intelligence Estimator</button>
 
       <!-- LLM-ONLY: A MEASUREMENT, AND IT HAS TO LOOK LIKE ONE.
-           BESIDE THE PACK ESTIMATOR, NOT THE ENQUIRY. This first went in next to "Estimate
-           every drawing", which is the MULTI-DRAWING enquiry — a hundred drawings treated as
-           a hundred separate jobs. It reads the same Drawings panel this button does, so
-           pressing it there would have pooled a hundred enquiries into ONE job and produced
-           a confident estimate of a different question. That is the exact failure the
-           runner's own --job/--pdf comment warns about.
+           UNDER THE PACK ESTIMATOR, WHICH IS THE BUTTON IT IS AN ALTERNATIVE TO. Same job,
+           same Drawings panel, same endpoint, same output folder — one reader instead of
+           four. A choice reads as a choice when the two options sit together, and the run it
+           starts is gated, logged and stopped by this card's controls.
+           IT WENT IN BESIDE THE WRONG LIST FIRST: next to "Estimate every drawing", which is
+           the MULTI-DRAWING enquiry — a hundred drawings treated as a hundred separate jobs.
+           It reads the same Drawings panel this button does, so pressing it there would have
+           pooled a hundred enquiries into ONE job and produced a confident estimate of a
+           different question.
            Deliberately NOT styled btn-run. A workbook produced this way is indistinguishable
            from a real estimate once it is on the share — same template, same tabs, same
            totals column — so the only place a reader can be warned is before they press it.
            On 10575-02 it read the BOM and the routes correctly and costed one steel part out
-           of nine, because a folded part's developed size is not printed on any drawing. -->
+           of nine, because a folded part's developed size is not printed on any drawing.
+           IT SAID "NOT A PRICE", WHICH WAS FALSE AND THE WRONG WAY ROUND. It produces a
+           price — a costed workbook with a figure in the total cell, on the same template as
+           a real one. Telling an estimator there is no price in the file invites them to
+           treat the file as harmless, which is the opposite of the truth: the danger is
+           precisely that there IS a number, and that a week later nothing on the sheet says
+           where it came from. So the button states the number exists and must not leave the
+           building. -->
       <button class="btn-run btn-measure" id="bRunLLM" disabled
               title="Reads this pack with the vision model alone — no deterministic BOM reader, no DXF, no SolidWorks">
-        LLM read only (Grok / xAI) — BOM and routes, not a price</button>
-      <p class="note" id="bLLMNote">A <b>measurement of the model</b>, not an estimate. The
-         deterministic BOM reader, the DXF flat patterns and the SolidWorks extract are all
-         switched off and every page goes to Grok. It reads the parts list and the routes
-         well; it cannot size a folded part, because the developed blank is not printed on
-         the drawing. <b>The total it produces must not be quoted, and must not be compared
-         with a normal run's.</b> Reads the drawings in the <b>Drawings</b> panel above —
-         one drawing or a whole pack.</p>
+        LLM read only (Grok / xAI) — BOM and routes; it gives a total, do NOT quote it</button>
+      <p class="note" id="bLLMNote">A <b>measurement of the model</b>, not an estimate — but it
+         does produce a full costed workbook with a total, on the same template as a real run.
+         That is the danger, not a reassurance. The deterministic BOM reader, the DXF flat
+         patterns and the SolidWorks extract are all switched off and every page goes to Grok.
+         It reads the parts list and the routes well; it cannot size a folded part, because the
+         developed blank is not printed on the drawing — so the total is right about the work
+         it could see and silently short of the material it could not. <b>The total it produces
+         must not be quoted, and must not be compared with a normal run's.</b> Reads the
+         drawings in the <b>Drawings</b> panel — one drawing or a whole pack — and files into
+         the same folder, and reports into the same run log, as the estimator above it.</p>
+
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
            release offered in the refusal, or by POSTing by hand. So an accidental double
@@ -523,6 +537,7 @@
         <button id="printDrawings" disabled>Print drawings…</button>
         <button id="clearFiles" style="margin-left:auto">Clear</button>
       </div>
+
     </section>
   </div>
 

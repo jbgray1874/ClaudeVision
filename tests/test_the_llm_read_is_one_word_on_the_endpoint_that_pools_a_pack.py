@@ -108,12 +108,53 @@ def test_the_button_exists_and_is_not_styled_as_a_run_button():
     assert "btn-measure" in _MARKUP, "it is styled as an ordinary run button"
 
 
+def test_it_sits_with_the_button_it_is_an_alternative_to():
+    """UNDER THE PACK ESTIMATOR, IN THE JOB CARD. Same job, same Drawings panel, same
+    endpoint, same output folder — one reader instead of four. A choice only reads as a choice
+    when the two options sit together, and this card's controls are what gate it, log it and
+    stop it.
+
+    It went in beside "Estimate every drawing" first — the MULTI-DRAWING enquiry, a hundred
+    drawings treated as a hundred separate jobs — while reading `drawings` and posting to the
+    pooling endpoint. Stated as a POSITION rather than a sentence in a comment, because a
+    comment did not stop it going there the first time."""
+    card_start = _MARKUP.index("<h2>Job</h2>")
+    card_end = _MARKUP.index("</section>", card_start)
+    at = _MARKUP.index('id="bRunLLM"')
+    assert card_start < at < card_end, (
+        "the LLM read button has left the Job card, where the estimator it is an alternative "
+        "to lives, and where the run log and Stop that serve it are wired")
+    assert _MARKUP.index('id="run"') < at < _MARKUP.index('id="stop"'), (
+        "it no longer sits between the estimator and that estimator's Stop")
+
+
 def test_the_button_says_what_it_is_and_is_not():
     at = _MARKUP.index('id="bRunLLM"')
-    block = _MARKUP[at:at + 1600]
-    assert "not a price" in block or "not an estimate" in block
+    block = _MARKUP[at:at + 2400]
+    assert "not an estimate" in block
     assert "must not be quoted" in block, (
         "nothing beside the button warns against quoting its total")
+
+
+def test_it_does_not_tell_the_estimator_there_is_no_price_in_the_file():
+    """THE LABEL SAID "not a price" AND THAT WAS FALSE. The run produces a costed workbook
+    with a figure in the total cell, on the same template as a real estimate — James read the
+    label, looked at the sheet, and said so: "well it is a price, as the s/sheet will produce
+    one."
+
+    It is not a pedantic correction. "Not a price" describes a file with nothing in it to
+    misuse, so it reads as a reassurance — and the whole risk of this button is the opposite:
+    there IS a number, it is plausible, and a week later nothing on the sheet says which
+    reader produced it. The warning only works if it concedes the total exists.
+
+    Read off the VISIBLE text. The comment above the button quotes the old wording to explain
+    why it went — a negative assertion over the raw markup fails on its own explanation."""
+    visible = re.sub(r"<!--.*?-->", " ", _MARKUP, flags=re.S)
+    at = visible.index('id="bRunLLM"')
+    block = visible[at:at + 2400]
+    assert "not a price" not in block.lower(), (
+        "the button denies producing a price; it produces one, and that is the risk")
+    assert "total" in block.lower(), "nothing on the face of it says a total comes out"
 
 
 def test_it_asks_before_it_runs():
