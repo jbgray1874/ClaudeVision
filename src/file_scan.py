@@ -1879,6 +1879,25 @@ def _finalize_scan_summary(
                 print(f"   [bom-vision] {_vc.get('paid', 0)} page(s) sent to the model, "
                       f"{_vc.get('cached', 0)} from cache, "
                       f"{_vc.get('skipped', 0)} not selected", flush=True)
+            # HOW MUCH EACH READER ACTUALLY CONTRIBUTED, which was computed on every run
+            # since the dual path was built and printed only by the standalone CLI.
+            #
+            # The BOM is read twice so the two can check each other, and reconcile_page
+            # already records WHICH of them saw each row. That is the direct answer to
+            # "is the vision model pulling its weight" and to "what would we lose without
+            # the deterministic reader" -- and it was being thrown away on the one run
+            # where somebody is looking.
+            #
+            # recovered is the number that justifies paying for vision at all: rows the
+            # deterministic reader did not find. a_only is its mirror -- rows vision
+            # missed, which is what an LLM-only run would lose.
+            _cnt = dict((_dp or {}).get("counts") or {})
+            if _cnt:
+                _da["bom_reader_counts"] = _cnt
+                print(f"   [bom-readers] both agreed {_cnt.get('both', 0)}; "
+                      f"vision recovered {_cnt.get('recovered', 0)} the deterministic "
+                      f"reader missed; vision overrode {_cnt.get('override', 0)}; "
+                      f"vision missed {_cnt.get('a_only', 0)}", flush=True)
             if _dp.get("rows"):
                 _da["bom_rows"] = _dp["rows"]
                 _da["bom_code_quality_findings"] = _dp.get("findings", [])
