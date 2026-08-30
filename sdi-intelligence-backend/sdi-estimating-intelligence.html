@@ -413,6 +413,29 @@
            work placed in China is a different set of numbers, and the two must not be told
            apart by remembering which one the unlabelled button was. -->
       <button class="btn-run" id="run" disabled>SDI (UK) Intelligence Estimator</button>
+
+      <!-- LLM-ONLY: A MEASUREMENT, AND IT HAS TO LOOK LIKE ONE.
+           BESIDE THE PACK ESTIMATOR, NOT THE ENQUIRY. This first went in next to "Estimate
+           every drawing", which is the MULTI-DRAWING enquiry — a hundred drawings treated as
+           a hundred separate jobs. It reads the same Drawings panel this button does, so
+           pressing it there would have pooled a hundred enquiries into ONE job and produced
+           a confident estimate of a different question. That is the exact failure the
+           runner's own --job/--pdf comment warns about.
+           Deliberately NOT styled btn-run. A workbook produced this way is indistinguishable
+           from a real estimate once it is on the share — same template, same tabs, same
+           totals column — so the only place a reader can be warned is before they press it.
+           On 10575-02 it read the BOM and the routes correctly and costed one steel part out
+           of nine, because a folded part's developed size is not printed on any drawing. -->
+      <button class="btn-run btn-measure" id="bRunLLM" disabled
+              title="Reads this pack with the vision model alone — no deterministic BOM reader, no DXF, no SolidWorks">
+        LLM read only (Grok / xAI) — BOM and routes, not a price</button>
+      <p class="note" id="bLLMNote">A <b>measurement of the model</b>, not an estimate. The
+         deterministic BOM reader, the DXF flat patterns and the SolidWorks extract are all
+         switched off and every page goes to Grok. It reads the parts list and the routes
+         well; it cannot size a folded part, because the developed blank is not printed on
+         the drawing. <b>The total it produces must not be quoted, and must not be compared
+         with a normal run's.</b> Reads the drawings in the <b>Drawings</b> panel above —
+         one drawing or a whole pack.</p>
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
            release offered in the refusal, or by POSTing by hand. So an accidental double
@@ -693,22 +716,7 @@
     <button class="btn-run" id="bRun" disabled>SDI (UK) Intelligence — Estimate every drawing</button>
     <button class="btn-stop" id="bStop" hidden>Stop the rest</button>
 
-    <!-- LLM-ONLY: A MEASUREMENT, AND IT HAS TO LOOK LIKE ONE.
-         Deliberately NOT styled btn-run. A workbook produced this way is indistinguishable
-         from a real estimate once it is sitting on the share — same template, same tabs,
-         same totals column — so the one place a reader can be warned is before they press
-         it. On 10575-02 this route read the BOM and the routes correctly and costed one
-         steel part out of nine, because a folded part's developed size is not printed on
-         any drawing and no amount of reading recovers it. -->
-    <button class="btn-run btn-measure" id="bRunLLM" disabled
-            title="Reads the pack with the vision model alone — no deterministic BOM reader, no DXF, no SolidWorks">
-      LLM read only (Grok / xAI) — BOM and routes, not a price</button>
-    <p class="note" id="bLLMNote">A <b>measurement of the model</b>, not an estimate. The
-       deterministic BOM reader, the DXF flat patterns and the SolidWorks extract are all
-       switched off and every page goes to Grok. It reads the parts list and the routes well;
-       it cannot size a folded part, because the developed blank is not printed on the
-       drawing. <b>The total it produces must not be quoted, and must not be compared with a
-       normal run's.</b> Works on one drawing or a whole pack.</p>
+
     <button class="btn-run btn-soon" id="bRunChina" disabled aria-disabled="true"
             title="Not connected yet — there is no China estimating endpoint behind this button">
       SDI (China) Intelligence — Estimate every drawing</button>
@@ -833,6 +841,10 @@ const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
 const bList=$("bList"), bEmpty=$("bEmpty"), bWhere=$("bWhere"), bRun=$("bRun"),
       bStop=$("bStop"), bProgress=$("bProgress"), bCount=$("bCount"), bRows=$("bRows"),
       bDot=$("bDot"), bStatus=$("bStatus");
+/* THE LLM READ BELONGS TO THE JOB PANEL, not to the enquiry — it reads `drawings`, it posts
+   to the pooling endpoint, and it reports into THIS panel's log. The `b` prefix is the one
+   thing left over from where it first went in. */
+const bRunLLM=$("bRunLLM");
 
 let drawings = [];      // {path, name, is_dir}
 let running  = false;
@@ -915,6 +927,14 @@ function refresh(){
   destPath.innerHTML = show ? show : '<span class="pending">Enter a client and drawing number</span>';
 
   runBtn.disabled = running || missing.length > 0;
+  /* THE SAME GATE AS THE PACK ESTIMATOR, because it is the same job, the same Drawings
+     panel and the same endpoint — only the reader differs. Gating it separately is how one
+     button becomes pressable in a state the other has already refused. `running` covers
+     both directions: an LLM read holds the machine exactly as an estimate does, so neither
+     button can start while the other is working. */
+  bRunLLM.disabled = running || missing.length > 0;
+  bRunLLM.title = missing.length ? "Still needed: " + missing.join(", ")
+                : "Reads this pack with Grok alone — a measurement, not an estimate";
   runBtn.textContent = running ? "Estimating…" : "SDI (UK) Intelligence Estimator";
   // Offered only while there is something to stop, so it cannot be pressed against a run
   // that has already finished and read as having done something.
@@ -1529,15 +1549,7 @@ function renderBatch(){
   if(!runnersOnline)                   why.push("a connected runner");
   bRun.disabled = why.length > 0 || batchId !== null;
   bRun.title = why.length ? "Still needed: " + why.join(", ") : "";
-  /* THE DRAWING NUMBER IS NOT OPTIONAL HERE AND IS FOR THE BATCH RUN. /api/estimate pools
-     the selection into ONE job and names it; /api/estimate/batch treats every file as its
-     own enquiry and derives a name per drawing. Sharing one `why` list would either block
-     the batch button on a field it does not use, or let this one submit and be refused. */
-  const llmWhy = why.filter(w => w !== "client").concat(
-    safe(client.value) ? [] : ["client"], safe(drawing.value) ? [] : ["a drawing number"]);
-  bRunLLM.disabled = llmWhy.length > 0 || batchId !== null;
-  bRunLLM.title = llmWhy.length ? "Still needed: " + llmWhy.join(", ")
-                                : "Reads the pack with Grok alone — a measurement, not an estimate";
+
 }
 
 function bSet(cls, text){ bDot.className = "dot " + cls; bStatus.textContent = text; }
@@ -1551,31 +1563,51 @@ $("bClear").onclick = () => { batchFiles = []; renderBatch(); };
    not on /api/estimate/batch, where every file is a separate enquiry and the answer is one
    price per drawing with no BOM and no routes. */
 $("bRunLLM").onclick = async () => {
-  if(bRunLLM.disabled) return;
+  if(running || bRunLLM.disabled) return;
   /* ASKED, BECAUSE THE OUTPUT CANNOT BE TOLD APART AFTERWARDS. The workbook this produces
      carries the same template, tabs and totals as a real estimate. */
   if(!confirm("LLM read only.\n\nThe vision model reads the pack alone — no deterministic "
             + "BOM reader, no DXF flat patterns, no SolidWorks. It reads the parts list and "
             + "the routes; it CANNOT size a folded part.\n\nThe workbook it produces looks "
             + "like an estimate and is not one. Do not quote its total.\n\nRun it?")) return;
-  bRunLLM.disabled = true;
-  bSet("run","Queueing LLM read");
-  bProgress.hidden = false; bRows.innerHTML = "";
+  /* THE JOB PANEL'S OWN STATE, not the enquiry's. This first reported into bSet/bRows/bCount
+     because that is where the button first sat — press it up here and the log appeared in a
+     different card halfway down the page, while the panel it was launched from sat idle.
+     Taking `running` also makes it STOPPABLE: it is the same queue, the same lease and the
+     same desktop as an estimate, and a twenty-page pack is minutes of vision calls. */
+  blockedBy = ""; $("release").hidden = true;
+  runDest = null;
+  running = true; refresh();
+  log.innerHTML = ""; out.innerHTML = "";
+  setStatus("run","LLM read");
+  line("LLM READ ONLY · "+safe(drawing.value)+" · "+safe(client.value)+" · "+units.value+" off");
+  line("UNVERIFIED: Grok alone — no deterministic BOM reader, no DXF, no SolidWorks. A "
+     + "measurement of the model, NOT an estimate. Do not quote its total.");
+  line("Output → "+destination());
+  const folder = drawings.find(d => d.is_dir);
   try{
     const r = await api("/api/estimate", {method:"POST",
       headers:{"Content-Type":"application/json"},
+      /* THE SAME BODY AS THE PACK ESTIMATOR, one word different. A folder goes in job_folder
+         and files in files — sending a directory path in `files` is how a pack of one shows
+         up empty. And it is the DRAWINGS panel's list: batchFiles belongs to the
+         multi-drawing enquiry, where each file is its own job; sending those here would pool
+         a hundred separate enquiries into one confident answer to a different question. */
       body: JSON.stringify({client: safe(client.value), drawing_number: safe(drawing.value),
                             units: parseInt(units.value,10),
-                            files: batchFiles.map(f => f.path), output_root: OUTPUT_ROOT,
+                            job_folder: folder ? folder.path : null,
+                            files: drawings.filter(d => !d.is_dir).map(d => d.path),
+                            output_root: OUTPUT_ROOT, deliverables: true,
                             method: "llm"})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
-    bWhere.textContent = started.job_folder || started.client_folder || "";
-    bCount.textContent = "LLM-only read queued — a MEASUREMENT of the model, not an estimate.";
-    watchOneRun(started.run_id);
+    runId = started.run_id;
+    if(started.output_path){ runDest = started.output_path; refresh(); }
+    watchOneRun(runId);
   }catch(e){
-    bSet("error", String(e.message || e).slice(0,200));
-    bRunLLM.disabled = false;
+    setStatus("err","Failed to start");
+    line("Could not start the LLM read — " + String(e.message || e).slice(0,300));
+    running = false; refresh();
   }
 };
 
@@ -1630,26 +1662,45 @@ $("bStop").onclick = async () => {
    report "not found" as a failure of the run. */
 function watchOneRun(runId){
   if(!runId) return;
+  let seen = 0;
   const tick = async () => {
+    let j, r;
     try{
-      const r = await api("/api/estimate/" + encodeURIComponent(runId));
-      if(!r.ok) throw new Error((await r.text()).slice(0,200));
-      const j = await r.json();
-      bSet(j.status === "done" ? "ok" : (j.status === "error" ? "error" : "run"),
-           "LLM read · " + (j.status || "queued"));
-      bRows.innerHTML = (j.log || []).slice(-40)
-        .map(l => "<li>" + l.replace(/[<&]/g, c => c === "<" ? "&lt;" : "&amp;") + "</li>")
-        .join("");
-      if(j.status === "done" || j.status === "error"){
-        bRunLLM.disabled = false;
-        return;
-      }
-    }catch(e){
-      bSet("error", String(e.message || e).slice(0,200));
-      bRunLLM.disabled = false;
+      r = await api("/api/estimate/" + encodeURIComponent(runId));
+      j = await r.json();
+    }catch(e){ setTimeout(tick, 4000); return; }   // a dropped poll is not a failed run
+    /* THE SERVICE FORGETTING A RUN IS NOT THE RUN FAILING — the same 404 the estimate poll
+       learned about. The runner is another process on another machine and will still file. */
+    if(r.status === 404){
+      running = false; refresh();
+      setStatus("warn","Lost track of this run");
+      line("The service restarted and no longer holds this run. That is NOT the same as it "
+         + "failing — look under Completed estimates before running it again.");
       return;
     }
-    setTimeout(tick, 4000);
+    if(!j || !j.status){ setTimeout(tick, 4000); return; }
+    (j.log || []).slice(seen).forEach(line); seen = (j.log || []).length;
+    if(j.status === "queued"){ setStatus("run","Queued — LLM read"); setTimeout(tick, 4000); return; }
+    if(j.status === "running"){
+      setStatus("run", j.runner ? "LLM read on " + j.runner : "LLM read");
+      setTimeout(tick, 4000); return;
+    }
+    /* THE RUN IS OVER — and `running` is what re-opens BOTH buttons, through refresh(), so
+       neither can come back pressable in a state the page has otherwise refused. */
+    running = false; refresh();
+    if(j.status === "done"){
+      setStatus("warn","LLM read complete — not an estimate");
+      (j.deliverables || []).forEach(d => {
+        const a = document.createElement("a");
+        a.href = "/api/file?path=" + encodeURIComponent(d.path);
+        a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        const li = document.createElement("li"); li.appendChild(a); out.appendChild(li);
+      });
+      line("UNVERIFIED — read by the vision model alone. Its total must not be quoted and "
+         + "must not be compared with a normal run's.");
+    }else{
+      setStatus("err","Failed"); if(j.error) line(j.error);
+    }
   };
   tick();
 }

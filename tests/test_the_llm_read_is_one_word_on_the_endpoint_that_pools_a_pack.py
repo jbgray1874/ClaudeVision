@@ -39,6 +39,21 @@ _PAGE = (_ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html"
 _SCRIPT = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", _PAGE, re.S | re.I))
 _MARKUP = re.sub(r"<script[^>]*>.*?</script>", " ", _PAGE, flags=re.S | re.I)
 
+# THE WHOLE HANDLER, NOT THE FIRST 1400 CHARACTERS OF IT. Every test below used to slice a
+# fixed window after the `onclick`, which is a guard that quietly stops guarding: adding four
+# lines of comment to the top of the handler pushes `method: "llm"` past the end of the window
+# and the assertion passes on a body it can no longer see. The handler ends at the only line
+# that closes it at column zero.
+_AT = _SCRIPT.index('$("bRunLLM").onclick')
+_HANDLER = _SCRIPT[_AT:_SCRIPT.index("\n};", _AT)]
+
+# AND THE CODE WITHOUT ITS PROSE, for every assertion of the form "this is NOT in here".
+# The handler carries a comment naming the enquiry widgets it must no longer touch, and the
+# one naming `batchFiles` as the list it must not read — so both negative assertions failed on
+# the explanation of the fix rather than on the fix. That is the same trap seven times over in
+# this repo: a search that matches the sentence describing what is being searched for.
+_CODE = re.sub(r"//[^\n]*", " ", re.sub(r"/\*.*?\*/", " ", _HANDLER, flags=re.S))
+
 
 # ── the request reaches the engine ───────────────────────────────────────────
 
@@ -104,10 +119,8 @@ def test_the_button_says_what_it_is_and_is_not():
 def test_it_asks_before_it_runs():
     """The workbook it produces is indistinguishable from a real estimate once it is on the
     share — same template, same tabs, same totals. The only place to warn is before."""
-    at = _SCRIPT.index('$("bRunLLM").onclick')
-    body = _SCRIPT[at:at + 1400]
-    assert "confirm(" in body, "it runs without asking"
-    assert "CANNOT size a folded part" in body, (
+    assert "confirm(" in _HANDLER, "it runs without asking"
+    assert "CANNOT size a folded part" in _HANDLER, (
         "the confirmation does not say what the model cannot do, which is the whole limit")
 
 
@@ -121,20 +134,56 @@ def test_the_runs_own_log_records_it():
 # ── it posts what the endpoint expects ───────────────────────────────────────
 
 def test_it_posts_to_the_pooling_endpoint_not_the_batch_one():
-    at = _SCRIPT.index('$("bRunLLM").onclick')
-    body = _SCRIPT[at:at + 1400]
-    assert '"/api/estimate"' in body, "it posts to the batch endpoint, which prices per file"
-    assert '"/api/estimate/batch"' not in body
-    assert 'method: "llm"' in body
+    assert '"/api/estimate"' in _HANDLER, "it posts to the batch endpoint, which prices per file"
+    assert '"/api/estimate/batch"' not in _CODE
+    assert 'method: "llm"' in _HANDLER
+
+
+def test_it_reads_the_drawings_panel_and_not_the_enquiry_list():
+    """THE FAILURE THIS BUTTON WAS ONE COMMIT AWAY FROM SHIPPING. It first went in beside
+    "Estimate every drawing" and read `batchFiles` — the multi-drawing enquiry's list, where
+    every file is its own job. Posted to the POOLING endpoint that becomes one estimate over a
+    hundred unrelated drawings: a confident answer to a question nobody asked, filed in one
+    folder, with nothing on the face of it to say so.
+
+    A directory belongs in job_folder, not in files — the pack endpoint takes both."""
+    assert "drawings.filter(d => !d.is_dir).map(d => d.path)" in _HANDLER, (
+        "it does not send the Drawings panel's files the way the pack estimator does")
+    assert "batchFiles" not in _CODE, (
+        "the LLM read is pooling the multi-drawing enquiry's files into ONE job")
+    assert "job_folder:" in _HANDLER, "a folder would be posted as a file and read as empty"
 
 
 def test_it_sends_the_drawing_number_the_endpoint_requires():
     """/api/estimate refuses without one; /api/estimate/batch derives a name per drawing and
-    never asks. Sharing one gating list would let this button submit and be refused."""
-    at = _SCRIPT.index('$("bRunLLM").onclick')
-    assert "drawing_number:" in _SCRIPT[at:at + 1400]
-    assert 'safe(drawing.value) ? [] : ["a drawing number"]' in _SCRIPT, (
-        "the button can be pressed without a drawing number, and the endpoint will refuse it")
+    never asks. The gate is the PACK button's `missing` list, which already carries the drawing
+    number because the pack button posts to the same endpoint — the two share a panel, a job
+    and a destination folder, so a state one refuses cannot be a state the other accepts."""
+    assert "drawing_number:" in _HANDLER
+    gate = _SCRIPT[_SCRIPT.index("runBtn.disabled = running || missing.length > 0;"):][:700]
+    assert "bRunLLM.disabled = running || missing.length > 0;" in gate, (
+        "the LLM button is not gated with the pack button, so it can be pressed without a "
+        "drawing number and the endpoint will refuse it")
+    assert 'if(!safe(drawing.value))            missing.push("drawing number");' in _SCRIPT, (
+        "the shared gate no longer requires a drawing number")
+
+
+def test_the_run_is_stoppable_and_reports_where_it_was_launched_from():
+    """IT HOLDS THE MACHINE EXACTLY AS AN ESTIMATE DOES — same queue, same lease, same
+    SOLIDWORKS desktop — and a twenty-page pack is minutes of vision calls. `running` is what
+    shows Stop, what names the run to abandon, and what keeps the two buttons from starting
+    over each other.
+
+    And it reports into the JOB panel. Launched from up here and logging into the enquiry card
+    halfway down the page, the panel you pressed sits idle and the run looks like it never
+    started."""
+    assert "running = true; refresh();" in _HANDLER, (
+        "the run is not held: Stop cannot see it and the pack button stays pressable")
+    assert "runId = started.run_id;" in _HANDLER, "nothing records the run id, so Stop is blind"
+    for enquiry_widget in ("bSet(", "bRows", "bCount", "bProgress", "bWhere"):
+        assert enquiry_widget not in _CODE, (
+            "the LLM read reports into the enquiry card, not the panel it was pressed in: "
+            + enquiry_widget)
 
 
 def test_a_single_run_is_watched_by_something_that_knows_about_single_runs():
@@ -142,4 +191,11 @@ def test_a_single_run_is_watched_by_something_that_knows_about_single_runs():
     endpoint that does not know it and report 'not found' as a failure of the run."""
     assert "function watchOneRun(" in _SCRIPT
     at = _SCRIPT.index("function watchOneRun(")
-    assert '"/api/estimate/" + encodeURIComponent(runId)' in _SCRIPT[at:at + 900]
+    watcher = _SCRIPT[at:_SCRIPT.index("\n}", at)]
+    assert '"/api/estimate/" + encodeURIComponent(runId)' in watcher
+    assert watcher.count("running = false; refresh();") >= 2, (
+        "an LLM read that ends without releasing `running` leaves the job panel showing a run "
+        "that finished and both buttons dead until the page is reloaded")
+    assert "404" in watcher, (
+        "a restarted service answers 404 and the watcher would report a run that is still "
+        "working, and will still file, as a failure")
