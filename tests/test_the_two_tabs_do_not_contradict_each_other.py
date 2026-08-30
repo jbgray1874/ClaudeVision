@@ -27,6 +27,7 @@ front of an estimator deciding whether to trust a number.
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,37 @@ def test_a_bought_in_part_is_still_answered_as_bought_in():
     got = dr._mat_source_explanation({"part_number": "BI-BOLT", "is_bought_in": True,
                                       "description": "M6x10mm C/SUNK BOLT; BLACK"})
     assert "Bought-in" in got, got
+
+
+# ── and the column next door, found on the 30/08 22:38 full run ──────────────
+
+def test_the_thickness_source_is_read_not_re_derived_in_provenance():
+    """ONE PART, ONE THICKNESS, TWO ORIGINS. On 10575-02 the Decision Report said 10575-01-001
+    was 1.2mm "from the SolidWorks model" and AI Provenance said "DXF filename
+    (10575-01-001_MS_1.2mm_Rev D.DXF)". Both said 1.2mm. Only one was describing the estimate.
+
+    The model is rank 90 and the filename rank 70, so with both reading 1.2 the model wins the
+    arbitration — the Decision Report was right and this tab was not asking. Identical in shape
+    to the MATERIAL defect this file already guards, one file and one column over, which is why
+    the guard is stated over the arbitrated datum rather than over either answer."""
+    src = (ROOT / "src" / "estimation_report.py").read_text(encoding="utf-8")
+    code = re.sub(r"#[^\n]*", " ", re.sub(r'"""(?:.|\n)*?"""', " ", src))
+    at = code.index("thk_source")
+    body = code[at:at + 2600]
+    assert 'source_of(part, "normalized_thickness_mm")' in body, (
+        "the thickness source is derived rather than read, so this tab can disagree with the "
+        "Decision Report about where one number came from")
+    # the filename derivation must be the FALLBACK, not the first answer
+    assert body.index('source_of(part, "normalized_thickness_mm")') < body.index(
+        'DXF filename ({_dfn})'), (
+        "the filename is still consulted before the arbitrated datum")
+
+
+def test_both_files_ask_the_same_module_for_the_display_name():
+    """Two vocabularies for one source is the same bug wearing a different hat: 'the SolidWorks
+    model' on one tab and 'solidworks_api' on the other is a reader's problem even when both
+    are right."""
+    for name in ("estimation_report.py", "job_decision_report.py"):
+        src = (ROOT / "src" / name).read_text(encoding="utf-8")
+        assert "from source_precedence import" in src and "source_of" in src, (
+            f"{name} does not use the module that owns the ranks and their display names")

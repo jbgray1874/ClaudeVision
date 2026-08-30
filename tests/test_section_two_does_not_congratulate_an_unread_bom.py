@@ -80,8 +80,40 @@ def test_the_reason_is_named_not_just_the_refusal():
 def test_it_still_points_somewhere_useful():
     """Withholding is not the same as saying nothing can be checked. How the lines WERE costed
     is checkable and the reader has to be sent there, or the section is a dead end."""
-    html = jr._render_whats_right(_summary(["uncorroborated_bom_line_costed"]), _streams())
+    html = jr._render_whats_right(_summary(["bom_reader_never_ran"]), _streams())
     assert "Decision Report" in html and "AI Provenance" in html
+
+
+# ── it over-triggered, and hid the part that was right ───────────────────────
+
+@pytest.mark.parametrize("code", sorted(jr._QUALIFIES_STRUCTURE))
+def test_a_parentless_screw_does_not_hide_eleven_nested_flats(code):
+    """WHAT HAPPENED ON THE 30/08 FULL RUN. bom_node_disconnected fired on BI-BOLT, the wood
+    screws and the pallet — hardware the prose recogniser MINTED from a note, which by
+    construction has no parent in a drawing hierarchy — and the whole section vanished. Eleven
+    flat patterns had been read, corroborated and costed at the gauge the drawing office typed.
+
+    James: "A disconnected screw should not hide '11 flats nested at 1.2 mm'. Gate §2 on
+    fabricated corroboration, not on minted hardware." """
+    html = jr._render_whats_right(_summary([code]), _streams())
+    assert "Not established" not in html, (
+        f"{code} withholds the whole section; it is a caveat, not a disqualification")
+    assert "No double-counting" in html, "the strengths went with it"
+
+
+@pytest.mark.parametrize("code", sorted(jr._QUALIFIES_STRUCTURE))
+def test_but_it_is_still_said_inside_the_section(code):
+    """A caveat a reader can weigh beats a blank page they cannot — and beats saying nothing
+    at all, which is what dropping these codes entirely would have done."""
+    html = jr._render_whats_right(_summary([code]), _streams())
+    assert f"message for {code}" in html, "the finding disappeared instead of moving"
+    assert "t-warn" in html, "it is not marked as something to check"
+
+
+def test_the_two_sets_do_not_overlap():
+    """A code in both would withhold the section AND appear inside it, which is the kind of
+    contradiction this whole file exists to stop."""
+    assert not (jr._UNDERCUTS_STRUCTURE & jr._QUALIFIES_STRUCTURE)
 
 
 def test_an_ordinary_job_still_gets_its_strengths():

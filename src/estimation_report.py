@@ -305,13 +305,45 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         if _bought:
             thk_source = "— bought-in component (no fabrication thickness)"
         else:
+            # THE ARBITRATED DATUM FIRST, exactly as the Decision Report asks for it.
+            #
+            # This re-derived the source by parsing the DXF filename, and on 10575-02 it
+            # published "DXF filename (10575-01-001_MS_1.2mm_Rev D.DXF)" against the Decision
+            # Report's "from the SolidWorks model" — one part, one thickness, two tabs of one
+            # workbook naming different origins for it. Both said 1.2mm; only one was
+            # describing the estimate.
+            #
+            # The model is rank 90 and the filename rank 70, so with both reading 1.2 the model
+            # wins the arbitration and the Decision Report was right. This tab simply was not
+            # asking. That is the same defect 7060e27 fixed for MATERIAL in the other file —
+            # a document whose purpose is provenance must READ the provenance, because two
+            # readers that each guess will eventually disagree in front of an estimator
+            # deciding whether to trust a number.
+            _costed = part.get("normalized_thickness_mm")
+            try:
+                _costed = float(_costed) if _costed not in (None, "") else None
+            except (TypeError, ValueError):
+                _costed = None
+            if _costed and _costed > 0:
+                thk_val = _costed
+                _tsrc = ""
+                try:
+                    from source_precedence import source_of, display_name as _disp
+                    _tsrc = str(source_of(part, "normalized_thickness_mm") or "")
+                except Exception:
+                    _tsrc = ""
+                thk_source = _disp(_tsrc) if _tsrc else "costed value (source not recorded)"
+
             _dfn = str(part.get("dxf_source_file") or "")
-            _tm = _re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn, _re.IGNORECASE)
-            if _tm:
-                _tv = float(_tm.group(1))
-                if 0.3 <= _tv <= 25.0:
-                    thk_val = _tv
-                    thk_source = f"DXF filename ({_dfn})"
+            if thk_val is None:
+                # FALLBACK ONLY, for records with no arbitrated value — a report of an older
+                # JSON, or a part the resolver never touched.
+                _tm = _re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn, _re.IGNORECASE)
+                if _tm:
+                    _tv = float(_tm.group(1))
+                    if 0.3 <= _tv <= 25.0:
+                        thk_val = _tv
+                        thk_source = f"DXF filename ({_dfn})"
             if thk_val is None:
                 thicknesses = part.get("thicknesses_mm") or []
                 tol_set     = {0.5, 1.0, 1.5, 2.0, 3.0}

@@ -639,27 +639,49 @@ def bought_in_strength_row(bi: List[Dict[str, Any]]) -> str:
 # nothing about whether those lines are the job's real lines, and these findings say they may
 # not be.
 _UNDERCUTS_STRUCTURE = {
-    # The BOM was read once. Nothing corroborates any line, so a missing parent BOM looks
-    # exactly like a job that has none.
+    # THE ONLY SIGNAL THAT MEANS THE BOM WAS READ ONCE. Both readers ran or they did not, and
+    # when they did not, nothing in this section is standing on anything.
     "bom_reader_never_ran",
-    # Lines only one reader could see, carrying most of the material value.
+}
+
+# OVER-TRIGGERED, AND HIDING THE PART THAT WAS RIGHT.
+#
+# bom_node_disconnected and its canonical twin were in the set above. On the 30/08 full run
+# they fired on BI-BOLT, the wood screws and the pallet — hardware the prose recogniser MINTED
+# from a note, which by construction has no parent in a drawing hierarchy — and the whole "what
+# the engine got right" block was withheld. James: "A disconnected screw should not hide '11
+# flats nested at 1.2 mm'. Gate §2 on fabricated corroboration, not on minted hardware."
+#
+# He is right, and the distinction is the fabricated BOM. Eleven flat patterns were read,
+# corroborated and costed at the gauge the drawing office typed; that is exactly what this
+# section exists to report, and three parentless screws say nothing about it.
+#
+# They still need saying, so they say it INSIDE the section as a check rather than by deleting
+# it. A caveat a reader can weigh beats a blank page they cannot.
+_QUALIFIES_STRUCTURE = {
     "uncorroborated_bom_line_costed",
-    # A part with no defensible owner in the hierarchy — its quantity is a guess.
     "canonical_route_bom_node_disconnected",
     "bom_node_disconnected",
 }
 
 
-def _structure_is_unverified(summary: Dict[str, Any]) -> List[str]:
-    """The messages, if this job's BOM structure is not corroborated well enough to praise."""
+def _messages_for(summary: Dict[str, Any], codes) -> List[str]:
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
         return []
-    out = []
-    for v in inv.get("violations") or ():
-        if isinstance(v, dict) and str(v.get("code") or "") in _UNDERCUTS_STRUCTURE:
-            out.append(str(v.get("message") or v.get("code")))
-    return out
+    return [str(v.get("message") or v.get("code"))
+            for v in (inv.get("violations") or ())
+            if isinstance(v, dict) and str(v.get("code") or "") in codes]
+
+
+def _structure_is_unverified(summary: Dict[str, Any]) -> List[str]:
+    """The messages, if this job's BOM structure is not corroborated well enough to praise."""
+    return _messages_for(summary, _UNDERCUTS_STRUCTURE)
+
+
+def _structure_qualifiers(summary: Dict[str, Any]) -> List[str]:
+    """Real, and not a reason to withhold the section — they belong in it."""
+    return _messages_for(summary, _QUALIFIES_STRUCTURE)
 
 
 def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
@@ -683,6 +705,10 @@ def _render_whats_right(summary: Dict[str, Any], streams: List[Dict[str, Any]]) 
     """
     rows = ""
     parts = _extract_parts(summary)
+
+    for _q in _structure_qualifiers(summary):
+        rows += ('<tr><td><span class="tag t-warn">Check</span></td><td>'
+                 f'{_esc(_q)}</td></tr>')
 
     _unverified = _structure_is_unverified(summary)
     if _unverified:
