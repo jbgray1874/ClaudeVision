@@ -77,7 +77,19 @@ param(
     # spreads its setup over four times too many units and every labour line comes out
     # light. The engine takes it and says which of the three sources supplied it; it just
     # had no way through this script.
-    [int] $OrderQty = 0
+    [int] $OrderQty = 0,
+
+    # MEASUREMENT, NOT ESTIMATING. Reads the pack with the vision model alone -- the
+    # deterministic BOM reader, the DXF flat patterns and the SolidWorks extract are all
+    # switched off, and every page goes to the model. It answers "what does Grok make of
+    # this pack by itself", which cannot be asked while three other readers are supplying
+    # half the rows and correcting the rest.
+    #
+    # The engine prints a banner saying so on every such run. The number it produces is
+    # not a quote, is not reproducible, and must not be compared with a normal run's
+    # totals -- the source waterfall ranks an LLM read LAST, capped at 0.68, for exactly
+    # the reasons this makes visible.
+    [switch] $LlmOnly
 )
 
 $root   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -457,6 +469,10 @@ if ($Deliverables) { $estArgs += '--deliverables' }
 if ($OrderQty -gt 0) {
     $estArgs += @('--order-qty', "$OrderQty")
     Write-Host "order quantity: $OrderQty off" -ForegroundColor DarkGray
+}
+if ($LlmOnly) {
+    $estArgs += '--llm-only'
+    Write-Host "LLM-ONLY: the vision model is the only reader. Not an estimate." -ForegroundColor Yellow
 }
 
 function Invoke-Run([string] $label) {
