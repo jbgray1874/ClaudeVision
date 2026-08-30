@@ -1,7 +1,7 @@
 import os
 import time
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from extractor_patterns import canonical_material, normalize_text
 
@@ -42,6 +42,24 @@ class SqlServerPriceConnector:
         self.encrypt = encrypt
         self.trust_server_certificate = trust_server_certificate
         self.source_name = source_name
+        # THE SAME PART, ASKED TWICE, THREE SECONDS EACH.
+        #
+        # 10575-02 costs 25 parts and the log shows every one of them queried TWICE, back to
+        # back, same code, same description, same empty answer:
+        #
+        #   get_part_system_cost part_code=10575-01-001 -> rows=0 elapsed=3.4s
+        #   get_part_system_cost part_code=10575-01-001 -> rows=0 elapsed=3.41s
+        #
+        # That is ~170 seconds of a ~10 minute run spent asking a question that has already
+        # been answered. Held per INSTANCE, so it lives exactly as long as one run of the
+        # engine and cannot carry a stale price between jobs -- prices move, and a cache that
+        # outlived a run would be a quiet way to quote yesterday's.
+        #
+        # A MISS IS CACHED TOO, deliberately. Misses are the expensive case here: a fabricated
+        # part is not in the purchased-parts catalogue and never will be, so every one of them
+        # scans the table and returns nothing, twice. Caching only hits would leave the whole
+        # cost exactly where it is.
+        self._part_cost_cache: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 
     def is_available(self) -> bool:
         return bool(
@@ -198,6 +216,17 @@ class SqlServerPriceConnector:
 
         part_code_norm = normalize_text(part_code).upper()
         desc_norm = normalize_text(description)
+        # KEYED ON WHAT THE QUERY ACTUALLY USES — the normalised code and description, not the
+        # raw arguments. Two callers passing "10575-01-001" and " 10575-01-001 " ask the
+        # database the identical question and must not miss each other in here.
+        _ck = (part_code_norm, desc_norm)
+        if _ck in self._part_cost_cache:
+            self._debug(f"cached get_part_system_cost part_code={part_code_norm} "
+                        f"rows={len(self._part_cost_cache[_ck])}")
+            # A COPY. The caller is handed a list of dicts it may well annotate — a source
+            # name, a confidence, a note — and handing out the cached objects themselves would
+            # let the first caller's edits appear in the second caller's answer.
+            return [dict(r) for r in self._part_cost_cache[_ck]]
         rows: List[Dict[str, Any]] = []
         try:
             started = time.time()
@@ -265,7 +294,12 @@ class SqlServerPriceConnector:
                     )
             self._debug(f"done get_part_system_cost rows={len(rows)} elapsed={round(time.time()-started,2)}s")
         except Exception:
-            self._debug("failed get_part_system_cost -> returning []")
+            # NOT CACHED. A dropped connection or a timeout is not the answer "this part is not
+            # in the catalogue" — it is no answer at all. Storing it would turn one blip into a
+            # whole run priced as though the part had been looked up and found missing, which
+            # is indistinguishable in the output from a part that genuinely is not there.
+            self._debug("failed get_part_system_cost -> returning [] (not cached)")
             return []
+        self._part_cost_cache[_ck] = [dict(r) for r in rows]
         return rows
 
