@@ -197,6 +197,12 @@ class Run:
     # seat and no Excel; queued as an ordinary run it would sit in front of real work for
     # ever, waiting for a machine that has nothing to do with it.
     wants_engine: bool = True
+    # THE VISION MODEL ALONE, AS A MEASUREMENT. Distinct from wants_engine, which decides
+    # whether a runner picks the run up at all: this run DOES need a runner -- it produces a
+    # workbook and deliverables like any other -- it simply reads the pack with one reader
+    # instead of four. main.py --llm-only turns off the deterministic BOM reader, the DXF
+    # flat patterns and the SolidWorks extract, and says so on every run it produces.
+    llm_only: bool = False
     # STOP MEANS STOP, NOT "LOOK STOPPED". Abandoning a run frees the queue and leaves the
     # engine running -- SOLIDWORKS and Excel carry on driving a desktop nobody is watching,
     # for the fifteen minutes the job had left, and the next run queues behind work that has
@@ -352,6 +358,15 @@ class EstimateRequest(BaseModel):
     # the only way the comparison gets made at the moment somebody is actually looking at
     # the job, rather than never.
     manual_workbook: Optional[str] = None
+    # THE SAME THREE WORDS THE BATCH ENDPOINT ALREADY VALIDATES. "both" and "engine" are the
+    # normal run and behave identically here -- this endpoint has always produced a full
+    # estimate and still does. "llm" is the new one: read the pack with the vision model
+    # alone, which is a MEASUREMENT of the model and not an estimate.
+    #
+    # A pack of one PDF is a pack, so this covers a single drawing and a whole folder with
+    # no branching. That is why it belongs here rather than on the batch endpoint, which has
+    # to keep treating every file as a separate enquiry.
+    method: str = "both"
 
 
 class BatchRequest(BaseModel):
@@ -457,6 +472,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         # The runner passes it to main.py as --parity-workbook; it is a share path, readable
         # from the runner's machine, never a temp file from this service's disk.
         "manual_workbook": run.manual_workbook,
+        "llm_only": bool(run.llm_only),
     }}
 
 
@@ -529,6 +545,14 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         raise HTTPException(400, "A client and a drawing number are both required.")
     if not isinstance(req.units, int) or req.units < 1:
         raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
+
+    # CHECKED BEFORE ANYTHING IS STAGED. Staging clears and refills a folder on the share;
+    # doing that and then refusing the run over a typo in one word leaves the estimator's
+    # job folder rewritten for nothing.
+    method = str(req.method or "both").strip().lower()
+    if method not in {"both", "llm", "engine"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
+                                 f"engine.")
 
     # THE DRAWINGS ARE STAGED, AND THE STAGED FOLDER IS THE JOB.
     #
@@ -633,10 +657,20 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         busy = _busy_runner()
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                   units=int(req.units), job_folder=str(job), output_path=str(out),
-                  manual_workbook=manual_wb, queued_at=queued_at)
+                  manual_workbook=manual_wb, queued_at=queued_at,
+                  llm_only=(method == "llm"))
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
+    if run.llm_only:
+        # ON THE RUN'S OWN LOG, not only in the engine's console. The estimator watching this
+        # page sees the log; the banner main.py prints scrolls past in a window nobody has
+        # open. A workbook produced this way is indistinguishable from a real estimate once
+        # it is sitting on the share.
+        run.line("LLM-ONLY: read by the vision model alone — the deterministic BOM reader, "
+                 "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
+                 "MEASUREMENT of the model, not an estimate, and its total must not be "
+                 "quoted or compared with a normal run's.")
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))
@@ -1217,6 +1251,14 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                                  "these estimates is filed under.")
     if not isinstance(req.units, int) or req.units < 1:
         raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
+
+    # CHECKED BEFORE ANYTHING IS STAGED. Staging clears and refills a folder on the share;
+    # doing that and then refusing the run over a typo in one word leaves the estimator's
+    # job folder rewritten for nothing.
+    method = str(req.method or "both").strip().lower()
+    if method not in {"both", "llm", "engine"}:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
+                                 f"engine.")
     if not req.files:
         raise HTTPException(400, "Add the drawings to estimate.")
 
