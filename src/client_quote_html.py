@@ -791,6 +791,39 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
                          manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> Optional[str]:
     jp = Path(json_path)
     summary = json.loads(jp.read_text(encoding="utf-8"))
+
+    # ── NO CUSTOMER QUOTE OFF A MEASUREMENT RUN ──────────────────────────────────────
+    #
+    # THE DOCUMENT THIS PRODUCES IS THE MOST DANGEROUS FILE THIS ENGINE WRITES. It carries
+    # the SDI letterhead, a unit price, "valid 30 days" and a "what's included" list of
+    # laser, weld, powder and pack. On the 10575-02 LLM-only run it did all of that for a
+    # total the same job's Decision Report described, in capitals, as INSUFFICIENT DATA —
+    # DO NOT QUOTE FROM THIS TOTAL. The word "indicative" appeared; "read by a language
+    # model alone" did not. James's verdict on seeing it: "Do not send this."
+    #
+    # main.py ALREADY BELIEVED THIS GATE EXISTED. Its call site reads:
+    #     # None = deliberately suppressed by the credibility gate, which has
+    #     # already said why. Do not print a path that does not exist.
+    # That comment has been there through every run; the function it describes always wrote
+    # the file and always returned a path. A safety documented at the call site and absent
+    # from the callee is worse than no safety, because it stops anyone looking.
+    #
+    # SUPPRESSED, NOT STAMPED. A stamped quote can be forwarded, screenshotted, or have its
+    # banner scrolled past; a file that was never written cannot be sent. An LLM-only run
+    # exists to measure the model, and a measurement has no customer.
+    #
+    # BOTH SIGNALS, because this function is also a CLI entry point run against a JSON long
+    # after the process that made it has gone: the environment answers for the run in flight,
+    # the summary key answers for every reader afterwards.
+    _llm_only = bool(summary.get("llm_only")) or (
+        os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"})
+    if _llm_only:
+        print("   [deliverables] client quote NOT WRITTEN — this run read the pack with the "
+              "vision model alone. It is a measurement of the model, not an estimate, and a "
+              "document on SDI letterhead quoting its total must not exist. The workbook and "
+              "the Decision Report carry the figures.", flush=True)
+        return None
+
     stem = job_stem or summary.get("job_output_stem") or jp.stem
     html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook, customer=customer)
     out_dir_p = Path(out_dir) if out_dir else jp.parent

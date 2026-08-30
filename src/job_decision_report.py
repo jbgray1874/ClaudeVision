@@ -266,8 +266,36 @@ def _mat_source_explanation(part: Dict) -> str:
             return ("Bought-in / no fabrication material — NOT YET PRICED, estimator to "
                     "enter a per-unit figure")
         return "Bought-in / catalogue component — no fabrication material (priced from catalogue/history)"
+    # THE RECORDED SOURCE, NOT A RE-GUESS OF IT. This function used to ignore what the
+    # waterfall had written down and re-derive an explanation from the DXF filename, the
+    # part-number suffix and the material string — and on 10575-02 it told an estimator
+    # every mild steel part was "AI inference from drawing context" when the AI Provenance
+    # tab, reading `material_source`, correctly said the drawing was read deterministically.
+    # Two tabs of one workbook, opposite answers, about the most common material in the pack.
+    #
+    # THE MECHANISM IS WORTH RECORDING because it is not a typo. The steel branch below is
+    # guarded by `"pdf" in geo`; estimation_report.py defaults a missing geometry_source to
+    # "pdf" and this file defaulted it to "", so on a PDF-only part the guard was false here
+    # and true there, and this function fell through every branch to the AI catch-all. A
+    # provenance document that infers provenance will disagree with the one that reads it.
+    #
+    # So the recorded source answers first, named by the module that owns the ranks — the
+    # same treatment the thickness explanation already gave. ✅ for a source that MEASURED
+    # the part, ⚡ for one that reasoned about it, which is the distinction the waterfall
+    # exists to make. The heuristics below are kept for a part with nothing recorded, where a
+    # guess stated as a guess beats a blank.
     mat = str(part.get("normalized_material") or part.get("material") or "").upper()
     src = str(part.get("material_source") or "")
+    if not src:
+        try:
+            from source_precedence import source_of
+            src = str(source_of(part, "normalized_material") or "")
+        except Exception:
+            src = ""
+    if src and str(src).strip().lower() != "unknown":
+        _pretty = _display_source(src)
+        if _pretty:
+            return ("✅ " if _was_measured(src) else "⚡ ") + f"Read from {_pretty}"
     geo = str(part.get("geometry_source") or "")
     dxf = str(part.get("dxf_source_file") or "")
     pn  = str(part.get("part_number") or "")

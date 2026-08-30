@@ -1281,6 +1281,28 @@ def main() -> None:
             _canon_json2 = (summary.get("saved_output_paths") or {}).get("json")
             _out_dir = str(Path(str(xlsx_path)).parent)
 
+            # WHAT KIND OF RUN THIS WAS, ON THE RECORD ITSELF. The JSON outlives the process
+            # that wrote it: the quote generator is also a CLI entry point, the parity and
+            # report builders read it days later, and an environment variable answers for
+            # none of that. A file that cannot say how it was produced will eventually be
+            # read as an ordinary estimate, which for an LLM-only run is the one outcome
+            # every warning in this engine exists to prevent.
+            if getattr(args, "llm_only", False) and _canon_json2:
+                try:
+                    _p = Path(_canon_json2)
+                    _d = json.loads(_p.read_text(encoding="utf-8"))
+                    _d["llm_only"] = True
+                    _d["read_by"] = "vision model alone (--llm-only) — a MEASUREMENT of the " \
+                                    "model, not an estimate; its total must not be quoted"
+                    _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False),
+                                  encoding="utf-8")
+                except Exception as _se:
+                    # SAID, NOT SWALLOWED. Downstream readers decide what to suppress from
+                    # this flag; if it did not land they are deciding without it.
+                    print(f"   [deliverables] WARNING could not stamp llm_only on the JSON "
+                          f"({_se}) — anything reading it later cannot tell this was a "
+                          f"measurement run.", flush=True)
+
             # Resolve the pinned manual estimate ONCE (explicit-only, no discovery) so
             # both the client quote (customer name from the ...\<CUSTOMER>\... path) and
             # the parity section below compare against the exact same spreadsheet. One job
