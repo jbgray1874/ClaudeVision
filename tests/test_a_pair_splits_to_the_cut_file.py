@@ -121,7 +121,11 @@ def test_the_proviso_is_a_drawing_problem_not_the_engines_fault():
     """The engine read the pack correctly and priced it; the pack disagreed with itself. So the
     code counts as the drawing's, not an engine discovery, and lands in the confirm-or-overwrite
     bucket rather than the broken-inputs one."""
-    assert engine_discoveries.classify("handed_pair_settled_on_cut_file") == "drawing"
+    # Not the engine's — the point of this test — and specifically the estimator's: the two
+    # hands read different materials and the cut file broke the tie, so somebody confirms the
+    # material before it goes out firm. No file from the drawing office settles that.
+    assert engine_discoveries.classify("handed_pair_settled_on_cut_file") != "engine"
+    assert engine_discoveries.classify("handed_pair_settled_on_cut_file") == "estimator"
     line = estimating_review._line({"code": "handed_pair_settled_on_cut_file",
                                     "severity": "warning", "message": "x"})
     assert line["bucket"] == estimating_review.CONFIRM

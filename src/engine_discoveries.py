@@ -29,24 +29,51 @@ SCHEMA = "engine_discoveries.v1"
 # WOULD A PERFECT ENGINE STILL RAISE THIS ON THIS PACK? Yes -> it belongs to the drawing or to
 # commerce. These are estimating work, and a mature system produces MORE of them, not fewer,
 # because it reads more of the pack and has more to say about it.
-_NOT_OURS = {
-    # Commerce: a price this business has not decided yet.
-    "material_has_no_rate_in_this_engine",
-    "price_not_reproducible",
-    "price_not_firm",
-    "stated_finish_not_costed",
-    "short_run_pays_for_sheet_it_does_not_use",
-    "bought_in_without_a_catalogue_price",
-    # The drawing pack disagreeing with itself, or being incomplete.
-    "two_sources_disagree_about_the_gauge",
-    "two_sources_disagree_about_the_material",
-    "handed_pair_disagrees",
-    "handed_pair_settled_on_cut_file",
+# ── NOT OURS, SPLIT BY WHO FIXES IT ───────────────────────────────────────────────────
+#
+# "Not ours" covered a missing flat pattern and a missing price rate equally, and those go to
+# different people: the drawing office cannot add a rate to SDILive and nobody in estimating
+# can draw a flat pattern. Severity never said whose work a line was, and neither did this.
+
+# THE DRAWING PACK — incomplete or unreadable. Fixed by a file or an answer from the drawing
+# office, and worth putting in front of them: a missing flat pattern costs more than any
+# warning about a total, because without it a folded part cannot be sized at all.
+_PACK = {
     "cad_files_not_read",
     "bom_page_not_read_by_both",
     "detail_drawing_missing",
     "dims_required",
+    "no_part_dxf",
+    "blank_and_cut_path_disagree",
 }
+
+# A PRICE THIS BUSINESS HAS NOT PUT IN SDILIVE YET. Nothing is wrong with the drawing and
+# nothing is wrong with the engine — the rate does not exist to be looked up. The fix is a row
+# in the database, a supplier catalogue, or a feed, and naming that is more use to an estimator
+# than any amount of doubt about the total.
+_COMMERCE = {
+    "material_has_no_rate_in_this_engine",
+    "price_not_reproducible",
+    "price_not_firm",
+    "stated_finish_not_costed",
+    "bought_in_without_a_catalogue_price",
+}
+
+# THE ESTIMATOR'S OWN CALL, on this job, with the drawing in front of them. Two readings of a
+# material that the evidence cannot separate, or whether a one-off carries its own offcut.
+# Neither the drawing office nor a database can answer these, and a good run produces MORE of
+# them: they are estimating, not failure.
+_ESTIMATOR = {
+    "two_sources_disagree_about_the_gauge",
+    "two_sources_disagree_about_the_material",
+    "handed_pair_disagrees",
+    "handed_pair_settled_on_cut_file",
+    "short_run_pays_for_sheet_it_does_not_use",
+}
+
+# The union, so any caller still asking only "is this the engine's fault" gets the answer it
+# always had.
+_NOT_OURS = _PACK | _COMMERCE | _ESTIMATOR
 
 # Would a perfect engine still raise it? NO. These are confessions: something was invented,
 # lost, guessed, or written where nothing can weigh it. This is the number that must fall.
@@ -86,6 +113,15 @@ def classify(code: Any) -> str:
         return "engine"                  # an unnamed flag is not evidence of a clean job
     if c.endswith(_UNVERIFIED_SUFFIX):
         return "unverified"
+    # THREE ANSWERS WHERE THERE WAS ONE, because "not ours" covered a missing DXF and a
+    # missing price rate equally, and those go to different people. The drawing office cannot
+    # add a rate to SDILive and nobody in estimating can draw the flat pattern.
+    if c in _PACK:
+        return "drawing"
+    if c in _COMMERCE:
+        return "commerce"
+    if c in _ESTIMATOR:
+        return "estimator"
     if c in _NOT_OURS:
         return "drawing"
     if c in _ASSUMPTIONS:
@@ -103,19 +139,29 @@ def count(violations: Any) -> Dict[str, Any]:
     "bom_node_disconnected, datum_written_without_source, finish_field_holds_drawing_text" is
     a morning's work.
     """
-    buckets: Dict[str, List[str]] = {"engine": [], "drawing": [],
-                                     "assumption": [], "unverified": []}
+    buckets: Dict[str, List[str]] = {"engine": [], "drawing": [], "commerce": [],
+                                     "estimator": [], "assumption": [], "unverified": []}
     for v in violations or ():
         code = v.get("code") if isinstance(v, dict) else v
         buckets[classify(code)].append(str(code))
+    # STILL ONE NUMBER FOR "NOT OURS", over all three of them. Splitting the classes by who
+    # fixes them must not quietly shrink the metric they are measured against: this counted
+    # eight on the side panel and would have reported two, which reads as six problems having
+    # been solved by a refactor.
+    _not_ours = buckets["drawing"] + buckets["commerce"] + buckets["estimator"]
     return {
         "schema": SCHEMA,
         "engine_discoveries": len(buckets["engine"]),
-        "drawing_and_commercial": len(buckets["drawing"]),
+        "drawing_and_commercial": len(_not_ours),
         "declared_assumptions": len(buckets["assumption"]),
         "unverified": len(buckets["unverified"]),
         "engine_codes": sorted(set(buckets["engine"])),
-        "drawing_codes": sorted(set(buckets["drawing"])),
+        "drawing_codes": sorted(set(_not_ours)),
+        # AND THE THREE APART, for anything that wants to say who. The rolled-up number above
+        # is the score; these are the work.
+        "drawing_office": sorted(set(buckets["drawing"])),
+        "sdilive": sorted(set(buckets["commerce"])),
+        "estimator": sorted(set(buckets["estimator"])),
     }
 
 

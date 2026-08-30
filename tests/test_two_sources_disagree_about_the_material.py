@@ -108,7 +108,10 @@ def test_a_handed_settled_part_is_not_reported_twice():
 # ── classification and wiring ────────────────────────────────────────────────────────
 
 def test_it_is_a_drawing_problem_in_the_confirm_bucket():
-    assert engine_discoveries.classify("two_sources_disagree_about_the_material") == "drawing"
+    # NOT the engine's — which is what this test is for — and specifically the estimator's:
+    # two readings the evidence cannot separate, settled by whoever has the drawing open.
+    assert engine_discoveries.classify("two_sources_disagree_about_the_material") != "engine"
+    assert engine_discoveries.classify("two_sources_disagree_about_the_material") == "estimator"
     line = estimating_review._line({"code": "two_sources_disagree_about_the_material",
                                     "severity": "warning", "message": "x"})
     assert line["bucket"] == estimating_review.CONFIRM

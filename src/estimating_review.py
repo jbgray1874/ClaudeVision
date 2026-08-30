@@ -44,18 +44,30 @@ import engine_discoveries
 
 SCHEMA = "estimating_review.v1"
 
+DRAWINGS = "Ask the drawing office"
+PRICES = "Missing from SDILive"
 CONFIRM = "Confirm or overwrite"
 BROKEN = "Missing or broken inputs"
 INFORMATION = "For information — assumptions the engine made"
 
-# The order a person works, not the order the checks happen to run. Decisions first because
-# they are what stops the quote going out; the engine's own list next because it changes what
-# the decisions are worth; assumptions last because they are already answered unless somebody
-# disagrees.
-ORDER = (CONFIRM, BROKEN, INFORMATION)
+# ONE MORE SPLIT, BECAUSE ONE BUCKET HELD THREE PEOPLE'S WORK. "Missing or broken inputs"
+# carried a flat pattern nobody has drawn, a rate nobody has entered in SDILive, and a node
+# the engine invented — filed together because none of them is estimating. They are fixed by
+# the drawing office, by whoever maintains the price data, and by us, and an estimator reading
+# one list cannot hand any of it on.
+#
+# NOTHING HERE IS A VERDICT. These are not reasons to doubt the total; they are the specific
+# things that would make the next estimate better, each named with an owner. Everything that
+# could be priced has been priced.
+#
+# The order is who is furthest from the sheet. A DXF has to be asked for and waited on, so it
+# goes first and goes early enough to matter; a rate is a row somebody can add today; the
+# confirms are the estimator's own and can be done with the job open. Ours is last because it
+# is our morning's work and not theirs.
+ORDER = (DRAWINGS, PRICES, CONFIRM, BROKEN, INFORMATION)
 
-_BUCKET_FOR = {"drawing": CONFIRM, "engine": BROKEN,
-               "assumption": INFORMATION, "unverified": BROKEN}
+_BUCKET_FOR = {"drawing": DRAWINGS, "commerce": PRICES, "estimator": CONFIRM,
+               "engine": BROKEN, "assumption": INFORMATION, "unverified": BROKEN}
 
 # WHAT TO DO, in a sentence, for the codes that carry a standard action. Anything not listed
 # falls back to the bucket's own instruction rather than inventing advice — a made-up action is
@@ -97,6 +109,9 @@ _ACTION = {
 }
 
 _BUCKET_ACTION = {
+    DRAWINGS: "Ask the drawing office for it. The job is priced from what could be read "
+              "meanwhile.",
+    PRICES: "Add the rate to SDILive, or price the line by hand on the sheet.",
     CONFIRM: "Confirm the figure or overwrite it.",
     # NOT "STOP". Everything that could be priced HAS been, and an estimator can change any
     # of it. What this bucket says is which numbers rest on something the engine could not

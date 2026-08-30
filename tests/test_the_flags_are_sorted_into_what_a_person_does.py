@@ -49,7 +49,11 @@ def test_a_decision_and_a_confession_do_not_sit_together():
     rev = er.review(RUN)
     confirm = {l["code"] for l in _bucket(rev, er.CONFIRM)["lines"]}
     broken = {l["code"] for l in _bucket(rev, er.BROKEN)["lines"]}
-    assert "price_not_reproducible" in confirm
+    # A PRICE GAP IS NOW ITS OWN BUCKET. It was filed under "confirm or overwrite" because it
+    # was not the engine's fault; it is really a row missing from SDILive, and saying so gives
+    # it an owner instead of leaving an estimator to decide what "confirm" means here.
+    prices = {l["code"] for l in _bucket(rev, er.PRICES)["lines"]}
+    assert "price_not_reproducible" in prices
     assert "canonical_route_bom_node_disconnected" in broken
     assert not (confirm & broken)
 
@@ -64,8 +68,18 @@ def test_a_declared_assumption_is_not_presented_as_a_problem():
 
 def test_decisions_come_first_because_they_stop_the_quote():
     """The order a person works, not the order the checks ran."""
-    assert er.ORDER[0] == er.CONFIRM
-    assert [g["title"] for g in er.review(RUN)["buckets"]][0] == er.CONFIRM
+    # THE DRAWING OFFICE GOES FIRST NOW, and the reason is time rather than severity: a flat
+    # pattern has to be asked for and waited on, so it has to be seen early enough to be
+    # worth asking. The confirms can be done with the job open; a DXF cannot.
+    assert er.ORDER[0] == er.DRAWINGS
+    assert er.ORDER.index(er.CONFIRM) < er.ORDER.index(er.BROKEN), (
+        "the estimator's own decisions still come before the engine's confessions")
+    # THE FIRST BUCKET PRESENT, not a fixed name — this run has no drawing-office lines, so
+    # the top of its list is the price gaps. What the order guarantees is the SEQUENCE, and
+    # that is asserted above against ORDER itself rather than against one fixture's contents.
+    _titles = [g["title"] for g in er.review(RUN)["buckets"]]
+    assert _titles == [t for t in er.ORDER if t in _titles], (
+        "the buckets are not in the order a person works: " + repr(_titles))
 
 
 def test_inside_a_bucket_the_order_is_stable():

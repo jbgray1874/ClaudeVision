@@ -53,14 +53,23 @@ SIDE_PANEL_RUN = [
 def test_a_missing_rate_is_not_an_engine_defect():
     """The commonest confusion, and the one that makes the number useless if it is wrong. A
     price this business has not decided is not a bug; the engine did its whole job."""
-    assert ed.classify("material_has_no_rate_in_this_engine") == "drawing"
-    assert ed.classify("price_not_reproducible") == "drawing"
+    # "commerce" NOW, NOT "drawing". The point of the test is unchanged and is asserted
+    # first: it is not the engine's fault. What changed is that "not ours" split by WHO fixes
+    # it — a rate is a row in SDILive and the drawing office cannot add one.
+    assert ed.classify("material_has_no_rate_in_this_engine") != "engine"
+    assert ed.classify("material_has_no_rate_in_this_engine") == "commerce"
+    assert ed.classify("price_not_reproducible") != "engine"
+    assert ed.classify("price_not_reproducible") == "commerce"
 
 
 def test_a_pack_disagreeing_with_itself_is_not_an_engine_defect():
     """The model says 2.2 and the export says 2MM. A perfect engine reports exactly that."""
-    assert ed.classify("two_sources_disagree_about_the_gauge") == "drawing"
-    assert ed.classify("handed_pair_disagrees") == "drawing"
+    # "estimator": the pack caused it, but nobody in the drawing office can settle it and no
+    # database holds the answer. Somebody with the job open decides which gauge it is.
+    assert ed.classify("two_sources_disagree_about_the_gauge") != "engine"
+    assert ed.classify("two_sources_disagree_about_the_gauge") == "estimator"
+    assert ed.classify("handed_pair_disagrees") != "engine"
+    assert ed.classify("handed_pair_disagrees") == "estimator"
     assert ed.classify("cad_files_not_read") == "drawing"
 
 
