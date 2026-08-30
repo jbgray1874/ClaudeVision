@@ -685,26 +685,35 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         # number and is deliberately not quoted here.
         _mat, _lab = _totals.get("material_gbp"), _totals.get("labour_gbp")
         _col_mat = sum(float(p.get("extended_cost") or 0) for p in provenance)
-        # NAME THE GAP. This printed both figures and stopped — "the material column above
-        # sums to £70.27 against the sheet's £144.40" — leaving the reader to decide which of
-        # the two was wrong. Neither is. The column is PER-PART material and only that; the
-        # sheet's material total also carries the purchased items on the Bill of Materials,
-        # the packaging and delivery lines, and the scrap uplift added to every line.
+        # NAME THE GAP — IN THE WORDS THE OTHER TAB ALREADY USES.
         #
-        # An unexplained £74 between two tabs of one workbook is not a rounding note. It is
-        # the reader's first real test of whether this tab can be trusted, and on 10575-02 it
-        # was 51% of the material total sitting in a difference nothing accounted for.
+        # This printed both figures and stopped, leaving the reader to decide which was wrong.
+        # Neither is. The first attempt at explaining it then got the CONTENTS wrong, and that
+        # was worse than saying nothing: it named "purchased items on the Bill of Materials,
+        # packaging and delivery", every one of which is already IN this column — packaging at
+        # £28, the pallet, FIXING2104, the screws, the TESA tape. A reader who went looking for
+        # packaging in the gap would have found it in the column instead and concluded the tab
+        # could not account for itself, which is exactly the distrust the sentence exists to
+        # prevent.
+        #
+        # The Decision Report has computed this residual all along and labels it
+        # "Powder / scrap / other workbook material" — the powder consumable and the per-line
+        # scrap uplift, lines that belong to no single part and so cannot appear in a per-part
+        # column. Same arithmetic, same words, and the reader is sent there to see the figure
+        # broken out rather than asked to take this sentence on trust.
         if _mat is None:
             _mat_txt = ""
         else:
             _gap = float(_mat) - _col_mat
             _gap_txt = ""
             if abs(_gap) >= 0.01:
-                _gap_txt = (f"The £{abs(_gap):,.2f} difference is material the SHEET carries "
-                            f"and this column does not: purchased items on the Bill of "
-                            f"Materials, packaging and delivery, and the scrap uplift added "
-                            f"per line. Neither figure is wrong — this column is per-part "
-                            f"provenance, the sheet is the money. ")
+                _gap_txt = (f"The £{abs(_gap):,.2f} difference is the sheet's "
+                            f"POWDER / SCRAP / OTHER WORKBOOK MATERIAL — the powder consumable "
+                            f"and the per-line scrap uplift, which belong to no single part and "
+                            f"so cannot appear in a per-part column. The Decision Report's "
+                            f"material breakdown shows it as its own row. Neither figure is "
+                            f"wrong — this column is per-part provenance, the sheet is the "
+                            f"money. ")
             _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
                         f"sheet's £{float(_mat):,.2f}. {_gap_txt}")
         _lab_txt = (f"Labour is £{float(_lab):,.2f}, charged per department row across "
