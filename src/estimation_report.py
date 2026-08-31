@@ -155,7 +155,29 @@ def reading_and_pricing_counts(provenance):
             out["priced"] += 1
     return out
 def source_label(source: str) -> str:
-    """Human-readable explanation of where a value came from."""
+    """Human-readable explanation of where a value came from.
+
+    THE ONE VOCABULARY FIRST. source_precedence is where every source name is defined and
+    displayed; this chain is older than it and had drifted into a second, partial copy —
+    `dxf_matched_no_geometry` matched none of its branches and fell through to `return
+    str(source)`, so the raw identifier printed in the Mat. Source column of the tab whose
+    whole purpose is saying where numbers came from.
+
+    AND IT NAMED THE WRONG MODEL. The final branch read "AI inference (Claude)". This engine's
+    vision reader is Grok, on the xAI API; the name has been wrong on every provenance sheet
+    it has ever written, and it is the kind of error that ends a conversation with an estimator
+    who spots it. source_precedence has said "Grok (xAI)" all along.
+
+    The chain below is kept for the keys source_precedence does not hold — override_rule with
+    its payload, pn_suffix, historical — which are real and have no entry there.
+    """
+    try:
+        from source_precedence import SOURCE_DISPLAY_NAME, display_name
+        _key = str(source or "").strip().lower()
+        if _key in SOURCE_DISPLAY_NAME:
+            return display_name(_key)
+    except ImportError:
+        pass
     s = str(source or "").lower()
     if "knowledge_base" in s:
         return "SDI Knowledge Base (previously confirmed)"
@@ -174,9 +196,14 @@ def source_label(source: str) -> str:
     elif "pdf" in s:
         return "PDF drawing text extraction"
     elif "ai" in s or "inference" in s:
-        return "AI inference (Claude)"
+        return "engine inference"
+    # A NAME NOBODY HAS WRITTEN UP IS NOT A LABEL. Returning the raw key put
+    # `dxf_matched_no_geometry` in a column an estimator reads; saying the source is
+    # unrecognised is honest and puts the gap where somebody will fill it in.
+    elif s:
+        return f"{s.replace('_', ' ')} (source name not in the glossary)"
     else:
-        return str(source or "AI inference")
+        return "not recorded"
 def _price_basis_label(price_source: Dict[str, Any], material: str = "") -> str:
     """One-line 'where did this price come from?' for the provenance sheet, built
     from the engine's own per-part price_source metadata (pricing_service /
@@ -294,8 +321,12 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         if _bought:
             mat_source_str = "Bought-in / catalogue component — no fabrication material"
         else:
-            mat_source   = part.get("material_source") or geo
-            mat_source_str = source_label(mat_source)
+            # NOT `or geo`. Where no material source was recorded this fell back to the
+            # GEOMETRY source, which is a different question about a different field: knowing
+            # a blank was measured off a DXF says nothing about who decided the part is mild
+            # steel. On 10575-01-001 that put `dxf_matched_no_geometry` in the Mat. Source
+            # column — a geometry state, reported as the material's provenance.
+            mat_source_str = source_label(part.get("material_source"))
         # ── Thickness provenance ───────────────────────────────────────────────
         # DXF filename FIRST — most reliable, and avoids real 2mm/3mm acrylic
         # being wrongly stripped as tolerance-table values.
@@ -579,9 +610,14 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
          #
          # Put here rather than in a row of its own: rows 3 and 4 are both already written,
          # and inserting one silently overwrote the legend that lives below.
+         # THE ONE TAB, NOW THAT THERE IS ONLY ONE. This line used to send the reader to the
+         # Decision Report for what had to be decided. That tab has gone — its part list was
+         # this one's part list, twenty-five rows twice — and its four unique blocks are
+         # further down this sheet. Pointing at a tab the workbook no longer has is how a
+         # reader concludes the file is broken.
          "THIS TAB: WHERE EVERY NUMBER CAME FROM — source, confidence, geometry, the rate "
-         "that priced it. For WHAT HAD TO BE DECIDED and on what grounds, use the DECISION "
-         "REPORT tab. Same parts, different question.\n"
+         "that priced it. Below the totals: who decided powder, the material breakdown that "
+         "adds back to the sheet's own total, and every value two sources disagreed about.\n"
          "STATUS — the WEAKEST field decides the line, never an average:   "
          "CONFIRMED/MEASURED — read from a model, a DXF or the estimators' own calculator   "
          "REPORTED — read from the drawing; reproducible, not verified   "
@@ -769,8 +805,8 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 _gap_txt = (f"The £{abs(_gap):,.2f} difference is the sheet's "
                             f"POWDER / SCRAP / OTHER WORKBOOK MATERIAL — the powder consumable "
                             f"and the per-line scrap uplift, which belong to no single part and "
-                            f"so cannot appear in a per-part column. The Decision Report's "
-                            f"material breakdown shows it as its own row. Neither figure is "
+                            f"so cannot appear in a per-part column. The MATERIAL COST "
+                            f"BREAKDOWN below shows it as its own row. Neither figure is "
                             f"wrong — this column is per-part provenance, the sheet is the "
                             f"money. ")
             _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "

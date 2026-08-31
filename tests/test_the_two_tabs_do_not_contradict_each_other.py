@@ -164,31 +164,37 @@ def test_both_files_ask_the_same_module_for_the_display_name():
 
 # ── and they must not be the same tab twice ──────────────────────────────────
 
-def test_each_tab_says_what_it_is_for_and_names_the_other():
-    """ELEVEN OF THE DECISION REPORT'S TWELVE COLUMNS ARE ON AI PROVENANCE, and the twelfth is
-    one of them under a different name. A separate invariant requires every deliverable to
-    describe the same part list, so the two cannot be told apart by which rows they carry —
-    only by what they are FOR.
+def test_the_surviving_tab_says_what_it_holds_and_points_at_no_missing_tab():
+    """THE DIVISION OF LABOUR WAS THE PROBLEM, NOT THE SOLUTION.
 
-    Unsaid, an estimator reads the same rows twice and has no way to know which tab to believe
-    when they differ, which they did on 10575-01-001's thickness. Each now states its own
-    question and names the other in the same words, so the pair reads as a division of labour
-    rather than a duplication."""
-    # SEAMS CLOSED FIRST. Both sentences are built from adjacent string fragments and Python
-    # joins them at runtime, so "DECISION " + "REPORT" is one phrase on the sheet and two to a
-    # substring search. This guard failed on wording that is on the page — the same trap the
-    # material-totals test already had to close, and the ninth time in this repository.
+    This test used to require each tab to state its own question and name the other, on the
+    reasoning that eleven of the Decision Report's twelve columns were also on AI Provenance
+    and a separate invariant forbids either from carrying a different part list — so the pair
+    could only be told apart by what they were FOR.
+
+    That was the best available answer while both tabs existed. It is not one any longer.
+    James, having read them side by side: "let's get rid of one and just keep the other one
+    then. we don't want clutter." Two tabs cross-referencing each other is still two tabs of
+    the same twenty-five rows, and the cross-reference does not stop them disagreeing — which
+    is what they did about 10575-01-001's geometry source, each deriving it separately.
+
+    WHAT THIS NOW GUARDS is the failure the deletion introduces: a surviving sheet that still
+    tells the reader to go and look at a tab the workbook does not have. A pointer to a missing
+    thing does not read as a stale sentence; it reads as a broken file."""
+    # SEAMS CLOSED FIRST. The sentence is built from adjacent string fragments and Python joins
+    # them at runtime, so "DECISION " + "REPORT" is one phrase on the sheet and two to a
+    # substring search — the ninth time this trap has been hit in this repository.
     _seam = lambda t: re.sub(r'"\s*\n\s*(?:#[^\n]*\n\s*)*f?"', "", t)
-    dec = _seam((ROOT / "src" / "job_decision_report.py").read_text(encoding="utf-8"))
     prov = _seam((ROOT / "src" / "estimation_report.py").read_text(encoding="utf-8"))
+    # And comments stripped, because the comment explaining the removal quotes the wording it
+    # removed — the prose-grep trap, which is the same trap wearing the other hat.
+    prov_code = re.sub(r"#[^\n]*", " ", re.sub(r'"""(?:.|\n)*?"""', " ", prov))
 
-    assert "THIS TAB: what had to be DECIDED" in dec
-    assert "AI PROVENANCE" in dec, "the Decision Report does not send the reader to the audit"
-
-    assert "THIS TAB: WHERE EVERY NUMBER CAME FROM" in prov
-    assert "DECISION REPORT" in prov, "Provenance does not send the reader to the decisions"
-
-    for name, src in (("decision report", dec), ("provenance", prov)):
-        assert "Same parts, different question" in src, (
-            f"the {name} does not say the two tabs cover the same parts — which is the thing a "
-            f"reader concludes is a contradiction when they see it")
+    assert "THIS TAB: WHERE EVERY NUMBER CAME FROM" in prov_code
+    assert "DECISION REPORT tab" not in prov_code, (
+        "AI Provenance still sends the reader to a tab the workbook no longer contains")
+    # It says what it now holds instead — the blocks that came across with the deletion.
+    for promised in ("who decided powder", "material breakdown", "two sources disagreed"):
+        assert promised in prov_code, (
+            f"the tab does not tell the reader it carries {promised!r}, which arrived here "
+            f"when the Decision Report was removed and is findable nowhere else")

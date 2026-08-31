@@ -88,9 +88,22 @@ def test_the_label_matches_the_decision_reports_row_exactly():
 
 
 def test_it_sends_the_reader_to_where_the_figure_is_broken_out():
-    at = CODE.index("_gap = float(_mat) - _col_mat")
-    assert "Decision Report" in CODE[at:at + 1600], (
-        "the sentence asks to be taken on trust instead of naming the tab that shows it")
+    """THE PLACE MOVED, THE OBLIGATION DID NOT. The sentence used to name the Decision Report,
+    which held the breakdown row showing this residual. That tab was removed as a duplicate of
+    this one's part list and the breakdown came here with it, so the sentence now points down
+    this sheet — but it must still point SOMEWHERE. An explanation of a £74 gap that asks to be
+    taken on trust is the state this whole file exists to prevent."""
+    # PROSE, not CODE: "MATERIAL COST " and "BREAKDOWN below" are adjacent f-string fragments
+    # that Python joins at runtime, so the phrase is one thing on the sheet and two to a
+    # substring search — the same seam this file's own header already had to close, and the
+    # reason it built PROSE in the first place. Reading CODE here reported a sentence missing
+    # that is on the page in front of the estimator.
+    at = PROSE.index("_gap = float(_mat) - _col_mat")
+    window = PROSE[at:at + 1800]
+    assert "MATERIAL COST BREAKDOWN" in window, (
+        "the sentence asks to be taken on trust instead of naming where the figure is shown")
+    assert "Decision Report" not in window, (
+        "it still names the tab the workbook no longer contains")
 
 
 def test_it_says_neither_figure_is_wrong():
