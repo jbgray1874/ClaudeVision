@@ -17,7 +17,7 @@ Called from estimator.py:
 """
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from geometry_inference import _has_geometry as _has_real_dxf_geometry
 
@@ -608,9 +608,200 @@ def powder_authority(summary: Dict[str, Any]) -> str:
                                    best.get("source_rank") or "?"))
 
 
+# The one spelling of the residual row, so the breakdown and AI Provenance's reconciliation
+# sentence cannot drift into two vocabularies for one number.
+POWDER_SCRAP_LABEL = "Powder / scrap / other workbook material"
+
+
+def material_breakdown(summary: Dict[str, Any]) -> List[Tuple[str, float]]:
+    """Per-part material by type, plus the row that makes it add back to the sheet.
+
+    THE RESIDUAL IS THE POINT OF THIS BLOCK, not the breakdown. A list of materials summing to
+    less than the workbook's material total is short and silently so — on 10575-02 the per-part
+    column was £70.27 against the sheet's £144.40, and an estimator reading a breakdown that
+    accounts for half the money concludes the engine has lost the other half.
+
+    What is actually there is the powder consumable and the per-line scrap uplift the workbook
+    adds, neither of which belongs to any single part. Named as its own row, from the
+    difference, so the section adds back to the authoritative figure instead of being near it.
+
+    THE LABEL IS LOAD-BEARING. AI Provenance's reconciliation sentence names this same residual
+    in these same words, and the two must match exactly — a reader who cannot join the sentence
+    to the row has two unexplained figures instead of one explained one.
+    """
+    from costed_facts import job_parts, part_material_cost, priced_route_known, job_totals
+    parts = job_parts(summary) or (
+        (summary.get("manufacturing_writeup") or {}).get("parts") or [])
+    if not parts:
+        return []
+    canonical = priced_route_known(summary)
+    est = {p.get("part_number"): p
+           for p in (summary.get("estimate_summary") or {}).get("part_estimates", [])
+           if p.get("part_number")}
+    totals: Dict[str, float] = {}
+    for part in parts:
+        # Group bought-ins together rather than under a mis-inferred "MILD_STEEL".
+        mat = ("Bought-in" if _is_bought_in(part)
+               else str(part.get("normalized_material") or part.get("material") or "Unknown"))
+        cost = (part_material_cost(part)[1] if canonical else
+                float(est.get(part.get("part_number"), {})
+                      .get("extended_total_cost_gbp") or 0))
+        totals[mat] = totals.get(mat, 0.0) + cost
+    mat_total = job_totals(summary).get("material_gbp")
+    if mat_total is not None:
+        residual = round(float(mat_total) - sum(totals.values()), 4)
+        if abs(residual) >= 0.005:
+            totals[POWDER_SCRAP_LABEL] = residual
+    return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+
+def append_decision_blocks(ws, row: int, summary: Dict[str, Any]) -> int:
+    """The four blocks that were the Decision Report's own, written onto whatever sheet asks.
+
+    WHY THEY MOVED. James, after reading both tabs side by side: "we don't want overlapping
+    data between the two sheets decision and ai governance. they need to have their own
+    identities." Then, having looked again: "let's get rid of one and just keep the other one
+    then. we don't want clutter."
+
+    He is right about the overlap and right about the remedy. The two tabs shared their PER-PART
+    TABLE — one row per part, material, gauge, source, on both — and that table is what a reader
+    sees first and most of. Twenty-five rows duplicated is not two perspectives on a job; it is
+    the same list twice, and it was actively harmful, because where the two derived a fact
+    independently they disagreed (geometry source read `pdf` on one and `DXF flat pattern
+    (exact)` on the other for the same part) and an estimator had no way to tell which tab to
+    believe.
+
+    TRIMMING THE DUPLICATE TABLE WAS TRIED FIRST AND IS NOT AVAILABLE.
+    test_every_deliverable_describes_the_same_part_list requires every deliverable to cover the
+    same parts, so a tab cannot be narrowed to a subset — which leaves deletion as the only way
+    to remove the duplication, and makes James's instruction the correct one rather than merely
+    the one he gave.
+
+    WHAT WAS UNIQUE HAD TO COME WITH IT. Four blocks existed nowhere else:
+
+        who decided powder, and at what rank
+        the material breakdown that adds back to the sheet's own total
+        the operations where two equally-ranked sources disagreed
+        the DATA contests — what the part is made of, and how thick
+
+    The last is the expensive one. Material decides the rate and whether the part has a rate at
+    all; gauge decides the rate AND steps the cut time, so a part costed on the wrong gauge is
+    wrong twice. Deleting the tab without these would have removed the only place they appear.
+
+    Returns the next free row.
+    """
+    _contested = decisions_that_required_resolution(summary)
+    _datum = datum_decisions_that_required_resolution(summary)
+
+    # ── Who decided powder ──────────────────────────────────────────────────
+    row += 2
+    _c(ws, row, 1, powder_authority(summary), bg=C_LIGHT, size=9, wrap=True, italic=True)
+    ws.row_dimensions[row].height = 24
+
+    # ── Material breakdown, adding back to the sheet's total ────────────────
+    breakdown = material_breakdown(summary)
+    if breakdown:
+        from costed_facts import job_totals
+        _mat_total = job_totals(summary).get("material_gbp")
+        row += 2
+        _c(ws, row, 1,
+           "MATERIAL COST BREAKDOWN BY TYPE"
+           + (f"  —  per-part material; the Estimate sheet calculated "
+              f"£{float(_mat_total):,.2f} of material in total"
+              if _mat_total is not None else
+              "  —  per-part material only; labour is charged per department row"),
+           bold=True, bg=C_BLUE, fg=C_WHITE, size=11)
+        ws.row_dimensions[row].height = 20
+        row += 1
+        _total = sum(v for _k, v in breakdown) or 1.0
+        for mat, cost in breakdown:
+            _c(ws, row, 1, mat, size=9, border=True)
+            _c(ws, row, 2, cost, size=9, border=True, num_fmt="£#,##0.00", align="right")
+            _c(ws, row, 3, f"{cost / _total * 100:.0f}%", size=9, border=True, align="right")
+            row += 1
+
+    # ── Operations two equally-ranked sources disagreed about ───────────────
+    if _contested:
+        row += 2
+        _c(ws, row, 1, "DECISIONS THAT REQUIRED RESOLUTION", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        row += 1
+        _c(ws, row, 1,
+           "Every other line on this tab describes a decision that made itself: one strongest "
+           "source, nothing at that rank contradicting it. These are the ones the engine had "
+           "to choose, weakest ground first.",
+           size=8, italic=True, fg="666666")
+        row += 1
+        for _ci, _h in enumerate(("Part", "Operation", "Settled as", "Decided by",
+                                  "Rank", "Other source claimed", "Settled by"), 1):
+            _c(ws, row, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        row += 1
+        for _d in _contested:
+            _c(ws, row, 1, str(_d.get("target_id") or ""), size=9, border=True)
+            _c(ws, row, 2, str(_d.get("operation") or "").replace("_", " "), size=9, border=True)
+            _c(ws, row, 3, str(_d.get("status") or ""), size=9, border=True)
+            _c(ws, row, 4, str(_d.get("decided_by") or _d.get("source") or "unrecorded"),
+               size=9, border=True)
+            _c(ws, row, 5, _d.get("source_rank") or "", align="center", size=9, border=True)
+            _c(ws, row, 6, ", ".join(str(x) for x in (_d.get("losing_statuses") or [])),
+               size=9, border=True)
+            _c(ws, row, 7, str(_d.get("settled_by_key") or "rank"), size=9, border=True,
+               wrap=True)
+            row += 1
+
+    # ── What the part IS, where two sources disagreed ───────────────────────
+    if _datum:
+        row += 2
+        _c(ws, row, 1, "WHAT THE PART IS — WHERE TWO SOURCES DISAGREED", bold=True,
+           bg=C_NAVY, fg=C_WHITE, size=10)
+        row += 1
+        _c(ws, row, 1,
+           "The higher-ranked source was used and the figure stands. Confirm these before "
+           "quoting firm — material and gauge both move the money.",
+           size=8, italic=True, fg="666666")
+        row += 1
+        for _ci, _h in enumerate(("Part", "Datum", "Costed as", "Read from",
+                                  "Other source said", "Which source", "Apart by"), 1):
+            _c(ws, row, _ci, _h, bold=True, bg=C_SECTION, size=9, border=True)
+        row += 1
+        for _d in _datum:
+            _ratio = _d.get("ratio")
+            _c(ws, row, 1, str(_d.get("part_number") or ""), size=9, border=True)
+            _c(ws, row, 2, str(_d.get("datum") or ""), size=9, border=True)
+            _c(ws, row, 3, str(_d.get("costed_as") or ""), size=9, border=True)
+            _c(ws, row, 4, str(_d.get("costed_from") or ""), size=9, border=True, wrap=True)
+            _c(ws, row, 5, str(_d.get("other") or ""), size=9, border=True)
+            _c(ws, row, 6, str(_d.get("other_from") or ""), size=9, border=True, wrap=True)
+            # Only the gauge contest measures a distance; a material argument is categorical.
+            _c(ws, row, 7, (f"{float(_ratio):g}x" if _ratio else "—"),
+               align="center", size=9, border=True)
+            row += 1
+    elif not _contested:
+        row += 2
+        _c(ws, row, 1,
+           "NOTHING WAS CONTESTED ON THIS JOB — no operation and no datum had two sources "
+           "disagreeing at the same rank. Every value above came from a single strongest "
+           "source. That is not the same as corroborated: where only one reader looked, "
+           "there was nothing to disagree with it.",
+           bg=C_LIGHT, size=9, wrap=True, italic=True)
+        ws.row_dimensions[row].height = 28
+    return row
+
+
 def add_decision_report_sheet(wb, summary: Dict[str, Any],
                                scan_meta: Dict[str, Any] = None) -> None:
-    """Add a 'Decision Report' sheet to an existing workbook."""
+    """Add a 'Decision Report' sheet to an existing workbook.
+
+    NO LONGER WRITTEN INTO THE DELIVERED WORKBOOK. James removed the tab — see
+    append_decision_blocks for why, and for the four blocks that moved to AI Provenance rather
+    than going with it. main.py does not call this; the estimator opening a job gets eight
+    sheets, not nine, and no part list appears twice.
+
+    Kept, deliberately and not by neglect. The blocks above are the sheet's content and their
+    tests exercise it here; and the tab can be restored in one line if the estimators miss it
+    when this is walked through with them. A test asserts the delivered workbook has no such
+    sheet, so it cannot come back unnoticed.
+    """
     if not _OK:
         return
 

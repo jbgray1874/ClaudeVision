@@ -370,8 +370,22 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         if _bought:
             geo_source = "— bought-in component (no fabrication geometry)"
         else:
-            geo_source = "DXF flat pattern (exact)" if "dxf" in geo else \
-                         f"PDF vector extraction (reliability {geo_conf_raw:.0%})"
+            # READ THE RECORD, DO NOT RE-DERIVE IT. This was:
+            #     "DXF flat pattern (exact)" if "dxf" in geo else "PDF vector extraction …"
+            # A substring test over a field drawing_job_merge writes in three deliberate
+            # grades, so `dxf_matched_no_geometry` — which means the DXF was found and carried
+            # NO geometry — printed "DXF flat pattern (exact)". The one state where "exact
+            # flat pattern" is precisely the wrong claim.
+            #
+            # And the AI Material Detail tab asked the same field the opposite way, an exact
+            # lookup over two keys defaulting to "pdf", so on 10575-01-001 one tab said `pdf`
+            # and this one said `DXF flat pattern (exact)` about the same part. Two
+            # derivations of one recorded fact will always eventually disagree; the fix in
+            # both places is to stop deriving.
+            from wb_populate import _geom_source_words
+            _words = _geom_source_words(geo if geo != "pdf" else "")
+            geo_source = (_words if _words != "not recorded" else
+                          f"PDF vector extraction (reliability {geo_conf_raw:.0%})")
         # ── Cost provenance ────────────────────────────────────────────────────
         hist_match   = None
         if _DB_OK and pn and pn != "—":
@@ -795,6 +809,33 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
              f"in the figures above: {_names}{_more}",
              bg=C_LOW, size=9, wrap=True, bold=True)
         ws.row_dimensions[row].height = 30
+
+    # ── WHAT THE DECISION REPORT KNEW AND THIS TAB DID NOT ──────────────────────
+    #
+    # The workbook shipped nine sheets, two of which listed every part with its material, its
+    # gauge and where each came from. Twenty-five rows, twice, and not identically: the two
+    # derived geometry source independently and disagreed about it on 10575-01-001. James:
+    # "we don't want overlapping data between the two sheets decision and ai governance...
+    # let's get rid of one and just keep the other one then. we don't want clutter."
+    #
+    # The Decision Report is the one that goes. What it held alone comes here first — who
+    # decided powder, the material breakdown that adds back to the sheet's own total, and the
+    # two contest tables. The DATA contests especially: material decides the rate and whether
+    # the part has a rate at all, gauge decides the rate AND steps the cut time, and nowhere
+    # else in the workbook says two sources disagreed about either.
+    try:
+        from job_decision_report import append_decision_blocks
+        row = append_decision_blocks(ws, row, summary)
+    except Exception as _blk:                                    # noqa: BLE001
+        # SAID ON THE SHEET, not swallowed. These blocks are now the ONLY place the contests
+        # appear; a silent failure here reads as a job where nothing was contested.
+        row += 2
+        cell(row, 1,
+             f"The decision blocks could not be built ({_blk}). Powder authority, the material "
+             f"breakdown and the two contest tables are missing from this tab — that is a "
+             f"rendering failure, not a job with nothing contested.",
+             bg=C_LOW, size=9, wrap=True, bold=True)
+        ws.row_dimensions[row].height = 28
 
     row += 2
     ws.merge_cells(f"A{row}:P{row}")

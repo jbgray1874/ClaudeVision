@@ -11954,16 +11954,25 @@ def test_the_report_sheets_are_written_after_excel_has_calculated():
     The code for both was correct and inert: main.py wrote the two tabs BEFORE the Excel
     read-back, so at the moment they asked whether the workbook had calculated, the honest
     answer was no. And the read-back stamps the JSON on disk, not the in-memory summary the
-    tabs are written from, so ordering alone was not enough."""
+    tabs are written from, so ordering alone was not enough.
+
+    THE ANCHOR MOVED WHEN THE DECISION REPORT TAB DID. This test used to locate the write by
+    searching for add_decision_report_sheet, which main.py no longer calls — James removed the
+    tab, and its four unique blocks now render inside AI Provenance. The ordering it guards is
+    unchanged and matters more, not less: AI Provenance is now the only sheet reconciling the
+    engine's per-part material against what Excel calculated."""
     import inspect
     import main as _main
 
     _src = inspect.getsource(_main)
     _readback = _src.index("stamp_real_totals_into_json")
-    _tabs = _src.index("add_decision_report_sheet(_wb")
+    _tabs = _src.index("add_provenance_sheet(_wb")
     ok(_readback < _tabs,
        "the report sheets must be written after the read-back, or they have nothing to "
        "reconcile against")
+    ok("add_decision_report_sheet(_wb" not in _src,
+       "the Decision Report tab is being written into the workbook again — it was removed as "
+       "a duplicate of AI Provenance's part list, and its unique blocks moved there")
     ok(_src.index('summary["final_estimate"] = _stamped') < _tabs,
        "and the calculated totals must be merged into the in-memory summary first — the "
        "read-back stamps the file on disk, not the object the tabs are rendered from")

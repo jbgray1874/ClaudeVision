@@ -1194,16 +1194,24 @@ def main() -> None:
                 print(f"   [wep-readback] totals not merged ({_fe_exc}) — the report sheets "
                       f"will show engine figures and say so", flush=True)
 
-        # SDI Intelligence — Decision Report + Provenance sheets
+        # SDI Intelligence — AI Provenance sheet
         # Added to whichever output was produced (wb_populate or fallback).
         #
-        # AFTER the read-back, deliberately. These sheets state what Excel calculated and
-        # reconcile the engine's per-part figures against it; written before the read-back
-        # they had nothing to reconcile against and silently fell back to engine-only.
+        # AFTER the read-back, deliberately. This sheet states what Excel calculated and
+        # reconciles the engine's per-part figures against it; written before the read-back
+        # it had nothing to reconcile against and silently fell back to engine-only.
+        #
+        # ONE TAB, NOT TWO. The Decision Report used to be written here as well, and the two
+        # sheets each carried a row per part with its material, its gauge and where they came
+        # from — the same twenty-five rows twice, and not identically: they derived geometry
+        # source independently and disagreed about it. James: "let's get rid of one and just
+        # keep the other one then. we don't want clutter." Its four unique blocks — powder
+        # authority, the material breakdown that adds back to the sheet's total, and the two
+        # contest tables — moved into AI Provenance first. job_decision_report still holds the
+        # code and the computation; nothing calls it to make a sheet.
         if xlsx_path:
             try:
                 import openpyxl as _opxl
-                from job_decision_report import add_decision_report_sheet
                 from estimation_report import add_provenance_sheet
                 _wb = _opxl.load_workbook(str(xlsx_path))
                 _scan_meta = {
@@ -1211,10 +1219,9 @@ def main() -> None:
                     "job_number":  str(scan_label).split("-")[0][:6],
                     "scan_date":   __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
                 }
-                add_decision_report_sheet(_wb, summary, _scan_meta)
                 add_provenance_sheet(_wb, summary, _scan_meta)
                 _wb.save(str(xlsx_path))
-                print(f"   -> Decision Report + AI Provenance sheets added")
+                print(f"   -> AI Provenance sheet added")
             except Exception as _rep_exc:
                 print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
 

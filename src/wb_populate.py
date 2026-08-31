@@ -4561,6 +4561,45 @@ def _flag_to_text(rf):
         return " / ".join(_flag_to_text(x) for x in rf)
     return str(rf)
 
+def _geom_source_words(recorded: Any) -> str:
+    """What the geometry actually came from — READ, not re-derived.
+
+    THE DEFAULT WAS ANSWERING FOR THE RECORD. This column was:
+
+        {"dxf_flat_pattern": "dxf",
+         "solidworks_flat_pattern": "solidworks"}.get(str(geometry_source or ""), "pdf")
+
+    A two-key lookup with "pdf" as the fallback, over a field that takes at least six values.
+    `dxf_cut_length_only`, `dxf_matched_no_geometry` and `mirror_of_measured` all printed
+    "pdf" — three DXF-derived states reported as a PDF read, because they were not in the dict.
+    A miss and a genuine PDF read produced the same word, which is the failure mode the whole
+    source waterfall exists to prevent, reintroduced in the sheet that reports it.
+
+    IT ALSO PUT TWO TABS IN DISAGREEMENT. AI Provenance asks the same field a different way —
+    `"dxf" in geo` — so on 10575-01-001 one tab said `pdf` and the other `DXF flat pattern
+    (exact)` about one part. Neither was reading the record: one underclaimed by defaulting,
+    the other overclaimed by matching a substring, and `dxf_matched_no_geometry` means the DXF
+    was FOUND AND CARRIED NO GEOMETRY — the one state where "exact flat pattern" is precisely
+    wrong.
+
+    drawing_job_merge writes this field in three deliberate grades. Reading them back is the
+    whole job here; there is nothing to infer.
+    """
+    key = str(recorded or "").strip().lower()
+    return {
+        "dxf_flat_pattern":        "DXF — measured flat pattern",
+        "dxf_cut_length_only":     "DXF — cut length only, blank not measured",
+        "dxf_matched_no_geometry": "DXF matched but carried no geometry",
+        "solidworks_flat_pattern": "SolidWorks flat pattern",
+        "solidworks_api":          "SolidWorks model",
+        "mirror_of_measured":      "mirrored from the measured opposite hand",
+        "pdf":                     "PDF",
+        # NOT "pdf". A part with nothing recorded has not been read off a PDF; nobody has said
+        # where its geometry came from, and those are different facts about the estimate.
+        "":                        "not recorded",
+    }.get(key, key.replace("_", " "))
+
+
 def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     """Append the engine's own detail/provenance sheets under NON-colliding names,
     so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
@@ -4587,11 +4626,7 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
             pe.get("normalized_thickness_mm"),
             me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
             (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
-            # Name the real source. A modelled flat pattern is measured geometry, but the
-            # estimator must be able to tell a SolidWorks cut list from a DXF from a PDF.
-            {"dxf_flat_pattern": "dxf",
-             "solidworks_flat_pattern": "solidworks"}.get(
-                str(pe.get("geometry_source") or ""), "pdf"),
+            _geom_source_words(pe.get("geometry_source")),
         ])
     _add("AI Material Detail",
          ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
