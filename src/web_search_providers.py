@@ -130,6 +130,47 @@ def _remember_refusal(provider: str, reason: str) -> None:
 def forget_provider_refusals() -> None:
     """Clear the latch. For tests and for a caller that knows the account was topped up."""
     _PROVIDER_REFUSED.clear()
+    _TRANSPORT_FAILURES.clear()
+
+
+# ── A PROVIDER THAT NEVER ANSWERS IS COSTING WALL CLOCK, NOT BUYING INFORMATION ──────
+# The latch above is for what the provider SAYS. This one is for what it does not say at
+# all. A timeout is transient and must not latch on the first one — a blip should not turn
+# web pricing off for a whole job — but the failure mode actually seen is not a blip: on
+# 12552 every SerpAPI call timed out, and each part waited the full web_ai_call_timeout_s
+# (25s) to learn nothing. A run takes twenty to forty minutes and that is a slice of it
+# spent on a provider that was never going to reply.
+#
+# Two CONSECUTIVE failures is the threshold, and any success resets the count, so a network
+# that is merely slow keeps its lookups and a network where the provider is unreachable
+# stops paying for the discovery once. Deliberately per-run and in memory: nothing is
+# remembered into the next job, because the next job may be on a working connection.
+_TRANSPORT_FAILURES: Dict[str, int] = {}
+_TRANSPORT_STRIKES = 2
+
+
+#
+# KEYED THE WAY THE GUARD READS IT. search_serpapi opens with `if "serpapi" in
+# _PROVIDER_REFUSED`, lowercase — so a latch written under "SerpAPI" would be set, printed,
+# and then never consulted: the run would announce that lookups were off and keep making
+# them. The key is the caller's own lowercase token; the display name is passed separately
+# and used only in the message.
+def _note_transport_failure(key: str, shown_as: str, reason: str) -> None:
+    _TRANSPORT_FAILURES[key] = _TRANSPORT_FAILURES.get(key, 0) + 1
+    if _TRANSPORT_FAILURES[key] < _TRANSPORT_STRIKES:
+        logger.warning("%s search failed: %s", shown_as, reason)
+        return
+    if key in _PROVIDER_REFUSED:
+        return
+    _PROVIDER_REFUSED[key] = f"unreachable ({reason})"
+    print(f"   [web-price] {shown_as} did not answer {_TRANSPORT_STRIKES} times running "
+          f"({reason}). Every further call would wait the full timeout to learn the same "
+          f"thing, so web price lookup is off for the rest of this run. Lines that needed "
+          f"it are left for the estimator, not priced at nothing.", flush=True)
+
+
+def _note_transport_success(key: str) -> None:
+    _TRANSPORT_FAILURES.pop(key, None)
 
 
 def search_serpapi(
@@ -161,8 +202,9 @@ def search_serpapi(
         if _account_level_refusal(exc):
             _remember_refusal("serpapi", str(exc))
         else:
-            logger.warning("SerpAPI search failed: %s", exc)
+            _note_transport_failure("serpapi", "SerpAPI", str(exc))
         return [], str(exc)
+    _note_transport_success("serpapi")
 
     hits: List[SearchHit] = []
     for i, item in enumerate(body.get("organic_results") or [], start=1):

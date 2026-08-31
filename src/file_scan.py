@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover
     PdfReader = None
 
 import config
+import run_timing
 from document_builder import build_document_writeup, merge_page_analysis
 from estimator import append_rows_to_csv, build_estimate_input_rows, estimate_document
 from extractor_patterns import build_textual_manufacturing_summary, normalize_text
@@ -1718,6 +1719,11 @@ def scan_dxf_file(
     started = time.time()
 
     def _debug(stage: str) -> None:
+        # TIMED WHETHER OR NOT ANYONE IS WATCHING. These brackets already named every major
+        # phase and threw the timing away unless the run was in debug mode, so the only
+        # evidence of where forty minutes went was the runner's "no output for 133s" notices
+        # — the absence of printing, read as if it were a phase.
+        run_timing.mark(stage)
         if debug:
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")
@@ -1780,6 +1786,11 @@ def scan_pdf_file(
     started = time.time()
 
     def _debug(stage: str) -> None:
+        # TIMED WHETHER OR NOT ANYONE IS WATCHING. These brackets already named every major
+        # phase and threw the timing away unless the run was in debug mode, so the only
+        # evidence of where forty minutes went was the runner's "no output for 133s" notices
+        # — the absence of printing, read as if it were a phase.
+        run_timing.mark(stage)
         if debug:
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")
@@ -1820,6 +1831,11 @@ def _finalize_scan_summary(
     auto_discover_dxf: Optional[bool] = None,
 ) -> Tuple[Dict[str, Any], Tuple[Path, Path, Path, Path]]:
     def _debug(stage: str) -> None:
+        # TIMED WHETHER OR NOT ANYONE IS WATCHING. These brackets already named every major
+        # phase and threw the timing away unless the run was in debug mode, so the only
+        # evidence of where forty minutes went was the runner's "no output for 133s" notices
+        # — the absence of printing, read as if it were a phase.
+        run_timing.mark(stage)
         if debug:
             elapsed = round(time.time() - started, 2)
             print(f"[DEBUG] {stage} (+{elapsed}s)")

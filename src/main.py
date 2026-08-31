@@ -1446,4 +1446,19 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # PRINTED EVEN WHEN THE RUN DIES, WHICH IS WHEN IT MATTERS MOST. A job that hangs or
+        # throws is exactly the one whose phase times nobody has ever seen — the last run to
+        # do it sat for ninety minutes on seventy-eight seconds of CPU and left nothing to
+        # say which step it was in. In `finally`, an abandoned phase still reports as
+        # STARTED AND NEVER FINISHED, which names the hang.
+        try:
+            import run_timing as _rt
+            _report = _rt.report()
+            if _report:
+                print("\n" + _report, flush=True)
+        except Exception:                                        # noqa: BLE001
+            # Never let instrumentation take down a run that otherwise finished.
+            pass
