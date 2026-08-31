@@ -162,3 +162,123 @@ The pipeline already writes dated files to
 Attaching one of each makes the questions concrete. **Check the contents before
 sending** — these contain real staff names, so treat it as a personal-data
 disclosure to a supplier and keep it to a single small sample.
+
+---
+
+# Vendor correspondence
+
+## Round 1 — sent 25 Aug 2026 (ticket #1052488, via Simon Foister)
+
+Asked: how does InVentry receive data from an external system — watched folder,
+database, or API — and can that route carry live on-site presence?
+
+## Round 1 reply — Manuel Thomas, InVentry Support, 26 Aug 2026
+
+> We can pull data directly from your MIS, provided the users have been added to
+> your MIS. Alternatively, if you have a list of users in an Excel spreadsheet,
+> you can import them directly into the system by following the guide below:
+> *Manually Adding Personnel Records*.
+
+**Assessment: this does not answer the question.** It is a first-line reply that
+treats the request as "how do I add users", and neither option is usable:
+
+| Offered | Why it does not fit |
+|---|---|
+| Pull from MIS | We are a manufacturer with no MIS. A school concept. |
+| Manual spreadsheet import | Manual, and roster-only. We need unattended refresh every ~5 minutes. |
+
+Critically, **live on-site presence was not addressed at all** — both options
+concern personnel records (who exists), not who is in the building. Nothing here
+describes a watched folder or drop-off location.
+
+The one genuinely useful thread: if InVentry can *pull* from an MIS database,
+the same mechanism might be pointed at a database or view we publish. That is
+the "MIS link" the original handover mentioned, and it is worth pursuing.
+
+## Round 2 — to send
+
+Reply below. Two changes of approach: ask for escalation past first-line, and
+separate the two data flows explicitly, since conflating roster with presence is
+what caused the mismatch.
+
+> Hi Manny,
+>
+> Thanks for coming back to us. I think we may have crossed wires, so let me be
+> precise about what we're trying to do — and could this be passed to your
+> technical or integrations team? I don't think it's a first-line question.
+>
+> Two points on the options you suggested. We're a manufacturer rather than a
+> school, so we have no MIS. And the manual spreadsheet import won't work for
+> us: this needs to be automated and unattended, refreshing roughly every five
+> minutes.
+>
+> There are two separate data flows here, and I think only the first has been
+> addressed so far:
+>
+> 1. **Staff roster** — who exists. Around 190 people, changing only when
+>    someone joins or leaves.
+> 2. **Live on-site presence** — who is physically in the building right now.
+>    This is the one that matters most to us: it drives the fire evacuation
+>    list, and it changes continuously through the day as people clock in and
+>    out.
+>
+> Our staff clock in and out using BrightHR Blip. We already extract both
+> datasets automatically onto our own server. What we need is a supported way to
+> get them into InVentry with no human in the loop.
+>
+> So, specifically:
+>
+> 1. **Can InVentry's on-site register and evacuation list be updated
+>    programmatically by an external system** — can we tell InVentry "these
+>    people are currently on site"? If that simply isn't possible, please say so
+>    plainly and we'll stop pursuing it.
+>
+> 2. **You mentioned you can pull data directly from an MIS. Can that same pull
+>    mechanism point at a database or endpoint we provide instead?** If so, what
+>    connection method does it use, and what table and field structure does it
+>    expect?
+>
+> 3. **Do you have an API for writing data into InVentry?** We understand you
+>    have an API integration with timeware from v4.11.0 onwards. Could you send
+>    the documentation and tell us what credentials we would need?
+>
+> 4. **Is there an automated file-based import**, as opposed to the manual
+>    process in the guide? If so: where must the file live for your service to
+>    reach it, what format, and does it replace the whole list or apply changes
+>    to it?
+>
+> 5. **Which field do you match a person on** — email address, an InVentry staff
+>    ID, or name?
+>
+> For reference, this is the shape of what we hold for each person on site
+> (illustrative values):
+>
+> ```json
+> {
+>   "id": "062b2236-…",          // BrightHR employee ID, stable per person
+>   "first_name": "Jane",
+>   "surname": "Doe",
+>   "email": "jane.doe@wearesdi.com",
+>   "clocked_in": "2026-08-27T07:45:00Z"
+> }
+> ```
+>
+> We can supply any subset of that, as CSV, JSON, or a database view — whatever
+> suits your system. If you tell us the format you need, we'll produce it.
+>
+> Lastly, could you confirm **which version of InVentry we're running, and
+> whether our system is on-premise or hosted by you**? That determines which
+> network routes are even possible.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+
+## If round 2 also comes back roster-only
+
+Then presence-into-InVentry is probably not a supported capability, and the
+honest move is to stop trying to push it. The fallback needs nothing from
+InVentry: we already know who BrightHR says is on site, so comparing that
+against InVentry's register and reporting the difference gives H&S most of the
+safety value. Worth putting that to Simon as a decision rather than continuing
+to chase the vendor.
