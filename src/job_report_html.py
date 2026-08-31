@@ -1309,9 +1309,34 @@ def _render_readers_panel(readers: List[Dict[str, Any]]) -> str:
             f"{len(on)} of {len(on) + n_off} readers ran on this pack. "
             f"The {n_off} that did not are the reason figures on this job are corroborated by "
             f"fewer sources than usual — each says why it was off.")
+    # ── WHAT "LLM-ONLY" ACTUALLY MEANS, ON THE PAGE ─────────────────────────────────
+    #
+    # James: "Fix the heading. Don't say 'vision model alone / DXF and extract off' if
+    # pdfplumber still read title blocks. Say: BOM from vision; title-block text from
+    # pdfplumber; flats/SW off."
+    #
+    # The flag's name is the problem and no wording can undo it: --llm-only reads as "nothing
+    # but the LLM", and what it does is switch off Path A of the BOM merge, the DXF flats and
+    # the SolidWorks extract. The drawing's text layer is read exactly as on a normal run,
+    # which is why twenty parts on the 10575-02 measurement carried material and thickness
+    # from "the drawing" and were right to.
+    #
+    # An estimator holding this document has to know which half is the model's. Stating it in
+    # one sentence, above the table, is cheaper than expecting anyone to reconstruct it from
+    # six ran/did-not-run rows.
+    _bom_only = any(not r.get("ran") and r.get("key") == "bom_reader" for r in readers)
+    _scope = ""
+    if _bom_only:
+        _scope = ('<div class="callout warn"><b>What "LLM-only" means on this run.</b> '
+                  'The <b>bill of materials</b> — which parts, how many — came from the vision '
+                  'model and nothing else, so no BOM line was corroborated by a second reader. '
+                  'The <b>drawing\'s text</b> was still read normally: material, thickness and '
+                  'title-block fields came off the PDF\'s own text layer exactly as on a full '
+                  'run, and are shown as "the drawing" in section 9. Flat patterns and the '
+                  'SolidWorks extract were off, so no folded part has a measured blank.</div>')
     return (f'<div class="callout"><b>What read this pack.</b> {lead} '
             f'Where a figure came from is recorded per part in section 9 and, per costing '
-            f'datum, on the AI Provenance tab of the workbook.</div>'
+            f'datum, on the AI Provenance tab of the workbook.</div>{_scope}'
             f'<table><thead><tr><th>Reader</th><th>This run</th>'
             f'<th>What it produces, and where it stops</th></tr></thead><tbody>'
             f'{_rows(on, True)}{_rows(off, False)}</tbody></table>')
@@ -1774,7 +1799,44 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
     rows = _fe.get("material_rows") or []
     if not rows:
         return ""
-    blanks = []
+    # ── A ZERO ON THIS ROW IS NOT A PART THAT WAS NOT PRICED ────────────────────────
+    #
+    # WHAT THIS SECTION TOLD TIM TO DO, on 10575-02:
+    #
+    #     10575-01-001   no_price_source   ...no catalogue, price file or quote holds it
+    #     10575-01-012   no_price_source   ...same
+    #
+    # James: "001 IS in Sheet Steel (the BOM dash is 'costed below'). 012 HAS £0.21 in
+    # Provenance. The 'no catalogue' line is the WRONG BUCKET. Don't send those to Tim as 'you
+    # must find a price.'"
+    #
+    # The section read final_estimate.material_rows and treated every zero as an unpriced line.
+    # A material row can be zero because the part's material is carried on ANOTHER row — a
+    # sheet-steel stream line covering every part nested from that sheet — and the dash means
+    # "costed below", not "nobody costed this". The engine knows: part_estimates carries the
+    # per-part figure that AI Provenance prints.
+    #
+    # SENDING SOMEBODY TO FIND A PRICE THAT ALREADY EXISTS IS WORSE THAN SAYING NOTHING. They
+    # look, find the number two tabs away, and stop believing the section — including on the
+    # lines where the gap is real. So a blank row is cross-checked against what the job
+    # actually costed for that part before it is called unpriced at all.
+    _costed_elsewhere: Dict[str, float] = {}
+    for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
+        if not isinstance(_pe, dict):
+            continue
+        _pn = str(_pe.get("part_number") or "").strip().upper()
+        if not _pn:
+            continue
+        _me = _pe.get("material_estimate") or {}
+        try:
+            _v = float(_me.get("extended_material_cost_gbp") or 0) or float(
+                _pe.get("extended_total_cost_gbp") or 0)
+        except (TypeError, ValueError):
+            _v = 0.0
+        if _v:
+            _costed_elsewhere[_pn] = _v
+
+    blanks, _elsewhere = [], []
     for r in rows:
         if not isinstance(r, dict):
             continue
@@ -1784,10 +1846,33 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
                 continue
         except (TypeError, ValueError):
             pass
+        _key = str(r.get("part_number") or r.get("part_code") or "").strip().upper()
+        _found = _costed_elsewhere.get(_key)
+        if _found:
+            _elsewhere.append((r, _found))
+            continue
         blanks.append(r)
+
+    # NAMED, NOT QUIETLY DROPPED. A row that vanishes from this table because it is costed
+    # somewhere else looks, to anyone who noticed it last week, like a finding that was
+    # suppressed. Saying where the money is turns it from an omission into an answer — and it
+    # is the same sentence that stops the next reader chasing it.
+    _elsewhere_note = ""
+    if _elsewhere:
+        _bits = ", ".join(f"{_esc(str(r.get('part_number') or r.get('part_code')))} "
+                          f"({_money(v)})" for r, v in _elsewhere[:8])
+        _more = f" and {len(_elsewhere) - 8} more" if len(_elsewhere) > 8 else ""
+        _elsewhere_note = (
+            f'<p class="mini"><b>{len(_elsewhere)} line(s) show zero here and ARE costed.</b> '
+            f'Their material sits on another row — a sheet-steel stream line covers every part '
+            f'nested from that sheet, so the part\'s own row reads as a dash meaning "costed '
+            f'below". These are not waiting on anybody: {_bits}{_more}. The per-part figures '
+            f'are on the AI Provenance tab.</p>')
+
     if not blanks:
         return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
-                '<p class="mini">Every material line on this job carries a price.</p>')
+                '<p class="mini">Every material line on this job carries a price.</p>'
+                + _elsewhere_note)
     # A SHEET FULL OF BLANKS AND NO REASONS IS THE DEFECT, NOT AN EMPTY SECTION. The
     # vocabulary existed for months with no writer and the check stayed green throughout;
     # a report that quietly shows an empty table when the stamping did not run would let
@@ -1853,7 +1938,7 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
             '<p class="mini">A part SDI makes has no catalogue price and never will &mdash; its '
             'cost is material plus labour, so a blank on one of those lines means a gauge, a '
             'blank size or a labour rate is missing, not that a supplier could not be found.</p>'
-            + _lead +
+            + _elsewhere_note + _lead +
             '<table><thead><tr><th>Line</th><th>Make or buy</th><th>Why it is blank</th>'
             '<th>Who acts</th></tr></thead><tbody>'
             + "".join(r[2] for r in out) + '</tbody></table>')

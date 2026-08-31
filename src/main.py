@@ -91,13 +91,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--llm-only",
         action="store_true",
-        help="MEASUREMENT, NOT ESTIMATING. Read the pack with the vision model alone: the "
-             "deterministic BOM reader, the DXF flat patterns and the SolidWorks extract are "
-             "all switched off, and every page is sent to the model. Answers 'what does Grok "
-             "make of this pack by itself' -- which cannot be asked while three other readers "
-             "are quietly supplying half the rows. The result is not a quote and not "
-             "reproducible; the source waterfall ranks an LLM read LAST for exactly this "
-             "reason. Works on one drawing or a whole folder -- a pack of one PDF is a pack.",
+        help="MEASUREMENT, NOT ESTIMATING. THE BILL OF MATERIALS COMES FROM THE VISION MODEL "
+             "AND NOTHING ELSE: the deterministic BOM reader, the DXF flat patterns and the "
+             "SolidWorks extract are all switched off, and every page is sent to the model. "
+             "The drawing's TEXT LAYER IS STILL READ -- pdfplumber supplies the title-block "
+             "material, thickness and finish exactly as on a normal run, because --llm-only "
+             "disables Path A of the BOM merge and nothing else. So this answers 'what does "
+             "Grok make of this pack's BOM by itself', which is a narrower question than 'what "
+             "does Grok make of this pack' and the only one the flag actually asks. The result "
+             "is not a quote and not reproducible; the source waterfall ranks an LLM read LAST "
+             "for exactly this reason. Works on one drawing or a whole folder.",
     )
     parser.add_argument(
         "--fresh-read",
@@ -608,13 +611,16 @@ def main() -> None:
         auto_discover_dxf = False
         print("")
         print("   " + "=" * 68)
-        print("   LLM-ONLY RUN. The vision model is the only reader.")
+        print("   LLM-ONLY RUN. The BILL OF MATERIALS comes from the vision model alone.")
         print("   Deterministic BOM reader: OFF.  DXF flat patterns: OFF.")
         print("   SolidWorks native extract: OFF.  Every page is sent to the model.")
+        print("   STILL READING THE DRAWING'S TEXT: pdfplumber supplies the title-block")
+        print("   material, thickness and finish exactly as on a normal run. This flag")
+        print("   turns off Path A of the BOM merge, not the text layer.")
         print("")
-        print("   Nothing corroborates anything. This is a MEASUREMENT of what the")
-        print("   model reads unaided -- it is not an estimate, and the numbers it")
-        print("   produces must not be quoted or compared with a normal run's totals.")
+        print("   So no BOM LINE is corroborated. This is a MEASUREMENT of what the")
+        print("   model makes of the bill of materials -- it is not an estimate, and the")
+        print("   numbers it produces must not be quoted or compared with a normal run.")
         print("   " + "=" * 68)
         print("")
 
@@ -1332,8 +1338,11 @@ def main() -> None:
                     _p = Path(_canon_json2)
                     _d = json.loads(_p.read_text(encoding="utf-8"))
                     _d["llm_only"] = True
-                    _d["read_by"] = "vision model alone (--llm-only) — a MEASUREMENT of the " \
-                                    "model, not an estimate; its total must not be quoted"
+                    _d["read_by"] = ("BOM from the vision model alone (--llm-only); "
+                                     "title-block text still read by pdfplumber; DXF flat "
+                                     "patterns and the SolidWorks extract off — a MEASUREMENT "
+                                     "of the model's BOM reading, not an estimate; its total "
+                                     "must not be quoted")
                     _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False),
                                   encoding="utf-8")
                 except Exception as _se:

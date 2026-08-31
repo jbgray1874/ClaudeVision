@@ -47,12 +47,19 @@ READERS: List[Dict[str, str]] = [
         "key": "pdf_text",
         "name": "PDF text and tables",
         "library": "pdfplumber",
-        "produces": "Part numbers, descriptions, quantities, material and thickness callouts, "
-                    "title-block fields and BOM table cells — read straight out of the PDF's "
-                    "own text layer.",
-        "limits": "Nothing here is interpreted: it returns what the drawing office typed. A "
-                  "scanned or flattened PDF has no text layer and this reader returns nothing "
-                  "from it.",
+        # WHAT THIS READER DOES AND WHAT THE NEXT ONE DOES, KEPT APART. This said "…and BOM
+        # table cells", which is the deterministic BOM reader's job — and on an LLM-only run
+        # that reader is off while this one is not, so the entry described a contribution that
+        # had not happened. The text layer supplies the WORDS; walking them into a table of
+        # parts and quantities is the row below.
+        "produces": "The drawing's own words — title-block fields, material and thickness "
+                    "callouts, finish, part numbers, dimensions and notes — read straight out "
+                    "of the PDF's text layer. This is where a part's material and gauge come "
+                    "from on most jobs, and it runs on every run including --llm-only.",
+        "limits": "Nothing here is interpreted: it returns what the drawing office typed. It "
+                  "supplies text, not structure — turning a BOM table into rows is the "
+                  "deterministic BOM reader below. A scanned or flattened PDF has no text "
+                  "layer and this reader returns nothing from it.",
         "shows_as": "the drawing",
     },
     {

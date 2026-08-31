@@ -109,8 +109,43 @@ def test_the_run_says_what_it_is_every_time():
     was."""
     block = _flag_block()
     assert "LLM-ONLY RUN" in block
-    for said in ("not an estimate", "Nothing corroborates"):
+    for said in ("not an estimate", "no BOM LINE is corroborated"):
         assert said in block, f"the banner does not say {said!r}"
+
+
+def test_the_banner_does_not_claim_more_than_the_flag_does():
+    """IT SAID "Nothing corroborates anything" AND THAT WAS NOT TRUE.
+
+    --llm-only disables Path A of the BOM merge, the DXF flat patterns and the SolidWorks
+    extract. It does NOT disable the PDF text layer: extract_with_pdfplumber is called
+    unconditionally in extract_pdf_summary, and SDI_LLM_ONLY is read in exactly one production
+    place — merge_boms — so material, thickness and the title-block fields are read on a
+    measurement run exactly as on a full one.
+
+    So twenty parts on the 10575-02 measurement legitimately carried material and thickness
+    from "the drawing", and a banner announcing that nothing was corroborated contradicted the
+    report's own provenance table. James: "Don't say 'vision model alone / DXF and extract off'
+    if pdfplumber still read title blocks."
+
+    OVERCLAIMING IS NOT THE SAFE DIRECTION. A warning a reader can disprove from the next page
+    is one they discount, and the thing it was overstating — that no BOM LINE has a second
+    reader — is true, serious, and the whole reason the flag exists."""
+    block = _flag_block()
+    assert "Nothing corroborates anything" not in block, (
+        "the banner claims nothing was corroborated on a run whose title-block reads are "
+        "corroborated exactly as usual")
+    assert "pdfplumber" in block, (
+        "the banner does not say the drawing's text was still read, so a reader takes "
+        "'LLM-only' at face value and distrusts the fields that came off the sheet")
+
+
+def test_the_help_text_scopes_the_flag_to_the_bom():
+    """Somebody reaching for --llm-only is asking a question, and the flag answers a narrower
+    one than its name suggests: what does the model make of this pack's BILL OF MATERIALS."""
+    at = _MAIN.index('"--llm-only"')
+    help_text = _MAIN[at:at + 1600]
+    assert "TEXT LAYER IS STILL READ" in help_text
+    assert "pdfplumber" in help_text
 
 
 def test_it_says_the_numbers_must_not_be_quoted():
