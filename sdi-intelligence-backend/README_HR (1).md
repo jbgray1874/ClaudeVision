@@ -1,6 +1,7 @@
 # BrightHR → InVentry pipeline (HR ingestion)
 
-Two stages, with a snapshot on local disk in between, all wired into the intranet.
+Two stages for the staff **roster**, plus a third for live **presence**, with a
+snapshot on local disk in between, all wired into the intranet.
 
 ```
  COO clicks "Run ingestion"  ─▶  /api/hr/sync
@@ -14,8 +15,16 @@ Two stages, with a snapshot on local disk in between, all wired into the intrane
               latest snapshot ──▶ InVentry CSV (atomic write)
                                    C:\InVentryImports\brighthr_staff.csv
                                           │
-              InVentry CSV Automation Service sweeps it ──▶ front-desk tablets
+                                   ??? ──▶ InVentry front-desk tablets
 ```
+
+> **⚠ The last hop is NOT established.** `C:\InVentryImports\` is only the
+> default path in `hr_config.py`; nothing at InVentry has been configured to
+> read it, and no vendor conversation set it. It is a local folder on
+> SDI-APP01, so a cloud or off-box InVentry service could not reach it anyway.
+> Until InVentry tell us how they ingest external data (see
+> `docs/INVENTRY_INTEGRATION_REQUEST.md`), stages 2 and 3 write a correct file
+> to a destination nothing reads.
 
 **Why a snapshot in the middle:** audit trail of every pull, the load can retry
 without re-hitting the API, and the safety guard can compare against the last
@@ -30,8 +39,102 @@ good pull before it ever overwrites InVentry.
 | `hr_config.py` | Settings (reads the same `.env`) |
 | `hr_brighthr.py` | Auth (pluggable) + paginated fetch + field normalisation |
 | `hr_pull.py` | **Stage 1** — pull → store snapshot |
-| `hr_load_inventry.py` | **Stage 2** — snapshot → InVentry CSV |
+| `hr_load_inventry.py` | **Stage 2** — snapshot → InVentry roster CSV |
+| `hr_blip.py` | **Blip** — who is clocked in right now → snapshot |
+| `hr_blip_inventry.py` | **Stage 3** — Blip snapshot → InVentry on-site CSV |
 | `hr_routes.py` | Backend endpoints (`/api/hr/...`) |
+| `tests/` | `python -m pytest tests -q` — no network or credentials needed |
+
+---
+
+## Stage 3 — live presence (fire roll call)
+
+Stages 1–2 sync who *exists*. Stage 3 syncs who is *in the building*, so the
+InVentry evacuation list is live rather than manual.
+
+```
+ COO clicks "Who's clocked in?"  ─▶  /api/hr/blip     hr_blip.py
+      BrightHR Blip clockings ──▶ blip_latest.json + K:\IT\HRSystemsOutput\blip_onsite_<UTC>.json
+                                         │
+ COO clicks "Load to InVentry"  ─▶  /api/hr/blip/load  hr_blip_inventry.py
+      blip_latest.json ──▶ C:\InVentryImports\brighthr_onsite.csv  (atomic)
+                                         │
+                                  ??? ──▶ on-site register / fire roll
+```
+
+The final hop is unestablished — see the warning above.
+
+`POST /api/hr/blip/sync` does both in one call.
+
+The CSV is written as the **full current on-site list**: in the file = on site,
+absent from the file = signed out. That is our assumption about how a presence
+import should behave, and it is one of the questions for InVentry — they may
+expect a delta instead. It carries the same name + email the roster CSV uses, so
+no separate employee-ID mapping is needed *if* they match on those fields; which
+identifier they actually match on is also an open question.
+
+### Two sources for the same on-site list
+
+| `source=` | File | Notes |
+|---|---|---|
+| `latest` (default) | `…\snapshots\blip_latest.json` | Full snapshot, **includes email** — the best match key for InVentry |
+| `output` | `K:\IT\HRSystemsOutput\blip_onsite_<UTC>.json` | The file the portal **Files view** exposes — the "site signed in" page. Newest wins. |
+| *a path* | any of the above | For a one-off file |
+
+`hr_blip.py` deliberately **strips email** from the portal-exposed file (names
+only, for PII). Loading with `source=output` therefore recovers each email from
+the roster snapshot (`latest.json`) by name. A name appearing twice is left
+blank rather than guessed — a wrong email on a fire roll is worse than a missing
+one — and anyone still without an email is written **name-only** and counted in
+`name_only`, since leaving them off the roll entirely is the more dangerous
+failure.
+
+The portal button uses `latest` because it keeps emails without a name lookup.
+
+### ⚠ The delivery route to InVentry is still unknown
+
+Everything up to the file is built and produces real output — see the dated
+`blip_onsite_*.json` and `brighthr_staff_*.json` files in
+`\\sdi-dc01\shareddata$\Shared\IT\HRSystemsOutput`. What has never been
+established is how InVentry *receives* it.
+
+The "watched folder" in earlier versions of this document was an assumption, not
+a vendor answer. Treat the CSV as the shape of the payload, not as a working
+delivery mechanism.
+
+The request that unblocks this is drafted in
+**`docs/INVENTRY_INTEGRATION_REQUEST.md`**. In short, InVentry need to tell us:
+
+1. **How** they ingest external data — a folder their server watches (and where
+   must it live, given `C:\` on our app server is not reachable by them), a
+   database we write to, or an API.
+2. Whether that same route carries **live on-site presence**, or only the staff
+   roster.
+3. If presence is supported: the **format and columns**, and whether the payload
+   is **full current state** (absent = signed out) or a delta.
+4. Which **identifier** they match on — email, staff ID, or name.
+
+Until then the button and the endpoints default to **dry run**
+(`HR_LOAD_DRY_RUN = true` in the portal; `?dry_run=true` on the API), which
+writes the CSV beside the snapshot rather than to any InVentry path.
+
+### Presence guards (different from the roster guards)
+
+The roster guard protects against wiping the front-desk list. Presence has the
+opposite risk: publishing an on-site list that is *missing* people who are in
+the building. So the load refuses to publish when:
+
+- the Blip run is **degraded** — some per-employee queries failed, so the list
+  may be short (`BLIP_MAX_FAIL_PCT`);
+- the snapshot is **stale** — older than `BLIP_MAX_STALE_MINUTES` (default 15);
+  a stale roll call is worse than no update;
+- **zero on site with query failures** — a broken token looks exactly like an
+  empty building. Zero from a *clean* run is published, since an empty site at
+  3am is real.
+
+`--force` overrides all three. Everything is written atomically (temp file then
+`os.replace`), so whatever ends up consuming the file can never read a
+half-written one.
 
 ---
 
@@ -53,10 +156,18 @@ good pull before it ever overwrites InVentry.
 On demand (the COO button) hits the backend:
 
 ```
-POST /api/hr/sync     # pull + load            (header: X-SDI-Key: <key>)
-POST /api/hr/pull     # pull + store only
-POST /api/hr/load     # load latest snapshot only
-GET  /api/hr/status   # last pull + load summary
+POST /api/hr/sync         # roster: pull + load    (header: X-SDI-Key: <key>)
+POST /api/hr/pull         # roster: pull + store only
+POST /api/hr/load         # roster: load latest snapshot only
+GET  /api/hr/status       # last pull + load + presence-load summary
+
+POST /api/hr/blip         # presence: who is clocked in right now
+GET  /api/hr/blip/latest  # presence: last snapshot, no BrightHR call
+POST /api/hr/blip/load    # presence: on-site list -> InVentry
+                          #   ?dry_run=true   write beside the snapshot, not the InVentry path
+                          #   ?source=output  load the JSON the portal Files view exposes
+                          #   ?force=true     override the presence guards
+POST /api/hr/blip/sync    # presence: blip + load in one call (same query params)
 ```
 
 Or scheduled, via Windows Task Scheduler (same code, no button):
@@ -105,10 +216,13 @@ document.getElementById('hr-sync').onclick = async () => {
   InVentry with an empty roster; the pull won't advance "latest good" on a zero pull.
 - **Drop guard** — `HR_MAX_DROP_PCT`: a sharp fall in active staff vs the last good
   pull is flagged for review rather than pushed through blindly.
-- **Secrets** — all credentials live in `.env` (git-ignored), never in code.
+- **Secrets** — all credentials live in `.env`, never in code. (This file was
+  previously committed to the repo despite this note; it was removed from
+  tracking on 14 Aug 2026 and the credentials in it need rotating.)
 - **PII** — names/emails only; logs record counts, not people. Keep `HR_SNAPSHOT_DIR`
   and the InVentry folder locked down (NTFS perms) and in your UK GDPR records.
 
-> Scope note: this syncs the **active staff roster** into InVentry. Live "who's on
-> site" attendance (BrightHR **Blip**) is a separate data source and a separate
-> endpoint — easy to add later once this is solid.
+> Scope note: stages 1–2 sync the **active staff roster** into InVentry. Live
+> "who's on site" attendance (BrightHR **Blip**) is stage 3 above — built, tested
+> and wired to the portal button, running in dry run until InVentry confirm the
+> presence import.

@@ -1879,7 +1879,7 @@
        +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
        +'<button class="run" id="hr-blip-btn" onclick="hrBlip()">Who\'s clocked in?</button>'
        +'<button class="run" style="background:transparent;color:var(--ink);border:1px solid var(--line)" onclick="var n=document.querySelector(\'.nav a[data-view=files]\');if(n)n.click();">View HR output folder \u2192</button>'
-       +'<button class="run" disabled title="Load to InVentry \u2014 in development" style="opacity:.5;cursor:not-allowed;background:transparent;color:var(--ink);border:1px solid var(--line)">Load to InVentry (soon)</button>'
+       +'<button class="run" id="hr-load-btn" onclick="hrBlipLoad()" title="Write the current on-site list to the InVentry watched folder" style="background:transparent;color:var(--ink);border:1px solid var(--line)">Load to InVentry</button>'
        +'</div>'
        +'<div id="hr-blip-result" class="muted" style="margin-top:12px;font-size:12px;font-family:var(--mono);white-space:pre-wrap"></div>'
        +'<div class="muted" style="margin-top:10px;font-size:12px">Buttons activate as soon as BrightHR credentials and the employee endpoint are populated in <code>.env</code>. They call <code>POST /api/hr/sync</code>, <code>/api/hr/pull</code> and <code>/api/hr/load</code> respectively.</div>'
@@ -2299,6 +2299,42 @@
     }catch(e){
       out.style.color='var(--fail)';
       out.textContent='Blip failed: '+e.message;
+    }finally{
+      btn.disabled=false; btn.textContent=orig;
+    }
+  }
+
+
+  // ---- Blip -> InVentry presence load (stage 3) ----
+  // DRY RUN until InVentry confirm they accept a presence import: the CSV is
+  // written beside the snapshot instead of into their watched folder.
+  // Set to false once confirmed.
+  var HR_LOAD_DRY_RUN = true;
+
+  async function hrBlipLoad(){
+    var btn=document.getElementById('hr-load-btn');
+    var out=document.getElementById('hr-blip-result');
+    if(!btn||!out) return;
+    if(!HR_LOAD_DRY_RUN && !confirm('Write the current on-site list to InVentry?\n\nThis replaces the front-desk on-site register.')) return;
+    var orig=btn.textContent;
+    btn.disabled=true; btn.textContent='Loading\u2026';
+    out.style.color='var(--ink-dim)';
+    out.textContent=(HR_LOAD_DRY_RUN?'[DRY RUN] ':'')+'Writing on-site list to InVentry\u2026';
+    try{
+      var r=await fetch(API_BASE+'/api/hr/blip/load?dry_run='+HR_LOAD_DRY_RUN,{method:'POST',headers:_hdr()});
+      if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,200));
+      var d=await r.json();
+      var warn=(d.warnings||[]).join('\n');
+      out.style.color = d.status==='ok' ? 'var(--ok)' : 'var(--warn)';
+      out.textContent=(d.dry_run?'[DRY RUN] ':'')
+        +'Wrote '+d.written+' of '+d.on_site+' on site'
+        +'\nStatus: '+(d.status||'').toUpperCase()
+        +'\nTarget: '+(d.target||'')
+        +(d.snapshot_age_minutes!=null ? '\nSnapshot age: '+d.snapshot_age_minutes+' min' : '')
+        +(warn ? '\n'+warn : '');
+    }catch(e){
+      out.style.color='var(--fail)';
+      out.textContent='Load failed: '+e.message;
     }finally{
       btn.disabled=false; btn.textContent=orig;
     }

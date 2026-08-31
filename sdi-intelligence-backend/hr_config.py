@@ -42,8 +42,26 @@ BH_MAX_PAGES = int(_opt("BH_MAX_PAGES", "200"))     # safety cap on the page loo
 # ── Local storage (audit trail + the load source) ────────────────────────
 HR_SNAPSHOT_DIR = _opt("HR_SNAPSHOT_DIR", r"C:\SDIIntelligence\hr\snapshots")
 
-# ── InVentry watched-folder CSV (the load target) ────────────────────────
+# ── InVentry roster CSV (the load target) ────────────────────────────────
+# UNVERIFIED DESTINATION: this default was never confirmed with InVentry, and a
+# local C:\ path cannot be read by an off-box or cloud InVentry instance. See
+# docs/INVENTRY_INTEGRATION_REQUEST.md.
 INVENTRY_CSV_PATH = _opt("INVENTRY_CSV_PATH", r"C:\InVentryImports\brighthr_staff.csv")
+
+# ── InVentry on-site presence CSV (Blip -> InVentry, stage 3) ────────────
+# Separate file from the staff roster: the roster says who exists, this says who
+# is in the building right now (fire roll call). Same caveat as above - the
+# destination is a placeholder until InVentry confirm how they ingest data.
+INVENTRY_ONSITE_CSV_PATH = _opt("INVENTRY_ONSITE_CSV_PATH", r"C:\InVentryImports\brighthr_onsite.csv")
+
+# Presence is only useful while it is current — refuse to load a Blip snapshot
+# older than this (a stale fire roll is worse than no update).
+BLIP_MAX_STALE_MINUTES = int(_opt("BLIP_MAX_STALE_MINUTES", "15"))
+
+# Blip queries one endpoint per employee. If some of those calls fail, the
+# snapshot under-reports who is on site, which is the dangerous direction for
+# an evacuation list. Refuse to publish a snapshot with more failures than this.
+BLIP_MAX_FAIL_PCT = float(_opt("BLIP_MAX_FAIL_PCT", "2"))
 
 # ── Safety guards ────────────────────────────────────────────────────────
 HR_MIN_RECORDS = int(_opt("HR_MIN_RECORDS", "1"))       # abort if fewer than this
