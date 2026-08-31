@@ -299,6 +299,112 @@ def convert_dwgs_with_solidworks(
 _COM_FAULT_CODES = (-2147023170, -2147417848, -2147023174, -2146959355)
 
 
+# ── WHY THE SEAT COULD NOT BE ATTACHED TO, AS A FACT RATHER THAN A SHRUG ────────────
+#
+# "SolidWorks is either not running, or is running in a different logon session from this
+# runner. Both look identical from here."
+#
+# That sentence is true of GetActiveObject and useless to the person reading it. James, on a
+# paid seat that was open at the time: "we can't be having these issues with SolidWorks. the
+# company is paying for this subscription. it needs to work." He is right, and the engine's
+# part of it is that it stopped looking at the exact point where looking is cheap.
+#
+# The two cases are NOT identical from here — they are only identical to COM. Windows will say
+# whether SLDWORKS.exe is running, under which user, and in which logon session, and this
+# process knows its own. Comparing them turns an unactionable error into one instruction.
+#
+# STDLIB ONLY. psutil is not a dependency of this engine and adding one to print a better
+# error message is the wrong trade; tasklist has carried session and user since XP.
+
+def this_process() -> Dict[str, Any]:
+    """Our own logon session and user, for comparison with SolidWorks'."""
+    out: Dict[str, Any] = {"session": None, "user": None}
+    try:
+        import ctypes
+        _sid = ctypes.c_ulong()
+        if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(_sid)):
+            out["session"] = int(_sid.value)
+    except Exception:                                      # noqa: BLE001
+        pass
+    out["user"] = os.environ.get("USERNAME") or ""
+    return out
+
+
+def solidworks_processes() -> Optional[List[Dict[str, str]]]:
+    """Every SLDWORKS.exe on this machine with its user and session.
+
+    None means WE COULD NOT LOOK, which must never be reported as "none running" — that is the
+    same inference-printed-as-observation this whole function exists to stop.
+    """
+    try:
+        raw = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq SLDWORKS.exe", "/FO", "CSV", "/V"],
+            capture_output=True, text=True, timeout=20, check=False).stdout
+    except Exception:                                      # noqa: BLE001
+        return None
+    if not raw or "SLDWORKS" not in raw.upper():
+        # tasklist prints an INFO line when a filter matches nothing; that is a real answer.
+        return [] if raw else None
+    import csv, io
+    out: List[Dict[str, str]] = []
+    try:
+        for row in csv.reader(io.StringIO(raw)):
+            # Image Name, PID, Session Name, Session#, Mem, Status, User Name, ...
+            if len(row) < 7 or not row[0].upper().startswith("SLDWORKS"):
+                continue
+            out.append({"pid": row[1].strip(), "session": row[3].strip(),
+                        "user": (row[6].split("\\")[-1] or "").strip()})
+    except Exception:                                      # noqa: BLE001
+        return None
+    return out
+
+
+def attach_failure_reason(procs: Optional[List[Dict[str, str]]],
+                          me: Dict[str, Any],
+                          elevated: Optional[bool]) -> str:
+    """One sentence naming the actual cause, and what to do about it.
+
+    Ordered by what the reader can act on soonest, and every branch ends in an instruction.
+    A diagnosis with no next step is the message this replaces.
+    """
+    if elevated:
+        # Checked first: an elevated runner cannot see an ordinary SolidWorks however plainly
+        # it is on screen, and no amount of process detail changes the answer.
+        return ("This runner is ELEVATED and SolidWorks almost certainly is not: an "
+                "administrator process cannot see an ordinary one in the Running Object "
+                "Table. Start the runner from a NORMAL PowerShell, or install it as the "
+                "scheduled task (tools\\start\\install-runner-task.ps1), which runs "
+                "unelevated in your own desktop session.")
+    if procs is None:
+        return ("SolidWorks is either not running, or is running in a different logon session "
+                "from this runner, and this process could not query the machine to find out "
+                "which.")
+    if not procs:
+        return ("SLDWORKS.exe is NOT RUNNING on this machine — nothing was there to attach "
+                "to. Open SolidWorks in this desktop session and re-run.")
+
+    _my_session = me.get("session")
+    _my_user = str(me.get("user") or "")
+    _same = [p for p in procs
+             if str(p.get("session") or "") == str(_my_session)
+             and p.get("user", "").lower() == _my_user.lower()]
+    if _same:
+        # Same user, same session, unelevated runner, and still invisible. The only remaining
+        # ROT partition is integrity level, so SolidWorks is the elevated one.
+        return (f"SolidWorks IS running as {_my_user} in your own session "
+                f"(session {_my_session}, PID {_same[0].get('pid')}) and is still not visible, "
+                f"which leaves one cause: it was started AS ADMINISTRATOR and this runner was "
+                f"not. Close SolidWorks and reopen it normally — not 'Run as administrator'.")
+    _where = "; ".join(f"PID {p.get('pid')} as {p.get('user') or '?'} in session "
+                       f"{p.get('session') or '?'}" for p in procs[:3])
+    return (f"SolidWorks IS running on this machine but not where this runner can reach it: "
+            f"{_where}. This runner is {_my_user or '?'} in session {_my_session}. The Running "
+            f"Object Table is per logon session, so these cannot see each other. Start the "
+            f"runner in the session that owns SolidWorks — the scheduled task from "
+            f"tools\\start\\install-runner-task.ps1 does this; a Windows service or NSSM "
+            f"never can, because session 0 has no desktop.")
+
+
 def _is_com_fault(exc: Exception) -> bool:
     args = getattr(exc, "args", ()) or ()
     code = args[0] if args and isinstance(args[0], int) else None
@@ -365,18 +471,11 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
             _elevated = bool(ctypes.windll.shell32.IsUserAnAdmin())
         except Exception:                                  # noqa: BLE001
             pass
-        _why = ("This runner is ELEVATED and SolidWorks almost certainly is not: an "
-                "administrator process cannot see an ordinary one in the Running Object "
-                "Table. Start the runner from a NORMAL PowerShell, or install it as the "
-                "scheduled task (tools\\start\\install-runner-task.ps1), which runs "
-                "unelevated in your own desktop session."
-                if _elevated else
-                "SolidWorks is either not running, or is running in a different logon "
-                "session from this runner. Both look identical from here.")
         raise RuntimeError(
             "No SolidWorks seat could be attached to, so there is nothing to convert with. "
             "This does not mean SolidWorks is closed — it means this process could not find "
-            f"it in the Running Object Table it is allowed to read. {_why} "
+            f"it in the Running Object Table it is allowed to read. "
+            f"{attach_failure_reason(solidworks_processes(), this_process(), _elevated)} "
             f"({exc})")
     errs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     warns = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
