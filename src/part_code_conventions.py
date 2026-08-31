@@ -65,8 +65,28 @@ _MIRROR_PREFIX = re.compile(r"^MIRROR[\s_-]*(?=[\d-])", re.IGNORECASE)
 #
 # HAND alone is deliberately not accepted: "LEFT-HAND" and "-RH" are descriptions of a
 # part, not markers of a derivation, and admitting them would collapse two real parts.
+#
+# "-H" IS THE THIRD HOUSE STYLE AND IT IS NOT THE SAME AS "-RH". 12552's folder holds
+# 12552-01-03M.SLDPRT and 12552-01-03M-H.SLDPRT, and the GA lists 12552-01-03M at quantity 2.
+# James: "Folder has 12552-01-03M-H.SLDPRT — handed pair, not a second identical panel. PDF
+# has one 03M sheet." Unrecognised, "-H" is an unrelated part: it inherits no geometry from
+# the hand that WAS measured, it is counted as a drawing nobody supplied, and the pair is
+# priced as two separate purchases instead of one.
+#
+# THE DISTINCTION THE ORIGINAL RULE WAS PROTECTING STILL HOLDS. "-LH" and "-RH" name the two
+# hands of a symmetric pair, NEITHER of which is the base — collapsing them onto each other
+# would merge two real parts, which is why they stay out. "-H" names one hand OF a base that
+# is separately drawn and separately numbered, which is the same shape as "MIR" and "HANDED".
+#
+# AND THE CALLERS GUARD IT. Every consumer of mirror_base — handed_pairs, the mirror-fill
+# pass, and the pack-completeness check — requires the BASE to be present in the same job
+# before doing anything. So a part legitimately ending in "-H" is untouched unless the job
+# also contains the identical code without it, which at SDI is the pair this exists to find.
 _MIRROR_SUFFIX = re.compile(
-    r"(?:[\s_-]+|(?<=\d))(?:MIR(?:ROR(?:ED)?|ORED|OR)?|HANDED)$",
+    r"(?:"
+    r"(?:[\s_-]+|(?<=\d))(?:MIR(?:ROR(?:ED)?|ORED|OR)?|HANDED)"
+    r"|[\s_-]H"
+    r")$",
     re.IGNORECASE)
 
 
