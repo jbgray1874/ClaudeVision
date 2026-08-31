@@ -21,6 +21,16 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+# THE SAME ANSWER THE REST OF THE ENGINE USES. bought_in_policy is the union of every
+# bought-in rule in the codebase, and FABRICATION_OPS is its own list of what a purchased
+# component can never incur — handling and assembly deliberately excluded, because we do
+# receive and fit bought-in parts. A local copy of either would be free to drift from the
+# gates upstream of this one, which is exactly how a part gets refused a blank in one pass
+# and given a laser in the next.
+from bought_in_policy import (FABRICATION_OPS as _FABRICATION_OPS,
+                              bought_in_reason as _bought_in_reason,
+                              is_bought_in as _is_bought_in)
+
 SOURCE_NAME = "llm_full_extract"
 _RE_SECTION = re.compile(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)")
 
@@ -448,6 +458,35 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
                     f"{_ruled}. The measurement stands. If the part does fold, the flat "
                     f"pattern is not showing its bend lines (commonly a block export) — "
                     f"check the DXF before accepting the route")
+                continue
+            # WE DO NOT LASER SOMETHING WE BUY.
+            #
+            # The rule above refuses a route a MEASUREMENT contradicts. This refuses one the
+            # part's own identity contradicts, and it is the same argument: the model is
+            # reading a drawing, and a drawing shows a purchased component sitting in the
+            # assembly it was bought for. Nothing about that picture says SDI cuts it.
+            #
+            # 12552-01-01X SURVIVED TWO EARLIER GUARDS TO GET HERE. A 62012RS ball bearing,
+            # 12x32x10mm. The assembly-page guard would not let it take ops from the shared
+            # sheet; the borrow refusal would not give it another part's blank. This pass
+            # then added laser_cutting to it anyway, stamped `inference`, and the workbook
+            # billed 269 seconds of laser on 8 bearings. Two gates held and the route came in
+            # through the third door.
+            #
+            # FABRICATION_OPS, not every operation. Handling and assembly are deliberately
+            # not in that set: we do receive and fit bought-in parts and that bench time is
+            # real work. Only the ops a purchased component can never incur are refused.
+            #
+            # Flagged, never silent — if the part is genuinely something we make and the
+            # numbering says otherwise, the drawing office needs to hear it, and the estimator
+            # needs to know a route was declined rather than never seen.
+            if op in _FABRICATION_OPS and _is_bought_in(part):
+                part.setdefault("review_flags", []).append(
+                    f"operation '{op}' was read from the drawing pack but NOT applied to "
+                    f"{part.get('part_number') or 'this line'}: it is a bought-in "
+                    f"({_bought_in_reason(part) or 'purchased'}), and we do not "
+                    f"{op.replace('_', ' ')} something we buy. If SDI does make this part, "
+                    f"its part number or its page role is wrong.")
                 continue
             # THE NAME IS NOT THE DECISION.
             #
