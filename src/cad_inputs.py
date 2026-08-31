@@ -451,7 +451,33 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
     pythoncom.CoInitialize()
     try:
         sw = win32com.client.GetActiveObject("SldWorks.Application")
-    except Exception as exc:                               # noqa: BLE001
+    except Exception as _rot_exc:                          # noqa: BLE001
+        # ── THE ROT IS ONE OF TWO REGISTRATIONS, AND ONLY ONE OF THEM IS BROKEN ──────
+        #
+        # GetActiveObject looks in the Running Object Table. Dispatch goes through the CLASS
+        # registration (CLSID / LocalServer32). A SolidWorks REINSTALL can leave the second
+        # intact and the first not — which is exactly what SDI's machine did: every report
+        # since 30 August carries -2147221021 from this line, while the engine's own
+        # sw_native_analyse.py has gone on working, because it uses Dispatch.
+        #
+        # SO THE POLICY IS KEPT AND THE LOOKUP IS NOT. "Attach, never launch" is right: a
+        # Dispatch with nothing running STARTS SolidWorks — hidden, licence-prompt-prone, a
+        # second seat competing with the estimate for one desktop. That is a real hazard and
+        # this does not accept it. It asks Windows whether SLDWORKS.exe is ALREADY RUNNING
+        # first, and only then lets Dispatch attach to it. With a process already up,
+        # CoCreateInstance binds to the running server rather than starting one.
+        #
+        # A seat that is genuinely closed still comes back as the sentence it always did.
+        sw = None
+        if solidworks_processes():
+            try:
+                sw = win32com.client.Dispatch("SldWorks.Application")
+                print("   [solidworks] the Running Object Table lookup failed but SolidWorks "
+                      "is running and answered on the class registration — attached. The ROT "
+                      "registration on this machine is broken (a reinstall usually does it); "
+                      "the estimate is unaffected.", flush=True)
+            except Exception:                              # noqa: BLE001
+                sw = None
         # WHAT WE KNOW IS THAT WE CANNOT SEE IT, WHICH IS NOT THE SAME AS IT NOT BEING THERE.
         #
         # This said "SolidWorks is not running on this machine" and sent somebody to start an
@@ -465,18 +491,20 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
         # not in the table I am allowed to read. Reporting it as a fact about the machine is
         # the same defect this codebase keeps naming — an inference printed as an observation
         # — and here it cost real time on a machine that had a licensed seat open all along.
-        _elevated = None
-        try:
-            import ctypes
-            _elevated = bool(ctypes.windll.shell32.IsUserAnAdmin())
-        except Exception:                                  # noqa: BLE001
-            pass
-        raise RuntimeError(
-            "No SolidWorks seat could be attached to, so there is nothing to convert with. "
-            "This does not mean SolidWorks is closed — it means this process could not find "
-            f"it in the Running Object Table it is allowed to read. "
-            f"{attach_failure_reason(solidworks_processes(), this_process(), _elevated)} "
-            f"({exc})")
+        if sw is None:
+            _elevated = None
+            try:
+                import ctypes
+                _elevated = bool(ctypes.windll.shell32.IsUserAnAdmin())
+            except Exception:                              # noqa: BLE001
+                pass
+            raise RuntimeError(
+                "No SolidWorks seat could be attached to, so there is nothing to convert "
+                "with. This does not mean SolidWorks is closed — it means this process could "
+                "not find it in the Running Object Table it is allowed to read, and the class "
+                "registration did not answer either. "
+                f"{attach_failure_reason(solidworks_processes(), this_process(), _elevated)} "
+                f"({_rot_exc})")
     errs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     warns = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     doc = sw.OpenDoc6(str(dwg), SW_DRW, OPEN_SILENT_READONLY, "", errs, warns)
