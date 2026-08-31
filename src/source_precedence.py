@@ -258,6 +258,23 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
     "compiler_default":       "an engine default",
+    # A NAME FOR THE THING THAT WAS CALLED NOTHING.
+    #
+    # James, reading section 12 of the 10575-02 report — forty-odd operations, every one of them
+    # "an unrecorded source", rank 0: "what is an unrecorded source?"
+    #
+    # They were operations recognised in the drawing's own note text. route_compiler's adapter
+    # fell back to "unknown" for the textual_operations field, so a keyword recogniser reading
+    # WELD AND DRESS off a note produced a claim indistinguishable from one nobody could account
+    # for. The drawing said it; the record did not say the drawing said it.
+    #
+    # RANK IS DELIBERATELY UNCHANGED AT 0 (this key is absent from SOURCE_RANK, which ranks
+    # anything it does not hold at 0). Naming a source is a reporting change; ranking it is a
+    # costing change — it decides which claim wins an arbitration and therefore what the job is
+    # priced at. Those two must not travel together, least of all in the week before this engine
+    # is walked through with the estimators. Whether a recognised note should outrank a bare
+    # inference is a real question and it needs a parity run, not a commit message.
+    "drawing_notes":          "a note on the drawing",
     "unknown":                "an unrecorded source",
 }
 

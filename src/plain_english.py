@@ -225,6 +225,9 @@ SOURCE_NOTES: Dict[str, str] = {
     "SDI's knowledge base": "A value SDI has previously confirmed for this part or material.",
     "an SDI override rule": "A pattern rule in the engine set this — not an observation of this "
                             "drawing.",
+    "a note on the drawing": "Found in the drawing's own note text by a keyword recogniser — "
+                             "WELD AND DRESS, TAP M4, FOLD. The drawing says it; a recogniser "
+                             "rather than a person read it.",
     "an unrecorded source": "The value is being used and nothing stamped where it came from. "
                             "That is a gap in the engine's record-keeping, not evidence the "
                             "value is wrong — but it cannot be traced back to a drawing.",
@@ -234,7 +237,7 @@ SOURCE_NOTES: Dict[str, str] = {
 }
 
 
-def why_no_price(code: str, part_is_fabricated: bool = False) -> Tuple[str, str]:
+def why_no_price(code: str, part_is_fabricated: bool = False) -> Tuple[str, str, bool]:
     """The blank-price reasons, which needed the most work of anything here.
 
     WHAT THE REPORT SAID, for 10575-01-001 — a folded mild-steel bracket SDI makes itself:
@@ -249,6 +252,12 @@ def why_no_price(code: str, part_is_fabricated: bool = False) -> Tuple[str, str]
 
     So the reason a fabricated line is blank is stated as what it is: the engine could not
     build a cost, not that a supplier could not be found.
+
+    THE THIRD RETURN VALUE SAYS TO DROP THE RECORDED DETAIL. The pricing writer stamps its own
+    sentence beside the category, and on a fabricated line that sentence is the misleading one —
+    "no catalogue row, price file or quote was found for this item", printed under an
+    explanation that has just said the catalogue was never the place to look. Correcting the
+    heading and leaving the original underneath argues with itself in one cell.
     """
     c = str(code or "").strip()
     if c == "no_price_source" and part_is_fabricated:
@@ -256,11 +265,12 @@ def why_no_price(code: str, part_is_fabricated: bool = False) -> Tuple[str, str]
                 "This is a part SDI makes, so it has no catalogue price and never will — its "
                 "cost is material plus labour. One of those could not be worked out, which "
                 "almost always means the thickness, the blank size or a labour rate is "
-                "missing. The specific gap is listed against this part elsewhere in this "
-                "report.")
+                "missing. The specific gap is listed against this part in section 5.",
+                True)
     if c == "no_price_source":
         return ("Nothing we can query holds a price for it",
                 "This is a bought-in item and no catalogue row, price file or quote was found "
                 "for it. Either the part code does not match what SDILive holds, or nobody has "
-                "priced it yet.")
-    return (label(c), explain(c))
+                "priced it yet.",
+                True)
+    return (label(c), explain(c), False)

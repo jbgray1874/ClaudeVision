@@ -1929,8 +1929,23 @@ def compile_job_route(
         sequences = part.get("operation_sequence") or {}
 
         seen: Set[str] = set()
+        # WHERE "an unrecorded source" CAME FROM, and why only one of these three changes.
+        #
+        # textual_operations is populated by infer_operations() over the drawing's cleaned note
+        # text — a keyword recogniser reading WELD AND DRESS, TAP M4, FOLD off the sheet's own
+        # words. That is a reading of the drawing. Falling back to "unknown" made it
+        # indistinguishable from a claim nobody could account for, and section 12 printed forty
+        # of them: "an unrecorded source", rank 0, for operations the drawing states.
+        #
+        # `operations` keeps "unknown" because it is written by several passes with different
+        # provenance and this adapter cannot tell which wrote a given entry. Naming it would be
+        # a guess, and a wrong source name is worse than an honest absence — the whole point of
+        # the column is that it can be relied on.
+        #
+        # drawing_notes is absent from SOURCE_RANK and therefore still ranks 0, so nothing
+        # arbitrates differently. This names the source; it does not promote it.
         for field_name, fallback_source in (
-            ("textual_operations", "unknown"),
+            ("textual_operations", "drawing_notes"),
             ("operations", "unknown"),
             ("inferred_operations", "inference"),
         ):

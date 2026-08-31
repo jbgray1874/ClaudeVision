@@ -188,9 +188,36 @@ def test_a_reasoned_datum_is_marked_and_a_measured_one_is_not():
 
 def test_an_unstamped_field_says_so_rather_than_reading_as_measured():
     """A blank in a provenance column reads as 'fine'. It means nobody recorded who
-    decided, which is not the same fact at all."""
+    decided, which is not the same fact at all.
+
+    THE WORD CHANGED FROM "not stamped" TO "not recorded" and the reason is James's, about
+    this table among others: "it's all a bit like shrouded in codes." Stamping is what this
+    engine calls writing a source onto a datum; it is not what anybody else calls it, and a
+    reader who has to work out what an unstamped field is has been given a puzzle instead of
+    a finding."""
     html = jrh._bom_provenance_section(_psummary([_part()]))
-    assert "not stamped" in html
+    assert "not recorded" in html
+    assert "not stamped" not in html, "the internal word for it is back on the page"
+
+
+def test_a_field_a_bought_in_part_cannot_have_is_not_reported_as_missing():
+    """A BOUGHT-IN BOLT HAS NO GAUGE AND NO BLANK, and never will.
+
+    The section reported "22 part(s) carry a field with no recorded source at all" on a
+    25-part job, most of it the Blank size column against BI-BOLT, PALLET1, STD PART and the
+    wood screws. Nobody is ever going to record a blank size for a bolt, so counting them
+    buried the parts where the gap is real — the folded steel whose blank genuinely was never
+    measured — under four times as many rows where the question does not apply.
+
+    This is section 11's error in another column: asking a bought-in question of a fabricated
+    line, or here a sheet-metal question of a purchased one."""
+    bolt = _part("BI-BOLT", material_source="bom_tree", quantity_source="bom_tree")
+    bolt.pop("thickness_source", None)
+    html = jrh._bom_provenance_section(_psummary([bolt]))
+    assert "not applicable" in html, "a bought-in part is asked for a gauge it cannot have"
+    # and it is not counted as a gap in the engine's record-keeping
+    assert "On <b>0 part(s)</b>" in html or "Every costing datum" in html, (
+        "a field the part cannot have is still being tallied as an unrecorded source")
 
 
 def test_the_weakest_provenance_is_listed_first():

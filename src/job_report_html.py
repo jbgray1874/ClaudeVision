@@ -288,7 +288,20 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     stray_space = [n for n in all_names if re.search(r"\s\.(dxf|pdf)$", n, re.I) or "  " in n]
 
     # part-number format variety
+    #
+    # THE COUNT ON ITS OWN WAS NOT A FINDING. The report said "Inconsistent part-number formats
+    # — 4 distinct patterns" and James asked the only question available: "what are the mixed
+    # conventions? If it's mixed conventions from the drawings, this should be stated clearly.
+    # Does the report state which drawings have mixed convention issues?"
+    #
+    # It did not, and worse, it could not, because a shape count is not a list of anything. So
+    # the part numbers behind each shape are kept. Reading them is what shows that on 10575-02
+    # the four patterns are 10575-01-001 (SDI fabricated), BI-BOLT (bought-in prefix),
+    # FIXING2104 (supplier code) and STD PART (a category, not a number) — three working
+    # conventions that TELL an estimator what kind of line each is, and one entry that is not a
+    # part number at all. Only the last is worth anyone's time.
     pn_patterns = set()
+    pn_examples: Dict[str, List[str]] = {}
     for p in parts:
         pn = str(p.get("part_number") or "")
         if not pn:
@@ -296,6 +309,9 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
         # crude signature: letters/digits/dashes shape
         sig = re.sub(r"\d+", "N", re.sub(r"[A-Za-z]+", "L", pn))
         pn_patterns.add(sig)
+        pn_examples.setdefault(sig, [])
+        if pn not in pn_examples[sig]:
+            pn_examples[sig].append(pn)
 
     # contaminated / low-confidence fields from manual_review_items, BY SEVERITY
     # (distinguish genuine errors from low-confidence dimension-read warnings/info)
@@ -369,6 +385,7 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
         "stray_space_files": stray_space,
         "pn_pattern_count": len(pn_patterns),
         "pn_patterns": sorted(pn_patterns),
+        "pn_examples": {k: v[:6] for k, v in pn_examples.items()},
         "review_errors": sev_tally["error"],
         "review_warnings": sev_tally["warning"],
         "review_info": sev_tally["info"],
@@ -1004,8 +1021,28 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
         wk += (f'<tr><td><b>Stray spaces in filenames</b></td><td><code>{ex}</code></td>'
                f'<td>Spaces (esp. before the extension) complicate file matching; tolerated but fragile.</td></tr>')
     if dq.get("pn_pattern_count", 0) > 2:
-        wk += (f'<tr><td><b>Inconsistent part-number formats</b></td><td>{dq["pn_pattern_count"]} distinct patterns</td>'
-               f'<td>Mixed conventions make it harder to tell fabricated parts from sub-assemblies and bought-ins.</td></tr>')
+        # NAMED, AND NOT OVERSTATED. This row used to say "Inconsistent part-number formats — 4
+        # distinct patterns" and nothing else, which is a count where a list was needed and an
+        # accusation where none was earned. Several numbering conventions in one pack is usually
+        # the pack WORKING: 10575-01-001 is an SDI fabricated part, BI-BOLT is flagged bought-in
+        # by its prefix, FIXING2104 is a supplier's own code. An estimator reads the shape and
+        # knows what kind of line it is.
+        #
+        # What is worth flagging is an entry that is not a part number at all — "STD PART", a
+        # description sitting in the number column — because that is the one a lookup fails on.
+        # So the families are shown with examples, and the finding is stated as something to
+        # confirm rather than something wrong.
+        _ex = dq.get("pn_examples") or {}
+        _fam = " &nbsp;·&nbsp; ".join(
+            f'<code>{_esc(v[0])}</code>' + (f' <span class="t-muted">(+{len(v)-1})</span>'
+                                            if len(v) > 1 else "")
+            for _k, v in sorted(_ex.items(), key=lambda kv: -len(kv[1])) if v)
+        wk += (f'<tr><td><b>Several part-number conventions</b></td><td>{_fam}</td>'
+               f'<td>{dq["pn_pattern_count"]} shapes across the pack. This is normal and '
+               f'usually useful &mdash; the shape is how a reader tells an SDI fabricated part '
+               f'from a bought-in one from a supplier code. Worth a glance for the opposite '
+               f'case: an entry that is a description rather than a number will not match '
+               f'anything in SDILive.</td></tr>')
     # review items — honest severity, not a lump "contaminated" count
     if dq.get("review_total"):
         errs = dq.get("review_errors", 0)
@@ -1468,24 +1505,49 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
                 'reached the costed pool, so no material provenance can be shown &mdash; '
                 'this is not a job whose provenance is clean.</div>')
 
-    _FIELDS = (("normalized_material", "Material"),
-               ("normalized_thickness_mm", "Thickness"),
-               ("quantity", "Quantity"),
-               ("blank_length_mm", "Blank size"))
+    # ── A FIELD THAT DOES NOT APPLY IS NOT A FIELD THAT IS MISSING ──────────────────
+    #
+    # The section reported "22 part(s) carry a field with no recorded source at all" on a
+    # 25-part job, and the Blank size column was a wall of "not stamped" — including on
+    # BI-BOLT, PALLET1, STD PART and the wood screws. A bought-in bolt has no blank size and
+    # no gauge; nobody will ever stamp one, because there is nothing there to stamp.
+    #
+    # Counting those as gaps did two things, both bad. It buried the real gaps — the folded
+    # steel parts whose blank genuinely was never measured — in a list four times too long.
+    # And it made the tally read as an indictment of the engine's record-keeping when most of
+    # it was the table asking sheet-metal questions about a screw.
+    #
+    # This is the same error section 11 made asking for a catalogue price on a part SDI makes.
+    # Both come from applying one vocabulary to two kinds of line.
+    try:
+        from bought_in_policy import is_bought_in as _bi
+    except ImportError:
+        def _bi(p):
+            return str(p.get("part_number") or "").upper().startswith("BI-")
+
+    _FIELDS = (("normalized_material", "Material", False),
+               ("normalized_thickness_mm", "Thickness", True),
+               ("quantity", "Quantity", False),
+               ("blank_length_mm", "Blank size", True))
     rows, reasoned_n, unstamped_n = [], 0, 0
     for p in parts:
         if not isinstance(p, dict):
             continue
+        _bought = _bi(p)
         cells, worst, any_reasoned, any_missing = [], 999, False, False
-        for field, _label in _FIELDS:
+        for field, _label, _fab_only in _FIELDS:
             src = ""
             try:
                 src = str(source_of(p, field) or "")
             except Exception:
                 src = ""
             if not src:
-                cells.append('<td class="mini"><i>not stamped</i></td>')
-                any_missing = True
+                if _fab_only and _bought:
+                    cells.append('<td class="mini t-muted">not applicable &mdash; '
+                                 'bought in</td>')
+                else:
+                    cells.append('<td class="mini"><i>not recorded</i></td>')
+                    any_missing = True
                 continue
             measured = was_measured(src)
             any_reasoned = any_reasoned or not measured
@@ -1501,11 +1563,13 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
     if not rows:
         return ""
     rows.sort(key=lambda r: (r[0], r[1]))          # weakest provenance first
-    _heads = "".join(f"<th>{h}</th>" for _f, h in _FIELDS)
+    _heads = "".join(f"<th>{h}</th>" for _f, h, _o in _FIELDS)
     _note = (f'<p class="mini"><b>{reasoned_n} of {len(rows)} part(s)</b> rest on at least one '
              f'reasoned value (&#9889;) rather than a measurement, and are listed first. '
-             f'{unstamped_n} part(s) carry a field with no recorded source at all -- an '
-             f'unstamped datum is not a measured one.</p>' if (reasoned_n or unstamped_n)
+             f'On <b>{unstamped_n} part(s)</b> a field that DOES apply has no recorded source '
+             f'&mdash; an unstamped datum is not a measured one. Fields a part cannot have, '
+             f'such as a gauge on a bought-in bolt, are marked not applicable and are not '
+             f'counted here.</p>' if (reasoned_n or unstamped_n)
              else '<p class="mini">Every costing datum on every part was measured and '
                   'carries a recorded source.</p>')
     return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
@@ -1513,7 +1577,35 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
             '&#9889; marks a value that was reasoned rather than measured: it can be right, '
             'but it cannot be held against the drawing.</p>' + _note +
             f'<table><thead><tr><th>Part</th>{_heads}</tr></thead><tbody>'
-            + "".join(r[2] for r in rows) + '</tbody></table>')
+            + "".join(r[2] for r in rows) + '</tbody></table>'
+            + _source_legend(rows_html="".join(r[2] for r in rows)))
+
+
+def _source_legend(rows_html: str) -> str:
+    """WHAT EACH SOURCE NAME ACTUALLY MEANS, under the table that uses it.
+
+    James: "it's all a bit like shrouded in codes. it's difficult to understand."
+
+    The names in this table are already plain English — "the drawing", "engine inference",
+    "Grok (xAI)". Plain is not the same as explanatory: "the drawing" does not tell a reader
+    whether it means a dimension somebody typed or a number a model read off a picture of the
+    page, and that difference is the whole reason the column exists.
+
+    Only the sources actually used on this job are listed. A legend covering sources that did
+    not appear is a second thing to read past.
+    """
+    try:
+        from plain_english import SOURCE_NOTES
+    except ImportError:
+        return ""
+    used = [(name, note) for name, note in SOURCE_NOTES.items() if f">{name}<" in rows_html
+            or f"; {name}<" in rows_html or f"&#9889; {name}<" in rows_html]
+    if not used:
+        return ""
+    body = "".join(f'<tr><td class="mini"><b>{_esc(n)}</b></td>'
+                   f'<td class="mini">{_esc(t)}</td></tr>' for n, t in used)
+    return ('<p class="mini"><b>What these sources are.</b></p>'
+            f'<table><tbody>{body}</tbody></table>')
 
 
 def _purchased_key_section(summary: Dict[str, Any]) -> str:
@@ -1636,6 +1728,15 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
                 f'recorded reason.</b> A blank in a price column reads as free. Nothing on '
                 f'this job says which of them are correctly nil, which are waiting on an '
                 f'estimator, and which are work this engine cannot charge for.</div>')
+    # WHICH LINES ARE PARTS SDI MAKES. The distinction decides whether "no catalogue price"
+    # is an explanation or a category error — see plain_english.why_no_price.
+    try:
+        from bought_in_policy import is_bought_in as _bi
+    except ImportError:
+        def _bi(p):
+            return str(p.get("part_number") or p.get("part_code") or "").upper().startswith("BI-")
+    from plain_english import why_no_price as _why
+
     _RANK = {"engine": 0, "estimator": 1, "nobody": 2}
     out, tally = [], {"engine": 0, "estimator": 0, "nobody": 0}
     for r in blanks:
@@ -1644,12 +1745,27 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         owner = reason.get("owner") or "engine"
         tally[owner] = tally.get(owner, 0) + 1
         code = str(r.get("part_number") or r.get("part_code") or r.get("description") or "?")
+        _fab = not _bi(r)
+        _cat, _why_txt, _supersedes = _why(str(reason.get("category") or ""),
+                                           part_is_fabricated=_fab)
+        if not _cat:
+            _cat, _why_txt = str(reason.get("category") or ""), str(reason.get("why") or "")
+        # ONE SENTENCE, NOT THE SAME ONE TWICE, AND NEVER THE CORRECTED ONE BESIDE THE WRONG
+        # ONE. The row read "no catalogue, price file or quote we can query holds this item —
+        # no catalogue row, price file or quote was found for this item": the category's gloss
+        # and the writer's detail saying the same thing in two vocabularies, which reads as two
+        # findings and answers neither. On a fabricated line the detail is worse than redundant
+        # — it is the sentence the heading has just corrected.
+        _detail = "" if _supersedes else str(reason.get("detail") or "")
+        _norm = lambda s: re.sub(r"[^a-z]", "", s.lower())
+        if _detail and (_norm(_detail) in _norm(_why_txt) or _norm(_why_txt) in _norm(_detail)):
+            _detail = ""
         out.append((_RANK.get(owner, 0), code,
                     f'<tr class="{"over" if reason.get("undercharging") else ""}">'
                     f'<td class="pn">{_esc(code[:40])}</td>'
-                    f'<td class="mini">{_esc(reason.get("category"))}</td>'
-                    f'<td class="mini">{_esc(reason.get("why"))}'
-                    + (f' &mdash; {_esc(reason.get("detail"))}' if reason.get("detail") else "")
+                    f'<td class="mini">{"SDI makes it" if _fab else "Bought in"}</td>'
+                    f'<td class="mini"><b>{_esc(_cat)}</b><br>{_esc(_why_txt)}'
+                    + (f' &mdash; {_esc(_detail)}' if _detail else "")
                     + f'</td><td class="mini">{_esc(owner)}</td></tr>'))
     out.sort(key=lambda t: (t[0], t[1]))
     gaps = tally.get("engine", 0)
@@ -1657,14 +1773,18 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
              f'has no way to price them</b>, not because anything is missing from the '
              f'drawings. That work will be done and invoiced. The job is under-charged by '
              f'that amount and no estimator input can fix it.</div>' if gaps else
-             '<p class="mini">No line is unpriced because of a gap in the engine.</p>')
+             '<p class="mini">Nothing here is blank because the engine lacks a way to price '
+             'it. Every line below is waiting on a person or is correctly nil.</p>')
     return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
             f'<p class="mini">{len(blanks)} blank line(s): <b>{tally.get("estimator", 0)}</b> '
             f'waiting on the estimator, <b>{tally.get("nobody", 0)}</b> correctly nil '
             f'(costed elsewhere, a duplicate article, or an assembly whose material is its '
             f'children\'s), <b>{gaps}</b> the engine cannot price. Worst first.</p>'
+            '<p class="mini">A part SDI makes has no catalogue price and never will &mdash; its '
+            'cost is material plus labour, so a blank on one of those lines means a gauge, a '
+            'blank size or a labour rate is missing, not that a supplier could not be found.</p>'
             + _lead +
-            '<table><thead><tr><th>Line</th><th>Kind of nothing</th><th>Why</th>'
+            '<table><thead><tr><th>Line</th><th>Make or buy</th><th>Why it is blank</th>'
             '<th>Who acts</th></tr></thead><tbody>'
             + "".join(r[2] for r in out) + '</tbody></table>')
 
@@ -1712,8 +1832,10 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
             f'<td class="pn"><a id="route-{_esc(d.get("target_id"))}" href="#bom-{_esc(d.get("target_id"))}">{_esc(d.get("target_id"))}</a></td>'
             f'<td>{_esc(str(d.get("operation") or "").replace("_", " "))}</td>'
             f'<td>{_esc(d.get("status"))}</td>'
-            f'<td>{_esc(d.get("decided_by") or d.get("source") or "not recorded")}</td>'
-            f'<td class="num">{_esc(d.get("source_rank"))}</td>'
+            f'<td>{_esc(d.get("decided_by") or d.get("source") or "not recorded")}<br>'
+            f'<span class="t-muted">{_esc(_source_note(d))}</span></td>'
+            f'<td class="num">{_esc(d.get("source_rank"))}<br>'
+            f'<span class="t-muted">{_esc(_rank_word(d.get("source_rank")))}</span></td>'
             f'<td>{("<b>resolved over " + _esc(_losing) + "</b> &#8226; by " + _esc(d.get("settled_by_key") or "rank")) if _contested else "—"}</td>'
             f'<td class="mini">{_esc(_ev[:70]) if _ev else "<i>nothing quoted</i>"}</td></tr>'))
     if not rows:
@@ -1725,13 +1847,62 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
              '<p class="mini">No decision was contested — every operation had a single '
              'strongest source and nothing at that rank disagreed with it.</p>')
     return ('<h2>12 &nbsp;How each operation was decided</h2>'
-            '<p class="mini">Every operation on this job, the source that decided it and the '
-            'rank that source carries. "Nothing quoted" means no claim carried the drawing\'s '
-            'own words, so the decision cannot be held against the sheet.</p>'
+            '<p class="mini">Every operation on this job and what decided it. <b>Rank</b> is '
+            'the engine\'s order of precedence between sources: a higher-ranked source may not '
+            'be overwritten by a lower one, and where two disagree at the same rank the '
+            'arbiter settles it and the row says so. <b>"Nothing quoted"</b> means no claim '
+            'carried the drawing\'s own words &mdash; the operation is on the route and there '
+            'is no sentence from the sheet to hold it against.</p>'
+            '<p class="mini">Names in this column are readers, not documents. '
+            '<b>A note on the drawing</b> means a keyword recogniser found the operation in the '
+            'sheet\'s own note text. <b>Engine inference</b> means nothing on the drawing said '
+            'it and the engine concluded it from the part &mdash; a folded part needs folding. '
+            '<b>An unrecorded source</b> means the operation is on the route and the engine '
+            'failed to stamp where it came from: a gap in record-keeping rather than evidence '
+            'the operation is wrong, but it cannot be traced back to a drawing.</p>'
             + _note +
             '<table><thead><tr><th>Part</th><th>Operation</th><th>Status</th>'
             '<th>Decided by</th><th>Rank</th><th>Contested</th><th>Drawing says</th>'
             '</tr></thead><tbody>' + "".join(r[2] for r in rows) + '</tbody></table>')
+
+
+def _rank_word(rank: Any) -> str:
+    """A NUMBER IN A COLUMN HEADED "Rank" IS NOT INFORMATION.
+
+    James saw a column of 0s and 20s beside "an unrecorded source" and "engine inference". The
+    number is meaningful inside the engine — it is the precedence that decides which claim
+    survives an arbitration — and it means nothing to a reader who has not seen the table it
+    indexes into. Both are printed: the figure for anyone comparing rows, and the word for
+    everyone else.
+    """
+    try:
+        r = int(rank)
+    except (TypeError, ValueError):
+        return ""
+    if r >= 90:
+        return "measured — the model itself"
+    if r >= 80:
+        return "measured — DXF geometry"
+    if r >= 70:
+        return "read off the drawing"
+    if r >= 60:
+        return "read off the BOM table"
+    if r >= 40:
+        return "a reading, not a measurement"
+    if r >= 20:
+        return "reasoned, not read"
+    return "fills gaps only — never overrides anything"
+
+
+def _source_note(decision: Dict[str, Any]) -> str:
+    """One line on what that source name means, from the one glossary."""
+    try:
+        from plain_english import SOURCE_NOTES
+    except ImportError:
+        return ""
+    name = str(decision.get("decided_by") or decision.get("source") or "")
+    note = SOURCE_NOTES.get(name, "")
+    return note[:130] if note else ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
