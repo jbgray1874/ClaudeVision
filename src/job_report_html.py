@@ -463,6 +463,41 @@ _CSS = """
   .chk li{padding:8px 0 8px 30px;position:relative;border-bottom:1px dashed var(--line);}
   .chk li:before{content:"\\25A1";position:absolute;left:4px;top:7px;font-size:17px;color:var(--steel);}
   .chk li:last-child{border-bottom:none;}
+
+  /* ── PRINTED, BECAUSE THIS IS THE DOCUMENT THAT GETS WALKED THROUGH ────────────────
+     There were no print rules at all, and the default handling of this page loses
+     content in three ways that a reader sees as "the bottom is missing":
+
+     COLOUR IS THE WARNING. Browsers drop background colours when printing unless told
+     otherwise, so every callout printed white on white: the red PRESENT, NOT READ rows
+     and the whole "what to check" apparatus came out looking like ordinary prose. The
+     alarming rows are the ones that vanish, which is the wrong way round.
+
+     A TABLE'S HEADINGS STOP AT PAGE ONE. Section 12 runs to forty-odd rows over three
+     sheets of paper, and without display:table-header-group the second and third pages
+     are unlabelled columns of part numbers. thead repeats now.
+
+     AND ROWS SPLIT DOWN THE MIDDLE. A row whose cells carry two lines of explanation
+     breaks across the fold, so half a finding sits at the bottom of one page and half
+     at the top of the next, and the two halves read as two different findings. */
+  @media print {
+    @page { margin: 14mm 12mm; }
+    html, body { background:#fff; }
+    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; font-size:11.5px; }
+    .wrap { max-width:none; padding:0; }
+    /* Repeat the column headings on every page the table spills onto. */
+    thead { display:table-header-group; }
+    tfoot { display:table-footer-group; }
+    /* Keep a finding whole, and keep a heading with what it introduces. */
+    tr, .callout, .rec, .chk li { page-break-inside:avoid; break-inside:avoid; }
+    h1, h2, h3 { page-break-after:avoid; break-after:avoid; }
+    table { page-break-inside:auto; font-size:10.5px; }
+    /* A grid container is the classic way for print to swallow the second column. */
+    .split { display:block; }
+    .split > * { margin-bottom:10px; }
+    /* Nothing on this page is interactive on paper; the underline just adds noise. */
+    a { color:inherit; text-decoration:none; }
+  }
   /* Scoped styles for the detailed parity tables reused from parity_report_html
      (kept under .parity-detail so their .num/.over/.pn/.pill do not collide). */
   .parity-detail h3{color:var(--navy);font-size:14px;margin:18px 0 4px;}
