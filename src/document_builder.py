@@ -1062,10 +1062,29 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # Assembly-only, zero-geometry parts: page text is for the whole weldment, not this line.
         # Skip Fix 1 (text inference) and Fix 2 (weld/P/C propagation) — keep ops/cost at zero.
         # Wire hooks still run (document may label wire pages as assembly).
+        #
+        # "bought_in" COUNTS AS ASSEMBLY-ONLY HERE, AND USED NOT TO. The test was
+        # `all(r == "assembly")`, so a line carrying BOTH roles fell straight past this guard
+        # into the text inference below — and the tag that disqualified it is the strongest
+        # statement in the record that the line needs no fabrication at all. The block a few
+        # lines down ADDS that tag itself, so the guard was undoing its own work: retag a
+        # commodity as bought_in on one pass, lose its protection on the next.
+        #
+        # 12552-01-01X is what that cost. A 62012RS ball bearing, page_roles
+        # ['assembly', 'bought_in'], geometry reliability 0.0 — nothing about it was ever
+        # measured — took the SHARED assembly page's text through infer_operations_from_text.
+        # The page describes a laser-cut mild steel drawer, so the bearing came out of the run
+        # with a laser_cutting op and no material, and was costed at GBP 1.84 x 8.
+        #
+        # Zero geometry means nothing on this line was measured; roles that are only assembly
+        # and/or bought_in mean every word of that page belongs to something else. Neither
+        # tag on its own is new here — the change is that holding both no longer forfeits the
+        # protection either one earns. A part with a "detail" role still takes this path, so
+        # 12552-01-02X (['detail','bought_in']) is untouched and keeps costing as it does now.
         if (
             geo_reliability == 0.0
             and page_roles
-            and all(r == "assembly" for r in page_roles)
+            and all(r in ("assembly", "bought_in") for r in page_roles)
             and not _is_wire_part
         ):
             # Before dropping this assembly-only, zero-geometry line: if it is a
