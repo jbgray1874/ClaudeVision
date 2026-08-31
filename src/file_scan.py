@@ -2503,6 +2503,34 @@ def _finalize_scan_summary(
                 print(f"   [solidworks] {_sw_job.meta.get('native_files_present')} native model "
                       f"file(s) are in this job folder but were NOT read: "
                       f"{_sw_job.meta.get('native_unread_reason')}", flush=True)
+            # ── SAY WHAT LAYER 0 DID, ON EVERY RUN, WHETHER OR NOT IT WORKED ─────────
+            #
+            # analyser_error was recorded on the job's meta and printed only inside the
+            # branch above — which needs models COUNTED and no records. Any other shape of
+            # failure (the analyser exits non-zero, cannot start, times out, writes
+            # somewhere unexpected) set the field and printed NOTHING. The run then looked
+            # exactly like a job with no models, on a pack where the models are the only
+            # measured geometry there is.
+            #
+            # That silence cost a day. James, after four runs: "solid works com api needs to
+            # run. you assured me it would." The engine had the answer each time and did not
+            # say it.
+            #
+            # So Layer 0 now reports its outcome unconditionally: attached and read, or the
+            # reason it did not. One line either way, and never nothing.
+            if _sw_job is not None:
+                _n = len(getattr(_sw_job, "parts", None) or {}) or None
+                if _sw_job.meta.get("analyser_error"):
+                    print(f"   [solidworks] the analyser did not produce an extract: "
+                          f"{_sw_job.meta['analyser_error']}", flush=True)
+                elif getattr(_sw_job, "found", False):
+                    print(f"   [solidworks] model extract APPLIED"
+                          + (f" — {_n} part record(s)" if _n else "")
+                          + f" from {_sw_job.meta.get('extract_path') or 'the job folder'}",
+                          flush=True)
+            elif _sw_flag not in {"0", "false", "no", "off"}:
+                print("   [solidworks] no extract was resolved for this job and no reason was "
+                      "recorded — the estimate is running on drawings alone.", flush=True)
             # ── AN EXTRACT FOR ANOTHER JOB IS WORSE THAN NO EXTRACT ──────────────
             # M&S 2085 was costed against 12120_sw_extract_v7.json — top assembly
             # 12120-01-GA, a different customer's job, bound through a persistent
