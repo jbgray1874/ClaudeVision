@@ -414,6 +414,12 @@ _CSS = """
     font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   .wrap{max-width:960px;margin:0 auto;padding:40px 28px 80px;}
   header.rpt{border-bottom:3px solid var(--navy);padding-bottom:22px;margin-bottom:8px;}
+  /* Letterhead. Both marks sit on one baseline whatever their aspect ratios, which is what
+     a fixed offset could never manage across a tall logo and a wide one. */
+  .marks{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    min-height:46px;margin-bottom:16px;}
+  .marks .m-sdi,.marks .m-cust{display:inline-flex;align-items:center;}
+  .marks img,.marks svg{max-height:46px;width:auto;display:block;}
   .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--steel);font-weight:700;}
   h1{font-size:27px;line-height:1.2;margin:8px 0 6px;color:var(--navy);font-weight:750;letter-spacing:-.01em;}
   .sub{color:var(--mut);font-size:14px;}
@@ -515,9 +521,38 @@ _CSS = """
 # Section renderers — each returns an HTML string, driven by the view-model
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _render_header(h: Dict[str, Any], has_parity: bool) -> str:
+def _render_header(h: Dict[str, Any], has_parity: bool,
+                   summary: Optional[Dict[str, Any]] = None) -> str:
+    """THE MEETING FILE GETS A LETTERHEAD.
+
+    James: "SDI + Dyson on the job report header. Meeting file."
+
+    The quote has carried both marks all along; this document — the one an estimator actually
+    works from, and the one being walked through with the team — opened with a text kicker and
+    nothing else. A page with no marks on it reads as a working note. This one is the argument.
+
+    Both marks come from the quote's loader, so a white logo gets the same dark plate here and
+    the two documents cannot disagree about what a customer's logo looks like. Failure is
+    silent by design: a missing folder or an unreadable file leaves the header exactly as it
+    was, because a report that will not render for want of a logo is a worse outcome than a
+    report without one.
+    """
     kind = "Estimate Review &amp; Parity" if has_parity else "Estimate Review"
+    _marks = ""
+    try:
+        from client_quote_html import (_derive_customer, _load_logo_markup,
+                                       _sdi_logo_markup)
+        _sdi = _sdi_logo_markup()
+        _cust_name = _derive_customer(summary or {}, str(h.get("stem") or ""))
+        _cust = _load_logo_markup(_cust_name) if _cust_name else ""
+        if _sdi or _cust:
+            _marks = (f'<div class="marks">'
+                      f'<span class="m-sdi">{_sdi}</span>'
+                      f'<span class="m-cust">{_cust}</span></div>')
+    except Exception:                                            # noqa: BLE001
+        _marks = ""
     return f"""<header class="rpt">
+  {_marks}
   <div class="kicker">SDI Intelligence &middot; {kind}</div>
   <h1>Job {_esc(h['job_no'])} — {_esc(h['name'])}</h1>
   <div class="sub">Automated estimate analysis &amp; drawing-quality audit</div>
@@ -2030,7 +2065,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
 
     title = f"Job {h['job_no']} {h['name']} — Estimate Review"
     body = "\n".join([
-        _render_header(h, has_parity),
+        _render_header(h, has_parity, summary),
         f'<p class="lead">This report presents the engine model\'s estimate for job {_esc(h["job_no"])}, '
         f'together with a detailed audit of the drawing pack: what the drawings gave us cleanly, where they '
         f'were inconsistent or hard to read, and how Design could make future jobs more reliable to estimate.</p>',

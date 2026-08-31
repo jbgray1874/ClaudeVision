@@ -29,7 +29,7 @@ Price note: shows the engine's computed UNIT COST as 'indicative' ex-VAT (JG's d
 hook (MARKUP_FACTOR) is provided but defaults to 1.0 (cost shown as-is). Change later for sell price.
 """
 from __future__ import annotations
-import argparse, base64, html, json, os, re
+import argparse, base64, html, json, os, re, zlib
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -285,27 +285,274 @@ def _size_svg(svg_markup: str, *, height_px: int, width_px: Optional[int] = None
     return svg_markup.replace(tag, tag2, 1)
 
 
+def _svg_is_light(svg_markup: str) -> Optional[bool]:
+    """True when an inline SVG's marks are all white or near-white.
+
+    A brand mark drawn in white is drawn for a dark ground. Dyson's is:
+    `.st0{fill:#FFFFFF;}` on every path.
+    """
+    fills = re.findall(r'(?:fill|stroke)\s*[:=]\s*"?\s*(#[0-9a-fA-F]{3,8}|white|none)',
+                       svg_markup, re.I)
+    seen = [f.lower() for f in fills if f.lower() != "none"]
+    if not seen:
+        return None
+    def _light(c: str) -> bool:
+        if c == "white":
+            return True
+        h = c.lstrip("#")
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        if len(h) < 6:
+            return False
+        try:
+            r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return False
+        return (0.299 * r + 0.587 * g + 0.114 * b) > 200
+    return all(_light(c) for c in seen)
+
+
+def _png_visible_luminance(path: str) -> Optional[float]:
+    """Mean luminance of a PNG's visible pixels, using only the standard library.
+
+    WHY NOT JUST PILLOW. Pillow is in requirements.txt and is the better tool, but a logo
+    rendering invisibly is not the kind of defect that should depend on whether one optional
+    package got installed on the box that happens to be running the job. The failure mode when
+    it is missing is silent and looks exactly like success — which is the same shape as the bug
+    this function exists to catch. So the common case is handled without it.
+
+    Scope is deliberately narrow: 8-bit, non-interlaced, colour types 0/2/3/4/6. That is every
+    logo any design agency has ever sent. Anything else returns None and Pillow answers, or
+    nothing does and the logo is left exactly as it renders today.
+
+    STOPS EARLY. A brand mark can be 3800x1600, and defiltering six million pixels in Python
+    per quote is not free. Scanlines must be defiltered in order — each depends on the one
+    above — but once enough visible pixels have been seen the answer will not change.
+    """
+    try:
+        raw = open(path, "rb").read()
+    except OSError:
+        return None
+    if raw[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, width, height, depth, ctype, interlace = 8, [], 0, 0, 0, 0, 0
+    palette, trns = b"", b""
+    while pos + 8 <= len(raw):
+        ln = int.from_bytes(raw[pos:pos + 4], "big")
+        tag = raw[pos + 4:pos + 8]
+        body = raw[pos + 8:pos + 8 + ln]
+        if tag == b"IHDR":
+            width, height = (int.from_bytes(body[0:4], "big"),
+                             int.from_bytes(body[4:8], "big"))
+            depth, ctype, interlace = body[8], body[9], body[12]
+        elif tag == b"PLTE":
+            palette = body
+        elif tag == b"tRNS":
+            trns = body
+        elif tag == b"IDAT":
+            idat.append(body)
+        elif tag == b"IEND":
+            break
+        pos += 12 + ln
+    if depth != 8 or interlace != 0 or not idat or not width or not height:
+        return None
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ctype)
+    if channels is None:
+        return None
+    try:
+        data = zlib.decompress(b"".join(idat))
+    except zlib.error:
+        return None
+
+    stride = width * channels
+    if height * (1 + stride) > len(data):
+        return None
+
+    # HOW MUCH DEFILTERING THIS WILL COST, BEFORE COMMITTING TO IT. Scanline filters are
+    # per-byte and sequential, so a large filtered image is genuinely slow in Python. Reading
+    # one byte per row to find out is not — and a palette export like this one turns out to use
+    # filter 0 on all 1600 rows, so there is nothing to undo at all.
+    _work = sum(stride for _y in range(height) if data[_y * (1 + stride)])
+    if _work > 6_000_000:
+        return None                      # let Pillow answer; this would take seconds
+
+    prev = bytearray(stride)
+    lum, seen, off = 0.0, 0, 0
+    # Sample across the row rather than every pixel: a wordmark is wide, and every few columns
+    # is a fair sample of it.
+    step = max(1, width // 400) * channels
+    # AND ACROSS THE WHOLE HEIGHT. The first version stopped as soon as it had enough visible
+    # pixels, which sounds like a saving and is a bias: a wordmark sits in the middle of its
+    # canvas, so the first fifty rows of a 1600-row logo are margin. On the real Dyson file
+    # that returned a mean luminance of 0.0 — pure black — for an image whose lettering is
+    # white. Rows are still defiltered in order because each depends on the one above; only
+    # the SAMPLING is spread.
+    row_step = max(1, height // 200)
+    for _y in range(height):
+        ftype = data[off]
+        line = bytearray(data[off + 1:off + 1 + stride])
+        off += 1 + stride
+        if ftype:
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                if ftype == 1:
+                    line[i] = (line[i] + a) & 0xFF
+                elif ftype == 2:
+                    line[i] = (line[i] + b) & 0xFF
+                elif ftype == 3:
+                    line[i] = (line[i] + ((a + b) >> 1)) & 0xFF
+                elif ftype == 4:
+                    c = prev[i - channels] if i >= channels else 0
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    line[i] = (line[i] + pred) & 0xFF
+                else:
+                    return None
+        prev = line
+        if _y % row_step:
+            continue
+        for i in range(0, stride, step):
+            if ctype == 6:
+                r, g, b, alpha = line[i], line[i + 1], line[i + 2], line[i + 3]
+            elif ctype == 2:
+                r, g, b, alpha = line[i], line[i + 1], line[i + 2], 255
+            elif ctype == 0:
+                r = g = b = line[i]
+                alpha = 255
+            elif ctype == 4:
+                r = g = b = line[i]
+                alpha = line[i + 1]
+            else:                                          # palette
+                idx = line[i]
+                if (idx + 1) * 3 > len(palette):
+                    continue
+                r, g, b = palette[idx * 3:idx * 3 + 3]
+                alpha = trns[idx] if idx < len(trns) else 255
+            if alpha > 128:
+                lum += 0.299 * r + 0.587 * g + 0.114 * b
+                seen += 1
+    return (lum / seen) if seen >= 20 else None
+
+
+def _raster_is_light(path: str) -> Optional[bool]:
+    """True when a raster logo's VISIBLE pixels are predominantly light.
+
+    ALPHA IS THE WHOLE POINT. A transparent PNG of a white wordmark is almost entirely
+    transparent, so averaging every pixel says "dark" and gets it exactly backwards —
+    reproducing the bug this is here to catch. Only pixels the reader will see are weighed.
+
+    None means "could not tell", which is a real answer and must not collapse to either
+    extreme: an unreadable file, a format neither reader handles, or an image with nothing
+    visible in it all leave the logo exactly as it renders today.
+    """
+    lum = _png_visible_luminance(path)
+    if lum is None:
+        try:
+            from PIL import Image                                   # type: ignore
+        except ImportError:
+            return None
+        try:
+            with Image.open(path) as im:
+                im = im.convert("RGBA")
+                im.thumbnail((160, 160))
+                tot, n = 0.0, 0
+                for r, g, b, a in im.getdata():
+                    if a > 128:
+                        tot += 0.299 * r + 0.587 * g + 0.114 * b
+                        n += 1
+            if n < 20:
+                return None
+            lum = tot / n
+        except Exception:                                           # noqa: BLE001
+            return None
+    return lum > 200
+
+
+# A white mark needs a ground to sit on. SDI's own ink, so the plate reads as part of the
+# letterhead rather than a box somebody drew round the customer's logo.
+_DARK_PLATE = ("display:inline-flex;align-items:center;background:#282928;"
+               "padding:10px 16px;border-radius:4px;")
+
+
 def _load_logo_markup(customer: str) -> str:
-    """Return inline SVG (bare) or <img> base64 for the customer logo, else empty (text fallback)."""
+    """Return inline SVG (bare) or <img> base64 for the customer logo, else empty (text fallback).
+
+    A WHITE LOGO ON A WHITE LETTERHEAD IS AN ABSENT LOGO.
+
+    "Dyson logo missing." It was not missing. `Dyson.svg` was on the page, correctly sized and
+    correctly placed, drawn entirely in `.st0{fill:#FFFFFF;}` — a white wordmark on a white
+    header. James renamed the file, then made a PNG, and the PNG is white on transparent too,
+    so the second attempt rendered exactly as invisibly as the first. Reading the delivered
+    quote and decoding its own base64 is what showed it: 3800x1600, valid PNG, white letters.
+
+    THE FILE WAS NEVER THE PROBLEM AND NEITHER WAS THE FORMAT. Dyson's brand mark IS white —
+    that is the correct mark, and their own guidelines put it on a dark ground. So the fix is
+    the ground, not the file: a logo whose visible marks are light gets SDI's ink behind it.
+
+    Done by measuring rather than by a per-customer rule, because the next white logo will
+    arrive without anyone remembering this, and a list of customers-whose-logo-is-white is a
+    list somebody has to maintain.
+    """
     key = _normalise_key(customer)
     if not key or not os.path.isdir(ASSETS_LOGOS):
         return ""
-    # match a file whose normalised stem == key
+    # ── ONE KEY, TWO FILES, AND WHICHEVER THE FILESYSTEM HANDED BACK FIRST ──────────
+    #
+    # This was `for fn in os.listdir(...)`, unsorted, returning the FIRST stem that matched.
+    # After the Dyson SVG was replaced with a PNG there were two files answering to the same
+    # customer — Dyson.svg and Dyson.png — and which one reached the quote depended on the
+    # order the directory happened to enumerate in. Same folder, same code, same customer,
+    # different logo between runs.
+    #
+    # That is a far better fit for what was actually observed than any single-cause theory:
+    # "Dyson logo missing", then a rename, then "dyson is there.....", then missing again. The
+    # SVG is drawn in white (`.st0{fill:#FFFFFF;}`) and vanishes on a white header; the PNG is
+    # a black plate with white lettering and shows. Two files, one key, a coin toss each run.
+    #
+    # NEWEST WINS, which is both deterministic and the right reading of intent: somebody who
+    # exports a new logo for a customer means the new one. Ties break on name so two files
+    # written in the same second still resolve the same way on every machine.
     try:
-        for fn in os.listdir(ASSETS_LOGOS):
+        _matches = [fn for fn in os.listdir(ASSETS_LOGOS)
+                    if _normalise_key(os.path.splitext(fn)[0]) == key]
+    except OSError:
+        return ""
+
+    def _newest_first(fn: str):
+        try:
+            return (-os.path.getmtime(os.path.join(ASSETS_LOGOS, fn)), fn)
+        except OSError:
+            return (0.0, fn)
+
+    _matches.sort(key=_newest_first)
+    if len(_matches) > 1:
+        # SAID, NOT SILENTLY RESOLVED. An ambiguity nobody is told about is one nobody tidies
+        # up, and this one presents as an intermittent rendering fault.
+        print(f"   [quote] {len(_matches)} logo files match customer {customer!r}: "
+              f"{', '.join(_matches)} — using {_matches[0]} (most recently written). "
+              f"Delete the others to make this unambiguous.", flush=True)
+    try:
+        for fn in _matches:
             stem, ext = os.path.splitext(fn)
-            if _normalise_key(stem) != key:
-                continue
             p = os.path.join(ASSETS_LOGOS, fn)
             if ext.lower() == ".svg":
                 svg = open(p, encoding="utf-8", errors="replace").read()
                 m = re.search(r"<svg\b.*?</svg>", svg, re.S | re.I)
-                inner = _size_svg(m.group(0) if m else svg, height_px=72)
-                return f'<span style="display:inline-flex;align-items:center;">{inner}</span>'
+                _markup = m.group(0) if m else svg
+                inner = _size_svg(_markup, height_px=72)
+                _style = (_DARK_PLATE if _svg_is_light(_markup)
+                          else "display:inline-flex;align-items:center;")
+                return f'<span style="{_style}">{inner}</span>'
             if ext.lower() in (".png", ".jpg", ".jpeg", ".gif"):
                 data = base64.b64encode(open(p, "rb").read()).decode("ascii")
                 mime = "image/png" if ext.lower() == ".png" else ("image/jpeg" if ext.lower() in (".jpg", ".jpeg") else "image/gif")
-                return f'<img src="data:{mime};base64,{data}" alt="{_esc(customer)}" style="max-height:72px;max-width:300px;object-fit:contain;">'
+                img = (f'<img src="data:{mime};base64,{data}" alt="{_esc(customer)}" '
+                       f'style="max-height:72px;max-width:300px;object-fit:contain;">')
+                if _raster_is_light(p):
+                    return f'<span style="{_DARK_PLATE}">{img}</span>'
+                return img
     except OSError:
         pass
     return ""
@@ -657,6 +904,29 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
 
     # When the drawing states no title we fall back to its number, and repeating it either
     # side of a dash reads as a fault rather than a shortage of information.
+    # ── A MEASUREMENT IS NOT AN OFFER, SO IT HAS NO OFFER WINDOW ────────────────────
+    #
+    # James: "Drop 'Valid 30 days' on LLM-only. A measurement isn't an offer window. Keep
+    # indicative."
+    #
+    # This is the one thing on the page that was a COMMITMENT rather than a figure. A price
+    # marked indicative is a number somebody will check; "valid for 30 days" is a promise with
+    # a date on it, and it was being made off a pack that one reader had seen. It is also the
+    # line that survives a document being forwarded, because it reads as boilerplate and
+    # boilerplate is what nobody re-reads.
+    #
+    # Everything else on the page stays identical to a full-run quote — that is the point of
+    # the comparison, and the reason the red banner went. This is not a warning added back in
+    # another form: it is the removal of a claim the run cannot support.
+    from run_readers import run_was_llm_only
+    _llm = run_was_llm_only(summary)
+    _validity_row = ("<tr><td>Basis</td><td>Indicative — for internal comparison</td></tr>"
+                     if _llm else
+                     f"<tr><td>Valid for</td><td>{VALID_DAYS} days</td></tr>")
+    _validity_foot = ("Prices ex VAT, GBP. Indicative."
+                      if _llm else
+                      f"Prices ex VAT, GBP. Valid {VALID_DAYS} days from quotation date.")
+
     _lead_open = (
         f"Manufactured to drawing {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}. "
         if str(product).strip() == str(job_number).strip() else
@@ -759,7 +1029,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
             <tr><td>Unit price (ex VAT · indicative)</td><td>{_money(unit_price)}</td></tr>
             <tr><td>Order quantity</td><td>{_num(qty) if qty else '—'}</td></tr>
             <tr><td>Quotation date</td><td>{_esc(today)}</td></tr>
-            <tr><td>Valid for</td><td>{VALID_DAYS} days</td></tr>
+            {_validity_row}
           </table>
         </div>
       </div>
@@ -788,7 +1058,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         matt.evans@wearesdi.com · 0116 274 7040 · wearesdi.com
       </div>
       <div class="terms" style="text-align:right;">
-        Prices ex VAT, GBP. Valid {VALID_DAYS} days from quotation date.<br>
+        {_validity_foot}<br>
         wearesdi is the trading name of SDI Displays Ltd.
       </div>
     </div>

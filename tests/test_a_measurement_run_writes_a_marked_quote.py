@@ -113,20 +113,55 @@ def test_the_page_carries_no_banner(summary_json, tmp_path, monkeypatch):
         assert gone not in html, f"the red block is back on the page: {gone!r}"
 
 
-def test_the_two_quotes_differ_only_where_the_numbers_do(summary_json, tmp_path, monkeypatch):
-    """THE INVARIANT THE RUN DEPENDS ON. An LLM-only quote and a full-run quote are laid side
-    by side to see what a one-reader BOM does to a customer-facing document. Anything on the
-    page that marks one of them makes that comparison read the difference this engine put
-    there rather than the difference the missing readers made.
+def test_the_measurement_run_makes_no_promise_it_cannot_keep(summary_json, tmp_path,
+                                                              monkeypatch):
+    """THE ONE THING ON THE PAGE THAT WAS A COMMITMENT RATHER THAN A FIGURE.
 
-    Same JSON both ways, so any difference at all is one the mode introduced."""
+    James: "Drop 'Valid 30 days' on LLM-only. A measurement isn't an offer window. Keep
+    indicative."
+
+    Every price on the quote already says *indicative* — a number somebody will check. "Valid
+    for 30 days" is different in kind: a promise, with a date on it, made off a pack one reader
+    has seen. It is also the line most likely to survive being forwarded, because it reads as
+    boilerplate and boilerplate is what nobody re-reads."""
+    llm = Path(_write(summary_json, tmp_path, monkeypatch, llm_only=True)).read_text(
+        encoding="utf-8")
+    assert "Valid 30 days" not in llm and "Valid for" not in llm
+    assert "30 days from quotation date" not in llm
+    assert "Indicative" in llm, "the basis is no longer stated at all"
+
+
+def test_the_difference_is_a_claim_REMOVED_never_a_warning_ADDED(summary_json, tmp_path,
+                                                                  monkeypatch):
+    """THE INVARIANT THE RUN DEPENDS ON, STATED PRECISELY.
+
+    An LLM-only quote and a full-run quote are laid side by side to see what a one-reader BOM
+    does to a customer-facing document. This file used to require them to render IDENTICALLY,
+    which was right about the danger and too blunt about the remedy: dropping an offer window
+    the run cannot support is not the same act as stamping a red banner across the page.
+
+    So the rule is directional. The measurement run may say LESS than the full run. It may not
+    say MORE — no banner, no disclaimer, no instruction to the reader about what to do with the
+    document. A warning added is the engine editorialising about the thing being measured; a
+    claim removed is the engine declining to assert what it does not know.
+
+    Same JSON both ways, so every difference is one the mode introduced."""
     llm = Path(_write(summary_json, tmp_path, monkeypatch, llm_only=True)).read_text(
         encoding="utf-8")
     full = Path(_write(summary_json, tmp_path, monkeypatch, llm_only=False)).read_text(
         encoding="utf-8")
-    assert llm == full, (
-        "the LLM-only quote renders differently from the full-run quote off identical input — "
-        "the comparison now measures the engine's own marking")
+
+    def _words(html: str) -> set:
+        text = re.sub(r"<[^>]+>", " ", re.sub(r"<style.*?</style>|data:[^\"')]+", " ", html,
+                                              flags=re.S))
+        return {w for w in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", text)}
+
+    added = _words(llm) - _words(full)
+    # "Indicative" and "comparison" are the removal's replacement wording, not new claims.
+    added -= {"Indicative", "comparison", "internal", "Basis"}
+    assert not added, (
+        f"the measurement quote says things the full quote does not: {sorted(added)} — a "
+        f"difference the engine introduced, which is what the comparison then measures")
 
 
 def test_nothing_reinstates_it_further_down_the_page(summary_json, tmp_path, monkeypatch):
