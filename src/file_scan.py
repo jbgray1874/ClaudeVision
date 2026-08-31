@@ -2528,6 +2528,18 @@ def _finalize_scan_summary(
                           + (f" — {_n} part record(s)" if _n else "")
                           + f" from {_sw_job.meta.get('extract_path') or 'the job folder'}",
                           flush=True)
+                else:
+                    # THE HOLE IN MY OWN "UNCONDITIONAL" REPORTING, one commit later.
+                    # A job object with no analyser error and found=False fell between the two
+                    # branches and printed nothing — the exact silence the previous commit was
+                    # written to end, reintroduced by writing `if error / elif found` and
+                    # calling it exhaustive. An extract that was carried, read, and then
+                    # matched no part on the job lands here, and it is the case worth hearing
+                    # about: the file is present and contributing nothing.
+                    print(f"   [solidworks] an extract was resolved but NOTHING WAS APPLIED "
+                          f"from it — {_sw_job.meta.get('extract_path') or 'no path recorded'}"
+                          f". The models did not match this job's part numbers, so the "
+                          f"estimate is running on drawings alone.", flush=True)
             elif _sw_flag not in {"0", "false", "no", "off"}:
                 print("   [solidworks] no extract was resolved for this job and no reason was "
                       "recorded — the estimate is running on drawings alone.", flush=True)
