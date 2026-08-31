@@ -515,15 +515,51 @@ def convert_dwgs(
     DWGs were not used.
     """
     folder = Path(folder)
-    dwgs = [p for p in sorted(folder.rglob("*"))
-            if p.is_file() and p.suffix.lower() in CONVERTIBLE and not _is_noise(p)]
+    _all_dwgs = [p for p in sorted(folder.rglob("*"))
+                 if p.is_file() and p.suffix.lower() in CONVERTIBLE and not _is_noise(p)]
+
+    # ── A GENERAL ARRANGEMENT IS NOT WORTH A COM CALL ──────────────────────────────────
+    #
+    # dwg_class has been able to tell a flat pattern from a GA since it was written, and its
+    # own docstring says a GA "is worth approximately nothing… possibly worth less than
+    # nothing, if a viewport rectangle is taken for a blank". It was wired to REPORTING only.
+    # Every DWG in the folder was still opened.
+    #
+    # WHAT THAT COST ON 12552. The pack's only DWG is 12552-00-GA — the general arrangement,
+    # the same sheet as the PDF the engine had already read. Converting it was worth nothing,
+    # it faulted the COM server (-2147023170, RPC_S_CALL_FAILED), and SolidWorks went down
+    # with a crash dialog — taking with it the seat the NATIVE MODEL EXTRACT needs. On a pack
+    # with no DXFs, that extract is the only measured geometry there is. The engine spent the
+    # seat on the file it had already decided was worthless, and lost the one that mattered.
+    #
+    # ORDERING WOULD NOT HAVE SAVED IT EITHER. Running the extract first only moves which
+    # operation is holding the session when the GA faults it. Not opening the file is the
+    # fix; there was never a reason to.
+    #
+    # SKIPPED, NOT FAILED. It is named in the output as a GA that was deliberately not
+    # converted, because "not read" and "not worth reading" are different facts and an
+    # estimator chasing unread geometry deserves to know which this is.
+    _skipped_ga = [p for p in _all_dwgs if dwg_class(p) == "general_arrangement"]
+    dwgs = [p for p in _all_dwgs if p not in _skipped_ga]
+
     # PER FILE, NOT PER RUN. "converted 2 of 4" is a number an estimator cannot act on: it
     # does not say WHICH two, whether the other two failed or were 3D, or whether the ones
     # that converted were then used. A DWG that silently contributes nothing looks exactly
     # like one that was never there, which is the whole failure this module exists to end.
-    result: Dict[str, Any] = {"schema": SCHEMA, "found": [p.name for p in dwgs],
+    result: Dict[str, Any] = {"schema": SCHEMA, "found": [p.name for p in _all_dwgs],
                               "converted": [], "converted_paths": [], "reason": "",
-                              "backend": "", "files": []}
+                              "backend": "", "files": [],
+                              "skipped_general_arrangement": [p.name for p in _skipped_ga]}
+    if _skipped_ga:
+        # THE SHAPE THE REST OF THIS LIST USES — dwg / backend / converted / dxf / reason.
+        # A second record shape in one list is how a consumer ends up printing "None -> None"
+        # for half the rows, which is exactly what the first version of this did.
+        result["files"].extend(
+            {"dwg": p.name, "backend": "", "converted": False, "dxf": None,
+             "reason": "not attempted — a general arrangement, not a flat pattern. The same "
+                       "content as the PDF of this sheet, which was read. Converting it adds "
+                       "nothing and costs a CAD seat the model extract needs."}
+            for p in _skipped_ga)
     if not dwgs:
         return result
 
@@ -538,7 +574,7 @@ def convert_dwgs(
         result["converted"] = _sw["converted"]
         result["converted_paths"] = _sw["converted_paths"]
         result["reason"] = _sw["reason"]
-        result["files"] = _sw["files"]
+        result["files"] = result["files"] + _sw["files"]
         return result
     if not exe and runner is None:
         # NOT "these flat patterns". A job folder's DWGs are whatever the customer sent, and
@@ -573,7 +609,7 @@ def convert_dwgs(
     # thing it tells us. A DWG with no DXF of its own name did not convert, whatever the
     # exit code said.
     _by_stem = {p.stem.upper(): p for p in produced}
-    result["files"] = [
+    result["files"] = result["files"] + [
         {"dwg": d.name, "backend": "oda",
          "converted": d.stem.upper() in _by_stem,
          "dxf": (_by_stem[d.stem.upper()].name if d.stem.upper() in _by_stem else None),

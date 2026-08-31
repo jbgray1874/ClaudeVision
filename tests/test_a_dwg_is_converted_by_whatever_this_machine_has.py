@@ -350,3 +350,70 @@ def test_a_faulted_seat_is_not_restarted_behind_the_estimate():
     import inspect
     src = inspect.getsource(cad_inputs.convert_dwgs_with_solidworks)
     assert "restart" not in src.lower().replace("restarted automatically", "")
+
+
+# ── a general arrangement is not worth a CAD seat ────────────────────────────────────
+
+def test_a_general_arrangement_dwg_is_never_opened(tmp_path):
+    """WHAT THIS COST ON 12552, AND WHY IT IS THE FIRST THING THE CONVERTER SHOULD ASK.
+
+    dwg_class has been able to tell a flat pattern from a general arrangement since it was
+    written, and its own docstring says a GA "is worth approximately nothing… possibly worth
+    less than nothing, if a viewport rectangle is taken for a blank". It was wired to the
+    REPORTING and nothing else. Every DWG in the folder was still opened.
+
+    12552's only DWG is 12552-00-GA — the general arrangement, the same sheet as the PDF the
+    engine had already read. Opening it faulted the COM server (-2147023170,
+    RPC_S_CALL_FAILED) and SolidWorks went down with a crash dialog, taking the seat that the
+    NATIVE MODEL EXTRACT needs. On a pack with no DXFs that extract is the only measured
+    geometry there is. The engine spent the seat on the file it had already judged worthless
+    and lost the one that mattered.
+
+    Reordering would not have helped: it only changes which operation is holding the session
+    when the GA faults it. Not opening the file is the fix, and there was never a reason to."""
+    (tmp_path / "12552-00-GA_Infinity Drawer_Rev C.DWG").write_bytes(b"dwg")
+    calls = []
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=lambda d, x: calls.append(d) or True)
+    assert calls == [], "a general arrangement was opened on a CAD seat for nothing"
+    assert out["skipped_general_arrangement"] == ["12552-00-GA_Infinity Drawer_Rev C.DWG"]
+
+
+def test_a_flat_pattern_is_still_converted_beside_a_skipped_ga(tmp_path):
+    """The skip must not become "stop converting DWGs". A flat pattern is the strongest input
+    this engine can be handed short of a model."""
+    (tmp_path / "12552-00-GA_Infinity Drawer_Rev C.DWG").write_bytes(b"dwg")
+    (tmp_path / "11650-04-01A_2MM PETG_REVG.DWG").write_bytes(b"dwg")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    assert out["converted"] == ["11650-04-01A_2MM PETG_REVG.dxf"]
+    assert out["skipped_general_arrangement"] == ["12552-00-GA_Infinity Drawer_Rev C.DWG"]
+
+
+def test_the_skipped_ga_is_reported_as_skipped_not_as_failed(tmp_path):
+    """"Not read" and "not worth reading" are different facts, and an estimator chasing unread
+    geometry deserves to know which this is. A GA reported as a failure sends somebody after a
+    converter for a file that would add nothing."""
+    (tmp_path / "12552-00-GA_Infinity Drawer_Rev C.DWG").write_bytes(b"dwg")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    assert not out["reason"], "a deliberate skip is being reported as a conversion failure"
+    rec = [f for f in out["files"] if f["dwg"].startswith("12552")][0]
+    assert rec["converted"] is False
+    assert "general arrangement" in rec["reason"]
+
+
+def test_the_skipped_rows_share_the_shape_of_every_other_row(tmp_path):
+    """A second record shape in one list is how a consumer prints "None -> None" for half the
+    rows — which is exactly what the first version of this did."""
+    (tmp_path / "12552-00-GA_Infinity Drawer_Rev C.DWG").write_bytes(b"dwg")
+    (tmp_path / "11650-04-01A_2MM PETG_REVG.DWG").write_bytes(b"dwg")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    assert len(out["files"]) == 2
+    for rec in out["files"]:
+        assert set(rec) >= {"dwg", "converted", "dxf", "reason"}, rec
+
+
+def test_the_ga_still_appears_in_found(tmp_path):
+    """It was in the folder. A file that vanishes from the inventory because the engine chose
+    not to open it is the opposite of what this module is for."""
+    (tmp_path / "12552-00-GA_Infinity Drawer_Rev C.DWG").write_bytes(b"dwg")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    assert out["found"] == ["12552-00-GA_Infinity Drawer_Rev C.DWG"]
