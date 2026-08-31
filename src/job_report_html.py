@@ -1900,7 +1900,19 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         owner = reason.get("owner") or "engine"
         tally[owner] = tally.get(owner, 0) + 1
         code = str(r.get("part_number") or r.get("part_code") or r.get("description") or "?")
-        _fab = not _bi(r)
+        # ASK THE POLICY ABOUT A PART, NOT ABOUT A SPREADSHEET ROW.
+        #
+        # This passed the material row straight to is_bought_in, and a material row keys its
+        # identity as `part_code` where a part record uses `part_number`. The policy found no
+        # part number, answered False, and BI-BOLT — whose entire name is the bought-in prefix
+        # — was labelled "SDI makes it" and given the fabricated explanation: that its cost is
+        # material plus labour and a gauge or a blank size must be missing. For a bolt.
+        #
+        # Caught on the 31/08 full run, in the section this change was written to fix, which is
+        # the argument for reading the output rather than the tests.
+        _probe = dict(r)
+        _probe["part_number"] = code
+        _fab = not _bi(_probe)
         _cat, _why_txt, _supersedes = _why(str(reason.get("category") or ""),
                                            part_is_fabricated=_fab)
         if not _cat:

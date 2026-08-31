@@ -133,3 +133,27 @@ def test_a_genuinely_unpriced_part_is_not_rescued_by_a_zero_estimate():
     of 0.00 is the engine agreeing there is nothing there."""
     html = jrh._unpriced_section(JOB)
     assert "BI-BOLT" in html[html.index("<tbody>"):]
+
+
+def test_a_row_keyed_by_part_code_is_still_classified_correctly():
+    """CAUGHT ON THE 31/08 FULL RUN, IN THIS SECTION, AFTER IT SHIPPED.
+
+    A material row keys its identity as `part_code`; a part record uses `part_number`. The
+    make-or-buy test passed the ROW to the bought-in policy, which found no part number,
+    answered False, and labelled BI-BOLT "SDI makes it" — then handed it the fabricated
+    explanation: that its cost is material plus labour and a gauge or a blank size must be
+    missing. For a bolt whose entire name is the bought-in prefix.
+
+    The unit tests all passed, because every fixture in them used `part_number`. The engine's
+    own output did not."""
+    html = jrh._unpriced_section(_summary(
+        rows=[{"part_code": "BI-BOLT", "price_gbp": 0, "unpriced_reason": _reason()},
+              {"part_code": "10575-01-013", "price_gbp": 0, "unpriced_reason": _reason()}],
+        estimates=[]))
+    rows = html[html.index("<tbody>"):]
+    bolt = rows[rows.index("BI-BOLT"):rows.index("BI-BOLT") + 400]
+    assert "Bought in" in bolt and "SDI makes it" not in bolt
+    assert "material plus labour" not in bolt, (
+        "a bought-in bolt is being told its gauge or blank size is missing")
+    made = rows[rows.index("10575-01-013"):]
+    assert "SDI makes it" in made
