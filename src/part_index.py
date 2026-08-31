@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from bought_in_policy import is_bought_in as _is_bought_in
 from source_precedence import apply_field
 
 
@@ -314,7 +315,31 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         part["review_flags"] = dedupe(part["review_flags"])
         if not part.get("drawing_numbers") and not is_assembly_identifier(part.get("part_number")):
             part["drawing_numbers"] = [part["part_number"]]
-        if part.get("normalized_thickness_mm") is None and document_primary_thickness is not None:
+        # THE PACK'S GAUGE BELONGS TO THE PARTS WE CUT FROM IT.
+        #
+        # This fallback exists because a detail sheet that does not repeat the gauge should
+        # inherit the document's, and for a fabricated part that is right. It was applied to
+        # every part with no thickness of its own, which put a sheet gauge on things that are
+        # not cut from sheet at all:
+        #
+        #   12552-01-01X  62012RS Ball Bearing 12x32x10mm   ->  1.5mm
+        #   12552-01-02X  CONCRETE SLAB (drawing says 20mm) ->  1.5mm
+        #
+        # A gauge is not decoration. It makes a part look like sheet metal to the estimator —
+        # _has_blank accepts a bare thickness — and it sets the rate and steps the cut time.
+        # The bearing carried 1.5mm through three runs while everything else about it was
+        # being corrected, and it is the last thing holding it in the 1.5mm MILD STEEL laser
+        # group.
+        #
+        # NOT FLAGGED, deliberately, unlike the other bought-in refusals. Those all suppress
+        # something that would otherwise appear — a blank, a route — where silence would look
+        # like the rule never ran. Here the correct end state IS the absence, and it is
+        # already visible: the Gauge column on the sheet is simply empty, which is the honest
+        # answer for a part whose thickness we do not know and do not need. Flagging every
+        # FIXING on every job would be noise, not evidence.
+        if (part.get("normalized_thickness_mm") is None
+                and document_primary_thickness is not None
+                and not _is_bought_in(part)):
             apply_field(part, "normalized_thickness_mm", document_primary_thickness,
                         "drawing_deterministic")
             if not part.get("thicknesses_mm"):
