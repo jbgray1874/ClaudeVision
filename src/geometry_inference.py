@@ -26,6 +26,11 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+# ONE ANSWER TO "IS THIS PURCHASED", NOT A SECOND OPINION. bought_in_policy is the union of
+# every bought-in rule the codebase applies, so asking it here cannot classify fewer parts
+# than any caller already does — and a local re-implementation would be free to drift.
+from bought_in_policy import is_bought_in, bought_in_reason
+
 
 # ── Description → family, for sibling matching and category defaults ──────────
 # Each family: keywords that identify it, and a conservative default blank (mm).
@@ -239,21 +244,59 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
     """
     Main entry. Mutates summary["manufacturing_writeup"]["parts"] in place,
     injecting provisional dimensions for no-geometry parts. Returns a small
-    report dict: {"inferred": [...], "still_missing": [...]}.
+    report dict: {"inferred": [...], "still_missing": [...], "refused_bought_in": [...]}.
     """
     try:
         parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
     except Exception:
-        return {"inferred": [], "still_missing": []}
+        return {"inferred": [], "still_missing": [], "refused_bought_in": []}
 
     geometried = [p for p in parts if _has_geometry(p)]
     inferred_log: List[Dict[str, Any]] = []
     still_missing: List[str] = []
+    refused_bought_in: List[Dict[str, Any]] = []
 
     for part in parts:
         if _has_geometry(part):
             _clear_inference_tags(part)
             continue
+
+        # A PURCHASED ARTICLE IS NOT A FABRICATED PART MISSING ITS DRAWING.
+        #
+        # This whole function answers one question: "we make this and nobody measured it —
+        # roughly how big is it?" A bought-in has no answer to that question, because we do
+        # not make it. Its size is whatever the supplier ships. Every rule below is therefore
+        # wrong for it, and the sibling borrow is wrong in the most expensive way.
+        #
+        # 12552-01-01X IS WHY. A 62012RS ball bearing, 12x32x10mm, came out of the run
+        # carrying 650.7 x 178.7 x 1.5mm — the flat pattern of 12552-01-01M, CROSS MEMBERS,
+        # the first steel part in the job with a blank. The path, reproduced exactly:
+        #
+        #   SolidWorks says the bearing model is "Steel" (applied_library — an appearance,
+        #   not a spec) -> _material_family -> "metal". _family_of("62012RS Ball Bearing
+        #   12x32x10mm") is None, so _sibling_dims cannot score the 2 that means "same kind
+        #   of thing" and falls to its score-1 tier, "same material" — which every steel part
+        #   in the job satisfies. It takes the first one.
+        #
+        # The blank then made the bearing look like sheet metal to the estimator, which gave
+        # it a laser op and 269 seconds, and it was billed at GBP 2.02 x 8. None of that was
+        # a misread: the material was real, the blank was real, and they belonged to two
+        # different parts.
+        #
+        # The gate below cannot catch it — _is_no_geometry_bom_part ends on
+        # `return not _has_geometry(part)` and asks nothing about what the part IS. So the
+        # question is asked here instead, through the predicate the rest of the codebase
+        # already uses, before any of the three rules run.
+        #
+        # REFUSED, NOT "STILL MISSING". A bought-in with no blank is not an unpriced hole —
+        # it is priced per piece from a catalogue, which is the correct and complete answer
+        # for it. Counting it as missing geometry would report a problem that does not exist
+        # and invite someone to fix it by loosening this very rule.
+        if is_bought_in(part):
+            refused_bought_in.append({"part": part.get("part_number"),
+                                      "reason": bought_in_reason(part)})
+            continue
+
         if not _is_no_geometry_bom_part(part):
             continue
 
@@ -295,4 +338,5 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
         # Nothing worked — leave as £0, keep flagged.
         still_missing.append(str(pn))
 
-    return {"inferred": inferred_log, "still_missing": still_missing}
+    return {"inferred": inferred_log, "still_missing": still_missing,
+            "refused_bought_in": refused_bought_in}

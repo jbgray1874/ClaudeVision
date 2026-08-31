@@ -2811,6 +2811,16 @@ def _finalize_scan_summary(
         summary.setdefault("ai_inference", {})["geometry"] = _inf
         if _inf.get("inferred") or _inf.get("still_missing"):
             print(f"   [inference] {len(_inf.get('inferred', []))} no-DXF part(s) given provisional dimensions; {len(_inf.get('still_missing', []))} still £0")
+        # A REFUSAL IS A DECISION AND HAS TO BE AUDIBLE. Silently, a bought-in that was
+        # denied a borrowed blank is indistinguishable from one the rule never considered —
+        # and it is the borrow being denied that stops a ball bearing arriving with the
+        # cross member's flat pattern, a laser op and 269 seconds against it.
+        _ref = _inf.get("refused_bought_in") or []
+        if _ref:
+            print(f"   [inference] {len(_ref)} bought-in part(s) NOT given borrowed "
+                  f"dimensions — they are purchased, so a blank of ours would be another "
+                  f"part's: " + ", ".join(str(r.get("part")) for r in _ref[:6])
+                  + (f" (+{len(_ref) - 6} more)" if len(_ref) > 6 else ""), flush=True)
     except Exception as _e:
         print(f"   [inference] skipped: {_e}", flush=True)
 
