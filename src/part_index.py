@@ -5,6 +5,48 @@ from typing import Any, Callable, Dict, List, Optional
 from source_precedence import apply_field
 
 
+# Which reader actually saw a merged BOM row. merge_boms.reconcile_page stamps every row it
+# emits, and those four values are the whole answer.
+_BOM_ROW_READER = {
+    "BOTH":        "bom_tree",      # the deterministic reader and vision agreed
+    "A_ONLY":      "bom_tree",      # the deterministic reader alone — what bom_tree means
+    "B_RECOVERED": "llm_extract",   # vision found a row the deterministic reader did not
+    "B_OVERRIDE":  "llm_extract",   # vision disagreed and won
+}
+
+
+def _bom_row_source(row: Dict[str, Any]) -> str:
+    """A BOM ROW READ BY THE VISION MODEL IS NOT A MEASURED BOM ROW.
+
+    Every quantity off a BOM was stamped `bom_tree` — rank 60, and a member of
+    MEASURED_SOURCES, so reports print it with no reasoned-value mark and arbitration treats it
+    as something read off a table rather than off a picture of one.
+
+    ON AN LLM-ONLY RUN THAT IS FALSE FOR EVERY ROW ON THE JOB. --llm-only switches off Path A,
+    so `document_analysis.bom_rows` is the vision model's reading and nothing else; it then
+    reached section 9 of the report as "the bill of materials" with no lightning bolt beside
+    it, telling an estimator those quantities were measured. James was right to push on this,
+    though the column he named — material and thickness, which really do come off the drawing's
+    text layer via pdfplumber — was the one place the labels were already correct.
+
+    IT IS ALSO WRONG ON A FULL RUN, more quietly: any row vision RECOVERED (the deterministic
+    reader missed it) or OVERRODE carries the same false stamp. Those are exactly the rows
+    where corroboration did not happen, so they are exactly the rows the mark exists for.
+
+    THE ANSWER WAS ALREADY ON THE ROW. reconcile_page records BOTH / A_ONLY / B_RECOVERED /
+    B_OVERRIDE on every row it emits, and this was throwing it away. Nothing new is derived
+    here — a recorded fact is read instead of being replaced by a constant.
+
+    A NOTE ON RANK, because this is not purely cosmetic. bom_tree is 60 and llm_extract is 40,
+    so a vision-only quantity can now be displaced by an override rule at 50 where before it
+    could not. The exposure is narrow: a B_RECOVERED row is by definition one the deterministic
+    reader never saw, so no competing BOM value exists, and a title-block quantity already
+    outranked it at 70. Worth a look at the next full run's total against the 23:09 run's
+    £574.94 before this is shown to anybody.
+    """
+    return _BOM_ROW_READER.get(str(row.get("source") or "").strip().upper(), "bom_tree")
+
+
 def _clean_bom_description(desc: Any) -> Any:
     """Truncate BOM text blobs to the first meaningful phrase (max 80 chars)."""
     if not desc:
@@ -58,7 +100,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
     interpret_part = deps.interpret_part
 
     parts: Dict[str, Dict[str, Any]] = {}
-    document_bom_lookup = {
+    document_bom_lookup = {  # noqa: E501 — see _bom_row_source below for how these are attributed
         row["part_number"]: row
         for row in summary.get("document_analysis", {}).get("bom_rows", [])
         if is_valid_part_identifier(row.get("part_number"))
@@ -81,7 +123,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             description=_clean_bom_description(row.get("description")),
             quantity=None,
         )
-        apply_field(parts[pn], "quantity", row.get("quantity"), "bom_tree")
+        apply_field(parts[pn], "quantity", row.get("quantity"), _bom_row_source(row))
 
     for page in summary["pages"]:
         page_analysis = page.get("page_analysis", {})
@@ -186,8 +228,11 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             # Every observation is submitted; the resolver decides which survives.
             quantities = title_block.get("quantities", [])
             if pn in document_bom_lookup and document_bom_lookup[pn].get("quantity"):
+                # SAME ROW, SAME ATTRIBUTION. The second of the two places a BOM quantity is
+                # submitted; stamping it differently from the first would put one part's
+                # quantity at rank 60 and another's at 40 for no reason a reader could find.
                 apply_field(part, "quantity", document_bom_lookup[pn].get("quantity"),
-                            "bom_tree")
+                            _bom_row_source(document_bom_lookup[pn]))
             elif quantities:
                 try:
                     apply_field(part, "quantity", int(quantities[0]), "drawing_deterministic")
