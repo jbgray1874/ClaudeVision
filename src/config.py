@@ -221,7 +221,32 @@ FINISH_PATTERN = r"(?:SURFACE\s+FINISH|FINISH)\s*[:\-]?\s*([A-Z0-9\s\-\[\]/,]+)"
 COLOUR_PATTERN = r"(?:COLOUR|COLOR)\s*[:\-]?\s*([A-Z0-9\s\-,\[\]/]+)"
 WEIGHT_PATTERN = r"WEIGHT\s*[:\-]?\s*([0-9.]+\s*(?:KG|kg|g|G))"
 QUANTITY_PATTERN = r"\b(?:QTY|QUANTITY)\s*[:\-]?\s*(\d+)\b"
-THICKNESS_PATTERN = r"\b(?:THK|THICKNESS|GAUGE)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:MM|mm)?\b"
+# THE VALUE COMES FIRST ON AN SDI DRAWING, AND THIS ONLY LOOKED AFTER THE LABEL.
+#
+# Every sheet in SDI's own template writes the gauge as "1.5 THK", "2 THK", "1.2 THK". This
+# pattern read THK-then-number — "THK: 1.5" — which is a convention SDI does not use. Two
+# failures came out of that, and the second is much worse than the first:
+#
+#   NOTHING READ. 12552's 02-05M, 02-09M, 01-03M and 02-03M all state their gauge and all
+#   returned no thickness at all, so the gauge fell through to SolidWorks, a DXF, or inference.
+#
+#   THE WRONG NUMBER READ. On 12552's 01-04M the text runs "1.5 THK" then "39.5" — the box
+#   section dimension on the next line. THK-then-number matched across the line break and
+#   captured 39.5, so a 1.5 mm corner upright presents a title-block gauge of 39.5 mm, stamped
+#   drawing_deterministic at rank 70 where almost nothing can displace it. That is twenty-six
+#   times the material on four parts, from a pattern that was merely looking the wrong way
+#   round.
+#
+# VALUE-FIRST IS TRIED FIRST, deliberately. On "1.5 THK 39.5" it consumes through the label,
+# so the trailing dimension is no longer available to the label-first branch — the correct
+# reading wins AND the wrong one becomes unreachable in the same step. The label-first form is
+# kept because other people's drawings do write it that way.
+THICKNESS_PATTERN = (
+    r"\b(?:"
+    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE)"
+    r"|(?:THK|THICKNESS|GAUGE)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:MM|mm)?"
+    r")\b"
+)
 
 DIMENSION_PATTERN = r"(?<![A-Z0-9])(\d+(?:\.\d+)?)\s*(?:MM|mm)\b"
 ANGLE_PATTERN = r"(\d+(?:\.\d+)?)\s*(?:°|º|Â°)"
