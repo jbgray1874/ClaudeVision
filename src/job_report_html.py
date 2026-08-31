@@ -187,32 +187,51 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
     ers = _get(summary, "estimate_summary", "estimate_review_signals", default={}) or {}
     flagged = ers.get("parts_flagged") or []
 
-    # translate reason codes into plain language
-    def _reason_text(reasons: List[Dict[str, Any]]) -> str:
-        if not reasons:
-            return ""
-        bits = []
-        for r in reasons:
+    # ── THE FINDINGS, KEPT APART ────────────────────────────────────────────────
+    #
+    # This used to join every reason for a part into one string with semicolons:
+    #
+    #     "high bend count; low extraction confidence (26%)"
+    #
+    # Two unrelated observations, one clause, no subject. James read them as a single claim and
+    # asked whether the confidence figure was a judgement on the bend count. It is not — it is
+    # the mean confidence across every field read for that part — but nothing on the page could
+    # have told him, because the semicolon had already made them one sentence.
+    #
+    # So each finding is returned as its own record carrying its CODE, and the renderer glosses
+    # each one separately from plain_english. Prose is built at the point of display, where the
+    # space to keep things apart exists.
+    def _findings(reasons: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for r in reasons or []:
             if not isinstance(r, dict):
                 continue
             code = str(r.get("code", ""))
             detail = r.get("detail")
+            if not code:
+                continue
+            if code == "risk_flag":
+                # The code that matters is the flag itself; "risk_flag" is only its envelope.
+                out.append({"code": str(detail), "detail": None})
+                continue
+            note = ""
             if code == "low_part_confidence":
                 try:
-                    bits.append(f"low extraction confidence ({float(detail)*100:.0f}%)")
+                    note = f"{float(detail) * 100:.0f}% average across the fields read"
                 except (TypeError, ValueError):
-                    bits.append("low extraction confidence")
-            elif code == "risk_flag":
-                RF = {
-                    "many_bends": "high bend count",
-                    "missing_material_spec": "material spec missing on the drawing",
-                    "weld_required": "weld cue detected — verify weld/dress content",
-                }
-                bits.append(RF.get(str(detail), f"risk flag: {detail}"))
-            elif code == "geometry_with_powder_below":
-                bits.append("low geometry confidence on a powder-coated part")
-            elif code:
-                bits.append(f"{code.replace('_', ' ')}" + (f" ({detail})" if detail is not None else ""))
+                    note = ""
+            elif detail is not None:
+                note = str(detail)
+            out.append({"code": code, "detail": note})
+        return out
+
+    def _reason_text(reasons: List[Dict[str, Any]]) -> str:
+        """The one-line form, still used where a table cell has no room for more."""
+        from plain_english import label as _lbl
+        bits = []
+        for f in _findings(reasons):
+            note = f" ({f['detail']})" if f.get("detail") else ""
+            bits.append(f"{_lbl(f['code'])}{note}")
         return "; ".join(bits)
 
     for f in flagged:
@@ -227,6 +246,7 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
             review["flagged_parts"].append({
                 "part": _label,
                 "reason": _reason_text(f.get("reasons") or []),
+                "findings": _findings(f.get("reasons") or []),
                 "cost": f.get("unit_total_cost_gbp") or f.get("cost"),
             })
 
@@ -1056,15 +1076,39 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
                 out.append(str(nm))
         return out
 
+    # WHAT ACTUALLY READ EACH FILE, not what kind of file it is.
+    #
+    # The column is headed "What it contributed" and printed "SOLIDWORKS model" against every
+    # SLDPRT in the folder — on a run with the SolidWorks extract switched off. Two paragraphs
+    # below, 4.2 said "No DXFs or SolidWorks models are matched on this job". One section was
+    # reporting the folder; the other was reporting the readings; the reader got both.
+    #
+    # A model file is a SOURCE only when the extract ran against it. Where it did not, it
+    # belongs with the DWGs — present, and contributed nothing.
+    from run_readers import pdf_reader_summary, readers_that_ran, run_was_llm_only
+    _recorded = summary.get("readers_that_ran")
+    if isinstance(_recorded, list) and _recorded:
+        _readers = _recorded
+    else:
+        # An older JSON, or a run where the stamp did not land. Derive it from the flag: the
+        # answer is coarser but it is never wrong about the three readers --llm-only disables.
+        _readers = readers_that_ran(llm_only=run_was_llm_only(summary))
+    _ran = {r.get("key"): bool(r.get("ran")) for r in _readers if isinstance(r, dict)}
+    _sw_ran = _ran.get("solidworks", True)
+
     rows: List[tuple] = []
+    _pdf_what = pdf_reader_summary(summary)
     for n in read:
-        rows.append((n, "PDF", "read"))
+        rows.append((n, "PDF", _pdf_what))
     for n in _names(dxf.get("matched")):
-        rows.append((n, "DXF", "matched to a part — measured flat pattern"))
+        rows.append((n, "DXF", "matched to a part — measured flat pattern (ezdxf)"))
     for n in _names(dxf.get("unmatched_dxf")):
         rows.append((n, "DXF", "present, matched to no part"))
     for n in (cad.get("solidworks") or []):
-        rows.append((str(n), "MODEL", "SOLIDWORKS model"))
+        rows.append((str(n), "MODEL",
+                     "cut list and assembly structure read from the model (SolidWorks COM)"
+                     if _sw_ran else
+                     "PRESENT, NOT READ — the SolidWorks extract did not run on this job"))
     for n in (cad.get("converted") or []):
         rows.append((str(n), "DXF", "converted from a DWG"))
     # LAST AND MARKED, because this is the row that changes what the number means.
@@ -1091,44 +1135,146 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
                  f'<td{cls}>{_esc(what)}</td></tr>')
 
     note = ""
-    if unread:
-        note = (f'<div class="callout warn"><b>{len(unread)} file(s) were in the pack and were '
+    _sw_files = [str(n) for n in (cad.get("solidworks") or [])]
+    if unread or (_sw_files and not _sw_ran):
+        _n = len(unread) + (len(_sw_files) if not _sw_ran else 0)
+        note = (f'<div class="callout warn"><b>{_n} file(s) were in the pack and were '
                 f'not read.</b> They contributed nothing to this estimate. A DWG usually means '
                 f'no converter was available; a STEP or IGES carries geometry but no part '
-                f'numbers, quantities or material, so it is never a source.</div>')
+                f'numbers, quantities or material, so it is never a source. A SolidWorks file '
+                f'is only a source when the native extract runs against it — sitting in the '
+                f'folder it contributes nothing.</div>')
 
     return (f'<h3>4.1 &nbsp;Drawings this estimate was built from</h3>'
+            f'{_render_readers_panel(_readers)}'
             f'<p>Exactly these files, and nothing else in the folder. Drawings not selected for '
             f'the run were not read.</p>'
-            f'<table><thead><tr><th>File</th><th>Type</th><th>What it contributed</th></tr>'
+            f'<table><thead><tr><th>File</th><th>Type</th><th>What read it, and what it '
+            f'contributed</th></tr>'
             f'</thead><tbody>{body}</tbody></table>{note}')
 
 
+def _render_readers_panel(readers: List[Dict[str, Any]]) -> str:
+    """WHICH READERS LOOKED AT THIS PACK — named, with what each one can and cannot see.
+
+    James, on the LLM-only report: "it states when solidworks was used but not what was used to
+    read the PDF? Was it pdfplumber and / or something else? it must have been LLM."
+
+    His guess was half right, and the half he had wrong is the half that matters. The vision
+    model did read every page. It did NOT produce the part numbers, the quantities, the material
+    callouts or the title-block fields — those came off the PDF's own text layer, exactly as
+    typed, on this run as on any other, because --llm-only switches off the BOM reader and the
+    two measuring readers and leaves the text readers alone.
+
+    That distinction is the difference between "an LLM wrote this estimate" and "an LLM was the
+    only thing corroborating the drawing", and no estimator can be expected to infer it. So the
+    readers are listed, run and not run together, and each says in one sentence what it produces
+    and where it stops.
+
+    OFF IS PRINTED AS LOUDLY AS ON. A reader that did not run is the reason a number is
+    provisional, and a list that quietly omitted it would read as a shorter pipeline rather than
+    a weaker one.
+    """
+    if not readers:
+        return ""
+    on, off = [], []
+    for r in readers:
+        if not isinstance(r, dict):
+            continue
+        (on if r.get("ran") else off).append(r)
+
+    def _rows(items, ran: bool) -> str:
+        out = ""
+        for r in items:
+            mark = ("<b style='color:#1e7d32'>ran</b>" if ran
+                    else "<b style='color:#b3261e'>did not run</b>")
+            tail = (f' <span class="t-muted">— {_esc(r.get("why_off") or "")}</span>'
+                    if not ran and r.get("why_off") else "")
+            out += (f'<tr><td><b>{_esc(r.get("name") or "")}</b><br>'
+                    f'<span class="t-muted">{_esc(r.get("library") or "")}</span></td>'
+                    f'<td>{mark}{tail}</td>'
+                    f'<td>{_esc(r.get("produces") or "")}<br>'
+                    f'<span class="t-muted">{_esc(r.get("limits") or "")}</span></td></tr>')
+        return out
+
+    n_off = len(off)
+    lead = ("Every reader below ran on this pack." if not n_off else
+            f"{len(on)} of {len(on) + n_off} readers ran on this pack. "
+            f"The {n_off} that did not are the reason figures on this job are corroborated by "
+            f"fewer sources than usual — each says why it was off.")
+    return (f'<div class="callout"><b>What read this pack.</b> {lead} '
+            f'Where a figure came from is recorded per part in section 9 and, per costing '
+            f'datum, on the AI Provenance tab of the workbook.</div>'
+            f'<table><thead><tr><th>Reader</th><th>This run</th>'
+            f'<th>What it produces, and where it stops</th></tr></thead><tbody>'
+            f'{_rows(on, True)}{_rows(off, False)}</tbody></table>')
+
+
 def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
-    items = ""
+    """5 — THE CHECKLIST, WITH EACH FINDING EXPLAINED ONCE.
+
+    WHAT IT LOOKED LIKE, and why nobody could work from it:
+
+        * 10575-01-102 — high bend count; weld cue detected — verify weld/dress content; low
+          extraction confidence (26%).
+        * 10575-01-103 — high bend count; risk flag: missing_labour_rate:laser_cutting; low
+          extraction confidence (34%).
+        * 10575-01-104 — weld cue detected — verify weld/dress content; low extraction
+          confidence (26%).
+
+    James: "same for all these. Can we be more specific somehow?"
+
+    THE REPETITION IS THE PROBLEM, NOT THE LENGTH. Three parts, one shared vocabulary, and by
+    the third line the reader has learned that these lines all say roughly the same thing —
+    which is exactly when they stop reading, and the one line that differs is the one carrying
+    `missing_labour_rate:laser_cutting`: an operation on the route with no rate behind it, which
+    means laser cutting on that part is costing nothing at all.
+
+    So the findings are GROUPED BY WHAT THEY ARE, not scattered per part. Each kind is explained
+    once, in full, and lists the parts it applies to. A reader learns "3 or more bends" one time
+    and then reads a list of part numbers; the labour-rate gap gets its own row and cannot hide
+    at the end of a semicolon chain.
+    """
+    from plain_english import action as _action, explain as _explain, label as _lbl
+
     flagged = review.get("flagged_parts", [])
-    # Split: parts with a SPECIFIC issue (weld/material/etc.) get individual lines;
-    # parts flagged ONLY for low confidence get grouped into one summary line (else it's noise).
-    specific = []
-    low_conf_only = []
+
+    # code -> {parts: [names], notes: [per-part detail]}
+    by_code: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
     for fp in flagged:
-        reason = (fp.get("reason") or "").lower()
-        has_specific = any(k in reason for k in ("weld", "material spec", "bend", "risk flag", "price"))
-        if has_specific:
-            specific.append(fp)
-        elif reason:
-            low_conf_only.append(fp)
+        for f in (fp.get("findings") or []):
+            code = str(f.get("code") or "")
+            if not code:
+                continue
+            if code not in by_code:
+                by_code[code] = {"parts": [], "notes": []}
+                order.append(code)
+            cost = f" ({_money(fp['cost'])})" if fp.get("cost") is not None else ""
+            note = f" — {f['detail']}" if f.get("detail") else ""
+            by_code[code]["parts"].append(f"{fp['part']}{cost}{note}")
 
-    for fp in specific:
-        cost = f" ({_money(fp['cost'])})" if fp.get("cost") is not None else ""
-        items += f"<li><b>{_esc(fp['part'])}{cost}</b> — {_esc(fp['reason'])}.</li>"
+    # Worst first is not severity but ACTIONABILITY: a gap that makes an operation cost nothing
+    # outranks a flag asking somebody to look at a fold count.
+    _PRIORITY = ("missing_labour_rate", "missing_material_price", "missing_material_spec",
+                 "missing_material_thickness", "customer_supplied_zero_cost")
 
-    if low_conf_only:
-        names = ", ".join(_esc(fp["part"]) for fp in low_conf_only[:8])
-        more = f" (+{len(low_conf_only)-8} more)" if len(low_conf_only) > 8 else ""
-        items += (f"<li><b>{len(low_conf_only)} part(s) flagged for low extraction confidence</b> — "
-                  f"{names}{more}. These read below the confidence threshold; spot-check their "
-                  f"dimensions/material against the drawing.</li>")
+    def _rank(code: str) -> Tuple[int, int]:
+        head = code.split(":", 1)[0]
+        return (_PRIORITY.index(head) if head in _PRIORITY else len(_PRIORITY),
+                order.index(code))
+
+    items = ""
+    for code in sorted(order, key=_rank):
+        rec = by_code[code]
+        names = rec["parts"]
+        shown = ", ".join(_esc(n) for n in names[:10])
+        more = f" <span class=\"t-muted\">(+{len(names) - 10} more)</span>" if len(names) > 10 else ""
+        items += (f'<li><b>{_esc(_lbl(code))}</b> &nbsp;<span class="t-muted">'
+                  f'{len(names)} part(s)</span><br>'
+                  f'{_esc(_explain(code))}<br>'
+                  f'<b>Do:</b> {_esc(_action(code))}<br>'
+                  f'<span class="t-muted">{shown}{more}</span></li>')
 
     for pv in review.get("provisional", []):
         items += f"<li><b>{_esc(pv['item'])}</b> — {_esc(pv['note'])}</li>"
@@ -1136,7 +1282,9 @@ def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
     if not items:
         items = "<li>No specific review points — the estimate read cleanly.</li>"
     return f"""<h2>5 &nbsp;What to focus on when checking this job</h2>
-<p>A practical checklist for the estimator reviewing the populated sheet:</p>
+<p>Grouped by what the finding is, so each one is explained once and you can see every part it
+touches. Ordered by what it does to the number: a missing rate makes an operation cost nothing,
+a flag asks you to look at something.</p>
 <ul class="chk">{items}</ul>"""
 
 

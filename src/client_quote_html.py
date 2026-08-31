@@ -797,38 +797,28 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
 </html>"""
 
 
-LLM_ONLY_BANNER = """
-<div style="background:#B00020;color:#fff;padding:14px 18px;font:600 14px/1.45 system-ui,
-     -apple-system,'Segoe UI',Arial,sans-serif;letter-spacing:.01em">
-  <div style="font-size:16px;font-weight:800;letter-spacing:.06em;margin-bottom:5px">
-    LLM-ONLY MEASUREMENT RUN &mdash; NOT A QUOTATION
-  </div>
-  This pack was read by the vision model alone. The deterministic BOM reader, the DXF flat
-  patterns and the SolidWorks extract were all switched off, so no figure below is corroborated
-  by a second reader and no folded part has a measured blank. The document is produced in the
-  same form as a real quotation <b>so the two can be compared</b> &mdash; that is what it is
-  for. <b>Do not send it to a customer and do not quote its total.</b>
-</div>
-"""
-
-
-def _stamp_llm_only(html_str: str) -> str:
-    """Put the banner where the page starts, not where the reader gives up.
-
-    ABOVE THE LETTERHEAD. A warning under the total is read after somebody has already decided
-    what the document is; a red block before the SDI logo is the first thing on the page and
-    survives being printed, screenshotted from the top, or pasted into an email.
-
-    Inserted after <body> when there is one, and prepended when there is not, so a change to
-    the quote's own markup cannot silently drop it.
-    """
-    lower = html_str.lower()
-    at = lower.find("<body")
-    if at != -1:
-        end = html_str.find(">", at)
-        if end != -1:
-            return html_str[:end + 1] + LLM_ONLY_BANNER + html_str[end + 1:]
-    return LLM_ONLY_BANNER + html_str
+# THE PAGE CARRIES NO BANNER. THE FILENAME CARRIES THE MARK.
+#
+# There was a red block here — "LLM-ONLY MEASUREMENT RUN — NOT A QUOTATION", above the
+# letterhead, ending "do not send it to a customer and do not quote its total". James removed
+# it, and both of his reasons are structural rather than presentational:
+#
+#   THE COMPARISON. An LLM-only run exists to be held against a full one. Two documents that
+#   differ by a 100mm red block at the top no longer differ only in their numbers, and the
+#   numbers are the entire question. Printed side by side the banner also pushes the lower half
+#   of a one-page quote off the sheet, so the run that is meant to be compared is the one that
+#   cannot be read to the end. "the lower section is missing.. again.."
+#
+#   WHOSE DECISION IT IS. "The estimator takes responsibility. remove this sort of alarming
+#   disclaimer." A document that tells a professional not to trust it is not adding a control;
+#   it is declining to produce the artefact and hoping the reader supplies the judgement
+#   anyway. Everyone in the room knows which button was pressed.
+#
+# WHAT REPLACES IT IS NOT NOTHING. The filename still says _quote_LLM-ONLY.html, which is how a
+# file is identified from a folder listing, an attachment box or a share — the places the wrong
+# document actually gets picked up. And the job report says, in full and in its own section,
+# which readers ran and which were switched off. The warning lives where somebody can act on
+# it, not stamped across the thing being measured.
 
 
 def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem: Optional[str] = None,
@@ -877,10 +867,10 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
     html_str = build_quote_html(summary, job_stem=stem, manual_workbook=manual_workbook,
                                 customer=customer)
     if _llm_only:
-        html_str = _stamp_llm_only(html_str)
-        print("   [deliverables] client quote written and STAMPED — this run read the pack "
-              "with the vision model alone, so the file is named _quote_LLM-ONLY.html and "
-              "says so above the letterhead. It is a measurement, not a quotation.",
+        print("   [deliverables] client quote written — this run read the pack with the vision "
+              "model alone, so the file is named _quote_LLM-ONLY.html. The page itself is "
+              "identical to a full-run quote so the two can be laid side by side; which "
+              "readers ran is in section 4.1 of the job report.",
               flush=True)
     out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)

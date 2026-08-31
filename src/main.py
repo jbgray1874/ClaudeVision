@@ -756,6 +756,39 @@ def main() -> None:
             )
             scan_label = drawing_path.name
 
+        # ── WHICH READERS RAN, ON THE RECORD, BEFORE ANYTHING DESCRIBES THE JOB ─────────
+        #
+        # THE DEFECT THIS FIXES, in James's words: "why does it state SolidWorks model was
+        # used on some drawing files when it couldn't have been as it was an llm run?"
+        #
+        # It was stated because nothing had told the report otherwise. --llm-only set three
+        # environment variables and the summary carried no trace of it, so the workbook
+        # sheets and the HTML report — both built from this in-memory dict — described the
+        # run in the vocabulary of a full one. Section 4.1 listed eighteen SLDPRT files under
+        # a heading that reads "What it contributed"; section 4.2, two paragraphs later, said
+        # "No DXFs or SolidWorks models are matched on this job". Both sentences came out of
+        # the same run because one was reporting the folder and the other the readings.
+        #
+        # THE STAMP WAS THERE AND IT WAS TOO LATE. main.py already wrote `llm_only` onto the
+        # saved JSON, but under --deliverables, hundreds of lines below this point and after
+        # the sheets had been written from `summary`. A flag that reaches the file and not
+        # the object is a flag every generator in this process runs without.
+        #
+        # Stamped here, immediately after the scan, so there is no window in which a
+        # deliverable can be built by something that does not know what kind of run it is.
+        summary["llm_only"] = bool(getattr(args, "llm_only", False))
+        summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
+        try:
+            from run_readers import readers_that_ran as _readers
+            summary["readers_that_ran"] = _readers(
+                llm_only=bool(getattr(args, "llm_only", False)),
+                dxf_enabled=bool(auto_discover_dxf))
+        except Exception as _rr_exc:
+            # SAID, NOT SWALLOWED. The report falls back to deriving this from the flag, which
+            # is correct but coarser; a silent failure here would look like a full run.
+            print(f"   [run] could not record which readers ran ({_rr_exc}) — section 4.1 of "
+                  f"the job report will describe the run from the flag alone.", flush=True)
+
         # SDI Intelligence — Learning Engine
         try:
             from learning_engine import get_engine
