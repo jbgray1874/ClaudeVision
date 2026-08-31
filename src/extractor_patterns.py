@@ -789,7 +789,31 @@ _MATERIAL_BOILERPLATE_RE = re.compile(
     r"|\bWOOD\s+PRODUCTS\b"
     r"|\bMATERIAL\s+SPECIFICATIONS?\b"
     r"|\bFOR\s+POWDER\s+COATED\s+STEEL\b"
-    r"|\bFOR\s+CHROME[,\s]+ZINC\s+PLATE\b",
+    r"|\bFOR\s+CHROME[,\s]+ZINC\s+PLATE\b"
+    # ── A RAL COLOUR NAME IS NOT A MATERIAL ─────────────────────────────────────────
+    #
+    # 12552's 02-09M is MILD STEEL powder coated RAL9006, whose registered name is WHITE
+    # ALUMINIUM. Its title block extracts as labels-then-values, so "MATERIAL:" is followed
+    # immediately by "COLOUR:" and the labelled read returns nothing; the whole-page keyword
+    # fallback then scans the page and finds ALUMINIUM — inside the colour name — BEFORE it
+    # reaches MILD STEEL, and _first_or_none takes the first. A 1.5 mm steel cover is costed
+    # as aluminium: a third of the density, a different rate, a different supplier.
+    #
+    # RAL's own palette is full of these. 9006 White Aluminium, 9007 Grey Aluminium, 8004
+    # Copper Brown, 9022 Pearl Light Grey. Any of them lands a metal word on a page whose
+    # part is made of something else, and the more carefully a drawing office names its
+    # colour the worse the misread gets.
+    #
+    # Blanked as a phrase, not as a word: "ALUMINIUM" on its own is still a perfectly good
+    # material callout, and a part genuinely made of aluminium and coated RAL9006 still reads
+    # correctly from its MATERIAL field or from any other mention on the sheet.
+    # The words between the RAL code and the metal word must not themselves be material
+    # words. Without that guard the filler is greedy: on "RAL9006 WHITE ALUMINIUM MILD STEEL"
+    # it swallows "WHITE ALUMINIUM MILD " to reach STEEL, and blanks the part's real material
+    # along with the colour name — turning a misread into a blank, which is worse.
+    r"|\bRAL\s*\d{3,4}[\s\-–—:]*"
+    r"(?:(?!ALUMINIUM|ALUMINUM|COPPER|SILVER|BRASS|BRONZE|STEEL|MILD|GOLD)[A-Z]+[\s\-]+){0,2}"
+    r"(?:ALUMINIUM|ALUMINUM|COPPER|SILVER|BRASS|BRONZE|GOLD)\b",
     re.IGNORECASE,
 )
 
