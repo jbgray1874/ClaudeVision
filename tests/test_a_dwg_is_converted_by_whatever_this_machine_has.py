@@ -332,54 +332,15 @@ def test_no_unverified_preference_ids_are_sent_to_solidworks():
 
 
 def test_solidworks_is_attached_to_and_never_launched():
-    """NEVER LAUNCH IS THE INVARIANT. "Never call Dispatch" was how it used to be written, and
-    that turned out to be the mechanism rather than the property.
-
-    Dispatch() returns a running SolidWorks if one is registered and STARTS ONE if not —
+    """Dispatch() returns a running SolidWorks if one is registered and STARTS ONE if not —
     hidden, prone to a licence prompt nobody can see, and a second seat competing with the
-    estimate for the same desktop. GetActiveObject only ever attaches, so it was the safe call
-    and Dispatch was banned outright.
-
-    THEN A REINSTALL BROKE THE OTHER REGISTRATION. GetActiveObject reads the Running Object
-    Table; Dispatch goes through the class registration (CLSID / LocalServer32). On SDI's
-    machine the reinstall left the class registration working and the ROT not, so every report
-    from 30 August carried -2147221021 from this line while a plain
-    `Dispatch('SldWorks.Application')` attached first time — on a job whose only geometry is
-    the models. A ban on the mechanism cost the engine the seat it was paying for.
-
-    So Dispatch is allowed, and the hazard is answered directly: it may only be reached when
-    SLDWORKS.exe is ALREADY RUNNING, and with a process up CoCreateInstance binds to the
-    running server instead of starting one. A genuinely closed seat still comes back as the
-    sentence it always did."""
+    estimate for the same desktop. GetActiveObject only ever attaches, so "not running" comes
+    back as that sentence rather than as a mysterious new process."""
     import inspect
     src = inspect.getsource(cad_inputs._solidworks_dxf_export)
-    assert "GetActiveObject" in src, "the attach-first lookup is gone"
+    assert "GetActiveObject" in src
+    assert 'Dispatch("SldWorks.Application")' not in src
     assert "is not running on this machine" in src
-
-    # Dispatch is permitted ONLY behind the already-running check. Both must be present, and
-    # the guard must come first in the source, or the ban has simply been lifted.
-    if 'Dispatch("SldWorks.Application")' in src:
-        assert "solidworks_processes()" in src, (
-            "Dispatch is reachable with nothing running — it will START a hidden SolidWorks")
-        assert src.index("solidworks_processes()") < src.index(
-            'Dispatch("SldWorks.Application")'), (
-            "the already-running check does not gate the Dispatch call")
-
-
-def test_the_fallback_cannot_be_reached_when_no_seat_is_running():
-    """THE HAZARD THE OLD BAN EXISTED FOR. With no SolidWorks up, Dispatch starts one: hidden,
-    unlicensed-prompt-prone, and competing with the estimate for the desktop. The guard is the
-    whole reason the ban could be lifted, so it is asserted on its own rather than only as an
-    ordering."""
-    import inspect
-    src = inspect.getsource(cad_inputs._solidworks_dxf_export)
-    at = src.find('Dispatch("SldWorks.Application")')
-    if at == -1:
-        return                                    # no fallback present; nothing to guard
-    window = src[max(0, at - 400):at]
-    assert "if solidworks_processes():" in window, (
-        "nothing between the ROT failure and the Dispatch call establishes that a seat is "
-        "already up")
 
 
 def test_a_faulted_seat_is_not_restarted_behind_the_estimate():
