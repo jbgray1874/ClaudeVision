@@ -32,11 +32,20 @@ import re
 from typing import List, Tuple
 
 __all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base", "material_suffix",
-           "is_category_not_a_code"]
+           "purchased_suffix", "is_category_not_a_code"]
 
 # A trailing material letter, and only after a digit — so "11350-01-01M" yields
 # "11350-01-01" while a code that simply ends in a letter ("...-GA") is left alone.
 _MATERIAL_SUFFIX = re.compile(r"^(.*\d)([TMA])$", re.IGNORECASE)
+
+# THE OTHER HALF OF THE SAME CONVENTION: the letter for a part SDI does NOT cut.
+#
+# Same shape as _MATERIAL_SUFFIX and deliberately a separate pattern, because the two say
+# opposite things. "M"/"A"/"T" name the sheet a part is cut FROM, so they are evidence we
+# make it; "X" says the line is bought. Folding X into _MATERIAL_SUFFIX would make base_code
+# strip it — and would tell every caller that reads a material suffix as "we fabricate this"
+# exactly the wrong thing about a purchase.
+_PURCHASED_SUFFIX = re.compile(r"^(.*\d)(X)$", re.IGNORECASE)
 
 # "Mirror<code>" / "MIRROR-<code>". The lookahead admits only a DIGIT or a separator —
 # [\dA-Z] also matches a letter, which made "MIRRORLIKE-01" read as a mirrored part. A part
@@ -110,6 +119,35 @@ def material_suffix(identity: str) -> str:
     not an observation. Every caller must let a material the drawing actually STATES win.
     """
     match = _MATERIAL_SUFFIX.match(str(identity or "").strip())
+    return match.group(2).upper() if match else ""
+
+
+def purchased_suffix(identity: str) -> str:
+    """"X" where SDI's numbering says the line is BOUGHT, or "" for any other code.
+
+    The counterpart to material_suffix, and the same weight: a naming convention written by
+    whoever drew it, not an observation. "12552-01-01M" is a cross member we cut, "-01A" a
+    washer we cut, "-01X" a part we buy.
+
+    THIS RULE ALREADY EXISTED AND FIRED TOO LATE TO HELP. estimator._is_special_bought_in_item
+    reads the same letter — "Special / bought-in FINISHING items ... These are NOT
+    SDI-fabricated: they carry no saw/glue/CNC/laser/weld fab labour" — and, having decided,
+    appends "bought_in" to page_roles. But that runs at COSTING, and it is the only thing on
+    a code like "12552-01-01X" that ever sets the role: document_builder's retag deliberately
+    excludes anything matching ^\\d{3,5}- as an SDI drawing reference, which was written to
+    protect the parts we cut and protected the purchases with them.
+
+    So every earlier stage saw page_roles ['assembly'] and concluded "not bought-in".
+    12552-01-01X, a 62012RS ball bearing, was handed 12552-01-01M's 650.7 x 178.7 flat by the
+    sibling borrow, then read as sheet metal and given a laser op — while the record that
+    finally reached the workbook carried the bought_in role, so the run looked consistent
+    with itself. The letter was on the part number the whole time; nothing asked until the
+    end.
+
+    Returned as the LETTER, matching material_suffix, so a caller that wants to say WHICH
+    convention fired can. The lexicon question — what "X" is bought AS — is not this module's.
+    """
+    match = _PURCHASED_SUFFIX.match(str(identity or "").strip())
     return match.group(2).upper() if match else ""
 
 

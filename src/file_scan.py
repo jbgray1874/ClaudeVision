@@ -2817,9 +2817,28 @@ def _finalize_scan_summary(
         # cross member's flat pattern, a laser op and 269 seconds against it.
         _ref = _inf.get("refused_bought_in") or []
         if _ref:
+            # NAME THE ONES SOMEBODY IS LOOKING FOR. The first version printed the first six
+            # in list order and hid the rest behind "(+2 more)". On 12552 that put "None" and
+            # five FIXING codes on screen and buried the two drawing-numbered parts the line
+            # existed to report — and the truncation was read, reasonably, as proof they were
+            # never refused at all. Hardware is the bulk and the least interesting: a job's
+            # own part numbers sort first.
+            def _ref_key(_r):
+                _pn = str(_r.get("part") or "")
+                return (0 if re.match(r"^\d{3,5}-", _pn) else 1, _pn)
+
+            # A NAMELESS ROW STILL HAS TO BE FINDABLE. str(None) is "None", which names
+            # nothing an estimator can look up; the description is what that row is known by
+            # on the sheet.
+            def _ref_name(_r):
+                return (str(_r.get("part") or "").strip()
+                        or str(_r.get("description") or "").strip()
+                        or "an unnamed row")
+
+            _ref = sorted(_ref, key=_ref_key)
             print(f"   [inference] {len(_ref)} bought-in part(s) NOT given borrowed "
                   f"dimensions — they are purchased, so a blank of ours would be another "
-                  f"part's: " + ", ".join(str(r.get("part")) for r in _ref[:6])
+                  f"part's: " + ", ".join(_ref_name(r) for r in _ref[:6])
                   + (f" (+{len(_ref) - 6} more)" if len(_ref) > 6 else ""), flush=True)
     except Exception as _e:
         print(f"   [inference] skipped: {_e}", flush=True)

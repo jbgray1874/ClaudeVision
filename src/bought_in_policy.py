@@ -154,6 +154,29 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
             return f"read from a bought-in-only source ({tok})"
     if _upper(part.get("part_number")).startswith(_BOUGHT_IN_PREFIXES):
         return "the part number is a bought-in code family"
+    # SDI'S OWN SUFFIX, AVAILABLE FROM THE FIRST STAGE — which is the whole point of it
+    # being here. The same letter is already read this way at costing:
+    # estimator._is_special_bought_in_item calls "-X" a "Special / bought-in FINISHING item"
+    # that carries "no saw/glue/CNC/laser/weld fab labour", strips those ops, and appends
+    # "bought_in" to page_roles. That is the seventh rule this module was written to absorb
+    # and the only one it missed.
+    #
+    # MISSING IT COST THE WHOLE MILWAUKEE BEARING. On a code like "12552-01-01X" the
+    # estimator's append is the ONLY thing that ever sets the bought_in role, because
+    # document_builder's retag skips anything matching ^\d{3,5}- as an SDI drawing reference
+    # — a rule written to protect the parts we cut, which protected the purchases with them.
+    # So at geometry_inference the bearing's roles were ['assembly'] and this predicate said
+    # False; it was handed 12552-01-01M's 650.7 x 178.7 flat by the sibling borrow, read as
+    # sheet metal, given a laser op and 269 seconds. By the time anything printed the record
+    # the role was on it, so the run looked consistent with itself.
+    #
+    # It sits BELOW the page-role rule, not above, so the "detail + material suffix"
+    # override there is untouched — and an "-X" code cannot reach that override anyway,
+    # since material_suffix admits only T/M/A. Above the material-family defaults below,
+    # because a letter the draughtsman wrote is a statement and "we could not identify the
+    # material" is an absence.
+    if part_code_conventions.purchased_suffix(_upper(part.get("part_number"))):
+        return "SDI's numbering marks it bought (-X), not a part we cut"
 
     fam = str(part.get("material_family") or "").strip().lower()
     if fam == "bought_in":

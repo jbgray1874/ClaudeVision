@@ -294,6 +294,7 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
         # and invite someone to fix it by loosening this very rule.
         if is_bought_in(part):
             refused_bought_in.append({"part": part.get("part_number"),
+                                      "description": part.get("description"),
                                       "reason": bought_in_reason(part)})
             continue
 
