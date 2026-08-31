@@ -555,6 +555,19 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # ── Legend ─────────────────────────────────────────────────────────────────
     ws.merge_cells("A3:P3")
     cell(3, 1,
+         # WHOSE QUESTION THIS TAB ANSWERS, on the line the reader already looks at.
+         #
+         # Eleven of the Decision Report's twelve columns are also here, and the twelfth is
+         # one of these under a different name. Every deliverable has to describe the same
+         # part list, so the two tabs cannot be told apart by which rows they carry — only by
+         # what they are FOR. Unsaid, an estimator reads the same rows twice with no way to
+         # know which to believe when they differ, which they did on 001's thickness.
+         #
+         # Put here rather than in a row of its own: rows 3 and 4 are both already written,
+         # and inserting one silently overwrote the legend that lives below.
+         "THIS TAB: WHERE EVERY NUMBER CAME FROM — source, confidence, geometry, the rate "
+         "that priced it. For WHAT HAD TO BE DECIDED and on what grounds, use the DECISION "
+         "REPORT tab. Same parts, different question.\n"
          "STATUS — the WEAKEST field decides the line, never an average:   "
          "CONFIRMED/MEASURED — read from a model, a DXF or the estimators' own calculator   "
          "REPORTED — read from the drawing; reproducible, not verified   "

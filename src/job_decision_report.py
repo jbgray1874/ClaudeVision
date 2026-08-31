@@ -761,6 +761,37 @@ def add_decision_report_sheet(wb, summary: Dict[str, Any],
     ws.row_dimensions[5].height = 20
     # ── Part rows ──────────────────────────────────────────────────────────────
     row = 6
+    # ── WHOSE QUESTION THIS TAB ANSWERS ───────────────────────────────────────────
+    #
+    # ELEVEN OF THIS TABLE'S TWELVE COLUMNS ARE ON AI PROVENANCE, and the twelfth is the same
+    # column under a different name. Listing every part here made the two tabs a strict subset
+    # of one another: an estimator reading both read the same rows twice and had no way to know
+    # which to believe when they differed — which they did, on 001's thickness, until 9a6b11d.
+    #
+    # They answer different questions and only one of them needs a row per part:
+    #
+    #   AI Provenance    WHERE DID THIS NUMBER COME FROM — every part, every field, its source,
+    #                    its confidence, the rate behind it. The audit.
+    #   Decision Report  WHAT HAD TO BE DECIDED, AND ON WHAT GROUNDS — the places two sources
+    #                    disagreed and something arbitrated, what owns the powder, how the
+    #                    material breakdown adds back to the sheet, and what needs a person.
+    #
+    # So this table now carries the parts a DECISION was made about, and says where the rest
+    # are. A tab that repeats the audit is a tab nobody opens twice.
+    # EVERY PART, because every deliverable describes the same part list — an invariant this
+    # tab does not get to opt out of. The two tabs are told apart by their COLUMNS, not by
+    # which parts they carry.
+    ws.merge_cells(f"A{row}:L{row}")
+    _c(ws, row, 1,
+       "THIS TAB: what had to be DECIDED, and on what grounds — the material and gauge each "
+       "part was costed at, WHY that reading won, how the route was detected, and which sheet "
+       "row charges it. For where a number came from in detail — the exact source key, "
+       "confidence, cut length, geometry and the rate behind the price — use the AI PROVENANCE "
+       "tab. Same parts, different question.",
+       bg=C_LIGHT, size=9, wrap=True, italic=True)
+    ws.row_dimensions[row].height = 26
+    row += 1
+
     review_parts = []
     for i, part in enumerate(parts):
         pn   = str(part.get("part_number") or "—")
