@@ -1335,9 +1335,30 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     part["blank_width_mm_source"] = "overall_dimensions"
                     _blank_l, _blank_w = _own_l, _own_w
             if not _blank_l or not _blank_w:
+                # THE GA'S OVERALL IS THE ONE NUMBER ON THE PACK THAT IS CERTAINLY NOT THIS
+                # PART'S. A general arrangement prints the size of the finished unit; every
+                # leaf inside it is smaller, by definition. Scanning "the whole document"
+                # for the largest numbers therefore does not merely risk the assembly's
+                # envelope — on any pack where the GA prints its overall, it PREFERS it,
+                # because the biggest number in a drawing pack is nearly always the GA's.
+                #
+                # 12349-02-69-01A is what that costs. Its seven acrylic flats had gone to
+                # the wrong parent, so it reached here with no blank, and took 2120 x 2120
+                # off the GA — a 4.5 m2 square of high-impact acrylic, on a drawer front.
+                # James, looking at the quote: "2120x2120 is not a feeder."
+                #
+                # So read the DETAIL pages only. A pack with nothing but assembly sheets
+                # gives this part no blank, which is the honest outcome: there is no
+                # drawing of it to size it from.
+                _detail_pages = []
+                for _p in summary.get("pages", []) or []:
+                    _r = (_p.get("page_role") or {})
+                    _r = _r.get("primary_role") if isinstance(_r, dict) else _r
+                    if str(_r or "").strip().lower() not in ("assembly", "ga", "general_arrangement"):
+                        _detail_pages.append(_p)
                 _pt_dims = re.findall(
                     r"\b(\d{3,4}(?:\.\d{1,2})?)\b",
-                    " ".join(str(_get_page_text(p)) for p in summary.get("pages", [])),
+                    " ".join(str(_get_page_text(p)) for p in _detail_pages),
                 )
                 _nums = sorted(
                     [float(v) for v in _pt_dims if 50 <= float(v) <= 3000],
@@ -1347,16 +1368,23 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # construction, which is why it is last and why saying so matters more here
                 # than anywhere else: a blank from this source is a guess wearing a
                 # measurement's clothes, and only the stamp tells them apart.
-                if len(_nums) >= 2 and not _blank_l:
-                    part["blank_length_mm"] = _nums[0]
-                    part["blank_width_mm"] = _nums[1]
-                    part["overall_length_mm"] = _nums[0]
-                    part["overall_width_mm"] = _nums[1]
+                #
+                # ONE NUMBER READ TWICE IS ONE DIMENSION, NOT TWO. `_nums` is a sorted list
+                # of every occurrence, so a dimension printed on two views arrives as two
+                # entries and became a perfect square — 2120 x 2120 was 2120 seen twice, not
+                # a length and a width. It is the same defect the arbitrator names elsewhere:
+                # one observation counted as two. Take DISTINCT values.
+                _distinct = sorted(set(_nums), reverse=True)
+                if len(_distinct) >= 2 and not _blank_l:
+                    part["blank_length_mm"] = _distinct[0]
+                    part["blank_width_mm"] = _distinct[1]
+                    part["overall_length_mm"] = _distinct[0]
+                    part["overall_width_mm"] = _distinct[1]
                     part["blank_length_mm_source"] = "document_text_largest_numbers"
                     part["blank_width_mm_source"] = "document_text_largest_numbers"
-                elif len(_nums) == 1 and not _blank_l:
-                    part["blank_length_mm"] = _nums[0]
-                    part["overall_length_mm"] = _nums[0]
+                elif len(_distinct) == 1 and not _blank_l:
+                    part["blank_length_mm"] = _distinct[0]
+                    part["overall_length_mm"] = _distinct[0]
                     part["blank_length_mm_source"] = "document_text_largest_numbers"
 
         if _is_non_metal_mat and not inherited_steel:

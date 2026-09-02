@@ -5625,8 +5625,36 @@ def _last_resort_price_is_needed(pe: Dict[str, Any]) -> bool:
     # An assembly parent carries its material on its children; its own £0 is correct.
     if pe.get("is_assembly_parent") or (pe.get("route_context") or {}).get("is_assembly_parent"):
         return False
-    # Already carries money on the line — nothing to rescue.
-    if (_safe_float(pe.get("extended_total_cost_gbp")) or 0.0) > 0:
+    # A firm catalogue price already reached this line through the bought-in path; the
+    # money is in the line total by design and there is nothing to look up again.
+    if str(pe.get("costing_basis") or "") == "system_cost_per_part":
+        return False
+    if ((pe.get("cost_breakdown") or {}).get("system_cost") or {}).get("applied_to_total"):
+        return False
+
+    # THE MATERIAL COLUMN IS WHAT SETTLES THIS, NOT THE LINE TOTAL.
+    #
+    # This asked `extended_total_cost_gbp`, which is material PLUS labour (see the
+    # computed branch of estimate_part). Every fixing carries a couple of minutes of
+    # handling, so every fixing had a line total, so no fixing was ever rescued — and
+    # its material cell stayed blank. That is the £0 hardware on 12349's BOM: screws,
+    # inserts, glides and the acrylic/MDF panels all read as free in the one column an
+    # estimator looks at for a price, while the rescue that exists to prevent exactly
+    # that sat behind a test they could not fail.
+    #
+    # Ask the column the blank appears in — WHERE THERE IS ONE. A line carrying money and no
+    # material record at all is a different animal: nothing says what its total is made of, so
+    # re-pricing it could only double-apply. Those keep the original test.
+    _me = pe.get("material_estimate")
+    if isinstance(_me, dict) and _me:
+        _material_on_the_line = (
+            (_safe_float(_me.get("extended_material_cost_gbp")) or 0.0)
+            or (_safe_float(_me.get("unit_material_cost_gbp")) or 0.0)
+            or (_safe_float(_me.get("cost_per_part_gbp")) or 0.0)
+        )
+        if _material_on_the_line > 0:
+            return False
+    elif (_safe_float(pe.get("extended_total_cost_gbp")) or 0.0) > 0:
         return False
     # Nothing to look a price up against.
     if not str(pe.get("description") or pe.get("part_number") or "").strip():
@@ -5653,16 +5681,26 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
         qty = _safe_int(pe.get("quantity")) or 1
         _unit = _round_money(unit)
         _ext = _round_money(unit * qty)
+        # THE MATERIAL IS ADDED TO THE LINE, IT DOES NOT BECOME THE LINE.
+        #
+        # Now that a line with labour on it can be rescued, assigning the material price
+        # to `extended_total_cost_gbp` would throw that labour away — a fixing with 2 min
+        # of handling would go from £1.04 of labour to £0.40 all-in, and the rescue meant
+        # to add a missing price would quietly subtract a real one. Both were zero before
+        # this, which is why the assignment read as harmless.
+        _prior_unit = _safe_float(pe.get("unit_total_cost_gbp")) or 0.0
+        _prior_ext = _safe_float(pe.get("extended_total_cost_gbp")) or 0.0
         _me = pe.setdefault("material_estimate", {})
         _me.update({
             "unit_material_cost_gbp": _unit, "cost_per_part_gbp": _unit,
             "extended_material_cost_gbp": _ext,
             "cost_method": "last_resort_market_indication",
         })
-        pe["unit_cost_gbp"] = _unit
-        pe["unit_total_cost_gbp"] = _unit
-        pe["extended_total_cost_gbp"] = _ext
-        pe["costing_basis"] = "last_resort_market_indication"
+        pe["unit_cost_gbp"] = _round_money(_prior_unit + _unit)
+        pe["unit_total_cost_gbp"] = _round_money(_prior_unit + _unit)
+        pe["extended_total_cost_gbp"] = _round_money(_prior_ext + _ext)
+        pe["costing_basis"] = ("last_resort_market_indication_plus_labour"
+                               if _prior_ext else "last_resort_market_indication")
         pe.setdefault("review_flags", []).append(
             "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
             "indicative market figure is shown rather than a blank that reads as free. NON-FIRM "

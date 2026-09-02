@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
+    "corroboration_defends",
     "SOURCE_DISPLAY_NAME", "MEASURED_SOURCES", "display_name", "was_measured",
     "SOURCE_TIEBREAK", "tiebreak_priority",
 ]
@@ -528,6 +529,61 @@ def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
             "displaced_value": _cur, "displaced_sources": holding}
 
 
+# A PERSON DECIDING IS NOT A READER, AND IS NEVER OUTVOTED BY READERS.
+_DECISION_RANK = 100
+
+
+def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,
+                          new_source: Any) -> Optional[Dict[str, Any]]:
+    """Do independent sources agreeing on the value HELD outweigh a single stronger newcomer?
+
+    THE OTHER HALF OF THE QUORUM RULE, AND THE HALF THE CASES NEEDED.
+
+    `corroboration_overrules` is asked by apply_field only after ordinary precedence has
+    REFUSED — that is, only when the newcomer was weaker or equal. So the quorum could
+    protect a value from a weaker source, which it never needed protecting from, and could
+    do nothing at all when a STRONGER one arrived. Every job cited in this module as the
+    reason the rule exists is the stronger-source shape:
+
+      * 11650-04's door — title block, an options list and six DXF exports all say PETG;
+        one SolidWorks property says ABS, outranks them 90 to 70, writes, and the part
+        goes from GBP 35.28 to GBP 0.00 because ABS has no rate in config.
+      * 12349-02-69-04M's gauge — the DXF is named `1.2MM_MS`, the title block reads
+        "1.2 THK", and the model's cut list says 6mm. Two readings against one, and the
+        one wins by rank: a 1.2mm bracket costed as 6mm plate.
+
+    In both, the losing evidence was recorded, countable, and never counted, because the
+    only question asked of a stronger source was its rank.
+
+    A quorum (>= CORROBORATION_QUORUM distinct sources) holding the current value turns a
+    stronger singleton's overwrite into a refusal — a flagged conflict for a person to
+    settle, not a silent replacement.
+
+    It defends only while it is STRICTLY the larger side. Once as many sources have named
+    the challenger's value, the count no longer separates them and the question goes back to
+    rank, which is the resolver's ordinary job. That matters: a defence that held at parity
+    would be a veto the first two readers could impose on any amount of later evidence, and
+    the point of this is to weigh readings, not to freeze whichever arrived first.
+    """
+    _cur = value_of(part, field)
+    if _cur is MISSING or _same_value(_cur, new_value):
+        return None
+    if rank(new_source) >= _DECISION_RANK:
+        return None
+    holding = set(support_for(part, field, _cur))
+    holding.discard("")
+    if len(holding) < CORROBORATION_QUORUM:
+        # One source held it. A stronger reading correcting a lone stale filename is
+        # precedence working, and nothing here should stand in its way.
+        return None
+    against = set(support_for(part, field, new_value)) | {str(new_source or "")}
+    against.discard("")
+    if len(against) >= len(holding):
+        return None
+    return {"value": _cur, "sources": sorted(holding),
+            "refused_value": new_value, "refused_sources": sorted(against)}
+
+
 def displaced_values(part: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
     """Every observation this field does not currently hold, oldest first — refused as well as
     overwritten. Each entry says which it was, in `applied`.
@@ -632,6 +688,21 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         # The value did not change, so this is not a change to report. Callers gate their
         # audit messages on the return, and "SolidWorks replaced X with X" is noise at best
         # and a false claim at worst.
+        return False
+
+    # A QUORUM DEFENDS, AS WELL AS OVERRULES. Asked BEFORE precedence, because precedence
+    # cannot ask it: by the time a stronger source has been allowed to write, the thing worth
+    # weighing — that several independent readers already agreed against it — has been
+    # overwritten. Where one source holds the value this is a no-op and rank decides as before.
+    _defence = corroboration_defends(part, field, value, source)
+    if _defence is not None:
+        _observe(part, field, value, source, applied=False)
+        part.setdefault("_corroboration", {})[field] = _defence
+        part.setdefault("review_flags", []).append(
+            f"{field}: '{value}' from {source} was NOT applied although it outranks what is "
+            f"held — {len(_defence['sources'])} independent sources say '{_cur}' "
+            f"({', '.join(_defence['sources'])}) against it. The stronger single reading has "
+            f"been set aside because several others agree against it; confirm which is right")
         return False
 
     if may_overwrite(part, field, source, new_value=value, new_confidence=confidence):
