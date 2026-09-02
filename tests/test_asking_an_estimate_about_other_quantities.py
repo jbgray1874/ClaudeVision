@@ -5,9 +5,10 @@ re-read drawings that do not depend on the quantity at all. The sheet already kn
 throughput the engine writes is pieces per hour and carries no quantity, so setting the order
 cell and recalculating gives the template's own labour curve.
 
-The two things that make it trustworthy are that it never saves, and that it says out loud
-what it cannot work out — freight priced at the old quantity, and bought-ins that do not step
-down because the price-break lookup was overwritten.
+The two things that make it trustworthy are that it never writes to the estimate it was given,
+and that it says out loud what it cannot work out — freight priced at the old quantity, and
+bought-ins that do not step down because the price-break lookup was overwritten. A saved
+variant is a new file, and it opens on a page that says both.
 """
 from __future__ import annotations
 
@@ -31,16 +32,34 @@ def test_a_missing_workbook_is_reported_not_raised(tmp_path):
     assert quantity_sweep.sweep(tmp_path / "nothing.xlsx", [10]) is None
 
 
-def test_it_never_saves_the_workbook_it_is_asking_about():
-    """An estimate that has gone to an estimator must not come back altered by a question
-    somebody asked about it."""
+def test_it_never_writes_to_the_workbook_it_was_given():
+    """Variants are saved to their own files. The estimate itself is never written to.
+
+    An estimate that has gone to an estimator must not come back altered by a question
+    somebody asked about it — and a quantity variant that overwrote the original would be the
+    worst possible way to find that out.
+    """
     source = (SRC / "quantity_sweep.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    saves = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-             and n.func.attr in ("Save", "SaveAs", "SaveCopyAs")]
-    assert not saves, "the sweep reads; it has no business writing"
+    in_place = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr in ("Save", "SaveCopyAs")]
+    assert not in_place, "Save writes to the file we were handed; there is no reason to"
+
+    variant = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "_save_variant")
+    save_as = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+               and n.func.attr == "SaveAs"]
+    assert save_as, "the variants have to be written somehow"
+    for call in save_as:
+        assert any(call is inner for inner in ast.walk(variant)), (
+            "SaveAs belongs only in the variant writer, where the destination is a new name")
+
+    assert "with_name(" in ast.get_source_segment(source, variant), (
+        "the variant's path is derived from the original's NAME, so it cannot resolve back "
+        "to the original file")
 
     closes = [n for n in ast.walk(tree)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
@@ -51,6 +70,29 @@ def test_it_never_saves_the_workbook_it_is_asking_about():
                    for kw in call.keywords), (
             "closed with SaveChanges=False explicitly — the default is to prompt, and a "
             "headless Excel with a dialog open holds the file against the next run")
+
+
+def test_a_saved_variant_opens_on_a_page_that_says_what_it_is():
+    """It looks exactly like a finished estimate. That is the danger."""
+    source = (SRC / "quantity_sweep.py").read_text(encoding="utf-8")
+    variant = ast.get_source_segment(
+        source, next(n for n in ast.walk(ast.parse(source))
+                     if isinstance(n, ast.FunctionDef) and n.name == "_save_variant"))
+    assert "NOT A QUOTE" in variant
+    assert "FREIGHT IS STILL PRICED AT" in variant
+    assert "BOUGHT-IN PRICES DID NOT STEP DOWN" in variant
+    assert variant.index("ws.Activate()") < variant.index("SaveAs"), (
+        "the sheet active at save time is the sheet Excel opens on — the banner has to be "
+        "activated BEFORE the save or the file opens on the Estimate tab and the warning is "
+        "a page nobody turns to")
+
+
+def test_the_freight_taken_back_out_is_read_off_the_sheet():
+    """A sweep of a 40-off estimate must not subtract a 1-off pallet nobody paid for."""
+    result = {"workbook": "x.xlsx", "order_qty_cell": "D6", "baseline_quantity": 40,
+              "freight_on_sheet": {"PACKAGING": 4.25, "DELIVERY": 4.25},
+              "rows": [{"quantity": 100, "material": 400.0, "labour": 80.0, "unit": 516.13}]}
+    assert quantity_sweep.commercial_correction(result)[0]["freight_carried_gbp"] == 8.5
 
 
 def test_the_order_cell_is_put_back_before_it_closes():
@@ -95,7 +137,7 @@ def test_it_names_both_things_it_cannot_correct():
     assert "do not step down" in text, (
         "the price-break lookup is overwritten with a literal, so bought-ins are flat at "
         "every quantity — silence there overstates the discount available")
-    assert "nothing was saved" in text
+    assert "the estimate itself was not written to" in text
 
 
 def test_a_sweep_with_no_freight_figures_still_reports():

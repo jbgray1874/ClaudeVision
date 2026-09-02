@@ -28,24 +28,31 @@ def main() -> None:
     ap.add_argument("--workbook", required=True, type=Path)
     ap.add_argument("--quantities", nargs="+", type=int, default=[10, 25, 50, 100])
     ap.add_argument("--packaging", type=float,
-                    help="the per-unit PACKAGING figure on the BOM, to take back out")
+                    help="override the PACKAGING figure to take back out; read off the "
+                         "sheet when not given")
     ap.add_argument("--delivery", type=float,
-                    help="the per-unit DELIVERY figure on the BOM, to take back out")
+                    help="override the DELIVERY figure to take back out; read off the "
+                         "sheet when not given")
+    ap.add_argument("--save-variants", action="store_true",
+                    help="also save a workbook per quantity, each opening on a page that "
+                         "says what did not re-price")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
 
-    result = sweep(args.workbook, args.quantities)
+    result = sweep(args.workbook, args.quantities,
+                   save_variants=args.save_variants)
     if result is None:
         raise SystemExit(1)
 
-    corrected = (commercial_correction(result, args.packaging, args.delivery)
-                 if (args.packaging or args.delivery) else None)
+    corrected = commercial_correction(result, args.packaging, args.delivery)
     text = to_markdown(result, corrected)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
         print(f"wrote {args.out}")
     else:
         print(text)
+    for path in result.get("variants") or []:
+        print(f"variant: {path}")
 
 
 if __name__ == "__main__":
