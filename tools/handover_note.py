@@ -107,18 +107,30 @@ _TOTAL_LABELS = (("material", "total material cost"),
                  ("unit", "total unit cost"))
 
 
-def _sheet_totals(wb) -> Dict[str, Optional[float]]:
-    """The Estimate sheet's own labelled totals, read from the cells.
+def _sheet_totals(wb, final: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The Estimate sheet's own labelled totals.
 
     Found by label rather than by cell reference, and the value taken as the first number to
     the right of it — the template's totals sit in column M today and a reference is the one
-    thing that cannot survive a template revision. A total whose cell holds a formula with no
-    cached result reads as None and the document says the figure was not available, rather
-    than reporting a zero that would make every reconciliation look perfect.
+    thing that cannot survive a template revision.
+
+    THE CELLS ARE USUALLY EMPTY TO US, AND THAT IS NOT THE SAME AS ABSENT. Total Material
+    Cost is a SUM formula, and a workbook written by openpyxl and never re-saved by Excel
+    carries no cached result for it — so reading the file alone returned nothing for all
+    three totals and the reconciliation could not be performed at all, on a document whose
+    whole purpose is to perform it. The read-back has already opened that workbook through
+    Excel, calculated it, and read those same labelled cells: `final_estimate.totals` IS
+    what the cell held. Falling back to it is not circular — the totals were scanned from
+    the labelled cells, the rows from the four blocks, by two separate passes — but the
+    document says which of the two it used, because "read from the file" and "read from the
+    run's record of the file" are different claims.
+
+    A figure neither source yields stays None. The document then says the total was not
+    available rather than reporting a zero that would make every reconciliation look perfect.
     """
-    out: Dict[str, Optional[float]] = {k: None for k, _ in _TOTAL_LABELS}
+    out: Dict[str, Any] = {k: None for k, _ in _TOTAL_LABELS}
     if "Estimate" not in wb.sheetnames:
-        return out
+        return _fill_totals_from_final(out, final)
     ws = wb["Estimate"]
     for r in range(1, ws.max_row + 1):
         label = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 8)).strip().lower()
@@ -130,7 +142,25 @@ def _sheet_totals(wb) -> Dict[str, Optional[float]]:
                     value = _money(ws.cell(r, c).value)
                     if value is not None:
                         out[key] = round(value, 2)
+                        out.setdefault("_from", {})[key] = "the workbook's own cell"
                         break
+    return _fill_totals_from_final(out, final)
+
+
+def _fill_totals_from_final(out: Dict[str, Any],
+                            final: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Whatever the cells would not yield, taken from the run's record of those same cells."""
+    totals = (final or {}).get("totals")
+    if not isinstance(totals, dict):
+        return out
+    for key, field in (("material", "material_gbp"), ("labour", "labour_gbp"),
+                       ("unit", "unit_gbp")):
+        if out.get(key) is None:
+            value = _money(totals.get(field))
+            if value is not None:
+                out[key] = round(value, 2)
+                out.setdefault("_from", {})[key] = (
+                    "the run's read-back of that cell, calculated by Excel")
     return out
 
 
@@ -383,12 +413,22 @@ def _fe_totals(final: Dict[str, Any]) -> Dict[str, Any]:
     return node if isinstance(node, dict) else {}
 
 
-def _measured_sentence(material: Dict[str, Dict[str, Any]]) -> str:
-    """How much of the geometry was measured off a model rather than reasoned from a view."""
+def _measured_sentence(material: Dict[str, Dict[str, Any]],
+                       scan: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+    """How much of the geometry was measured off a model rather than reasoned from a view.
+
+    THE PART RECORD ANSWERS THIS WHEN THE TAB WILL NOT. On 12552 the AI Material Detail tab
+    read "not recorded" for all 31 parts while the same run's part records carried
+    solidworks_flat_pattern on nineteen of them — so the honest answer was sitting one join
+    away while the document reported that nothing at all had been measured. That is the
+    worst kind of wrong here: it understates the estimate's own evidence.
+    """
     sources: Dict[str, int] = {}
-    for row in material.values():
-        key = str(row.get("Geom source") or "not recorded").strip() or "not recorded"
-        sources[key] = sources.get(key, 0) + 1
+    for code, row in material.items():
+        key = str(row.get("Geom source") or "").strip()
+        if not key or key == "not recorded":
+            key = str(((scan or {}).get(code) or {}).get("geometry_source") or "").strip()
+        sources[key or "not recorded"] = sources.get(key or "not recorded", 0) + 1
     if not sources:
         return "The workbook carries no geometry-source column to answer this from."
     ranked = sorted(sources.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -413,7 +453,7 @@ def _blocks_sentence(material_rows: List[Dict[str, Any]],
 
 def _reconciles_sentence(material_rows: List[Dict[str, Any]],
                          labour_rows: List[Dict[str, Any]],
-                         totals: Dict[str, Optional[float]]) -> str:
+                         totals: Dict[str, Any]) -> str:
     if not material_rows and not labour_rows:
         return ("Not yet — no calculated rows were supplied, so nothing below can be summed "
                 "against the sheet.")
@@ -449,7 +489,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     accepted = _accepted_labour(scan_doc)
     labour_rows = [r for r in (final.get("labour_rows") or []) if isinstance(r, dict)]
     material_rows = [r for r in (final.get("material_rows") or []) if isinstance(r, dict)]
-    totals = _sheet_totals(wb)
+    totals = _sheet_totals(wb, final)
     steel = _steel_rows(wb)
     material = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Material Detail")}
     provenance = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Price Provenance")}
@@ -498,7 +538,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
            + ", ".join(r["code"] or _description(r) for r in _indicative[:8]) + "."
            if _indicative else "No line rests on an AI market indication."))
     add(f"- **How much of this was measured rather than reasoned?** "
-        + _measured_sentence(material))
+        + _measured_sentence(material, scan))
     add(f"- **Where is the money?** " + _blocks_sentence(material_rows, labour_rows))
     add(f"- **Does this document add up to the sheet?** "
         + _reconciles_sentence(material_rows, labour_rows, totals))
@@ -528,6 +568,11 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add("> Every figure in the £ column is the value the Estimate sheet itself computed "
             "for that row, read back after Excel recalculated. Nothing here is re-derived, "
             "so a difference is a row this document cannot see — not a rounding argument.")
+        _from = totals.get("_from") or {}
+        for key, label in (("material", "Total Material Cost"),
+                           ("labour", "Total Labour Cost")):
+            if _from.get(key):
+                add(f"> **{label}** came from {_from[key]}.")
         add("")
         for problem in (final.get("adapter_problems") or []):
             if isinstance(problem, dict) and problem.get("message"):
@@ -798,7 +843,12 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     impact = ("No — it is unpriced, and a drawing would not price it. It "
                               "needs a rate, not a sheet.")
                 else:
-                    impact = "No — bought or commercial; priced from a book, not a drawing."
+                    # NOT "priced from a book". Packaging, delivery and the powder line are
+                    # not bought from anybody's catalogue — one is computed from coated
+                    # area, two are priced for the order — and calling all three a book
+                    # price is a claim about the source that the BOM table above contradicts.
+                    impact = ("No — it is not a drawn part. Its price and its source are on "
+                              "the bill of materials above.")
                 add(f"| {item['code']} | {item['desc']} "
                     f"| {_gbp(item['gbp']) if item['gbp'] is not None else 'no price'} "
                     f"| {impact} |")

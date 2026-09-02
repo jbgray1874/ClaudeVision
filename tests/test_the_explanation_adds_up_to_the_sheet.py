@@ -178,17 +178,40 @@ def test_a_bought_in_with_no_sheet_is_not_a_missing_drawing(tmp_path):
     assert "**None of them is a part SDI cuts**" in text
     section = text.split("## Drawings the pack does not contain")[1]
     row = next(l for l in section.splitlines() if l.startswith("| FIXING535 |"))
-    assert "No — bought or commercial" in row
+    assert "No — it is not a drawn part" in row
 
 
-def test_a_total_the_sheet_will_not_yield_is_never_reported_as_zero(tmp_path):
-    """An uncached formula reads as nothing; printing £0.00 would fake an exact match."""
+def test_an_uncached_total_falls_back_to_the_runs_read_back_of_the_same_cell(tmp_path):
+    """Total Material Cost is a SUM formula. openpyxl sees no cached result for it.
+
+    The read-back already opened that workbook through Excel and scanned the same labelled
+    cells, so the figure exists — and the document says which of the two it used, because
+    "read from the file" and "read from the run's record of the file" are different claims.
+    """
     workbook = _workbook(tmp_path)
     wb = openpyxl.load_workbook(workbook)
     wb["Estimate"].cell(170, 13).value = None
     wb.save(workbook)
 
     text = handover_note.build(workbook, _run_json(tmp_path))
+    assert "£200.00" in text
+    assert "**Total Material Cost** came from the run's read-back of that cell" in text
+    assert "**Total Labour Cost** came from the workbook's own cell" in text
+
+
+def test_a_total_neither_source_holds_is_never_reported_as_zero(tmp_path):
+    """With no cached cell AND no read-back, printing GBP 0.00 would fake an exact match."""
+    workbook = _workbook(tmp_path)
+    wb = openpyxl.load_workbook(workbook)
+    wb["Estimate"].cell(170, 13).value = None
+    wb.save(workbook)
+
+    scan = _run_json(tmp_path)
+    doc = handover_note.json.loads(scan.read_text(encoding="utf-8"))
+    doc["final_estimate"]["totals"].pop("material_gbp")
+    scan.write_text(handover_note.json.dumps(doc), encoding="utf-8")
+
+    text = handover_note.build(workbook, scan)
     assert "not readable from the sheet" in text
     assert "cannot be checked" in text
     assert "£0.00" not in text
