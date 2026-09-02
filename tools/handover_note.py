@@ -58,6 +58,50 @@ def _sheet(wb, name: str) -> List[Dict[str, Any]]:
     return _rows(wb[name]) if name in wb.sheetnames else []
 
 
+# The Sheet Steel block's own columns, by position, from the template.
+_STEEL_COLS = {"desc": 3, "qty": 5, "length": 6, "width": 7, "gauge": 8,
+               "sheet_l": 9, "sheet_w": 10, "per_sheet": 11, "scrap": 12,
+               "cost_per_part": 13, "internal_cut": 20, "rate_per_hour": 23}
+
+
+def _steel_rows(wb) -> Dict[str, Dict[str, Any]]:
+    """The Sheet Steel block, keyed by part number.
+
+    WHERE A FABRICATED PART'S MONEY ACTUALLY IS. A "-M" line shows a dash in the BOM price
+    column and says why in its own text — "costed in Sheet Steel below" — because sheet metal
+    is priced from blank area, not per piece. An explanation that stops at "priced below"
+    ends exactly where the estimator's question begins: how big, off what sheet, how many out
+    of it, at what cost. This reads that block so the two halves can be shown together.
+
+    Found by its header text, not a row number: the block moves with the size of the BOM
+    above it, and a fixed row would silently read whatever had shifted into it.
+    """
+    if "Estimate" not in wb.sheetnames:
+        return {}
+    ws = wb["Estimate"]
+    header_row = None
+    for r in range(1, min(ws.max_row, 120) + 1):
+        joined = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 26)).lower()
+        if "part length" in joined and "gauge" in joined and "part description" in joined:
+            header_row = r
+            break
+    if header_row is None:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in range(header_row + 1, ws.max_row + 1):
+        text = str(ws.cell(r, _STEEL_COLS["desc"]).value or "").strip()
+        if not text:
+            # Blank template rows sit between the blocks; stop once we have started and
+            # then hit two in a row, rather than running on into "Other Sheet Material".
+            if out and not str(ws.cell(r + 1, _STEEL_COLS["desc"]).value or "").strip():
+                break
+            continue
+        code = text.split()[0].strip().upper()
+        out[code] = {"row": r, "text": text,
+                     **{k: ws.cell(r, c).value for k, c in _STEEL_COLS.items() if k != "desc"}}
+    return out
+
+
 def _estimate_bom(wb) -> List[Dict[str, Any]]:
     """The Bill of Materials block on the Estimate sheet.
 
@@ -123,7 +167,8 @@ def _pages_of(record: Dict[str, Any]) -> str:
 _INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
 
 
-def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]) -> str:
+def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]],
+                  steel_index: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     """Which book priced this line, in words an estimator can act on.
 
     THE FABRICATED PARTS ARE NOT UNPRICED. Every "-M" line carries a blank in the BOM's
@@ -141,7 +186,12 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
     named = str(prov.get("Price Source") or prov.get("price_source") or "").strip()
 
     if "costed in sheet steel" in text.lower():
-        return "priced by blank area on the Sheet Steel block, not per piece"
+        # NAME THE ROW IT IS COSTED ON. "priced below" is true and stops exactly where the
+        # question starts; an estimator wants to look at the figure, not be told it exists.
+        steel_row = (steel_index or {}).get(code, {}).get("row")
+        return (f"by blank area — see `Estimate!{steel_row}` below"
+                if steel_row else
+                "by blank area on the Sheet Steel block, not per piece")
     if bom_row.get("price") in (None, ""):
         return "**NOT PRICED — needs a rate**"
     if any(token in supplier.lower() for token in _INDICATIVE):
@@ -194,6 +244,7 @@ def _fmt(value: Any, dash: str = "—") -> str:
 def build(workbook: Path, scan_json: Optional[Path]) -> str:
     wb = openpyxl.load_workbook(workbook, data_only=True)
     scan = _scan_parts(scan_json)
+    steel = _steel_rows(wb)
     material = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Material Detail")}
     provenance = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Price Provenance")}
     routes = _sheet(wb, "Canonical Route")
@@ -227,12 +278,47 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             f"| {_description(row)} "
             f"| {_fmt(row.get('qty'))} "
             f"| {_fmt(row.get('price'))} "
-            f"| {_price_source(row, provenance)} "
+            f"| {_price_source(row, provenance, steel)} "
             f"| {_fmt(mat.get('Material'))} "
             f"| {_fmt(mat.get('Gauge'), 'none — not sheet')} "
             f"| {blank} "
             f"| {_pages_of(rec) if rec else 'not supplied'} |")
     add("")
+
+    # ── where the fabricated money actually is ───────────────────────────────
+    if steel:
+        add("## The fabricated parts, priced by blank area")
+        add("")
+        add("Each of these shows a dash in the BOM price column above. That is not a missing "
+            "rate — sheet metal is costed from its blank on this block, and pricing it in "
+            "both places would double it. This is the other half of those lines.")
+        add("")
+        add("| Part | Blank L × W | Gauge | Off a sheet | Scrap | Cost/part | Qty | "
+            "Extended | Sheet row |")
+        add("|---|---|---|---|---|---|---|---|---|")
+        for code, row in steel.items():
+            # COST FROM THE RESOLVED FIGURE, NOT THE FORMULA CELL. The Sheet Steel block's
+            # cost column is an Excel formula, and a workbook written by the engine and never
+            # opened has no cached result — so reading that cell alone gives nothing and the
+            # table says "computes in Excel" on the one column an estimator came for. The
+            # engine's own resolved figure for the same part is on AI Material Detail, which
+            # is a value, not a formula. Still read, never recalculated here.
+            mat = material.get(code, {})
+            add(f"| {code} "
+                f"| {_fmt(row.get('length'))} × {_fmt(row.get('width'))} "
+                f"| {_fmt(row.get('gauge'))} "
+                f"| {_fmt(row.get('sheet_l'))} × {_fmt(row.get('sheet_w'))} "
+                f"| {_fmt(row.get('scrap'))} "
+                f"| {_fmt(mat.get('Cost/Part'), 'not resolved')} "
+                f"| {_fmt(row.get('qty'))} "
+                f"| {_fmt(mat.get('Ext Material'), 'not resolved')} "
+                f"| `Estimate!{row['row']}` |")
+        add("")
+        add("> Cost per part and extended are the engine's own resolved figures, read from "
+            "the AI Material Detail tab. The Sheet Steel block holds them as Excel formulas, "
+            "which have no value until the workbook is opened — nothing here is "
+            "recalculated, so this cannot disagree with the sheet.")
+        add("")
 
     # ── every route line ─────────────────────────────────────────────────────
     add("## Every operation, and who decided it")
