@@ -280,6 +280,13 @@ def _pack_files(data: Any) -> List[str]:
     out: List[str] = []
     for key in ("job_source_pdfs", "source_pdfs"):
         for item in (data.get(key) or []):
+            # `job_source_pdfs` holds RECORDS, not paths — file_scan writes
+            # {"name", "path", "page_count"} per document, while `source_pdfs` is a plain
+            # list of paths. _basename() was handed the dict and stringified it, so the
+            # pack read `{'name': '12552-00-GA_Infinity Drawer_RevC.PDF'}` and any answer
+            # built from it carried the braces into the report.
+            if isinstance(item, dict):
+                item = item.get("name") or item.get("path") or ""
             name = _basename(item)
             if name and name not in out:
                 out.append(name)
@@ -291,7 +298,38 @@ def _pack_files(data: Any) -> List[str]:
     return out
 
 
-def _file_of(record: Dict[str, Any], pack: List[str]) -> str:
+def _page_index(data: Any) -> Dict[int, Dict[str, Any]]:
+    """job page number -> which PDF it is a page of, and the page number PRINTED on it.
+
+    A PACK OF FOUR DRAWINGS HAS FOUR PAGE ONES. file_scan renumbers every page across the
+    whole job so `page_number` is unique — 1..N — and keeps the document's own number as
+    `source_page_number`, "the per-PDF original for display". Nothing was displaying it.
+
+    So a part on the second document's page 4 was reported as "p.18": a number that appears
+    on no drawing anybody can open, next to a file name that was only ever filled in when the
+    pack happened to hold exactly ONE PDF. An estimator turning to p.18 of a 12-page drawing
+    finds nothing there, and has no way to tell which of the four documents to look in.
+
+    Both halves of "where did you see that" come from here.
+    """
+    out: Dict[int, Dict[str, Any]] = {}
+    pages = (data or {}).get("pages") if isinstance(data, dict) else None
+    for page in pages or []:
+        if not isinstance(page, dict):
+            continue
+        try:
+            job_page = int(page.get("job_page_number") or page.get("page_number"))
+        except (TypeError, ValueError):
+            continue
+        name = _basename(page.get("source_pdf_name") or page.get("source_pdf_path") or "")
+        printed = page.get("source_page_number")
+        out[job_page] = {"file": name,
+                         "printed": printed if printed is not None else job_page}
+    return out
+
+
+def _file_of(record: Dict[str, Any], pack: List[str],
+             pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
     """WHICH FILE, not just which page.
 
     "p.6" is only half an answer when a pack has four PDFs and a folder of DXFs — the estimator
@@ -305,6 +343,13 @@ def _file_of(record: Dict[str, Any], pack: List[str]) -> str:
     own = str(record.get("source_file") or "").strip()
     if own.lower().endswith(".pdf"):
         return _basename(own)
+    # THE PAGE KNOWS WHICH DOCUMENT IT IS A PAGE OF. Asked before falling back to guessing
+    # from the size of the pack, so a four-PDF job answers as precisely as a one-PDF job.
+    named = {(pages or {}).get(_int(p), {}).get("file") for p in (record.get("pages") or [])}
+    named.discard(None)
+    named.discard("")
+    if named:
+        return ", ".join(sorted(named))
     if record.get("pages") and len(pack) == 1:
         # One document in the pack, so every page in it is a page of that document. Said
         # rather than inferred silently: with two PDFs this would be a guess and it declines.
@@ -312,19 +357,44 @@ def _file_of(record: Dict[str, Any], pack: List[str]) -> str:
     return "not recorded"
 
 
-def _where(record: Dict[str, Any], pack: List[str]) -> str:
+def _int(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _where(record: Dict[str, Any], pack: List[str],
+           pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
     """The file and the page, which is what "where did you see that" actually asks."""
     if not record:
         return "not supplied"
-    return f"{_file_of(record, pack)} · {_pages_of(record)}"
+    # A PART LISTED ON THE GA AND DRAWN ON ITS DETAIL IS IN TWO DOCUMENTS. Printing the files
+    # and then the pages leaves the reader to pair them — "GA.PDF, Details.PDF · p.2, p.1"
+    # does not say which page is in which. Where they span, pair each page with its own file.
+    own = record.get("pages") or []
+    if pages and own:
+        seen = {(pages.get(_int(p), {}).get("file") or "") for p in own}
+        seen.discard("")
+        if len(seen) > 1:
+            roles = record.get("page_roles") or []
+            pairs = ", ".join(
+                f"{pages.get(_int(p), {}).get('file') or 'not recorded'} "
+                f"p.{pages.get(_int(p), {}).get('printed', p)}" for p in own)
+            return (f"{pairs} ({', '.join(str(r) for r in roles)})" if roles else pairs)
+    return f"{_file_of(record, pack, pages)} · {_pages_of(record, pages)}"
 
 
-def _pages_of(record: Dict[str, Any]) -> str:
-    pages = record.get("pages") or []
+def _pages_of(record: Dict[str, Any],
+              pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
+    own = record.get("pages") or []
     roles = record.get("page_roles") or []
-    if not pages:
+    if not own:
         return "no sheet of its own"
-    shown = ", ".join(f"p.{p}" for p in pages)
+    # THE NUMBER PRINTED ON THE DRAWING, not the job-wide one. They are the same on a
+    # single-PDF pack and different on every other, and only one of them is a page an
+    # estimator can turn to.
+    shown = ", ".join(f"p.{(pages or {}).get(_int(p), {}).get('printed', p)}" for p in own)
     return f"{shown} ({', '.join(str(r) for r in roles)})" if roles else shown
 
 
@@ -600,7 +670,9 @@ def _synthesised_number(part_number: str) -> bool:
 
 def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
                       steel_calc: Dict[str, Dict[str, Any]],
-                      material: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+                      material: Dict[str, Dict[str, Any]],
+                      pages: Optional[Dict[int, Dict[str, Any]]] = None
+                      ) -> List[Dict[str, Any]]:
     """Every part whose number stopped tracing somewhere, with what it cost.
 
     Reported per part rather than per pack, because "three numbers did not resolve" is not
@@ -639,7 +711,7 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
             "description": str(rec.get("description") or "")[:48],
             "why": why,
             "reader": _reader(rec.get("geometry_source")),
-            "where": _where(rec, pack),
+            "where": _where(rec, pack, pages),
             "gbp": _money(_calc.get("total_value_gbp")) or _money(_det.get("Cost")),
             "blank": (f"{_fmt(_det.get('Blank L'))} x {_fmt(_det.get('Blank W'))}"
                       if _det.get("Blank L") else ""),
@@ -863,6 +935,7 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
         "bom": _estimate_bom(wb),
         "order_qty": _order_quantity(wb),
         "pack": _pack_files(scan_doc),
+        "page_index": _page_index(scan_doc),
     }
 
 
@@ -874,6 +947,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     totals, steel, steel_calc = g["totals"], g["steel"], g["steel_calc"]
     material, provenance, routes = g["material"], g["provenance"], g["routes"]
     bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
+    page_index = g["page_index"]
 
     lines: List[str] = []
     add = lines.append
@@ -951,7 +1025,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                    if kind == "indicative" else
                    "| **£0.00 — the line is costing nothing** "
                    "| **A rate.** Nothing we can query holds a price for this code. ")
-                + f"| {_where(_rec, pack)} |")
+                + f"| {_where(_rec, pack, page_index)} |")
         add("")
 
     # ── does it reconcile ────────────────────────────────────────────────────
@@ -1025,7 +1099,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         blank_l, blank_w = mat.get("Blank L"), mat.get("Blank W")
         blank = (f"{_fmt(blank_l)} × {_fmt(blank_w)}"
                  if blank_l or blank_w else "not a cut part")
-        page = _where(rec, pack)
+        page = _where(rec, pack, page_index)
         _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
         add(f"| {row['code'] or '—'} "
             f"| {_description(row)} "
@@ -1194,7 +1268,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     f"| {_reader(rec.get('thickness_source'))} "
                     f"| {_reader(rec.get('quantity_source'))} "
                     f"| {_reader(rec.get('geometry_source'))} "
-                    f"| {_where(rec, pack)} |")
+                    f"| {_where(rec, pack, page_index)} |")
             add("")
             add("> A SOLIDWORKS source means the part and assembly files themselves were read "
                 "— not the PDF of them. Where the model was available the engine takes the "
@@ -1254,7 +1328,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             f"| {_fmt(row.get('Qty/unit'))} "
             f"| {_fmt(row.get('Source'))} "
             f"| {str(row.get('Reason') or '—')[:70]} "
-            f"| {_where(rec, pack)} |")
+            f"| {_where(rec, pack, page_index)} |")
     add("")
 
     # ── what each sheet could be read for ────────────────────────────────────
@@ -1318,7 +1392,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     missing.append("finish")
                 if not (geom.get("estimated_cut_length_mm") or 0):
                     missing.append("cut length")
-            add(f"| {_where(rec, pack)} | {code or _fmt(rec.get('description'))} "
+            add(f"| {_where(rec, pack, page_index)} | {code or _fmt(rec.get('description'))} "
                 f"| {', '.join(str(m) for m in rec.get('materials') or []) or '**no**'} "
                 f"| {', '.join(str(t) for t in rec.get('thicknesses_mm') or []) or '**no**'} "
                 f"| {', '.join(str(f) for f in rec.get('surface_finishes') or []) or '**no**'} "
@@ -1332,7 +1406,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # size or price a part from something that is not a drawing OF that part. Some of those
     # are our reader's fault and some are the pack's, and the only way to tell which is to
     # print both the break and what the estimate did instead.
-    _untraced = _tracing_failures(scan, pack, steel_calc, material)
+    _untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
     if _untraced:
         add("## Where a part number stopped tracing through the pack")
         add("")
@@ -1415,7 +1489,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                         f"| {str(_u.get('description') or '—')[:44]} "
                         f"| {_gbp_or(_u.get('extended_cost_gbp'), '—')} "
                         f"| {', '.join(str(r) for r in (_u.get('reasons') or [])) or 'not recorded'} "
-                        f"{'· ' + _where(_rec, pack) if _rec.get('pages') else ''} |")
+                        f"{'· ' + _where(_rec, pack, page_index) if _rec.get('pages') else ''} |")
                 add("")
                 add("> A part DXF or a SOLIDWORKS model for the parts above is the single "
                     "thing that would move those lines from read to measured. Every other "
@@ -1557,6 +1631,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     material, provenance = g["material"], g["provenance"]
     labour_rows, material_rows = g["labour_rows"], g["material_rows"]
     order_qty = g["order_qty"] or 1
+    page_index = g["page_index"]
     job = str(g["stem"]).split("_")[0]
 
     _unpriced = [r for r in bom
@@ -1567,7 +1642,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                    and _money(r.get("price"))]
     needs_a_person = _unpriced + _indicative
     labour = _setup_and_run(labour_rows)
-    untraced = _tracing_failures(scan, pack, steel_calc, material)
+    untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
 
     _steel_total = round(sum(_money(r.get("total_value_gbp")) or 0
                              for r in material_rows if r.get("block") == "steel"), 2)
@@ -1629,7 +1704,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _fmt(_det.get("Gauge") or _rec.get("normalized_thickness_mm")),
                 _fmt(r.get("quantity")),
                 _gbp_or(r.get("total_value_gbp"), "—"),
-                _where(_rec, pack),
+                _where(_rec, pack, page_index),
             ])
         add(_table(["Part", "Blank mm", "Ga", "Qty", "£ line total", "Which file and page"],
                    _srows, numeric={3, 4}))
@@ -1649,7 +1724,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _gbp_or(_u, "—"),
                 _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
                 _price_source(row, provenance, scan) or "source not named on the sheet",
-                _where(_rec, pack),
+                _where(_rec, pack, page_index),
             ])
         add(_table(["Line", "What it is", "Qty", "£/ea", "£ ext", "Source",
                     "Which file and page"], _brows, numeric={2, 3, 4}))
@@ -1707,7 +1782,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 ("An AI market indication, not a catalogue price. Overwrite it, or accept it "
                  "deliberately." if _is_ind else
                  "The line is costing nothing — nothing we can query holds a rate for this."),
-                _where(scan.get(str(row.get("code") or "").upper()) or {}, pack),
+                _where(scan.get(str(row.get("code") or "").upper()) or {}, pack, page_index),
             ])
         add(_table(["Line", "What it is", "On the sheet now", "What's needed",
                     "Which file and page"], _nrows, numeric={2}))
@@ -1729,7 +1804,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _rrows.append([
                 _fmt(row.get("Target")), _fmt(row.get("Operation")), _fmt(row.get("Seq")),
                 _fmt(row.get("Scope")), _fmt(row.get("Qty/unit")), _fmt(row.get("Source")),
-                str(row.get("Reason") or "—")[:80], _where(_rec, pack),
+                str(row.get("Reason") or "—")[:80], _where(_rec, pack, page_index),
             ])
         add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
                     "On what basis", "Which file and page"], _rrows, numeric={2, 4}))
@@ -1765,7 +1840,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _rel = ((rec.get("geometry_rollup") or {}).get("confidence") or {}).get(
                 "geometry_reliability")
             _qrows.append([
-                _where(rec, pack), code or _fmt(rec.get("description")),
+                _where(rec, pack, page_index), code or _fmt(rec.get("description")),
                 ", ".join(str(m) for m in rec.get("materials") or []) or "no",
                 ", ".join(str(t) for t in rec.get("thicknesses_mm") or []) or "no",
                 ", ".join(str(f) for f in rec.get("surface_finishes") or []) or "no",
