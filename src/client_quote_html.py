@@ -959,6 +959,22 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   .head .cust {{ text-align:right; display:flex; align-items:center;
                  justify-content:flex-end; min-height:44px; }}
   .head .cust img {{ max-height:56px; width:auto; display:block; }}
+  /* WHO PRODUCED THIS, BETWEEN WHOSE IT IS AND WHO IT IS FOR.
+     The letterhead carried SDI's mark and the customer's and nothing between them, so a
+     quote gave no sign of what produced it. Set in the portal's own two-line lockup so the
+     page and the document read as one system.
+     The accent is NOT --sdi-yellow: that is tuned for the dark band, and #F5D947 on white
+     is barely a colour. This is the same gold already used for the provisional banner's
+     rule, which was chosen to survive being printed in black and white. */
+  .head .mark {{ flex:1; text-align:center; line-height:1.25; padding:0 8px; }}
+  .head .mark .eyebrow {{ display:block; font-size:9.5px; letter-spacing:.18em;
+                          text-transform:uppercase; color:var(--muted); }}
+  .head .mark .name {{ display:block; font-size:15px; font-weight:600; color:var(--sdi-ink);
+                       white-space:nowrap; }}
+  .head .mark .name b {{ color:#B8860B; font-weight:600; }}
+  /* On a narrow page the three-up header stacks; the mark goes first out of the middle
+     rather than squeezing the two logos it sits between. */
+  @media (max-width:560px) {{ .head .mark {{ display:none; }} }}
   .band {{ background:var(--sdi-ink); color:#fff; padding:20px 40px; }}
   /* Not decorative. This is the difference between a price the shop can commit to and one
      the engine could not verify, and it has to survive being printed in black and white. */
@@ -1005,6 +1021,10 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   <div class="sheet">
     <div class="head">
       <div class="sdi">{sdi_logo}</div>
+      <div class="mark">
+        <span class="eyebrow">SDI Intelligence</span>
+        <span class="name">SDI Estimating <b>Intelligence</b></span>
+      </div>
       <div class="cust">{cust_header}</div>
     </div>
     <div class="band">
