@@ -58,7 +58,8 @@ _KNOWN_UNDECLARED = {
     ("document_builder.py", "record"),      # stamps quantity_source on a record it just made
     ("extract_bom_to_sql.py", "mapping"),   # a column index, not a quantity
     ("main.py", "summary"),                 # the ORDER quantity, not a part's
-    ("parity_check.py", "out"),             # a report header
+    # parity_check.py's `out` is gone: the rebuilt harness assembles its report as a list of
+    # lines and returns it, rather than writing a dict somebody downstream reads as a record.
     ("reconciliation.py", "reconciled"),    # an estimator override, applied deliberately
     ("route_compiler.py", "record"),        # a route node's qty from the BOM tree
     ("wb_populate.py", "item"),             # a spreadsheet row, not the part
