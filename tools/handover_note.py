@@ -627,15 +627,23 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             f"| {page} |")
         steel_row = steel.get(code)
         if steel_row:
-            per_part = _gbp_or(mat.get("Cost/Part"), "not resolved")
-            extended = _gbp_or(mat.get("Ext Material"), "not resolved")
+            # M IS A LINE TOTAL, NOT A COST PER PART. The column is headed "Cost Per Part"
+            # and holds ROUNDUP(sheet price / parts-per-sheet, 2) x qty x scrap — the whole
+            # line. Printing it under a per-part heading, or dividing it back out by the
+            # quantity, invents a per-piece figure the sheet never computed; printing the AI
+            # Material Detail tab's per-part instead put a blank-area number in the money
+            # column that is not in the unit cost at all. Same naming trap as the labour
+            # block's "Rate Per Hour", which holds a throughput.
+            line_total = _gbp_or((steel_calc.get(code) or {}).get("total_value_gbp"),
+                                 "not read back")
             add(f"| ↳ `Estimate!{steel_row['row']}` "
                 f"| the same part, on the Sheet Steel block "
                 f"| {_fmt(steel_row.get('qty'))} "
-                f"| {per_part} "
-                f"| {extended} "
-                f"| off a {_fmt(steel_row.get('sheet_l'))} × {_fmt(steel_row.get('sheet_w'))} "
-                f"sheet, {_fmt(steel_row.get('scrap'))} scrap "
+                f"| — line total, not per part "
+                f"| **{line_total}** "
+                f"| one {_fmt(steel_row.get('sheet_l'))} × {_fmt(steel_row.get('sheet_w'))} "
+                f"sheet ÷ {_fmt(steel_row.get('per_sheet'), '?')} nested, × qty, "
+                f"× {_fmt(steel_row.get('scrap'))} scrap "
                 f"| {_fmt(mat.get('Material'))} "
                 f"| {_fmt(steel_row.get('gauge'), 'none — not sheet')} "
                 f"| {_fmt(steel_row.get('length'))} × {_fmt(steel_row.get('width'))} "
@@ -672,11 +680,13 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                 f"| {_gbp_or(mat.get('Ext Material'), 'not resolved')} "
                 f"| `Estimate!{row['row']}` |")
         add("")
-        add("> **£ the sheet charges** is what the Sheet Steel row calculated in Excel: the "
-            "cost of one whole sheet of that gauge, divided by how many of the part nest out "
-            "of it, times the quantity. That is the figure in Total Material Cost and the "
-            "one to quote. **The engine's own figure** is the same row as the AI Material "
-            "Detail tab resolved it before Excel ran. Nothing here is recalculated.")
+        add("> **£ the sheet charges** is column M of the Sheet Steel row, and it is a LINE "
+            "TOTAL despite the column being headed *Cost Per Part*: "
+            "`ROUNDUP(sheet price / nest per sheet, 2) x qty x scrap`. Do not divide it back "
+            "out — the sheet computes no per-piece figure. That total is what is inside "
+            "Total Material Cost. **The engine's own figure** is the AI Material Detail tab's "
+            "blank-area calculation of the same part; it is NOT in the unit cost and must "
+            "not be quoted. Nothing here is recalculated.")
         # THE TWO VIEWS OF THE SAME FIFTEEN PARTS, HELD AGAINST EACH OTHER.
         #
         # On 12552 the engine's per-part figures extended to £49.76 while the sheet's own
@@ -697,8 +707,11 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     f"sheet charges {_gbp(_sheet_side)}, a difference of "
                     f"{_gbp(abs(_engine - _sheet_side))}. The usual cause is the nest: the "
                     f"sheet divides a whole sheet by the Nest per sheet column beside each "
-                    f"row, and a part that yields one per sheet carries the whole sheet. "
-                    f"Quote the bold column.")
+                    f"row, and a part that yields one per sheet carries the whole sheet — at "
+                    f"one off that is the template working correctly, not a double charge. "
+                    f"Quote the bold column, and do not change the block to match the other "
+                    f"one without a policy decision: every job costed on this template moves "
+                    f"with it.")
         add("")
 
     # ── every labour line, with the money on it ──────────────────────────────

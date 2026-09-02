@@ -139,7 +139,13 @@ def test_a_part_we_cut_gets_both_of_its_halves_and_the_page_on_each(tmp_path):
         "the Sheet Steel half is the same part on the same drawing — leaving its page blank "
         "is what made the join look like a missing answer")
     assert "650.7 × 178.7" in steel_row and "1.5" in steel_row
-    assert "£6.30" in steel_row, "the extended cost belongs on the row that carries the money"
+    assert "**£6.30**" in steel_row, "column M — the line total — is the money on this row"
+    assert "line total, not per part" in steel_row, (
+        "M is headed 'Cost Per Part' and holds ROUNDUP(sheet/nest,2) x qty x scrap. A "
+        "per-part figure divided back out of it is one the sheet never computed.")
+    assert "£1.05" not in steel_row, (
+        "the AI Material Detail per-part figure is blank-area only and is not in the unit "
+        "cost — it must not appear in the money column")
 
 
 def test_the_two_views_of_the_steel_are_shown_disagreeing(tmp_path):
