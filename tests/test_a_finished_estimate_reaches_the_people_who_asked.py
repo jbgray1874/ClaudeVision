@@ -188,6 +188,18 @@ def _finished_run(**over):
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
+    # TWO MODULES ARE CALLED config, and which one wins depends on who imported first.
+    # src/config.py is the engine's and has no API_KEY; sdi-intelligence-backend/config.py is
+    # the portal's and does. Alone, this file imports the portal's. In the full suite another
+    # test has already put src/ on the path, so estimate_routes._check_key reaches for
+    # config.API_KEY on the engine's module and raises AttributeError — a failure that
+    # appears only when the suite runs together, which is the worst kind.
+    #
+    # Pinned here rather than worked around, because the collision is real: on a machine
+    # where both directories are importable, the portal can bind the wrong config. Worth
+    # fixing properly by naming one of them.
+    if not hasattr(estimate_routes.config, "API_KEY"):
+        estimate_routes.config.API_KEY = ""
     estimate_routes._RUNS.clear()
     yield
     estimate_routes._RUNS.clear()
