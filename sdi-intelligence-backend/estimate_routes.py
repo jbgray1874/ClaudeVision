@@ -434,6 +434,13 @@ class RecipientsRequest(BaseModel):
     recipients: str = ""
 
 
+class SendRequest(BaseModel):
+    recipients: str = ""
+    # Which of the run's OWN deliverables to attach. Empty means all of them except the
+    # customer quote, which is the same rule the automatic send follows.
+    files: List[str] = []
+
+
 class BatchRequest(BaseModel):
     """A hundred drawings that are a hundred enquiries, not one pack."""
     client: str
@@ -1722,6 +1729,69 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         if r is not None and r.run_id == run.run_id:
             r.run_id = ""
     return {"ok": True, "was": was, "run_id": run_id}
+
+
+@router.post("/{run_id}/email")
+def email_run(run_id: str, req: SendRequest,
+              x_sdi_key: Optional[str] = Header(default=None)):
+    """Send a finished run to somebody, now, from the page.
+
+    THE AUTOMATIC SEND ONLY EVER FIRES ONCE, at the moment the runner reports the job done —
+    so an estimate finished before the recipients box existed, or one whose recipients were
+    left empty, or one somebody now wants a second person to see, could not be mailed at all
+    without going to the folder and doing it by hand. That is the job this closes.
+
+    ONLY THIS RUN'S OWN FILES. The paths come back from a page, and this service can read
+    whole shares; accepting an arbitrary path would turn a send button into a way to mail any
+    file the service account can see. Anything not among the run's deliverables is refused by
+    name rather than silently dropped, because a missing attachment nobody was told about is
+    how somebody quotes off a report they never received.
+    """
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "No such run.")
+        _snapshot = run.as_json()
+        _deliverables = list(run.deliverables)
+        _provisional = _looks_provisional(run)
+
+    people, bad = estimate_email.parse_recipients(req.recipients)
+    if bad:
+        raise HTTPException(400, f"These are not email addresses: {', '.join(bad)}.")
+    if not people:
+        raise HTTPException(400, "Nobody to send it to. Add at least one address.")
+    if not _deliverables:
+        raise HTTPException(409, "That run produced no deliverables to send.")
+
+    _own = {str(d.get("path")) for d in _deliverables if isinstance(d, dict) and d.get("path")}
+    chosen = [str(f) for f in (req.files or [])]
+    _foreign = [f for f in chosen if f not in _own]
+    if _foreign:
+        raise HTTPException(
+            400, f"These are not files this run produced: {', '.join(_foreign)}")
+
+    if chosen:
+        # An explicit choice is a decision, quote included. The page shows what it is sending.
+        paths, held = chosen, []
+    else:
+        paths, held = estimate_email.choose_attachments(
+            _deliverables, provisional=_provisional, include_quote=False)
+
+    note = estimate_email.compose(_snapshot, _deliverables, provisional=_provisional)
+    result = estimate_email.send(people, note["subject"], note["html"], note["text"], paths)
+    if held:
+        result["held_back"] = held
+    with _LOCK:
+        _live = _RUNS.get(run_id)
+        if _live is not None:
+            _live.email_result = result
+            _live.line(f"Sent to {', '.join(people)}"
+                       + (f" — {', '.join(result.get('attached') or []) or 'no attachments'}"
+                          if result.get("sent") else f" — NOT SENT: {result.get('reason')}"))
+    if not result.get("sent"):
+        raise HTTPException(502, str(result.get("reason") or "The mail could not be sent."))
+    return result
 
 
 @router.get("/{run_id}")

@@ -2059,13 +2059,61 @@ runBtn.onclick = async () => {
         const a=document.createElement("a");
         a.href="/api/file?path="+encodeURIComponent(d.path);
         a.textContent=d.name; a.target="_blank"; a.rel="noopener";
-        const li=document.createElement("li"); li.appendChild(a); out.appendChild(li);
+        /* PICKABLE, because the automatic send fires once and only at completion. A run
+           finished before the recipients box existed, or one somebody now wants a second
+           person to see, would otherwise have to be mailed by hand from the folder. */
+        const box=document.createElement("input");
+        box.type="checkbox"; box.className="sendPick"; box.value=d.path;
+        box.checked = !/_quote\.html?$/i.test(d.path);   /* the quote is opt-in, as always */
+        box.style.marginRight="8px";
+        const li=document.createElement("li");
+        li.appendChild(box); li.appendChild(a); out.appendChild(li);
       });
+      showSendPanel(s);
     }else{
       setStatus("err","Failed"); if(s.error) line(s.error);
     }
   }, 2000);
 };
+
+/* ══ SEND A FINISHED RUN ══════════════════════════════════════════════════════
+   The automatic send happens once, when the runner reports the job done. This is for
+   everything else: a run finished before the box existed, one whose recipients were left
+   empty, or one a second person now needs. Ticks default to everything except the customer
+   quote — the same rule the automatic send follows, and the tick is how somebody overrides
+   it deliberately rather than by accident. */
+function showSendPanel(s){
+  const old = $("sendPanel"); if(old) old.remove();
+  const wrap = document.createElement("div");
+  wrap.id = "sendPanel";
+  wrap.style.cssText = "margin-top:14px;padding-top:12px;border-top:1px solid var(--line)";
+  wrap.innerHTML =
+    '<label for="sendTo" style="display:block;font-weight:600;margin-bottom:6px">'
+    + 'Email the ticked files to</label>'
+    + '<input id="sendTo" type="text" autocomplete="off" style="width:100%;max-width:520px">'
+    + ' <button id="sendGo" class="btn-measure" type="button" style="margin-left:8px">Send</button>'
+    + '<p class="hint" id="sendHint" style="margin:6px 0 0">The customer quote is unticked by '
+    + 'default. Tick it only when the estimate is ready to leave the building.</p>';
+  out.parentNode.appendChild(wrap);
+  $("sendTo").value = (emailTo && emailTo.value) || "";
+  $("sendGo").addEventListener("click", async () => {
+    const picks = Array.from(document.querySelectorAll(".sendPick"))
+                       .filter(b => b.checked).map(b => b.value);
+    const hint = $("sendHint");
+    if(!picks.length){ hint.textContent = "Tick at least one file."; return; }
+    hint.textContent = "Sending…";
+    try{
+      const r = await api("/api/estimate/" + encodeURIComponent(s.run_id) + "/email", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({recipients: $("sendTo").value || "", files: picks})});
+      const d = await r.json();
+      hint.textContent = r.ok
+        ? ("Sent to " + (d.recipients||[]).join(", ") + " — "
+           + ((d.attached||[]).join(", ") || "no attachments"))
+        : (d.detail || "The mail could not be sent.");
+    }catch(e){ hint.textContent = "Could not reach the server."; }
+  });
+}
 
 /* ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════════════════════
    Upload the amended workbook + the three fields already on this page, POST it, and show

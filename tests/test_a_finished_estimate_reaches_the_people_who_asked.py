@@ -169,3 +169,112 @@ def test_a_client_name_with_an_ampersand_cannot_break_the_page():
         {"drawing_number": "1", "client": "M&S <script>", "units": 1}, [])
     assert "<script>" not in note["html"]
     assert "M&amp;S" in note["html"]
+
+
+# ── sending a run that has already finished ──────────────────────────────────
+
+def _finished_run(**over):
+    run = estimate_routes.Run(
+        run_id="r1", client="fanatics", drawing_number="12349-02", units=7,
+        job_folder="", output_path="", status="done", engine_price_gbp=320.91,
+        deliverables=[{"name": "workbook", "path": "out/12349.xlsx"},
+                      {"name": "report", "path": "out/12349_report.html"},
+                      {"name": "quote", "path": "out/12349_quote.html"}])
+    for key, value in over.items():
+        setattr(run, key, value)
+    estimate_routes._RUNS[run.run_id] = run
+    return run
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    estimate_routes._RUNS.clear()
+    yield
+    estimate_routes._RUNS.clear()
+
+
+def test_only_this_runs_own_files_can_be_sent():
+    """The paths come back from a page, and this service can read whole shares. Accepting an
+    arbitrary path would turn a send button into a way to mail anything the service account
+    can see."""
+    from fastapi import HTTPException
+    _finished_run()
+    with pytest.raises(HTTPException) as caught:
+        estimate_routes.email_run(
+            "r1", estimate_routes.SendRequest(recipients="a@b.co",
+                                              files=[r"C:\ClaudeVision\.env"]), None)
+    assert caught.value.status_code == 400
+    assert ".env" in str(caught.value.detail), "refused by name, not silently dropped"
+
+
+def test_a_run_with_no_deliverables_says_so():
+    from fastapi import HTTPException
+    _finished_run(deliverables=[])
+    with pytest.raises(HTTPException) as caught:
+        estimate_routes.email_run(
+            "r1", estimate_routes.SendRequest(recipients="a@b.co"), None)
+    assert caught.value.status_code == 409
+
+
+def test_sending_to_nobody_is_refused_rather_than_quietly_doing_nothing():
+    """Unlike the automatic send, where empty means "do not send", pressing Send with an
+    empty box is a mistake and should say so."""
+    from fastapi import HTTPException
+    _finished_run()
+    with pytest.raises(HTTPException) as caught:
+        estimate_routes.email_run("r1", estimate_routes.SendRequest(recipients=""), None)
+    assert caught.value.status_code == 400
+    assert "at least one address" in str(caught.value.detail)
+
+
+def test_an_explicit_choice_of_files_includes_the_quote_if_it_was_ticked():
+    """The automatic send withholds the quote. A person ticking it has decided."""
+    _finished_run()
+    sent = {}
+
+    def _fake(recipients, subject, html, text, paths):
+        sent.update(recipients=recipients, paths=paths)
+        return {"sent": True, "recipients": recipients, "attached": [p for p in paths]}
+
+    original = estimate_email.send
+    estimate_email.send = _fake
+    try:
+        estimate_routes.email_run(
+            "r1", estimate_routes.SendRequest(recipients="a@b.co",
+                                              files=["out/12349_quote.html"]), None)
+    finally:
+        estimate_email.send = original
+    assert sent["paths"] == ["out/12349_quote.html"]
+
+
+def test_with_no_choice_it_follows_the_same_rule_as_the_automatic_send():
+    _finished_run()
+    sent = {}
+
+    def _fake(recipients, subject, html, text, paths):
+        sent.update(paths=paths)
+        return {"sent": True, "recipients": recipients, "attached": []}
+
+    original = estimate_email.send
+    estimate_email.send = _fake
+    try:
+        estimate_routes.email_run("r1", estimate_routes.SendRequest(recipients="a@b.co"), None)
+    finally:
+        estimate_email.send = original
+    assert "out/12349_quote.html" not in sent["paths"], "the quote stays opt-in"
+    assert len(sent["paths"]) == 2
+
+
+def test_a_failed_send_is_reported_to_the_page_not_swallowed():
+    from fastapi import HTTPException
+    _finished_run()
+    original = estimate_email.send
+    estimate_email.send = lambda *a, **k: {"sent": False, "reason": "mailbox unavailable"}
+    try:
+        with pytest.raises(HTTPException) as caught:
+            estimate_routes.email_run(
+                "r1", estimate_routes.SendRequest(recipients="a@b.co"), None)
+    finally:
+        estimate_email.send = original
+    assert caught.value.status_code == 502
+    assert "mailbox unavailable" in str(caught.value.detail)
