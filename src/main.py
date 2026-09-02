@@ -211,6 +211,12 @@ def parse_args() -> argparse.Namespace:
         help="After populate, generate client quote (always) + parity report (if a manual estimate is found).",
     )
     parser.add_argument(
+        "--quantity-breaks", type=int, nargs="+", default=None,
+        help="Also file a workbook at each of these quantities, generated from the finished "
+             "estimate. The estimate itself is run at --order-qty; these are recalculated "
+             "from it, which is what an estimator does by hand.",
+    )
+    parser.add_argument(
         "--order-qty", type=int, default=None,
         help="Order/demand quantity for this job (drives batch economics + the WB order qty). "
              "Each tender product prices at its own demand qty. If omitted, the engine's "
@@ -1262,6 +1268,47 @@ def main() -> None:
             except Exception as _note_exc:
                 print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
                       f"fall back to its own short note.", flush=True)
+
+            # THE OTHER QUANTITIES, FILED WITH THE FIRST.
+            #
+            # "we need to price sheets for multiple units.. so 1, 50, 100, 250 and 500 in
+            # this case. this seems to be the norm now." The estimator's own method is to
+            # price one properly and recalculate the rest from it, and quantity_sweep has
+            # done exactly that for a while — as a command nobody was going to remember,
+            # which is the same reason parity ran once.
+            #
+            # Recalculated from THIS estimate rather than re-run: a re-run per quantity is
+            # five hours for arithmetic Excel does in a second, and it would re-ask the
+            # vision model five times for readings that cannot change with the order size.
+            #
+            # The order-level packaging and delivery go down with them so each variant
+            # divides freight by its OWN quantity. Without that a 1-off estimate puts the
+            # whole pallet on every one of 500 units — the biggest single error in a variant,
+            # and it swamps the saving the variant exists to show.
+            _breaks = [q for q in (getattr(args, "quantity_breaks", None) or [])
+                       if int(q) >= 1]
+            if _breaks and xlsx_path:
+                try:
+                    from quantity_sweep import sweep as _sweep
+                    _order_freight: Dict[str, float] = {}
+                    for _cl in (summary.get("commercial_lines") or []):
+                        if isinstance(_cl, dict) and _cl.get("order_gbp"):
+                            _order_freight[str(_cl.get("code") or "").upper()] = float(
+                                _cl["order_gbp"])
+                    _swept = _sweep(xlsx_path, _breaks, save_variants=True,
+                                    order_freight=_order_freight or None)
+                    if _swept:
+                        (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \
+                            list(_swept.get("variants") or [])
+                        summary["quantity_sweep"] = _swept
+                        print(f"   [qty-sweep] {len(_swept.get('variants') or [])} variant "
+                              f"workbook(s) filed at {', '.join(str(q) for q in _breaks)} off"
+                              + ("" if _order_freight else
+                                 " — freight NOT re-priced (no order-level figures on this "
+                                 "run), so each variant says so on its banner"), flush=True)
+                except Exception as _sw_exc:                     # noqa: BLE001
+                    print(f"   [qty-sweep] variants not written ({_sw_exc}) — the estimate "
+                          f"itself is unaffected.", flush=True)
 
         # SDI Intelligence — AI Provenance sheet
         # Added to whichever output was produced (wb_populate or fallback).

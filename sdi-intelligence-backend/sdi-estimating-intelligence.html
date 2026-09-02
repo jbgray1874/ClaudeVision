@@ -299,7 +299,26 @@
   <span>Collapse</span>
 </button>
 </nav>
-<script>(function(){
+<script>
+// EVERY QUANTITY THE ESTIMATE IS WANTED AT, out of one field.
+//
+// A number input cannot hold a list, so this is a text field — and the parsing is done
+// ONCE, here, rather than at each of the three places that post a run, which is how two of
+// them come to disagree about what "1, 50" means.
+//
+// The FIRST number is the one the estimate is actually RUN at. The rest are recalculated
+// from the finished workbook, which is the estimator's own method and the only affordable
+// one: a re-run per quantity is hours of vision reading that cannot change with the order
+// size.
+function unitList() {
+  const seen = [];
+  for (const part of String(units.value || "").split(/[,;\s]+/)) {
+    const n = parseInt(part, 10);
+    if (Number.isFinite(n) && n >= 1 && !seen.includes(n)) seen.push(n);
+  }
+  return seen.length ? seen : [1];
+}
+(function(){
   var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
   if(!t) return;
   document.querySelectorAll(".sdinav-item").forEach(function(a){
@@ -356,7 +375,9 @@
       <div class="row2">
         <div class="field">
           <label for="units">Number of units</label>
-          <input id="units" type="number" min="1" step="1" autocomplete="off">
+          <input id="units" type="text" inputmode="numeric" autocomplete="off"
+                 placeholder="1, 50, 100, 250, 500">
+          <div class="sub">One number, or several separated by commas. The estimate is run at the <b>first</b>; the rest are recalculated from it and filed beside it, one workbook each.</div>
         </div>
         <div class="field">
           <label for="drawing">Drawing number</label>
@@ -1010,7 +1031,7 @@ function refresh(){
   // the other's gate. Asking here is how they cannot get out of step.
   if(typeof renderBatch === "function") renderBatch();
   const missing = [];
-  if(!(parseInt(units.value,10) > 0)) missing.push("number of units");
+  if(!unitList().length)              missing.push("number of units");
   if(!safe(client.value))             missing.push("client");
   if(!safe(drawing.value))            missing.push("drawing number");
   if(!drawings.length)                missing.push("at least one drawing");
@@ -1642,7 +1663,7 @@ function renderBatch(){
      nothing, and un-filing them is manual. */
   const why = [];
   if(!safe(client.value))              why.push("client");
-  if(!(parseInt(units.value,10) > 0))  why.push("number of units");
+  if(!unitList().length)  why.push("number of units");
   if(!batchFiles.length)               why.push("at least one drawing");
   if(!runnersOnline)                   why.push("a connected runner");
   bRun.disabled = why.length > 0 || batchId !== null;
@@ -1699,7 +1720,8 @@ $("bRunLLM").onclick = async () => {
          multi-drawing enquiry, where each file is its own job; sending those here would pool
          a hundred separate enquiries into one confident answer to a different question. */
       body: JSON.stringify({client: safe(client.value), drawing_number: safe(drawing.value),
-                            units: parseInt(units.value,10),
+                            units: unitList()[0],
+                            quantity_breaks: unitList().slice(1),
                             job_folder: folder ? folder.path : null,
                             files: drawings.filter(d => !d.is_dir).map(d => d.path),
                             output_root: OUTPUT_ROOT, deliverables: true,
@@ -1724,7 +1746,8 @@ $("bRun").onclick = async () => {
   try{
     const r = await api("/api/estimate/batch", {method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({client: safe(client.value), units: parseInt(units.value,10),
+      body: JSON.stringify({client: safe(client.value), units: unitList()[0],
+                            quantity_breaks: unitList().slice(1),
                             files: batchFiles.map(f => f.path), output_root: OUTPUT_ROOT,
                             method: (document.querySelector("input[name=bMethod]:checked")
                                      || {}).value || "both"})});
@@ -1959,7 +1982,8 @@ runBtn.onclick = async () => {
   const body = {
     client: safe(client.value),
     drawing_number: safe(drawing.value),
-    units: parseInt(units.value,10),
+    units: unitList()[0],
+    quantity_breaks: unitList().slice(1),
     job_folder: folder ? folder.path : null,
     files: drawings.filter(d => !d.is_dir).map(d => d.path),
     output_root: OUTPUT_ROOT,
@@ -2165,7 +2189,7 @@ overrideFile.addEventListener("change", () => {
 function refreshRegen(){
   const missing=[];
   if(!overrideFile.files[0] && !overrideShare) missing.push("an amended workbook");
-  if(!(parseInt(units.value,10) > 0)) missing.push("the number of units");
+  if(!unitList().length) missing.push("the number of units");
   if(!drawing.value.trim()) missing.push("a drawing number");
   if(!client.value.trim()) missing.push("a client");
   regen.disabled = missing.length > 0;
@@ -2185,7 +2209,7 @@ regen.onclick = async () => {
        engine opens the sheet where it already is. */
     if(overrideShare) fd.append("share_path", overrideShare.path);
     else              fd.append("file", f);
-    fd.append("units", String(parseInt(units.value,10)));
+    fd.append("units", String(unitList()[0]));
     fd.append("drawing", drawing.value.trim());
     fd.append("client", client.value.trim());
     const r = await api("/api/estimate/override", {method:"POST", body:fd});

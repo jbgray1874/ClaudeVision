@@ -173,6 +173,10 @@ class Run:
     units: int
     job_folder: str
     output_path: str
+    # The other quantities this estimate is wanted at. The run happens at `units`; these
+    # are recalculated from the finished workbook and filed beside it. Defaulted, so every
+    # existing caller and every queued run that predates this field still constructs.
+    quantity_breaks: List[int] = field(default_factory=list)
     status: str = "queued"          # queued | running | done | error
     error: str = ""
     queued_at: float = field(default_factory=time.time)
@@ -252,7 +256,8 @@ class Run:
         return {
             "run_id": self.run_id, "status": self.status, "error": self.error,
             "client": self.client, "drawing_number": self.drawing_number,
-            "units": self.units, "output_path": self.output_path,
+            "units": self.units, "quantity_breaks": list(self.quantity_breaks),
+            "output_path": self.output_path,
             "job_folder": self.job_folder, "runner": self.runner,
             "pdf_path": self.pdf_path, "batch_id": self.batch_id,
             "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
@@ -396,6 +401,10 @@ class EstimateRequest(BaseModel):
     client: str
     drawing_number: str
     units: int
+    # THE QUANTITIES THE ESTIMATE IS ALSO WANTED AT. The estimate is RUN at `units`; these
+    # are recalculated from the finished workbook, which is what an estimator does by hand.
+    # Empty means one sheet, exactly as before.
+    quantity_breaks: List[int] = []
     job_folder: Optional[str] = None
     files: List[str] = []
     output_root: Optional[str] = None
@@ -445,6 +454,7 @@ class BatchRequest(BaseModel):
     """A hundred drawings that are a hundred enquiries, not one pack."""
     client: str
     units: int
+    quantity_breaks: List[int] = []
     files: List[str] = []
     output_root: Optional[str] = None
     # "both" runs the fast LLM read AND queues the full estimate. "llm" scans only, which is
@@ -761,6 +771,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         raise HTTPException(400, "A client and a drawing number are both required.")
     if not isinstance(req.units, int) or req.units < 1:
         raise HTTPException(400, "Number of units must be a whole number of 1 or more.")
+    # REFUSED HERE, BEFORE STAGING. A quantity list with a typo in it would otherwise reach
+    # the runner and fail an hour in, on a folder that has already been rewritten.
+    _breaks: List[int] = []
+    for _q in (req.quantity_breaks or []):
+        try:
+            _n = int(_q)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"'{_q}' is not a number of units.")
+        if _n < 1:
+            raise HTTPException(400, "Every quantity must be 1 or more.")
+        if _n != req.units and _n not in _breaks:
+            _breaks.append(_n)
+    if len(_breaks) > 12:
+        raise HTTPException(400, "Twelve quantities is the most a run will file; each one "
+                                 "is a workbook an estimator has to look at.")
 
     # CHECKED BEFORE ANYTHING IS STAGED. Staging clears and refills a folder on the share;
     # doing that and then refusing the run over a typo in one word leaves the estimator's
@@ -882,7 +907,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         # cost of it being there was that the queue could only ever hold one thing.
         busy = _busy_runner()
         run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
-                  units=int(req.units), job_folder=str(job), output_path=str(out),
+                  units=int(req.units), quantity_breaks=list(_breaks),
+                  job_folder=str(job), output_path=str(out),
                   manual_workbook=manual_wb, queued_at=queued_at,
                   llm_only=(method == "llm"),
                   fresh_read=bool(req.fresh_read),

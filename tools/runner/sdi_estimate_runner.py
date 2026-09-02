@@ -203,6 +203,7 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
 
 def engine_command(engine_root: Path, engine_python: Path, job: Path,
                    units: int, client: str, pdf: Optional[Path] = None,
+                   quantity_breaks: Optional[List[int]] = None,
                    manual_workbook: Optional[Path] = None,
                    llm_only: bool = False, fresh_read: bool = False) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
@@ -226,6 +227,14 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         str(Path(engine_root) / "src" / "main.py"),
     ] + (["--pdf", str(pdf)] if pdf else ["--job", str(job)]) + [
         "--order-qty", str(units),
+    ] + (
+        # THE OTHER QUANTITIES THE ESTIMATOR ASKED FOR. The estimate runs at the FIRST one
+        # and the rest are recalculated from it — the estimator's own method, and the only
+        # affordable one: a re-run per quantity is five hours for arithmetic Excel does in a
+        # second, against readings that cannot change with the order size.
+        ["--quantity-breaks", *[str(int(q)) for q in quantity_breaks]]
+        if quantity_breaks else []
+    ) + [
         "--deliverables",
         "--customer", client,
     ] + (
@@ -792,6 +801,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     before = snapshot(engine_root)
     cmd = engine_command(engine_root, engine_python, folder, int(job["units"]),
                          job["client"], pdf=pdf, manual_workbook=manual_wb,
+                         quantity_breaks=[int(q) for q in (job.get("quantity_breaks") or [])],
                          llm_only=bool(job.get("llm_only")),
                          fresh_read=bool(job.get("fresh_read")))
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))

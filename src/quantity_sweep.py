@@ -86,7 +86,8 @@ def _freight_on_sheet(ws, max_row: int) -> Dict[str, Optional[float]]:
 
 def sweep(xlsx_path: Any, quantities: List[int],
           sheet_name: str = "Estimate",
-          save_variants: bool = False) -> Optional[Dict[str, Any]]:
+          save_variants: bool = False,
+          order_freight: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
     """Total Material, Total Labour and Unit Cost at each quantity, read from the sheet.
 
     Returns None with a printed reason rather than raising: this answers a question about an
@@ -128,6 +129,11 @@ def sweep(xlsx_path: Any, quantities: List[int],
         saved: List[str] = []
         for qty in wanted:
             ws.Range(cell).Value = qty
+            # Freight BEFORE the recalculation, so the totals this reads are the corrected
+            # ones. Reading first and re-pricing after would report a number the saved
+            # workbook does not contain.
+            _repriced = (_reprice_freight(ws, max_row, qty, order_freight or {})
+                         if save_variants else {})
             excel.CalculateFull()
             row: Dict[str, Any] = {"quantity": qty}
             for key, needles in _TOTAL_LABELS.items():
@@ -139,7 +145,8 @@ def sweep(xlsx_path: Any, quantities: List[int],
                 # that matters: the original on disk is never written to, by anything, on any
                 # path through this function. Each variant deletes and rewrites the banner, so
                 # one derived from another still says the right quantity.
-                _path = _save_variant(com_wb, book, qty, baseline, freight, row)
+                _path = _save_variant(com_wb, book, qty, baseline, freight, row,
+                                      repriced=_repriced)
                 if _path:
                     saved.append(_path)
                     row["workbook"] = _path
@@ -152,7 +159,8 @@ def sweep(xlsx_path: Any, quantities: List[int],
 
         return {"workbook": str(book), "order_qty_cell": cell,
                 "baseline_quantity": baseline, "rows": rows,
-                "freight_on_sheet": freight, "variants": saved}
+                "freight_on_sheet": freight, "variants": saved,
+                "freight_repriced": bool(order_freight)}
     except Exception as exc:                                     # noqa: BLE001
         print(f"   [qty-sweep] failed ({type(exc).__name__}: {exc}) — the workbook is "
               f"unchanged.", flush=True)
@@ -175,9 +183,41 @@ def sweep(xlsx_path: Any, quantities: List[int],
 _BANNER_SHEET = "READ THIS FIRST"
 
 
+def _reprice_freight(ws, max_row: int, qty: int,
+                     order_freight: Dict[str, float]) -> Dict[str, float]:
+    """Divide the ORDER's packaging and delivery by THIS quantity, in this variant.
+
+    THE ONE THING A RECALCULATED SHEET GETS PLAINLY WRONG. Packaging and delivery are asked
+    for the whole order and divided per unit at run time, so a variant made from a 1-off
+    estimate carries the whole pallet on every one of 500 units — £37.14 a unit that should
+    be about £0.07. It is the single biggest error in a variant and it swamps the saving the
+    variant exists to show.
+
+    The engine knows the ORDER-level figure, and dividing it is arithmetic, not a new
+    estimate. So where the run hands those figures down, each variant carries freight priced
+    for its own quantity; where it does not, the banner says the freight is still the
+    baseline's, exactly as before. Nothing is invented either way.
+    """
+    written: Dict[str, float] = {}
+    if not order_freight:
+        return written
+    for row in range(1, min(max_row, 120) + 1):
+        code = str(ws.Cells(row, 8).Value or "").strip().upper()
+        if not code:
+            continue
+        for wanted, order_gbp in order_freight.items():
+            if not code.startswith(wanted):
+                continue
+            per_unit = round(float(order_gbp) / max(1, qty), 2)
+            ws.Cells(row, 10).Value = per_unit          # J — the line's unit price
+            written[wanted] = per_unit
+    return written
+
+
 def _save_variant(com_wb, book: Path, qty: int, baseline: int,
                   freight: Dict[str, Optional[float]],
-                  row: Dict[str, Any]) -> Optional[str]:
+                  row: Dict[str, Any],
+                  repriced: Optional[Dict[str, float]] = None) -> Optional[str]:
     """Save the recalculated workbook as its own file, opening on a page that says what it is.
 
     A QUANTITY VARIANT LOOKS EXACTLY LIKE A FINISHED ESTIMATE, which is the danger. It has the
@@ -208,11 +248,21 @@ def _save_variant(com_wb, book: Path, qty: int, baseline: int,
             [f"This is {book.name} recalculated at {qty} off. It was estimated at "
              f"{baseline} off, and two things did not re-price when the quantity changed."],
             [""],
-            ["1. FREIGHT IS STILL PRICED AT " + str(baseline) + " OFF."],
-            [f"   Packaging and delivery are worked out for the whole order and divided by "
-             f"it, by the engine, at run time. This sheet still carries "
-             f"GBP {carried:,.2f} per unit from the {baseline}-off run. At {qty} off the "
-             f"real figure is lower, and it has to come from a proper run."],
+            ([f"1. FREIGHT HAS BEEN RE-PRICED FOR {qty} OFF."]
+             if repriced else
+             ["1. FREIGHT IS STILL PRICED AT " + str(baseline) + " OFF."]),
+            ([f"   Packaging and delivery are worked out for the whole order and divided "
+              f"by it. The order figures from the {baseline}-off run have been divided by "
+              f"{qty} instead: "
+              + ", ".join(f"{k} GBP {v:,.2f}/unit" for k, v in sorted(repriced.items()))
+              + ". That is arithmetic on a figure the engine already had, not a new "
+                "estimate — the ORDER cost of boxing and hauling is assumed unchanged, "
+                "which is close enough to compare quantities and is not a quotation."]
+             if repriced else
+             [f"   Packaging and delivery are worked out for the whole order and divided by "
+              f"it, by the engine, at run time. This sheet still carries "
+              f"GBP {carried:,.2f} per unit from the {baseline}-off run. At {qty} off the "
+              f"real figure is lower, and it has to come from a proper run."]),
             [""],
             ["2. BOUGHT-IN PRICES DID NOT STEP DOWN."],
             ["   The template has a quantity price-break lookup and the engine writes a "
