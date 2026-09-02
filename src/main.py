@@ -1468,6 +1468,43 @@ def main() -> None:
                         _gen_bundle(Path(_canon_json2), Path(_manual), _bundle_json, _bundle_csv,
                                     read_via_excel=bool(getattr(args, "full_parity_read_via_excel", False)))
                         print(f"   [deliverables] parity bundle built (manual: {_manual})", flush=True)
+
+                        # THE HARNESS THAT ASKS WHETHER EACH SIDE ADDS UP TO ITSELF.
+                        #
+                        # The bundle above compares the workbook against the scan. This is the
+                        # other question, and the one an estimator asks: how does the engine's
+                        # answer differ from the one a person wrote, block by block and line by
+                        # line, with the inputs behind each difference and the reader that
+                        # supplied them. It was a command somebody had to remember to run, so
+                        # it ran once in July; a comparison nobody performs is not a check.
+                        #
+                        # It refuses to stand behind a parse that does not reconcile, which is
+                        # the whole reason it is safe to file automatically: a bad read says so
+                        # in its own first section rather than producing a confident lane
+                        # analysis of its own omissions.
+                        #
+                        # Failure-isolated like every other deliverable. A parity that cannot
+                        # be built must never cost a run that has already taken an hour.
+                        try:
+                            import parity_check as _pc
+                            _p_manual = _pc.read_house_workbook(Path(_manual))
+                            _p_engine = _pc.read_engine_json(Path(_canon_json2))
+                            _p_text, _p_detail = _pc.build_report(
+                                _p_manual, _p_engine, str(scan_label), Path(_canon_json2))
+                            _p_path = Path(_out_dir) / (
+                                re.sub(r"[^\w\- ]", "", str(scan_label)).strip() + "_parity.txt")
+                            _p_path.write_text(_p_text, encoding="utf-8")
+                            _pc.append_ledger(
+                                str(Path(_out_dir) / "parity_ledger.csv"),
+                                _pc.ledger_row(str(scan_label), _p_manual, _p_engine, _p_detail))
+                            (summary.setdefault("saved_output_paths", {}))["parity"] = str(_p_path)
+                            print(f"   [deliverables] parity -> {_p_path.name} "
+                                  f"(manual reconciles: {_p_detail['manual_reconciles']}, "
+                                  f"engine reconciles: {_p_detail['engine_reconciles']})",
+                                  flush=True)
+                        except Exception as _p_exc:              # noqa: BLE001
+                            print(f"   [deliverables] parity report skipped ({_p_exc}) — the "
+                                  f"bundle above is unaffected.", flush=True)
                     elif not _explicit:
                         print("   [deliverables] no --parity-workbook passed — new-job report only "
                               "(no parity section). Pass --parity-workbook <path> to compare against a "

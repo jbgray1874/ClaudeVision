@@ -253,3 +253,36 @@ def test_a_second_job_is_added_rather_than_replacing_the_first(tmp_path):
     pc.append_ledger(str(led), _row("12552-00", 541.42))
     assert {r["job"] for r in csv.DictReader(led.open(encoding="utf-8"))} == {
         "12349-02", "12552-00"}
+
+
+# ── it runs when the estimator attaches a manual, not when somebody remembers ───
+
+def test_the_run_files_a_parity_when_a_manual_workbook_is_attached():
+    """A comparison nobody performs is not a check. This was a command somebody had to
+    remember, so it ran once in July — while the portal has carried a "compare this run
+    against a manual estimate" field the whole time, wired to a different module."""
+    import ast
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    names = {a.asname or a.name.split(".")[0]
+             for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert "_pc" in names or "parity_check" in names, (
+        "the deliverables pass does not build a parity report")
+
+
+def test_it_is_failure_isolated_like_every_other_deliverable():
+    """A parity that cannot be built must never cost a run that has already taken an hour."""
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    i = src.index("import parity_check as _pc")
+    window = src[i - 400:i + 2000]
+    assert "except Exception" in window and "parity report skipped" in window
+
+
+def test_a_report_over_an_unbalanced_parse_says_so_before_anything_else():
+    """The reason it is safe to file this automatically: a bad read announces itself in its
+    own first section rather than producing a confident analysis of its own omissions."""
+    manual = _side([{"total_value_gbp": 100.0}], [], 50.0, 0.0)
+    engine = _side([{"total_value_gbp": 50.0}], [], 50.0, 0.0)
+    engine["basis"] = "final_estimate"
+    text, _ = pc.build_report(manual, engine, "JOB")
+    assert text.index("does not sum to its own totals") < text.index("MATERIAL, BLOCK BY BLOCK")
