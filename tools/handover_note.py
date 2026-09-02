@@ -334,10 +334,14 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
     if "costed in sheet steel" in text.lower():
         # NAME THE ROW IT IS COSTED ON. "priced below" is true and stops exactly where the
         # question starts; an estimator wants to look at the figure, not be told it exists.
+        # NOT "BY BLANK AREA". That was the AI Material Detail tab's method, and it is not
+        # what the sheet does: column M divides a whole sheet by how many of the part nest
+        # out of it. Naming the wrong method on the row that points at the money is how a
+        # covering note came to quote the blank-area figure.
         steel_row = (steel_index or {}).get(code, {}).get("row")
-        return (f"by blank area — see `Estimate!{steel_row}` below"
+        return (f"costed by nest on the Sheet Steel block — see `Estimate!{steel_row}` below"
                 if steel_row else
-                "by blank area on the Sheet Steel block, not per piece")
+                "costed by nest on the Sheet Steel block, not per piece here")
     if bom_row.get("price") in (None, ""):
         return "**NOT PRICED — needs a rate**"
     if any(token in supplier.lower() for token in _INDICATIVE):
@@ -557,6 +561,8 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # labelled total. Where the two differ the difference is stated in pounds — an
     # explanation that quietly covers 81% of a total is worse than one that says which 19% it
     # cannot see, because only the second sends anybody looking.
+    _pointers = sum(1 for r in bom
+                    if "costed in sheet steel" in str(r.get("text") or "").lower())
     if material_rows or labour_rows:
         add("## This document against the sheet")
         add("")
@@ -565,7 +571,14 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         for block in ("bom", "tube", "steel", "other_sheet"):
             rows_in = [r for r in material_rows if r.get("block") == block]
             if rows_in:
-                add(f"| {_BLOCK_NAMES[block]} | {len(rows_in)} | "
+                # THE BOM BLOCK CARRIES THE POINTERS TOO. Every part costed on Sheet Steel
+                # also has a row up here showing a dash, so a bare count reads as thirty-two
+                # bought-in lines when seventeen of them are what anybody would call bought in.
+                _count = str(len(rows_in))
+                if block == "bom" and _pointers:
+                    _count = (f"{len(rows_in)} — {len(rows_in) - _pointers} priced or awaiting "
+                              f"a rate, {_pointers} pointing at Sheet Steel")
+                add(f"| {_BLOCK_NAMES[block]} | {_count} | "
                     f"{_gbp(_sum_money(rows_in))} | — | — |")
         add(f"| **All material** | {len(material_rows)} | {_gbp(_sum_money(material_rows))} "
             f"| {_gbp(totals['material'])} | {_diff(_sum_money(material_rows), totals['material'])} |")
@@ -642,7 +655,8 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                 f"| — line total, not per part "
                 f"| **{line_total}** "
                 f"| one {_fmt(steel_row.get('sheet_l'))} × {_fmt(steel_row.get('sheet_w'))} "
-                f"sheet ÷ {_fmt(steel_row.get('per_sheet'), '?')} nested, × qty, "
+                f"sheet ÷ {_fmt((steel_calc.get(code) or {}).get('qty_per_sheet'), '?')} "
+                f"nested, × qty, "
                 f"× {_fmt(steel_row.get('scrap'))} scrap "
                 f"| {_fmt(mat.get('Material'))} "
                 f"| {_fmt(steel_row.get('gauge'), 'none — not sheet')} "
@@ -669,11 +683,16 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             # engine's own resolved figure for the same part is on AI Material Detail, which
             # is a value, not a formula. Still read, never recalculated here.
             mat = material.get(code, {})
+            # THE NEST COUNT COMES FROM THE READ-BACK, NOT THE CELL. Qty Per Sheet is a
+            # formula with no cached result in the saved file, so the column read "not
+            # computed" on every row of a job whose whole steel story is the nest. Excel
+            # calculated it and the read-back recorded it.
+            nest = _fmt((steel_calc.get(code) or {}).get("qty_per_sheet"), "not recorded")
             add(f"| {code} "
                 f"| {_fmt(row.get('length'))} × {_fmt(row.get('width'))} "
                 f"| {_fmt(row.get('gauge'))} "
                 f"| {_fmt(row.get('sheet_l'))} × {_fmt(row.get('sheet_w'))} "
-                f"| {_fmt(row.get('per_sheet'), 'not computed')} "
+                f"| {nest} "
                 f"| {_fmt(row.get('scrap'))} "
                 f"| {_fmt(row.get('qty'))} "
                 f"| **{_gbp_or((steel_calc.get(code) or {}).get('total_value_gbp'), 'not read back')}** "

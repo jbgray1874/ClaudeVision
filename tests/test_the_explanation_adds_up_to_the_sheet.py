@@ -131,7 +131,7 @@ def test_a_part_we_cut_gets_both_of_its_halves_and_the_page_on_each(tmp_path):
     """One part, two rows: the BOM's dash and the Sheet Steel row that holds the money."""
     text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
     bom_row = next(l for l in text.splitlines()
-                   if l.startswith("| 12552-01-01M ") and "Sheet Steel block" not in l)
+                   if l.startswith("| 12552-01-01M | CROSS MEMBERS"))
     steel_row = next(l for l in text.splitlines() if "↳ `Estimate!63`" in l)
 
     assert "p.6 (detail)" in bom_row, "the BOM half must name the drawing that owns it"
