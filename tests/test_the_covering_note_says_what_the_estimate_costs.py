@@ -98,18 +98,30 @@ def _scan(path: Path) -> Path:
             "schema": "final_estimate.v2",
             "totals": {"material_gbp": 541.42, "labour_gbp": 323.84, "unit_gbp": 930.39},
             "labour_rows": [
-                {"row": 103, "description": "P.Coat, 16 parts", "department": "P/C",
-                 "batch_hours": 0.344, "rate_gbp_per_hour": 355.43,
-                 "total_value_gbp": 122.23, "setup_cost_gbp": 90.0},
-                {"row": 97, "description": "Laser 1.5, 11 parts", "department": "LASM",
-                 "batch_hours": 0.472, "rate_gbp_per_hour": 68.19,
-                 "total_value_gbp": 32.21, "setup_cost_gbp": 11.4},
+                {"operation": "P.Coat", "description": "P.Coat, 16 parts",
+                 "department": "P/C", "batch_hours": 0.344,
+                 "dept_rate_gbp_per_hour": 355.43, "setup_minutes": 15,
+                 "total_value_gbp": 122.23},
+                {"operation": "Laser (Metal)", "description": "Laser 1.5, 11 parts",
+                 "department": "LASM", "batch_hours": 0.472,
+                 "dept_rate_gbp_per_hour": 68.19, "setup_minutes": 10,
+                 "total_value_gbp": 32.21},
             ],
             "material_rows": [
                 {"block": "steel", "description": "01-01M Cross members",
-                 "quantity": 6, "total_value_gbp": 11.48},
+                 "qty_per_unit": 6, "length_mm": 650.7, "width_mm": 178.7, "gauge": 1.5,
+                 "qty_per_sheet": 18, "total_value_gbp": 11.48},
                 {"block": "steel", "description": "01A Drawer front",
-                 "quantity": 1, "total_value_gbp": 86.40},
+                 "qty_per_unit": 1, "length_mm": 480, "width_mm": 295, "gauge": 1.5,
+                 "total_value_gbp": 86.40},
+                # The block 12349-02's note left out entirely.
+                {"block": "other_sheet", "description": "06A Front cover",
+                 "qty_per_unit": 3, "length_mm": 300, "width_mm": 200, "gauge": 5,
+                 "total_value_gbp": 30.71},
+                {"block": "bom", "part_code": "FIXING908",
+                 "description": "CONCRETE SLAB", "qty_per_unit": 2,
+                 "unit_price_gbp": 85.62, "supplier": "xAI market indication",
+                 "total_value_gbp": 171.24},
             ],
         },
         "parts": [
@@ -156,7 +168,7 @@ def test_the_unit_cost_is_the_first_thing_in_the_body(note):
 
 @pytest.mark.parametrize("heading", [
     "1. The number",
-    "2. Sheet steel",
+    "The material we cut, block by block",
     "3. Bought-in and commercial",
     "4. Labour",
     "that need you",
@@ -169,7 +181,7 @@ def test_every_section_an_estimator_acts_on_is_present(note, heading):
 
 def test_the_sections_are_in_the_order_they_are_read_in(note):
     text = note["text"]
-    order = [text.index("1. The number"), text.index("2. Sheet steel"),
+    order = [text.index("1. The number"), text.index("The material we cut"),
              text.index("3. Bought-in"), text.index("4. Labour"),
              text.index("The drawing pack")]
     assert order == sorted(order)
@@ -182,9 +194,24 @@ def test_the_number_breaks_into_material_and_labour(note):
         assert figure in note["text"], f"{figure} is not in the note"
 
 
-def test_material_is_split_into_bought_in_and_sheet_steel(note):
-    """541.42 total less 97.88 of steel = 443.54 bought-in. Stated, not left to the reader."""
-    assert "£97.88" in note["text"] and "£443.54" in note["text"]
+def test_every_material_block_is_named_with_its_own_subtotal(note):
+    """"bought-in and commercial X plus sheet steel Y", with X computed as (material -
+    steel), announced a third block's money as bought-in. 12349-02 headed section 3 with
+    GBP 69.99 over rows adding to GBP 39.28 that way."""
+    text = note["text"]
+    assert "sheet steel £97.88" in text
+    assert "other sheet material £30.71" in text
+    assert "bought-in and commercial £171.24" in text
+
+
+def test_the_block_nobody_rendered_has_its_own_table(note):
+    assert "Other sheet material" in note["text"] and "06A Front cover" in note["text"]
+
+
+def test_the_material_is_reconciled_against_the_sheets_own_total(note):
+    """A residual is stated rather than absorbed — that difference is the whole reason to
+    print this line."""
+    assert "Material reconciliation" in note["text"] and "£541.42" in note["text"]
 
 
 # ── section 2: the formula, so nobody divides it back out ──────────────────────
@@ -200,8 +227,19 @@ def test_the_note_warns_against_dividing_the_line_total_out(note):
 # ── section 4: the set-up split, which is the quantity story ───────────────────
 
 def test_the_labour_says_how_much_is_set_up(note):
-    assert "£101.40" in note["text"], "the set-up share is the whole of the quantity story"
-    assert "£53.04" in note["text"], "and the run time is the half that does not move"
+    """The sheet records set-up in MINUTES against a department rate, not in pounds. Asking
+    for a `setup_cost_gbp` no row carries returned zero on every row and concluded there was
+    no set-up — so the one sentence that answers "what would 50 off cost" never printed.
+
+    15 min at 355.43/hr and 10 min at 68.19/hr, each divided by the order quantity of 7
+    because Total Value is per unit: 12.69 + 1.62 = 14.32."""
+    assert "£14.32" in note["text"], "the set-up share is the whole of the quantity story"
+    assert "£140.12" in note["text"], "and the run time is the half that does not move"
+
+
+def test_the_set_up_minutes_are_shown_on_each_labour_row(note):
+    section = note["text"].split("4. Labour")[1].split("that need you")[0]
+    assert "Set-up min" in section
 
 
 # ── section 5: what a person has to settle ─────────────────────────────────────

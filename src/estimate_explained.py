@@ -412,7 +412,10 @@ def _sources_of(record: Dict[str, Any], pack: List[str],
             out.append(f"{name} · p.{entry.get('printed', p)}")
     elif own:
         name = _file_of(record, pack, pages)
-        out.append(f"{name} · {_pages_of(record, pages).split(' (')[0]}")
+        # Where the page cannot be resolved, _file_of falls back to the DXF — which is
+        # already the first entry. Naming it twice reads as two documents.
+        if not any(entry.startswith(name) for entry in out):
+            out.append(f"{name} · {_pages_of(record, pages).split(' (')[0]}")
     if roles and out:
         out[-1] = f"{out[-1]} ({roles})"
     return out
@@ -1652,7 +1655,7 @@ def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = N
             f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
-def _setup_and_run(labour_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dict[str, Any]:
     """How much of the labour is set-up, which is the whole of the quantity story.
 
     Set-up does not move with the order and run time does. Stating the split is what lets an
@@ -1660,13 +1663,24 @@ def _setup_and_run(labour_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     £247.40 of £323.84, which is not a detail.
     """
     total = round(sum(_money(r.get("total_value_gbp")) or 0 for r in labour_rows), 2)
-    setup = round(sum(_money(r.get("setup_cost_gbp"))
-                      or _money(r.get("setup_amortised_gbp")) or 0
-                      for r in labour_rows), 2)
+    # THE SHEET RECORDS SET-UP IN MINUTES, NOT IN POUNDS. The read-back carries
+    # `setup_minutes` and `dept_rate_gbp_per_hour`; this asked for `setup_cost_gbp`, got
+    # nothing on every row, and concluded there was no set-up to report — so the one
+    # sentence that answers "what would 50 off cost" never printed. Total Value is per
+    # UNIT and the sheet has already divided the set-up by the order quantity, so the
+    # conversion divides by it too.
+    setup = 0.0
+    known = False
+    for r in labour_rows:
+        mins = _money(r.get("setup_minutes"))
+        rate = _money(r.get("dept_rate_gbp_per_hour"))
+        if mins is None or rate is None:
+            continue
+        known = True
+        setup += (rate / 60.0) * mins / max(1, int(order_qty or 1))
+    setup = round(setup, 2)
     return {"total": total, "setup": setup, "run": round(total - setup, 2),
-            "rows": len(labour_rows),
-            "known": any(r.get("setup_cost_gbp") is not None
-                         or r.get("setup_amortised_gbp") is not None for r in labour_rows)}
+            "rows": len(labour_rows), "known": known}
 
 
 def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
@@ -1682,14 +1696,29 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     page_index = g["page_index"]
     job = str(g["stem"]).split("_")[0]
 
-    _unpriced = [r for r in bom
-                 if r.get("price") in (None, "")
-                 and "costed in sheet steel" not in str(r.get("text") or "").lower()]
+    # A LINE AT £0.00 IS THE ONE THIS SECTION EXISTS FOR, AND IT WAS NOT COUNTED.
+    #
+    # This asked `price in (None, "")`. 12349-02's wood screws, flange buttons, bumpons and
+    # all three acrylic/MDF lines carry a price of 0.0 — a number, not a blank — so none of
+    # them matched, `needs_a_person` came out EMPTY, and section 5 did not render at all.
+    # The message still said "it stays unissued until the lines in §5 are settled", above a
+    # document with no §5 in it. Zero IS the condition: it is what a blank reads as once the
+    # cell has been written.
+    def _reads_as_free(row) -> bool:
+        if "costed in" in str(row.get("text") or "").lower():
+            return False          # its money is in a fabricated block, not missing
+        price = _money(row.get("price"))
+        return price is None or price == 0
+    _unpriced = [r for r in bom if _reads_as_free(r)]
+    # The source string is what names an indication — the supplier cell often holds the
+    # engine's own marker rather than a supplier, and _price_source is what the table prints.
     _indicative = [r for r in bom
-                   if any(t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE)
-                   and _money(r.get("price"))]
+                   if _money(r.get("price"))
+                   and any(t in (f"{r.get('supplier') or ''} "
+                                 f"{_price_source(r, provenance, scan) or ''}").lower()
+                           for t in _INDICATIVE)]
     needs_a_person = _unpriced + _indicative
-    labour = _setup_and_run(labour_rows)
+    labour = _setup_and_run(labour_rows, order_qty)
     untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
 
     _steel_total = round(sum(_money(r.get("total_value_gbp")) or 0
@@ -1729,61 +1758,138 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                       or "the unit cell's own uplift", f"+{_gbp(_other)}"])
     _rows.append([f"Unit cost, {order_qty} off", _gbp(totals.get("unit"))])
     add(_table(["", "£"], _rows, numeric={1}))
-    add(f"<p>Material is bought-in and commercial {_gbp(_bought_total)} plus sheet steel "
-        f"{_gbp(_steel_total)}. Labour is {labour['rows']} sheet rows.</p>")
+    # NAMED BY BLOCK, from the rows themselves. This said "bought-in and commercial X plus
+    # sheet steel Y", where X was (material - steel) — so on any job with an acrylic, MDF or
+    # tube block, material the sheet holds in a third place was announced as bought-in.
+    _by_block = {}
+    for _r in material_rows:
+        _by_block[_r.get("block") or "?"] = round(
+            _by_block.get(_r.get("block") or "?", 0.0)
+            + (_money(_r.get("total_value_gbp")) or 0), 2)
+    _BLOCK_WORDS = {"bom": "bought-in and commercial", "steel": "sheet steel",
+                    "other_sheet": "other sheet material", "tube": "tube and section"}
+    if _by_block:
+        add("<p>Material is "
+            + ", ".join(f"{_BLOCK_WORDS.get(b, b)} {_gbp(v)}"
+                        for b, v in sorted(_by_block.items(), key=lambda kv: -kv[1]))
+            + f". Labour is {_plural(labour['rows'], 'sheet row')}.</p>")
+    else:
+        add(f"<p>Material is bought-in and commercial {_gbp(_bought_total)} plus sheet steel "
+            f"{_gbp(_steel_total)}. Labour is {_plural(labour['rows'], 'sheet row')}.</p>")
 
-    # 2 ─ sheet steel, and the formula that produced it
-    _steel = [r for r in material_rows if r.get("block") == "steel"]
-    if _steel:
-        add(f"<h3>2. Sheet steel — {_gbp(_steel_total)}</h3>")
-        add("<p><b>Priced by nest, not by area.</b> Each line is<br>"
-            "<code>ROUNDUP(sheet price ÷ how many nest per sheet, 2) × qty × 1.04 scrap</code>"
-            "<br>There is no per-piece figure on the sheet — please don't divide these back "
-            "out.</p>")
-        _srows = []
-        for r in sorted(_steel, key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
-            _code = str(r.get("description") or "").split()[0].strip().upper()
-            _det = material.get(_code) or {}
-            _rec = scan.get(_code) or {}
-            _srows.append([
-                str(r.get("description") or "—")[:44],
-                (f"{_fmt(_det.get('Blank L'))} × {_fmt(_det.get('Blank W'))}"
-                 if _det.get("Blank L") else "—"),
-                _fmt(_det.get("Gauge") or _rec.get("normalized_thickness_mm")),
-                _fmt(r.get("quantity")),
-                _gbp_or(r.get("total_value_gbp"), "—"),
-                _drawing_no(_rec),
-                _where(_rec, pack, page_index),
-            ])
-        add(_table(["Part", "Blank mm", "Ga", "Qty", "£ line total", "Drawing no.",
-                    "Which drawing files and pages"], _srows, numeric={3, 4}))
+    # 2 ─ THE FABRICATED MATERIAL, EVERY BLOCK OF IT.
+    #
+    # This rendered the STEEL block and called everything else "bought-in and commercial",
+    # a figure it computed as (material total - steel). On 12349-02 that headed section 3
+    # with GBP 69.99 over rows adding to GBP 39.28: the acrylic and the MDF are in the
+    # sheet's OTHER SHEET MATERIAL block, which nothing here drew, so GBP 30.71 of material
+    # was in the note's arithmetic and on none of its lines — in a document whose first
+    # sentence promises every figure is read from the workbook's own cells.
+    #
+    # Every block the sheet has, each with its own subtotal, and the four reconciled against
+    # Total Material Cost underneath. A residual is stated rather than absorbed.
+    _BLOCK_TITLES = [
+        ("steel", "Sheet steel", True),
+        ("other_sheet", "Other sheet material — acrylic, MDF, board", True),
+        ("tube", "Tube and section", False),
+    ]
+    _fab_total = 0.0
+    _fab_present = [(b, t, n) for b, t, n in _BLOCK_TITLES
+                    if any(r.get("block") == b for r in material_rows)]
+    if _fab_present:
+        add("<h3>2. The material we cut, block by block</h3>")
+        if any(n for _, _, n in _fab_present):
+            add("<p><b>Priced by nest, not by area.</b> Each line in the nested blocks "
+                "below is<br><code>ROUNDUP(sheet price ÷ how many nest per sheet, 2) × qty "
+                "× 1.04 scrap</code><br>There is no per-piece figure on the sheet — please "
+                "don't divide these back out.</p>")
+        for _block, _title, _nested in _fab_present:
+            _rows_b = [r for r in material_rows if r.get("block") == _block]
+            _sub = round(sum(_money(r.get("total_value_gbp")) or 0 for r in _rows_b), 2)
+            _fab_total += _sub
+            add(f"<p><b>{_e(_title)} — {_gbp(_sub)}</b></p>")
+            _srows = []
+            for r in sorted(_rows_b, key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
+                _code = str(r.get("description") or "").split(" ")[0].strip().upper()
+                _rec = scan.get(_code) or {}
+                # THE SHEET'S OWN CELLS, not the AI Material Detail tab. Those are two
+                # records of one fact and they differ — the detail tab holds the engine's
+                # blank-area figure, this holds what the estimate was actually built from.
+                _blank = (f"{_fmt(r.get('length_mm'))} × {_fmt(r.get('width_mm'))}"
+                          if r.get("length_mm") else "—")
+                _srows.append([
+                    str(r.get("description") or "—")[:44], _blank,
+                    _fmt(r.get("gauge") or r.get("thickness_mm")
+                         or _rec.get("normalized_thickness_mm")),
+                    _fmt(r.get("qty_per_unit")), _fmt(r.get("qty_per_sheet")),
+                    _gbp_or(r.get("total_value_gbp"), "—"),
+                    _drawing_no(_rec), _where(_rec, pack, page_index),
+                ])
+            add(_table(["Part", "Blank mm", "Ga", "Qty", "Nest/sheet", "£ line total",
+                        "Drawing no.", "Which drawing files and pages"],
+                       _srows, numeric={3, 4, 5}))
 
-    # 3 ─ bought-in and commercial
-    if bom:
-        add(f"<h3>3. Bought-in and commercial — {_gbp(_bought_total)}</h3>")
+    # 3 ─ bought-in and commercial, from the same record as everything else
+    _bom_rows = [r for r in material_rows if r.get("block") == "bom"]
+    _bom_total = round(sum(_money(r.get("total_value_gbp")) or 0 for r in _bom_rows), 2)
+    if _bom_rows or bom:
+        add(f"<h3>3. Bought-in and commercial — {_gbp(_bom_total if _bom_rows else _bought_total)}</h3>")
         _brows = []
-        for row in sorted(bom, key=lambda r: -((_money(r.get("price")) or 0)
-                                               * (_money(r.get("qty")) or 0))):
-            if "costed in sheet steel" in str(row.get("text") or "").lower():
-                continue
-            _u, _q = _money(row.get("price")), _money(row.get("qty"))
-            _rec = scan.get(str(row.get("code") or "").upper()) or {}
+        _src_by_code = {str(r.get("code") or "").upper(): r for r in bom}
+        for r in sorted(_bom_rows or [], key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
+            _code = str(r.get("part_code") or "").strip()
+            _rec = scan.get(_code.upper()) or {}
+            _srow = _src_by_code.get(_code.upper())
             _brows.append([
-                row.get("code") or "—", _description(row), _fmt(row.get("qty")),
-                _gbp_or(_u, "—"),
-                _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
-                _price_source(row, provenance, scan) or "source not named on the sheet",
+                _code or "—", str(r.get("description") or "—")[:44],
+                _fmt(r.get("qty_per_unit")), _gbp_or(r.get("unit_price_gbp"), "—"),
+                _gbp_or(r.get("total_value_gbp"), "0.00"),
+                (_price_source(_srow, provenance, scan) if _srow else "")
+                or str(r.get("supplier") or "") or "source not named on the sheet",
                 _where(_rec, pack, page_index),
             ])
+        if not _bom_rows:
+            # Pre-read-back fallback: the workbook scan, as before.
+            for row in sorted(bom, key=lambda r: -((_money(r.get("price")) or 0)
+                                                   * (_money(r.get("qty")) or 0))):
+                if "costed in sheet steel" in str(row.get("text") or "").lower():
+                    continue
+                _u, _q = _money(row.get("price")), _money(row.get("qty"))
+                _rec = scan.get(str(row.get("code") or "").upper()) or {}
+                _brows.append([
+                    row.get("code") or "—", _description(row), _fmt(row.get("qty")),
+                    _gbp_or(_u, "—"),
+                    _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
+                    _price_source(row, provenance, scan) or "source not named on the sheet",
+                    _where(_rec, pack, page_index),
+                ])
         add(_table(["Line", "What it is", "Qty", "£/ea", "£ ext", "Source",
-                    "Which file and page"], _brows, numeric={2, 3, 4}))
+                    "Which drawing files and pages"], _brows, numeric={2, 3, 4}))
         if _indicative:
             _ind_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
                                  for r in _indicative), 2)
-            add(f"<p><b>{_plural(len(_indicative), 'of those lines is', 'of those lines are')} "
-                f"AI market indications rather than catalogue prices — {_gbp(_ind_gbp)} "
-                f"between them.</b> They move "
-                f"between runs, so an estimate resting on them cannot be reproduced.</p>")
+            _one = len(_indicative) == 1
+            add(f"<p><b>{len(_indicative)} of those lines "
+                f"{'is an AI market indication' if _one else 'are AI market indications'} "
+                f"rather than "
+                f"{'a catalogue price' if _one else 'catalogue prices'} — {_gbp(_ind_gbp)}"
+                f"{'' if _one else ' between them'}.</b> "
+                f"{'It moves' if _one else 'They move'} between runs, so an estimate "
+                f"resting on {'it' if _one else 'them'} cannot be reproduced.</p>")
+
+    # DOES THE MATERIAL ADD UP. The claim that makes the rest worth reading, and the one a
+    # reader can check without leaving the message.
+    _mat_sheet = _money(totals.get("material"))
+    if _mat_sheet is not None and material_rows:
+        _lines_total = round(_fab_total + _bom_total, 2)
+        _gap = round(_mat_sheet - _lines_total, 2)
+        add(f"<p><b>Material reconciliation.</b> The blocks above come to "
+            f"{_gbp(_lines_total)} against the sheet's Total Material Cost of "
+            f"{_gbp(_mat_sheet)}"
+            + (f" — they agree.</p>" if abs(_gap) < 0.01 else
+               f", a difference of {_gbp(abs(_gap))}. That difference is on the sheet and "
+               f"on no line here, which means a block was not read back. Treat the sheet's "
+               f"figure as the total.</p>"))
 
     # 4 ─ labour
     if labour_rows:
@@ -1794,14 +1900,16 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         _lab_sheet = _money(totals.get("labour"))
         add(f"<h3>4. Labour — {_gbp(_lab_sheet if _lab_sheet is not None else labour['total'])}"
             f" across {labour['rows']} sheet rows</h3>")
-        _lrows = [[r.get("row") or "—", str(r.get("description") or "—")[:48],
+        _lrows = [[str(r.get("operation") or r.get("description") or "—")[:24],
+                   str(r.get("description") or "—")[:46],
                    r.get("department") or "—",
-                   _fmt(r.get("batch_hours")), _gbp_or(r.get("rate_gbp_per_hour"), "—"),
+                   _fmt(r.get("setup_minutes")), _fmt(r.get("batch_hours")),
+                   _gbp_or(r.get("dept_rate_gbp_per_hour"), "—"),
                    _gbp_or(r.get("total_value_gbp"), "—")]
                   for r in sorted(labour_rows,
                                   key=lambda r: -(_money(r.get("total_value_gbp")) or 0))]
-        add(_table(["Row", "Operation", "Dept", "Batch hrs", "£/hr", "£"],
-                   _lrows, numeric={3, 4, 5}))
+        add(_table(["Operation", "What it covers", "Dept", "Set-up min", "Batch hrs",
+                    "£/hr", "£"], _lrows, numeric={3, 4, 5, 6}))
         if labour["known"] and labour["setup"]:
             add(f"<p><b>About {_gbp(labour['setup'])} of the {_gbp(labour['total'])} in this "
                 f"table is set-up</b>, all of it landing on {_plural(order_qty, 'item')}. "
