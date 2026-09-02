@@ -846,6 +846,16 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
 # the newest key reports nothing at all on an older record -- and reporting nothing here
 # looks exactly like an estimate that produced no price.
 _UNIT_COST_KEYS = (
+    # THE FIGURE EXCEL ITSELF CALCULATED, and the only one that provably sums to the sheet's
+    # own totals. final_estimate is written by the read-back after the workbook recalculates;
+    # every other key below is the engine's own pre-workbook arithmetic, which is what the
+    # sheet was BUILT from rather than what it came to.
+    #
+    # It was not in this list, and none of the four that were is present on a v2 record, so
+    # the runner reported no price at all. 12349-02's covering email went out headed "not
+    # reported/unit at 7 off" over an estimate whose workbook had a unit cost in it — the
+    # exact failure the comment below was written to prevent, by a key added since.
+    ("final_estimate", "totals", "unit_gbp"),
     ("workbook_equivalent_pricing", "m105_total_unit_cost_gbp"),
     ("headline_cost_price", "workbook_equivalent_total_unit_cost_gbp"),
     ("headline_cost_price", "total_unit_cost_gbp"),
@@ -864,15 +874,18 @@ def unit_cost_from(summary: Dict[str, Any]) -> Optional[float]:
     """
     if not isinstance(summary, dict):
         return None
-    for outer, inner in _UNIT_COST_KEYS:
-        node = summary.get(outer)
-        if isinstance(node, dict):
-            try:
-                value = float(node.get(inner))
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return round(value, 2)
+    for path in _UNIT_COST_KEYS:
+        node: Any = summary
+        for step in path[:-1]:
+            node = node.get(step) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            continue
+        try:
+            value = float(node.get(path[-1]))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return round(value, 2)
     return None
 
 

@@ -250,9 +250,49 @@ def _money(value: Any) -> str:
         return "not reported"
 
 
+_NOTE_MARKERS = ("_covering_email.html", "_covering_note.html")
+_SUBJECT_LINE = re.compile(r"<!--\s*subject:\s*(.+?)\s*-->")
+
+
+def engine_note(deliverables: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """The covering note the ENGINE wrote, if this run filed one.
+
+    THE NOTE BELONGS WHERE THE NUMBERS ARE. This service has never read an estimate — that
+    was a deliberate choice and it stays — but the consequence was a covering note that could
+    say nothing about the job beyond the single figure it was handed. 12349-02 went out headed
+    "not reported/unit at 7 off" over a list of filenames, because that figure had not
+    arrived and there was nothing else to fall back on.
+
+    So the engine writes the note from the workbook, as a deliverable, and this reads it. The
+    service still knows nothing about estimating; it carries an envelope.
+    """
+    for item in deliverables or []:
+        path = str((item or {}).get("path") or "")
+        if not any(m in path.lower() for m in _NOTE_MARKERS):
+            continue
+        try:
+            html = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        found = _SUBJECT_LINE.search(html[:1000])
+        if not found:
+            continue
+        return {"subject": found.group(1), "html": html,
+                "text": re.sub(r"<[^>]+>", " ", html)}
+    return None
+
+
 def compose(run: Dict[str, Any], deliverables: List[Dict[str, str]],
             provisional: bool = True) -> Dict[str, str]:
-    """Subject, HTML and plain text for one finished estimate."""
+    """Subject, HTML and plain text for one finished estimate.
+
+    Prefers the engine's own note when the run filed one; the short form below is the fallback
+    for a run that predates it or whose note could not be written.
+    """
+    written = engine_note(deliverables)
+    if written:
+        return written
+
     drawing = str(run.get("drawing_number") or "").strip() or "estimate"
     client = str(run.get("client") or "").strip()
     units = run.get("units") or 1
@@ -320,6 +360,10 @@ def choose_attachments(deliverables: List[Dict[str, str]], *, provisional: bool,
     for item in deliverables or []:
         path = str((item or {}).get("path") or "")
         if not path:
+            continue
+        # The covering note IS the message. Attaching it as well sends the reader the same
+        # words twice and puts a file in front of them that they have already read.
+        if any(m in path.lower() for m in _NOTE_MARKERS):
             continue
         if is_customer_quote(path):
             if provisional and not include_quote:

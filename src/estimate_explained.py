@@ -32,6 +32,7 @@ Run it from tools/handover_note.py.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -481,6 +482,105 @@ def _readers_used(scan: Dict[str, Dict[str, Any]]) -> List[str]:
             for k, n in sorted(seen.items(), key=lambda kv: (-_rank(kv[0]), -kv[1], kv[0]))]
 
 
+# ── where a part number stopped tracing through the pack ─────────────────────
+#
+# THE FAILURE DESIGN CAN ACT ON, AND THE ONE NOBODY HAS BEEN TOLD ABOUT.
+#
+# A part number is supposed to travel: BOM row -> detail sheet -> DXF export -> model. Every
+# place it does not is a place the engine had to size or price a part from something that was
+# not a drawing of that part, and every one of those has a £ on it.
+#
+# 12349-02-69 is the case. Its flats are named `...-01A_-01_2MM_High Impact Acrylic_RevA.DXF`
+# — four dash-segments — and the filename parser capped a number at three, so all seven
+# resolved to the grandparent. 01A then had no flat of its own, fell through to a document
+# text scan, and took 2120 x 2120 off the general arrangement. None of that was reported: the
+# estimate simply arrived with a 4.5 square metre acrylic drawer front in it.
+#
+# The engine cannot tell Design their numbering is wrong — usually it is not; usually the
+# READER is. What it can do is say, on every job, exactly where a number stopped tracing and
+# what the estimate did instead, so the two of us can tell which end the fix belongs at.
+
+# Geometry that is not a measurement OF THIS PART. Each means: no flat, no model, so a size
+# came from somewhere that describes the part only indirectly.
+_UNTRACED_GEOMETRY = {
+    "pdf_overall_dims": "sized from the overall on a view rather than a flat pattern",
+    "document_text_largest_numbers": "sized from the largest numbers in the document text — "
+                                     "context-blind, and the biggest numbers in a pack are "
+                                     "usually the general arrangement's",
+    "inference": "sized by inference — nothing on the drawing stated it",
+    "geometry_inference": "sized from reasoning about the part, not from a drawing of it",
+    "llm_extract": "sized from a vision-model reading of the page",
+    "llm_full_extract": "sized from a vision-model reading of the page",
+}
+
+# A TRACING FAILURE IS ABOUT A PART WE HAVE TO CUT.
+#
+# `bom_tree` was in the list above and produced the wrong kind of noise: a bought-in concrete
+# slab has no geometry because it is bought, not because its number stopped tracing, and
+# reporting it here sends somebody to ask Design for a detail drawing of a slab. Nothing is a
+# break in the trail unless the engine needed a drawing of that part and could not find one —
+# which means the part is fabricated.
+
+
+def _synthesised_number(part_number: str) -> bool:
+    """A number the engine invented because the file's own would not resolve.
+
+    drawing_job_merge names a promoted flat `<parent>-DXF<digits>` when it cannot bind it to a
+    real child. That is a legitimate rescue and a loud signal: something in the pack did not
+    trace, and this line may be a duplicate of one that did.
+    """
+    return "-DXF" in str(part_number or "").upper()
+
+
+def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
+                      steel_calc: Dict[str, Dict[str, Any]],
+                      material: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every part whose number stopped tracing somewhere, with what it cost.
+
+    Reported per part rather than per pack, because "three numbers did not resolve" is not
+    something anybody can act on and "01A was sized off the GA at £86" is.
+    """
+    out: List[Dict[str, Any]] = []
+    for code, rec in sorted(scan.items()):
+        if not code:
+            continue
+        _calc = steel_calc.get(code) or {}
+        _det = material.get(code) or {}
+        # Fabricated: the engine cut it, so it needed a drawing of it. A bought-in is
+        # excluded here and reported — with its price and its source — on the bill of
+        # materials, where it belongs.
+        _roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+        _fabricated = bool(_calc or _det.get("Blank L")
+                           or str(rec.get("dxf_source_file") or "").strip()) or (
+            "detail" in _roles and "bought_in" not in _roles)
+        if not _fabricated:
+            continue
+        geom = str(rec.get("geometry_source") or "").strip().lower()
+        pages = rec.get("pages") or []
+        why: List[str] = []
+        if _synthesised_number(rec.get("part_number") or code):
+            why.append("its number was synthesised by the engine — the file it came from "
+                       "could not be bound to a part in the BOM")
+        if geom in _UNTRACED_GEOMETRY:
+            why.append(_UNTRACED_GEOMETRY[geom])
+        if not pages and not str(rec.get("dxf_source_file") or "").strip():
+            why.append("no sheet of its own in the pack and no DXF — nothing in the pack "
+                       "draws this part")
+        if not why:
+            continue
+        out.append({
+            "code": rec.get("part_number") or code,
+            "description": str(rec.get("description") or "")[:48],
+            "why": why,
+            "reader": _reader(rec.get("geometry_source")),
+            "where": _where(rec, pack),
+            "gbp": _money(_calc.get("total_value_gbp")) or _money(_det.get("Cost")),
+            "blank": (f"{_fmt(_det.get('Blank L'))} x {_fmt(_det.get('Blank W'))}"
+                      if _det.get("Blank L") else ""),
+        })
+    return sorted(out, key=lambda d: -(d["gbp"] or 0))
+
+
 # ── the money's provenance ───────────────────────────────────────────────────
 
 _INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
@@ -658,30 +758,56 @@ def _fmt(value: Any, dash: str = "—") -> str:
     return str(value)
 
 
-def build(workbook: Path, scan_json: Optional[Path]) -> str:
+def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
+    """Everything both the document and the covering email are written from.
+
+    ONE READER, TWO RENDERERS. The email restates the estimate's headline figures in the body
+    of a message somebody forwards to a customer's engineer; the markdown document states them
+    in full. If each opened the workbook and totalled it for itself, the two would eventually
+    disagree — and the one that disagreed would be the one already sent. So the reading is done
+    once, here, and both renderers are handed the same numbers.
+    """
     wb = openpyxl.load_workbook(workbook, data_only=True)
     scan_doc = _load_scan(scan_json)
-    scan = _scan_parts(scan_doc)
     final = _final_estimate(scan_doc)
-    sufficiency = _data_sufficiency(scan_doc)
-    accepted = _accepted_labour(scan_doc)
-    labour_rows = [r for r in (final.get("labour_rows") or []) if isinstance(r, dict)]
-    material_rows = [r for r in (final.get("material_rows") or []) if isinstance(r, dict)]
-    totals = _sheet_totals(wb, final)
-    steel = _steel_rows(wb)
-    # The calculated steel rows, keyed the way the block's own description cell is keyed —
-    # the read-back carries no part code for the fabricated blocks, only the description the
-    # engine wrote into them, and that description begins with the part number.
-    steel_calc = {str(r.get("description") or "").split()[0].strip().upper(): r
-                  for r in (final.get("material_rows") or [])
-                  if isinstance(r, dict) and r.get("block") == "steel"
-                  and str(r.get("description") or "").strip()}
-    material = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Material Detail")}
-    provenance = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Price Provenance")}
-    routes = _sheet(wb, "Canonical Route")
-    bom = _estimate_bom(wb)
-    order_qty = _order_quantity(wb)
-    pack = _pack_files(scan_doc)
+    return {
+        "wb": wb,
+        "stem": workbook.stem,
+        "scan_doc": scan_doc,
+        "scan": _scan_parts(scan_doc),
+        "final": final,
+        "sufficiency": _data_sufficiency(scan_doc),
+        "accepted": _accepted_labour(scan_doc),
+        "labour_rows": [r for r in (final.get("labour_rows") or []) if isinstance(r, dict)],
+        "material_rows": [r for r in (final.get("material_rows") or []) if isinstance(r, dict)],
+        "totals": _sheet_totals(wb, final),
+        "steel": _steel_rows(wb),
+        # The calculated steel rows, keyed the way the block's own description cell is keyed —
+        # the read-back carries no part code for the fabricated blocks, only the description
+        # the engine wrote into them, and that description begins with the part number.
+        "steel_calc": {str(r.get("description") or "").split()[0].strip().upper(): r
+                       for r in (final.get("material_rows") or [])
+                       if isinstance(r, dict) and r.get("block") == "steel"
+                       and str(r.get("description") or "").strip()},
+        "material": {str(r.get("Part") or "").upper(): r
+                     for r in _sheet(wb, "AI Material Detail")},
+        "provenance": {str(r.get("Part") or "").upper(): r
+                       for r in _sheet(wb, "AI Price Provenance")},
+        "routes": _sheet(wb, "Canonical Route"),
+        "bom": _estimate_bom(wb),
+        "order_qty": _order_quantity(wb),
+        "pack": _pack_files(scan_doc),
+    }
+
+
+def build(workbook: Path, scan_json: Optional[Path]) -> str:
+    g = _gather(workbook, scan_json)
+    wb, scan_doc, scan = g["wb"], g["scan_doc"], g["scan"]
+    final, sufficiency, accepted = g["final"], g["sufficiency"], g["accepted"]
+    labour_rows, material_rows = g["labour_rows"], g["material_rows"]
+    totals, steel, steel_calc = g["totals"], g["steel"], g["steel_calc"]
+    material, provenance, routes = g["material"], g["provenance"], g["routes"]
+    bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
 
     lines: List[str] = []
     add = lines.append
@@ -1135,6 +1261,31 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                 f"| {', '.join(missing) or 'nothing — complete'} |")
         add("")
 
+    # ── where a part number stopped tracing, and what it cost ────────────────
+    # FOR DESIGN AS MUCH AS FOR THE ESTIMATOR. Every entry here is a place the engine had to
+    # size or price a part from something that is not a drawing OF that part. Some of those
+    # are our reader's fault and some are the pack's, and the only way to tell which is to
+    # print both the break and what the estimate did instead.
+    _untraced = _tracing_failures(scan, pack, steel_calc, material)
+    if _untraced:
+        add("## Where a part number stopped tracing through the pack")
+        add("")
+        _at_stake = round(sum(u["gbp"] or 0 for u in _untraced), 2)
+        add(f"{_plural(len(_untraced), 'part')} could not be followed from the BOM through to "
+            f"a drawing or a flat of its own"
+            + (f", carrying {_gbp(_at_stake)} between them" if _at_stake else "")
+            + ". Each was still costed — from whatever the engine could reach — and that "
+              "substitution is what the last column names. **Where the break is ours we will "
+              "fix the reader; where it is the pack's, this is the list to send Design.**")
+        add("")
+        add("| Part | What it is | £ on this job | Blank used | Which file and page "
+            "| Where the trail broke |")
+        add("|---|---|---|---|---|---|")
+        for u in _untraced:
+            add(f"| {u['code']} | {u['description'] or '—'} | {_gbp_or(u['gbp'], '—')} "
+                f"| {u['blank'] or '—'} | {u['where']} | {'; '.join(u['why'])} |")
+        add("")
+
     # ── what the pack does not contain, and what it costs ────────────────────
     # ASKED DIRECTLY AND ANSWERED DIRECTLY. "Which drawings are missing, and does it hurt the
     # price?" is a different question from "how good are the drawings we have", and the
@@ -1259,6 +1410,320 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             add("")
 
     return "\n".join(lines)
+
+
+# ── the covering note, in the shape an estimator actually reads ──────────────
+#
+# THE FORMAT IS NOT DECORATION; IT IS THE SPECIFICATION.
+#
+# What went out with 12349-02 was a headline reading "not reported/unit at 7 off" over a list
+# of filenames. James: "the write up is very poor. it needs to be in this format" — and then
+# the note he had written by hand for 12552, which is the thing to reproduce. It works because
+# it answers, in order and before any table: what does it cost, what is the biggest number
+# made of, what is the labour, what needs a person, what is wrong with the pack, and what is
+# wrong with US. An estimator can act on each of those; a list of attachments is not something
+# anybody can act on.
+#
+# Every figure is read from the workbook's own calculated cells through _gather, so this note
+# and the full document cannot disagree — they are the same numbers rendered twice.
+
+_EMAIL_CSS = ("font:14px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
+              "color:#1c2530;max-width:860px")
+_TH = ('style="text-align:left;padding:4px 12px 4px 0;border-bottom:1px solid #c8d2dc;'
+       'font-weight:600;white-space:nowrap"')
+_TD = 'style="padding:3px 12px 3px 0;border-bottom:1px solid #edf1f5;vertical-align:top"'
+_NUM = ('style="padding:3px 12px 3px 0;border-bottom:1px solid #edf1f5;text-align:right;'
+        'white-space:nowrap"')
+
+
+def _plural(count: Any, noun: str, plural: str = "") -> str:
+    """"1 line" and "2 lines". A note an estimator forwards to a customer's engineer should
+    not read "1 part number(s)" — small, and it is the difference between a document that
+    looks written and one that looks generated."""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return f"{count} {noun}s"
+    return f"{n} {noun}" if n == 1 else f"{n} {plural or noun + 's'}"
+
+
+def _e(text: Any) -> str:
+    return (str(text if text is not None else "").replace("&", "&amp;")
+            .replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = None) -> str:
+    numeric = numeric or set()
+    head = "".join(f"<th {_TH}>{_e(h)}</th>" for h in headers)
+    body = "".join(
+        "<tr>" + "".join(
+            f"<td {_NUM if i in numeric else _TD}>{_e(cell)}</td>"
+            for i, cell in enumerate(row)) + "</tr>"
+        for row in rows)
+    return (f'<table style="border-collapse:collapse;margin:10px 0;width:100%">'
+            f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+
+def _setup_and_run(labour_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """How much of the labour is set-up, which is the whole of the quantity story.
+
+    Set-up does not move with the order and run time does. Stating the split is what lets an
+    estimator answer "what would 50 off cost" without another run — and on 12552 it was
+    £247.40 of £323.84, which is not a detail.
+    """
+    total = round(sum(_money(r.get("total_value_gbp")) or 0 for r in labour_rows), 2)
+    setup = round(sum(_money(r.get("setup_cost_gbp"))
+                      or _money(r.get("setup_amortised_gbp")) or 0
+                      for r in labour_rows), 2)
+    return {"total": total, "setup": setup, "run": round(total - setup, 2),
+            "rows": len(labour_rows),
+            "known": any(r.get("setup_cost_gbp") is not None
+                         or r.get("setup_amortised_gbp") is not None for r in labour_rows)}
+
+
+def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
+                   client: str = "", deliverables: Optional[List[str]] = None,
+                   provisional: bool = True) -> Dict[str, str]:
+    """Subject, HTML and plain text for one finished estimate, in seven sections."""
+    g = _gather(workbook, scan_json)
+    scan, final, pack = g["scan"], g["final"], g["pack"]
+    totals, bom, steel_calc = g["totals"], g["bom"], g["steel_calc"]
+    material, provenance = g["material"], g["provenance"]
+    labour_rows, material_rows = g["labour_rows"], g["material_rows"]
+    order_qty = g["order_qty"] or 1
+    job = str(g["stem"]).split("_")[0]
+
+    _unpriced = [r for r in bom
+                 if r.get("price") in (None, "")
+                 and "costed in sheet steel" not in str(r.get("text") or "").lower()]
+    _indicative = [r for r in bom
+                   if any(t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE)
+                   and _money(r.get("price"))]
+    needs_a_person = _unpriced + _indicative
+    labour = _setup_and_run(labour_rows)
+    untraced = _tracing_failures(scan, pack, steel_calc, material)
+
+    _steel_total = round(sum(_money(r.get("total_value_gbp")) or 0
+                             for r in material_rows if r.get("block") == "steel"), 2)
+    _bought_total = round((totals.get("material") or 0) - _steel_total, 2)
+
+    _state = "PROVISIONAL. " if provisional else ""
+    _need = (f"{_plural(len(needs_a_person), 'line')} need a person."
+             if needs_a_person else "No line is waiting on a person.")
+    subject = (f"{job} — SDI Intelligence estimate, {_state}"
+               f"{_gbp(totals.get('unit'))}/unit at {order_qty} off. {_need}")
+
+    h: List[str] = [f'<div style="{_EMAIL_CSS}">']
+    add = h.append
+    add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
+        f"{order_qty} off &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
+    add(f'<p style="font-size:26px;margin:12px 0 4px"><b>{_e(_gbp(totals.get("unit")))}</b>'
+        f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT</span></p>')
+    add("<p>Every figure below is read from the workbook's own calculated cells — nothing "
+        "re-derived. The objective is to give you a set of explains you can work with, so "
+        "please feed back anything that is wrong or missing.</p>")
+    if deliverables:
+        add("<p>Attached: " + " &middot; ".join(f"<b>{_e(_basename(d))}</b>"
+                                                for d in deliverables) + ".")
+        add(" No customer quote — it stays unissued until the lines in §5 are settled.</p>"
+            if provisional else "</p>")
+
+    # 1 ─ the number
+    add("<h3>1. The number</h3>")
+    _rows = [["Material", _gbp(totals.get("material"))],
+             ["Labour", _gbp(totals.get("labour"))]]
+    _sub = round((totals.get("material") or 0) + (totals.get("labour") or 0), 2)
+    _rows.append(["Subtotal", _gbp(_sub)])
+    _other = _money(_fe_totals(final).get("other_gbp"))
+    if _other:
+        _rows.append([(final.get("unit_price_composition") or {}).get("basis")
+                      or "the unit cell's own uplift", f"+{_gbp(_other)}"])
+    _rows.append([f"Unit cost, {order_qty} off", _gbp(totals.get("unit"))])
+    add(_table(["", "£"], _rows, numeric={1}))
+    add(f"<p>Material is bought-in and commercial {_gbp(_bought_total)} plus sheet steel "
+        f"{_gbp(_steel_total)}. Labour is {labour['rows']} sheet rows.</p>")
+
+    # 2 ─ sheet steel, and the formula that produced it
+    _steel = [r for r in material_rows if r.get("block") == "steel"]
+    if _steel:
+        add(f"<h3>2. Sheet steel — {_gbp(_steel_total)}</h3>")
+        add("<p><b>Priced by nest, not by area.</b> Each line is<br>"
+            "<code>ROUNDUP(sheet price ÷ how many nest per sheet, 2) × qty × 1.04 scrap</code>"
+            "<br>There is no per-piece figure on the sheet — please don't divide these back "
+            "out.</p>")
+        _srows = []
+        for r in sorted(_steel, key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
+            _code = str(r.get("description") or "").split()[0].strip().upper()
+            _det = material.get(_code) or {}
+            _rec = scan.get(_code) or {}
+            _srows.append([
+                str(r.get("description") or "—")[:44],
+                (f"{_fmt(_det.get('Blank L'))} × {_fmt(_det.get('Blank W'))}"
+                 if _det.get("Blank L") else "—"),
+                _fmt(_det.get("Gauge") or _rec.get("normalized_thickness_mm")),
+                _fmt(r.get("quantity")),
+                _gbp_or(r.get("total_value_gbp"), "—"),
+                _where(_rec, pack),
+            ])
+        add(_table(["Part", "Blank mm", "Ga", "Qty", "£ line total", "Which file and page"],
+                   _srows, numeric={3, 4}))
+
+    # 3 ─ bought-in and commercial
+    if bom:
+        add(f"<h3>3. Bought-in and commercial — {_gbp(_bought_total)}</h3>")
+        _brows = []
+        for row in sorted(bom, key=lambda r: -((_money(r.get("price")) or 0)
+                                               * (_money(r.get("qty")) or 0))):
+            if "costed in sheet steel" in str(row.get("text") or "").lower():
+                continue
+            _u, _q = _money(row.get("price")), _money(row.get("qty"))
+            _rec = scan.get(str(row.get("code") or "").upper()) or {}
+            _brows.append([
+                row.get("code") or "—", _description(row), _fmt(row.get("qty")),
+                _gbp_or(_u, "—"),
+                _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
+                _price_source(row, provenance, scan) or "source not named on the sheet",
+                _where(_rec, pack),
+            ])
+        add(_table(["Line", "What it is", "Qty", "£/ea", "£ ext", "Source",
+                    "Which file and page"], _brows, numeric={2, 3, 4}))
+        if _indicative:
+            _ind_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
+                                 for r in _indicative), 2)
+            add(f"<p><b>{_plural(len(_indicative), 'of those lines is', 'of those lines are')} "
+                f"AI market indications rather than catalogue prices — {_gbp(_ind_gbp)} "
+                f"between them.</b> They move "
+                f"between runs, so an estimate resting on them cannot be reproduced.</p>")
+
+    # 4 ─ labour
+    if labour_rows:
+        # HEADED WITH THE SHEET'S OWN TOTAL, NOT THE SUM OF THE ROWS BELOW IT. Those are two
+        # different numbers whenever a row could not be read back, and a note whose section 4
+        # contradicts its section 1 is worse than one that admits the gap: the reader stops
+        # trusting both figures rather than the one that is short.
+        _lab_sheet = _money(totals.get("labour"))
+        add(f"<h3>4. Labour — {_gbp(_lab_sheet if _lab_sheet is not None else labour['total'])}"
+            f" across {labour['rows']} sheet rows</h3>")
+        _lrows = [[r.get("row") or "—", str(r.get("description") or "—")[:48],
+                   r.get("department") or "—",
+                   _fmt(r.get("batch_hours")), _gbp_or(r.get("rate_gbp_per_hour"), "—"),
+                   _gbp_or(r.get("total_value_gbp"), "—")]
+                  for r in sorted(labour_rows,
+                                  key=lambda r: -(_money(r.get("total_value_gbp")) or 0))]
+        add(_table(["Row", "Operation", "Dept", "Batch hrs", "£/hr", "£"],
+                   _lrows, numeric={3, 4, 5}))
+        if labour["known"] and labour["setup"]:
+            add(f"<p><b>About {_gbp(labour['setup'])} of the {_gbp(labour['total'])} in this "
+                f"table is set-up</b>, all of it landing on {_plural(order_qty, 'item')}. "
+                f"Run time is "
+                f"{_gbp(labour['run'])}. That is the quantity story in one line: raise the "
+                f"order and the set-up spreads while the run time stays put. Say the word "
+                f"and I'll run a larger quantity properly rather than project it.</p>")
+        if _lab_sheet is not None and abs(_lab_sheet - labour["total"]) >= 0.01:
+            add(f"<p><b>The rows above come to {_gbp(labour['total'])} against the sheet's "
+                f"{_gbp(_lab_sheet)}</b> — {_gbp(round(abs(_lab_sheet - labour['total']), 2))} "
+                f"of labour is on the sheet and not in this table, because the read-back could "
+                f"not resolve every row. Treat the sheet's figure as the total and this table "
+                f"as most of the detail behind it.</p>")
+
+    # 5 ─ what needs a person
+    if needs_a_person:
+        add(f"<h3>5. {_plural(len(needs_a_person), 'line')} that need you</h3>")
+        _nrows = []
+        for row in sorted(needs_a_person,
+                          key=lambda r: -((_money(r.get("price")) or 0)
+                                          * (_money(r.get("qty")) or 0))):
+            _u, _q = _money(row.get("price")), _money(row.get("qty"))
+            _is_ind = row in _indicative
+            _nrows.append([
+                row.get("code") or "—", _description(row),
+                _gbp_or(round(_u * _q, 2) if _u and _q else None, "£0.00"),
+                ("An AI market indication, not a catalogue price. Overwrite it, or accept it "
+                 "deliberately." if _is_ind else
+                 "The line is costing nothing — nothing we can query holds a rate for this."),
+                _where(scan.get(str(row.get("code") or "").upper()) or {}, pack),
+            ])
+        add(_table(["Line", "What it is", "On the sheet now", "What's needed",
+                    "Which file and page"], _nrows, numeric={2}))
+        add("<p>Overwrite anything tagged <b>AI ESTIMATE — INDICATIVE, NOT A QUOTE</b> and "
+            "the sheet recalculates.</p>")
+
+    # 6 ─ the drawing pack, including where a number stopped tracing
+    add("<h3>6. The drawing pack</h3>")
+    _sheets = sorted({int(p) for rec in scan.values() for p in (rec.get("pages") or [])
+                      if isinstance(p, (int, float))})
+    if _sheets:
+        add(f"<p>{_plural(len(pack) or 1, 'document')}, p.1–p.{max(_sheets)}. "
+            f"{_plural(len([r for r in scan.values() if r.get('pages')]), 'costed part')} "
+            f"traced to a sheet of their own.</p>")
+    if untraced:
+        _at_stake = round(sum(u["gbp"] or 0 for u in untraced), 2)
+        add(f"<p><b>{_plural(len(untraced), 'part number')} could not be followed from the "
+            f"BOM through to a drawing or a flat of its own"
+            + (f", carrying {_gbp(_at_stake)} between them" if _at_stake else "")
+            + ".</b> Each was still costed, from whatever the engine could reach — the last "
+              "column says what it used instead. Where the break is ours we will fix the "
+              "reader; where it is the pack's, this is the list for Design.</p>")
+        add(_table(["Part", "What it is", "£ on this job", "Blank used",
+                    "Which file and page", "Where the trail broke"],
+                   [[u["code"], u["description"] or "—", _gbp_or(u["gbp"], "—"),
+                     u["blank"] or "—", u["where"], "; ".join(u["why"])]
+                    for u in untraced], numeric={2}))
+    else:
+        add("<p>Every costed part traced from the BOM through to a drawing or a flat of its "
+            "own. Nothing here for Design.</p>")
+
+    # 7 ─ ours, not yours
+    #
+    # ONLY WHAT WE CAN ACTUALLY OWN. This listed every break in section 6 and called them all
+    # engine defects, which is a claim the engine is not in a position to make: a part with no
+    # sheet in the pack may be our reader or may be a drawing nobody issued. So it names the
+    # SUBSTITUTIONS — a size the engine reached for when it had no measurement — because those
+    # are ours whatever the pack looks like, and leaves the rest in section 6 for us to settle
+    # between us.
+    _substituted = [u for u in untraced
+                    if any(w in _UNTRACED_GEOMETRY.values() for w in u["why"])]
+    _ours = [f"{u['code']} — {u['why'][0]}"
+             + (f" ({_gbp(u['gbp'])} on this job)" if u["gbp"] else "")
+             for u in _substituted[:6]]
+    if _ours:
+        add("<h3>7. Ours, not yours</h3>")
+        add("<p>Where the engine had no measurement it used something else rather than "
+            "leaving the line blank. Each of these is a substitution we made, and ours to "
+            "fix — nothing here needs anything from you:</p>")
+        add("<ul>" + "".join(f"<li>{_e(o)}</li>" for o in _ours) + "</ul>")
+
+    add(f'<p style="color:#5b6b7d;font-size:12px;margin-top:18px">Produced by SDI '
+        f'Intelligence{" for " + _e(client) if client else ""}. '
+        f'The full line-by-line document is the <b>AI Explanation</b> tab in the attached '
+        f'workbook and section 14 of the report — every row with the drawing page it came '
+        f'from, which reader decided it, and what it charges.</p>')
+    add("</div>")
+    html = "\n".join(h)
+    return {"subject": subject, "html": html, "text": _as_text(html)}
+
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _as_text(html: str) -> str:
+    """A plain-text alternative that keeps the shape. Not a general HTML renderer: it reads
+    only the markup produced above, which is why it can be this short."""
+    text = html
+    for pattern, repl in (
+            (r"</h3>", "\n"), (r"<h3[^>]*>", "\n\n"), (r"</p>", "\n"),
+            (r"</tr>", "\n"), (r"</li>", "\n"), (r"<br\s*/?>", "\n"),
+            (r"</t[dh]>", "  ")):
+        text = re.sub(pattern, repl, text)
+    text = _TAG.sub("", text)
+    text = (text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", '"').replace("&middot;", "·"))
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    out: List[str] = []
+    for line in lines:
+        if line.strip() or (out and out[-1].strip()):
+            out.append(line)
+    return "\n".join(out).strip() + "\n"
 
 
 # ── the same document, in a shape other renderers can use ────────────────────

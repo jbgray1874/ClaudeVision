@@ -1229,6 +1229,40 @@ def main() -> None:
                 print(f"   [explanation-tab] skipped ({_tab_exc}) — the workbook is "
                       f"unchanged.", flush=True)
 
+            # THE COVERING NOTE, WRITTEN WHERE THE NUMBERS ARE.
+            #
+            # The mail service composed this, and by design has never read an estimate — so
+            # it could say nothing about the job beyond the one figure it was handed, and
+            # when that figure did not arrive, 12349-02's note went out headed "not
+            # reported/unit at 7 off" over a list of filenames. James: "the write up is very
+            # poor."
+            #
+            # It is written here instead, from the same _gather() the full document uses, so
+            # the note and the document are one reading rendered twice and cannot disagree.
+            # Filed as a deliverable; the service attaches and sends it, and composes nothing.
+            try:
+                from estimate_explained import covering_email as _covering_email
+                _note = _covering_email(
+                    Path(xlsx_path),
+                    Path((summary.get("saved_output_paths") or {}).get("json") or "")
+                    if (summary.get("saved_output_paths") or {}).get("json") else None,
+                    client=str(summary.get("client") or ""),
+                    deliverables=[str(v) for v in
+                                  (summary.get("saved_output_paths") or {}).values() if v],
+                )
+                _note_path = Path(xlsx_path).with_name(
+                    f"{Path(xlsx_path).stem}_covering_email.html")
+                _note_path.write_text(
+                    f"<!-- subject: {_note['subject']} -->\n{_note['html']}",
+                    encoding="utf-8")
+                (summary.setdefault("saved_output_paths", {}))["covering_email"] = str(
+                    _note_path)
+                print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
+                      flush=True)
+            except Exception as _note_exc:
+                print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
+                      f"fall back to its own short note.", flush=True)
+
         # SDI Intelligence — AI Provenance sheet
         # Added to whichever output was produced (wb_populate or fallback).
         #
