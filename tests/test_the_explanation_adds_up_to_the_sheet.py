@@ -151,15 +151,16 @@ def test_the_two_views_of_the_steel_are_shown_disagreeing(tmp_path):
     """
     text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
     row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | 650.7"))
-    assert "£6.30" in row, "the engine's extended figure"
-    assert "these two columns do not agree" not in text.lower(), (
+    assert "**£6.30**" in row, "the sheet's own charge is the bold, quotable figure"
+    assert "the one you pay" not in text, (
         "6.30 against 6.30 is agreement — the warning must not fire on a job that ties")
 
     louder = handover_note.build(_workbook(tmp_path),
                                  _run_json(tmp_path, material_values=(17.60, 0.40)))
-    assert "**These two columns do not agree.**" in louder
-    assert "£11.30 of material turns on which is right" in louder
-    assert "the sheet is charging more" in louder
+    assert "**The two columns disagree, and the sheet's is the one you pay.**" in louder
+    assert "the sheet charges £17.60" in louder
+    assert "a difference of £11.30" in louder
+    assert "Nest per sheet" in louder
 
 
 def test_the_labour_lines_carry_the_money_the_sheet_charged(tmp_path):

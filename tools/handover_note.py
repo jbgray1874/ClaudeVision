@@ -650,8 +650,8 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             "rate — sheet metal is costed from its blank on this block, and pricing it in "
             "both places would double it. This is the other half of those lines.")
         add("")
-        add("| Part | Blank L × W | Gauge | Off a sheet | Scrap | Cost/part | Qty | "
-            "Extended | The sheet's own figure | Sheet row |")
+        add("| Part | Blank L × W | Gauge | Off a sheet | Nest per sheet | Scrap | Qty | "
+            "**£ the sheet charges** | The engine's own figure | Sheet row |")
         add("|---|---|---|---|---|---|---|---|---|---|")
         for code, row in steel.items():
             # COST FROM THE RESOLVED FIGURE, NOT THE FORMULA CELL. The Sheet Steel block's
@@ -665,17 +665,18 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                 f"| {_fmt(row.get('length'))} × {_fmt(row.get('width'))} "
                 f"| {_fmt(row.get('gauge'))} "
                 f"| {_fmt(row.get('sheet_l'))} × {_fmt(row.get('sheet_w'))} "
+                f"| {_fmt(row.get('per_sheet'), 'not computed')} "
                 f"| {_fmt(row.get('scrap'))} "
-                f"| {_fmt(mat.get('Cost/Part'), 'not resolved')} "
                 f"| {_fmt(row.get('qty'))} "
-                f"| {_fmt(mat.get('Ext Material'), 'not resolved')} "
-                f"| {_gbp_or((steel_calc.get(code) or {}).get('total_value_gbp'), 'not read back')} "
+                f"| **{_gbp_or((steel_calc.get(code) or {}).get('total_value_gbp'), 'not read back')}** "
+                f"| {_gbp_or(mat.get('Ext Material'), 'not resolved')} "
                 f"| `Estimate!{row['row']}` |")
         add("")
-        add("> Cost per part and extended are the engine's own resolved figures, read from "
-            "the AI Material Detail tab. **The sheet's own figure** is what the Sheet Steel "
-            "row calculated in Excel, which is the number that reaches Total Material Cost. "
-            "Nothing here is recalculated.")
+        add("> **£ the sheet charges** is what the Sheet Steel row calculated in Excel: the "
+            "cost of one whole sheet of that gauge, divided by how many of the part nest out "
+            "of it, times the quantity. That is the figure in Total Material Cost and the "
+            "one to quote. **The engine's own figure** is the same row as the AI Material "
+            "Detail tab resolved it before Excel ran. Nothing here is recalculated.")
         # THE TWO VIEWS OF THE SAME FIFTEEN PARTS, HELD AGAINST EACH OTHER.
         #
         # On 12552 the engine's per-part figures extended to £49.76 while the sheet's own
@@ -691,13 +692,13 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                                     for r in steel_calc.values()), 2)
             if abs(_engine - _sheet_side) >= 0.01:
                 add("")
-                add(f"> **These two columns do not agree.** The engine's extended figures sum "
-                    f"to {_gbp(_engine)} across {len(steel)} part(s); the sheet's own steel "
-                    f"rows sum to {_gbp(_sheet_side)}, and it is the sheet's figure that reaches "
-                    f"Total Material Cost. {_gbp(abs(_engine - _sheet_side))} of material turns on "
-                    f"which is right. Do not quote a per-part steel cost out of the Cost/part "
-                    f"column until this is settled — the sheet is charging "
-                    f"{'more' if _sheet_side > _engine else 'less'}.")
+                add(f"> **The two columns disagree, and the sheet's is the one you pay.** "
+                    f"The engine resolved these {len(steel)} part(s) at {_gbp(_engine)}; the "
+                    f"sheet charges {_gbp(_sheet_side)}, a difference of "
+                    f"{_gbp(abs(_engine - _sheet_side))}. The usual cause is the nest: the "
+                    f"sheet divides a whole sheet by the Nest per sheet column beside each "
+                    f"row, and a part that yields one per sheet carries the whole sheet. "
+                    f"Quote the bold column.")
         add("")
 
     # ── every labour line, with the money on it ──────────────────────────────
