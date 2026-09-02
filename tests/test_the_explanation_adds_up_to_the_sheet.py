@@ -34,6 +34,10 @@ def _workbook(tmp_path: Path, *, steel_cost=1.05, steel_ext=6.30,
     ws = wb.active
     ws.title = "Estimate"
 
+    # The header cell wb_populate writes the order quantity into; everything on the sheet
+    # that scales with the order reads $D$6.
+    ws.cell(6, 4, 1)
+
     ws.cell(10, 3, "Bill of Materials (per unit)")
     ws.cell(10, 8, "Part code")
     # A part we cut: a dash in the price column, and its money on the Sheet Steel block.
@@ -305,3 +309,52 @@ def test_the_tab_gets_cells_not_markdown(tmp_path):
     assert money[2] == "£6.70"
     labour = next(r for r in rows if r and r[0] == "Estimate!96")
     assert labour[8] == "£50.00"
+
+
+# ── the two things the covering email had to work out by hand ────────────────
+
+def test_the_labour_splits_into_set_up_and_run(tmp_path):
+    """The whole quantity story, and it was being derived by hand for every email.
+
+    Set-up is one-off per department row and spreads across the order; run time per unit
+    never moves. An estimator asked "what would 25 off cost" should not have to open the
+    sheet and find eleven set-up cells and eleven rates themselves.
+    """
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    assert "## What the labour is: set-up, and run time" in text
+    # 10 min at GBP 62.50/hr, on a 1-off estimate, is GBP 10.42 of the GBP 50.00 row.
+    assert "**£10.42 is set-up**" in text
+    assert "**£39.58 is run time**" in text
+    row100 = next(l for l in text.splitlines() if l.startswith("| 100 |"))
+    assert "£0.10" in row100, "set-up per unit falls as 1/qty"
+    assert "£39.58" in row100, "run time per unit is the floor and does not move"
+    assert "not a unit price" in text, (
+        "material and freight are not in that table — saying so is the difference between a "
+        "labour curve and a price somebody quotes")
+
+
+def test_the_lines_needing_a_person_are_listed_not_counted(tmp_path):
+    """"3 lines carry no price" is true and unactionable. They want codes and money."""
+    workbook = _workbook(tmp_path)
+    wb = openpyxl.load_workbook(workbook)
+    ws = wb["Estimate"]
+    ws.cell(13, 3, "BI-SCREW M5X10mm CAP SCREW")
+    ws.cell(13, 8, "BI-SCREW")
+    ws.cell(13, 11, 10)
+    ws.cell(14, 3, "12552-01-02X CONCRETE SLAB")
+    ws.cell(14, 8, "12552-01-02X")
+    ws.cell(14, 9, "xAI Grok LLM - INDICATIVE")
+    ws.cell(14, 10, 85.62)
+    ws.cell(14, 11, 2)
+    wb.save(workbook)
+
+    text = handover_note.build(workbook, _run_json(tmp_path))
+    assert "## What a person still has to settle" in text
+    section = text.split("## What a person still has to settle")[1].split("## ")[0]
+    slab = next(l for l in section.splitlines() if l.startswith("| 12552-01-02X"))
+    assert "£171.24" in slab, "the money at stake, not just the fact of it"
+    assert "cannot be reproduced" in slab
+    screw = next(l for l in section.splitlines() if l.startswith("| BI-SCREW"))
+    assert "£0.00 — the line is costing nothing" in screw
+    assert slab.index("|") < screw.index("|") or section.index(slab) < section.index(screw), (
+        "worst first — an estimator reads the top of the list")

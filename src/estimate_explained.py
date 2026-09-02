@@ -166,6 +166,24 @@ def _fill_totals_from_final(out: Dict[str, Any],
     return out
 
 
+def _order_quantity(wb) -> Optional[int]:
+    """How many this estimate is for, from the header cell the populator writes.
+
+    A plain value, not a formula, so it reads out of the saved file — unlike the totals. It is
+    what makes the set-up split meaningful: a labour row's Total Value is per unit, so the
+    set-up inside it has already been divided by this.
+    """
+    if "Estimate" not in wb.sheetnames:
+        return None
+    try:
+        from wb_populate import CELL_MAP
+        cell = str(CELL_MAP["header"]["order_qty"])
+    except Exception:                                            # noqa: BLE001
+        cell = "D6"
+    value = _money(wb["Estimate"][cell].value)
+    return int(value) if value and value >= 1 else None
+
+
 def _estimate_bom(wb) -> List[Dict[str, Any]]:
     """The Bill of Materials block on the Estimate sheet.
 
@@ -508,6 +526,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     provenance = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Price Provenance")}
     routes = _sheet(wb, "Canonical Route")
     bom = _estimate_bom(wb)
+    order_qty = _order_quantity(wb)
 
     lines: List[str] = []
     add = lines.append
@@ -556,6 +575,37 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     add(f"- **Does this document add up to the sheet?** "
         + _reconciles_sentence(material_rows, labour_rows, totals))
     add("")
+
+    # ── what a person still has to do ────────────────────────────────────────
+    # NAMED, PRICED AND COUNTED, not summarised in a sentence. "3 lines carry no price" is
+    # true and an estimator cannot act on it: they want the codes, the money each one is
+    # worth, the page to look at and whether it is waiting on them or on us. This is the list
+    # that has been retyped into every covering email so far.
+    if _unpriced or _indicative:
+        add("## What a person still has to settle")
+        add("")
+        add(f"{len(_unpriced) + len(_indicative)} line(s). Until these are answered the "
+            f"estimate is not a quote, and the banner on the sheet says so.")
+        add("")
+        add("| Line | What it is | Qty | On the sheet | What it needs | Which sheet |")
+        add("|---|---|---|---|---|---|")
+        _todo = ([(r, "indicative") for r in _indicative]
+                 + [(r, "unpriced") for r in _unpriced])
+        for row, kind in sorted(
+                _todo, key=lambda pair: -((_money(pair[0].get("price")) or 0)
+                                          * (_money(pair[0].get("qty")) or 0))):
+            _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
+            _ext = round(_unit * _qty, 2) if _unit and _qty else None
+            _rec = scan.get(row["code"].upper()) or {}
+            add(f"| {row['code'] or '—'} | {_description(row)} | {_fmt(row.get('qty'))} "
+                + (f"| {_gbp(_ext)} — an AI market indication, not a catalogue price "
+                   f"| **Overwrite it, or accept it deliberately.** It moves between runs, "
+                   f"so an estimate resting on it cannot be reproduced. "
+                   if kind == "indicative" else
+                   "| **£0.00 — the line is costing nothing** "
+                   "| **A rate.** Nothing we can query holds a price for this code. ")
+                + f"| {_pages_of(_rec) if _rec else 'not supplied'} |")
+        add("")
 
     # ── does it reconcile ────────────────────────────────────────────────────
     # THE CLAIM THAT MAKES THE REST OF THE DOCUMENT WORTH READING, AND THE ONE THAT CAN BE
@@ -767,6 +817,42 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add("")
         add(f"> {len(labour_rows)} row(s), {_gbp(_sum_money(labour_rows))} — "
             f"against the sheet's Total Labour Cost of {_gbp(totals['labour'])}.")
+        add("")
+
+    # ── what the labour actually is ──────────────────────────────────────────
+    # THE WHOLE QUANTITY STORY, AND IT WAS BEING WORKED OUT BY HAND. Every labour row carries
+    # a one-off set-up and a run time, and the sheet charges both against however many units
+    # the run was for. The set-up is what falls when the quantity rises; the run time never
+    # moves. Without the split an estimator asked "what would 25 off cost" has to open the
+    # sheet, find eleven set-up cells and eleven rates, and do it themselves — which is what
+    # happened, and it is the kind of arithmetic that goes into an email slightly wrong.
+    if labour_rows and order_qty:
+        _setup = 0.0
+        for row in labour_rows:
+            _mins = _money(row.get("setup_minutes")) or 0.0
+            _rate = _money(row.get("dept_rate_gbp_per_hour")) or 0.0
+            _setup += (_mins / 60.0) * _rate / order_qty
+        _setup = round(_setup, 2)
+        _charged = _sum_money(labour_rows)
+        _run = round(_charged - _setup, 2)
+        add("## What the labour is: set-up, and run time")
+        add("")
+        add(f"This estimate is for **{order_qty} off**. Of the {_gbp(_charged)} of labour on "
+            f"it, **{_gbp(_setup)} is set-up** and **{_gbp(_run)} is run time**. Set-up is a "
+            f"one-off per department row and is spread across the order, so it falls as the "
+            f"quantity rises. Run time per unit does not move at any quantity — it is the "
+            f"floor.")
+        add("")
+        add("| Order qty | Set-up per unit | Run per unit | Labour per unit |")
+        add("|---|---|---|---|")
+        for _q in (1, 10, 25, 50, 100, 250):
+            _s = round(_setup * order_qty / _q, 2)
+            add(f"| {_q}{' — this estimate' if _q == order_qty else ''} | {_gbp(_s)} "
+                f"| {_gbp(_run)} | {_gbp(round(_s + _run, 2))} |")
+        add("")
+        add("> Labour only. Material per part does not change with quantity, and packaging "
+            "and delivery are priced for the whole order at the quantity above — neither is "
+            "in this table, so it is not a unit price. It is what the labour would do.")
         add("")
 
     # ── every route line ─────────────────────────────────────────────────────
