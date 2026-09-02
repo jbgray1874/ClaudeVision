@@ -2215,8 +2215,17 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
 
 
 def generate_report(summary_json_path: str, out_path: Optional[str] = None,
-                    bundle_path: Optional[str] = None, job_stem: Optional[str] = None) -> str:
+                    bundle_path: Optional[str] = None, job_stem: Optional[str] = None,
+                    workbook: Optional[str] = None) -> str:
     summary = json.loads(Path(summary_json_path).read_text(encoding="utf-8"))
+    # A RUN FROM BEFORE THE PATH WAS RECORDED STILL HAS A WORKBOOK. The run JSON only began
+    # naming the estimate it produced recently, so every job estimated before that cannot show
+    # section 14 however good the code is — the report has no way to find the spreadsheet.
+    # Naming it on the command line costs one argument and makes every existing job
+    # regenerable, which is the difference between a fix that applies from now on and one that
+    # applies to the jobs already sitting on the share.
+    if workbook:
+        summary.setdefault("saved_output_paths", {})["estimate_xlsx"] = str(workbook)
     bundle = None
     if bundle_path and Path(bundle_path).exists():
         try:
@@ -2238,8 +2247,11 @@ def main() -> None:
     ap.add_argument("--json", required=True, help="Summary JSON path.")
     ap.add_argument("--bundle", help="Optional parity bundle JSON (adds the comparison section).")
     ap.add_argument("--out", help="Output HTML path.")
+    ap.add_argument("--workbook", help="The estimate .xlsx, for runs made before the JSON "
+                                       "recorded which workbook they produced.")
     args = ap.parse_args()
-    out = generate_report(args.json, out_path=args.out, bundle_path=args.bundle)
+    out = generate_report(args.json, out_path=args.out, bundle_path=args.bundle,
+                          workbook=args.workbook)
     print(f"report -> {out}")
 
 

@@ -90,3 +90,16 @@ def test_wide_tables_scroll_inside_themselves():
     assert ".t-muted{" in css, (
         "used since the report was written and never defined — every t-muted span has been "
         "rendering as ordinary text")
+
+
+def test_a_job_estimated_before_the_path_was_recorded_can_still_be_regenerated(tmp_path):
+    """Every job on the share predates the stamp. A fix that only applies to future runs
+    leaves the two jobs anybody actually wants to look at without section 14."""
+    import ast
+    source = (SRC / "job_report_html.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(source))
+              if isinstance(n, ast.FunctionDef) and n.name == "generate_report")
+    body = ast.get_source_segment(source, fn)
+    assert "workbook" in [a.arg for a in fn.args.args], "nameable on the call"
+    assert '["estimate_xlsx"] = str(workbook)' in body
+    assert "--workbook" in source, "and from the command line"
