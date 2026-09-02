@@ -630,9 +630,29 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
         # Try joining first two if they look like  9376  01  001
         if len(pn_tokens) >= 3 and all(re.match(r"^\d+$", t) for t in pn_tokens[:3]):
             part_number = "-".join(pn_tokens[:3])
-        # Cap at 3 dash-segments: 9233-12-GA-UK-MW → 9233-12-GA
-        if part_number and part_number.count("-") > 2:
-            part_number = "-".join(part_number.split("-")[:3])
+        # TRIM DESCRIPTIVE WORDS, NOT PART NUMBERS.
+        #
+        # This capped at three dash-segments, to turn 9233-12-GA-UK-MW into 9233-12-GA. SDI
+        # numbers a fabrication 12349-02-69-01A — four segments — so on that job EVERY flat
+        # resolved to the top-level 12349-02-69 instead of to the part it belongs to. Seven
+        # acrylic flats arrived at the wrong parent, could bind to nothing there, and were
+        # promoted as standalone parts with invented numbers; meanwhile 01A kept a 2120 x
+        # 2120 bounding box for a blank and one flat was costed twice, once as 03M and once
+        # as an orphan.
+        #
+        # So the cut is decided by what a segment LOOKS like rather than by how many there
+        # are. An identifier is digits with at most one trailing letter — 01A, 03M, 002, 04 —
+        # or GA. A word is not, and stops it, which is what the original cap was for: MM is
+        # two letters, REVA is not digits, UK is not digits.
+        if part_number:
+            _segments = part_number.split("-")
+            _kept = _segments[:2]
+            for _seg in _segments[2:]:
+                if _seg.upper() == "GA" or re.match(r"^\d{1,3}[A-Z]?$", _seg, re.IGNORECASE):
+                    _kept.append(_seg)
+                else:
+                    break
+            part_number = "-".join(_kept)
 
     # SDI filenames like "1453 -01C - 50cm Kick Plate_1mm" — family + detail suffix
     # without a full dashed token in pn_tokens (1453 then -01C breaks the loop).
