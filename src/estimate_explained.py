@@ -858,10 +858,17 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
         # Asked only of an unpriced line: PACKAGING is a category word too, and on a line
         # that carries GBP 25.00 the price is what matters, not the spelling of its code.
         if _is_category is not None and code and _is_category(code):
-            return ("**NOT PRICED — the code column holds a CLASS, not a code.** The drawing "
-                    f"prints '{bom_row['code']}' where the item has no part number of its "
-                    "own, so there is nothing to look a rate up against. Identify it from "
-                    "the description and give it a code, or price it by hand")
+            # WHOSE FAULT IT IS, STATED CAREFULLY. The first version of this told an
+            # estimator to "identify it and give it a code" — and on 12349-02 the engine had
+            # ALREADY resolved BI-SCREW and BI-BUTTONSCREW for two of the three lines and
+            # then kept the class word over them. Asking a person to do work we had already
+            # done and thrown away is worse than saying nothing.
+            return ("**NOT PRICED — the code column holds a CLASS, not a code.** The sheet "
+                    f"carries '{bom_row['code']}', which is the word a drawing prints where "
+                    "an item has no part number, so nothing can look a rate up against it. "
+                    "If the item has an SDI code, put it in and the price follows; if it "
+                    "genuinely has none, price it by hand. Where the engine resolved a real "
+                    "code and this class word displaced it, that is ours")
         return "**NOT PRICED — needs a rate**"
     # PACKAGING AND DELIVERY ARE ORDER-LEVEL, AND THE DIVISOR IS THE POINT.
     #

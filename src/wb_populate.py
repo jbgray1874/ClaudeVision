@@ -3308,7 +3308,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
         ws.cell(row=row, column=b["col_price"],    value=price if price is not None else None)
         ws.cell(row=row, column=b["col_qty"],      value=qty)
-        ws.cell(row=row, column=b["col_scrap"],    value=0.04)  # 4% default; WB applies
+        # 4% SCRAP IS AN ALLOWANCE FOR MATERIAL YOU CUT AND SPOIL. A pallet is not cut, and
+        # a lorry is not spoiled.
+        #
+        # This wrote 0.04 onto every BOM row without asking what the row was, so 12349-02
+        # charged 4% on £25.00 of boxes and £12.14 of haulage — the sheet shows £26.00 and
+        # £12.63 — and 12552 carried £6.80 of scrap on freight. Mechanically what the
+        # template does, and indefensible the moment anyone reads the two columns side by
+        # side, which the covering note now prints next to each other.
+        #
+        # Only the commercial placeholders are exempted: packaging and delivery are priced
+        # for the whole ORDER and divided per unit, so there is no material in them at all.
+        # Every real bought-in keeps its allowance — a fixing is dropped and a panel is
+        # scratched like anything else.
+        _is_commercial = bool(pe.get("_commercial_placeholder")) or str(
+            pe.get("source") or "") == "commercial_placeholder" or str(
+            code or "").strip().upper() in ("PACKAGING", "DELIVERY")
+        ws.cell(row=row, column=b["col_scrap"],
+                value=None if _is_commercial else 0.04)  # 4% default; WB applies
         # A line the material block covers, or an assembly, is not a gap somebody fills.
         from estimator_inputs import UNPRICED as _GAP
         if price is None and _line["status"] == _GAP:

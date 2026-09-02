@@ -5590,6 +5590,37 @@ def _reconcile_bought_in(parts: List[Dict[str, Any]], *, all_text: str = "", deb
         rank_new = _BOUGHT_IN_SOURCE_RANK.get(str(p.get("source") or ""), 0)
         rank_old = _BOUGHT_IN_SOURCE_RANK.get(str(existing.get("source") or ""), 0)
         winner, loser = (p, existing) if rank_new > rank_old else (existing, p)
+
+        # A CLASS WORD MUST NOT WIN AN IDENTITY IT CANNOT BE LOOKED UP BY.
+        #
+        # The rank decides which SOURCE is better grounded, and says nothing about which of
+        # the two records can actually be priced. On 12349-02 the engine held both spellings
+        # of the same three items and kept the wrong half of each pair:
+        #
+        #     BOM row 18   STD PART   3.5x19mm WOOD SCREW               £0.00
+        #     AI Material  BI-SCREW   3.5x19mm WOOD SCREW
+        #     BOM row 19   FIXING     M4x10mm FLANGE BUTTON HEAD SCREW  £0.00
+        #     AI Material  BI-BUTTONSCREW  M4x10mm FLANGE BUTTON HEAD SCREW
+        #
+        # So it is not that the drawing prints no code — we RESOLVED one and then dropped it
+        # in favour of the word the drawing prints where a code would go. Nothing downstream
+        # can price "FIXING", and every later layer that tries reports an honest miss against
+        # an identity that was never lookupable.
+        #
+        # Asked after rank and only when the two disagree about this, so a better-grounded
+        # source still wins on its own merits everywhere else.
+        try:
+            from part_code_conventions import is_category_not_a_code as _is_class
+            _w_class = _is_class(str(winner.get("part_number") or ""))
+            _l_class = _is_class(str(loser.get("part_number") or ""))
+            if _w_class and not _l_class:
+                winner, loser = loser, winner
+                winner.setdefault("review_flags", []).append(
+                    f"Kept '{winner.get('part_number')}' over '{loser.get('part_number')}': "
+                    f"the other spelling is a CLASS word the drawing prints where an item "
+                    f"has no code, and nothing can look a rate up against it")
+        except Exception:                                        # noqa: BLE001
+            pass
         winner.setdefault("review_flags", []).append(
             f"Reconciled: same item also found as '{loser.get('part_number')}' "
             f"({loser.get('source')}) — kept '{winner.get('part_number')}' "

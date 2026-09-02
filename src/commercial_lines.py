@@ -78,15 +78,43 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     weight_kg = 0.0
     longest = widest = 0.0
     counted = skipped = 0
+    phantom = 0
+    shippable: List[Dict[str, Any]] = []
     for part in parts or ():
         if not isinstance(part, dict) or part.get("_commercial_placeholder"):
+            continue
+        # AN ASSEMBLY IS NOT A THING YOU PUT IN A BOX. Its material is already counted on its
+        # children, so weighing it too counts the same steel twice — and its "blank" is not a
+        # blank at all: it is the envelope the finished unit occupies.
+        #
+        # 12349-02 shipped on that. The description read "largest panel 2026 x 1144mm, about
+        # 446 kg total" for seven feeders whose drawings mass about 28 kg each — 196 kg, not
+        # 446 — and 2026 mm is the install width, not a part anybody wraps. Both the
+        # packaging and the delivery indication were asked against that phantom, and they are
+        # the two largest bought-in lines on the job.
+        if part.get("is_assembly_parent") or (part.get("route_context") or {}).get(
+                "is_assembly_parent") or part.get("is_sub_assembly"):
+            skipped += 1
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1
             continue
+        # A BLANK THAT FITS NO SHEET THE MATERIAL IS STOCKED IN IS NOT A BLANK. The same
+        # test that stops such a figure being PRICED should stop it being SHIPPED — a
+        # bounding box promoted onto a leaf inflates a weight exactly as it inflates a cost,
+        # and this is the quieter of the two because nobody checks a haulage description.
+        try:
+            from blank_credibility import fits_a_stock_sheet
+            if not fits_a_stock_sheet(L, W, part.get("normalized_material")):
+                phantom += 1
+                skipped += 1
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
         counted += 1
+        shippable.append(part)
         try:
             per = max(1, int(part.get("quantity") or 1))
         except (TypeError, ValueError):
@@ -100,6 +128,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         "order_weight_kg": round(weight_kg * qty, 2) if weight_kg else None,
         "largest_part_mm": [longest, widest] if longest and widest else None,
         "parts_measured": counted, "parts_without_a_blank": skipped,
+        # Counted separately from an ordinary miss: a part left out because its recorded
+        # blank fits no stock sheet is a defect upstream, not a gap in the drawings.
+        "parts_with_an_impossible_blank": phantom,
     }
     # THE SHIPMENT AS CARTONS AND PALLETS, counted deterministically from the same blanks. It
     # turns "about 34 kg" into "about 34 kg, ~3 cartons on 1 pallet" — a better question whoever
@@ -107,7 +138,10 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     # one assumption (the packing factor) is declared on the plan, not hidden in this total.
     try:
         import palletising
-        out["shipment"] = palletising.plan_shipment(parts, order_qty)
+        # THE SAME PARTS THE WEIGHT WAS BUILT FROM. Handing this the unfiltered list left the
+        # carton and pallet count resting on the assembly envelope the weight had just been
+        # cleared of — half a fix, and the half nobody reads.
+        out["shipment"] = palletising.plan_shipment(shippable, order_qty)
     except Exception:                                                # noqa: BLE001
         out["shipment"] = None
     return out
