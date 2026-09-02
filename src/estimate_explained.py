@@ -364,25 +364,72 @@ def _int(value: Any) -> Any:
         return value
 
 
+def _drawing_no(record: Dict[str, Any]) -> str:
+    """The number in the TITLE BLOCK, which is not always the part number.
+
+    part_index collects `drawing_numbers` off each title block and falls back to the part
+    number when a sheet prints none. An estimator checking our work reads the number off the
+    drawing in front of them, so it is reported even when it equals the part number — "the
+    same" is an answer, and its absence is the interesting case.
+    """
+    numbers = [str(d).strip() for d in (record.get("drawing_numbers") or []) if str(d).strip()]
+    if not numbers:
+        return "—"
+    pn = str(record.get("part_number") or "").strip().upper()
+    other = [d for d in numbers if d.upper() != pn]
+    return ", ".join(dict.fromkeys(other or numbers))
+
+
+def _sources_of(record: Dict[str, Any], pack: List[str],
+                pages: Optional[Dict[int, Dict[str, Any]]] = None) -> List[str]:
+    """EVERY drawing file this part is evidenced by, each with the page and what it is.
+
+    A part is rarely evidenced by one document. It has a flat exported for the laser, a
+    detail sheet, a line on the GA, and a model the first two came out of — and this returned
+    whichever ONE it found first, which meant "where did you see that" was answered with the
+    DXF and the drawing pages went unmentioned, or answered with a page and the flat that
+    actually supplied the geometry went unmentioned.
+
+    James: "source_pdf_name needs to cover all drawing file names, not just pdfs." So all of
+    them, named, in the order of what they are worth as evidence: the flat that was measured,
+    the model it came from, then the sheets it is drawn on.
+    """
+    out: List[str] = []
+    dxf = str(record.get("dxf_source_file") or "").strip()
+    if dxf:
+        out.append(f"{_basename(dxf)} (flat)")
+    model = str(record.get("solidworks_part_number") or "").strip()
+    if model:
+        out.append(f"{model} (SOLIDWORKS model)")
+
+    own = record.get("pages") or []
+    roles = ", ".join(str(r) for r in (record.get("page_roles") or []))
+    if own and pages:
+        # Each page paired with the document it is printed in, and the number printed on it.
+        for p in own:
+            entry = pages.get(_int(p)) or {}
+            name = entry.get("file") or (pack[0] if len(pack) == 1 else "not recorded")
+            out.append(f"{name} · p.{entry.get('printed', p)}")
+    elif own:
+        name = _file_of(record, pack, pages)
+        out.append(f"{name} · {_pages_of(record, pages).split(' (')[0]}")
+    if roles and out:
+        out[-1] = f"{out[-1]} ({roles})"
+    return out
+
+
 def _where(record: Dict[str, Any], pack: List[str],
            pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
-    """The file and the page, which is what "where did you see that" actually asks."""
+    """Every file and page this part was seen in, which is what "where did you see that"
+    actually asks. Never one of them."""
     if not record:
         return "not supplied"
-    # A PART LISTED ON THE GA AND DRAWN ON ITS DETAIL IS IN TWO DOCUMENTS. Printing the files
-    # and then the pages leaves the reader to pair them — "GA.PDF, Details.PDF · p.2, p.1"
-    # does not say which page is in which. Where they span, pair each page with its own file.
-    own = record.get("pages") or []
-    if pages and own:
-        seen = {(pages.get(_int(p), {}).get("file") or "") for p in own}
-        seen.discard("")
-        if len(seen) > 1:
-            roles = record.get("page_roles") or []
-            pairs = ", ".join(
-                f"{pages.get(_int(p), {}).get('file') or 'not recorded'} "
-                f"p.{pages.get(_int(p), {}).get('printed', p)}" for p in own)
-            return (f"{pairs} ({', '.join(str(r) for r in roles)})" if roles else pairs)
-    return f"{_file_of(record, pack, pages)} · {_pages_of(record, pages)}"
+    found = _sources_of(record, pack, pages)
+    if not found:
+        return "no sheet of its own"
+    # "·" already separates a file from its page, so a second level is needed between the
+    # files themselves. Not "|" — these strings go into markdown tables.
+    return " ; ".join(found)
 
 
 def _pages_of(record: Dict[str, Any],
@@ -711,6 +758,7 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
             "description": str(rec.get("description") or "")[:48],
             "why": why,
             "reader": _reader(rec.get("geometry_source")),
+            "drawing_no": _drawing_no(rec),
             "where": _where(rec, pack, pages),
             "gbp": _money(_calc.get("total_value_gbp")) or _money(_det.get("Cost")),
             "blank": (f"{_fmt(_det.get('Blank L'))} x {_fmt(_det.get('Blank W'))}"
@@ -1704,10 +1752,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _fmt(_det.get("Gauge") or _rec.get("normalized_thickness_mm")),
                 _fmt(r.get("quantity")),
                 _gbp_or(r.get("total_value_gbp"), "—"),
+                _drawing_no(_rec),
                 _where(_rec, pack, page_index),
             ])
-        add(_table(["Part", "Blank mm", "Ga", "Qty", "£ line total", "Which file and page"],
-                   _srows, numeric={3, 4}))
+        add(_table(["Part", "Blank mm", "Ga", "Qty", "£ line total", "Drawing no.",
+                    "Which drawing files and pages"], _srows, numeric={3, 4}))
 
     # 3 ─ bought-in and commercial
     if bom:
@@ -1785,7 +1834,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _where(scan.get(str(row.get("code") or "").upper()) or {}, pack, page_index),
             ])
         add(_table(["Line", "What it is", "On the sheet now", "What's needed",
-                    "Which file and page"], _nrows, numeric={2}))
+                    "Which drawing files and pages"], _nrows, numeric={2}))
         add("<p>Overwrite anything tagged <b>AI ESTIMATE — INDICATIVE, NOT A QUOTE</b> and "
             "the sheet recalculates.</p>")
 
@@ -1807,7 +1856,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 str(row.get("Reason") or "—")[:80], _where(_rec, pack, page_index),
             ])
         add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
-                    "On what basis", "Which file and page"], _rrows, numeric={2, 4}))
+                    "On what basis", "Which drawing files and pages"], _rrows,
+                   numeric={2, 4}))
         _inferred = [r for r in g["routes"]
                      if "infer" in str(r.get("Source") or "").lower()]
         if _inferred:
@@ -1841,6 +1891,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 "geometry_reliability")
             _qrows.append([
                 _where(rec, pack, page_index), code or _fmt(rec.get("description")),
+                _drawing_no(rec),
                 ", ".join(str(m) for m in rec.get("materials") or []) or "no",
                 ", ".join(str(t) for t in rec.get("thicknesses_mm") or []) or "no",
                 ", ".join(str(f) for f in rec.get("surface_finishes") or []) or "no",
@@ -1848,8 +1899,9 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                  + (f" ({_rel:.0%})" if isinstance(_rel, (int, float)) else "")),
                 ", ".join(_what_a_sheet_could_not_give(rec)) or "nothing — complete",
             ])
-        add(_table(["File and page", "Part", "Material stated", "Thickness stated",
-                    "Finish stated", "Geometry", "What it could not give"], _qrows))
+        add(_table(["Which drawing files and pages", "Part", "Drawing no.",
+                    "Material stated", "Thickness stated", "Finish stated", "Geometry",
+                    "What it could not give"], _qrows))
 
     # Drawings the pack does not contain, and whether that costs anything.
     _no_sheet = _missing_drawings(bom, scan, g["steel"], material)
@@ -1878,11 +1930,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             + ".</b> Each was still costed, from whatever the engine could reach — the last "
               "column says what it used instead. Where the break is ours we will fix the "
               "reader; where it is the pack's, this is the list for Design.</p>")
-        add(_table(["Part", "What it is", "£ on this job", "Blank used",
-                    "Which file and page", "Where the trail broke"],
-                   [[u["code"], u["description"] or "—", _gbp_or(u["gbp"], "—"),
-                     u["blank"] or "—", u["where"], "; ".join(u["why"])]
-                    for u in untraced], numeric={2}))
+        add(_table(["Part", "Drawing no.", "What it is", "£ on this job", "Blank used",
+                    "Which drawing files and pages", "Where the trail broke"],
+                   [[u["code"], u.get("drawing_no") or "—", u["description"] or "—",
+                     _gbp_or(u["gbp"], "—"), u["blank"] or "—", u["where"],
+                     "; ".join(u["why"])]
+                    for u in untraced], numeric={3}))
     else:
         add("<p>Every costed part traced from the BOM through to a drawing or a flat of its "
             "own. Nothing here for Design.</p>")
