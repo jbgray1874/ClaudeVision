@@ -140,6 +140,65 @@ def plausible_as_a_sheet_part(length_mm: Any, width_mm: Any) -> bool:
     return all(MIN_SHEET_PART_MM <= v <= MAX_SHEET_PART_MM for v in (length, width))
 
 
+def _stock_sheets_for(material: Any) -> Tuple[Tuple[float, float], ...]:
+    """The sheet sizes this material is actually stocked in, from config."""
+    try:
+        import config
+        sizes = getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}
+    except Exception:                                            # noqa: BLE001
+        sizes = {}
+    key = str(material or "").strip().upper()
+    found = sizes.get(key) or sizes.get(key.replace(" ", "_")) or sizes.get("DEFAULT")
+    out = []
+    for pair in (found or ()):
+        try:
+            out.append((float(pair[0]), float(pair[1])))
+        except Exception:                                        # noqa: BLE001
+            continue
+    return tuple(out)
+
+
+def fits_a_stock_sheet(length_mm: Any, width_mm: Any, material: Any) -> Optional[bool]:
+    """Could this blank be cut from any sheet this material comes in? None when we cannot say.
+
+    THE ABSOLUTE BOUND ABOVE DOES NOT CATCH THE COMMON CASE. plausible_as_a_sheet_part asks
+    only whether a number is between 10 mm and 4 m, so 12349-02's 2120 x 2120 sailed through
+    — and 2120 x 2120 is not a gravity feeder, it is the drawing sheet's own bounding box,
+    picked up as "the largest numbers in the document text".
+
+    What made it visible is that Excel had already worked it out. Nothing 2120 square nests
+    on a 2050 x 1520 acrylic sheet or a 2440 x 1220 board, so Qty Per Sheet came back empty,
+    Cost Per Part came back empty, and the two largest parts on the job contributed NOTHING to
+    the material total while appearing on the sheet as ordinary rows. A part that silently
+    costs nothing is worse than one that is refused, because the refusal is at least visible.
+
+    The same bounding box then went on to size the packaging and the haulage — 661 kg on two
+    pallets — so one bad blank priced three lines.
+
+    Rotation is allowed because a nester rotates. A material with no stock sizes of its own
+    falls back to DEFAULT, because that is the sheet the NESTER falls back to — the answer has
+    to be about the sheet this part will actually be costed on, not an ideal one. None only
+    when there are no dimensions to test.
+    """
+    length, width = _num(length_mm), _num(width_mm)
+    if not length or not width:
+        return None
+    sheets = _stock_sheets_for(material)
+    if not sheets:
+        return None
+    part = (max(length, width), min(length, width))
+    for sheet in sheets:
+        if part[0] <= max(sheet) and part[1] <= min(sheet):
+            return True
+    return False
+
+
+def largest_stock_sheet(material: Any) -> Optional[Tuple[float, float]]:
+    """The biggest sheet this material comes in, so a refusal can say what it did not fit."""
+    sheets = _stock_sheets_for(material)
+    return max(sheets, key=lambda s: s[0] * s[1]) if sheets else None
+
+
 def envelope_proves_it_never_leaves_the_plane(bbox_mm: Any, thickness_mm: Any) -> bool:
     """Is this part flat, on the evidence of its own bounding box?
 

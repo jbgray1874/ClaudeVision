@@ -2050,6 +2050,31 @@ def _blank_that_could_have_been_cut(
         pass                       # measured or not, the pair is impossible
     elif _blank_measured:
         return blank_length, blank_width
+    elif _bc.fits_a_stock_sheet(blank_length, blank_width,
+                                part.get("normalized_material")) is False:
+        # IT DOES NOT FIT ANY SHEET THIS MATERIAL COMES IN, so it is not this part's blank.
+        #
+        # The bound above asks only whether a number is between 10 mm and 4 m, and 12349-02's
+        # 2120 x 2120 passed it comfortably — while being the drawing sheet's own bounding
+        # box, read as "the largest numbers in the document text". Excel had already worked
+        # out that it was wrong: nothing 2120 square nests on a 2050 x 1520 acrylic sheet, so
+        # Qty Per Sheet came back empty, Cost Per Part came back empty, and the two LARGEST
+        # parts on the job contributed nothing to the material total while sitting on the
+        # sheet as ordinary rows. A part that silently costs nothing is worse than one that is
+        # refused, because a refusal is at least visible — and the same bounding box went on
+        # to size the packaging and the haulage.
+        _sheet = _bc.largest_stock_sheet(part.get("normalized_material"))
+        verdict = {"evaluated": True, "credible": False,
+                   "reason": (f"a {blank_length:g} x {blank_width:g} mm blank does not fit "
+                              f"any sheet "
+                              + (f"{part.get('normalized_material')} " if part.get(
+                                  "normalized_material") else "")
+                              + f"is stocked in"
+                              + (f" (largest is {_sheet[0]:g} x {_sheet[1]:g})"
+                                 if _sheet else "")
+                              + " — this is a bounding box or a drawing sheet size, not the "
+                                "part"
+                              + (f" (source: {_blank_src})" if _blank_src else ""))}
     elif _bc.plausible_as_a_sheet_part(blank_length, blank_width):
         # Unstamped, but it could be the size of something we cut and nothing contradicts
         # it. Keep it — refusing every unstamped blank stopped a 120 x 80 bracket costing
