@@ -355,12 +355,32 @@ def _active_run_for(client: str, drawing: str) -> Optional[Run]:
     Queueing a DIFFERENT job behind this one is fine and stays fine -- a hundred-drawing
     enquiry is a hundred different job folders. It is only the same client and the same
     drawing that collide, because they are the same folder.
+
+    AND "THE SAME FOLDER" IS A FILESYSTEM QUESTION, NOT A STRING ONE.
+    #
+    This compared client and drawing exactly, and the folder these name is on Windows, where
+    paths are case-insensitive. So "Fanatics" and "fanatics" are ONE folder and were TWO jobs:
+    the guard saw a different client, let the second run through, and staging cleared the
+    folder the first run was reading. Every word of the paragraph above then applies, reached
+    by nothing more than typing the customer's name differently the second time -- which is
+    exactly what happens when a job is re-queued an hour later by somebody else.
+
+    Compared case-insensitively, and trimmed, because that is how the filesystem will read
+    them. Erring towards refusing a run is the safe direction: the cost of a false match is a
+    message telling you to wait, and the cost of a miss is a corrupted estimate that looks
+    entirely ordinary.
     """
     for run in _RUNS.values():
         if run.status in {"queued", "running"} \
-                and run.client == client and run.drawing_number == drawing:
+                and _same_job_key(run.client, client) \
+                and _same_job_key(run.drawing_number, drawing):
             return run
     return None
+
+
+def _same_job_key(a: Any, b: Any) -> bool:
+    """Whether two client or drawing names would land in the same staged folder."""
+    return str(a or "").strip().casefold() == str(b or "").strip().casefold()
 
 
 # ── request models ───────────────────────────────────────────────────────────
