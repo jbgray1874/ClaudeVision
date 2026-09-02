@@ -775,6 +775,19 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
 _INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
 
 
+def _order_qty_hint(bom_row: Dict[str, Any]) -> str:
+    """The order quantity a commercial line was priced for, out of its own description.
+
+    commercial_lines writes "PACKAGING for the whole order of 7, divided per unit" onto the
+    line. That sentence is the only place the divisor survives into the workbook, so this
+    reads it back rather than guessing at the header quantity — which is the same number
+    today and would silently diverge the moment a line is priced for a different batch.
+    """
+    found = re.search(r"whole order of\s*(\d+)", str(bom_row.get("text") or ""),
+                      re.IGNORECASE)
+    return found.group(1) if found else ""
+
+
 def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]],
                   steel_index: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     """Which book priced this line, in words an estimator can act on.
@@ -848,6 +861,19 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
                     "own, so there is nothing to look a rate up against. Identify it from "
                     "the description and give it a code, or price it by hand")
         return "**NOT PRICED — needs a rate**"
+    # PACKAGING AND DELIVERY ARE ORDER-LEVEL, AND THE DIVISOR IS THE POINT.
+    #
+    # Both are asked for the WHOLE ORDER and divided by the quantity, so the per-unit figure
+    # an estimator reads falls as the order rises — on 12552 they were £85 + £85 on a unit of
+    # £930.39 at 1 off, and near nothing at 100. "AI market indication" says neither of those
+    # things, and does not say how to stop it being an indication at all.
+    _order_line = str(bom_row.get("code") or "").upper() in ("PACKAGING", "DELIVERY")
+    if _order_line and any(token in f"{supplier} {named}".lower() for token in _INDICATIVE):
+        _qty = _order_qty_hint(bom_row)
+        return ("market indication for the WHOLE ORDER"
+                + (f" of {_qty}, ÷ {_qty} per unit" if _qty else ", divided per unit")
+                + " — NOT A QUOTE. To make it a firm house rate on every job, set "
+                  "`config.COMMERCIAL_LINE_GBP_PER_ORDER` and this becomes a catalogue price")
     if any(token in supplier.lower() for token in _INDICATIVE):
         return f"AI market indication ({supplier}) — NOT A QUOTE, replace it"
     if any(token in named.lower() for token in _INDICATIVE):

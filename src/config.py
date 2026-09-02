@@ -310,6 +310,32 @@ PACKAGING_CONFIG = {
     "bays_per_delivery": None,   # bays per delivery load (delivery_price split across these)
 }
 
+# --- Packaging and delivery: the house figure, when there is one ------------------
+#
+# THE LEVER commercial_lines DOCUMENTS AND CONFIG DID NOT HAVE.
+#
+# `_held_rate` reads this and its own note tells an estimator to "put a per-order figure in
+# config.COMMERCIAL_LINE_GBP_PER_ORDER['PACKAGING'] and every job carries it". The setting
+# was never defined, so `getattr(config, ..., {})` returned an empty dict on every job, the
+# catalogue rung of the ladder could not fire, and BOTH lines fell through to a market/LLM
+# indication every single time. That is why packaging and delivery arrive on every estimate
+# stamped "NOT A QUOTE, replace it" — not because nobody has a figure, but because there was
+# nowhere to put one.
+#
+# On 12552 those two lines were £85.00 + £85.00 against a £930.39 unit at 1 off: 18% of the
+# quote resting on a number that moves between runs.
+#
+# EMPTY ON PURPOSE. A figure invented here would be worse than the indication it replaced,
+# because it would carry no "check me" flag. Put SDI's real per-order costs in and both lines
+# become reproducible catalogue prices on every job, with the source named as this setting.
+#
+#   £ PER ORDER, not per unit — commercial_lines divides by the order quantity and writes the
+#   divisor onto the line, so an estimator changing the quantity can see what moved.
+COMMERCIAL_LINE_GBP_PER_ORDER = {
+    # "PACKAGING": 85.00,   # protective packaging + one shipping pallet, per order
+    # "DELIVERY":  85.00,   # one UK mainland palletised delivery, per order
+}
+
 # Standard bought-in COMMODITIES that appear on a BOM as a COMPONENT (not packaging) under a
 # generic name — "PALLET", "STD PART" — with no SDI part code, so the purchasing DB has nothing
 # to match and the line would otherwise fall to a per-run LLM guess or a £0. A stable, REPRODUCIBLE
