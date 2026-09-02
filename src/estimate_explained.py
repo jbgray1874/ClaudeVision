@@ -259,6 +259,65 @@ def _scan_parts(data: Any) -> Dict[str, Dict[str, Any]]:
             for p in parts if isinstance(p, dict)}
 
 
+def _basename(path: Any) -> str:
+    """The filename out of a path that was written on Windows and may be read anywhere.
+
+    Path(...).name splits on the separator of the machine it is RUNNING on, so a
+    "K:\\jobs\\part.DXF" recorded by the runner comes back whole on anything but Windows —
+    and the document is generated wherever somebody happens to run it. Split on both.
+    """
+    text = str(path or "").strip().rstrip("\\/")
+    for sep in ("\\", "/"):
+        text = text.rsplit(sep, 1)[-1]
+    return text
+
+
+def _pack_files(data: Any) -> List[str]:
+    """Every drawing file this run read, in the order the run recorded them."""
+    if not isinstance(data, dict):
+        return []
+    out: List[str] = []
+    for key in ("job_source_pdfs", "source_pdfs"):
+        for item in (data.get(key) or []):
+            name = _basename(item)
+            if name and name not in out:
+                out.append(name)
+    single = data.get("source_file")
+    if single and str(single).lower().endswith(".pdf"):
+        name = _basename(single)
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def _file_of(record: Dict[str, Any], pack: List[str]) -> str:
+    """WHICH FILE, not just which page.
+
+    "p.6" is only half an answer when a pack has four PDFs and a folder of DXFs — the estimator
+    still has to work out which document page 6 belongs to. A part measured off a DXF has an
+    even better answer available: the DXF's own filename, which the engine already records and
+    which names the gauge and the material in most drawing offices' conventions.
+    """
+    dxf = str(record.get("dxf_source_file") or "").strip()
+    if dxf:
+        return _basename(dxf)
+    own = str(record.get("source_file") or "").strip()
+    if own.lower().endswith(".pdf"):
+        return _basename(own)
+    if record.get("pages") and len(pack) == 1:
+        # One document in the pack, so every page in it is a page of that document. Said
+        # rather than inferred silently: with two PDFs this would be a guess and it declines.
+        return pack[0]
+    return "not recorded"
+
+
+def _where(record: Dict[str, Any], pack: List[str]) -> str:
+    """The file and the page, which is what "where did you see that" actually asks."""
+    if not record:
+        return "not supplied"
+    return f"{_file_of(record, pack)} · {_pages_of(record)}"
+
+
 def _pages_of(record: Dict[str, Any]) -> str:
     pages = record.get("pages") or []
     roles = record.get("page_roles") or []
@@ -622,6 +681,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     routes = _sheet(wb, "Canonical Route")
     bom = _estimate_bom(wb)
     order_qty = _order_quantity(wb)
+    pack = _pack_files(scan_doc)
 
     lines: List[str] = []
     add = lines.append
@@ -682,7 +742,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add(f"{len(_unpriced) + len(_indicative)} line(s). Until these are answered the "
             f"estimate is not a quote, and the banner on the sheet says so.")
         add("")
-        add("| Line | What it is | Qty | On the sheet | What it needs | Which sheet |")
+        add("| Line | What it is | Qty | On the sheet | What it needs | Which file and page |")
         add("|---|---|---|---|---|---|")
         _todo = ([(r, "indicative") for r in _indicative]
                  + [(r, "unpriced") for r in _unpriced])
@@ -699,7 +759,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                    if kind == "indicative" else
                    "| **£0.00 — the line is costing nothing** "
                    "| **A rate.** Nothing we can query holds a price for this code. ")
-                + f"| {_pages_of(_rec) if _rec else 'not supplied'} |")
+                + f"| {_where(_rec, pack)} |")
         add("")
 
     # ── does it reconcile ────────────────────────────────────────────────────
@@ -773,7 +833,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         blank_l, blank_w = mat.get("Blank L"), mat.get("Blank W")
         blank = (f"{_fmt(blank_l)} × {_fmt(blank_w)}"
                  if blank_l or blank_w else "not a cut part")
-        page = _pages_of(rec) if rec else "not supplied"
+        page = _where(rec, pack)
         _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
         add(f"| {row['code'] or '—'} "
             f"| {_description(row)} "
@@ -934,7 +994,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             add("**What decided something on this job:** "
                 + "; ".join(_readers_used(scan)) + ".")
             add("")
-            add("| Part | Material | Thickness | Quantity | Geometry / size | Which sheet |")
+            add("| Part | Material | Thickness | Quantity | Geometry / size | Which file and page |")
             add("|---|---|---|---|---|---|")
             for code, rec in _graded:
                 add(f"| {code or '—'} "
@@ -942,7 +1002,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     f"| {_reader(rec.get('thickness_source'))} "
                     f"| {_reader(rec.get('quantity_source'))} "
                     f"| {_reader(rec.get('geometry_source'))} "
-                    f"| {_pages_of(rec)} |")
+                    f"| {_where(rec, pack)} |")
             add("")
             add("> A SOLIDWORKS source means the part and assembly files themselves were read "
                 "— not the PDF of them. Where the model was available the engine takes the "
@@ -990,7 +1050,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # ── every route line ─────────────────────────────────────────────────────
     add("## Every operation, and who decided it")
     add("")
-    add("| Part | Operation | Seq | Scope | Qty | Decided by | On what basis | Which sheet |")
+    add("| Part | Operation | Seq | Scope | Qty | Decided by | On what basis | Which file and page |")
     add("|---|---|---|---|---|---|---|---|")
     for row in routes:
         target = str(row.get("Target") or "").upper()
@@ -1002,7 +1062,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             f"| {_fmt(row.get('Qty/unit'))} "
             f"| {_fmt(row.get('Source'))} "
             f"| {str(row.get('Reason') or '—')[:70]} "
-            f"| {_pages_of(rec) if rec else 'not supplied'} |")
+            f"| {_where(rec, pack)} |")
     add("")
 
     # ── what each sheet could be read for ────────────────────────────────────
@@ -1033,7 +1093,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     if scan and _has_quality:
         add("## Drawing quality, sheet by sheet")
         add("")
-        add("| Sheet | Part | Material stated | Thickness stated | Finish stated | "
+        add("| File and page | Part | Material stated | Thickness stated | Finish stated | "
             "Geometry | What it could not give |")
         add("|---|---|---|---|---|---|---|")
         for code, rec in sorted(scan.items(),
@@ -1066,7 +1126,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     missing.append("finish")
                 if not (geom.get("estimated_cut_length_mm") or 0):
                     missing.append("cut length")
-            add(f"| {_pages_of(rec)} | {code or _fmt(rec.get('description'))} "
+            add(f"| {_where(rec, pack)} | {code or _fmt(rec.get('description'))} "
                 f"| {', '.join(str(m) for m in rec.get('materials') or []) or '**no**'} "
                 f"| {', '.join(str(t) for t in rec.get('thicknesses_mm') or []) or '**no**'} "
                 f"| {', '.join(str(f) for f in rec.get('surface_finishes') or []) or '**no**'} "
@@ -1138,7 +1198,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                         f"| {str(_u.get('description') or '—')[:44]} "
                         f"| {_gbp_or(_u.get('extended_cost_gbp'), '—')} "
                         f"| {', '.join(str(r) for r in (_u.get('reasons') or [])) or 'not recorded'} "
-                        f"{'· ' + _pages_of(_rec) if _rec.get('pages') else ''} |")
+                        f"{'· ' + _where(_rec, pack) if _rec.get('pages') else ''} |")
                 add("")
                 add("> A part DXF or a SOLIDWORKS model for the parts above is the single "
                     "thing that would move those lines from read to measured. Every other "

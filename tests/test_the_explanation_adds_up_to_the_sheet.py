@@ -94,6 +94,7 @@ def _workbook(tmp_path: Path, *, steel_cost=1.05, steel_ext=6.30,
 def _run_json(tmp_path: Path, *, labour_value=50.00, material_values=(6.30, 0.40)) -> Path:
     steel_gbp, bom_gbp = material_values
     doc = {
+        "job_source_pdfs": ["\\\\share\\12552\\12552-00-GA_Infinity Drawer_RevC.PDF"],
         "parts": [
             {"part_number": "12552-01-01M", "pages": [6], "page_roles": ["detail"],
              "materials": ["MILD STEEL"], "thicknesses_mm": [1.5],
@@ -104,6 +105,9 @@ def _run_json(tmp_path: Path, *, labour_value=50.00, material_values=(6.30, 0.40
              "geometry_source": "solidworks_flat_pattern",
              "geometry_rollup": {"estimated_cut_length_mm": 3200}},
             {"part_number": "FIXING535", "pages": [], "page_roles": []},
+            {"part_number": "12552-02-09M", "pages": [], "page_roles": ["dxf_only"],
+             "dxf_source_file": "K:\\jobs\\12552-02-09M_1.5mm_MS_RevA.DXF",
+             "geometry_source": "dxf_flat_pattern"},
         ],
         "final_estimate": {
             "schema": "final_estimate.v2",
@@ -492,3 +496,35 @@ def test_the_gate_no_longer_withholds_the_total():
     assert any(e.startswith("PROVISIONAL —") for e in emitted), (
         "what replaces it states the fact — how many parts were sized from the drawing "
         "rather than measured — instead of passing judgement on the pack")
+
+
+# ── which file, not only which page ──────────────────────────────────────────
+
+def test_a_page_number_names_the_document_it_is_a_page_of(tmp_path):
+    """"p.6" is half an answer when a pack holds four PDFs and a folder of DXFs."""
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | CROSS MEMBERS"))
+    assert "12552-00-GA_Infinity Drawer_RevC.PDF · p.6 (detail)" in row
+    assert "Which file and page" in text, "the column says what it now carries"
+
+
+def test_a_part_measured_off_a_dxf_names_that_dxf(tmp_path):
+    """The better answer, and already recorded: the DXF's filename, which in most drawing
+    offices' conventions names the gauge and the material too."""
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    row = next(l for l in text.splitlines() if l.startswith("| 12552-02-09M |"))
+    assert "12552-02-09M_1.5mm_MS_RevA.DXF" in row
+    assert "K:\\" not in row, "the filename, not the path it happened to sit at"
+
+
+def test_it_will_not_guess_the_document_when_a_pack_holds_several(tmp_path):
+    """With one PDF every page is a page of it. With two that is a guess, and it declines."""
+    path = _run_json(tmp_path)
+    doc = handover_note.json.loads(path.read_text(encoding="utf-8"))
+    doc["job_source_pdfs"] = ["a\\ONE.PDF", "b\\TWO.PDF"]
+    path.write_text(handover_note.json.dumps(doc), encoding="utf-8")
+
+    text = handover_note.build(_workbook(tmp_path), path)
+    row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | CROSS MEMBERS"))
+    assert "not recorded · p.6 (detail)" in row
+    assert "ONE.PDF" not in row
