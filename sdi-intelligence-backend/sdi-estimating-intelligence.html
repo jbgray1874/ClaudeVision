@@ -300,24 +300,6 @@
 </button>
 </nav>
 <script>
-// EVERY QUANTITY THE ESTIMATE IS WANTED AT, out of one field.
-//
-// A number input cannot hold a list, so this is a text field — and the parsing is done
-// ONCE, here, rather than at each of the three places that post a run, which is how two of
-// them come to disagree about what "1, 50" means.
-//
-// The FIRST number is the one the estimate is actually RUN at. The rest are recalculated
-// from the finished workbook, which is the estimator's own method and the only affordable
-// one: a re-run per quantity is hours of vision reading that cannot change with the order
-// size.
-function unitList() {
-  const seen = [];
-  for (const part of String(units.value || "").split(/[,;\s]+/)) {
-    const n = parseInt(part, 10);
-    if (Number.isFinite(n) && n >= 1 && !seen.includes(n)) seen.push(n);
-  }
-  return seen.length ? seen : [1];
-}
 (function(){
   var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
   if(!t) return;
@@ -911,6 +893,30 @@ function detailText(j, r, fallback){
 
 const $ = id => document.getElementById(id);
 const units=$("units"), client=$("client"), drawing=$("drawing");
+// EVERY QUANTITY THE ESTIMATE IS WANTED AT, out of one field.
+//
+// DEFINED IN THE SCRIPT THAT OWNS THE ELEMENT. It was first put in the navigation
+// script at the top of the page, where `units` — declared `const` in the app script
+// below — is not in scope. Every call threw a ReferenceError, which took the form
+// validation down with it and the Run estimate button never appeared.
+//
+// A number input cannot hold a list, so this is a text field — and the parsing is done
+// ONCE, here, rather than at each of the three places that post a run, which is how two of
+// them come to disagree about what "1, 50" means.
+//
+// The FIRST number is the one the estimate is actually RUN at. The rest are recalculated
+// from the finished workbook, which is the estimator's own method and the only affordable
+// one: a re-run per quantity is hours of vision reading that cannot change with the order
+// size.
+function unitList() {
+  const seen = [];
+  for (const part of String(units.value || "").split(/[,;\s]+/)) {
+    const n = parseInt(part, 10);
+    if (Number.isFinite(n) && n >= 1 && !seen.includes(n)) seen.push(n);
+  }
+  return seen.length ? seen : [1];
+}
+
 const emailTo=$("emailTo"), emailQuote=$("emailQuote"), emailSave=$("emailSave"),
       emailHint=$("emailHint");
 

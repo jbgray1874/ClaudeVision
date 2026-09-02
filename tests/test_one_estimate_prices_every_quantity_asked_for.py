@@ -162,3 +162,33 @@ def test_the_banner_tells_the_truth_about_which_of_the_two_happened():
 def test_nothing_is_invented_when_the_order_figures_are_missing():
     import quantity_sweep as qs
     assert qs._reprice_freight(object(), 100, 500, {}) == {}
+
+
+# ── and it has to be able to SEE the field ─────────────────────────────────────
+
+def test_the_parser_lives_in_the_script_that_owns_the_field(page):
+    """`units` is declared `const` inside the app script, so it is block-scoped to it. The
+    helper was first put in the navigation script at the top of the page, where that name
+    does not exist — every call threw a ReferenceError, which took the form validation down
+    with it and the Run estimate button never appeared.
+
+    Nothing else in this file could see that: the parser was correct, the markup was correct,
+    the callers were correct, and the page was dead."""
+    import re as _re
+    def block_of(idx):
+        return sum(1 for m in _re.finditer(r"<script", page) if m.start() < idx)
+    defined = page.index("function unitList()")
+    bound = page.index('const units=$("units")')
+    assert block_of(defined) == block_of(bound), (
+        "unitList() is in a different <script> block from the const it reads")
+    assert defined > bound, "a const is not hoisted; the helper must come after it"
+
+
+def test_every_caller_is_in_that_same_script(page):
+    import re as _re
+    def block_of(idx):
+        return sum(1 for m in _re.finditer(r"<script", page) if m.start() < idx)
+    home = block_of(page.index("function unitList()"))
+    for m in _re.finditer(r"unitList\(\)", page):
+        assert block_of(m.start()) == home, (
+            f"a caller at offset {m.start()} cannot reach unitList()")
