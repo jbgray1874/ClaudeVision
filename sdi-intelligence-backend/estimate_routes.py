@@ -60,6 +60,7 @@ from pydantic import BaseModel
 
 import config
 import docmgr
+import estimate_email
 import staging
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
@@ -230,6 +231,12 @@ class Run:
     # already been given up on. The runner cannot be interrupted from here, so it is TOLD, on
     # the heartbeat it already sends, and it does the killing at its end.
     cancel_requested: bool = False
+    # WHO GETS THIS ONE, decided when the job was queued and not when it finished. A person
+    # saw the box, and what they left in it is what happens; empty means nobody, so an engine
+    # test does not land in an estimator's inbox at two in the morning.
+    email_to: List[str] = field(default_factory=list)
+    email_quote: bool = False
+    email_result: Dict[str, Any] = field(default_factory=dict)
     lease_until: float = 0.0
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
@@ -251,6 +258,7 @@ class Run:
             "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
             "engine_price_gbp": self.engine_price_gbp,
             "log": self.log, "deliverables": self.deliverables,
+            "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -412,6 +420,18 @@ class EstimateRequest(BaseModel):
     # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
     # which has three other readers and does not want its one reproducible source moving.
     fresh_read: bool = False
+    # WHO TO SEND THE FINISHED ESTIMATE TO. One or more addresses, however they were typed —
+    # commas, semicolons, newlines. Absent or empty means send to nobody, which is what a
+    # test run wants and what an API caller that has never heard of this field gets.
+    email_to: Optional[str] = None
+    # The customer quote is the one deliverable written to be read by a customer, and on a
+    # provisional estimate it looks exactly like a quotation for a figure nobody has stood
+    # behind. Withheld unless asked for.
+    email_quote: bool = False
+
+
+class RecipientsRequest(BaseModel):
+    recipients: str = ""
 
 
 class BatchRequest(BaseModel):
@@ -646,10 +666,84 @@ def complete(run_id: str, req: CompleteRequest,
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen, r.run_id = now, ""
+        _send_to = list(run.email_to)
+        _snapshot = run.as_json()
+        _quote = run.email_quote
+        _provisional = run.status != "done" or _looks_provisional(run)
+        _deliverables = list(run.deliverables)
+
+    # OUTSIDE THE LOCK. Talking to a mail server takes seconds and can hang; holding the
+    # registry lock while it does would stall every other run, the page's polling and the
+    # runner's next heartbeat. The runner is told the job is filed either way — a mail that
+    # will not send is not a reason to lose the estimate.
+    if _send_to:
+        _result = _email_finished_run(_snapshot, _deliverables, _send_to, _quote,
+                                      _provisional)
+        with _LOCK:
+            _live = _RUNS.get(run_id)
+            if _live is not None:
+                _live.email_result = _result
+                _live.line(
+                    f"Emailed to {', '.join(_send_to)}"
+                    + (f" — {', '.join(_result.get('attached') or []) or 'no attachments'}"
+                       if _result.get("sent") else
+                       f" — NOT SENT: {_result.get('reason')}"))
     return {"ok": True}
 
 
+def _looks_provisional(run: "Run") -> bool:
+    """Whether the customer quote should be withheld.
+
+    THIS SERVICE HAS NEVER READ AN ESTIMATE and is not about to start, so it asks the only
+    record it has: the run's own console. The engine prints PROVISIONAL when the pack did not
+    support a credible cost, and every estimate produced so far has been provisional. Erring
+    towards withholding is the safe direction — the cost of holding a quote back is an email
+    asking for it, and the cost of sending one early is a customer reading a number nobody
+    has stood behind.
+    """
+    for line in run.log:
+        if "PROVISIONAL" in str(line).upper():
+            return True
+    return True
+
+
+def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, str]],
+                        recipients: List[str], include_quote: bool,
+                        provisional: bool) -> Dict[str, Any]:
+    """Compose and send. Any failure is recorded on the run, never raised at the runner."""
+    try:
+        paths, held = estimate_email.choose_attachments(
+            deliverables, provisional=provisional, include_quote=include_quote)
+        note = estimate_email.compose(snapshot, deliverables, provisional=provisional)
+        result = estimate_email.send(recipients, note["subject"], note["html"],
+                                     note["text"], paths)
+        if held:
+            result.setdefault("held_back", held)
+        return result
+    except Exception as exc:                                     # noqa: BLE001
+        return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
 # ══ THE PAGE'S ENDPOINTS ═════════════════════════════════════════════════════
+@router.get("/recipients")
+def recipients_get(x_sdi_key: Optional[str] = Header(default=None)):
+    """The list the estimating page pre-fills its box with."""
+    _check_key(x_sdi_key)
+    out = estimate_email.saved_recipients()
+    out["smtp_configured"] = estimate_email.smtp_configured()
+    return out
+
+
+@router.post("/recipients")
+def recipients_set(req: RecipientsRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Change the saved default. Reports anything that was not an address rather than
+    dropping it, because a saved list that is quietly one short is worse than a refusal."""
+    _check_key(x_sdi_key)
+    out = estimate_email.save_recipients(req.recipients)
+    out["smtp_configured"] = estimate_email.smtp_configured()
+    return out
+
+
 @router.post("")
 def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
@@ -668,6 +762,16 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if method not in {"both", "llm", "engine"}:
         raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
                                  f"engine.")
+
+    # CHECKED BEFORE ANYTHING IS STAGED, for the same reason `method` is: a typo in an
+    # address should not cost the estimator a rewritten job folder. Reported rather than
+    # dropped — an estimate going to three people when four were asked for is exactly the
+    # kind of failure nobody notices.
+    _email_to, _email_bad = estimate_email.parse_recipients(req.email_to)
+    if _email_bad:
+        raise HTTPException(
+            400, f"These are not email addresses: {', '.join(_email_bad)}. Correct them, or "
+                 f"clear the box to send the estimate to nobody.")
 
     # THE DRAWINGS ARE STAGED, AND THE STAGED FOLDER IS THE JOB.
     #
@@ -774,10 +878,16 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   units=int(req.units), job_folder=str(job), output_path=str(out),
                   manual_workbook=manual_wb, queued_at=queued_at,
                   llm_only=(method == "llm"),
-                  fresh_read=bool(req.fresh_read))
+                  fresh_read=bool(req.fresh_read),
+                  email_to=_email_to, email_quote=bool(req.email_quote))
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
+    if _email_to:
+        run.line(f"On completion: emailed to {', '.join(_email_to)}"
+                 + ("" if req.email_quote else " — the customer quote is not attached"))
+    else:
+        run.line("No recipients — the finished estimate will be filed, not sent.")
     if run.llm_only:
         # ON THE RUN'S OWN LOG, not only in the engine's console. The estimator watching this
         # page sees the log; the banner main.py prints scrolls past in a window nobody has

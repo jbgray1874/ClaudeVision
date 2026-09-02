@@ -363,6 +363,32 @@
           <input id="drawing" type="text" autocomplete="off">
         </div>
       </div>
+
+      <!-- WHO GETS THE FINISHED ESTIMATE.
+           Pre-filled from the saved list so the common case is no typing, editable per run
+           because one job in ten goes to somebody else, and EMPTY MEANS NOBODY so an engine
+           test does not land in an estimator's inbox. The saved list is changed deliberately,
+           by the button, and not by whatever the last run happened to leave in the box. -->
+      <div class="row2">
+        <div class="field" style="flex:2">
+          <label for="emailTo">Email the finished estimate to
+            <span class="sub" style="font-weight:400">— one or more, separated by
+            commas. Leave empty to send to nobody.</span></label>
+          <input id="emailTo" type="text" autocomplete="off"
+                 placeholder="nobody — the estimate will be filed, not sent">
+          <p class="hint" id="emailHint" style="margin:6px 0 0"></p>
+        </div>
+        <div class="field" style="flex:1">
+          <label>Attachments</label>
+          <label style="font-weight:400;display:block;margin-top:6px">
+            <input id="emailQuote" type="checkbox"> Include the customer quote
+          </label>
+          <p class="hint" style="margin:4px 0 0">The workbook, the report and the explanation
+             always go. The quote is held back while an estimate is provisional.</p>
+          <button id="emailSave" class="btn-measure" type="button" style="margin-top:8px">
+            Save as the default list</button>
+        </div>
+      </div>
       <div class="field">
         <label for="client">Client</label>
         <input id="client" type="text" autocomplete="off">
@@ -864,6 +890,45 @@ function detailText(j, r, fallback){
 
 const $ = id => document.getElementById(id);
 const units=$("units"), client=$("client"), drawing=$("drawing");
+const emailTo=$("emailTo"), emailQuote=$("emailQuote"), emailSave=$("emailSave"),
+      emailHint=$("emailHint");
+
+/* THE SAVED LIST, LOADED ONCE AND THEN LEFT ALONE.
+   Pre-filled so the common case is no typing. NOT written back on every run: the box is
+   edited per job and the saved default changes only when somebody presses the button, or one
+   unusual recipient on a Tuesday becomes everybody's default for ever. */
+async function loadRecipients(){
+  try{
+    const r = await api("/api/estimate/recipients");
+    if(!r.ok) return;
+    const d = await r.json();
+    if(!emailTo.value) emailTo.value = (d.recipients || []).join(", ");
+    emailHint.textContent = d.smtp_configured
+      ? ("Default from " + (d.source || "the saved list") + ".")
+      : "SMTP is not configured on this server, so nothing can be sent yet — "
+        + "the estimate will still be filed.";
+    emailHint.className = "hint";
+  }catch(e){ /* the page works perfectly well without this */ }
+}
+
+emailSave && emailSave.addEventListener("click", async () => {
+  try{
+    const r = await api("/api/estimate/recipients", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({recipients: emailTo.value || ""})});
+    const d = await r.json();
+    if(!r.ok){ emailHint.textContent = d.detail || "Could not save that list."; return; }
+    /* WHAT WAS NOT AN ADDRESS IS SAID, not dropped — a saved list quietly one short is
+       worse than a refusal, because nobody finds out until an estimate does not arrive. */
+    emailHint.textContent = (d.rejected && d.rejected.length)
+      ? ("Saved " + (d.recipients || []).length + ". NOT saved, these are not addresses: "
+         + d.rejected.join(", "))
+      : ("Saved as the default: " + (d.recipients || []).join(", "));
+    emailTo.value = (d.recipients || []).join(", ");
+  }catch(e){ emailHint.textContent = "Could not reach the server to save that list."; }
+});
+
+loadRecipients();
 const runBtn=$("run"), stopBtn=$("stop"), destPath=$("destPath"), req=$("req");
 const runnerBox=$("runnerBox"), runnerText=$("runnerText");
 const fileList=$("fileList"), fileEmpty=$("fileEmpty");
@@ -1901,7 +1966,11 @@ runBtn.onclick = async () => {
     deliverables: true,                   // --deliverables, always
     // The optional parity partner. null means no comparison was asked for and the run is
     // exactly as it was before this existed.
-    manual_workbook: runManual ? runManual.path : null
+    manual_workbook: runManual ? runManual.path : null,
+    // Sent as typed. The service parses and validates, and refuses the run on a typo BEFORE
+    // anything is staged — one place that decides what an address is, not two.
+    email_to: (document.getElementById("emailTo").value || "").trim(),
+    email_quote: document.getElementById("emailQuote").checked
   };
   try{
     const r = await api("/api/estimate",{method:"POST",
