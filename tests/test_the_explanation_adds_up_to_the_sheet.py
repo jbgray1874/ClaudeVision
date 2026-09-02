@@ -358,3 +358,58 @@ def test_the_lines_needing_a_person_are_listed_not_counted(tmp_path):
     assert "£0.00 — the line is costing nothing" in screw
     assert slab.index("|") < screw.index("|") or section.index(slab) < section.index(screw), (
         "worst first — an estimator reads the top of the list")
+
+
+# ── the pack's own verdict, where somebody reads it ──────────────────────────
+
+def _insufficient(tmp_path: Path) -> Path:
+    path = _run_json(tmp_path)
+    doc = handover_note.json.loads(path.read_text(encoding="utf-8"))
+    doc["data_sufficiency"] = {
+        "status": "insufficient_data",
+        "message": "INSUFFICIENT DATA — part DXFs required for credible auto-estimate",
+        "suppress_headline_total": True,
+        "document_total_provisional_gbp": 327.39,
+        "credible_cost_ratio": 0.26,
+        "fabricated_part_count": 12,
+        "parts_with_dxf": 9,
+        "unreliable_parts": [
+            {"part_number": "12349-02-69-05M", "description": "SIDE PANEL",
+             "extended_cost_gbp": 41.20,
+             "reasons": ["no part DXF", "blank inferred from an overall dimension"]},
+            {"part_number": "12349-02-69-07M", "description": "BRACKET",
+             "extended_cost_gbp": 8.15, "reasons": ["no part DXF"]},
+        ],
+    }
+    path.write_text(handover_note.json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def test_a_pack_the_engine_cannot_cost_says_so_where_a_person_reads(tmp_path):
+    """It suppresses its own headline and prints one line to a console nobody keeps, while
+    the workbook computes an ordinary Unit Cost — so the estimate arrives priced and the
+    reason to doubt it arrives nowhere."""
+    text = handover_note.build(_workbook(tmp_path), _insufficient(tmp_path))
+    section = text.split("## Drawings the pack does not contain")[1]
+    assert "does not consider this pack sufficient to cost on its own" in section
+    assert "26% rests on figures it considers credible" in section
+    assert "9 of 12 fabricated part(s) have a DXF" in section
+    assert "the workbook still computes a unit cost and it is a real figure" in section.lower(), (
+        "the suppressed figure is the engine's own parallel total, not the sheet's — saying "
+        "otherwise would have an estimator distrust a number that is fine")
+
+
+def test_the_doubted_lines_are_named_and_priced_worst_first(tmp_path):
+    text = handover_note.build(_workbook(tmp_path), _insufficient(tmp_path))
+    section = text.split("## Drawings the pack does not contain")[1]
+    panel = next(l for l in section.splitlines() if l.startswith("| 12349-02-69-05M"))
+    bracket = next(l for l in section.splitlines() if l.startswith("| 12349-02-69-07M"))
+    assert "£41.20" in panel and "no part DXF" in panel
+    assert "blank inferred from an overall dimension" in panel
+    assert section.index(panel) < section.index(bracket), "worst first"
+    assert "single thing that would move this estimate from provisional to defensible" in section
+
+
+def test_a_sufficient_pack_gets_no_lecture(tmp_path):
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    assert "does not consider this pack sufficient" not in text

@@ -279,6 +279,27 @@ def _pages_of(record: Dict[str, Any]) -> str:
 # Until this was read, this document explained material only, and the labour — a third of the
 # unit cost — appeared as a list of operations with no figure against any of them.
 
+def _data_sufficiency(data: Any) -> Dict[str, Any]:
+    """What the engine concluded about whether this pack could be costed credibly.
+
+    IT SUPPRESSES ITS OWN HEADLINE AND SAYS SO ONLY ON THE CONSOLE. The gate stamps
+    INSUFFICIENT DATA, nulls the engine's document total, and prints one line to a log nobody
+    keeps — while the workbook goes on to compute a perfectly ordinary Unit Cost, because the
+    two are different figures. So the estimate arrives priced, with the reason to doubt it
+    recorded in a JSON field and stated nowhere a person reads.
+
+    Priced with what we have, and the limitation stated: this is the half that was missing.
+    """
+    if not isinstance(data, dict):
+        return {}
+    for node in (data.get("data_sufficiency"),
+                 (data.get("estimate_summary") or {}).get("data_sufficiency")
+                 if isinstance(data.get("estimate_summary"), dict) else None):
+        if isinstance(node, dict):
+            return node
+    return {}
+
+
 def _final_estimate(data: Any) -> Dict[str, Any]:
     """`final_estimate` off the run JSON, wherever the writer put it."""
     if not isinstance(data, dict):
@@ -510,6 +531,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     scan_doc = _load_scan(scan_json)
     scan = _scan_parts(scan_doc)
     final = _final_estimate(scan_doc)
+    sufficiency = _data_sufficiency(scan_doc)
     accepted = _accepted_labour(scan_doc)
     labour_rows = [r for r in (final.get("labour_rows") or []) if isinstance(r, dict)]
     material_rows = [r for r in (final.get("material_rows") or []) if isinstance(r, dict)]
@@ -969,6 +991,46 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             })
         add("## Drawings the pack does not contain, and what that costs")
         add("")
+        # THE ENGINE'S OWN VERDICT ON THE PACK, WHERE SOMEBODY WILL READ IT. It decides
+        # whether the drawings supported a credible cost, suppresses its own headline when
+        # they did not, and prints one line to a console. The workbook still computes a Unit
+        # Cost, because that is a different figure — so the estimate arrives priced and the
+        # reason to doubt it arrives nowhere. Stated here, with the money on it, because "we
+        # priced what we could" is only honest if it is followed by what we could not.
+        if str(sufficiency.get("status") or "") == "insufficient_data":
+            _ratio = _money(sufficiency.get("credible_cost_ratio"))
+            _fab = sufficiency.get("fabricated_part_count")
+            _with = sufficiency.get("parts_with_dxf")
+            add(f"> **The engine does not consider this pack sufficient to cost on its own.** "
+                + (f"Of the {_gbp(sufficiency.get('document_total_provisional_gbp'))} it "
+                   f"assembled, **{_ratio:.0%} rests on figures it considers credible** — the "
+                   f"rest on geometry read off a view, or on prices it could not verify. "
+                   if _ratio is not None else "")
+                + (f"{_with} of {_fab} fabricated part(s) have a DXF; the others were sized "
+                   f"from the drawing rather than measured. "
+                   if _fab else "")
+                + "The workbook still computes a unit cost and it is a real figure — it is "
+                  "what the sheet's own cells add up to. It is the INPUTS underneath the "
+                  "weakest lines that are thin, and those lines are named below.")
+            add("")
+            _weak = [u for u in (sufficiency.get("unreliable_parts") or [])
+                     if isinstance(u, dict)]
+            if _weak:
+                add("| Part | What it is | £ on this job | Why the engine doubts it |")
+                add("|---|---|---|---|")
+                for _u in sorted(_weak,
+                                 key=lambda u: -(_money(u.get("extended_cost_gbp")) or 0)):
+                    _rec = scan.get(str(_u.get("part_number") or "").upper()) or {}
+                    add(f"| {_fmt(_u.get('part_number'))} "
+                        f"| {str(_u.get('description') or '—')[:44]} "
+                        f"| {_gbp_or(_u.get('extended_cost_gbp'), '—')} "
+                        f"| {', '.join(str(r) for r in (_u.get('reasons') or [])) or 'not recorded'} "
+                        f"{'· ' + _pages_of(_rec) if _rec.get('pages') else ''} |")
+                add("")
+                add("> A DXF for the parts above is the single thing that would move this "
+                    "estimate from provisional to defensible. Everything else in this "
+                    "document is unaffected by it.")
+                add("")
         if not no_sheet:
             add("Every costed line on this job is owned by a sheet in the pack. Nothing is "
                 "priced off a drawing that was not supplied.")
