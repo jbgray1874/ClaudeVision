@@ -138,6 +138,42 @@ def _allowed_ext(p: Path) -> bool:
     return p.suffix.lower() in config.ALLOWED_EXTENSIONS
 
 
+# WHAT WE WILL SERVE AND WHAT WE WILL STAGE ARE DIFFERENT QUESTIONS.
+#
+# ALLOWED_EXTENSIONS is a DOCUMENT list — .pdf, .xlsx, .html, .json, images — and it answers
+# "may this file be sent to a browser". The folder listing below reused it to decide what to
+# DISPLAY, and that listing is also the drawing picker on the estimating page. The two lists
+# overlap on exactly one drawing type:
+#
+#   staging.DRAWING_SUFFIXES   .pdf .dxf .dwg .sldprt .sldasm .slddrw .step .stp
+#   config.ALLOWED_EXTENSIONS  .doc .docx .htm .html .jpeg .jpg .json .log .md .pdf .png ...
+#
+# So a job folder holding 19 SLDPRT, 7 SLDASM, a SLDDRW, a DWG, a PDF and the SolidWorks
+# sidecar listed as TWO files, offered "Add all 2", and read as though the pack had been
+# lost off the share. It had not: "Use this folder" stages by DRAWING_SUFFIXES and had been
+# taking all 29 the whole time. The picker was asking the wrong question and answering it
+# accurately.
+#
+# DXF is the one that would have cost real money. The picker is invisible to it, and a DXF
+# drop is exactly what this pack is waiting on — an estimator adding files one at a time
+# would have seen nothing arrive and had no reason to doubt the screen.
+#
+# Widening the LISTING does not widen what can be downloaded: /api/file re-checks
+# _allowed_ext itself and returns 415, so a model appears in the browser and still cannot be
+# fetched through the service. `servable` is reported per item so the page can show that
+# distinction rather than the browser having to infer it from the extension.
+try:
+    from staging import DRAWING_SUFFIXES as _DRAWING_SUFFIXES
+except Exception:                                                # noqa: BLE001
+    # The listing must not fall over if staging moves; it simply narrows to documents,
+    # which is exactly the behaviour that was there before this.
+    _DRAWING_SUFFIXES = ()
+
+
+def _listable_ext(p: Path) -> bool:
+    return _allowed_ext(p) or p.suffix.lower() in _DRAWING_SUFFIXES
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health(x_sdi_key: str | None = Header(default=None)):
@@ -219,8 +255,8 @@ def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=No
         for entry in sorted(os.scandir(folder), key=lambda e: (not e.is_dir(), e.name.lower())):
             p = Path(entry.path)
             is_dir = entry.is_dir()
-            if not is_dir and not _allowed_ext(p):
-                continue  # hide file types we won't serve
+            if not is_dir and not _listable_ext(p):
+                continue  # hide what we can neither serve nor stage
             stat = entry.stat()
             items.append({
                 "name": entry.name,
@@ -229,6 +265,10 @@ def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=No
                 "ext": p.suffix.lower(),
                 "size_bytes": None if is_dir else stat.st_size,
                 "modified": int(stat.st_mtime),
+                # False for a model or a DXF: it can be added to a job, and /api/file will
+                # still refuse to hand it to a browser. Said here so the page does not have
+                # to keep its own copy of either list.
+                "servable": is_dir or _allowed_ext(p),
             })
     except PermissionError:
         raise HTTPException(status_code=403, detail="Service account lacks rights to this share")
