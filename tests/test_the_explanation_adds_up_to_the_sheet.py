@@ -142,6 +142,26 @@ def test_a_part_we_cut_gets_both_of_its_halves_and_the_page_on_each(tmp_path):
     assert "£6.30" in steel_row, "the extended cost belongs on the row that carries the money"
 
 
+def test_the_two_views_of_the_steel_are_shown_disagreeing(tmp_path):
+    """The engine's per-part figures and the sheet's own steel rows are different numbers.
+
+    It is the sheet's that reaches Total Material Cost. Printing one and reconciling with
+    the other leaves both honestly labelled and nothing saying they disagree — which is how
+    a covering note came to quote a per-part steel cost the sheet does not charge.
+    """
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | 650.7"))
+    assert "£6.30" in row, "the engine's extended figure"
+    assert "these two columns do not agree" not in text.lower(), (
+        "6.30 against 6.30 is agreement — the warning must not fire on a job that ties")
+
+    louder = handover_note.build(_workbook(tmp_path),
+                                 _run_json(tmp_path, material_values=(17.60, 0.40)))
+    assert "**These two columns do not agree.**" in louder
+    assert "£11.30 of material turns on which is right" in louder
+    assert "the sheet is charging more" in louder
+
+
 def test_the_labour_lines_carry_the_money_the_sheet_charged(tmp_path):
     text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
     assert "## Every labour line, and what it charges" in text

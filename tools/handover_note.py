@@ -491,6 +491,13 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     material_rows = [r for r in (final.get("material_rows") or []) if isinstance(r, dict)]
     totals = _sheet_totals(wb, final)
     steel = _steel_rows(wb)
+    # The calculated steel rows, keyed the way the block's own description cell is keyed —
+    # the read-back carries no part code for the fabricated blocks, only the description the
+    # engine wrote into them, and that description begins with the part number.
+    steel_calc = {str(r.get("description") or "").split()[0].strip().upper(): r
+                  for r in (final.get("material_rows") or [])
+                  if isinstance(r, dict) and r.get("block") == "steel"
+                  and str(r.get("description") or "").strip()}
     material = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Material Detail")}
     provenance = {str(r.get("Part") or "").upper(): r for r in _sheet(wb, "AI Price Provenance")}
     routes = _sheet(wb, "Canonical Route")
@@ -644,8 +651,8 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             "both places would double it. This is the other half of those lines.")
         add("")
         add("| Part | Blank L × W | Gauge | Off a sheet | Scrap | Cost/part | Qty | "
-            "Extended | Sheet row |")
-        add("|---|---|---|---|---|---|---|---|---|")
+            "Extended | The sheet's own figure | Sheet row |")
+        add("|---|---|---|---|---|---|---|---|---|---|")
         for code, row in steel.items():
             # COST FROM THE RESOLVED FIGURE, NOT THE FORMULA CELL. The Sheet Steel block's
             # cost column is an Excel formula, and a workbook written by the engine and never
@@ -662,12 +669,35 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                 f"| {_fmt(mat.get('Cost/Part'), 'not resolved')} "
                 f"| {_fmt(row.get('qty'))} "
                 f"| {_fmt(mat.get('Ext Material'), 'not resolved')} "
+                f"| {_gbp_or((steel_calc.get(code) or {}).get('total_value_gbp'), 'not read back')} "
                 f"| `Estimate!{row['row']}` |")
         add("")
         add("> Cost per part and extended are the engine's own resolved figures, read from "
-            "the AI Material Detail tab. The Sheet Steel block holds them as Excel formulas, "
-            "which have no value until the workbook is opened — nothing here is "
-            "recalculated, so this cannot disagree with the sheet.")
+            "the AI Material Detail tab. **The sheet's own figure** is what the Sheet Steel "
+            "row calculated in Excel, which is the number that reaches Total Material Cost. "
+            "Nothing here is recalculated.")
+        # THE TWO VIEWS OF THE SAME FIFTEEN PARTS, HELD AGAINST EACH OTHER.
+        #
+        # On 12552 the engine's per-part figures extended to £49.76 while the sheet's own
+        # steel rows summed to £136.32 — £86.56, sixteen per cent of the material total, on
+        # the same fifteen parts. The document printed the first set and reconciled with the
+        # second, so both numbers were honestly labelled and nothing said they disagreed.
+        # An estimator adding the Extended column would have got a figure the sheet does not
+        # charge, and the covering note quoted "£1.05 a part" off it.
+        if steel_calc:
+            _engine = round(sum(_money((material.get(c) or {}).get("Ext Material")) or 0.0
+                                for c in steel), 2)
+            _sheet_side = round(sum(_money(r.get("total_value_gbp")) or 0.0
+                                    for r in steel_calc.values()), 2)
+            if abs(_engine - _sheet_side) >= 0.01:
+                add("")
+                add(f"> **These two columns do not agree.** The engine's extended figures sum "
+                    f"to {_gbp(_engine)} across {len(steel)} part(s); the sheet's own steel "
+                    f"rows sum to {_gbp(_sheet_side)}, and it is the sheet's figure that reaches "
+                    f"Total Material Cost. {_gbp(abs(_engine - _sheet_side))} of material turns on "
+                    f"which is right. Do not quote a per-part steel cost out of the Cost/part "
+                    f"column until this is settled — the sheet is charging "
+                    f"{'more' if _sheet_side > _engine else 'less'}.")
         add("")
 
     # ── every labour line, with the money on it ──────────────────────────────
