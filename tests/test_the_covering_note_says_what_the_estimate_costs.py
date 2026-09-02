@@ -72,7 +72,21 @@ def _workbook(path: Path) -> Path:
         ws.cell(i, 11, qty)
     wb.create_sheet("AI Material Detail")
     wb.create_sheet("AI Price Provenance")
-    wb.create_sheet("Canonical Route")
+    rt = wb.create_sheet("Canonical Route")
+    for c, h in enumerate(["Target", "Operation", "Seq", "Scope", "Qty/unit", "Source",
+                           "Reason"], start=1):
+        rt.cell(1, c, h)
+    route = [
+        ("01-01M", "laser_cutting", 1, "part", 6, "drawing_deterministic",
+         "cut from a 1.5mm flat, stated on the detail"),
+        ("01-01M", "folding", 2, "part", 6, "solidworks_flat_pattern",
+         "4 bends in the model's cut list"),
+        ("01A", "punching", 1, "part", 1, "inference",
+         "no punch is drawn; inferred from the hole pattern"),
+    ]
+    for i, row in enumerate(route, start=2):
+        for c, v in enumerate(row, start=1):
+            rt.cell(i, c, v)
     wb.save(path)
     return path
 
@@ -146,7 +160,8 @@ def test_the_unit_cost_is_the_first_thing_in_the_body(note):
     "3. Bought-in and commercial",
     "4. Labour",
     "that need you",
-    "6. The drawing pack",
+    "Every operation, and who decided it",
+    "The drawing pack",
 ])
 def test_every_section_an_estimator_acts_on_is_present(note, heading):
     assert heading in note["text"], f"missing section: {heading}"
@@ -156,7 +171,7 @@ def test_the_sections_are_in_the_order_they_are_read_in(note):
     text = note["text"]
     order = [text.index("1. The number"), text.index("2. Sheet steel"),
              text.index("3. Bought-in"), text.index("4. Labour"),
-             text.index("6. The drawing pack")]
+             text.index("The drawing pack")]
     assert order == sorted(order)
 
 
@@ -202,7 +217,7 @@ def test_a_line_costing_nothing_is_called_out(note):
 def test_a_line_costed_in_the_steel_block_is_not_listed_as_unpriced(note):
     """It has no price on the BOM because its money is in Sheet Steel. Listing it as needing
     a rate sends an estimator looking for a supplier for a part we cut ourselves."""
-    section = note["text"].split("that need you")[1].split("6. The drawing pack")[0]
+    section = note["text"].split("that need you")[1].split("Every operation")[0]
     assert "01-01M" not in section
 
 
@@ -218,8 +233,8 @@ def test_the_substitution_the_engine_made_is_stated(note):
 
 
 def test_a_properly_traced_part_is_not_reported_as_a_break(note):
-    section = note["text"].split("6. The drawing pack")[1]
-    assert "01-01M" not in section.split("7.")[0]
+    section = note["text"].split("The drawing pack")[1]
+    assert "01-01M" not in section.split("Ours, not yours")[0]
 
 
 def test_the_list_is_addressed_to_design_where_the_break_is_theirs(note):
@@ -243,3 +258,57 @@ def test_the_note_never_calls_itself_ai_in_the_subject(note):
 
 def test_the_quote_is_named_as_withheld_while_provisional(note):
     assert "No customer quote" in note["text"]
+
+
+# ── section 6: the route, which is half the estimate ───────────────────────────
+#
+# It was absent from the note entirely. Section 4 says what the labour COSTS; this says what
+# we think the shop does to each part and on whose authority. An operation nobody drew is the
+# cheapest thing on the sheet to strike out and the easiest to miss.
+
+def test_every_route_line_is_in_the_note(note):
+    section = note["text"].split("Every operation")[1].split("The drawing pack")[0]
+    for op in ("laser_cutting", "folding", "punching"):
+        assert op in section, f"{op} is not in the route table"
+
+
+def test_each_operation_names_who_decided_it(note):
+    section = note["text"].split("Every operation")[1].split("The drawing pack")[0]
+    for who in ("drawing_deterministic", "solidworks_flat_pattern", "inference"):
+        assert who in section
+
+
+def test_an_inferred_operation_is_called_out_for_confirmation(note):
+    """The ones worth an estimator's attention: nothing on the drawing asked for them."""
+    section = note["text"].split("Every operation")[1].split("The drawing pack")[0]
+    assert "inferred rather than drawn" in section and "punching" in section
+
+
+# ── section 7: the pack, in full rather than in summary ────────────────────────
+
+def test_the_pack_is_graded_sheet_by_sheet(note):
+    section = note["text"].split("The drawing pack")[1]
+    assert "Drawing quality, sheet by sheet" in section
+
+
+def test_a_line_with_no_sheet_is_reported_with_whether_it_bites(note):
+    section = note["text"].split("The drawing pack")[1]
+    assert "with no sheet of their own" in section
+
+
+def test_sheets_no_costed_part_claimed_are_named(note):
+    section = note["text"].split("The drawing pack")[1]
+    assert "no costed part was traced to" in section or "claimed by at least one" in section
+
+
+def test_the_quality_grade_is_refused_rather_than_guessed_from_a_trimmed_extract(tmp_path):
+    """A field missing from the extract is not a field missing from the drawing. Answering
+    from a trimmed one produces a confident wrong assessment of Design's work."""
+    import json as _json
+    (tmp_path / "trim.json").write_text(_json.dumps({
+        "final_estimate": {"totals": {"unit_gbp": 1.0}, "labour_rows": [],
+                           "material_rows": []},
+        "parts": [{"part_number": "01-01M", "pages": [6]}],   # numbers and pages only
+    }), encoding="utf-8")
+    note = ee.covering_email(_workbook(tmp_path / "wb.xlsx"), tmp_path / "trim.json")
+    assert "not produced" in note["text"].lower()

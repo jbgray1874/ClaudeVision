@@ -522,6 +522,72 @@ _UNTRACED_GEOMETRY = {
 # which means the part is fabricated.
 
 
+_QUALITY_FIELDS = ("materials", "thicknesses_mm", "surface_finishes", "geometry_rollup")
+
+
+def _pack_was_read_in_full(scan: Dict[str, Dict[str, Any]]) -> bool:
+    """Does this extract carry the fields a drawing-quality read needs?
+
+    A FIELD MISSING FROM THE EXTRACT IS NOT A FIELD MISSING FROM THE DRAWING. Against a
+    trimmed extract every row comes out "material no, thickness no, finish no" for a pack
+    whose page 4 plainly reads MATERIAL: MILD STEEL, 1.5 THK, POWDER COATED. That is not a
+    weak answer, it is a confident wrong one, and it would go to an estimator as an
+    assessment of Design's work.
+    """
+    return any(any(k in rec for k in _QUALITY_FIELDS) for rec in scan.values())
+
+
+def _what_a_sheet_could_not_give(rec: Dict[str, Any]) -> List[str]:
+    """What this drawing did not state, or why the question does not apply to it.
+
+    A PURCHASED PART NAMED ON AN ASSEMBLY SHEET IS NOT AN INCOMPLETE DETAIL. The bearing and
+    the rivets appear on p.2 because that is where they are listed, and they have no detail
+    drawing because they do not need one. Saying what they ARE beats listing four fields they
+    were never going to carry.
+    """
+    roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+    if "bought_in" in roles and "detail" not in roles:
+        return ["bought in — listed on an assembly sheet, no detail drawing needed"]
+    geom = rec.get("geometry_rollup") or {}
+    missing: List[str] = []
+    if not rec.get("materials"):
+        missing.append("material")
+    if not rec.get("thicknesses_mm"):
+        missing.append("thickness")
+    if not rec.get("surface_finishes"):
+        missing.append("finish")
+    if not (geom.get("estimated_cut_length_mm") or 0):
+        missing.append("cut length")
+    return missing
+
+
+def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]],
+                      steel: Dict[str, Any],
+                      material: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Lines with no sheet of their own, and whether their price depended on one.
+
+    A LINE WITH NO SHEET IS ONLY A PROBLEM IF ITS PRICE RESTED ON ONE. A bought-in bolt has
+    no detail drawing because it does not need one, and saying so stops somebody chasing
+    Design for it.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in bom:
+        code = str(row.get("code") or "").upper()
+        if not code:
+            continue
+        rec = scan.get(code) or {}
+        if rec.get("pages"):
+            continue
+        unit, qty = _money(row.get("price")), _money(row.get("qty"))
+        out.append({
+            "code": row.get("code"), "desc": _description(row),
+            "cut": bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")),
+            "gbp": round(unit * qty, 2) if unit and qty else None,
+            "priced": row.get("price") not in (None, ""),
+        })
+    return out
+
+
 def _synthesised_number(part_number: str) -> bool:
     """A number the engine invented because the file's own would not resolve.
 
@@ -1648,14 +1714,87 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add("<p>Overwrite anything tagged <b>AI ESTIMATE — INDICATIVE, NOT A QUOTE</b> and "
             "the sheet recalculates.</p>")
 
-    # 6 ─ the drawing pack, including where a number stopped tracing
-    add("<h3>6. The drawing pack</h3>")
+    # 6 ─ every operation, and who decided it
+    #
+    # THE ROUTE IS HALF THE ESTIMATE AND IT WAS NOT IN THE NOTE AT ALL. Section 4 says what
+    # the labour costs; this says what we think the shop actually does to each part and on
+    # whose authority — drawn, inferred, or read by a model. An operation nobody drew is the
+    # cheapest thing on the sheet to strike out and the easiest to miss.
+    if g["routes"]:
+        add(f"<h3>6. Every operation, and who decided it — "
+            f"{_plural(len(g['routes']), 'line')}</h3>")
+        _rrows = []
+        for row in g["routes"]:
+            _rec = scan.get(str(row.get("Target") or "").upper(), {})
+            _rrows.append([
+                _fmt(row.get("Target")), _fmt(row.get("Operation")), _fmt(row.get("Seq")),
+                _fmt(row.get("Scope")), _fmt(row.get("Qty/unit")), _fmt(row.get("Source")),
+                str(row.get("Reason") or "—")[:80], _where(_rec, pack),
+            ])
+        add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
+                    "On what basis", "Which file and page"], _rrows, numeric={2, 4}))
+        _inferred = [r for r in g["routes"]
+                     if "infer" in str(r.get("Source") or "").lower()]
+        if _inferred:
+            add(f"<p><b>{_plural(len(_inferred), 'operation')} inferred rather than drawn</b> "
+                f"— {', '.join(sorted({str(r.get('Operation') or '?') for r in _inferred}))}. "
+                f"Confirm them or tell me to drop them.</p>")
+
+    # 7 ─ the drawing pack, in full
+    add("<h3>7. The drawing pack</h3>")
     _sheets = sorted({int(p) for rec in scan.values() for p in (rec.get("pages") or [])
                       if isinstance(p, (int, float))})
     if _sheets:
         add(f"<p>{_plural(len(pack) or 1, 'document')}, p.1–p.{max(_sheets)}. "
             f"{_plural(len([r for r in scan.values() if r.get('pages')]), 'costed part')} "
             f"traced to a sheet of their own.</p>")
+
+    # Sheet by sheet — refused outright rather than answered wrongly from a trimmed extract.
+    if scan and not _pack_was_read_in_full(scan):
+        add("<p><b>Drawing quality, sheet by sheet: not produced.</b> This ran against a "
+            "trimmed extract carrying only part numbers and page numbers. Reporting from it "
+            "would have said every drawing states no material, no thickness and no finish — "
+            "which is false. Re-run against the full job JSON and this builds itself.</p>")
+    elif scan:
+        add("<p><b>Drawing quality, sheet by sheet.</b></p>")
+        _qrows = []
+        for code, rec in sorted(scan.items(),
+                                key=lambda kv: ((kv[1].get("pages") or [999])[0], kv[0])):
+            if not (rec.get("pages") or []):
+                continue
+            _rel = ((rec.get("geometry_rollup") or {}).get("confidence") or {}).get(
+                "geometry_reliability")
+            _qrows.append([
+                _where(rec, pack), code or _fmt(rec.get("description")),
+                ", ".join(str(m) for m in rec.get("materials") or []) or "no",
+                ", ".join(str(t) for t in rec.get("thicknesses_mm") or []) or "no",
+                ", ".join(str(f) for f in rec.get("surface_finishes") or []) or "no",
+                (f"{_fmt(rec.get('geometry_source'))}"
+                 + (f" ({_rel:.0%})" if isinstance(_rel, (int, float)) else "")),
+                ", ".join(_what_a_sheet_could_not_give(rec)) or "nothing — complete",
+            ])
+        add(_table(["File and page", "Part", "Material stated", "Thickness stated",
+                    "Finish stated", "Geometry", "What it could not give"], _qrows))
+
+    # Drawings the pack does not contain, and whether that costs anything.
+    _no_sheet = _missing_drawings(bom, scan, g["steel"], material)
+    if _no_sheet:
+        _bites = [n for n in _no_sheet if n["cut"] or not n["priced"]]
+        add(f"<p><b>{_plural(len(_no_sheet), 'line')} with no sheet of their own"
+            + (f", of which {len(_bites)} "
+               f"{'affects' if len(_bites) == 1 else 'affect'} the price."
+               if _bites else ". None of them affects the price — they are fasteners off "
+                              "the BOM table, bought items, packaging, delivery and the "
+                              "powder line, none of which would carry a detail drawing on a "
+                              "complete pack.") + "</b></p>")
+        if _bites:
+            add(_table(["Line", "What it is", "£ on this job", "Does the missing sheet bite?"],
+                       [[n["code"] or "—", n["desc"], _gbp_or(n["gbp"], "no price"),
+                         ("Yes — we cut this part and had no drawing of it to size it from"
+                          if n["cut"] else
+                          "Yes — it has no price and no sheet to read one from")]
+                        for n in _bites], numeric={2}))
+
     if untraced:
         _at_stake = round(sum(u["gbp"] or 0 for u in untraced), 2)
         add(f"<p><b>{_plural(len(untraced), 'part number')} could not be followed from the "
@@ -1673,7 +1812,20 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add("<p>Every costed part traced from the BOM through to a drawing or a flat of its "
             "own. Nothing here for Design.</p>")
 
-    # 7 ─ ours, not yours
+    # Sheets nothing claimed. Derived from the pages the parts themselves name, so a gap is
+    # "no costed part was traced to this sheet", never "the PDF is short".
+    if _sheets:
+        _gaps = [p for p in range(1, max(_sheets) + 1) if p not in _sheets]
+        add(f"<p>Within p.1–p.{max(_sheets)}, "
+            + (f"<b>no costed part was traced to "
+               f"{', '.join(f'p.{p}' for p in _gaps)}</b>. Those are usually the cover, the "
+               f"general arrangement and the BOM table, which own no part of their own — but "
+               f"they are also where a part would hide if its drawing were read and never "
+               f"joined to a cost, so they are named rather than assumed harmless."
+               if _gaps else
+               "every sheet is claimed by at least one costed part.") + "</p>")
+
+    # 8 ─ ours, not yours
     #
     # ONLY WHAT WE CAN ACTUALLY OWN. This listed every break in section 6 and called them all
     # engine defects, which is a claim the engine is not in a position to make: a part with no
@@ -1687,7 +1839,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
              + (f" ({_gbp(u['gbp'])} on this job)" if u["gbp"] else "")
              for u in _substituted[:6]]
     if _ours:
-        add("<h3>7. Ours, not yours</h3>")
+        add("<h3>8. Ours, not yours</h3>")
         add("<p>Where the engine had no measurement it used something else rather than "
             "leaving the line blank. Each of these is a substitution we made, and ours to "
             "fix — nothing here needs anything from you:</p>")
