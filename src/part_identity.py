@@ -89,7 +89,26 @@ def normalize_part_code(raw: Any) -> str:
         return f"{base}-GA{suffix}" if suffix else f"{base}-GA"
     s = s.replace(" ", "")
     s = re.sub(r"-+$", "", s)
-    s = re.sub(r"-(?!GA$|CGA$)[A-Z]{3,}$", "", s)  # strip trailing desc bleed e.g. -WALL
+    # STRIP TRAILING DESCRIPTION BLEED ("11650-04-01A-WALL" -> "11650-04-01A"), BUT ONLY WHEN
+    # WHAT REMAINS IS STILL A DRAWING NUMBER.
+    #
+    # The rule was written for codes that begin with a job number, and it silently ate every
+    # code that does not. "BI-SCREW", "BI-HEADBOLT", "BI-DOMERIVET", "BI-HEXNUT" and
+    # "BI-LEDDOWNLIGHTS" — five distinct lines on 12552 alone — all normalised to "BI", so
+    # every BI- bought-in in the job shared one identity. "SA-BRACKET" became "SA" and
+    # "M4-NUT" became "M4". Where callers key a dict on this, five lines collide on one slot;
+    # where they compare two normalised codes for equality, two different parts test equal.
+    #
+    # The shape test is the one part_code_conventions already publishes, so this asks the
+    # same question as everything else that asks it rather than adding a seventh spelling.
+    _trimmed = re.sub(r"-(?!GA$|CGA$)[A-Z]{3,}$", "", s)
+    if _trimmed != s:
+        try:
+            from part_code_conventions import looks_like_a_drawing_number
+        except Exception:                                        # noqa: BLE001
+            looks_like_a_drawing_number = None                   # noqa: N806
+        if looks_like_a_drawing_number is None or looks_like_a_drawing_number(_trimmed):
+            s = _trimmed
     if s and s[0].isalpha():
         s = split_catalogue_token(s)
     return s
