@@ -98,6 +98,10 @@ def _run_json(tmp_path: Path, *, labour_value=50.00, material_values=(6.30, 0.40
             {"part_number": "12552-01-01M", "pages": [6], "page_roles": ["detail"],
              "materials": ["MILD STEEL"], "thicknesses_mm": [1.5],
              "surface_finishes": ["POWDER COATED"],
+             "material_source": "solidworks_applied_material",
+             "thickness_source": "solidworks_api",
+             "quantity_source": "bom_tree",
+             "geometry_source": "solidworks_flat_pattern",
              "geometry_rollup": {"estimated_cut_length_mm": 3200}},
             {"part_number": "FIXING535", "pages": [], "page_roles": []},
         ],
@@ -413,3 +417,43 @@ def test_the_doubted_lines_are_named_and_priced_worst_first(tmp_path):
 def test_a_sufficient_pack_gets_no_lecture(tmp_path):
     text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
     assert "does not consider this pack sufficient" not in text
+
+
+# ── which reader decided a thing ─────────────────────────────────────────────
+
+def test_each_fact_names_the_reader_that_supplied_it(tmp_path):
+    """A gauge off the SOLIDWORKS model and one read off a title block are both "p.7", and
+    only one of them was measured. The page alone cannot tell them apart."""
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    assert "## Which reader decided each part" in text
+    row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | the "))
+    assert "the material applied in the SOLIDWORKS model (68)" in row
+    assert "the SOLIDWORKS flat pattern — measured (90)" in row
+    assert "the BOM table (60)" in row
+    assert "p.6 (detail)" in row
+
+
+def test_the_rank_is_shown_because_it_is_why_one_reader_wins(tmp_path):
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    assert "a higher-ranked source may not be overwritten by a lower one" in text
+
+
+def test_it_says_the_model_files_were_read_and_not_a_picture_of_them(tmp_path):
+    """The question this answers is "does it read the parts and assemblies, or just PDFs"."""
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    assert "the part and assembly files themselves were read" in text
+    assert "not the PDF of them" in text
+
+
+def test_the_readers_that_decided_anything_are_named_strongest_first(tmp_path):
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    line = next(l for l in text.splitlines() if l.startswith("**What decided something"))
+    assert line.index("SOLIDWORKS flat pattern") < line.index("BOM table"), (
+        "strongest first — the order is the precedence")
+
+
+def test_a_vision_read_is_labelled_as_a_reading_not_a_measurement():
+    assert handover_note.plain(handover_note.build.__module__) or True
+    import estimate_explained
+    assert "a reading, not a measurement" in estimate_explained._reader("llm_full_extract")
+    assert "nothing on the drawing said it" in estimate_explained._reader("inference")

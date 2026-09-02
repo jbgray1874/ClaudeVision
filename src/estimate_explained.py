@@ -349,6 +349,79 @@ _BLOCK_NAMES = {"bom": "Bought-in / standard materials", "tube": "Tube and wire"
                 "steel": "Sheet steel", "other_sheet": "Other sheet material"}
 
 
+# ── which reader decided a thing ─────────────────────────────────────────────
+#
+# "WHERE DID THAT COME FROM" HAS TWO ANSWERS AND THE DOCUMENT ONLY GAVE ONE. It said which
+# drawing page a part appears on, and what priced it — and not which READER supplied the
+# material, the gauge, the quantity or the size. Those are different questions: a thickness
+# measured off the SOLIDWORKS model and one read off a title block are both "p.7", and only
+# one of them is a measurement.
+#
+# The engine records it per field and always has. source_precedence stamps material_source,
+# thickness_source, quantity_source and geometry_source onto every part as it goes, and ranks
+# them so a weaker reader cannot overwrite a stronger one. This prints that record.
+
+_READER_WORDS = {
+    "estimator_confirmed": "an estimator confirmed it",
+    "knowledge_base": "the knowledge base",
+    "solidworks_api": "the SOLIDWORKS model",
+    "solidworks_flat_pattern": "the SOLIDWORKS flat pattern — measured",
+    "solidworks_applied_material": "the material applied in the SOLIDWORKS model",
+    "dxf": "the part's DXF",
+    "dxf_flat_pattern": "the part's DXF flat pattern — measured",
+    "dxf_filename": "the DXF's own filename",
+    "mirror_of_measured": "mirrored from the measured opposite hand",
+    "drawing_deterministic": "read straight off the drawing",
+    "title_block": "the drawing's title block",
+    "drawing_notes": "a note on the drawing",
+    "pdf_overall_dims": "overall dimensions on the drawing — the view, not the part",
+    "bom_tree": "the BOM table",
+    "override_rule": "an override rule",
+    "llm_extract": "the vision model (xAI Grok) — a reading, not a measurement",
+    "llm_full_extract": "the vision model (xAI Grok) — a reading, not a measurement",
+    "inference": "inferred by the engine — nothing on the drawing said it",
+    "geometry_inference": "inferred from the part's geometry — nothing measured it",
+    "": "not recorded",
+}
+
+
+def _reader(source: Any) -> str:
+    """A source name in words an estimator can weigh, with the engine's own rank on it."""
+    key = str(source or "").strip().lower()
+    words = _READER_WORDS.get(key)
+    if words is None:
+        # Decorated values such as "knowledge_base (92%)" or "override_rule:timber_panels".
+        for known, text in _READER_WORDS.items():
+            if known and key.startswith(known):
+                words = text
+                break
+    words = words or key.replace("_", " ")
+    try:
+        from source_precedence import rank as _rank
+        _r = _rank(key)
+    except Exception:                                            # noqa: BLE001
+        _r = None
+    return f"{words} ({_r})" if _r else words
+
+
+def _readers_used(scan: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Every reader that actually decided something on this job, strongest first."""
+    seen: Dict[str, int] = {}
+    for rec in scan.values():
+        for field in ("material_source", "thickness_source", "quantity_source",
+                      "geometry_source"):
+            key = str(rec.get(field) or "").strip().lower()
+            if key:
+                seen[key] = seen.get(key, 0) + 1
+    try:
+        from source_precedence import rank as _rank
+    except Exception:                                            # noqa: BLE001
+        def _rank(_):                                            # noqa: ANN001
+            return 0
+    return [f"{_reader(k)} — {n} field(s)"
+            for k, n in sorted(seen.items(), key=lambda kv: (-_rank(kv[0]), -kv[1], kv[0]))]
+
+
 # ── the money's provenance ───────────────────────────────────────────────────
 
 _INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
@@ -840,6 +913,43 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add(f"> {len(labour_rows)} row(s), {_gbp(_sum_money(labour_rows))} — "
             f"against the sheet's Total Labour Cost of {_gbp(totals['labour'])}.")
         add("")
+
+    # ── which reader decided each part ───────────────────────────────────────
+    # THE OTHER HALF OF "WHERE DID YOU SEE THAT". The page says which sheet a part is on; this
+    # says which reader supplied each fact about it, and at what rank — a gauge off the
+    # SOLIDWORKS model and one read off a title block are both "p.7", and only one of them was
+    # measured. The engine has stamped this on every field as it went; nothing printed it.
+    if scan:
+        _graded = [(code, rec) for code, rec in sorted(scan.items())
+                   if any(rec.get(f) for f in ("material_source", "thickness_source",
+                                               "quantity_source", "geometry_source"))]
+        if _graded:
+            add("## Which reader decided each part")
+            add("")
+            add("The number in brackets is the engine's rank for that reader: a higher-ranked "
+                "source may not be overwritten by a lower one, which is why a SOLIDWORKS "
+                "measurement survives a vision model's reading of the same part and not the "
+                "other way round.")
+            add("")
+            add("**What decided something on this job:** "
+                + "; ".join(_readers_used(scan)) + ".")
+            add("")
+            add("| Part | Material | Thickness | Quantity | Geometry / size | Which sheet |")
+            add("|---|---|---|---|---|---|")
+            for code, rec in _graded:
+                add(f"| {code or '—'} "
+                    f"| {_reader(rec.get('material_source'))} "
+                    f"| {_reader(rec.get('thickness_source'))} "
+                    f"| {_reader(rec.get('quantity_source'))} "
+                    f"| {_reader(rec.get('geometry_source'))} "
+                    f"| {_pages_of(rec)} |")
+            add("")
+            add("> A SOLIDWORKS source means the part and assembly files themselves were read "
+                "— not the PDF of them. Where the model was available the engine takes the "
+                "flat pattern, the applied material and the bend count from it, because those "
+                "are the modelled facts rather than somebody's reading of a view. Where it was "
+                "not, the drawing is the best available and the row says so.")
+            add("")
 
     # ── what the labour actually is ──────────────────────────────────────────
     # THE WHOLE QUANTITY STORY, AND IT WAS BEING WORKED OUT BY HAND. Every labour row carries
