@@ -243,7 +243,17 @@ FOAM TAPE ADHESIVE GLUE SEALANT
 MISC MISCELLANEOUS SUNDRY SUNDRIES CONSUMABLE CONSUMABLES
 PART PARTS ITEM ITEMS COMPONENT COMPONENTS STDPART STANDARD
 PACKAGING PALLET PALLETS BOX BOXES
-""".split())
+""".split()) | {
+    # SDI's own shorthand for a proprietary/purchased item with no code of its own. It keeps
+    # its slash through bare_code (which strips spaces and hyphens, not separators inside a
+    # token), so it is listed in the form it actually appears in. 12349-02 carried it against
+    # "10.1 DIA BUMPON TRANSPARENT" and the estimate could not price a bumpon because the
+    # code column held the words "P/P".
+    #
+    # NOT "PP". That is polypropylene, and refusing a real material code as a category is
+    # the false positive this list is written to avoid.
+    "P/P",
+}
 
 
 def is_category_not_a_code(identity: str) -> bool:

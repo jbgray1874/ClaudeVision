@@ -350,3 +350,90 @@ def test_the_quality_grade_is_refused_rather_than_guessed_from_a_trimmed_extract
     }), encoding="utf-8")
     note = ee.covering_email(_workbook(tmp_path / "wb.xlsx"), tmp_path / "trim.json")
     assert "not produced" in note["text"].lower()
+
+
+# ── the Source column, which was answering "check AI Provenance" on most lines ──
+#
+# Four lines out of 12349-02's section 3, verbatim. Every one of them said
+# "source not named in the workbook — check AI Provenance", which reads as a lookup we forgot
+# to do and sends an estimator to a tab that has nothing to tell them.
+
+def _src(row, prov=None):
+    return ee._price_source(row, prov or {}, {})
+
+
+def test_a_part_costed_in_another_block_says_which_block():
+    """12349-02-69-01A, 06A and 08J are costed on Other Sheet Material and are correctly
+    blank here. The test was for "costed in sheet steel" alone, so all three fell through it
+    and landed on the estimator's to-do list for no reason."""
+    got = _src({"code": "12349-02-69-01A", "price": 0,
+                "text": "GRAVITY FEEDER FABRICATION — costed in Other Sheet Material"})
+    assert "Other Sheet Material" in got
+    assert "NOT PRICED" not in got and "not named" not in got
+
+
+def test_sheet_steel_still_names_its_own_block():
+    got = _src({"code": "01-01M", "price": None,
+                "text": "CROSS MEMBERS — costed in Sheet Steel below"})
+    assert "Sheet Steel" in got
+
+
+@pytest.mark.parametrize("code", ["STD PART", "FIXING", "P/P"])
+def test_a_class_in_the_code_column_is_named_as_one(code):
+    """You cannot look up a rate for the word FIXING. Saying "source not named" implies we
+    could have and did not."""
+    got = _src({"code": code, "price": 0, "text": "3.5x19mm WOOD SCREW"})
+    assert "CLASS, not a code" in got
+    assert "not named in the workbook" not in got
+
+
+def test_a_class_word_on_a_PRICED_line_keeps_its_price_source():
+    """PACKAGING is a category word too. On a line carrying £25.00 the price is what
+    matters, not the spelling of its code."""
+    got = _src({"code": "PACKAGING", "price": 25.0, "supplier": "market_indication",
+                "text": "Packaging"})
+    assert "NOT A QUOTE" in got and "CLASS" not in got
+
+
+def test_a_line_written_as_zero_is_an_unpriced_line():
+    """Zero is what a blank reads as once the cell has been written. This asked for None or
+    empty only, so every 0.00 line skipped the loud answer."""
+    assert "NOT PRICED" in _src({"code": "BI-SCREW", "price": 0.0, "text": "M5x10 CAP"})
+    assert "NOT PRICED" in _src({"code": "BI-SCREW", "price": None, "text": "M5x10 CAP"})
+
+
+def test_a_real_catalogue_line_is_unchanged():
+    assert _src({"code": "FIXING908", "price": 1.28, "supplier": "Elite",
+                 "text": "ADJUSTABLE FOOT"}) == "catalogue — Elite"
+
+
+def test_an_indication_is_still_called_out():
+    got = _src({"code": "PACKAGING", "price": 25.0, "supplier": "market_indication",
+                "text": "Packaging"})
+    assert "NOT A QUOTE" in got
+
+
+def test_the_provenance_row_is_found_when_the_two_sheets_spell_it_differently():
+    got = _src({"code": "01 01X", "price": 1.42, "text": "62012RS Ball Bearing"},
+               prov={"0101X": {"Price Source": "purchase history 2026-03"}})
+    assert "purchase history" in got
+
+
+# ── nothing is cut off mid-word ────────────────────────────────────────────────
+
+def test_a_long_operation_name_is_not_cut_mid_word(note):
+    """"CNC Joinery — 5mm HIGH IMPACT ACRYLIC (12349-02-" is a machine cutting a string at
+    character 48, and it reads as software that does not know what it is holding."""
+    assert "(12349-02-\n" not in note["text"]
+    for line in note["text"].splitlines():
+        assert not line.rstrip().endswith("(12349-02-")
+
+
+def test_the_word_safe_clip_breaks_on_a_space_and_marks_it():
+    got = ee._clip("CNC Joinery — 5mm HIGH IMPACT ACRYLIC (12349-02-69-01A)", 30)
+    assert got.endswith("…") and not got.rstrip("… ").endswith("-")
+    assert len(got) <= 32
+
+
+def test_the_clip_leaves_something_that_already_fits_alone():
+    assert ee._clip("P.Coat, 16 parts", 40) == "P.Coat, 16 parts"

@@ -758,7 +758,7 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
             continue
         out.append({
             "code": rec.get("part_number") or code,
-            "description": str(rec.get("description") or "")[:48],
+            "description": _clip(rec.get("description"), 48),
             "why": why,
             "reader": _reader(rec.get("geometry_source")),
             "drawing_no": _drawing_no(rec),
@@ -790,9 +790,37 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
     code = bom_row["code"].upper()
     text = str(bom_row.get("text") or "")
     supplier = str(bom_row.get("supplier") or "").strip()
-    prov = provenance.get(code) or {}
-    named = str(prov.get("Price Source") or prov.get("price_source") or "").strip()
+    # THE JOIN, TRIED THE WAYS THE TWO SHEETS ACTUALLY SPELL A CODE. Looking the raw code up
+    # verbatim and giving up is how most of 12349-02's lines came out "source not named".
+    prov = (provenance.get(code)
+            or provenance.get(code.replace(" ", ""))
+            or provenance.get(str(bom_row.get("text") or "").strip().split(" ")[0].upper())
+            or {})
+    named = str(prov.get("Price Source") or prov.get("price_source")
+                or prov.get("Source") or prov.get("source") or "").strip()
 
+    # A CATEGORY WORD IS NOT A CODE, AND SAYING SO IS THE ANSWER.
+    #
+    # SDI drawings put a CLASS in the part-code column where the item has no specific code:
+    # "FIXING", "STD PART", "P/P". 12349-02 carried all three, each at GBP 0.00 with "source
+    # not named in the workbook" beside it — which reads as a lookup we forgot to do. It is
+    # not: there is nothing to look up. You cannot price the word "FIXING", and the identity
+    # is entirely in the description next to it.
+    try:
+        from part_code_conventions import is_category_not_a_code as _is_category
+    except Exception:                                            # noqa: BLE001
+        _is_category = None                                      # type: ignore[assignment]
+    # EVERY FABRICATED BLOCK, NOT JUST THE STEEL ONE. This tested for "costed in sheet
+    # steel" alone, so 12349-02's acrylic and MDF — whose own text reads "costed in Other
+    # Sheet Material" — fell through it and came out as "source not named in the workbook",
+    # on lines that are correctly and deliberately blank here because their money is in
+    # another block. Three made parts on the estimator's to-do list for no reason.
+    _blocks = (("costed in sheet steel", "Sheet Steel"),
+               ("costed in other sheet material", "Other Sheet Material"),
+               ("costed in tube", "Tube"), ("costed in wire", "Wire"))
+    for _needle, _label in _blocks[1:]:
+        if _needle in text.lower():
+            return (f"costed by nest on the {_label} block, not per piece here")
     if "costed in sheet steel" in text.lower():
         # NAME THE ROW IT IS COSTED ON. "priced below" is true and stops exactly where the
         # question starts; an estimator wants to look at the figure, not be told it exists.
@@ -804,7 +832,21 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
         return (f"costed by nest on the Sheet Steel block — see `Estimate!{steel_row}` below"
                 if steel_row else
                 "costed by nest on the Sheet Steel block, not per piece here")
-    if bom_row.get("price") in (None, ""):
+    # ZERO IS WHAT A BLANK READS AS ONCE THE CELL HAS BEEN WRITTEN. This asked for None or
+    # empty only, so every line the workbook had filled with 0.00 skipped past the loud
+    # answer and landed on "source not named in the workbook" — which sends an estimator to
+    # check a provenance tab about a line that simply has no price.
+    _p = bom_row.get("price")
+    if _p in (None, "") or (isinstance(_p, (int, float)) and float(_p) == 0.0):
+        # WHY it could not be priced, where we can say. A class word in the code column is
+        # not a lookup we forgot — there is nothing to look up, and the answer is a code.
+        # Asked only of an unpriced line: PACKAGING is a category word too, and on a line
+        # that carries GBP 25.00 the price is what matters, not the spelling of its code.
+        if _is_category is not None and code and _is_category(code):
+            return ("**NOT PRICED — the code column holds a CLASS, not a code.** The drawing "
+                    f"prints '{bom_row['code']}' where the item has no part number of its "
+                    "own, so there is nothing to look a rate up against. Identify it from "
+                    "the description and give it a code, or price it by hand")
         return "**NOT PRICED — needs a rate**"
     if any(token in supplier.lower() for token in _INDICATIVE):
         return f"AI market indication ({supplier}) — NOT A QUOTE, replace it"
@@ -1537,7 +1579,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                                  key=lambda u: -(_money(u.get("extended_cost_gbp")) or 0)):
                     _rec = scan.get(str(_u.get("part_number") or "").upper()) or {}
                     add(f"| {_fmt(_u.get('part_number'))} "
-                        f"| {str(_u.get('description') or '—')[:44]} "
+                        f"| {_clip(_u.get('description'), 44)} "
                         f"| {_gbp_or(_u.get('extended_cost_gbp'), '—')} "
                         f"| {', '.join(str(r) for r in (_u.get('reasons') or [])) or 'not recorded'} "
                         f"{'· ' + _where(_rec, pack, page_index) if _rec.get('pages') else ''} |")
@@ -1625,6 +1667,24 @@ _TH = ('style="text-align:left;padding:4px 12px 4px 0;border-bottom:1px solid #c
 _TD = 'style="padding:3px 12px 3px 0;border-bottom:1px solid #edf1f5;vertical-align:top"'
 _NUM = ('style="padding:3px 12px 3px 0;border-bottom:1px solid #edf1f5;text-align:right;'
         'white-space:nowrap"')
+
+
+def _clip(text: Any, limit: int) -> str:
+    """Shorten on a WORD boundary, and say that it was shortened.
+
+    "CNC Joinery — 5mm HIGH IMPACT ACRYLIC (12349-02-" is a machine cutting a string at
+    character 48. An estimator reads that as software that does not know what it is holding,
+    and they are not wrong. Break where the words break, and mark it.
+    """
+    words = str(text if text is not None else "").split()
+    if not words:
+        return "—"
+    out = ""
+    for word in words:
+        if out and len(out) + 1 + len(word) > limit:
+            return out + " …"
+        out = f"{out} {word}".strip() if out else word
+    return out
 
 
 def _plural(count: Any, noun: str, plural: str = "") -> str:
@@ -1818,7 +1878,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _blank = (f"{_fmt(r.get('length_mm'))} × {_fmt(r.get('width_mm'))}"
                           if r.get("length_mm") else "—")
                 _srows.append([
-                    str(r.get("description") or "—")[:44], _blank,
+                    str(r.get("description") or "—"), _blank,
                     _fmt(r.get("gauge") or r.get("thickness_mm")
                          or _rec.get("normalized_thickness_mm")),
                     _fmt(r.get("qty_per_unit")), _fmt(r.get("qty_per_sheet")),
@@ -1841,7 +1901,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _rec = scan.get(_code.upper()) or {}
             _srow = _src_by_code.get(_code.upper())
             _brows.append([
-                _code or "—", str(r.get("description") or "—")[:44],
+                _code or "—", str(r.get("description") or "—"),
                 _fmt(r.get("qty_per_unit")), _gbp_or(r.get("unit_price_gbp"), "—"),
                 _gbp_or(r.get("total_value_gbp"), "0.00"),
                 (_price_source(_srow, provenance, scan) if _srow else "")
@@ -1900,8 +1960,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         _lab_sheet = _money(totals.get("labour"))
         add(f"<h3>4. Labour — {_gbp(_lab_sheet if _lab_sheet is not None else labour['total'])}"
             f" across {labour['rows']} sheet rows</h3>")
-        _lrows = [[str(r.get("operation") or r.get("description") or "—")[:24],
-                   str(r.get("description") or "—")[:46],
+        _lrows = [[str(r.get("operation") or r.get("description") or "—"),
+                   str(r.get("description") or "—"),
                    r.get("department") or "—",
                    _fmt(r.get("setup_minutes")), _fmt(r.get("batch_hours")),
                    _gbp_or(r.get("dept_rate_gbp_per_hour"), "—"),
@@ -1961,7 +2021,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _rrows.append([
                 _fmt(row.get("Target")), _fmt(row.get("Operation")), _fmt(row.get("Seq")),
                 _fmt(row.get("Scope")), _fmt(row.get("Qty/unit")), _fmt(row.get("Source")),
-                str(row.get("Reason") or "—")[:80], _where(_rec, pack, page_index),
+                str(row.get("Reason") or "—"), _where(_rec, pack, page_index),
             ])
         add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
                     "On what basis", "Which drawing files and pages"], _rrows,

@@ -142,5 +142,14 @@ def test_the_vocabulary_is_narrow_enough_to_be_safe():
     from part_code_conventions import _CATEGORY_CODES
     assert "FIXING" in _CATEGORY_CODES and "ELECTRICS" in _CATEGORY_CODES
     for entry in _CATEGORY_CODES:
-        assert entry.isalpha(), f"{entry!r} carries digits — that makes it look like a real code"
+        # THE REASON, NOT A PROXY FOR IT. This asserted isalpha(), whose stated purpose is
+        # "carries digits". A digit is what makes a token look like a real code — FIXING41
+        # names a screw a buyer can order — and isalpha() also refuses a separator, which
+        # carries none of that risk. SDI's own shorthand "P/P" is a class word with a slash
+        # in it, and the guard was refusing it for a reason that did not apply to it.
+        assert not any(c.isdigit() for c in entry), (
+            f"{entry!r} carries digits — that makes it look like a real code")
         assert entry == entry.upper(), f"{entry!r} is compared against the bare (upper) form"
+        # A separator is allowed; anything longer than one is a description, not a class.
+        assert sum(1 for c in entry if not c.isalnum()) <= 1, (
+            f"{entry!r} looks like a description rather than a class word")
