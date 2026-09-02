@@ -1373,6 +1373,43 @@ def _native_match_index(job: NativeJob):
     for _k, _v in _alias_hits.items():
         if len(set(_v)) == 1:
             exact[_k] = _v[0]
+
+    # ── AND THE CODE THE ENGINE STORES IS NOT THE CODE THE FILE CARRIES ──────────────
+    #
+    # Every tier above indexes the model's document title. The lookup key is the part's
+    # `part_number` AFTER the pipeline has been through it — and normalize_part_code rewrites
+    # several shapes on the way past: it strips description bleed from a drawing number
+    # ("11650-04-01A-WALL" -> "11650-04-01A"), joins a spaced GA ("1455-C GA" -> "1455-C-GA"),
+    # drops a trailing separator, and splits a glued catalogue suffix. The model's title
+    # carries none of those rewrites, so on exactly those shapes the index is keyed one way
+    # and queried another. The part then loses its flat pattern, its gauge, its bend count and
+    # its mass, and falls back to whatever the drawing could be read for — silently, because
+    # a miss here has never been an error.
+    #
+    # Measured against the three-rung matcher on eight realistic titles, four missed:
+    # -WALL and -PANEL bleed, "1455-C GA", and "9233-12-GA-UKM". "BI-SCREW" was a fifth until
+    # part_identity stopped collapsing it to "BI" this morning, which is the same defect at
+    # the other end of the same join.
+    #
+    # So the title is indexed under the engine's own spelling as well — asking the SAME
+    # function the engine asks, rather than adding another opinion about what a part number
+    # is. Ambiguity is refused as everywhere else in this builder, and a key already claimed
+    # by a real document is never overwritten: a part that owns its spelling outright keeps it.
+    try:
+        from part_identity import normalize_part_code as _engine_spelling
+    except Exception:                                            # noqa: BLE001
+        _engine_spelling = None                                  # type: ignore[assignment]
+    if _engine_spelling is not None:
+        _norm_hits: Dict[str, List[str]] = {}
+        for _pn in (list(job.part_signals) + [r.part_number for r in job.bom]
+                    + list(job.assembly_pns)):
+            _k = _pn_key(_engine_spelling(_pn))
+            if _k and _k not in exact:
+                _norm_hits.setdefault(_k, []).append(_pn)
+        for _k, _v in _norm_hits.items():
+            if len(set(_v)) == 1:
+                exact[_k] = _v[0]
+
     return exact, tail, lead
 
 
