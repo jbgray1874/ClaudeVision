@@ -1057,6 +1057,54 @@ def _apply_and_report(part: Dict[str, Any], chosen: Path, report: Dict[str, Any]
     )
 
 
+def _stock_key_of_flat(path: Path) -> Tuple[Optional[float], Optional[str]]:
+    """The (thickness, material) a flat's own filename declares — the stock it is cut from."""
+    thickness = None
+    if _parse_filename is not None:
+        try:
+            thickness = _parse_filename(path).get("thickness_mm")
+        except Exception:                                        # noqa: BLE001
+            thickness = None
+    try:
+        material = material_from_dxf_filename(path)
+    except Exception:                                            # noqa: BLE001
+        material = None
+    return (round(float(thickness), 3) if thickness else None,
+            str(material).upper() if material else None)
+
+
+def flats_are_different_pieces(paths: Sequence[Path]) -> bool:
+    """Are these flats DIFFERENT PARTS, or competing revisions of one?
+
+    THE ASSUMPTION THAT COST 12349-02 SIX OF ITS SEVEN ACRYLIC PIECES.
+    -----------------------------------------------------------------
+    When several distinct blanks resolve to one part number, the merge splits them onto child
+    detail parts — but only where numbered children exist in scope. 01A has none: SDI exports
+    the pieces of a bonded fabrication as `...-01A_-01_2MM_...` through `...-01A_-07_5MM_...`,
+    which is an export SUFFIX, not a child part number. So it fell to the other branch, whose
+    comment reads "these are competing variants for a single leaf part (e.g. a stale revision
+    left in the folder) — pick the best and flag".
+
+    That is right about stale revisions and wrong about this. 01A came through as one
+    770 x 135 x 5 strip: £11.43 of material and £1.96 of laser for a bonded box made of seven
+    pieces, which is an under-charge nobody reading the sheet could see, because the six that
+    were dropped left no trace on it.
+
+    THE TELL IS IN THE FILENAMES THE ENGINE ALREADY PARSES. A stale revision of a part is the
+    same part — same stock, same gauge, a slightly different outline. 01A's flats declare
+    2mm, 3mm and 5mm. Nothing is a revision of itself in a different thickness: that is a lens,
+    a comb and five 5mm parts, and they are bonded together.
+
+    So: disagree on the stock they are cut from, and they are pieces. Agree, and today's
+    pick-the-best behaviour stands, which is what keeps a stale revision from becoming a
+    phantom part on every existing job.
+    """
+    keys = {_stock_key_of_flat(p) for p in paths}
+    keys.discard((None, None))
+    return len({k for k in keys if k[0] is not None}) > 1 or \
+        len({k[1] for k in keys if k[1] is not None}) > 1
+
+
 def _split_parent_flats_to_children(
     parent: Dict[str, Any],
     clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]],
@@ -2224,12 +2272,19 @@ def augment_summary_with_dxf(
                 k != parent_key and k.startswith(parent_key + "-") and not k.endswith("-GA")
                 for k in parts_by_key
             )
-            if has_children:
+            # ... OR when the flats are cut from DIFFERENT STOCK, which is what says they are
+            # pieces of one fabrication rather than revisions of one part. See
+            # flats_are_different_pieces: 01A's seven arrive as 2mm, 3mm and five 5mm, and
+            # nothing is a revision of itself in a different thickness.
+            _pieces = flats_are_different_pieces(paths)
+            if has_children or _pieces:
                 report["ambiguous_dxf"].append(
                     {
                         "part_number": part.get("part_number"),
                         "candidates": [str(p) for p in paths],
-                        "reason": "distinct_blanks_on_one_parent_split_to_children",
+                        "reason": ("distinct_blanks_on_one_parent_split_to_children"
+                                   if has_children else
+                                   "distinct_stock_on_one_parent_promoted_as_pieces"),
                         "clusters": len(clusters),
                     }
                 )
