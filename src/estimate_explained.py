@@ -72,7 +72,9 @@ def _steel_rows(wb) -> Dict[str, Dict[str, Any]]:
 
     WHERE A FABRICATED PART'S MONEY ACTUALLY IS. A "-M" line shows a dash in the BOM price
     column and says why in its own text — "costed in Sheet Steel below" — because sheet metal
-    is priced from blank area, not per piece. An explanation that stops at "priced below"
+    is priced by NEST on that block: a whole sheet divided by how many of the part come out
+    of it, not by the part's own area and not per piece. An explanation that stops at
+    "priced below"
     ends exactly where the estimator's question begins: how big, off what sheet, how many out
     of it, at what cost. This reads that block so the two halves can be shown together.
 
@@ -794,7 +796,7 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
 
     THE FABRICATED PARTS ARE NOT UNPRICED. Every "-M" line carries a blank in the BOM's
     price column and says so in its own text — "costed in Sheet Steel below" — because sheet
-    metal is priced from blank area on the Sheet Steel block, not per piece here. Reading the
+    metal is priced BY NEST on the Sheet Steel block, not per piece here. Reading the
     blank as "no rate" put fifteen made parts on the estimator's to-do list, which is both
     wrong and the fastest way to lose their trust in the rest of the document.
 
@@ -1258,11 +1260,18 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
 
     # ── where the fabricated money actually is ───────────────────────────────
     if steel:
-        add("## The fabricated parts, priced by blank area")
+        # PRICED BY NEST. "by blank area" was the AI Material Detail tab's method and is
+        # not what this block does — column M divides a whole sheet by how many of the part
+        # nest out of it. The footnote under this very table has said so correctly the whole
+        # time, so the section contradicted itself over the one number an estimator came for,
+        # and the wrong half was the heading. James, on 12552: "Ignore the 'by blank area'
+        # wording on the dash rows."
+        add("## The fabricated parts, priced by nest")
         add("")
         add("Each of these shows a dash in the BOM price column above. That is not a missing "
-            "rate — sheet metal is costed from its blank on this block, and pricing it in "
-            "both places would double it. This is the other half of those lines.")
+            "rate — sheet metal is costed on this block, from how many of the part nest out "
+            "of a sheet, and pricing it in both places would double it. This is the other "
+            "half of those lines.")
         add("")
         add("| Part | Blank L × W | Gauge | Off a sheet | Nest per sheet | Scrap | Qty | "
             "**£ the sheet charges** | The engine's own figure | Sheet row |")

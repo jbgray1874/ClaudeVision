@@ -437,3 +437,20 @@ def test_the_word_safe_clip_breaks_on_a_space_and_marks_it():
 
 def test_the_clip_leaves_something_that_already_fits_alone():
     assert ee._clip("P.Coat, 16 parts", 40) == "P.Coat, 16 parts"
+
+
+# ── the section that contradicted its own footnote ─────────────────────────────
+
+def test_the_fabricated_section_does_not_claim_blank_area(tmp_path):
+    """"by blank area" is the AI Material Detail tab's method. This block divides a whole
+    sheet by how many of the part nest out of it, and the footnote under the table has always
+    said so — so the section disagreed with itself over the one number an estimator came for,
+    and the heading was the wrong half.
+
+    James, on 12552: "Ignore the 'by blank area' wording on the dash rows and the 'not
+    computed' nest column — both are cosmetic and on our list."
+    """
+    import estimate_explained as _ee
+    src = (Path(_ee.__file__)).read_text(encoding="utf-8")
+    assert "priced by blank area" not in src
+    assert "The fabricated parts, priced by nest" in src
