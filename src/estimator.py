@@ -441,9 +441,21 @@ def _assess_estimate_data_sufficiency(
     document_total: float,
 ) -> Dict[str, Any]:
     """
-    Decide whether the document headline total is credible enough to report.
-    GA-only jobs where most £ comes from PDF geometry / rejected catalogue hits
-    are stamped INSUFFICIENT DATA and the reportable total is suppressed.
+    Say how much of this total rests on a measurement, and which lines do not.
+
+    IT USED TO REFUSE TO REPORT THE NUMBER. A job where most of the money came from geometry
+    read off a view was stamped INSUFFICIENT DATA and its headline was nulled — which reads,
+    to anyone holding the same drawings, as the engine declining a job an estimator does by
+    hand every day. It is also the wrong answer: those drawings DO support a price, and most
+    of the lines on them are as solid as any other job's. James: "if the estimators can price
+    off them, then the question will be asked why can't we. this sounds like a lame excuse."
+
+    So it prices, and it says which lines are thin and why. Same arithmetic, same thresholds,
+    same list of doubted parts — the difference is that the total is reported and the doubt
+    travels beside it as a fact an estimator can act on, rather than as a verdict that leaves
+    them with nothing. `provisional` carries the judgement now; the invariant that insists a
+    weak number reaches the reader marked and reasoned reads that instead, so nothing that
+    was guarded has stopped being guarded.
     """
     min_cost_ratio = float(getattr(config, "DATA_SUFFICIENCY_MIN_CREDIBLE_COST_RATIO", 0.50) or 0.50)
     min_dxf_ratio = float(getattr(config, "DATA_SUFFICIENCY_MIN_DXF_PART_RATIO", 0.25) or 0.25)
@@ -484,16 +496,26 @@ def _assess_estimate_data_sufficiency(
     elif len(fabricated) >= 2 and dxf_part_ratio < min_dxf_ratio:
         insufficient = True
 
-    status = "insufficient_data" if insufficient else "ok"
+    _sized_from_drawing = max(len(fabricated) - len(with_dxf), 0)
+    status = "provisional" if insufficient else "ok"
     msg = (
-        "INSUFFICIENT DATA — part DXFs required for credible auto-estimate"
+        (f"PROVISIONAL — {_sized_from_drawing} of {len(fabricated)} fabricated part(s) were "
+         f"sized from the drawing rather than measured")
         if insufficient else "Data sufficiency OK"
+    )
+    reason = (
+        (f"{credible_cost_ratio:.0%} of £{document_total:,.2f} rests on a measurement; the "
+         f"rest on geometry read off a view or on prices that could not be verified. A part "
+         f"DXF or a SOLIDWORKS model for the {_sized_from_drawing} part(s) below would move "
+         f"those lines from read to measured.")
+        if insufficient else ""
     )
 
     if insufficient:
         print(
-            f"   [data] {msg} — credible {credible_cost_ratio:.0%} of £{document_total:,.2f}; "
-            f"DXF on {dxf_part_ratio:.0%} of {len(fabricated)} fabricated part(s); headline suppressed",
+            f"   [data] {msg} — {credible_cost_ratio:.0%} of £{document_total:,.2f} measured; "
+            f"DXF on {dxf_part_ratio:.0%} of {len(fabricated)} fabricated part(s). Priced in "
+            f"full and marked provisional.",
             flush=True,
         )
 
@@ -501,9 +523,15 @@ def _assess_estimate_data_sufficiency(
         "schema": "estimate_data_sufficiency.v1",
         "status": status,
         "message": msg,
-        "suppress_headline_total": insufficient,
+        # NOT SUPPRESSED ANY MORE, AND STILL DECLARED. The invariant that insists a weak
+        # number reaches the reader marked and reasoned accepts `provisional` in place of the
+        # suppression, so removing the blank total costs nothing that was protecting anybody.
+        "suppress_headline_total": False,
+        "provisional": insufficient,
+        "provisional_reason": reason,
+        "parts_sized_from_drawing": _sized_from_drawing,
         "document_total_provisional_gbp": round(document_total, 2),
-        "document_total_reportable_gbp": None if insufficient else round(document_total, 2),
+        "document_total_reportable_gbp": round(document_total, 2),
         "credible_cost_gbp": round(credible_cost, 2),
         "unreliable_cost_gbp": round(unreliable_cost, 2),
         "credible_cost_ratio": round(credible_cost_ratio, 4),
@@ -6020,10 +6048,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         estimable_parts, part_estimates, document_total
     )
     reportable_total = data_sufficiency.get("document_total_reportable_gbp")
-    if data_sufficiency.get("suppress_headline_total"):
-        document_total_out = None
-    else:
-        document_total_out = document_total
+    # THE TOTAL IS ALWAYS REPORTED. It was nulled on a job the gate judged thin, which left
+    # every deliverable with a blank where the price goes and an estimator with nothing —
+    # while the workbook went on and computed a unit cost regardless, because that is a
+    # different figure. The doubt is carried by data_sufficiency.provisional and stated on
+    # the estimate; it is no longer expressed by withholding the number.
+    document_total_out = document_total
 
     powder_material_total_raw = sum(_part_powder_material_extended_gbp(p) for p in part_estimates)
     powder_labour_total_raw = sum(_part_powder_labour_gbp(p) for p in part_estimates)

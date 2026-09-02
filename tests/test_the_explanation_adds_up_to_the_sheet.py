@@ -370,9 +370,11 @@ def _insufficient(tmp_path: Path) -> Path:
     path = _run_json(tmp_path)
     doc = handover_note.json.loads(path.read_text(encoding="utf-8"))
     doc["data_sufficiency"] = {
-        "status": "insufficient_data",
-        "message": "INSUFFICIENT DATA — part DXFs required for credible auto-estimate",
-        "suppress_headline_total": True,
+        "status": "provisional",
+        "message": "PROVISIONAL — 3 of 12 fabricated part(s) were sized from the drawing "
+                   "rather than measured",
+        "suppress_headline_total": False,
+        "provisional": True,
         "document_total_provisional_gbp": 327.39,
         "credible_cost_ratio": 0.26,
         "fabricated_part_count": 12,
@@ -389,18 +391,18 @@ def _insufficient(tmp_path: Path) -> Path:
     return path
 
 
-def test_a_pack_the_engine_cannot_cost_says_so_where_a_person_reads(tmp_path):
-    """It suppresses its own headline and prints one line to a console nobody keeps, while
-    the workbook computes an ordinary Unit Cost — so the estimate arrives priced and the
-    reason to doubt it arrives nowhere."""
+def test_a_thin_pack_is_priced_and_the_thin_lines_are_named(tmp_path):
+    """An estimator holding these drawings prices them. A gate that refuses to reads as the
+    engine declining a job somebody does by hand every day — and it is the wrong answer,
+    because most lines on such a pack are as solid as any other job's."""
     text = handover_note.build(_workbook(tmp_path), _insufficient(tmp_path))
     section = text.split("## Drawings the pack does not contain")[1]
-    assert "does not consider this pack sufficient to cost on its own" in section
+    assert "priced in full, and some of it is read rather than measured" in section
+    assert "INSUFFICIENT" not in section.upper(), (
+        "the verdict is gone; what replaces it is which lines and why")
     assert "26% rests on figures it considers credible" in section
     assert "9 of 12 fabricated part(s) have a DXF" in section
-    assert "the workbook still computes a unit cost and it is a real figure" in section.lower(), (
-        "the suppressed figure is the engine's own parallel total, not the sheet's — saying "
-        "otherwise would have an estimator distrust a number that is fine")
+    assert "so they can be checked first rather than the whole estimate being doubted" in section
 
 
 def test_the_doubted_lines_are_named_and_priced_worst_first(tmp_path):
@@ -411,7 +413,7 @@ def test_the_doubted_lines_are_named_and_priced_worst_first(tmp_path):
     assert "£41.20" in panel and "no part DXF" in panel
     assert "blank inferred from an overall dimension" in panel
     assert section.index(panel) < section.index(bracket), "worst first"
-    assert "single thing that would move this estimate from provisional to defensible" in section
+    assert "would move those lines from read to measured" in section
 
 
 def test_a_sufficient_pack_gets_no_lecture(tmp_path):
@@ -457,3 +459,36 @@ def test_a_vision_read_is_labelled_as_a_reading_not_a_measurement():
     import estimate_explained
     assert "a reading, not a measurement" in estimate_explained._reader("llm_full_extract")
     assert "nothing on the drawing said it" in estimate_explained._reader("inference")
+
+
+def test_the_gate_no_longer_withholds_the_total():
+    """It nulled the headline on a thin job, leaving every deliverable with a blank where the
+    price goes — while the workbook computed a unit cost anyway, because that is a different
+    figure. The doubt is declared now, not expressed by refusing to answer."""
+    import ast
+    src = (Path(__file__).resolve().parents[1] / "src" / "estimator.py").read_text(
+        encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef)
+              and n.name == "_assess_estimate_data_sufficiency")
+    body = ast.get_source_segment(src, fn)
+    assert '"suppress_headline_total": False' in body
+    assert '"document_total_reportable_gbp": round(document_total, 2)' in body
+    assert "None if insufficient" not in body, "the total is always reported"
+    assert '"provisional": insufficient' in body, (
+        "the judgement still exists and still travels — invariants reads it, and insists a "
+        "weak number reaches the reader marked and reasoned")
+    assert '"provisional_reason": reason' in body
+    # NOT A GREP FOR THE PHRASE. It survives in the docstring, recording why it went, and
+    # that record is worth keeping — so this checks what the function SAYS, not what it
+    # mentions: every string literal it could emit as a message or a reason.
+    emitted = [n.value for n in ast.walk(fn)
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and n is not fn.body[0].value]
+    assert not any("INSUFFICIENT" in e.upper() for e in emitted), (
+        "an estimator holding the same drawings prices them; the verdict read as the engine "
+        "declining a job somebody does by hand every day")
+    assert any(e.startswith("PROVISIONAL —") for e in emitted), (
+        "what replaces it states the fact — how many parts were sized from the drawing "
+        "rather than measured — instead of passing judgement on the pack")

@@ -252,11 +252,14 @@ def _suppression_banner(summary) -> Optional[str]:
     """
     es = summary.get("estimate_summary") or {}
     ds = es.get("data_sufficiency") or {}
-    if not ds.get("suppress_headline_total"):
+    # READS THE PROVISIONAL FLAG, NOT THE SUPPRESSION. The gate no longer withholds the total
+    # — it prices the job and says which lines are thin — so a banner keyed on suppression
+    # would have gone silent on exactly the sheets that need it.
+    if not (ds.get("provisional") or ds.get("suppress_headline_total")):
         return None
     ratio = ds.get("credible_cost_ratio")
     prov = es.get("document_total_provisional_gbp") or ds.get("document_total_provisional_gbp")
-    parts = ["\u26a0 INSUFFICIENT DATA \u2014 PROVISIONAL, NOT FOR QUOTING"]
+    parts = ["\u26a0 PROVISIONAL \u2014 PRICED IN FULL, NOT YET FOR QUOTING"]
     bits = []
     if isinstance(ratio, (int, float)):
         bits.append(f"credible {ratio:.0%}")

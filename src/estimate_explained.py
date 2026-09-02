@@ -1107,11 +1107,13 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         # Cost, because that is a different figure — so the estimate arrives priced and the
         # reason to doubt it arrives nowhere. Stated here, with the money on it, because "we
         # priced what we could" is only honest if it is followed by what we could not.
-        if str(sufficiency.get("status") or "") == "insufficient_data":
+        if sufficiency.get("provisional") or str(
+                sufficiency.get("status") or "") in ("provisional", "insufficient_data"):
             _ratio = _money(sufficiency.get("credible_cost_ratio"))
             _fab = sufficiency.get("fabricated_part_count")
             _with = sufficiency.get("parts_with_dxf")
-            add(f"> **The engine does not consider this pack sufficient to cost on its own.** "
+            add(f"> **This job is priced in full, and some of it is read rather than "
+                f"measured.** "
                 + (f"Of the {_gbp(sufficiency.get('document_total_provisional_gbp'))} it "
                    f"assembled, **{_ratio:.0%} rests on figures it considers credible** — the "
                    f"rest on geometry read off a view, or on prices it could not verify. "
@@ -1119,9 +1121,10 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                 + (f"{_with} of {_fab} fabricated part(s) have a DXF; the others were sized "
                    f"from the drawing rather than measured. "
                    if _fab else "")
-                + "The workbook still computes a unit cost and it is a real figure — it is "
-                  "what the sheet's own cells add up to. It is the INPUTS underneath the "
-                  "weakest lines that are thin, and those lines are named below.")
+                + "Every line is costed and the unit cost is a real figure — it is what the "
+                  "sheet's own cells add up to. What follows is which lines rest on a "
+                  "reading rather than a measurement, so they can be checked first rather "
+                  "than the whole estimate being doubted.")
             add("")
             _weak = [u for u in (sufficiency.get("unreliable_parts") or [])
                      if isinstance(u, dict)]
@@ -1137,9 +1140,9 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                         f"| {', '.join(str(r) for r in (_u.get('reasons') or [])) or 'not recorded'} "
                         f"{'· ' + _pages_of(_rec) if _rec.get('pages') else ''} |")
                 add("")
-                add("> A DXF for the parts above is the single thing that would move this "
-                    "estimate from provisional to defensible. Everything else in this "
-                    "document is unaffected by it.")
+                add("> A part DXF or a SOLIDWORKS model for the parts above is the single "
+                    "thing that would move those lines from read to measured. Every other "
+                    "line in this estimate is unaffected by it.")
                 add("")
         if not no_sheet:
             add("Every costed line on this job is owned by a sheet in the pack. Nothing is "
