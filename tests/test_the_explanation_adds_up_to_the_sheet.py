@@ -255,3 +255,53 @@ def test_without_the_calculated_rows_it_refuses_to_claim_completeness(tmp_path):
         "no calculated rows means no labour figures — inventing a section for them would be "
         "the confident wrong answer this document exists to avoid")
     assert "Not yet — no calculated rows were supplied" in text
+
+
+# ── the same rows, for the tab and the report ────────────────────────────────
+
+def test_the_structured_view_is_the_document_and_not_a_second_answer(tmp_path):
+    """The tab and the HTML report render THIS, so it has to carry the same figures.
+
+    Not a second pass over the workbook: a second pass is how the tab and the document come
+    to disagree, which is the failure this whole document exists to expose.
+    """
+    text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
+    parsed = handover_note.sections(text)
+
+    titles = [s["title"] for s in parsed]
+    assert "This document against the sheet" in titles
+    assert "Every line on the Bill of Materials" in titles
+    assert "Every labour line, and what it charges" in titles
+
+    recon = next(s for s in parsed if s["title"] == "This document against the sheet")
+    assert recon["tables"], "a section with a table must carry it"
+    assert recon["tables"][0]["columns"][0] == "Block"
+    material = next(r for r in recon["tables"][0]["rows"] if "All material" in r[0])
+    assert material[2] == "£6.70", "the £ column must survive the round trip intact"
+    assert any("read back after Excel recalculated" in n for n in recon["notes"])
+
+    labour = next(s for s in parsed if s["title"].startswith("Every labour line"))
+    row = labour["tables"][0]["rows"][0]
+    assert "Estimate!96" in handover_note.plain(row[0])
+    assert row[8] == "£50.00"
+
+
+def test_plain_strips_the_emphasis_a_cell_cannot_render(tmp_path):
+    assert handover_note.plain("**£11.48**") == "£11.48"
+    assert handover_note.plain("`Estimate!63`") == "Estimate!63"
+    assert handover_note.plain("— line total, not per part") == "— line total, not per part"
+
+
+def test_the_tab_gets_cells_not_markdown(tmp_path):
+    """A cell renders `**£11.48**` as those characters, so the tab takes plain text."""
+    rows = handover_note.worksheet_rows(
+        handover_note.sections(handover_note.build(_workbook(tmp_path),
+                                                   _run_json(tmp_path))))
+    flat = ["|".join(r) for r in rows]
+    assert any(r == "This document against the sheet" for r in flat), (
+        "a section title is a row of its own on a tab — there are no headings in a sheet")
+    assert not any("**" in r or "`" in r for r in flat), "no markdown reaches a cell"
+    money = next(r for r in rows if r and r[0] == "All material")
+    assert money[2] == "£6.70"
+    labour = next(r for r in rows if r and r[0] == "Estimate!96")
+    assert labour[8] == "£50.00"

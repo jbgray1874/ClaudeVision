@@ -23,7 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 # Re-exported so anything that imported this script by name keeps working.
-from estimate_explained import build, json                       # noqa: E402,F401
+from estimate_explained import (build, json, plain, sections,     # noqa: E402,F401
+                                worksheet_rows)
 
 
 def main() -> None:

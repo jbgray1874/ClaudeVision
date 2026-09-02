@@ -1200,6 +1200,25 @@ def main() -> None:
                 print(f"   [wep-readback] totals not merged ({_fe_exc}) — the report sheets "
                       f"will show engine figures and say so", flush=True)
 
+        # THE EXPLANATION, INSIDE THE WORKBOOK THAT NEEDS EXPLAINING.
+        #
+        # Every row of the estimate, where its figure came from and which drawing page owns
+        # it — the document that has been produced by hand for the last week, written as a
+        # tab so it arrives with the file rather than beside it. It has to run HERE: it prints
+        # Estimate!M63:M77 and the sheet's own totals, and none of those exist until Excel has
+        # calculated the populated template and the read-back has recorded what it found.
+        #
+        # Failure-isolated by the writer itself — a workbook without this tab is still a
+        # complete estimate, and nothing here may cost a run that has already taken an hour.
+        if xlsx_path:
+            try:
+                from estimate_explanation_tab import write_tab as _write_explanation_tab
+                _write_explanation_tab(
+                    xlsx_path, (summary.get("saved_output_paths") or {}).get("json"))
+            except Exception as _tab_exc:
+                print(f"   [explanation-tab] skipped ({_tab_exc}) — the workbook is "
+                      f"unchanged.", flush=True)
+
         # SDI Intelligence — AI Provenance sheet
         # Added to whichever output was produced (wb_populate or fallback).
         #

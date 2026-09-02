@@ -938,3 +938,101 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             add("")
 
     return "\n".join(lines)
+
+
+# ── the same document, in a shape other renderers can use ────────────────────
+#
+# PARSED BACK OUT OF THE MARKDOWN, DELIBERATELY. The obvious design is a structured
+# intermediate that both the markdown and the workbook tab render from, and it is the wrong
+# one here: it means rewriting four hundred lines of emit code that an estimator is about to
+# rely on, to gain a separation nothing yet needs. What IS needed is that the tab, the report
+# section and the email cannot drift from the document — and re-reading the document gives
+# that by construction, because there is only one document.
+#
+# This is safe to parse only because it is machine-written: every table is emitted by the
+# code above with a fixed shape, so there is no markdown here that this does not produce.
+# The moment a human is allowed to edit the text, this goes.
+
+_MD_STRIP = ("**", "`", "*")
+
+
+def plain(text: str) -> str:
+    """Markdown emphasis removed, for a renderer that has its own — a cell, or a <td>."""
+    out = str(text or "")
+    for token in _MD_STRIP:
+        out = out.replace(token, "")
+    return out.strip()
+
+
+def sections(markdown: str) -> List[Dict[str, Any]]:
+    """The document as [{title, intro, tables:[{columns, rows}], notes}].
+
+    Every string is left exactly as the document wrote it, markdown and all: a renderer that
+    wants plain text calls plain() on the cells it is placing. Stripping here would throw away
+    the emphasis the HTML report wants to keep.
+    """
+    out: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+    table: Optional[Dict[str, Any]] = None
+
+    def _cells(line: str) -> List[str]:
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    for line in str(markdown or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current = {"title": stripped[3:].strip(), "intro": [], "tables": [], "notes": []}
+            out.append(current)
+            table = None
+            continue
+        if current is None:
+            continue
+        if not stripped:
+            table = None
+            continue
+        if stripped.startswith("|"):
+            # The separator row carries no content — it only tells markdown a table started.
+            if set(stripped) <= set("|-: "):
+                continue
+            if table is None:
+                table = {"columns": _cells(stripped), "rows": []}
+                current["tables"].append(table)
+            else:
+                table["rows"].append(_cells(stripped))
+            continue
+        table = None
+        if stripped.startswith(">"):
+            current["notes"].append(stripped.lstrip("> ").strip())
+        else:
+            current["intro"].append(stripped)
+    return out
+
+
+def worksheet_rows(parsed: List[Dict[str, Any]]) -> List[List[str]]:
+    """The document as flat spreadsheet rows — one list of cells per sheet row.
+
+    A tab is not a document: it has no headings, no paragraphs and no emphasis, only cells.
+    So a section title becomes a row of its own, prose becomes a single wide cell, and a table
+    becomes its header row followed by its rows. Markdown is stripped, because a cell renders
+    `**£11.48**` as those characters.
+
+    Column count varies by section and that is correct — Excel does not mind, and forcing
+    every section onto the widest table's columns would put the reconciliation's five columns
+    under the bill of materials' ten.
+    """
+    out: List[List[str]] = []
+    for section in parsed:
+        if out:
+            out.append([])
+        out.append([plain(section["title"])])
+        for line in section.get("intro") or []:
+            out.append([plain(line)])
+        for table in section.get("tables") or []:
+            out.append([])
+            out.append([plain(c) for c in table["columns"]])
+            for row in table["rows"]:
+                out.append([plain(c) for c in row])
+        for note in section.get("notes") or []:
+            out.append([])
+            out.append([plain(note)])
+    return out
