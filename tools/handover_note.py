@@ -147,8 +147,18 @@ def _scan_parts(path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except Exception:                                            # noqa: BLE001
         return {}
-    parts = ((data.get("manufacturing_writeup") or {}).get("parts")
-             or data.get("parts") or [])
+    # THREE SHAPES, BECAUSE THE FULL SCAN IS TOO BIG TO MOVE. 12552's scan JSON is 258,935
+    # lines; nobody is going to send that to have three fields read out of it. So a trimmed
+    # extract — a bare list of records, or {"parts": [...]} — is accepted alongside the real
+    # thing, and only part_number, pages and page_roles are ever read from any of them.
+    #
+    # This is a workaround for the actual defect, which is that no page number reaches any
+    # deliverable. Once the page is written onto the row, this whole path becomes unnecessary.
+    if isinstance(data, list):
+        parts = data
+    else:
+        parts = ((data.get("manufacturing_writeup") or {}).get("parts")
+                 or data.get("parts") or [])
     return {str(p.get("part_number") or "").strip().upper(): p
             for p in parts if isinstance(p, dict)}
 
@@ -339,7 +349,31 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     add("")
 
     # ── what each sheet could be read for ────────────────────────────────────
-    if scan:
+    # A FIELD MISSING FROM THIS EXTRACT IS NOT A FIELD MISSING FROM THE DRAWING.
+    #
+    # This section reports what each sheet could be read for, and it does that by looking for
+    # materials / thicknesses_mm / surface_finishes on the record. The trimmed extract that
+    # supplies the page numbers carries only part_number, pages and page_roles — so against
+    # one of those every row came out "material **no**, thickness **no**, finish **no**",
+    # for a pack whose page 4 plainly reads "MATERIAL: MILD STEEL", "1.5 THK", "POWDER
+    # COATED". That is not a weak answer, it is a confident wrong one, and it would have gone
+    # to an estimator as a drawing-quality assessment.
+    #
+    # So the section is built only from an extract that actually carries the fields, and
+    # otherwise says what it needs. Refusing to answer is the honest failure mode; the whole
+    # document exists to stop people guessing from it.
+    _quality_fields = ("materials", "thicknesses_mm", "surface_finishes", "geometry_rollup")
+    _has_quality = any(any(k in rec for k in _quality_fields) for rec in scan.values())
+    if scan and not _has_quality:
+        add("## Drawing quality, sheet by sheet")
+        add("")
+        add("> **Not produced.** This ran against a trimmed extract carrying only part "
+            "numbers and page numbers. Reporting from it would have said every drawing "
+            "states no material, no thickness and no finish — which is false: page 4 alone "
+            "reads *MATERIAL: MILD STEEL*, *1.5 THK*, *POWDER COATED*. Re-run with the full "
+            "`output/json/<job>.json` and this section builds itself.")
+        add("")
+    if scan and _has_quality:
         add("## Drawing quality, sheet by sheet")
         add("")
         add("| Sheet | Part | Material stated | Thickness stated | Finish stated | "
