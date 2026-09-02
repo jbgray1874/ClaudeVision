@@ -1107,6 +1107,16 @@ def main() -> None:
                         if _wl.get("mode") == "canonical":
                             ((_doc.setdefault("estimate_summary", {}))
                              .setdefault("canonical_route_shadow", {}))["mode"] = "cutover"
+                        # WHICH WORKBOOK THIS RUN PRODUCED. The run JSON recorded the json,
+                        # text, log, csv and sql it wrote and not the estimate itself — so
+                        # anything reading the saved run back, the report generator above
+                        # all, could not find the spreadsheet the whole run exists to make.
+                        # Without it the report cannot show a figure that only lives on the
+                        # sheet, and a report regenerated a week later has no way to ask.
+                        ((_doc.setdefault("saved_output_paths", {}))
+                         ["estimate_xlsx"]) = str(xlsx_path)
+                        ((summary.setdefault("saved_output_paths", {}))
+                         ["estimate_xlsx"]) = str(xlsx_path)
                         # ...and the on-disk copy, which is what the HTML deliverables read.
                         # Both must agree or the .xlsx tabs and the HTML diverge again.
                         _rc_doc = _rrf(_doc)

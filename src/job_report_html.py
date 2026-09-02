@@ -410,6 +410,14 @@ _CSS = """
     --accent:#c9a227;
   }
   *{box-sizing:border-box}
+  /* Used since the report was written and never defined, so every "t-muted" span has been
+     rendering as ordinary text. Defined here rather than removed: the places that reach for
+     it are all saying "this is context, not the answer", which is worth showing. */
+  .t-muted{color:var(--mut)}
+  /* The explanation's tables are ten columns wide. Without this they push the page sideways
+     and the reader scrolls the whole report to read one row. */
+  .scroll{overflow-x:auto;max-width:100%}
+  .scroll table{min-width:100%}
   body{margin:0;background:var(--bg);color:var(--ink);
     font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   .wrap{max-width:960px;margin:0 auto;padding:40px 28px 80px;}
@@ -1490,7 +1498,8 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
 {_purchased_key_section(summary)}
 {_unpriced_section(summary)}
 {_route_decisions_section(summary)}
-{_invariants_section(summary)}"""
+{_invariants_section(summary)}
+{_explanation_section(summary)}"""
 
 
 def _provenance_strip(summary: Dict[str, Any]) -> str:
@@ -1596,6 +1605,8 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
         # SILENCE IS NOT A CLEAN BILL, and section 10 already knows it. A missing section
         # reads as nothing-to-report; here it means no part reached the costed pool at all.
         return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
+            '<p class="mini t-muted">This says which SOURCE won each field. What each row '
+            'COSTS, and which drawing page owns it, is in section 14.</p>'
                 '<div class="callout warn"><b>No costed parts on this job.</b> Nothing '
                 'reached the costed pool, so no material provenance can be shown &mdash; '
                 'this is not a job whose provenance is clean.</div>')
@@ -1668,6 +1679,8 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
              else '<p class="mini">Every costing datum on every part was measured and '
                   'carries a recorded source.</p>')
     return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
+            '<p class="mini t-muted">This says which SOURCE won each field. What each row '
+            'COSTS, and which drawing page owns it, is in section 14.</p>'
             '<p class="mini">The source recorded against each costing datum, weakest first. '
             '&#9889; marks a value that was reasoned rather than measured: it can be right, '
             'but it cannot be held against the drawing.</p>' + _note +
@@ -1980,6 +1993,8 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
         # SILENCE IS NOT A CLEAN BILL. A job with no compiled route has had no operation
         # arbitrated at all, and a missing section reads as "nothing to report".
         return ('<h2>12 &nbsp;How each operation was decided</h2>'
+            '<p class="mini t-muted">What each of these operations CHARGES, by sheet row, is '
+            'in section 14.</p>'
                 '<div class="callout warn"><b>No compiled route on this job.</b> No operation '
                 'was arbitrated, so nothing here can say what decided it. The labour below '
                 'came from the legacy path.</div>')
@@ -2014,6 +2029,8 @@ def _route_decisions_section(summary: Dict[str, Any]) -> str:
              '<p class="mini">No decision was contested — every operation had a single '
              'strongest source and nothing at that rank disagreed with it.</p>')
     return ('<h2>12 &nbsp;How each operation was decided</h2>'
+            '<p class="mini t-muted">What each of these operations CHARGES, by sheet row, is '
+            'in section 14.</p>'
             '<p class="mini">Every operation on this job and what decided it. <b>Rank</b> is '
             'the engine\'s order of precedence between sources: a higher-ranked source may not '
             'be overwritten by a lower one, and where two disagree at the same rank the '
@@ -2228,3 +2245,81 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ── 14 · every row, explained ────────────────────────────────────────────────
+#
+# THE SAME DOCUMENT THE WORKBOOK'S TAB CARRIES, rendered for the report. Not a second pass
+# over the workbook and not a second opinion: estimate_explained produces it once, sections()
+# gives it back as titles, tables and notes, and this turns those into HTML. Three renderings
+# of one answer.
+#
+# IT NEEDS THE WORKBOOK, and the report may be generated where the workbook is not reachable —
+# a regeneration on another machine, a share that has gone away, a run whose spreadsheet never
+# got written. In that case the section says what it needs rather than rendering half of
+# itself, which is the same rule the rest of this report follows.
+
+_EXPLAINED_SECTION_NO = 14
+
+
+def _explanation_section(summary: Dict[str, Any]) -> str:
+    paths = summary.get("saved_output_paths") or {}
+    workbook, run_json = paths.get("estimate_xlsx"), paths.get("json")
+    heading = (f'<h2>{_EXPLAINED_SECTION_NO} &nbsp;Every row, explained</h2>')
+
+    if not workbook or not Path(str(workbook)).is_file():
+        return (heading +
+                '<p class="mini">Not produced — this run did not record the estimate workbook '
+                'it wrote, or that file is not reachable from where the report was generated. '
+                'The same content is on the workbook\'s <b>AI Explanation</b> tab.</p>')
+    try:
+        import estimate_explained
+        parsed = estimate_explained.sections(
+            estimate_explained.build(Path(str(workbook)),
+                                     Path(str(run_json)) if run_json else None))
+    except Exception as exc:                                     # noqa: BLE001
+        return (heading +
+                f'<p class="mini">Not produced — the explanation could not be built '
+                f'({_esc(type(exc).__name__)}). Nothing else in this report is affected.</p>')
+    if not parsed:
+        return heading + '<p class="mini">Not produced — the explanation came back empty.</p>'
+
+    out = [heading,
+           '<p class="mini">Where every figure on the estimate came from, which drawing page '
+           'owns it, and what the sheet charges for it. Section 9 above says which SOURCE won '
+           'each field; this says what each ROW costs and where you would go to check it. The '
+           'workbook carries the same content on its <b>AI Explanation</b> tab.</p>']
+    for section in parsed:
+        out.append(f'<h3>{_esc(section["title"])}</h3>')
+        for line in section.get("intro") or []:
+            # The document's bullets are markdown "- "; a page has its own way of showing a
+            # list and the marker would arrive as a literal dash.
+            out.append(f'<p class="mini">{_explained_inline(line.lstrip("- ").strip())}</p>')
+        for table in section.get("tables") or []:
+            head = "".join(f"<th>{_explained_inline(c)}</th>" for c in table["columns"])
+            rows = "".join(
+                "<tr>" + "".join(f'<td class="mini">{_explained_inline(c)}</td>'
+                                 for c in row) + "</tr>"
+                for row in table["rows"])
+            out.append(f'<div class="scroll"><table><thead><tr>{head}</tr></thead>'
+                       f'<tbody>{rows}</tbody></table></div>')
+        for note in section.get("notes") or []:
+            out.append(f'<p class="mini t-muted">{_explained_inline(note)}</p>')
+    return "\n".join(out)
+
+
+def _explained_inline(text: Any) -> str:
+    """The document's own emphasis, kept — it marks the figures that matter.
+
+    Escaped first and marked up after, so a part description containing an angle bracket
+    cannot reach the page as markup while **£11.48** still arrives bold.
+    """
+    out = _esc(str(text or ""))
+    for token, tag in (("**", "b"), ("`", "code")):
+        parts = out.split(token)
+        if len(parts) > 2:
+            rebuilt = parts[0]
+            for index, part in enumerate(parts[1:], start=1):
+                rebuilt += (f"<{tag}>{part}</{tag}>" if index % 2 else part)
+            out = rebuilt
+    return out
