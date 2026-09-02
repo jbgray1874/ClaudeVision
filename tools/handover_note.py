@@ -381,18 +381,35 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add("|---|---|---|---|---|---|---|")
         for code, rec in sorted(scan.items(),
                                key=lambda kv: ((kv[1].get("pages") or [999])[0], kv[0])):
+            # ONLY THINGS THAT ARE DRAWINGS. A line with no page is a catalogue item, a
+            # commercial line, or a fastener off a BOM table — PACKAGING, DELIVERY, FIXING17.
+            # Graded here they came out "could not give: thickness, finish, cut length",
+            # which reads as a deficient drawing pack and is nonsense: packaging is not a
+            # drawing, and an M8 nyloc nut has no thickness because it is bought, not because
+            # somebody forgot to write one. Same false-negative as grading a pack from a
+            # trimmed extract, in a different place.
+            if not (rec.get("pages") or []):
+                continue
             geom = rec.get("geometry_rollup") or {}
             reliability = ((geom.get("confidence") or {}).get("geometry_reliability"))
-            missing = []
-            if not rec.get("materials"):
-                missing.append("material")
-            if not rec.get("thicknesses_mm"):
-                missing.append("thickness")
-            if not rec.get("surface_finishes"):
-                missing.append("finish")
-            if not (geom.get("estimated_cut_length_mm") or 0):
-                missing.append("cut length")
-            add(f"| {_pages_of(rec)} | {code} "
+            # A PURCHASED PART NAMED ON AN ASSEMBLY SHEET IS NOT AN INCOMPLETE DETAIL.
+            # The bearing and the rivets appear on p.2 because that is where they are listed,
+            # and they have no detail drawing because they do not need one. Saying what they
+            # ARE beats listing four fields they were never going to carry.
+            _roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+            if "bought_in" in _roles and "detail" not in _roles:
+                missing = ["bought in — listed on an assembly sheet, no detail drawing needed"]
+            else:
+                missing = []
+                if not rec.get("materials"):
+                    missing.append("material")
+                if not rec.get("thicknesses_mm"):
+                    missing.append("thickness")
+                if not rec.get("surface_finishes"):
+                    missing.append("finish")
+                if not (geom.get("estimated_cut_length_mm") or 0):
+                    missing.append("cut length")
+            add(f"| {_pages_of(rec)} | {code or _fmt(rec.get('description'))} "
                 f"| {', '.join(str(m) for m in rec.get('materials') or []) or '**no**'} "
                 f"| {', '.join(str(t) for t in rec.get('thicknesses_mm') or []) or '**no**'} "
                 f"| {', '.join(str(f) for f in rec.get('surface_finishes') or []) or '**no**'} "
