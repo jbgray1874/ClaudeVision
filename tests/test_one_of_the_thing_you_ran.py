@@ -28,7 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from bom_tree import (resolve_effective_quantities as resolve,               # noqa: E402
-                      unit_assembly_from_label as unit_from)
+                      unit_assembly_from_label as unit_from,
+                      unit_assembly_from_the_tree as unit_from_tree)
 
 # 12349-02 as the pack actually is: a GA showing three modules on a wall, and a drawing per
 # part underneath it, with a bought-in on two of them.
@@ -58,12 +59,20 @@ def test_every_line_matches_the_estimator(costed, code, qty):
     assert costed.get(code) == qty
 
 
-def test_without_the_rule_every_line_was_three_times_too_many(costed):
-    """The measurement, kept: this is what the sheet you have in your hand says."""
-    before = resolve(ROWS)["effective"]
-    assert before["12349-02-69-03M"] == 3 and costed["12349-02-69-03M"] == 1
-    assert before["FIXING"] == 12 and costed["FIXING"] == 4
-    assert before["P/P"] == 18 and costed["P/P"] == 6
+def test_the_size_of_what_was_wrong_is_on_the_record(costed):
+    """The measurement, kept — but no longer by re-running the old behaviour, because there is
+    no way left to ask for it: the GA's own shape now settles this even when nothing names the
+    assembly. So it is asserted from the data instead.
+
+    The GA says 3. Every fabricated line was multiplied by it. The sheet in your hand reads
+    03M at 3, FIXING at 12 and P/P at 18 against Tim's 1, 4 and 6."""
+    out = resolve(ROWS, unit_assembly=unit_from(FOLDER, ROWS))
+    assert out["install_context"] == {"12349-02-69-100": 3}, "the multiplier is not recorded"
+    multiplier = out["install_context"]["12349-02-69-100"]
+    for code, tim in (("12349-02-69-03M", 1), ("FIXING", 4), ("P/P", 6)):
+        assert costed[code] == tim
+        assert costed[code] * multiplier == tim * 3, (
+            f"{code} used to be costed at {tim * multiplier}, not {tim}")
 
 
 def test_a_part_used_several_times_inside_the_module_still_is(costed):
@@ -146,3 +155,69 @@ def test_flattening_does_not_let_a_shorter_code_win():
     assembly for a folder that names the assembly."""
     rows = ROWS + [{"part_number": "12349", "quantity": 1, "source_pdf": "GA.pdf"}]
     assert unit_from(r"K:\jobs\123490269100 GRAVITY FEEDER", rows) == "12349-02-69-100"
+
+
+# ── when nobody named the folder helpfully ────────────────────────────────────
+#
+# 12349-02's pack actually lives in "...\\fanatics\\12349-02", which does not contain
+# 12349-02-69-100. The folder rule finds nothing there and every part stays at three times
+# its quantity. A fix that only works when somebody named a folder helpfully is not a fix.
+#
+# The GA's own shape says it. A BAY lists several assemblies and the unit is all of them
+# together. An INSTALL ARRANGEMENT lists ONE assembly several times: that drawing is a picture
+# of where the articles go, and the article is the unit.
+
+REAL_FOLDER = r"\\sdi-dc01\Shared\...\SDIIntelligenceAISheet\fanatics\12349-02"
+
+# A genuine bay: several different assemblies on one GA, each used twice.
+BAY = [
+    {"part_number": "1448-GA", "quantity": 2, "source_pdf": "BAY.pdf"},
+    {"part_number": "3886-GA", "quantity": 2, "source_pdf": "BAY.pdf"},
+    {"part_number": "1448-01", "quantity": 1, "source_pdf": "1448.pdf"},
+    {"part_number": "3886-01", "quantity": 1, "source_pdf": "3886.pdf"},
+]
+
+
+def test_the_folder_this_pack_is_really_in_names_nothing():
+    """Stated, because it is the premise of everything below."""
+    assert unit_from(REAL_FOLDER, ROWS) is None
+
+
+@pytest.mark.parametrize("code,qty", sorted(TIM.items()))
+def test_the_ga_shape_settles_it_without_the_folder(code, qty):
+    out = resolve(ROWS, unit_assembly=unit_from(REAL_FOLDER, ROWS))
+    assert out["effective"].get(code) == qty
+
+
+def test_it_still_says_which_assembly_it_decided_on():
+    out = resolve(ROWS, unit_assembly=None)
+    assert out["install_context"] == {"12349-02-69-100": 3}
+
+
+def test_a_bay_of_several_assemblies_is_untouched():
+    """THE THING THIS MUST NOT BREAK. A bay IS a composite article and its children genuinely
+    multiply. Two or more structural codes on the GA and the rule says nothing at all."""
+    out = resolve(BAY)
+    assert out["install_context"] == {}
+    assert out["effective"]["1448-01"] == 2 and out["effective"]["3886-01"] == 2
+
+
+def test_one_assembly_shown_once_is_not_install_context():
+    """A GA showing one of the assembly is the ordinary case and has nothing to say."""
+    rows = [dict(r, quantity=1) if r["part_number"] == "12349-02-69-100" else r for r in ROWS]
+    assert unit_from_tree(rows, "GA.pdf") is None
+
+
+def test_a_bag_of_screws_does_not_make_a_ga_composite():
+    """Bought-in rows carry no number family. A GA listing one assembly and some fixings is
+    still a GA listing one assembly."""
+    rows = ROWS + [{"part_number": "FIXING99", "quantity": 8, "source_pdf": "GA.pdf"}]
+    assert unit_from_tree(rows, "GA.pdf") == "12349-02-69-100"
+
+
+def test_the_folder_wins_when_it_has_something_to_say():
+    """A folder that spells the assembly out is a person saying which article this is, and
+    that beats reading it off a drawing."""
+    src = (ROOT / "src" / "bom_tree.py").read_text(encoding="utf-8")
+    i = src.index("_unit = _norm(unit_assembly)")
+    assert "or _norm(unit_assembly_from_the_tree(" in src[i:i + 200]

@@ -130,6 +130,41 @@ def unit_assembly_from_label(label: Any, bom_rows: List[Dict[str, Any]]) -> Opti
     return best_code or None
 
 
+def unit_assembly_from_the_tree(bom_rows: List[Dict[str, Any]],
+                                main_ga: str) -> Optional[str]:
+    """The assembly this estimate is for, read off the SHAPE of the general arrangement.
+
+    THE FOLDER NAME IS NOT ALWAYS THERE. 12349-02's pack lives in "...\\fanatics\\12349-02",
+    which does not contain 12349-02-69-100, so the rule that reads the folder finds nothing
+    and every part stays at three times its quantity. A fix that only works when somebody
+    named a folder helpfully is not a fix.
+
+    The GA's own shape says it. Two drawings, two different things:
+
+      * A BAY lists SEVERAL assemblies — 2 x 1448-GA, 2 x 3886-GA, 1 x 1455-GA — and the unit
+        is all of them together. Multiplying is exactly right there.
+      * An INSTALL ARRANGEMENT lists ONE assembly, several times: 3 x 12349-02-69-100 on a
+        wall. That drawing is not a bill for a composite article; it is a picture of where the
+        articles go, and the article is the unit.
+
+    So: exactly one structural code on the main GA, showing more than one of itself, and that
+    code is the unit. Two or more and this says nothing, which leaves every bay job exactly as
+    it was. Bought-in rows are ignored — a GA carrying one assembly and a bag of screws is
+    still a GA carrying one assembly.
+    """
+    codes: Dict[str, int] = {}
+    for r in bom_rows:
+        if str(r.get("source_pdf") or "") != main_ga:
+            continue
+        code = _norm(r.get("part_number"))
+        if code and _family(code):          # structural rows only; a fixing is not an assembly
+            codes[code] = max(codes.get(code, 0), _qty(r))
+    if len(codes) != 1:
+        return None
+    only, qty = next(iter(codes.items()))
+    return only if qty > 1 else None
+
+
 def resolve_effective_quantities(
     bom_rows: List[Dict[str, Any]],
     main_ga: Optional[str] = None,
@@ -179,7 +214,10 @@ def resolve_effective_quantities(
     # sub-assembly used twice inside the module is still needed twice. Recorded as a flag,
     # because a quantity that silently became a third of what it was is exactly as hard to
     # trust as one that silently tripled.
-    _unit = _norm(unit_assembly)
+    # The folder name if it gave one, otherwise the GA's own shape. Named first because a
+    # folder that spells the assembly out is a person saying which article this is, and that
+    # beats reading it off a drawing.
+    _unit = _norm(unit_assembly) or _norm(unit_assembly_from_the_tree(bom_rows, main_ga))
     multipliers: Dict[str, int] = {}
     install_context: Dict[str, int] = {}
     for r in groups.get(main_ga, []):
