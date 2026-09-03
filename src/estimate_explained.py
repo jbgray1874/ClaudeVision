@@ -1843,7 +1843,8 @@ def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dic
 
 def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                    client: str = "", deliverables: Optional[List[str]] = None,
-                   provisional: bool = True) -> Dict[str, str]:
+                   provisional: bool = True,
+                   quantity_sweep: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """Subject, HTML and plain text for one finished estimate, in seven sections."""
     g = _gather(workbook, scan_json)
     scan, final, pack = g["scan"], g["final"], g["pack"]
@@ -1934,6 +1935,54 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     else:
         add(f"<p>Material is bought-in and commercial {_gbp(_bought_total)} plus sheet steel "
             f"{_gbp(_steel_total)}. Labour is {_plural(labour['rows'], 'sheet row')}.</p>")
+
+    # ── THE PRICE BREAK, ON THE PAGE SOMEBODY FORWARDS ────────────────────────────
+    #
+    # "does it present one s/sheet for all the units, or a s/sheet for each."
+    #
+    # A workbook each — the estimators' own template holds one order quantity, so five
+    # quantities is five files. That is right for the SHEETS and wrong for the NOTE: five
+    # attachments named _qty1, _qty50, _qty100 and nothing that puts the curve on one page,
+    # so the only way to see what 500 off does to the unit cost was to open five workbooks
+    # and write the numbers down. The engine has the whole table in hand by this point.
+    #
+    # It carries the two caveats with it, because a price break is exactly the figure
+    # somebody lifts into a quotation. Freight per unit falls with the quantity and is
+    # re-priced here; bought-in prices do NOT step down, so every one of these is a little
+    # dear at the top of the range and the note has to say so where the numbers are, not in
+    # a banner inside a file nobody opened.
+    _qs_rows = [r for r in ((quantity_sweep or {}).get("rows") or [])
+                if isinstance(r, dict) and _money(r.get("unit"))]
+    if len(_qs_rows) > 1:
+        _base = (quantity_sweep or {}).get("baseline_quantity") or order_qty
+        _at_one = next((_money(r.get("unit")) for r in _qs_rows
+                        if int(r.get("quantity") or 0) == _base), None)
+        add(f"<h4>At the other quantities</h4>")
+        add(_table(["Off", "Material £", "Labour £", "Unit £", "vs " + str(_base) + " off"],
+                   [[_fmt(r.get("quantity")), _gbp_or(r.get("material"), "—"),
+                     _gbp_or(r.get("labour"), "—"), _gbp_or(r.get("unit"), "—"),
+                     ("—" if not _at_one or not _money(r.get("unit"))
+                      else f"{(_money(r['unit']) / _at_one - 1) * 100:+.0f}%")]
+                    for r in _qs_rows], numeric={0, 1, 2, 3, 4}))
+        _saved = [str(v) for v in ((quantity_sweep or {}).get("variants") or [])]
+        add(f"<p>{_plural(len(_qs_rows), 'quantity')} priced from this one estimate by "
+            f"recalculating the sheet, not by re-running the job — a blank is a blank at 1 "
+            f"off and at 500, and re-reading the drawings five times would take five hours "
+            f"to produce the same geometry. "
+            + (f"{_plural(len(_saved), 'workbook')} filed alongside this one, one per "
+               f"quantity, each opening on a page that says what it is. "
+               if _saved else "")
+            + ("Packaging and delivery are re-priced at each quantity: they are worked out "
+               "for the whole order and divided by it, so the pallet does not ride on every "
+               "unit. "
+               if (quantity_sweep or {}).get("freight_repriced") else
+               "<b>Packaging and delivery are still priced at the baseline quantity</b> on "
+               "these lines, so the larger quantities are overstated by the freight. ")
+            + "<b>Bought-in prices do not step down</b> — the template's quantity price-break "
+              "lookup is overwritten with a fixed price, so every bought-in line costs the "
+              "same at 500 off as at 1. Treat the larger quantities as the top of the range "
+              "and the shape of the curve as sound; the quantity you intend to quote should "
+              "be run properly.</p>")
 
     # 2 ─ THE FABRICATED MATERIAL, EVERY BLOCK OF IT.
     #

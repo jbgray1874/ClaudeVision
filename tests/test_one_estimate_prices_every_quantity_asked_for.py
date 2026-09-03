@@ -192,3 +192,52 @@ def test_every_caller_is_in_that_same_script(page):
     for m in _re.finditer(r"unitList\(\)", page):
         assert block_of(m.start()) == home, (
             f"a caller at offset {m.start()} cannot reach unitList()")
+
+
+# ── and the curve has to be on the page somebody forwards ──────────────────────
+#
+# "does it present one s/sheet for all the units, or a s/sheet for each."
+#
+# A workbook each: the estimators' own template holds one order quantity, so five quantities
+# is five files. Right for the sheets, wrong for the note — five attachments named _qty1,
+# _qty50, _qty100 and nothing putting the curve on one page, so the only way to see what 500
+# off does to the unit cost was to open five workbooks and write the numbers down.
+
+def test_the_note_can_be_told_what_the_other_quantities_came_to():
+    import inspect
+    import estimate_explained as ee
+    assert "quantity_sweep" in inspect.signature(ee.covering_email).parameters
+
+
+def test_the_run_sweeps_before_it_writes_the_note():
+    """Ordering IS the feature. The sweep used to run after the covering note was written, so
+    teaching the note to read it would have printed an empty table on every job."""
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    swept = src.index("from quantity_sweep import sweep as _sweep")
+    noted = src.index("from estimate_explained import covering_email as _covering_email")
+    assert swept < noted, "the note is written before the quantities are swept"
+
+
+def test_the_note_is_actually_handed_the_result():
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    i = src.index("from estimate_explained import covering_email as _covering_email")
+    assert "quantity_sweep=summary.get(\"quantity_sweep\")" in src[i:i + 900], (
+        "a parameter nothing passes changes nothing")
+
+
+def test_the_table_carries_the_two_things_that_did_not_reprice():
+    """A price break is the figure somebody lifts into a quotation. Both caveats have to be
+    where the numbers are, not in a banner inside a workbook nobody opened."""
+    src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
+    i = src.index("THE PRICE BREAK, ON THE PAGE SOMEBODY FORWARDS")
+    block = src[i:i + 3500]
+    assert "Bought-in prices do not step down" in block
+    assert "freight_repriced" in block, "it must say which of the two freights it used"
+    assert "still priced at the baseline quantity" in block
+
+
+def test_one_quantity_prints_no_table():
+    """Every job that asks for a single quantity must read exactly as it did before."""
+    src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
+    i = src.index("_qs_rows = [r for r in")
+    assert "if len(_qs_rows) > 1:" in src[i:i + 600]
