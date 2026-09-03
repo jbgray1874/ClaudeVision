@@ -241,3 +241,82 @@ def test_one_quantity_prints_no_table():
     src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
     i = src.index("_qs_rows = [r for r in")
     assert "if len(_qs_rows) > 1:" in src[i:i + 600]
+
+
+# ── the link that was missing ─────────────────────────────────────────────────
+#
+# The page sent them, the request models accepted them, Run stored them, as_json carried
+# them, the runner passed them to main.py, and main.py parsed them. Every test above passed.
+#
+# The CLAIM did not carry them. That dictionary is the only thing the runner ever reads, so
+# job.get("quantity_breaks") was None on every run and --quantity-breaks never once reached
+# an engine. 11908-21 was asked for 1, 50, 100, 250 and 500 and produced one workbook at 1
+# off. An absent flag leaves no trace: it took reading the runner's command echo in a log to
+# find, because there is no line anywhere saying what did not happen.
+
+def _claim_payload(breaks):
+    est = pytest.importorskip("estimate_routes", reason="the portal service")
+    run = est.Run(run_id="r", client="c", drawing_number="d", units=1,
+                  job_folder="j", output_path="o", quantity_breaks=breaks)
+    # The claim body is built from the Run; build it the way the endpoint does.
+    import inspect
+    src = inspect.getsource(est.claim) if hasattr(est, "claim") else ""
+    return run, src
+
+
+def test_the_claim_the_runner_reads_carries_the_quantities():
+    """THE FAULT ITSELF. Everything else on the path had it; this is the only dictionary the
+    runner ever sees."""
+    import re as _re
+    src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    i = src.index('return {"run": {')
+    body = src[i:src.index("}}", i)]
+    for key in ("run_id", "client", "units", "manual_workbook", "llm_only", "fresh_read",
+                "quantity_breaks"):
+        assert f'"{key}"' in body, f"the claim does not hand the runner {key}"
+
+
+def test_every_field_the_runner_reads_is_a_field_the_claim_sends():
+    """The general form of the bug, asked of the code rather than of my memory of it: if the
+    runner reads job["x"], the claim must send "x". Nothing else was going to catch this."""
+    runner = (ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    routes = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(
+        encoding="utf-8")
+    i = routes.index('return {"run": {')
+    claim = routes[i:routes.index("}}", i)]
+    import re as _re
+    read = set(_re.findall(r'job(?:\.get)?[\[\(]"([a-z_]+)"', runner))
+    # These are the runner's own additions to the job dict after the claim, not claim fields.
+    read -= {"log_url", "runner_id"}
+    missing = sorted(k for k in read if f'"{k}"' not in claim)
+    assert not missing, f"the runner reads {missing} and the claim never sends it"
+
+
+def test_a_run_that_loses_the_flag_says_so_on_its_own_log():
+    """A stale runner is the other way this goes missing, and it leaves no trace either. It
+    must NOT stop the run — killing an hour of good work over four variant workbooks is worse
+    than the thing being reported — but it must not pass in silence, because the only symptom
+    is files that are not there and nobody counts files they did not get."""
+    est = pytest.importorskip("estimate_routes", reason="the portal service")
+    run = est.Run(run_id="r", client="c", drawing_number="d", units=1,
+                  job_folder="j", output_path="o", quantity_breaks=[50, 100])
+    est._check_the_engine_was_told(run, '$ "python" "C:\\x\\src\\main.py" --job "j"')
+    assert any("50, 100" in ln for ln in _lines_of(run)), "nothing was said"
+    assert not run.cancel_requested, "a missing variant must never kill a finished estimate"
+
+
+def test_it_says_nothing_when_the_flag_is_there():
+    est = pytest.importorskip("estimate_routes", reason="the portal service")
+    run = est.Run(run_id="r", client="c", drawing_number="d", units=1,
+                  job_folder="j", output_path="o", quantity_breaks=[50, 100])
+    est._check_the_engine_was_told(
+        run, '$ "python" "C:\\x\\src\\main.py" --job "j" --quantity-breaks 50 100')
+    assert not any("WARNING" in ln for ln in _lines_of(run))
+
+
+def _lines_of(run):
+    for attr in ("log", "lines", "_log"):
+        got = getattr(run, attr, None)
+        if isinstance(got, list):
+            return [str(x) for x in got]
+    return []

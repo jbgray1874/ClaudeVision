@@ -223,6 +223,9 @@ class Run:
     # half of what it means is how the second case ends up with its own parallel flag and its
     # own half of the check.
     instruction_refused: bool = False
+    # Said once. The command echo arrives on one line, but the guard reads every progress
+    # line, and a warning repeated down the log stops being read.
+    breaks_warned: bool = False
     # AND THE REASON, KEPT SEPARATELY FROM `error`. /complete assigns `run.error = req.error`
     # unconditionally — the runner's own verdict, which on this path is None, because the
     # engine exited 0 and the runner has nothing to complain about. Holding the reason only in
@@ -554,6 +557,14 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         # The runner passes it to main.py as --parity-workbook; it is a share path, readable
         # from the runner's machine, never a temp file from this service's disk.
         "manual_workbook": run.manual_workbook,
+        # THE OTHER QUANTITIES THIS RUN WAS ASKED FOR. Everything else on the path carried
+        # these — the page sends them, the request models accept them, Run stores them, the
+        # runner passes them to main.py as --quantity-breaks — and THIS dictionary did not,
+        # so the runner read None every time and the flag never once reached the engine.
+        # 11908-21 was asked for 1, 50, 100, 250 and 500 and produced one workbook at 1 off,
+        # with nothing in any log to say why: an absent flag leaves no trace, which is why it
+        # took reading the runner's command echo to find.
+        "quantity_breaks": [int(q) for q in (run.quantity_breaks or [])],
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
     }}
@@ -581,12 +592,26 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
     ONLY THE COMMAND ECHO, and only for a run that asked. `startswith("$ ")` is the runner's
     own convention for it; the LLM-ONLY banner and this guard's own words are prose on the
     same log and must not be mistaken for it."""
+    line = text.strip()
+    if not line.startswith("$ ") or "main.py" not in line:
+        return
+
+    # SAID, NOT STOPPED. Missing quantity breaks do not make the estimate wrong — they make
+    # it incomplete, and killing a good hour of work over four variant workbooks would be a
+    # worse outcome than the one being reported. But it must not pass in silence either: the
+    # only symptom is files that are not there, and nobody counts files they did not get.
+    if run.quantity_breaks and "--quantity-breaks" not in line and not run.breaks_warned:
+        run.breaks_warned = True
+        run.line("WARNING — this run asked for "
+                 + ", ".join(str(q) for q in run.quantity_breaks)
+                 + " off as well, and the engine was NOT told to price them. The estimate "
+                   "itself is unaffected; the variant workbooks will simply not be written. "
+                   "The usual cause is a runner started before that flag existed — it holds "
+                   "the module it loaded at start, and git pull does not reload it.")
+
     wanted = [f for f, asked in (("--llm-only", run.llm_only),
                                  ("--fresh-read", run.fresh_read)) if asked]
     if not wanted or run.instruction_refused:
-        return
-    line = text.strip()
-    if not line.startswith("$ ") or "main.py" not in line:
         return
     missing = [f for f in wanted if f not in line]
     if not missing:
