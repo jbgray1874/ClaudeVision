@@ -123,3 +123,26 @@ def test_the_caller_passes_the_job_name():
     i = src.index("from bom_tree import unit_assembly_from_label")
     assert "unit_assembly=_unit_asm" in src[i:i + 1200], "the rule is never given a label"
     assert "review_flags" in src[i:i + 1600], "the change is not surfaced to the estimator"
+
+
+# ── and the folder has to be recognised however it is spelled ──────────────────
+
+@pytest.mark.parametrize("folder", [
+    "12349-02-69-100 GRAVITY FEEDER MODULES",       # the share, as the estimator files it
+    "123490269100__GRAVITY_FEEDER_MODULES_REV_A",   # Tim's own file, no separators at all
+    "12349-02-69-100-GravityFeeder",
+    "12349_02_69_100 Gravity Feeder",               # underscores instead of hyphens
+])
+def test_the_assembly_is_found_however_the_folder_spells_it(folder):
+    """A folder is not spelled the way a part number is. Comparing with the hyphens intact
+    meant the rule fired on one spelling and silently did nothing on the others — and doing
+    nothing here leaves every part at three times its quantity, which is the failure it exists
+    to stop."""
+    assert unit_from(rf"K:\Estimating\Live Enquiry\{folder}", ROWS) == "12349-02-69-100"
+
+
+def test_flattening_does_not_let_a_shorter_code_win():
+    """Still matched whole, longest still wins — so the family number cannot beat the
+    assembly for a folder that names the assembly."""
+    rows = ROWS + [{"part_number": "12349", "quantity": 1, "source_pdf": "GA.pdf"}]
+    assert unit_from(r"K:\jobs\123490269100 GRAVITY FEEDER", rows) == "12349-02-69-100"

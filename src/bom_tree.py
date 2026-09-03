@@ -103,17 +103,31 @@ def unit_assembly_from_label(label: Any, bom_rows: List[Dict[str, Any]]) -> Opti
     "12349-02-69-100" and "12349" can both appear in one label and only one of them is an
     assembly somebody builds.
     """
-    hay = _norm(label)
+    # A FOLDER IS NOT SPELLED THE WAY A PART NUMBER IS. The assembly is 12349-02-69-100;
+    # the folder on the share is "12349-02-GravityFeeder" or "12349-02-69-100 GRAVITY FEEDER
+    # MODULES", and Tim's own file for it is "123490269100__GRAVITY_FEEDER_MODULES_REV_A.xls"
+    # with no separators at all. Comparing with the hyphens intact means the rule fires on one
+    # of those spellings and silently does nothing on the other two — and doing nothing here
+    # leaves every part at three times its quantity, which is the failure it exists to stop.
+    #
+    # So both sides are reduced to letters and digits. That is not a loosening: the codes are
+    # still matched whole and the longest still wins, so "12349" cannot beat "12349-02-69-100"
+    # for a folder that names the assembly.
+    def _flat(t: Any) -> str:
+        return re.sub(r"[^A-Z0-9]+", "", str(t or "").upper())
+
+    hay = _flat(label)
     if not hay:
         return None
-    best = ""
+    best_code, best_len = "", 0
     for r in bom_rows:
         code = _norm(r.get("part_number"))
+        flat = _flat(code)
         # Four characters is the shortest thing worth calling a match; below that a bare
         # family number matches half the folders on the share.
-        if len(code) >= 4 and code in hay and len(code) > len(best):
-            best = code
-    return best or None
+        if len(flat) >= 4 and flat in hay and len(flat) > best_len:
+            best_code, best_len = code, len(flat)
+    return best_code or None
 
 
 def resolve_effective_quantities(
