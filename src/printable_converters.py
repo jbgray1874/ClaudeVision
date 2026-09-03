@@ -162,7 +162,27 @@ def _dxf_to_pdf(src: Path, out: Path) -> Path:
     try:
         msp = doc.modelspace()
         backend = backend_mod.PyMuPdfBackend()
-        Frontend(RenderContext(doc), backend).draw_layout(msp, finalize=True)
+        # PAPER IS WHITE. MODEL SPACE IS BLACK.
+        #
+        # RenderContext honours the DXF's own background, and a CAD model space is black with
+        # light entities on it — which is right on a screen and wrong on every printer. The
+        # page came out a solid dark sheet with pale lines: unreadable under strip lighting,
+        # and it would empty a toner cartridge across a pack of eleven drawings.
+        #
+        # BLACK on WHITE rather than merely inverting: a DXF carries entity colours by layer,
+        # and a set of mid-greys and yellows that read fine on black are close to invisible on
+        # white. A drawing sent to a printer is a line drawing, so every line is drawn in ink.
+        _cfg = None
+        try:
+            from ezdxf.addons.drawing.config import (BackgroundPolicy, ColorPolicy,
+                                                     Configuration)
+            _cfg = Configuration(background_policy=BackgroundPolicy.WHITE,
+                                 color_policy=ColorPolicy.BLACK)
+        except Exception:                                       # noqa: BLE001
+            _cfg = None                 # older ezdxf: render as before rather than not at all
+        _frontend = (Frontend(RenderContext(doc), backend, config=_cfg) if _cfg is not None
+                     else Frontend(RenderContext(doc), backend))
+        _frontend.draw_layout(msp, finalize=True)
         page = layout.Page(0, 0, layout.Units.mm, layout.Margins.all(10))
         Path(out).write_bytes(backend.get_pdf_bytes(page))
     except Exception as exc:                                        # noqa: BLE001
