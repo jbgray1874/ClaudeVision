@@ -4177,6 +4177,33 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"return 0 for it. Add mapping.", flags)
                 wb_op = str(op)
 
+            # YOU CANNOT WELD ACRYLIC.
+            #
+            # 12349-02's 01A came back with Weld (CO2) and Dress Welds on it. The drawing says
+            # UV BONDED, and Tim's sheet has no weld on that part at all — it is seven acrylic
+            # pieces glued into a box. WELD here is CO2 on steel: an arc, a filler wire and a
+            # bead somebody then grinds flat. Put an acrylic panel under it and there is no
+            # part left.
+            #
+            # This is not a rate to tune, it is a physical impossibility, so it is corrected
+            # rather than flagged and left costing. Weld becomes Glue, which is the operation
+            # that actually joins these parts and is on the rate card; dressing is DROPPED
+            # outright, because a bonded joint has no bead to dress and the row would charge
+            # a hand pass for work nobody does.
+            #
+            # Steel is untouched. So is a genuinely plastic-welded part, if one ever arrives —
+            # it would arrive as its own operation, not as the steel CO2 department.
+            if _is_acr and not _is_timber(_mat) and wb_op in ("Weld (CO2)", "Spotweld",
+                                                              "Dress Welds"):
+                if wb_op == "Dress Welds":
+                    _flag(f"dropped '{op}' on {_pn} ({_mat}) — a bonded acrylic joint has no "
+                          f"weld bead to dress.", flags)
+                    continue
+                _flag(f"'{op}' on {_pn} ({_mat}) booked as Glue — acrylic is bonded, not "
+                      f"welded, and the CO2 department would destroy the part. Confirm the "
+                      f"joint is a bond.", flags)
+                wb_op = "Glue"
+
             # Wire frames go on the SPOT WELDER — but ONLY when the whole job is wire.
             # 7670 (3 wire forms welded to each other): Spotweld, £1.61 on Tim's sheet.
             # 1310 (8mm stud welded to a 2mm plate):    CO2 — you cannot spot-weld a bar
