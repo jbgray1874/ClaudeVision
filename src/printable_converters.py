@@ -183,11 +183,77 @@ def _dxf_to_pdf(src: Path, out: Path) -> Path:
         _frontend = (Frontend(RenderContext(doc), backend, config=_cfg) if _cfg is not None
                      else Frontend(RenderContext(doc), backend))
         _frontend.draw_layout(msp, finalize=True)
-        page = layout.Page(0, 0, layout.Units.mm, layout.Margins.all(10))
+
+        # A DRAWING GOES ON A SHEET OF PAPER.
+        #
+        # Page(0, 0, ...) does not mean "fit to the page". It means "make the page whatever
+        # size the drawing turns out to be", and ezdxf's fit-to-page then has nothing to fit
+        # to. One stray entity — a construction point, a sheet origin marker, an artefact a
+        # metre-scale part never notices — and the page becomes the size of the DISTANCE to
+        # that entity, with the part rendered a few thousandths of an inch across in the
+        # corner. The PDF is valid, one page, and to the eye completely blank. Reproduced
+        # here: a 400 x 300 flat plus a single POINT five kilometres away produces a page so
+        # large that rasterising it fails outright.
+        #
+        # So: a real sheet, and the content fitted to it (layout.Settings.fit_page defaults
+        # to True and now has a page to work with). Oriented to the part, because a flat
+        # pattern is usually wider than it is tall and turning the paper is free.
+        _box = backend.player().bbox()
+        if not _box.has_data:
+            raise _NothingDrawn(
+                "renders no geometry — model space is empty, or everything in it is on a "
+                "layer that is switched off or frozen")
+        _w, _h = _box.size.x, _box.size.y
+        page = (layout.Page(297, 420, layout.Units.mm, layout.Margins.all(10))
+                if _h > _w else
+                layout.Page(420, 297, layout.Units.mm, layout.Margins.all(10)))
         Path(out).write_bytes(backend.get_pdf_bytes(page))
+    except _NothingDrawn:
+        raise
     except Exception as exc:                                        # noqa: BLE001
         raise ConversionFailed(f"could not be rendered ({type(exc).__name__})") from exc
+
+    # AND THEN LOOK AT IT.
+    #
+    # Every guess above is a guess about a mechanism. This is a test of the complaint: is
+    # there anything on the page? A drawing that renders to a sheet with no ink on it is a
+    # failure however it got there, and a failure named on the cover page is worth more to an
+    # estimator than a blank sheet in the middle of a pack — which reads as a drawing that was
+    # never in the pack at all.
+    _ink = _ink_on_the_page(out)
+    if _ink is not None and _ink == 0:
+        raise ConversionFailed(
+            f"rendered to a blank sheet — its geometry spans {_w:,.0f} x {_h:,.0f} drawing "
+            f"units, so if the part is smaller than that, something in the file sits a long "
+            f"way from it and shrinks it out of sight")
     return out
+
+
+class _NothingDrawn(ConversionFailed):
+    """Rendered without error and put nothing on the paper. Named so the generic handler
+    below cannot swallow it and re-describe it as an unspecified failure."""
+
+
+def _ink_on_the_page(pdf: Path) -> Optional[int]:
+    """How many sampled pixels of the first page are not the background, or None if it could
+    not be checked. Cheap: one 36-dpi pixmap, sampled on a grid.
+
+    Never the reason a conversion fails — an answer it cannot get is not evidence of a blank
+    page, so it returns None and the caller lets the file through.
+    """
+    try:
+        import pymupdf                                              # already a dependency
+        with pymupdf.open(str(pdf)) as doc:
+            if doc.page_count < 1:
+                return None
+            pix = doc[0].get_pixmap(dpi=36)
+            if pix.width < 3 or pix.height < 3:
+                return None
+            bg = pix.pixel(0, 0)
+            return sum(1 for y in range(0, pix.height, 2)
+                       for x in range(0, pix.width, 2) if pix.pixel(x, y) != bg)
+    except Exception:                                               # noqa: BLE001
+        return None
 
 
 def _dwg_to_pdf(src: Path, out: Path) -> Path:
