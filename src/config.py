@@ -336,6 +336,29 @@ COMMERCIAL_LINE_GBP_PER_ORDER = {
     # "DELIVERY":  85.00,   # one UK mainland palletised delivery, per order
 }
 
+# --- ...and whether to ask the market when there is no house figure ---------------
+#
+# ONE PACK, THREE PRICES. 12349-02 was run three times at 7 off on an unchanged drawing pack
+# and order-level packaging came back £424.97, then £175.00, then £74.97 — a 5.7x spread with
+# nothing changed but the clock. Delivery moved £140.00 -> £68.11 -> £94.99 across the same
+# three. Tim's manual estimate reaches £7.94 from a catalogue pack code and one pallet.
+#
+# The indication was defended on the grounds that "a zero sums as free and nobody argues with
+# it; an indicative figure gets checked". That is true of a figure a person can sanity-check
+# against something. It is not true of a figure that moves 5.7x between runs of the same job:
+# an estimator cannot tell whether £75 or £425 is the one to argue with, and neither can the
+# parity harness, which is why the same job cannot be compared with itself.
+#
+# So the COUNT is kept and the PRICE is withheld. plan_shipment still weighs the order, finds
+# the largest panel, counts the cartons and the pallets, and writes the sentence a packer or a
+# haulier would be asked; the line arrives at £0.00 carrying that whole description and its own
+# entry on OUTSTANDING ESTIMATOR INPUTS. A zero that names the question it could not answer is
+# not the same thing as a silent zero.
+#
+# Set this True to restore the market indication. Better: put SDI's real rates in
+# COMMERCIAL_LINE_GBP_PER_ORDER above, and neither this flag nor the model is consulted.
+COMMERCIAL_LINE_ASK_MARKET = False
+
 # Standard bought-in COMMODITIES that appear on a BOM as a COMPONENT (not packaging) under a
 # generic name — "PALLET", "STD PART" — with no SDI part code, so the purchasing DB has nothing
 # to match and the line would otherwise fall to a per-run LLM guess or a £0. A stable, REPRODUCIBLE

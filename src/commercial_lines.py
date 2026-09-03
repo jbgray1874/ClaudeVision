@@ -228,15 +228,32 @@ def _line(code: str, order: Dict[str, Any], description: str,
             "source_class": "catalogue", "reproducible": True,
             "source_name": "config.COMMERCIAL_LINE_GBP_PER_ORDER"}
     else:
-        _ind = _ask_market(description, code.title())
+        # THE COUNT IS KEPT; THE PRICE IS WITHHELD. Asking a model to price the sentence gave
+        # 12349-02 three different answers for one unchanged pack at one quantity — £424.97,
+        # £175.00, £74.97 at order level. A figure that moves 5.7x cannot be sanity-checked by
+        # an estimator or compared by the parity harness, so it is worse than a zero that
+        # states its own question. config.COMMERCIAL_LINE_ASK_MARKET restores it; the real fix
+        # is a house rate in COMMERCIAL_LINE_GBP_PER_ORDER, which is asked first and always.
+        _ind = (_ask_market(description, code.title())
+                if bool(getattr(config, "COMMERCIAL_LINE_ASK_MARKET", False)) else None)
         if not _ind:
             # NOTHING CAME BACK, SO NOTHING IS INVENTED — and the line still says what it
             # would have been asked, so an estimator can answer the question themselves
             # rather than rediscover it.
+            _why = ("could not be priced"
+                    if bool(getattr(config, "COMMERCIAL_LINE_ASK_MARKET", False))
+                    else "is deliberately left at £0.00 until SDI's own rate is entered — a "
+                         "market indication for this line moved 5.7x between runs of the same "
+                         "job, so it is withheld rather than quoted")
             out.update({"unit_gbp": None, "order_gbp": None,
                         "estimator_input_required": True, "reason": "no_price_for_" + code.lower(),
-                        "note": (f"{code.title()} could not be priced. It was described as: "
-                                 f"{description}. Price it, or put a per-order figure in "
+                        # The shipment was still COUNTED. That work is the useful half and it
+                        # is on the line whether or not anybody has priced it yet.
+                        "shipment_counted": bool((order.get("shipment") or {}).get("pallet_count")
+                                                 or (order.get("shipment") or {}).get("carton_count")),
+                        "note": (f"{code.title()} {_why}. The shipment was still measured and "
+                                 f"counted: {description}. Price it from that, or put a "
+                                 f"per-order figure in "
                                  f"config.COMMERCIAL_LINE_GBP_PER_ORDER['{held_key}'] and "
                                  f"every job carries it.")})
             return out

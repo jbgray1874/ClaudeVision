@@ -38,8 +38,14 @@ PANELS = [
 @pytest.fixture()
 def market(monkeypatch):
     """The market answers. Stubbed rather than live — a test that reaches the internet is a
-    test that fails on a train."""
+    test that fails on a train.
+
+    The flag is set here too, because asking the market is now OFF by default: one pack priced
+    three times gave £424.97 / £175.00 / £74.97. The arithmetic below is still the arithmetic
+    a house rate goes through, so it stays covered — this fixture just says out loud which
+    rung of the ladder it is exercising."""
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", True, raising=False)
     monkeypatch.setattr(cl, "_ask_market", lambda d, t: {
         "order_gbp": 84.0, "source_class": "llm", "source_name": "web_ai_fallback",
         "reproducible": False, "indicative": True})
@@ -48,7 +54,15 @@ def market(monkeypatch):
 @pytest.fixture()
 def silent_market(monkeypatch):
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", True, raising=False)
     monkeypatch.setattr(cl, "_ask_market", lambda d, t: None)
+
+
+@pytest.fixture()
+def withheld(monkeypatch):
+    """The shipped default: no house rate, and the market deliberately not asked."""
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", False, raising=False)
 
 
 # ── the shipment, from what the engine already measured ──────────────────────────────
@@ -196,3 +210,88 @@ def test_an_unpriced_placeholder_is_still_a_clean_zero():
     estimator.estimate_part(part)
     assert part["material_estimate"]["cost_method"] == "commercial_placeholder_unpriced"
     assert part["unit_cost_gbp"] == 0.0
+
+
+# ── THE PRICE IS WITHHELD, THE COUNT IS NOT ──────────────────────────────────────────
+#
+# 12349-02 at 7 off, three runs, one unchanged drawing pack: order-level packaging came back
+# £424.97, then £175.00, then £74.97, and delivery £140.00 -> £68.11 -> £94.99. The argument
+# for an indication was that "a figure labelled indicative gets checked". A figure that moves
+# 5.7x between runs of the same job cannot be checked — an estimator has nothing to check it
+# against, and the parity harness cannot compare a job with itself. So the sentence a haulier
+# would be asked is kept, and the answer is left to a person.
+
+def test_the_market_is_not_asked_by_default(monkeypatch):
+    """The whole point. Not "it usually is not asked" — it is not asked."""
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", False, raising=False)
+    monkeypatch.setattr(cl, "_ask_market", lambda d, t: pytest.fail(
+        "a model was asked to price a shipment while the flag is off"))
+    for line in (cl.packaging_line(PANELS, 7), cl.delivery_line(PANELS, 7)):
+        assert line["unit_gbp"] is None and line["order_gbp"] is None
+
+
+def test_the_shipped_default_is_the_flag_being_off():
+    """A default that has to be set to be safe is not a default. Read off config itself, so
+    turning it on in a live config fails here rather than quietly on a customer's estimate."""
+    assert getattr(config, "COMMERCIAL_LINE_ASK_MARKET", False) is False
+
+
+@pytest.mark.parametrize("fn", ["packaging_line", "delivery_line"])
+def test_a_withheld_line_still_carries_the_whole_measured_shipment(withheld, fn):
+    """The measuring is the half worth having, and it is arithmetic on blanks the engine
+    already holds. Withholding the PRICE must not throw away the WEIGHT.
+
+    Asserted on `basis` rather than on the sentence, because the two sentences legitimately
+    differ — a packer is told the largest panel, a haulier is told the weight and the pallets."""
+    line = getattr(cl, fn)(PANELS, 7)
+    d = line["described_as"]
+    assert "7" in d and "kg" in d
+    assert line["basis"]["order_weight_kg"] == pytest.approx(25.33, abs=0.5)
+    assert line["basis"]["largest_part_mm"] == [1250.0, 525.0]
+    assert line["basis"]["parts_measured"] == 2
+
+
+def test_the_packer_is_told_the_panel_and_the_haulier_the_pallets(withheld):
+    """Both sentences survive the price being withheld, and each still asks its own question."""
+    assert "1250" in cl.packaging_line(PANELS, 7)["described_as"]
+    assert "pallet" in cl.delivery_line(PANELS, 7)["described_as"]
+
+
+@pytest.mark.parametrize("fn", ["packaging_line", "delivery_line"])
+def test_a_withheld_line_is_an_owned_gap_not_a_silent_zero(withheld, fn):
+    """£0.00 on its own sums as free and nobody argues with it. £0.00 that names the question
+    it could not answer lands on OUTSTANDING ESTIMATOR INPUTS and gets actioned."""
+    line = getattr(cl, fn)(PANELS, 7)
+    assert line["estimator_input_required"] is True
+    note = line["note"]
+    assert "deliberately left at" in note
+    assert "still measured and counted" in note
+    assert "COMMERCIAL_LINE_GBP_PER_ORDER" in note
+
+
+@pytest.mark.parametrize("fn", ["packaging_line", "delivery_line"])
+def test_the_note_says_the_figure_moved_rather_than_that_nothing_was_found(withheld, fn):
+    """"Could not be priced" would be a lie: it could, three times, differently. The reader is
+    owed the actual reason, because it is the reason the fix is two catalogue rates."""
+    note = getattr(cl, fn)(PANELS, 7)["note"]
+    assert "5.7x" in note or "5.7" in note
+
+
+def test_a_house_rate_still_beats_everything_with_the_flag_off(monkeypatch):
+    """Withholding is the FALLBACK, not the policy. The moment SDI enters a rate, that rate is
+    the answer and neither the flag nor a model is consulted."""
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER",
+                        {"PACKAGING": 56.0}, raising=False)
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", False, raising=False)
+    monkeypatch.setattr(cl, "_ask_market", lambda d, t: pytest.fail("asked despite a house rate"))
+    line = cl.packaging_line(PANELS, 7)
+    assert line["order_gbp"] == 56.0 and line["unit_gbp"] == pytest.approx(8.0, abs=0.01)
+    assert line["price_source"]["reproducible"] is True
+    assert line["estimator_input_required"] is False
+
+
+def test_the_flag_can_be_turned_back_on(market):
+    """One switch, both directions. If the market path ever stops working the failure should be
+    here and not on the day somebody needs it back."""
+    assert cl.packaging_line(PANELS, 5)["order_gbp"] == 84.0
