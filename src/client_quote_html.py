@@ -476,6 +476,24 @@ _DARK_PLATE = ("display:inline-flex;align-items:center;background:#282928;"
                "padding:10px 16px;border-radius:4px;")
 
 
+def _webp_to_png_bytes(path: str) -> Optional[bytes]:
+    """A WEBP logo re-encoded as PNG bytes, so the quote's data URI is a format every mail
+    client and PDF engine renders. Returns None when Pillow/libwebp cannot read it — the
+    caller treats that exactly as an unreadable file (text fallback), never a crash."""
+    try:
+        from PIL import Image                                       # type: ignore
+        import io
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as im:
+            buf = io.BytesIO()
+            im.convert("RGBA").save(buf, "PNG")
+            return buf.getvalue()
+    except Exception:                                               # noqa: BLE001
+        return None
+
+
 def _load_logo_markup(customer: str) -> str:
     """Return inline SVG (bare) or <img> base64 for the customer logo, else empty (text fallback).
 
@@ -545,9 +563,28 @@ def _load_logo_markup(customer: str) -> str:
                 _style = (_DARK_PLATE if _svg_is_light(_markup)
                           else "display:inline-flex;align-items:center;")
                 return f'<span style="{_style}">{inner}</span>'
-            if ext.lower() in (".png", ".jpg", ".jpeg", ".gif"):
-                data = base64.b64encode(open(p, "rb").read()).decode("ascii")
-                mime = "image/png" if ext.lower() == ".png" else ("image/jpeg" if ext.lower() in (".jpg", ".jpeg") else "image/gif")
+            if ext.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+                if ext.lower() == ".webp":
+                    # A CLIENT DROPS THE FILE THEY WERE SENT, WHATEVER IT IS. Harrods'
+                    # logo arrived as .webp and would otherwise be skipped — its stem
+                    # matches, but the extension was not in the accepted set, so the quote
+                    # fell back to the customer's name in text and nobody was told why.
+                    #
+                    # WEBP is not embedded raw. The quote is emailed and printed to PDF,
+                    # and WEBP is unreliable in both (Outlook's Word engine will not render
+                    # it). So it is transcoded to PNG here — the data URI the quote carries
+                    # is always a format every mail client and PDF engine handles, and the
+                    # folder becomes drop-anything.
+                    raw = _webp_to_png_bytes(p)
+                    if raw is None:
+                        # Pillow/libwebp unavailable or the file is unreadable — treat it
+                        # exactly as any unreadable logo: skip, text fallback, never crash.
+                        continue
+                    mime = "image/png"
+                else:
+                    raw = open(p, "rb").read()
+                    mime = "image/png" if ext.lower() == ".png" else ("image/jpeg" if ext.lower() in (".jpg", ".jpeg") else "image/gif")
+                data = base64.b64encode(raw).decode("ascii")
                 img = (f'<img src="data:{mime};base64,{data}" alt="{_esc(customer)}" '
                        f'style="max-height:72px;max-width:300px;object-fit:contain;">')
                 if _raster_is_light(p):

@@ -244,3 +244,63 @@ def test_a_black_plate_logo_is_left_alone(tmp_path):
     assert lum is not None
     assert lum < 200, ("sampling stopped in the top margin again — a mostly-black image with "
                        "white content is being read from its first rows only")
+
+
+# ── A WEBP LOGO IS ACCEPTED, AND EMBEDDED AS PNG ────────────────────────────────────
+#
+# Harrods' logo arrived as .webp. The loader read .svg/.png/.jpg/.jpeg/.gif and nothing
+# else, so the file was silently skipped and a Harrods quote fell back to the customer's
+# name in text — no logo, no error, no reason given. WEBP is now accepted, and because the
+# quote is emailed and printed to PDF (where WEBP is unreliable), it is transcoded to a PNG
+# data URI rather than embedded raw.
+
+import pytest as _pytest
+
+
+def _webp(path, rgba, size=(40, 16)):
+    from PIL import Image
+    Image.new("RGBA", size, rgba).save(str(path), "WEBP")
+
+
+def test_a_webp_logo_is_found_and_embedded_as_png(tmp_path, monkeypatch):
+    monkeypatch.setattr(q, "ASSETS_LOGOS", str(tmp_path))
+    _webp(tmp_path / "Harrods.webp", (183, 138, 40, 255))   # a gold plate
+    markup = q._load_logo_markup("Harrods")
+    assert "<img" in markup, "a .webp logo whose stem matches the customer must be embedded"
+    assert "data:image/png;base64," in markup, (
+        "the quote is emailed and printed to PDF; the embedded logo must be PNG, not WEBP")
+    assert "data:image/webp" not in markup
+
+
+def test_the_webp_transcode_produces_a_valid_png(tmp_path):
+    raw = q._webp_to_png_bytes(str(tmp_path / "nope.webp"))
+    assert raw is None, "an unreadable file returns None, not a crash"
+    p = tmp_path / "logo.webp"
+    _webp(p, (10, 20, 30, 255))
+    raw = q._webp_to_png_bytes(str(p))
+    assert raw is not None and raw[:8] == b"\x89PNG\r\n\x1a\n", "transcode must be real PNG bytes"
+
+
+def test_a_webp_customer_still_matches_by_normalised_key(tmp_path, monkeypatch):
+    """The extension changed; the key rule did not. A file named to match the customer is
+    found whether it is png or webp."""
+    monkeypatch.setattr(q, "ASSETS_LOGOS", str(tmp_path))
+    _webp(tmp_path / "HARRODS.webp", (183, 138, 40, 255))
+    assert "<img" in q._load_logo_markup("harrods")
+
+
+def test_a_light_webp_gets_the_dark_ground_like_any_raster(tmp_path, monkeypatch):
+    """The transcode does not bypass the white-logo guard: a light WEBP is plated the same
+    as a light PNG, because the ground is decided by the pixels, not the container."""
+    monkeypatch.setattr(q, "ASSETS_LOGOS", str(tmp_path))
+    _webp(tmp_path / "Pale.webp", (250, 250, 250, 255))     # a near-white mark
+    assert "background:#282928" in q._load_logo_markup("Pale")
+
+
+def test_a_png_logo_is_unchanged_by_the_webp_branch(tmp_path, monkeypatch):
+    """Regression guard: adding WEBP must not alter how a PNG is embedded."""
+    monkeypatch.setattr(q, "ASSETS_LOGOS", str(tmp_path))
+    from PIL import Image
+    Image.new("RGBA", (40, 16), (183, 138, 40, 255)).save(str(tmp_path / "Boots.png"), "PNG")
+    markup = q._load_logo_markup("Boots")
+    assert "data:image/png;base64," in markup and "<img" in markup
