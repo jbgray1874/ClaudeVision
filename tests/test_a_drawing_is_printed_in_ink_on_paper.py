@@ -179,3 +179,69 @@ def test_the_blank_check_never_itself_stops_a_drawing_printing(tmp_path):
     block = _dxf_block()
     assert "_ink is not None and _ink == 0" in block, (
         "an unanswerable check must not be evidence of a blank page")
+
+
+# ── AND THEN IT WAS BLANK IN THE VIEWER AND NOT IN THE CHECK ───────────────────
+#
+# Third time. The page had ink by every measurement this file could make, and Edge showed
+# nothing. ezdxf writes each DXF layer as a PDF OPTIONAL CONTENT GROUP and every mark carries
+# a reference to its group. That survives opening the file on its own. It does not survive
+# drawings_print's insert_pdf(): the page content is copied and the optional-content
+# dictionary is left behind, so every mark points at a group the merged document no longer
+# defines. MuPDF draws it anyway — which is exactly why the converter's own blank-page check
+# passed and reported the drawing was on the paper. Acrobat and the Edge reader hide it.
+#
+# A pack that reads perfectly in one viewer and is empty in another is worse than a failure:
+# nothing anywhere reports a problem.
+
+def _merge(paths, out):
+    """What drawings_print does to build the pack, in one line, so these tests measure the
+    file the estimator opens rather than the temporary one nobody sees."""
+    import pymupdf
+    merged = pymupdf.open()
+    for p in paths:
+        with pymupdf.open(str(p)) as d:
+            merged.insert_pdf(d)
+    merged.save(str(out))
+    merged.close()
+    return out
+
+
+def test_the_page_declares_no_pdf_layers(tmp_path):
+    """Nothing wants them. They are a CAD convenience on a sheet that gets printed and marked
+    up, and a group definition that does not survive a merge is a mark that disappears."""
+    import pymupdf
+    out = _render(tmp_path, _flat)
+    with pymupdf.open(str(out)) as doc:
+        assert doc.layer_ui_configs() == [], (
+            "an optional content group here becomes a dangling reference after the merge")
+
+
+def test_the_drawing_is_still_there_after_the_pack_is_merged(tmp_path):
+    """THE FAULT ITSELF, measured on the merged file. This is the assertion that was missing
+    both previous times: everything was checked on the intermediate PDF, and the intermediate
+    PDF was never the thing that was blank."""
+    import printable_converters as pc
+    one = _render(tmp_path, _flat)
+    pack = _merge([one], tmp_path / "pack.pdf")
+    assert pc._ink_on_the_page(pack), "the merged pack is blank"
+
+
+def test_no_group_survives_into_the_pack_undefined(tmp_path):
+    """The precise mechanism, stated as a property of the pack: whatever the page references,
+    the document defines. Zero and zero is the only pair that cannot go wrong."""
+    import pymupdf
+    pack = _merge([_render(tmp_path, _flat)], tmp_path / "pack.pdf")
+    with pymupdf.open(str(pack)) as doc:
+        assert doc.layer_ui_configs() == []
+
+
+def test_a_pack_of_several_drawings_keeps_all_of_them(tmp_path):
+    """A merge is the normal case, not the exception — a pack is eleven drawings."""
+    import printable_converters as pc
+    ones = [_render(tmp_path, _flat, name=f"f{i}") for i in range(3)]
+    pack = _merge(ones, tmp_path / "pack3.pdf")
+    import pymupdf
+    with pymupdf.open(str(pack)) as doc:
+        assert doc.page_count == 3
+    assert pc._ink_on_the_page(pack)

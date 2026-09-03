@@ -207,7 +207,30 @@ def _dxf_to_pdf(src: Path, out: Path) -> Path:
         page = (layout.Page(297, 420, layout.Units.mm, layout.Margins.all(10))
                 if _h > _w else
                 layout.Page(420, 297, layout.Units.mm, layout.Margins.all(10)))
-        Path(out).write_bytes(backend.get_pdf_bytes(page))
+
+        # NO PDF LAYERS. THIS IS THE BLANK PAGE.
+        #
+        # ezdxf writes each DXF layer as a PDF OPTIONAL CONTENT GROUP, and every drawn object
+        # carries a reference to the group it belongs to. That survives being opened on its
+        # own. It does NOT survive the merge: drawings_print builds the pack with
+        # insert_pdf(), which copies the page content and leaves the optional-content
+        # dictionary behind — so every mark on the page then points at a group the document no
+        # longer defines. MuPDF draws it anyway, which is why the converter's own check saw
+        # ink and reported the drawing was on the paper. Acrobat and the Edge reader do not:
+        # content in an undefined group is hidden, and the sheet is blank in the viewer the
+        # estimator is actually using.
+        #
+        # Measured: intermediate 1 group, merged 0 groups, same content stream. A pack of
+        # flats that reads perfectly in one viewer and is empty in another is worse than a
+        # failure, because nothing anywhere reports a problem.
+        #
+        # Nothing wants the layers. They are a CAD convenience on a sheet of paper that gets
+        # printed and marked up, so they are not written, and there is nothing left to dangle.
+        try:
+            _settings = layout.Settings(output_layers=False)
+        except TypeError:                                           # pragma: no cover
+            _settings = layout.Settings()       # older ezdxf: as before rather than not at all
+        Path(out).write_bytes(backend.get_pdf_bytes(page, settings=_settings))
     except _NothingDrawn:
         raise
     except Exception as exc:                                        # noqa: BLE001

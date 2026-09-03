@@ -119,11 +119,36 @@ def main(argv: list) -> int:
                   f"{pdf.page_count} page(s)")
         ink = pc._ink_on_the_page(out)
         print(f"ink samples   {ink}")
+
+        # AND THE SAME QUESTION OF THE MERGED PACK, which is the file the estimator opens.
+        # Asking only the intermediate is what let this report "the drawing is on the paper"
+        # over a pack that was blank in Edge: ezdxf writes DXF layers as PDF optional content
+        # groups, insert_pdf leaves the group definitions behind, and a viewer that honours
+        # optional content hides every mark that points at a group the document no longer has.
+        # MuPDF draws it regardless, so no measurement on the intermediate could ever see it.
+        pack = out.with_name(out.stem + "_merged.pdf")
+        merged = pymupdf.open()
+        with pymupdf.open(str(out)) as one:
+            merged.insert_pdf(one)
+        merged.save(str(pack))
+        merged.close()
+        with pymupdf.open(str(out)) as one:
+            groups_before = len(one.layer_ui_configs())
+        with pymupdf.open(str(pack)) as many:
+            groups_after = len(many.layer_ui_configs())
+        print(f"pdf layers    {groups_before} on the page, {groups_after} after merging")
+        if groups_before:
+            print("              ^ THESE DO NOT SURVIVE THE MERGE. Every mark on the merged "
+                  "page then points at a group the document no longer defines, and Acrobat "
+                  "and Edge hide it. This checkout predates the fix — pull and re-run.")
+        print(f"merged ink    {pc._ink_on_the_page(pack)}   ({pack.name})")
+
         if ink == 0:
             print("\nTHE SHEET IS BLANK and the converter did not catch it. Send this output on.")
-        elif ink:
-            print("\nThe drawing is on the paper. If the portal still prints it blank, the "
-                  "portal is running older code — restart the service.")
+        elif ink and not groups_before:
+            print("\nThe drawing is on the paper and survives the merge. Open the _merged.pdf "
+                  "above in the same reader you print from — if THAT is blank, the fault is "
+                  "past the converter and this output is what to send on.")
     except Exception as exc:                                        # noqa: BLE001
         print(f"could not inspect the PDF: {type(exc).__name__}: {exc}")
     return 0
