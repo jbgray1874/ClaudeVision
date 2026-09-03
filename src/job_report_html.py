@@ -1605,8 +1605,8 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
         # SILENCE IS NOT A CLEAN BILL, and section 10 already knows it. A missing section
         # reads as nothing-to-report; here it means no part reached the costed pool at all.
         return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
-            '<p class="mini t-muted">This says which SOURCE won each field. What each row '
-            'COSTS, and which drawing page owns it, is in section 14.</p>'
+            '<p class="mini t-muted">Which SOURCE won each field, and which drawing file it '
+            'was read from. What each row COSTS is in section 14.</p>'
                 '<div class="callout warn"><b>No costed parts on this job.</b> Nothing '
                 'reached the costed pool, so no material provenance can be shown &mdash; '
                 'this is not a job whose provenance is clean.</div>')
@@ -1630,6 +1630,42 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
     except ImportError:
         def _bi(p):
             return str(p.get("part_number") or "").upper().startswith("BI-")
+
+    # WHICH DRAWING, NOT WHICH KIND OF DRAWING.
+    #
+    # This table said "the drawing" and pointed at section 14 for the page. James, reading it:
+    # are we showing the drawing the part is associated with, that we extracted the data from
+    # to make the decision? We were not. "The drawing" in a pack of eleven names none of them,
+    # and an estimator checking a gauge has to go and find which sheet to open.
+    #
+    # The SAME reader the covering note uses, so the two documents cannot name different
+    # files for one part — that is the failure this whole set of documents exists to avoid.
+    # Every file the part is evidenced by: the flat that was measured, the model it came out
+    # of, then the sheets it is drawn on, each with the page number PRINTED on that document
+    # rather than the job-wide one.
+    try:
+        from estimate_explained import _page_index as _pgidx
+        from estimate_explained import _pack_files as _packf
+        from estimate_explained import _sources_of as _srcof
+        _pack, _pages = _packf(summary), _pgidx(summary)
+    except Exception:                                            # noqa: BLE001
+        _srcof, _pack, _pages = None, [], {}
+
+    def _where_from(part: Dict[str, Any]) -> str:
+        """The drawing files this part came from, or an honest dash."""
+        if _srcof is None:
+            return "&mdash;"
+        try:
+            found = _srcof(part, _pack, _pages)
+        except Exception:                                        # noqa: BLE001
+            return "&mdash;"
+        if not found:
+            # A bought-in has no drawing of its own and never will; saying "not recorded"
+            # about it is the same mistake this section already fixed for blank sizes.
+            return ("<span class='t-muted'>bought in &mdash; no drawing</span>"
+                    if _bi(part) else "<span class='t-muted'>not recorded</span>")
+        return "<br>".join(_esc(f) for f in found[:4]) + (
+            f"<br>&hellip;and {len(found) - 4} more" if len(found) > 4 else "")
 
     _FIELDS = (("normalized_material", "Material", False),
                ("normalized_thickness_mm", "Thickness", True),
@@ -1665,7 +1701,8 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
         rows.append((worst, str(p.get("part_number") or ""),
                      f'<tr class="{"over" if any_reasoned else ""}">'
                      f'<td class="pn"><a id="bom-{_esc(p.get("part_number"))}" href="#route-{_esc(p.get("part_number"))}">{_esc(p.get("part_number"))}</a></td>'
-                     + "".join(cells) + "</tr>"))
+                     + "".join(cells)
+                     + f'<td class="mini">{_where_from(p)}</td>' + "</tr>"))
     if not rows:
         return ""
     rows.sort(key=lambda r: (r[0], r[1]))          # weakest provenance first
@@ -1679,12 +1716,13 @@ def _bom_provenance_section(summary: Dict[str, Any]) -> str:
              else '<p class="mini">Every costing datum on every part was measured and '
                   'carries a recorded source.</p>')
     return ('<h2>9 &nbsp;Where the bill of materials came from</h2>'
-            '<p class="mini t-muted">This says which SOURCE won each field. What each row '
-            'COSTS, and which drawing page owns it, is in section 14.</p>'
+            '<p class="mini t-muted">Which SOURCE won each field, and which drawing file it '
+            'was read from. What each row COSTS is in section 14.</p>'
             '<p class="mini">The source recorded against each costing datum, weakest first. '
             '&#9889; marks a value that was reasoned rather than measured: it can be right, '
             'but it cannot be held against the drawing.</p>' + _note +
-            f'<table><thead><tr><th>Part</th>{_heads}</tr></thead><tbody>'
+            f'<table><thead><tr><th>Part</th>{_heads}'
+            f'<th>Which drawing files and pages</th></tr></thead><tbody>'
             + "".join(r[2] for r in rows) + '</tbody></table>'
             + _source_legend(rows_html="".join(r[2] for r in rows)))
 
