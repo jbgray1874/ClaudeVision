@@ -1905,6 +1905,10 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(" No customer quote — it stays unissued until the lines in §5 are settled.</p>"
             if provisional else "</p>")
 
+    # WHERE THE PANEL GOES. Built at the very end, from the same values the sections are
+    # built from, and put HERE — above everything. See the block by that name below.
+    _focus_at = len(h)
+
     # 1 ─ the number
     add("<h3>1. The number</h3>")
     _rows = [["Material", _gbp(totals.get("material"))],
@@ -2393,6 +2397,84 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         f'The full line-by-line document is the <b>AI Explanation</b> tab in the attached '
         f'workbook and section 14 of the report — every row with the drawing page it came '
         f'from, which reader decided it, and what it charges.</p>')
+    # ── WHAT NEEDS YOUR EYE ───────────────────────────────────────────────────────
+    #
+    # "do we highlight what the estimators should be focussing on? or is that littered
+    # across the e-mail with the details?"
+    #
+    # Littered. §5 held the unpriced lines, §3 the indicative prices and the freight, §6 the
+    # parts that could not be traced and the pack's own failures, §7 the substitutions — so
+    # assembling the list of things that actually need a person meant reading all eight
+    # sections and keeping score. An estimator with eleven enquiries open does not do that;
+    # they read the number, glance down, and file it.
+    #
+    # So the list is assembled here and put at the TOP, ordered by the money each item moves.
+    # Built LAST, from the same values the sections were built from, so it cannot say
+    # something the body of the message contradicts — the failure this whole document exists
+    # to avoid. It points at the section rather than restating it: one line each, the money
+    # at stake, and where to look.
+    #
+    # It says so when there is nothing, too. "Nothing here needs you" is a finding, and an
+    # absent panel reads as an unwritten one.
+    _focus: List[tuple] = []                                 # (£ at stake, html)
+
+    _unpriced_n = len(_unpriced)
+    if _unpriced_n:
+        _focus.append((10_000_000.0, (                       # no price is the top of any list
+            f"<b>{_plural(_unpriced_n, 'line')} "
+            f"{'carries' if _unpriced_n == 1 else 'carry'} no price.</b> "
+            f"{'It sums' if _unpriced_n == 1 else 'They sum'} as free, so the unit cost above "
+            f"is understated by whatever {'it is' if _unpriced_n == 1 else 'they are'} worth. "
+            f"§5 lists {'it' if _unpriced_n == 1 else 'them'}.")))
+    _ind_gbp = round(sum(_money(r.get("price")) or 0 for r in _indicative), 2)
+    if _indicative:
+        _focus.append((_ind_gbp, (
+            f"<b>{_plural(len(_indicative), 'line')} priced from a market indication</b>, "
+            f"{_gbp(_ind_gbp)} in total — a figure to check against a supplier, not a "
+            f"quotation. §5.")))
+    _freight_gbp = round(sum(_money(c.get("unit_gbp")) or 0 for c in _commercial), 2)
+    _unit_gbp = _money(totals.get("unit")) or 0
+    if _freight_gbp and _unit_gbp:
+        _pc = _freight_gbp / _unit_gbp * 100
+        _focus.append((_freight_gbp, (
+            f"<b>Packaging and delivery are {_gbp(_freight_gbp)} a unit — "
+            f"{_pc:.0f}% of the price.</b> Asked of the market against the shipment "
+            f"described in §3, where the whole working is shown. "
+            + ("Worth a look at that weight before it goes out." if _pc >= 25 else
+               "The arithmetic is under §3."))))
+    if untraced:
+        _focus.append((5.0, (
+            f"<b>{_plural(len(untraced), 'part')} could not be traced through the drawing "
+            f"pack.</b> Each one is a figure resting on less evidence than the rest. §6 names "
+            f"them and says what was missing.")))
+    _adapter = [p for p in (final.get("adapter_problems") or []) if p]
+    if _adapter:
+        _focus.append((4.0, (
+            f"<b>{_plural(len(_adapter), 'row')} did not read back cleanly</b> from the "
+            f"sheet. §7.")))
+    if _qs_rows and len(_qs_rows) > 1:
+        _focus.append((3.0, (
+            "<b>Bought-in prices do not step down at quantity</b> on the price-break table "
+            "in §1, so the larger quantities are the top of the range.")))
+
+    _focus.sort(key=lambda x: -x[0])
+    _panel = ['<div style="border-left:4px solid #B8860B;padding:2px 0 2px 14px;margin:16px 0">']
+    _panel.append("<p style=\"margin:6px 0\"><b>What needs your eye</b></p>")
+    if _focus:
+        _panel.append("<ol style=\"margin:6px 0 6px 18px;padding:0\">"
+                      + "".join(f"<li style='margin:4px 0'>{t}</li>" for _, t in _focus)
+                      + "</ol>")
+        if provisional:
+            _panel.append("<p style=\"margin:6px 0\">Until those are settled this stays "
+                          "provisional and no customer quote is attached.</p>")
+    else:
+        _panel.append("<p style=\"margin:6px 0\">Nothing on this estimate is waiting on a "
+                      "person: every line carries a price the engine can stand behind, every "
+                      "part was traced through the pack, and the sheet read back cleanly. "
+                      "The sections below are the working, not a list of problems.</p>")
+    _panel.append("</div>")
+    h.insert(_focus_at, "\n".join(_panel))
+
     add("</div>")
     html = "\n".join(h)
     return {"subject": subject, "html": html, "text": _as_text(html)}

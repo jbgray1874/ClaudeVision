@@ -495,3 +495,67 @@ def test_it_names_the_kinds_of_line_this_job_actually_has():
 
 def test_a_job_that_does_have_powder_still_says_so():
     assert "powder" in ee._what_they_are([{"code": "POWDER"}, {"code": "PACKAGING"}])
+
+
+# ── WHAT NEEDS YOUR EYE ────────────────────────────────────────────────────────
+#
+# "do we highlight what the estimators should be focussing on? or is that littered across the
+# e-mail with the details?"
+#
+# Littered. §5 held the unpriced lines, §3 the indicative prices and the freight, §6 the
+# untraced parts and the pack's failures, §7 the substitutions. Assembling the list of things
+# that actually need a person meant reading all eight sections and keeping score, and an
+# estimator with eleven enquiries open does not do that — they read the number, glance down,
+# and file it.
+
+import re as _re                                                     # noqa: E402
+
+
+def _panel_of(html: str) -> str:
+    i = html.index("What needs your eye")
+    return html[html.rindex("<div", 0, i):html.index("</div>", i) + 6]
+
+
+def test_the_panel_comes_before_the_number(note):
+    """It is the first thing under the headline or it is just a ninth section."""
+    html = note["html"]
+    assert html.index("What needs your eye") < html.index("1. The number")
+
+
+def test_it_says_so_when_nothing_needs_a_person(note):
+    """An absent panel reads as an unwritten one. 'Nothing here needs you' is a finding."""
+    html = note["html"]
+    assert "What needs your eye" in html
+    panel = _panel_of(html)
+    assert ("<ol" in panel) or ("Nothing on this estimate is waiting on a person" in panel)
+
+
+def test_every_item_points_at_the_section_that_holds_the_detail(note):
+    """It must not restate the sections — that is how the top of a document comes to
+    contradict the body of it."""
+    panel = _panel_of(note["html"])
+    if "<ol" not in panel:
+        pytest.skip("this fixture has nothing needing a person")
+    for item in _re.findall(r"<li[^>]*>(.*?)</li>", panel, _re.S):
+        assert _re.search(r"§\d", item), f"no section pointer in: {item[:80]}"
+
+
+def test_the_panel_is_built_from_the_same_values_as_the_sections():
+    """Built LAST and inserted FIRST, so it cannot be computed from a different reading than
+    the body. A panel assembled early would be a second opinion on the same estimate."""
+    src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
+    marker = src.index("_focus_at = len(h)")
+    built = src.index("_focus: List[tuple] = []")
+    inserted = src.index("h.insert(_focus_at,")
+    assert marker < built < inserted, "the panel is not built after the sections it summarises"
+    assert src.index("1. The number") > marker, "the insertion point is not above the sections"
+
+
+def test_an_unpriced_line_outranks_a_priced_worry():
+    """A line that sums as free understates the unit cost by an unknown amount, so it goes
+    above anything with a number on it however large that number is."""
+    src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
+    i = src.index("_focus: List[tuple] = []")
+    block = src[i:i + 3000]
+    assert "10_000_000.0" in block, "nothing guarantees an unpriced line sorts first"
+    assert "_focus.sort(key=lambda x: -x[0])" in src, "the list is not ordered by money"
