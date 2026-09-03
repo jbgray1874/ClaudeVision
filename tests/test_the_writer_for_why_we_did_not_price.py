@@ -363,11 +363,34 @@ def _sheet(job):
     return wb["AI Provenance"]
 
 
+def _column_headed(ws, title: str) -> int:
+    """The column that carries `title`, found by reading the header row.
+
+    NOT A LETTER. This asked for P5 and P6 by name, and a column inserted before it moved
+    "Not priced" to Q — the test failed for the right reason and told the reader the wrong
+    thing, which cost a minute working out that the sheet was fine. A header is what the
+    column IS; its letter is where it happens to sit today."""
+    for c in range(1, ws.max_column + 1):
+        if str(ws.cell(row=5, column=c).value or "").strip() == title:
+            return c
+    raise AssertionError(f"no column headed {title!r} on this sheet")
+
+
 def test_the_sheet_has_a_column_for_it_and_fills_it():
     ws = _sheet(_wb_job([{"part_number": "MAG CATCH", "description": "H", "quantity": 1}],
                         final_estimate={"material_rows": []}))
-    assert ws["P5"].value == "Not priced — why / who"
-    assert "ESTIMATOR TO PRICE" in str(ws["P6"].value)
+    col = _column_headed(ws, "Not priced — why / who")
+    assert "ESTIMATOR TO PRICE" in str(ws.cell(row=6, column=col).value)
+
+
+def test_the_provenance_tab_names_the_drawing_a_part_came_from():
+    """The third surface. The covering note and section 9 of the report both name the file;
+    this tab named only the KIND of evidence, which in a pack of eleven sheets names none of
+    them."""
+    ws = _sheet(_wb_job([{"part_number": "MAG CATCH", "description": "H", "quantity": 1}],
+                        final_estimate={"material_rows": []}))
+    col = _column_headed(ws, "Which drawing files and pages")
+    assert str(ws.cell(row=6, column=col).value or "").strip(), "the column is empty"
 
 
 def test_the_sheet_says_when_the_calculated_sheet_was_never_read_back():

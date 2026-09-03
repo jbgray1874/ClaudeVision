@@ -1235,6 +1235,42 @@ def main() -> None:
                 print(f"   [explanation-tab] skipped ({_tab_exc}) — the workbook is "
                       f"unchanged.", flush=True)
 
+        # SDI Intelligence — AI Provenance sheet
+        # Added to whichever output was produced (wb_populate or fallback).
+        #
+        # AFTER the read-back, deliberately. This sheet states what Excel calculated and
+        # reconciles the engine's per-part figures against it; written before the read-back
+        # it had nothing to reconcile against and silently fell back to engine-only.
+        #
+        # ONE TAB, NOT TWO. The Decision Report used to be written here as well, and the two
+        # sheets each carried a row per part with its material, its gauge and where they came
+        # from — the same twenty-five rows twice, and not identically: they derived geometry
+        # source independently and disagreed about it. James: "let's get rid of one and just
+        # keep the other one then. we don't want clutter." Its four unique blocks — powder
+        # authority, the material breakdown that adds back to the sheet's total, and the two
+        # contest tables — moved into AI Provenance first. job_decision_report still holds the
+        # code and the computation; nothing calls it to make a sheet.
+        if xlsx_path:
+            try:
+                import openpyxl as _opxl
+                from estimation_report import add_provenance_sheet
+                _wb = _opxl.load_workbook(str(xlsx_path))
+                _scan_meta = {
+                    "pdf_name":    str(scan_label),
+                    "job_number":  str(scan_label).split("-")[0][:6],
+                    "scan_date":   __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
+                }
+                add_provenance_sheet(_wb, summary, _scan_meta)
+                _wb.save(str(xlsx_path))
+                print(f"   -> AI Provenance sheet added")
+            except Exception as _rep_exc:
+                print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
+
+            # WRITTEN BEFORE THE VARIANTS ARE SAVED. The sweep does SaveAs on this
+            # workbook, so anything added after it lands on the baseline and on none of the
+            # four quantity variants: the estimator opening _qty500 found the AI Explanation
+            # tab there and no AI Provenance sheet at all, which reads as a sheet that failed
+            # rather than one written a minute too late.
             # THE OTHER QUANTITIES, FILED WITH THE FIRST.
             #
             # "we need to price sheets for multiple units.. so 1, 50, 100, 250 and 500 in
@@ -1310,37 +1346,6 @@ def main() -> None:
             except Exception as _note_exc:
                 print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
                       f"fall back to its own short note.", flush=True)
-
-        # SDI Intelligence — AI Provenance sheet
-        # Added to whichever output was produced (wb_populate or fallback).
-        #
-        # AFTER the read-back, deliberately. This sheet states what Excel calculated and
-        # reconciles the engine's per-part figures against it; written before the read-back
-        # it had nothing to reconcile against and silently fell back to engine-only.
-        #
-        # ONE TAB, NOT TWO. The Decision Report used to be written here as well, and the two
-        # sheets each carried a row per part with its material, its gauge and where they came
-        # from — the same twenty-five rows twice, and not identically: they derived geometry
-        # source independently and disagreed about it. James: "let's get rid of one and just
-        # keep the other one then. we don't want clutter." Its four unique blocks — powder
-        # authority, the material breakdown that adds back to the sheet's total, and the two
-        # contest tables — moved into AI Provenance first. job_decision_report still holds the
-        # code and the computation; nothing calls it to make a sheet.
-        if xlsx_path:
-            try:
-                import openpyxl as _opxl
-                from estimation_report import add_provenance_sheet
-                _wb = _opxl.load_workbook(str(xlsx_path))
-                _scan_meta = {
-                    "pdf_name":    str(scan_label),
-                    "job_number":  str(scan_label).split("-")[0][:6],
-                    "scan_date":   __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
-                }
-                add_provenance_sheet(_wb, summary, _scan_meta)
-                _wb.save(str(xlsx_path))
-                print(f"   -> AI Provenance sheet added")
-            except Exception as _rep_exc:
-                print(f"   -> Report sheets skipped: {_rep_exc}", flush=True)
 
         # ── Invariants: does this job hold together? ─────────────────────────────────
         # Everything above has finished writing. The workbook has calculated, the read-back

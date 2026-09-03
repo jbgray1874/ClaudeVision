@@ -262,6 +262,32 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
                               part_material_cost, priced_route_known,
                               priced_rows_for_part)
     _canonical = priced_route_known(summary)
+
+    # WHICH DRAWING EACH PART CAME FROM — the same reader the covering note and section 9 of
+    # the report use, so the three surfaces cannot name different files for one part. Two
+    # records of one fact is the defect this tab exists to expose; it must not be one.
+    try:
+        from estimate_explained import _page_index as _pgidx
+        from estimate_explained import _pack_files as _packf
+        from estimate_explained import _sources_of as _srcof
+        _pack, _pages = _packf(summary), _pgidx(summary)
+    except Exception:                                            # noqa: BLE001
+        _srcof, _pack, _pages = None, [], {}
+
+    def _drawing_files_for(part: Dict[str, Any], bought: bool) -> str:
+        if _srcof is None:
+            return ""
+        try:
+            found = _srcof(part, _pack, _pages)
+        except Exception:                                        # noqa: BLE001
+            return ""
+        if found:
+            return "\n".join(found[:4]) + (
+                f"\n…and {len(found) - 4} more" if len(found) > 4 else "")
+        # A bought-in has no drawing of its own and never will. Saying "not recorded" about
+        # one reads as a gap somebody should close, and there is nothing to close.
+        return "bought in — no drawing of its own" if bought else "not recorded"
+
     for part in parts:
         pn   = part.get("part_number") or "—"
         desc = part.get("description") or "—"
@@ -480,7 +506,9 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
                 ]))
             else:
                 _priced_by = "not priced on any labour row"
+        _drawing_files = _drawing_files_for(part, _bought)
         provenance.append({
+            "drawing_files": _drawing_files,
             "part_number":       pn,
             "rate_basis":        rate_basis,
             "description":       desc,
@@ -659,6 +687,12 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         ("Cut (mm)",          10), ("Ops",              22),
         (f"Unit £{_money_basis}",  11), (f"Ext £{_money_basis}", 11),
         ("Rate / source",     34), ("Priced by — sheet row / decision", 26),
+        # WHICH DRAWING, NOT WHICH KIND OF DRAWING. Mat. Source, Thk. Source and Geometry
+        # Source name the KIND of evidence — "the drawing", "dxf_flat_pattern" — and in a
+        # pack of eleven sheets that names none of them. The covering note and section 9 of
+        # the report both name the file now; this tab is the third surface reading the same
+        # facts and it must not be the one that still makes somebody go looking.
+        ("Which drawing files and pages", 44),
         # A BLANK IN A MONEY COLUMN READS AS FREE, on this sheet as much as on the Estimate
         # tab. The three kinds of nothing need different people: one must NOT be priced
         # (its material is costed in another block), one is waiting on the estimator, and
@@ -703,6 +737,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         cell(row, 14, _rb, bg=(C_LOW if _rb.startswith("⚠") else bg),
              border=True, size=9, wrap=True)
         cell(row, 15, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
+        cell(row, 16, p.get("drawing_files") or "—", bg=bg, border=True, size=8, wrap=True)
         # WHOSE BLANK THIS IS. Coloured by owner, not by severity of the number: an engine
         # gap is work that will be done and invoiced with nothing on the sheet asking anyone
         # to price it, so it is the one an estimator cannot fix and the one that gets the
@@ -714,11 +749,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                       "engine": "ENGINE GAP — THIS JOB IS UNDER-CHARGED",
                       "nobody": "nothing to charge here"}.get(_ur.get("owner"), "")
             _txt = f"{_ur.get('why')}" + (f" — {_ur['detail']}" if _ur.get("detail") else "")
-            cell(row, 16, f"{_owner}: {_txt}",
+            cell(row, 17, f"{_owner}: {_txt}",
                  bg=(C_LOW if _ur.get("undercharging") else bg),
                  border=True, size=8, wrap=True)
         else:
-            cell(row, 16, "—", bg=bg, border=True, size=8, align="center")
+            cell(row, 17, "—", bg=bg, border=True, size=8, align="center")
         ws.row_dimensions[row].height = 28
         row += 1
         # ── Flags / warnings ───────────────────────────────────────────────────
