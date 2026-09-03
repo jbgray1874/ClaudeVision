@@ -15,6 +15,8 @@ page. Then it writes the PDF next to the DXF so it can be opened.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -146,9 +148,82 @@ def main(argv: list) -> int:
         if ink == 0:
             print("\nTHE SHEET IS BLANK and the converter did not catch it. Send this output on.")
         elif ink and not groups_before:
-            print("\nThe drawing is on the paper and survives the merge. Open the _merged.pdf "
-                  "above in the same reader you print from — if THAT is blank, the fault is "
-                  "past the converter and this output is what to send on.")
+            print("\nThe drawing is on the paper and survives the merge.")
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"could not inspect the PDF: {type(exc).__name__}: {exc}")
+
+    _as_the_portal(src, out.with_name(out.stem + "_as_the_portal.pdf"))
+    return 0
+
+
+def _as_the_portal(src: Path, out: Path) -> None:
+    """Run the command the PORTAL runs, with the interpreter the PORTAL uses.
+
+    THE CONVERTER BEING RIGHT IS NOT THE SAME AS THE PORTAL USING IT. /api/drawings/print
+    does not import anything — it shells out to src/drawings_print.py with _ENGINE_PYTHON,
+    which is os.getenv("SDI_ENGINE_PYTHON", <repo>\\.venv\\Scripts\\python.exe). Set that
+    variable to another interpreter, or to another checkout, and every fix lands in a copy of
+    the code nothing runs, while the page keeps printing whatever the other one produces.
+
+    Nothing above this line could ever see that: everything above runs in THIS interpreter.
+    """
+    print()
+    print("── as the portal runs it " + "─" * 46)
+    engine_python = os.getenv("SDI_ENGINE_PYTHON") or ""
+    where_from = "the SDI_ENGINE_PYTHON environment variable"
+    if not engine_python:
+        for env_file in (ROOT / "sdi-intelligence-backend" / ".env", ROOT / ".env"):
+            try:
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("SDI_ENGINE_PYTHON"):
+                        engine_python = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        where_from = str(env_file)
+            except OSError:
+                continue
+    if not engine_python:
+        engine_python = str(ROOT / ".venv" / "Scripts" / "python.exe")
+        where_from = "the built-in default (no SDI_ENGINE_PYTHON set)"
+
+    print(f"engine python {engine_python}")
+    print(f"              from {where_from}")
+    print(f"this python   {sys.executable}")
+    if Path(engine_python).resolve() != Path(sys.executable).resolve():
+        print("              ^ DIFFERENT INTERPRETER FROM THE ONE THAT JUST PASSED. "
+              "Everything above was measured in this one; the portal uses that one.")
+    if not Path(engine_python).is_file():
+        print("              ^ AND IT DOES NOT EXIST. The portal's print endpoint cannot "
+              "run at all — set SDI_ENGINE_PYTHON to a real interpreter.")
+        return
+
+    cli = ROOT / "src" / "drawings_print.py"
+    cmd = [engine_python, str(cli), str(src), "--out", str(out), "--json"]
+    print("command       " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"              FAILED TO RUN: {type(exc).__name__}: {exc}")
+        return
+    if proc.returncode != 0:
+        print(f"              exit {proc.returncode}")
+    for stream, label in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+        for line in (stream or "").strip().splitlines()[-8:]:
+            print(f"  {label}      {line}")
+    if not out.is_file():
+        print("              no file produced — the reason is above.")
+        return
+    try:
+        import pymupdf
+        import printable_converters as pc
+        with pymupdf.open(str(out)) as doc:
+            r = doc[0].rect
+            print(f"portal pdf    {r.width / 72 * 25.4:.0f} x {r.height / 72 * 25.4:.0f} mm, "
+                  f"{doc.page_count} page(s), {len(doc.layer_ui_configs())} pdf layer(s)")
+        print(f"portal ink    {pc._ink_on_the_page(out)}   ({out.name})")
+        print("\nOPEN THAT FILE in the reader you print from. It is byte-for-byte what the "
+              "portal hands you. If it shows the drawing and the portal does not, the fault "
+              "is in the portal's delivery, not in the drawing or the converter.")
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"              could not inspect it: {type(exc).__name__}: {exc}")
     except Exception as exc:                                        # noqa: BLE001
         print(f"could not inspect the PDF: {type(exc).__name__}: {exc}")
     return 0
