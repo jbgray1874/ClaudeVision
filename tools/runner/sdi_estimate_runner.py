@@ -392,10 +392,20 @@ def _refuse(who: str):
         f"  One runner per machine: SOLIDWORKS and Excel are driven on one\n"
         f"  desktop, and a second runner here would fight the first for them.\n"
         f"  Close that window, or find strays with:\n"
-        f"      Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" |\n"
+        # pythonw.exe, NOT JUST python.exe. The portal starts its own runner on
+        # startup and starts it windowless, so the runner this message is about is
+        # almost always a pythonw. Naming only python.exe sent the reader looking
+        # for a process that was there all along under the other name, and made a
+        # correct refusal look like a stale lock — which is the one wrong
+        # conclusion this message must never invite, because acting on it means
+        # deleting a lock a live runner is holding.
+        f"      Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR "
+        f"Name='pythonw.exe'\" |\n"
         f"        Where-Object CommandLine -like '*sdi_estimate_runner*' |\n"
-        f"        Select-Object ProcessId, CommandLine\n"
-        f"  If nothing is listed, delete the stale lock and start again:\n"
+        f"        Select-Object ProcessId, CreationDate, CommandLine\n"
+        f"  Note the portal starts a runner of its own when it starts, so restarting\n"
+        f"  the portal is usually why this one is refused.\n"
+        f"  ONLY if nothing at all is listed, delete the stale lock and start again:\n"
         f"      Remove-Item C:\\ClaudeVision\\output\\.runner.lock\n")
 
 
