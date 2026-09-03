@@ -102,10 +102,29 @@ def test_filenames_that_declare_nothing_are_left_to_the_old_rule():
 
 
 def test_a_flat_that_declares_a_gauge_against_one_that_does_not_is_not_a_split():
-    """One reading is not a disagreement."""
+    """One reading is not a disagreement — about STOCK.
+
+    This asserted False on "..._-01_5MM_..._RevA" against "..._-02", which is right about the
+    gauges and was never the only evidence in those names. They carry SDI's export member
+    numbers, -01 and -02, and a weldment settled that question: 12349-02's 03M is a tap and
+    two channels, all 1.5mm mild steel, so the stock test says "revisions" and Tim splits them.
+    The member number is the axis the gauge cannot see.
+
+    Note the first name carries BOTH `_-01` and `_RevA` — the two axes are orthogonal, which
+    is exactly why a member number is not a revision marker and can be trusted as one.
+
+    What this test still pins is the stock reasoning: one reading of a gauge against no
+    reading is not a disagreement, so it must not be what decides."""
+    from drawing_job_merge import _stock_key_of_flat
+    keys = {_stock_key_of_flat(p) for p in _p(
+        "9999-01-01A_-01_5MM_High Impact Acrylic_RevA.DXF", "9999-01-01A_-02.DXF")}
+    gauges = {k[0] for k in keys if k[0] is not None}
+    assert len(gauges) == 1, "the stock test must still see no disagreement here"
+
+    # And the member numbers, which do decide it.
     assert flats_are_different_pieces(_p(
         "9999-01-01A_-01_5MM_High Impact Acrylic_RevA.DXF",
-        "9999-01-01A_-02.DXF")) is False
+        "9999-01-01A_-02.DXF")) is True
 
 
 def test_the_merge_asks_this_before_falling_back_to_pick_best():

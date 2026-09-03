@@ -1356,12 +1356,37 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     _r = _r.get("primary_role") if isinstance(_r, dict) else _r
                     if str(_r or "").strip().lower() not in ("assembly", "ga", "general_arrangement"):
                         _detail_pages.append(_p)
-                _pt_dims = re.findall(
-                    r"\b(\d{3,4}(?:\.\d{1,2})?)\b",
-                    " ".join(str(_get_page_text(p)) for p in _detail_pages),
-                )
+                # A DATE IS NOT A DIMENSION.
+                #
+                # "largest panel 2026 x 1144mm" on a gravity feeder whose biggest part is
+                # 1145mm, and "2026 x 400mm" on a 390mm sunglasses tray. The same number on
+                # two unrelated jobs is not a drawing, it is the YEAR — printed on every title
+                # block, every revision line and every date stamp in the pack, and 2026 sits
+                # neatly inside the 50–3000 band this scan accepts. The comment a few lines up
+                # already recorded it giving RISER "a garbage 2026x2026 square"; it was read as
+                # a one-off rather than as the rule it is.
+                #
+                # It is not a small error. That phantom became the largest blank on the job, so
+                # it set the shipping envelope: packaging and delivery were asked of the market
+                # against a 2026mm panel and came back at GBP 25 and GBP 12 a unit on a tray
+                # that fits in a carton — the two largest bought-in lines on both jobs.
+                #
+                # Dates are stripped by shape first, which removes the actual cause. The year
+                # band then goes as well, because this is the context-blind last resort and a
+                # bare four-digit year survives in forms no pattern catches ("REV A 2026",
+                # "(C) 2026"). The cost of that is a genuine 1990–2099mm part refused HERE —
+                # correct, for a guess of last resort: a part that size has to come from a
+                # measurement, not from the largest number anybody printed on the page.
+                _page_text = " ".join(str(_get_page_text(p)) for p in _detail_pages)
+                _page_text = re.sub(
+                    r"\b\d{1,4}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{1,4}\b", " ", _page_text)
+                _page_text = re.sub(
+                    r"\b(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\s*\d{2,4}\b",
+                    " ", _page_text, flags=re.IGNORECASE)
+                _pt_dims = re.findall(r"\b(\d{3,4}(?:\.\d{1,2})?)\b", _page_text)
                 _nums = sorted(
-                    [float(v) for v in _pt_dims if 50 <= float(v) <= 3000],
+                    [float(v) for v in _pt_dims
+                     if 50 <= float(v) <= 3000 and not (1990 <= float(v) <= 2099)],
                     reverse=True,
                 )
                 # The two largest numbers anywhere in the document text. Context-blind by

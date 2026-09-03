@@ -1101,8 +1101,40 @@ def flats_are_different_pieces(paths: Sequence[Path]) -> bool:
     """
     keys = {_stock_key_of_flat(p) for p in paths}
     keys.discard((None, None))
-    return len({k for k in keys if k[0] is not None}) > 1 or \
-        len({k[1] for k in keys if k[1] is not None}) > 1
+    if len({k for k in keys if k[0] is not None}) > 1 or \
+            len({k[1] for k in keys if k[1] is not None}) > 1:
+        return True
+
+    # AND THE WELDMENT, WHICH THE STOCK TEST CANNOT SEE.
+    #
+    # Disagreeing about stock proves pieces, and 01A proved it three times over — 2mm, 3mm and
+    # 5mm. A WELDMENT is the case it misses: 03M's tap and its two channels are all 1.5mm mild
+    # steel, so the stock keys agree and the pieces read as revisions of one another. Tim
+    # splits them (TAP 1145x358, CHANNELS 145x23 x2); we costed the tap alone.
+    #
+    # The suffix itself is the tell, and it is SDI's own export convention. A revision is
+    # marked as one — "11908-21-01J_9mm MDF+ LAM_REV[A].dxf" — while the members of a
+    # fabrication are numbered "_-01", "_-02", "_-07". Two files for one part number carrying
+    # DIFFERENT member numbers are different members; that is what the numbers are for. A
+    # stale revision left in the folder does not acquire one.
+    #
+    # Kept as the second test rather than the first so nothing that already worked changes:
+    # where the stock disagrees, the answer was already yes.
+    members = {m for m in (_member_suffix_of_flat(p) for p in paths) if m is not None}
+    return len(members) > 1
+
+
+_MEMBER_SUFFIX = re.compile(r"_-(\d{1,2})(?:[_.]|$)")
+
+
+def _member_suffix_of_flat(path: Path) -> Optional[str]:
+    """The `_-NN` member number SDI's exporter puts on each piece of a fabrication.
+
+    Anchored on the underscore-hyphen pair, so an ordinary part number with hyphens in it
+    ("12349-02-69-01A") cannot supply one, and a revision marker ("_REV[A]") has none.
+    """
+    m = _MEMBER_SUFFIX.search(str(getattr(path, "name", path)))
+    return m.group(1) if m else None
 
 
 def _split_parent_flats_to_children(
