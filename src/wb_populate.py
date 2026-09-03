@@ -1857,7 +1857,13 @@ def canonical_labour_groups(
         if not stock_form and representative_id in tube_pns:
             stock_form = "tube"
         is_acrylic = _is_board(material)
-        wb_op = _map_operation(operation, is_acrylic, stock_form)
+        # THE MATERIAL, HERE TOO. _map_operation takes it so a timber part reaches the joinery
+        # departments the rate card carries instead of the acrylic ones; this call site did
+        # not pass it, and this is the call site the CANONICAL ROUTE uses — which is to say,
+        # the one every current job actually goes through. 11908-21 came back reading
+        # "Assemble/pack (Acrylic) - 3mm MDF" with the joinery fix already in, because the fix
+        # was applied to the other of the two places that ask the same question.
+        wb_op = _map_operation(operation, is_acrylic, stock_form, material)
         if wb_op is None:
             wb_op = operation
         if (
@@ -1866,6 +1872,10 @@ def canonical_labour_groups(
             and all_fabricated_are_wire
         ):
             wb_op = "Spotweld"
+        # And you still cannot weld acrylic on this path either. Same rule, same reason: WELD
+        # is CO2 on steel, and a bonded acrylic joint has no bead to dress.
+        if is_acrylic and not _is_timber(material) and wb_op in ("Weld (CO2)", "Spotweld"):
+            wb_op = "Glue"
 
         scope = str(decision.get("scope") or "part").lower()
         sequence = _safe(decision.get("sequence"))
@@ -4275,7 +4285,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # keyed ("Robomac","MILD_STEEL","4")). Check before injecting.
         if str(_sf or "").lower() in _ROBOMAC_STOCK_FORMS:
             _has_robo = any(
-                _map_operation(_o, _is_acr, _sf or "") == "Robomac" for _o in ops
+                # The material here too, not because a bar is ever timber — it cannot be,
+                # this branch is gated on a round-bar stock form — but because this asks the
+                # same question the row-writer below answers, and two callers of one function
+                # disagreeing about the arguments is how "Assemble/pack (Acrylic) - 3mm MDF"
+                # survived a fix that was already in.
+                _map_operation(_o, _is_acr, _sf or "", _mat) == "Robomac" for _o in ops
             )
             if not _has_robo:
                 _rg = _groups.setdefault(("Robomac", _pn, ""), {

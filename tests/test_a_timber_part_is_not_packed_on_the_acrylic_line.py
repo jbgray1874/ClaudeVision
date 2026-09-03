@@ -167,3 +167,42 @@ def test_a_joinery_row_has_a_throughput_to_cost_against(name):
 @pytest.mark.parametrize("name", ["Packing Joinery", "Bench Work Joinery"])
 def test_a_joinery_row_knows_where_it_sits_in_the_route(name):
     assert name in _dict_keys_of_literal_containing("Laser (Metal)")
+
+
+# ── EVERY PLACE THAT ASKS THE QUESTION ─────────────────────────────────────────
+#
+# 11908-21 came back reading "Assemble/pack (Acrylic) — 3mm MDF" with this fix already in.
+# _map_operation is called from TWO places, and the fix was applied to one of them — the other
+# is the CANONICAL ROUTE path, which is the one every current job actually goes through. A
+# rule that only one of two callers obeys is not a rule.
+
+def test_every_caller_hands_it_the_material():
+    """Structural, by AST: the parameter exists so a timber part can reach the joinery
+    departments, and a caller that omits it silently gets the old answer."""
+    import ast
+    tree = ast.parse(SRC)
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_map_operation"]
+    assert len(calls) >= 2, "the call sites have moved; this test is looking at the wrong thing"
+    for c in calls:
+        got = len(c.args) + len(c.keywords)
+        assert got >= 4, (
+            f"a _map_operation call at line {c.lineno} passes {got} argument(s) and never "
+            f"names the material — a timber part there still books on the acrylic line")
+
+
+def test_the_canonical_route_is_one_of_them():
+    """Named explicitly, because it is the path the live jobs take and the one that was
+    missed. If this call ever stops passing `material`, the symptom is a label nobody can
+    explain on a sheet in front of an estimator."""
+    assert "_map_operation(operation, is_acrylic, stock_form, material)" in SRC
+
+
+def test_the_weld_guard_reaches_the_canonical_route_too():
+    """Same two-callers problem, same rule: you cannot weld acrylic on either path."""
+    i = SRC.index("_map_operation(operation, is_acrylic, stock_form, material)")
+    block = SRC[i:i + 1200]
+    assert 'if is_acrylic and not _is_timber(material) and wb_op in ("Weld (CO2)", "Spotweld")' \
+        in block
+    assert 'wb_op = "Glue"' in block
