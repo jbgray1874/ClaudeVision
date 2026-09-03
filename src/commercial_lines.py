@@ -81,6 +81,16 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     phantom = 0
     shippable: List[Dict[str, Any]] = []
     counted_parts: List[Dict[str, Any]] = []
+    # A PART LEFT OUT BY NAME, NOT A TALLY. "1.35 kg" against a title block that says 2283 g
+    # is a dropped side or divider, and a count of parts-without-a-blank cannot tell you which
+    # one. The reason is kept with the name so the covering note can say "the divider was not
+    # weighed because it has no blank" — a sentence design can act on.
+    left_out: List[Dict[str, Any]] = []
+
+    def _leave_out(part: Dict[str, Any], why: str) -> None:
+        left_out.append({"part_number": part.get("part_number"),
+                         "description": part.get("description"), "reason": why})
+
     for part in parts or ():
         if not isinstance(part, dict) or part.get("_commercial_placeholder"):
             continue
@@ -96,11 +106,14 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         if part.get("is_assembly_parent") or (part.get("route_context") or {}).get(
                 "is_assembly_parent") or part.get("is_sub_assembly"):
             skipped += 1
+            _leave_out(part, "an assembly, weighed through its children")
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1
+            _leave_out(part, "no blank size and gauge recorded"
+                       if not T else "no blank size recorded")
             continue
         # A BLANK THAT FITS NO SHEET THE MATERIAL IS STOCKED IN IS NOT A BLANK. The same
         # test that stops such a figure being PRICED should stop it being SHIPPED — a
@@ -111,6 +124,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
             if not fits_a_stock_sheet(L, W, part.get("normalized_material")):
                 phantom += 1
                 skipped += 1
+                _leave_out(part, f"blank {L:.0f} × {W:.0f} mm fits no stock sheet")
                 continue
         except Exception:                                            # noqa: BLE001
             pass
@@ -149,6 +163,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         "parts_with_an_impossible_blank": phantom,
         # What the weight and the envelope are actually made of, per part.
         "counted_parts": counted_parts,
+        # And what it is NOT made of. A weight that comes up short is a part that was left
+        # out; this says which, and why, so the shortfall is readable instead of arguable.
+        "left_out_parts": left_out,
         "shape": None,
     }
     # THE SHIPMENT AS CARTONS AND PALLETS, counted deterministically from the same blanks. It

@@ -2077,6 +2077,19 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                f"upstream, not a gap in the drawings" if _phantom else "")
             + ". Weight is blank area × gauge × the material's density, times how many are "
               "made. It decides the next line.</p>")
+        # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
+        # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
+        # tell anybody which. Named, it is one line for design to answer.
+        _out = [r for r in (_basis.get("left_out_parts") or []) if isinstance(r, dict)]
+        _out = [r for r in _out if "weighed through its children" not in str(r.get("reason"))]
+        if _out:
+            add(f"<p><b>Not weighed.</b> "
+                + "; ".join(f"{_fmt(r.get('part_number') or r.get('description'))} "
+                            f"({_fmt(r.get('reason'), 'no reason recorded')})"
+                            for r in _out[:12])
+                + (f"; and {len(_out) - 12} more" if len(_out) > 12 else "")
+                + ". If the unit weight above is lighter than the title block, these are the "
+                  "parts carrying the difference.</p>")
         try:
             from commercial_lines import shipment_shape as _shape
             _sh = _shape(_basis)

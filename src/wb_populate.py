@@ -376,6 +376,34 @@ OP_NAME_MAP_ACRYLIC = {
     "diamond_polish":      "Diamond Polish",
 }
 
+# TIMBER AND BOARD HAVE THEIR OWN DEPARTMENTS, AND THE RATE CARD HAS ALWAYS CARRIED THEM.
+#
+# _is_board() lumps timber in with acrylic because neither is sheet metal, which is right for
+# choosing the cost stream and wrong for naming a department — so a 3mm MDF tray came back
+# reading "Assemble/pack (Acrylic) — 3mm MDF", a line that contradicts itself on the face of
+# it. The note beside _is_timber said the template had no joinery equivalent and the acrylic
+# hand rate was the nearest available; that was not true. sheet_steel_costing.RATE_CARD, read
+# off the sheet's own rate card rows, carries "Packing Joinery" (PACJ, £28.735) and "Bench
+# Work Joinery" (BENC, £28.735) — both confirmed titles that have come back from a sheet with
+# a live rate. Timber was being packed at the acrylic rate, £25.43, for want of asking.
+#
+# Cutting: SDI routs board, it does not profile it on the acrylic laser. A laser operation
+# arriving on a timber part is sent to the router and the substitution is flagged, exactly as
+# a fold on a tube is sent to the tube-bender.
+OP_NAME_MAP_JOINERY = {
+    "handling":       "Packing Joinery",
+    "assembly":       "Packing Joinery",
+    "assemble":       "Packing Joinery",
+    "packing":        "Packing Joinery",
+    "manual":                "Bench Work Joinery",
+    "manual_labour":         "Bench Work Joinery",
+    "manual_labour_acrylic": "Bench Work Joinery",
+    "bench_work":            "Bench Work Joinery",
+    "laser":          "CNC Joinery",
+    "laser_cutting":  "CNC Joinery",
+    "laser_metal":    "CNC Joinery",
+}
+
 # Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
 # The engine correctly retains 'folding' on tubes (SDI does bend them), but the
 # WB operation is "Tubebend" (TBEN £32.84 / 45 min setup), not "Fold" (FOLD £40.47).
@@ -872,19 +900,28 @@ def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None,
     return out
 
 
-def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[str]:
+def _map_operation(op: str, is_acrylic: bool, stock_form: str = "",
+                   material: Any = "") -> Optional[str]:
     """Map an engine operation name to the correct WB department name.
 
     Priority:
       1. Tube stock → remap fold/folding to Tubebend (tube-bender, not press-brake)
-      2. Acrylic/board → use acrylic operation variants (Linebend, Laser (Acrylic), etc.)
-      3. Everything else → standard metal mapping
+      2. Timber/board → the joinery departments the rate card carries
+      3. Acrylic → use acrylic operation variants (Linebend, Laser (Acrylic), etc.)
+      4. Everything else → standard metal mapping
+
+    `material` is optional so that every existing caller keeps working; without it a timber
+    part behaves as it did before, which is the state this parameter exists to correct.
     """
     key = str(op).lower()
     sf = str(stock_form or "").lower()
     # Tube bending: the engine assigns 'folding' but SDI uses a tube-bender
     if sf == "tube" and key in _TUBE_OP_REMAP:
         return _TUBE_OP_REMAP[key]
+    # Joinery, BEFORE acrylic: a timber part is board, so it arrives here with is_acrylic set,
+    # and the acrylic map would otherwise name its department after a material it is not.
+    if _is_timber(str(material or "")) and key in OP_NAME_MAP_JOINERY:
+        return OP_NAME_MAP_JOINERY[key]
     # Acrylic/board operations
     if is_acrylic and key in OP_NAME_MAP_ACRYLIC:
         return OP_NAME_MAP_ACRYLIC[key]
@@ -3585,6 +3622,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "Saw":                      105,    # 10 lines  | was 60
         "Roll":                     100,    # 12 lines  | was 120
         "Assemble/pack (Acrylic)":   99,    # 15 lines  | was 35
+        # Joinery pack: no measured lines of its own yet, so it takes the acrylic pack
+        # figure rather than falling to a default that would bill hours for boxing a tray.
+        "Packing Joinery":           99,    # UNMEASURED — follows Assemble/pack (Acrylic)
+        "Bench Work Joinery":        79,    # UNMEASURED — follows Manual labour (Metal)
         "Fold":                      93,    # 329 lines | was 50
         "Manual labour (Metal)":     79,    # 23 lines  | was 40
         "Assemble/pack (Metal)":     58,    # 166 lines | was 40
@@ -3971,10 +4012,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # is welded to the hook plate and the assembly goes through powder as a single object —
     # grouping by gauge charged two coating setups to coat one thing (£5.90 vs Tim's £2.00).
     # Fold/Laser/Punch stay grouped by gauge, where the gauge genuinely IS the tooling.
+    # "Packing Joinery" is the third member of the pack family, not a fourth kind of thing.
+    # Left out of these two sets it would book a pack row per PART on a timber job, where
+    # metal and acrylic book one for the job — the whole reason the sets exist.
     _ONE_ROW_PER_JOB = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)",
+                        "Packing Joinery",
                         "Weld (CO2)", "Spotweld", "Dress Welds",
                         "P.Coat"}
-    _PACK_OPS = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)"}
+    _PACK_OPS = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)", "Packing Joinery"}
 
     # ── YOU CANNOT SPOT-WELD A BAR TO A PLATE ────────────────────────────────────
     # Spot welding squeezes two thin OVERLAPPING SHEETS between electrodes. 7670 is three
@@ -4110,15 +4155,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           f"(diamond-polish is spurious/boilerplate on a powder finish).", flags)
                     continue
 
-            wb_op = _map_operation(op, _is_acr, _sf or "")
-            # A timber part routed onto an ACRYLIC department: the template has no joinery
-            # equivalent, so the nearest hand rate is used. Say so rather than leaving
-            # "Assemble/pack (Acrylic)" sitting against a wooden crate unexplained — the
-            # rate is a substitution, and only an estimator can confirm it is the right one.
-            if wb_op and "(Acrylic)" in str(wb_op) and _is_timber(_mat):
-                _flag(f"'{wb_op}' booked on {_pn} ({_mat}) — the template has no joinery "
-                      f"equivalent of this department, so the ACRYLIC hand rate is used as "
-                      f"the nearest available. Confirm the rate is right for timber.", flags)
+            wb_op = _map_operation(op, _is_acr, _sf or "", _mat)
+            # A CUT ON TIMBER HAPPENS ON THE ROUTER. Sent there by the joinery map above; said
+            # out loud here, because it is a substitution the route did not ask for and only an
+            # estimator can confirm the router is where this part is actually cut.
+            if (_is_timber(_mat) and wb_op == "CNC Joinery"
+                    and "laser" in str(op).lower()):
+                _flag(f"'{op}' on {_pn} ({_mat}) booked as CNC Joinery — board is routed, not "
+                      f"profiled on the acrylic laser. Confirm the router is right for it.",
+                      flags)
+            # A timber part still landing on an ACRYLIC department. The pack, bench and cut
+            # families now go to the joinery rows the rate card carries; anything left here is
+            # a department with no joinery equivalent, and it says so rather than leaving
+            # "(Acrylic)" sitting against a wooden crate unexplained.
+            elif wb_op and "(Acrylic)" in str(wb_op) and _is_timber(_mat):
+                _flag(f"'{wb_op}' booked on {_pn} ({_mat}) — the rate table has no joinery "
+                      f"equivalent of this department, so the ACRYLIC rate is used as the "
+                      f"nearest available. Confirm the rate is right for timber.", flags)
             if wb_op is None:
                 _flag(f"labour op '{op}' ({_pn}) not in OP_NAME_MAP — WB rate lookup will "
                       f"return 0 for it. Add mapping.", flags)
@@ -4276,6 +4329,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "Dress Welds": 35, "Grinding / Deburr": 38,
         "P.Coat": 60, "Wet Spray": 60, "Diamond Polish": 62,
         "Assemble/pack (Metal)": 90, "Assemble/pack (Acrylic)": 90,
+        "Packing Joinery": 90,           # packs last, with the rest of the pack family
+        "Bench Work Joinery": 25,        # a hand bench pass, where manual labour sits
     }
     _DEFAULT_ORDER = 50          # something we do not recognise sits mid-route, not last
 
