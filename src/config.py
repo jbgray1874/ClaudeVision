@@ -2042,9 +2042,26 @@ def get_connection(timeout: int = 30):
 # £ per kg of powder. The Estimate workbook computes powder MATERIAL kg per part
 # from geometry (area -> 6 m2/kg coverage -> kg), sums it (AD57 'Total Powder Per
 # Unit'), and multiplies by this rate (cell AF57) into the material total M67.
-# This is the single source of truth for the powder price; change it here.
-# Provisional rate from Tim's manual sheet (POWDER5 line reconciled to ~£4/kg).
-POWDER_COST_PER_KG = 9.73
+# THIS SAID IT WAS THE SINGLE SOURCE OF TRUTH AND WAS THE SECOND OF TWO.
+#
+# POWDER_COSTING_POLICY["powder_material_gbp_per_kg"] is the other, and they disagreed by
+# 2.4x: the estimator costed powder at GBP 4.00/kg and the workbook charged GBP 9.73/kg for
+# the same powder on the same part. Two records of one fact, each calling itself the rate.
+#
+# The evidence is all on one side. The policy's own note says "GBP 4/kg standard powder,
+# confirmed by estimating (Tim, POWDER5 on job 1282)". THIS constant's own note said it was
+# "reconciled to ~GBP 4/kg" while holding 9.73 — a comment contradicting the value beneath it.
+# And Tim's 12349-02 sheet buys POWDER40 at GBP 3.48/kg. Nothing anywhere evidences 9.73.
+#
+# What it cost: 12349-02's powder came out at GBP 2.14 against Tim's GBP 0.72. At the policy
+# rate the same calculation gives GBP 0.88, and the rest of that gap is the quantity and the
+# area, both fixed separately. Every powder-coated job carried the same 2.4x.
+#
+# ONE NUMBER NOW, and it is the policy's — the one with a name against it. Change it there
+# and both the estimator and the workbook move together, which is the property that was
+# missing. POWDER_MATERIAL_GBP_PER_KG in the environment still overrides it.
+POWDER_COST_PER_KG = float(
+    POWDER_COSTING_POLICY.get("powder_material_gbp_per_kg") or 4.0)
 
 
 # ── POWDER COVERAGE ─────────────────────────────────────────────────────────────
