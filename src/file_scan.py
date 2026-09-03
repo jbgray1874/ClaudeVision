@@ -2966,7 +2966,21 @@ def _finalize_scan_summary(
         from bom_tree import merge_table_bom_rows as _merge_bom_rows
         _bt_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
         _bt_rows = _merge_bom_rows(_bt_rows, summary)
-        _effmap = (_resolve_eff_qty(_bt_rows) or {}).get("effective") or {}
+        # WHAT ONE OF THIS IS. The estimator pointed at a folder, and the folder is named for
+        # the assembly being quoted — 12349-02's is named for 12349-02-69-100, which is what
+        # Tim costed. Without it the GA row "3 x 12349-02-69-100" set the multiplier for the
+        # whole family and every fabricated line came out at qty 3.
+        from bom_tree import unit_assembly_from_label as _unit_from
+        _label = " ".join(str(x) for x in (
+            summary.get("job_folder"), summary.get("job_name"), summary.get("drawing_number"),
+            summary.get("job_label"), summary.get("scan_label")) if x)
+        _unit_asm = _unit_from(_label, _bt_rows)
+        _bt = _resolve_eff_qty(_bt_rows, unit_assembly=_unit_asm) or {}
+        _effmap = _bt.get("effective") or {}
+        for _f in (_bt.get("flags") or []):
+            if _f.get("severity") == "info" and "install context" in str(_f.get("detail")):
+                print(f"   [bom_tree] {_f['detail']}", flush=True)
+                summary.setdefault("review_flags", []).append(_f)
         if _effmap:
             _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
             for _p in _parts:

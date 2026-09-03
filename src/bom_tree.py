@@ -91,9 +91,35 @@ def _dominant_family_multiplier_by_source(
     return result
 
 
+def unit_assembly_from_label(label: Any, bom_rows: List[Dict[str, Any]]) -> Optional[str]:
+    """The assembly this estimate is FOR, if the job's own name says so.
+
+    THE ESTIMATOR POINTED AT A FOLDER, AND THE FOLDER IS THE ANSWER. 12349-02's job folder is
+    named for 12349-02-69-100 and Tim's sheet costs one of them; the GA that happens to show
+    three of them hanging on a wall is where they go, not what is being made.
+
+    Matched against codes the tree already holds rather than parsed out of the name, so a
+    folder called something else simply yields None and nothing changes. Longest match wins:
+    "12349-02-69-100" and "12349" can both appear in one label and only one of them is an
+    assembly somebody builds.
+    """
+    hay = _norm(label)
+    if not hay:
+        return None
+    best = ""
+    for r in bom_rows:
+        code = _norm(r.get("part_number"))
+        # Four characters is the shortest thing worth calling a match; below that a bare
+        # family number matches half the folders on the share.
+        if len(code) >= 4 and code in hay and len(code) > len(best):
+            best = code
+    return best or None
+
+
 def resolve_effective_quantities(
     bom_rows: List[Dict[str, Any]],
     main_ga: Optional[str] = None,
+    unit_assembly: Optional[str] = None,
 ) -> Dict[str, Any]:
     groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for r in bom_rows:
@@ -104,7 +130,14 @@ def resolve_effective_quantities(
     # the main GA is the drawing that references the most distinct families
     # (it lists every sub-assembly); override is honoured when given.
     if main_ga is None or main_ga not in groups:
-        main_ga = max(groups, key=lambda s: len({_family(r.get("part_number")) for r in groups[s]})) if groups else ""
+        # DISTINCT NUMBER FAMILIES, AND A BOUGHT-IN IS NOT ONE. _family() returns "" for
+        # FIXING/PLAS/POWDER rows, and counting that empty string made a sub-assembly drawing
+        # carrying one screw look like it referenced two families — beating the real GA, which
+        # references one family and every part in it. The whole tree then hangs off the wrong
+        # drawing, and on 12349-02 that put the GA's own row into `effective` as a part.
+        def _fam_count(s: str) -> int:
+            return len({f for f in (_family(r.get("part_number")) for r in groups[s]) if f})
+        main_ga = max(groups, key=_fam_count) if groups else ""
 
     sub_families = {
         _family(r.get("part_number"))
@@ -114,11 +147,36 @@ def resolve_effective_quantities(
     sub_families.discard("")
 
     # top-level multiplier per family, from the main GA rows
+    #
+    # ONE OF THE THING YOU RAN, NOT THREE OF IT BECAUSE THAT IS HOW MANY GO ON A WALL.
+    #
+    # _family() is the leading number, so a whole job is usually ONE family: 12349-02-69-03M,
+    # -04M, -01A and -08J are all family "12349". The GA row "12349-02-69-100 x3" therefore
+    # set the multiplier for every part on the job, and every fabricated line came out at
+    # qty 3 — the steel at 3 x GBP 5.74, the screws at 12 where Tim has 4, the bumpons at 18
+    # where Tim has 6.
+    #
+    # The GA is not wrong. Three modules DO hang on that wall. It is the wrong question: the
+    # estimate is for one 12349-02-69-100, which is what the estimator pointed at and what
+    # Tim sold, and three-per-wall is where they go rather than what is being made.
+    #
+    # So when the job names the assembly it is for, that assembly's own GA quantity is INSTALL
+    # CONTEXT and its multiplier is one. Everything below it still multiplies normally — a
+    # sub-assembly used twice inside the module is still needed twice. Recorded as a flag,
+    # because a quantity that silently became a third of what it was is exactly as hard to
+    # trust as one that silently tripled.
+    _unit = _norm(unit_assembly)
     multipliers: Dict[str, int] = {}
+    install_context: Dict[str, int] = {}
     for r in groups.get(main_ga, []):
         fam = _family(r.get("part_number"))
-        if fam:
-            multipliers[fam] = _qty(r)
+        if not fam:
+            continue
+        if _unit and _norm(r.get("part_number")) == _unit and _qty(r) != 1:
+            install_context[_unit] = _qty(r)
+            multipliers[fam] = 1
+            continue
+        multipliers[fam] = _qty(r)
 
     # per-source-drawing multiplier that bought-in (non-numeric) rows inherit
     boughtin_inherit = _dominant_family_multiplier_by_source(groups, multipliers, main_ga)
@@ -179,7 +237,21 @@ def resolve_effective_quantities(
                 else:
                     effective[code] = _qty(r) * parent
 
-    return {"main_ga": main_ga, "effective": effective, "multipliers": multipliers, "flags": flags}
+    for _code, _n in install_context.items():
+        flags.append({
+            "severity": "info",
+            "code": _code,
+            "detail": (f"the GA shows {_n} x {_code} — that is where they go, not what is "
+                       f"being made. This estimate costs ONE {_code}, so the GA quantity is "
+                       f"install context and has not multiplied the parts below it. If the "
+                       f"unit being quoted is the whole set of {_n}, this sheet is a third of "
+                       f"it." if _n == 3 else
+                       f"the GA shows {_n} x {_code} — install context, not the unit. This "
+                       f"estimate costs ONE {_code} and the GA quantity has not multiplied "
+                       f"the parts below it."),
+        })
+    return {"main_ga": main_ga, "effective": effective, "multipliers": multipliers,
+            "install_context": install_context, "flags": flags}
 
 
 # --------------------------------------------------------------------------
