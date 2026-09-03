@@ -51,8 +51,24 @@ def split_code_desc(text: str) -> Tuple[str, str]:
     return (code, rest)
 
 
+# A SIZE IS THE SAME SIZE WITH OR WITHOUT THE SPACES ROUND ITS x.
+#
+# 12349-02's M4 screw cost nothing because of ONE SPACE. Tim's catalogue row reads
+# "FIXING2813 - M4 x 10mm FLANGE BUTTON HEAD SCREW,BLACK"; the drawing says "M4x10mm FLANGE
+# BUTTON HEAD SCREW, BLACK". Normalised, those became "M4 X 10MM ..." and "M4X10MM ...", which
+# do not match, so the line fell through to "MATERIAL UNPRICED" with a class word for a code —
+# in front of an estimator who has the part in his own price book at 2.48p.
+#
+# Nobody writes a size meaning anything by where the spaces fall. Collapsing them is not a
+# fuzzy match: it makes two spellings of one dimension into one string, and leaves every other
+# word exactly as it was. The multiplication sign and its Unicode cousin go the same way,
+# because a drawing exported from SOLIDWORKS uses whichever the author typed.
+_DIM_JOIN = re.compile(r"(?<=\d)\s*[X×✕]\s*(?=\d)")
+
+
 def _normalise_desc(text: Any) -> str:
-    return re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()).strip()
+    flat = re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()).strip()
+    return _DIM_JOIN.sub("X", flat)
 
 
 # Strings that appear on real drawings where a part number should be. They mean "not decided
@@ -296,9 +312,24 @@ def make_price_book_pricer(
     for rec in price_book.values():
         if rec.get("code"):
             by_code[rec["code"].upper()] = rec
-        nd = _normalise_desc(rec.get("raw_text"))
-        if nd:
-            by_desc.setdefault(nd, []).append(rec)
+        # THE DESCRIPTION, NOT THE WHOLE CELL. The cell reads "FIXING2813 -M4 x 10mm FLANGE
+        # BUTTON HEAD SCREW,BLACK": the catalogue's own code and then the part. Indexed whole,
+        # that row could only ever match a drawing token that ALREADY said FIXING2813 — and if
+        # it said that, the code lookup above matched it and never reached here. So the
+        # description route was dead for every row that carries its code, which is all of
+        # them, and this docstring's "catalogue-description inside drawing-token" described
+        # something the code did not do.
+        #
+        # 12349-02 is what that costs: an M4 flange button screw Tim has at 2.48p arrived on
+        # the sheet as class word FIXING with no price and "enter a unit rate for this item".
+        #
+        # Both are indexed. The raw text keeps every match that worked before; the description
+        # adds the one the rails were built for. The rails are untouched — one-way containment,
+        # a minimum length, word boundaries, and a refusal when candidates disagree.
+        for _text in (rec.get("description"), rec.get("raw_text")):
+            nd = _normalise_desc(_text)
+            if nd and rec not in by_desc.setdefault(nd, []):
+                by_desc[nd].append(rec)
 
     def _resolve(cands: List[Dict[str, Any]]) -> Any:
         """One record, or None when the candidates cannot agree on a price."""
