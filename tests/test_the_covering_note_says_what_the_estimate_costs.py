@@ -454,3 +454,44 @@ def test_the_fabricated_section_does_not_claim_blank_area(tmp_path):
     src = (Path(_ee.__file__)).read_text(encoding="utf-8")
     assert "priced by blank area" not in src
     assert "The fabricated parts, priced by nest" in src
+
+
+# ── the gauge column was printing a tolerance table ────────────────────────────
+
+def test_the_gauge_column_shows_what_the_part_is_costed_at():
+    """11908-21's three parts are 9mm MDF — DXF filenames say `9mm MDF+ LAM`, the sheet
+    block says Ga 9, the cost is built on 9. Section 7 said "1.0, 3", which is every number
+    the page reader found that looked like a thickness. So the document disagreed with itself
+    about the same part, and the wrong half was the one headed "what the drawing states" —
+    the half an estimator uses to check us and the half they would send to Design."""
+    assert ee._gauge_stated({"normalized_thickness_mm": 9,
+                             "thicknesses_mm": ["1.0", "3"]}).startswith("9")
+
+
+def test_a_contradictory_reading_is_still_shown_but_marked_unused():
+    got = ee._gauge_stated({"normalized_thickness_mm": 9, "thicknesses_mm": ["1.0", "3"]})
+    assert "1.0, 3" in got and "not used" in got
+
+
+def test_a_page_that_agrees_is_not_cluttered_with_itself():
+    assert ee._gauge_stated({"normalized_thickness_mm": 1.5,
+                             "thicknesses_mm": ["1.5"]}) == "1.5"
+
+
+def test_with_no_resolved_gauge_it_still_reports_what_the_page_said():
+    assert ee._gauge_stated({"thicknesses_mm": ["1.0", "3"]}) == "1.0, 3"
+
+
+# ── and the sentence naming a powder line that is not there ────────────────────
+
+def test_it_names_the_kinds_of_line_this_job_actually_has():
+    """A fixed list printed whatever the job held, so 11908-21's note named a powder line it
+    does not have — which is the tell that a document is generated rather than written."""
+    got = ee._what_they_are([{"code": "PACKAGING"}, {"code": "DELIVERY"},
+                             {"code": "FIXING1270"}])
+    assert "powder" not in got
+    assert "packaging" in got and "delivery" in got and "fasteners" in got
+
+
+def test_a_job_that_does_have_powder_still_says_so():
+    assert "powder" in ee._what_they_are([{"code": "POWDER"}, {"code": "PACKAGING"}])

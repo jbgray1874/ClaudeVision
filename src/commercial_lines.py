@@ -80,6 +80,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     counted = skipped = 0
     phantom = 0
     shippable: List[Dict[str, Any]] = []
+    counted_parts: List[Dict[str, Any]] = []
     for part in parts or ():
         if not isinstance(part, dict) or part.get("_commercial_placeholder"):
             continue
@@ -115,6 +116,14 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
             pass
         counted += 1
         shippable.append(part)
+        # THE WORKING, KEPT. A shipment description is a sentence somebody prices, and when
+        # it says "about 49 kg" for a 2.3 kg tray there is no way to see which part put the
+        # 46 kg in. Every counted part is recorded with what it contributed, so the covering
+        # note can print the arithmetic and a phantom names itself.
+        _line_kg = ((_num(part.get("blank_length_mm")) or 0) / 1000.0
+                    * (_num(part.get("blank_width_mm")) or 0) / 1000.0
+                    * (_num(part.get("normalized_thickness_mm")) or 0) / 1000.0
+                    * _density_for(part.get("normalized_material")))
         try:
             per = max(1, int(part.get("quantity") or 1))
         except (TypeError, ValueError):
@@ -122,6 +131,13 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         volume_m3 = (L / 1000.0) * (W / 1000.0) * (T / 1000.0)
         weight_kg += volume_m3 * _density_for(part.get("normalized_material")) * per
         longest, widest = max(longest, L), max(widest, W)
+        counted_parts.append({
+            "part_number": part.get("part_number"), "length_mm": L, "width_mm": W,
+            "thickness_mm": T, "material": part.get("normalized_material"),
+            "density_kg_m3": _density_for(part.get("normalized_material")),
+            "per_assembly": per, "kg_each": round(_line_kg, 3),
+            "kg_in_order": round(_line_kg * per * qty, 3),
+        })
     out = {
         "schema": SCHEMA, "order_quantity": qty,
         "unit_weight_kg": round(weight_kg, 2) if weight_kg else None,
@@ -131,6 +147,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         # Counted separately from an ordinary miss: a part left out because its recorded
         # blank fits no stock sheet is a defect upstream, not a gap in the drawings.
         "parts_with_an_impossible_blank": phantom,
+        # What the weight and the envelope are actually made of, per part.
+        "counted_parts": counted_parts,
+        "shape": None,
     }
     # THE SHIPMENT AS CARTONS AND PALLETS, counted deterministically from the same blanks. It
     # turns "about 34 kg" into "about 34 kg, ~3 cartons on 1 pallet" — a better question whoever
@@ -226,6 +245,41 @@ def _count_phrase(order: Dict[str, Any]) -> str:
         return ""
 
 
+def shipment_shape(order: Dict[str, Any]) -> str:
+    """"parcel" or "pallet" — what this order actually is.
+
+    THE QUESTION DECIDED THE ANSWER, AND THE QUESTION WAS ALWAYS A PALLET.
+
+    Both descriptions read "a pallet ... palletised haulage" whatever the order was, so a
+    haulier was asked to price a pallet for 11908-21: one sunglasses tray, 400 x 390 mm and
+    about 2.3 kg. It came back GBP 95 packaging + GBP 65 delivery — 64% of a GBP 249 unit
+    against GBP 3.74 of MDF. The lookup did not invent that; it answered the question it was
+    asked, correctly, and the question was wrong. Same shape as 12349's 2026 mm envelope.
+
+    palletising has counted cartons and pallets all along and nothing consulted it. One
+    carton that a person can lift and a courier will take is a parcel; anything more is a
+    pallet. The limits are palletising's, not a second set of numbers here.
+    """
+    plan = order.get("shipment") or {}
+    cartons, pallets = plan.get("carton_count"), plan.get("pallet_count")
+    weight = _num(order.get("order_weight_kg")) or 0.0
+    try:
+        from palletising import _limits
+        max_parcel_kg = float(_limits().get("carton_max_weight_kg") or 25.0)
+    except Exception:                                            # noqa: BLE001
+        max_parcel_kg = 25.0
+    # Oversize for a carton is a pallet however light it is: a 2 m panel does not go by
+    # courier because it weighs nothing.
+    if plan.get("oversize_for_carton"):
+        return "pallet"
+    if cartons is not None and cartons <= 1 and weight and weight <= max_parcel_kg:
+        return "parcel"
+    if cartons is None and pallets is None and weight and weight <= max_parcel_kg:
+        # No plan (no carton catalogue yet) but a weight a person can carry.
+        return "parcel"
+    return "pallet"
+
+
 def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
     order = describe_order(parts, order_qty)
     size = order.get("largest_part_mm")
@@ -234,8 +288,11 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
               if order.get("order_weight_kg") else "")
     count = _count_phrase(order)
     count = (f"{count}, " if count else "")
+    shape = shipment_shape(order)
+    what = ("a carton and protective packing" if shape == "parcel"
+            else "protective packaging and a pallet")
     return _line("PACKAGING", order,
-                 f"Protective packaging and a pallet for {order['order_quantity']} "
+                 f"{what[0].upper()}{what[1:]} for {order['order_quantity']} "
                  f"flat-packed display assemblies, {where}{weight}{count}UK trade, per order",
                  "PACKAGING")
 
@@ -247,7 +304,11 @@ def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
     ship = order.get("shipment") or {}
     pallets = ship.get("pallet_count")
     on = (f" on {pallets} pallet(s)" if pallets else "")
-    return _line("DELIVERY", order,
-                 f"Palletised haulage of {weight}{on} for {order['order_quantity']} display "
-                 f"assemblies, one UK mainland delivery, per order",
-                 "DELIVERY")
+    shape = shipment_shape(order)
+    return _line(
+        "DELIVERY", order,
+        (f"Next-day courier parcel of {weight} for {order['order_quantity']} display "
+         f"assemblies, one UK mainland delivery, per order" if shape == "parcel"
+         else f"Palletised haulage of {weight}{on} for {order['order_quantity']} display "
+              f"assemblies, one UK mainland delivery, per order"),
+        "DELIVERY")

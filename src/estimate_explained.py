@@ -659,6 +659,34 @@ def _pack_was_read_in_full(scan: Dict[str, Dict[str, Any]]) -> bool:
     return any(any(k in rec for k in _QUALITY_FIELDS) for rec in scan.values())
 
 
+def _gauge_stated(rec: Dict[str, Any]) -> str:
+    """The gauge this part is COSTED at, and the scrape only where it disagrees.
+
+    THE COLUMN WAS PRINTING A TOLERANCE TABLE. `thicknesses_mm` is every number the page
+    reader found that looked like a thickness — on 11908-21 that is "1.0, 3" against three
+    parts whose DXF filenames read `9mm MDF+ LAM`, whose sheet block says Ga 9, and which are
+    costed at 9. On 12349 the same column said 5.0 for a 1.5 mm bracket.
+
+    So section 7 disagreed with section 2 about the same part in the same document, and the
+    half that was wrong is the half headed "what the drawing states" — which is the half an
+    estimator would use to check us, and the half they would send to Design.
+
+    The resolved gauge is what the arbitration decided after weighing every reading. Where a
+    scraped number differs it is still shown, marked as unused, because a drawing that prints
+    a contradictory thickness IS worth knowing about — it is just not what we costed.
+    """
+    resolved = _money(rec.get("normalized_thickness_mm"))
+    scraped = [str(t) for t in (rec.get("thicknesses_mm") or []) if str(t).strip()]
+    if resolved is None:
+        return ", ".join(scraped) or "no"
+    shown = f"{resolved:g}"
+    others = [t for t in scraped if _money(t) is not None
+              and abs((_money(t) or 0) - resolved) > 0.01]
+    if others:
+        return f"{shown} (the page also reads {', '.join(others)} — not used)"
+    return shown
+
+
 def _what_a_sheet_could_not_give(rec: Dict[str, Any]) -> List[str]:
     """What this drawing did not state, or why the question does not apply to it.
 
@@ -681,6 +709,34 @@ def _what_a_sheet_could_not_give(rec: Dict[str, Any]) -> List[str]:
     if not (geom.get("estimated_cut_length_mm") or 0):
         missing.append("cut length")
     return missing
+
+
+def _what_they_are(lines: List[Dict[str, Any]]) -> str:
+    """The kinds of line actually on THIS job, named from the lines themselves.
+
+    This sentence was a fixed list — "fasteners off the BOM table, bought items, packaging,
+    delivery and the powder line" — printed whatever the job held. 11908-21 has no powder on
+    it, so the note named a line that does not exist, which is exactly the tell that a
+    document is generated rather than written. It also had nothing to say about a job whose
+    lines were something else.
+    """
+    kinds: List[str] = []
+    codes = [str(l.get("code") or "").upper() for l in lines]
+    descs = " ".join(str(l.get("desc") or "") for l in lines).upper()
+    if any(c in ("PACKAGING",) for c in codes):
+        kinds.append("packaging")
+    if any(c in ("DELIVERY",) for c in codes):
+        kinds.append("delivery")
+    if any(c.startswith("POWDER") for c in codes):
+        kinds.append("the powder line")
+    if any(c.startswith(("FIXING", "STD", "BI-", "P/P")) for c in codes):
+        kinds.append("fasteners off the BOM table")
+    _named = {"packaging", "delivery", "the powder line", "fasteners off the BOM table"}
+    if len(kinds) < len(lines) or not kinds:
+        kinds.append("bought items")
+    if len(kinds) == 1:
+        return kinds[0]
+    return ", ".join(kinds[:-1]) + " and " + kinds[-1]
 
 
 def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]],
@@ -1979,6 +2035,71 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 f"{'It moves' if _one else 'They move'} between runs, so an estimate "
                 f"resting on {'it' if _one else 'them'} cannot be reproduced.</p>")
 
+    # ── HOW PACKAGING AND DELIVERY WERE WORKED OUT ────────────────────────────────
+    #
+    # "change the e-mail to include a detailed computational description of the delivery and
+    # palleting costs also please."
+    #
+    # On 11908-21 these two were £160 of a £249 unit — 64%, against £3.74 of MDF — and the
+    # note said only that they were market indications. An estimator could see THAT the
+    # number was wrong and had nothing to argue with. The shipment the engine described is
+    # what the market was asked to price, so the shipment is what has to be shown: every part
+    # it weighed, the density it used, what it came to, and whether that made it a parcel or
+    # a pallet. A description that says "about 49 kg" for a 2.3 kg tray then names the part
+    # carrying the other 46 kg, instead of hiding it in a total.
+    _commercial = [c for c in (g["scan_doc"] or {}).get("commercial_lines", [])
+                   if isinstance(c, dict)] if isinstance(g["scan_doc"], dict) else []
+    if _commercial:
+        add("<h4>How packaging and delivery were worked out</h4>")
+        _basis = next((c.get("basis") for c in _commercial
+                       if isinstance(c.get("basis"), dict)), {}) or {}
+        _counted = [r for r in (_basis.get("counted_parts") or []) if isinstance(r, dict)]
+        if _counted:
+            add(_table(["Part", "Blank mm", "Ga", "Material", "kg/m³", "Qty/unit",
+                        "kg each", "kg in the order"],
+                       [[r.get("part_number") or "—",
+                         f"{_fmt(r.get('length_mm'))} × {_fmt(r.get('width_mm'))}",
+                         _fmt(r.get("thickness_mm")), _fmt(r.get("material")),
+                         _fmt(r.get("density_kg_m3")), _fmt(r.get("per_assembly")),
+                         _fmt(r.get("kg_each")), _fmt(r.get("kg_in_order"))]
+                        for r in _counted], numeric={2, 4, 5, 6, 7}))
+        _skipped = _basis.get("parts_without_a_blank")
+        _phantom = _basis.get("parts_with_an_impossible_blank")
+        _size = _basis.get("largest_part_mm") or []
+        add(f"<p>That is <b>{_fmt(_basis.get('order_weight_kg'))} kg</b> for the whole order"
+            + (f", largest panel {_fmt(_size[0])} × {_fmt(_size[1])} mm" if len(_size) == 2
+               else "")
+            + f", from {_plural(_basis.get('parts_measured') or 0, 'part')} the engine could "
+              f"measure"
+            + (f"; {_plural(_skipped, 'part')} had no blank to weigh" if _skipped else "")
+            + (f"; <b>{_plural(_phantom, 'part')} were left out because the blank recorded "
+               f"for them fits no sheet the material is stocked in</b> — that is a defect "
+               f"upstream, not a gap in the drawings" if _phantom else "")
+            + ". Weight is blank area × gauge × the material's density, times how many are "
+              "made. It decides the next line.</p>")
+        try:
+            from commercial_lines import shipment_shape as _shape
+            _sh = _shape(_basis)
+        except Exception:                                        # noqa: BLE001
+            _sh = ""
+        _plan = _basis.get("shipment") or {}
+        if _sh:
+            add(f"<p><b>Priced as a {_sh}.</b> "
+                + ("One carton a person can lift and a courier will take, so it was asked "
+                   "for as a parcel rather than palletised haulage."
+                   if _sh == "parcel" else
+                   f"{_plural(_plan.get('carton_count') or 0, 'carton')} on "
+                   f"{_plural(_plan.get('pallet_count') or 0, 'pallet')}, so it was asked "
+                   f"for as palletised haulage.")
+                + " Both descriptions used to say <i>a pallet</i> whatever the order was — "
+                  "which is how a 2.3 kg tray came back at £95 to box and £65 to deliver. "
+                  "The lookup answers the question it is asked.</p>")
+        add(_table(["Line", "Asked for", "£ for the order", "÷ units", "£/unit"],
+                   [[c.get("code") or "—", str(c.get("described_as") or "")[:120],
+                     _gbp_or(c.get("order_gbp"), "—"),
+                     _fmt(c.get("order_quantity")), _gbp_or(c.get("unit_gbp"), "—")]
+                    for c in _commercial], numeric={2, 3, 4}))
+
     # DOES THE MATERIAL ADD UP. The claim that makes the rest worth reading, and the one a
     # reader can check without leaving the message.
     _mat_sheet = _money(totals.get("material"))
@@ -2055,10 +2176,22 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # whose authority — drawn, inferred, or read by a model. An operation nobody drew is the
     # cheapest thing on the sheet to strike out and the easiest to miss.
     if g["routes"]:
+        # AN OPERATION WE RULED OUT IS NOT AN OPERATION. The table listed both together and
+        # counted them in one number, so 11908-21 read "16 lines" over rows that include
+        # "folding — the part does not fold" and "laser_cutting — assembly parent has no
+        # independently measured fabricated leaf". Neither is done, neither is charged, and a
+        # laser row against an MDF tray is the kind of thing that loses a reader's trust in
+        # the fifteen rows that ARE right.
+        #
+        # Both are worth printing — a ruled-out operation with its reason is how somebody
+        # checks we did not miss one — but they are different questions and go in different
+        # tables. An applied operation carries a quantity; a ruling has none.
+        _applied = [r for r in g["routes"] if _money(r.get("Qty/unit")) is not None]
+        _ruled_out = [r for r in g["routes"] if _money(r.get("Qty/unit")) is None]
         add(f"<h3>6. Every operation, and who decided it — "
-            f"{_plural(len(g['routes']), 'line')}</h3>")
+            f"{_plural(len(_applied), 'line')}</h3>")
         _rrows = []
-        for row in g["routes"]:
+        for row in _applied:
             _rec = scan.get(str(row.get("Target") or "").upper(), {})
             _rrows.append([
                 _fmt(row.get("Target")), _fmt(row.get("Operation")), _fmt(row.get("Seq")),
@@ -2068,12 +2201,21 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
                     "On what basis", "Which drawing files and pages"], _rrows,
                    numeric={2, 4}))
-        _inferred = [r for r in g["routes"]
+        _inferred = [r for r in _applied
                      if "infer" in str(r.get("Source") or "").lower()]
         if _inferred:
             add(f"<p><b>{_plural(len(_inferred), 'operation')} inferred rather than drawn</b> "
                 f"— {', '.join(sorted({str(r.get('Operation') or '?') for r in _inferred}))}. "
                 f"Confirm them or tell me to drop them.</p>")
+
+        if _ruled_out:
+            add(f"<p><b>{_plural(len(_ruled_out), 'operation')} ruled out</b>, with the "
+                f"reason. Nothing here is done or charged; it is printed so somebody can "
+                f"check we did not rule out something we should be doing.</p>")
+            add(_table(["Part", "Operation", "Why it is not done", "Decided by"],
+                       [[_fmt(r.get("Target")), _fmt(r.get("Operation")),
+                         str(r.get("Reason") or "—"), _fmt(r.get("Source"))]
+                        for r in _ruled_out]))
 
     # 7 ─ the drawing pack, in full
     add("<h3>7. The drawing pack</h3>")
@@ -2103,7 +2245,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _where(rec, pack, page_index), code or _fmt(rec.get("description")),
                 _drawing_no(rec),
                 ", ".join(str(m) for m in rec.get("materials") or []) or "no",
-                ", ".join(str(t) for t in rec.get("thicknesses_mm") or []) or "no",
+                _gauge_stated(rec),
                 ", ".join(str(f) for f in rec.get("surface_finishes") or []) or "no",
                 (f"{_fmt(rec.get('geometry_source'))}"
                  + (f" ({_rel:.0%})" if isinstance(_rel, (int, float)) else "")),
@@ -2120,10 +2262,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(f"<p><b>{_plural(len(_no_sheet), 'line')} with no sheet of their own"
             + (f", of which {len(_bites)} "
                f"{'affects' if len(_bites) == 1 else 'affect'} the price."
-               if _bites else ". None of them affects the price — they are fasteners off "
-                              "the BOM table, bought items, packaging, delivery and the "
-                              "powder line, none of which would carry a detail drawing on a "
-                              "complete pack.") + "</b></p>")
+               if _bites else
+               ". None of them affects the price — "
+               + _what_they_are(_no_sheet)
+               + ", none of which would carry a detail drawing on a complete pack.")
+            + "</b></p>")
         if _bites:
             add(_table(["Line", "What it is", "£ on this job", "Does the missing sheet bite?"],
                        [[n["code"] or "—", n["desc"], _gbp_or(n["gbp"], "no price"),
