@@ -2072,10 +2072,17 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                     _gbp_or(_u, "—"),
                     _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
                     _price_source(row, provenance, scan) or "source not named on the sheet",
+                    # THE NUMBER OFF THE TITLE BLOCK, not just the file it is printed in.
+                    # Section 2 carried this and these two did not, so a reader checking a
+                    # bought-in line or an operation had the filename and had to open it to
+                    # learn which drawing it is. Blank on a line with no drawing of its own,
+                    # which is most bought-ins and is the honest answer for them.
+                    _drawing_no(_rec),
                     _where(_rec, pack, page_index),
                 ])
         add(_table(["Line", "What it is", "Qty", "£/ea", "£ ext", "Source",
-                    "Which drawing files and pages"], _brows, numeric={2, 3, 4}))
+                    "Drawing no.", "Which drawing files and pages"],
+                   _brows, numeric={2, 3, 4}))
         if _indicative:
             _ind_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
                                  for r in _indicative), 2)
@@ -2262,10 +2269,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _rrows.append([
                 _fmt(row.get("Target")), _fmt(row.get("Operation")), _fmt(row.get("Seq")),
                 _fmt(row.get("Scope")), _fmt(row.get("Qty/unit")), _fmt(row.get("Source")),
-                str(row.get("Reason") or "—"), _where(_rec, pack, page_index),
+                str(row.get("Reason") or "—"), _drawing_no(_rec),
+                _where(_rec, pack, page_index),
             ])
         add(_table(["Part", "Operation", "Seq", "Scope", "Qty", "Decided by",
-                    "On what basis", "Which drawing files and pages"], _rrows,
+                    "On what basis", "Drawing no.", "Which drawing files and pages"], _rrows,
                    numeric={2, 4}))
         _inferred = [r for r in _applied
                      if "infer" in str(r.get("Source") or "").lower()]

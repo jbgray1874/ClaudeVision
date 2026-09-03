@@ -206,3 +206,34 @@ def test_the_weld_guard_reaches_the_canonical_route_too():
     assert 'if is_acrylic and not _is_timber(material) and wb_op in ("Weld (CO2)", "Spotweld")' \
         in block
     assert 'wb_op = "Glue"' in block
+
+
+# ── AND THE GAUGE ON THAT SAME ROW ─────────────────────────────────────────────
+#
+# "Assemble/pack (Acrylic) — 3mm MDF" was wrong twice. The department was one fault; the 3mm
+# is the other, over three parts the sheet costs at 9mm — and section 7 of the covering note
+# said so on the same page: "9 (the page also reads 1.0, 3 — not used)".
+#
+# An assembly-scoped row takes its material and thickness from the PARENT, and a parent's
+# thickness is whatever stray number the GA page printed. The gauge belongs to its children,
+# and they need not share one. Boxing a finished assembly is not a gauge operation.
+
+def test_an_assembly_row_names_the_parts_and_not_a_gauge():
+    got = wb.labour_row_description("Packing Joinery", "MDF", None,
+                                    ["11908-21-01J", "11908-21-02J"])
+    assert "mm" not in got, got
+    assert "MDF" in got and "11908-21-01J" in got
+
+
+def test_a_part_row_still_carries_its_gauge():
+    """On a part-scoped row the gauge is the part's own and is the most useful thing on the
+    line. This must not strip it there."""
+    assert "9mm" in wb.labour_row_description("CNC Joinery", "MDF", 9, ["11908-21-01J"])
+
+
+def test_the_thickness_is_withheld_by_scope_not_by_department():
+    """Keyed on assembly_scoped, which the canonical route already records — not on a list of
+    department names that would need adding to every time a new one appears."""
+    i = SRC.index("# AN ASSEMBLY HAS NO GAUGE")
+    block = SRC[i:i + 1400]
+    assert 'None if g.get("assembly_scoped") else g["thickness"]' in block

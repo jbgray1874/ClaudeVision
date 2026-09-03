@@ -4428,7 +4428,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                          or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
 
         _matx = str(g["material"] or "").replace("_", " ").strip()
-        _rd = labour_row_description(wb_op, g["material"], g["thickness"],
+        # AN ASSEMBLY HAS NO GAUGE, AND PRINTING ONE IS WORSE THAN PRINTING NOTHING.
+        #
+        # 11908-21's pack row read "Assemble/pack (Acrylic) — 3mm MDF" over three parts the
+        # sheet costs at 9mm, and section 7 of the covering note said so on the same page:
+        # "9 (the page also reads 1.0, 3 — not used)". An assembly-scoped row takes its
+        # material and thickness from the PARENT, and a parent's thickness is whatever stray
+        # number the GA page happened to print — the gauge belongs to its children, and they
+        # do not all share one.
+        #
+        # Boxing a finished assembly is not a gauge operation, so the row names the parts and
+        # stops. Every part-scoped row is untouched: there the gauge is the part's own and it
+        # is the most useful thing on the line.
+        _rd = labour_row_description(wb_op, g["material"],
+                                     None if g.get("assembly_scoped") else g["thickness"],
                                      g["parts"], g["bends"], g["holes"])
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
