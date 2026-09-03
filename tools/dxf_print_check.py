@@ -11,13 +11,15 @@ the files as they are on disk now, which is the difference that settles it.
 
 It prints, in order: the ezdxf in use, what the file holds and on which layers, whether those
 layers are switched on, what the renderer actually recorded, and whether ink lands on the
-page. Then it writes the PDF next to the DXF so it can be opened.
+page. The PDFs it writes go to your TEMP folder, never into the job folder — a
+diagnostic that adds files to a drawing pack changes the thing it is diagnosing.
 """
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +105,11 @@ def main(argv: list) -> int:
         print(f"could not measure the drawing: {type(exc).__name__}: {exc}")
     print()
 
-    out = src.with_name(src.stem + "_print_check.pdf")
+    # NOT BESIDE THE DRAWING. Written into the job folder, these land in the next run's
+    # drawing pack and get read as drawings: 11908-21 was estimated from four PDFs where the
+    # pack has two, both extras at geometry reliability 0.25. A diagnostic that changes the
+    # thing it is diagnosing is worse than no diagnostic.
+    out = Path(tempfile.gettempdir()) / (src.stem + "_print_check.pdf")
     try:
         pc._dxf_to_pdf(src, out)
     except Exception as exc:                                        # noqa: BLE001
