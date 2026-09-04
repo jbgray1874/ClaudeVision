@@ -127,6 +127,28 @@ def test_no_qualifying_part_returns_zero_and_none():
 
 
 # ── the money story: the band the shelf lands in, and why P.Coat did not move ───────
+def test_the_labour_block_actually_calls_the_helper_at_the_band_site():
+    """THE PAIR-SETTLEMENT MISS, GUARDED. A helper tested in isolation proves nothing if the
+    labour block does not call it -- the suite goes green while the live run still bands on the
+    wrong part. Assert, from the source, that wb_populate CALLS _largest_fabricated_part_area
+    and that the band pick reads the variable it returns, so an edit that orphans the helper
+    fails here rather than on a job.
+    """
+    import ast
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    called = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                 and n.func.id == "_largest_fabricated_part_area"
+                 for n in ast.walk(tree))
+    assert called, "_largest_fabricated_part_area is defined but never called -- band site orphaned"
+    # the band pick must read the SAME name the helper's return is bound to
+    body = ast.unparse(tree)
+    assert "_max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(" in body, (
+        "the helper's return is not bound to the names the band pick reads")
+    assert "_THROUGHPUT_SIZE_BANDS.get(wb_op" in body and "_max_part_area_m2 > 0" in body, (
+        "the band pick no longer reads _max_part_area_m2 -- the helper's answer is unused")
+
+
 def test_the_shelf_lands_in_band_c_and_only_pack_moves():
     """0.367 m2 is band C by config.THROUGHPUT_AREA_EDGES. Pack differs B(30) vs C(20); P.Coat
     is 319 across B/C/D, so the mix-up moved pack and left P.Coat untouched -- the exact shape
