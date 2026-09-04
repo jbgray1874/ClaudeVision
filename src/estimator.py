@@ -1280,6 +1280,47 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # DB-FREE STANDARD-COMMODITY PROVISIONAL — the reproducible last resort.
+    #
+    # Everything above needs the DB (the legacy connector and the PricingService rungs). When
+    # none of it found a price — the DB was unreachable, PricingService could not be built, a
+    # rung threw and was swallowed, or the class-word code ('STD PART') left nothing to look up
+    # — a generically-named standard commodity was still handed £0, even though config carries a
+    # fixed figure for it. 11762-17's PERFO PLASTIC LOCKING CLIP is exactly that: no SDI code, a
+    # class word in the code column, and £1.20 sitting in STANDARD_COMMODITY_PRICE_GBP that the
+    # only route to it (inside PricingService's web/AI fallback) could not reach here.
+    #
+    # Consulted LAST, so a real catalogue/UDEF/history rate still wins; keyed on the DESCRIPTION,
+    # so a class-word code is no obstacle; DB-free, so it is reproducible on any box. Non-firm and
+    # flagged for review — a provisional, not a quote.
+    if best_price is None:
+        try:
+            from pricing_service import standard_commodity_price as _std_commodity
+            _com = _std_commodity(part)
+        except Exception:                                        # noqa: BLE001
+            _com = None
+        _com_price = _safe_float(_com.get("unit_price_gbp")) if _com else None
+        if _com_price is not None and _com_price > 0:
+            return {
+                "result": {"selected": {
+                    "source": _com.get("source"),
+                    "price": _com_price,
+                    "confidence": _com.get("confidence"),
+                    "provenance": _com.get("provenance"),
+                    "review_required": _com.get("review_flag", True),
+                    "review_reason": _com.get("review_reason"),
+                    "metadata": {
+                        # standard_commodity_price sets source_type and source to the same value,
+                        # so one read is enough — and avoids a hand-rolled name fallback chain.
+                        "pricing_mode": _com.get("source_type"),
+                        "supplier_name": _com.get("supplier_name"),
+                    },
+                }},
+                "applied_unit_cost": _com_price,
+                # Matched on the description, not a code — say so rather than claim a code hit.
+                "matched_part_code": None,
+            }
+
     return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
 
 
@@ -4516,6 +4557,29 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
     system_cost_result = system_cost.get("result", {})
     matched_part_code = system_cost.get("matched_part_code")
+
+    # A STANDARD-COMMODITY PROVISIONAL IS A MATERIAL BUY, PRICED AT ITS CONFIG FIGURE.
+    #
+    # The provisional (a pallet, a perforated-panel clip) is the price we PAY for the item. It
+    # belongs in the material column at exactly that figure — so the BOM shows the buy price,
+    # not a labour number, and the total carries the price the config names. The general bought-in
+    # path below adds a bench-fitting uplift on top of the buy and leaves the material column to be
+    # back-derived as (unit total − labour), which reads a fitting cost as material and lands the
+    # clip at £1.82 for a £1.20 buy. A standard commodity is placed during the assembly labour the
+    # parent already carries, so it takes no fitting of its own: route the figure straight to
+    # material and skip the uplift. Only the reproducible provisional source — every real
+    # catalogue/UDEF bought-in keeps the fitting path unchanged.
+    _is_commodity_provisional = (
+        system_unit_cost is not None
+        and str((_extract_selected_price(system_cost_result) or {}).get("source") or "")
+        == "standard_commodity_provisional")
+    if _is_commodity_provisional:
+        _com_unit = round(float(system_unit_cost), 4)
+        material["unit_material_cost_gbp"] = _com_unit
+        material["cost_per_part_gbp"] = _com_unit
+        material["extended_material_cost_gbp"] = round(_com_unit * quantity, 4)
+        material.setdefault("cost_method", "standard_commodity_provisional")
+
     material_extended = material.get("extended_material_cost_gbp")
     extended_material_cost = _safe_float(material_extended) or 0.0
     total_labour_cost = labour.get("total_labour_cost_gbp") or 0.0
@@ -4633,9 +4697,14 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # deriving it via the material+labour path below produced absurd figures (a £132 foam-
     # tape) because these stubs have no real geometry to cost. Respect the upstream price.
     if bought_in_candidate and system_unit_cost is not None:
-        _fitting_min = float(getattr(config, "BOUGHT_IN_FITTING_MIN_PER_PART", 2.0) or 2.0)
-        _manm_rate = float((HOURLY_RATES_GBP or {}).get("handling", 31.18))
-        _fitting_cost = (_fitting_min / 60.0) * _manm_rate
+        # A standard-commodity provisional takes no bench-fitting uplift — it is placed during
+        # the assembly labour the parent already carries — so its unit total IS the buy price.
+        if _is_commodity_provisional:
+            _fitting_cost = 0.0
+        else:
+            _fitting_min = float(getattr(config, "BOUGHT_IN_FITTING_MIN_PER_PART", 2.0) or 2.0)
+            _manm_rate = float((HOURLY_RATES_GBP or {}).get("handling", 31.18))
+            _fitting_cost = (_fitting_min / 60.0) * _manm_rate
         unit_total_raw = float(system_unit_cost) + _fitting_cost
         extended_total_raw = unit_total_raw * quantity
         costing_basis = "system_cost_per_part"

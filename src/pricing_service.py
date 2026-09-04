@@ -39,6 +39,61 @@ _FIRM_CATALOGUE_SOURCES = (
 )
 
 
+def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A stable, reproducible provisional for a generically-named standard bought-in — a
+    PALLET, a perforated-panel clip — from config.STANDARD_COMMODITY_PRICE_GBP, keyed on the
+    DESCRIPTION, or None.
+
+    DB-FREE ON PURPOSE, AND MODULE-LEVEL SO THE ENGINE CAN REACH IT WITHOUT A PRICINGSERVICE.
+    A fixed config number needs no database and no network, yet the only route to it used to
+    run inside PricingService._get_web_ai_fallback — reachable only with a live DB connection
+    AND only after _web_ai_fallback_allowed let the part through. So a known commodity on a box
+    whose DB rung was unavailable, or whose class-word code ('STD PART') steered the lookup, got
+    £0 despite a deterministic price sitting in config. The estimator now consults THIS function
+    directly as a last resort (see estimator._resolve_part_system_cost), so the provisional is
+    reached wherever a real catalogue/UDEF rate was not — the reproducible figure the whole
+    'commodity before the market guess' idea was for.
+
+    Reproducible (a fixed config number, same every run), so it prices the line AND clears
+    price_not_reproducible — unlike the market guess it stands in front of. Flagged for review:
+    it is a provisional, not a quote."""
+    table = getattr(config, "STANDARD_COMMODITY_PRICE_GBP", {}) or {}
+    if not table:
+        return None
+    _desc_u = " ".join(str(v) for v in (
+        part.get("description"), part.get("part_number")) if v).upper()
+    if not _desc_u.strip():
+        return None
+    for _tok, _c in table.items():
+        # A key may name ONE token ("PALLET") or several joined by "+" ("PERFO+CLIP"), in which
+        # case EVERY token must appear in the description. This keeps a generically-named
+        # commodity from over-matching: "PERFO+CLIP" prices the perforated-panel locking clip
+        # without also capturing a fabricated clip or a plain cable clip that happens to carry
+        # the word "CLIP". A single-token key is the len==1 case, so existing entries behave
+        # exactly as before.
+        _needed = [t.strip() for t in str(_tok).upper().split("+") if t.strip()]
+        if _needed and all(t in _desc_u for t in _needed):
+            try:
+                _price = float(_c.get("price_gbp") or 0)
+            except (TypeError, ValueError):
+                continue
+            if _price <= 0:
+                continue
+            return {
+                "source": "standard_commodity_provisional",
+                "source_type": "standard_commodity_provisional",
+                "price_is_reproducible": True,      # a fixed config number, same every run
+                "unit_price_gbp": round(_price, 2),
+                "confidence": 0.5,
+                "provenance": f"Standard commodity provisional: {_c.get('label', _tok)}",
+                "review_flag": True,
+                "review_reason": ("Provisional standard-commodity price — confirm against a "
+                                  "supplier quote or add the item to the purchasing catalogue."),
+                "supplier_name": "SDI standard commodity (provisional)",
+            }
+    return None
+
+
 class PricingService:
     """Workbook-first pricing engine with joined source provenance."""
 
@@ -1011,42 +1066,12 @@ class PricingService:
         """A stable, reproducible provisional for a generically-named standard bought-in (a
         pallet) from config.STANDARD_COMMODITY_PRICE_GBP, or None. Reproducible (a fixed config
         number), so it prices the line AND clears price_not_reproducible — unlike the market
-        guess it stands in front of. Flagged for review: it is a provisional, not a quote."""
-        table = getattr(config, "STANDARD_COMMODITY_PRICE_GBP", {}) or {}
-        if not table:
-            return None
-        _desc_u = " ".join(str(v) for v in (
-            part.get("description"), part.get("part_number")) if v).upper()
-        if not _desc_u.strip():
-            return None
-        for _tok, _c in table.items():
-            # A key may name ONE token ("PALLET") or several joined by "+" ("PERFO+CLIP"),
-            # in which case EVERY token must appear in the description. This keeps a
-            # generically-named commodity from over-matching: "PERFO+CLIP" prices the
-            # perforated-panel locking clip without also capturing a fabricated clip or a
-            # plain cable clip that happens to carry the word "CLIP". A single-token key is
-            # the len==1 case, so existing entries behave exactly as before.
-            _needed = [t.strip() for t in str(_tok).upper().split("+") if t.strip()]
-            if _needed and all(t in _desc_u for t in _needed):
-                try:
-                    _price = float(_c.get("price_gbp") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if _price <= 0:
-                    continue
-                return {
-                    "source": "standard_commodity_provisional",
-                    "source_type": "standard_commodity_provisional",
-                    "price_is_reproducible": True,      # a fixed config number, same every run
-                    "unit_price_gbp": round(_price, 2),
-                    "confidence": 0.5,
-                    "provenance": f"Standard commodity provisional: {_c.get('label', _tok)}",
-                    "review_flag": True,
-                    "review_reason": ("Provisional standard-commodity price — confirm against a "
-                                      "supplier quote or add the item to the purchasing catalogue."),
-                    "supplier_name": "SDI standard commodity (provisional)",
-                }
-        return None
+        guess it stands in front of. Flagged for review: it is a provisional, not a quote.
+
+        The matching itself is DB-free config, so it lives in the module-level
+        standard_commodity_price() below and the engine can reach the SAME table without a
+        PricingService instance (see estimator._resolve_part_system_cost)."""
+        return standard_commodity_price(part)
 
     def _get_web_ai_fallback(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
         # STANDARD COMMODITY BEFORE THE MARKET GUESS. A generically-named bought-in the purchasing
