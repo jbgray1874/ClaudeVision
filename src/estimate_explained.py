@@ -1803,6 +1803,18 @@ def _e(text: Any) -> str:
 
 def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = None) -> str:
     numeric = numeric or set()
+    # A ROW THAT IS NOT AS WIDE AS THE HEADER SILENTLY SHIFTS COLUMNS. §3 emitted seven cells
+    # for an eight-column header, so the file list rendered under "Drawing no." and "Which
+    # drawing files and pages" came out blank on a client quote. enumerate() just stops early
+    # and says nothing. A mismatch is a construction error in the caller, not something to
+    # paper over, so it is refused here where it is cheap to see rather than in front of a
+    # customer where it is not.
+    _n = len(headers)
+    _bad = next(((i, len(r)) for i, r in enumerate(rows) if len(r) != _n), None)
+    if _bad is not None:
+        raise ValueError(
+            f"_table: row {_bad[0]} has {_bad[1]} cells for {_n} headers "
+            f"({', '.join(map(str, headers))}) — a width mismatch shifts every column after it")
     head = "".join(f"<th {_TH}>{_e(h)}</th>" for h in headers)
     body = "".join(
         "<tr>" + "".join(
@@ -2057,6 +2069,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _gbp_or(r.get("total_value_gbp"), "0.00"),
                 (_price_source(_srow, provenance, scan) if _srow else "")
                 or str(r.get("supplier") or "") or "source not named on the sheet",
+                # THE DRAWING NUMBER, then the files. The header carries both columns and the
+                # fallback path below fills both; this read-back path emitted only the file
+                # list, so it landed one column left — under "Drawing no." — and "Which
+                # drawing files and pages" came out empty. Eight headers need eight cells.
+                _drawing_no(_rec),
                 _where(_rec, pack, page_index),
             ])
         if not _bom_rows:
