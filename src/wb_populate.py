@@ -991,6 +991,59 @@ def _safe(v, default=None):
         return default
 
 
+# The stock forms a part we FABRICATE can carry, for size-band voting. Aligned with the Sheet
+# Steel nest routing (STEEL_STOCK_FORMS = sheet, stated_weight) and the coated-area loop, plus
+# the board/plate panels we also cut. "" is deliberately ABSENT: an unknown stock form is not a
+# vote, and reading it as sheet is what let a bought-in vinyl DXF set the band on 11762-02.
+_FABRICATED_SHEET_STOCK_FORMS = frozenset({"sheet", "plate", "board", "stated_weight"})
+_FABRICATED_LINEAR_STOCK_FORMS = frozenset({"wire", "bar"})
+
+
+def _largest_fabricated_part_area(parts):
+    """(area_m2, part_number) of the biggest part we FABRICATE — the size proxy for throughput
+    banding of Assemble/pack and P.Coat.
+
+    Pack and coat speed track the biggest part in the job, not the average. ONLY a part we make
+    votes -- bought_in_policy, the single make/buy authority, keeps purchased lines (a vinyl
+    graphic, a fixing, a print) out -- and only through a stock form we recognise, so an unknown
+    "" form does not count.
+
+    On 11762-02 both gates had failed at once. The sheet branch read stock_form "" as sheet, so
+    a bought-in VINYL graphic with a cutter DXF (858 x 72 = 0.0618 m2) voted as a panel; and it
+    omitted "stated_weight", the form the 1009 x 364 steel shelf (0.367 m2) was routed by, so
+    the real largest part never entered the max. The band followed the graphic -> B -> pack
+    30/hr, where the shelf is C -> 20/hr: pack ~50% too fast and silently under-costed.
+
+    Returns (0.0, None) when nothing qualifies -- the caller falls to the un-banded default
+    rather than guess a band.
+    """
+    try:
+        import bought_in_policy as _bip
+    except Exception:                                    # noqa: BLE001
+        _bip = None
+    best_area, best_pn = 0.0, None
+    for _ap in parts or []:
+        if _bip is not None and _bip.is_bought_in(_ap):
+            continue                              # we buy it, so we do not size a band on it
+        _ame = _ap.get("material_estimate") or {}
+        _asf = str(_ame.get("stock_form") or "").lower()
+        _ang = _ap.get("normalized_geometry") or {}
+        _area = 0.0
+        if _asf in _FABRICATED_SHEET_STOCK_FORMS:
+            _al = _safe(_ame.get("blank_length_mm") or _ang.get("blank_length_mm"))
+            _aw = _safe(_ame.get("blank_width_mm") or _ang.get("blank_width_mm"))
+            if _al and _aw:
+                _area = (_al / 1000.0) * (_aw / 1000.0)
+        elif _asf in _FABRICATED_LINEAR_STOCK_FORMS:
+            _ag = _safe(_ame.get("gauge_mm") or _ame.get("diameter_mm"))
+            _aln = _safe(_ame.get("length_mm") or _ame.get("cut_length_mm"))
+            if _ag and _aln:
+                _area = 3.14159265 * (_ag / 1000.0) * (_aln / 1000.0)
+        if _area > best_area:
+            best_area, best_pn = _area, _ap.get("part_number")
+    return best_area, best_pn
+
+
 def _is_powder_consumable(part) -> bool:
     """A BOM line that IS the powder itself (the coating consumable), by name or description.
 
@@ -2972,28 +3025,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     _powder_kg_total = round(max(_powder_by_area_kg, _powder_by_floor_kg), 5)
 
-    # Largest fabricated part by area (m2) - the size proxy for throughput banding. Pack and
-    # coat speed track the biggest part in the job, not the average. Reuses the same geometry
-    # the powder area calc reads; known when the labour block runs, unlike the unit-cost cell.
-    _max_part_area_m2 = 0.0
-    for _ap in _all_pes_pw:
-        _ame = _ap.get("material_estimate") or {}
-        _asf = str(_ame.get("stock_form") or "").lower()
-        _ang = _ap.get("normalized_geometry") or {}
-        _aq = _safe(_ap.get("quantity"), 1) or 1
-        _area = 0.0
-        if _asf in ("sheet", "plate", "board", ""):
-            _al = _safe(_ame.get("blank_length_mm") or _ang.get("blank_length_mm"))
-            _aw = _safe(_ame.get("blank_width_mm") or _ang.get("blank_width_mm"))
-            if _al and _aw:
-                _area = (_al / 1000.0) * (_aw / 1000.0)
-        elif _asf in ("wire", "bar"):
-            _ag = _safe(_ame.get("gauge_mm") or _ame.get("diameter_mm"))
-            _aln = _safe(_ame.get("length_mm") or _ame.get("cut_length_mm"))
-            if _ag and _aln:
-                _area = 3.14159265 * (_ag / 1000.0) * (_aln / 1000.0)
-        if _area > _max_part_area_m2:
-            _max_part_area_m2 = _area
+    # Largest FABRICATED part by area (m2) - the size proxy for throughput banding, and the
+    # part it came from so the flag can name it. Only a part we make votes, through a stock
+    # form we recognise; see _largest_fabricated_part_area for why "" and bought-in do not.
+    _max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(_all_pes_pw)
     _powder_basis = ("MINIMUM PER PIECE" if _powder_by_floor_kg >= _powder_by_area_kg
                      else "COATED AREA")
     _wire_powder_kg = _powder_kg_total          # the BOM branch below reads this name
@@ -4471,7 +4506,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _banded = _bands.get(_band)
             if _banded:
                 _flag(f"throughput for '{wb_op}' size-banded on part area: largest part "
-                      f"{_max_part_area_m2:.4f} m2 -> band {_band} -> {_banded}/hr "
+                      f"{_max_part_area_pn or '?'} {_max_part_area_m2:.4f} m2 -> band {_band} "
+                      f"-> {_banded}/hr "
                       f"(was default {default_tp}/hr). MEASURED from your own history by product "
                       f"size - a small part runs faster than a big one, and one median cannot "
                       f"say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
