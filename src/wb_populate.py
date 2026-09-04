@@ -4831,11 +4831,29 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     mat_rows = []
     for pe in pes:
         me = pe.get("material_estimate") or {}
+        # A WIRE IS NOT A BLANK. A sheet part has Blank L × Blank W × Gauge; a wire has a
+        # developed LENGTH and a GAUGE (its diameter) and no width. Written into the sheet
+        # columns as-is, the gauge landed in Blank W and the Gauge column came out empty, so
+        # 04M read "900 | 0.554" with no gauge at all. Put the length under Blank L, the gauge
+        # under Gauge, and leave Blank W empty — the columns say what they hold.
+        _mi_md = pe.get("manufacturing_interpretation") or {}
+        _is_wire_md = (str(me.get("stock_form") or "").lower() in ("wire", "bar")
+                       or str(_mi_md.get("stock_form") or "").lower() in ("wire", "bar")
+                       or bool(pe.get("_bar_recognised")))
+        if _is_wire_md:
+            _blank_l = (_safe(me.get("wire_length_mm")) or _safe(pe.get("wire_length_mm"))
+                        or _safe(me.get("blank_length_mm")))
+            _blank_w = ""                       # a wire has no width
+            _gauge = (_safe(me.get("wire_gauge_mm")) or _safe(_mi_md.get("wire_gauge_mm"))
+                      or _safe(pe.get("wire_gauge_mm")) or _safe(me.get("blank_width_mm")))
+        else:
+            _blank_l = me.get("blank_length_mm")
+            _blank_w = me.get("blank_width_mm")
+            _gauge = pe.get("normalized_thickness_mm")
         mat_rows.append([
             pe.get("part_number"), pe.get("description"),
             pe.get("normalized_material"),
-            (me.get("blank_length_mm")), (me.get("blank_width_mm")),
-            pe.get("normalized_thickness_mm"),
+            _blank_l, _blank_w, _gauge,
             me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
             (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
             _geom_source_words(pe.get("geometry_source")),
