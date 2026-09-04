@@ -1052,6 +1052,63 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             # exactly what let this part masquerade as 8mm sheet steel.
             part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
             part.setdefault("_bar_recognised", True)
+
+        # ── WIRE/BAR BY ROUTE OR NAME, not only by the word in the material list ──────────
+        # 11762-17-03M "U WIRE" / -04M "WIRE STAND" (Milwaukee MX holder) carried a wire_forming
+        # op and welding, but material "MILD STEEL" — so the WIRE-in-materials tests above missed
+        # them and they fell to the sheet path: penny material on an 8mm DIAMETER read as a sheet
+        # THICKNESS, plus a laser row a solid wire never gets. A part the engine ROUTES as wire,
+        # or whose drawing NAMES it wire/bar/rod, is wire stock even when its material only says
+        # MILD STEEL. STUD is deliberately excluded (bought-in studs); WIRE MESH stays a section;
+        # a real flat-pattern DXF means the part is sheet, not wire, so it is left alone.
+        #
+        # This sets ONLY the shared signals — _bar_recognised + manufacturing_interpretation
+        # stock_form "wire" — so the three stock_form readers agree: the estimator bar formula
+        # prices it (or asks for the missing datum), and route_compiler's stock_form impossibility
+        # marks laser/fold NOT_APPLICABLE on it. Robomac/weld/dress are not impossible for wire and
+        # survive. No fourth laser-writer patch: the strip anchors on stock_form == "wire".
+        if (not _is_wire_part and not part.get("_bar_recognised")
+                and not part.get("flat_pattern_detected")):
+            _desc_pn = (str(part.get("description") or "") + " "
+                        + str(part.get("part_number") or "")).upper()
+            _ops_seen = {str(o).strip().lower() for o in
+                         ((part.get("textual_operations") or [])
+                          + (part.get("operations") or [])
+                          + (part.get("inferred_operations") or []))}
+            _named_wire = (re.search(r"\b(WIRE|BAR|ROD)\b", _desc_pn) is not None
+                           and "WIRE MESH" not in _desc_pn)
+            _has_wire_op = "wire_forming" in _ops_seen
+            # DIAMETER, not gauge. An EXPLICIT "N DIA" / "Ø N" callout is trusted anywhere; the
+            # SolidWorks min-bbox value misread into the thickness field is only taken as the Ø
+            # for a ROUTED wire (a wire_forming op) — never to reclassify a part on its name
+            # alone, or a plain gauge would turn every "...BAR..." sheet part into wire.
+            _dia_explicit = None
+            if _named_wire or _has_wire_op:
+                _m = (re.search(r"(?:Ø\s*|\bDIA\s*)(\d+(?:\.\d+)?)", _desc_pn)
+                      or re.search(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*DIA\b", _desc_pn))
+                if _m:
+                    _dia_explicit = _safe_float(_m.group(1))
+            _dia = _dia_explicit
+            if _dia is None and _has_wire_op and part.get("normalized_thickness_mm"):
+                _dia = _safe_float(part.get("normalized_thickness_mm"))
+            # A ROUTED wire (a wire_forming op) is wire on the op alone. A NAME on its own needs
+            # an EXPLICIT diameter callout to qualify, so a sheet part merely called "...BAR..."
+            # is not swept in by a stray gauge.
+            if _has_wire_op or (_named_wire and _dia_explicit):
+                part["_bar_recognised"] = True
+                if _dia:
+                    part["wire_gauge_mm"] = _dia
+                    # A DIAMETER is not a sheet THICKNESS — the misread that priced it as plate.
+                    part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
+                # LENGTH IS NOT THE PDF CUT PATH. 5496 / 6364 mm are inflated vector outlines
+                # (pdf_geometry_inflation_suspected), not developed wire length; on Ø8 that is
+                # kilograms, not pennies. Leave wire_length_mm UNSET unless a bar/wire schedule
+                # already gave one — the estimator then asks for the length rather than pricing
+                # kilos off an outline. (Length order: schedule > SW body length > CL dim > ask.)
+                _mi = part.setdefault("manufacturing_interpretation", {})
+                if isinstance(_mi, dict):
+                    _mi["stock_form"] = "wire"
+
         # Sheet mild steel inheritance — wire detection wins over bare MILD STEEL on drawing
         inherited_steel = (
             "MILD STEEL" in mat_upper_joined

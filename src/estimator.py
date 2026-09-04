@@ -2872,6 +2872,46 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                 }
 
+    # RECOGNISED AS WIRE/BAR BUT MISSING A TRUSTED DIAMETER OR LENGTH.
+    #
+    # The bar formula above prices only when it has BOTH a gauge and a length; without them the
+    # old code fell straight through to the sheet path at the bottom of this function and priced
+    # the DIAMETER as a plate — 11762-17-03M/04M came out at £0.11/£0.13 of "sheet" on an 8mm
+    # blank. A wire has no flat blank, so that number is meaningless. And the length must be a
+    # REAL developed length (a bar/wire schedule, a SolidWorks cut-list, a CL dimension) — a PDF
+    # vector cut path (5496/6364mm here, pdf_geometry_inflation_suspected) is an inflated outline,
+    # which on Ø8 is kilograms of error, so it is deliberately NOT used as a length upstream.
+    # Surface the gap as an estimator input on WIRE stock instead of inventing a sheet price.
+    if part.get("_bar_recognised"):
+        _wg = _safe_float(part.get("wire_gauge_mm"))
+        _wl = _safe_float(part.get("wire_length_mm"))
+        _missing = [n for n, v in (("diameter", _wg), ("developed length", _wl)) if not v]
+        part.setdefault("review_flags", []).append(
+            f"{part.get('part_number')}: wire/bar stock — {' and '.join(_missing)} not measured "
+            f"(no bar/wire schedule, SolidWorks cut-list or CL dimension; a PDF cut path is not a "
+            f"length). Material left for the estimator; NOT priced as sheet.")
+        return {
+            "material": material,
+            "thickness_mm": None,               # a DIAMETER is not a thickness
+            "blank_length_mm": _wl,
+            "blank_width_mm": None,
+            "blank_area_m2": None,
+            "unit_material_cost_gbp": None,
+            "cost_per_part_gbp": None,
+            "extended_material_cost_gbp": None,
+            "cost_method": "wire_stock_estimator_to_confirm",
+            "stock_form": "wire",
+            "wire_gauge_mm": _wg,
+            "wire_length_mm": _wl,
+            "requires_flat_blank": False,
+            "estimator_input_required": True,
+            "part_confidence_overall": _part_confidence_overall(part),
+            "part_geometry_reliability": _part_geometry_reliability(part),
+            "price_source": _build_price_source_metadata(
+                external_result, fallback_source="wire_stock_estimator_to_confirm",
+                applied=False),
+        }
+
     # Section/tube/wire path: uses linear stock mass estimate when profile+length is available.
     if _is_section_or_wire_candidate(part, material):
         _ss = part.get("section_stock") or {}
