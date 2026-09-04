@@ -832,6 +832,25 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
 
 _INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
 
+# EVERY FABRICATED BLOCK, NOT JUST THE STEEL ONE. A BOM line whose own text says its money is
+# costed in another block (Sheet Steel / Other Sheet / Tube / Wire) is deliberately £0 here —
+# pricing it again would double it. The unpriced/outstanding-input detectors used to test only
+# for "costed in sheet steel", so a WIRE cross-reference ("11762-17-03M U WIRE — costed in Wire
+# below") — priced £0.26 in the Wire block — was counted as a line carrying no price, and the
+# report/explanation/email/banner told the estimator a correct £21.01 was "understated by the
+# wires". One predicate, every block, so the row that points at the money is never on the
+# to-do list.
+_COSTED_IN_BLOCK_MARKERS = (
+    "costed in sheet steel", "costed in other sheet material",
+    "costed in tube", "costed in wire",
+)
+
+
+def _is_costed_in_a_block(text: Any) -> bool:
+    """True when a BOM row's own text says its material is costed in a fabricated block."""
+    _t = str(text or "").lower()
+    return any(_m in _t for _m in _COSTED_IN_BLOCK_MARKERS)
+
 
 def _order_qty_hint(bom_row: Dict[str, Any]) -> str:
     """The order quantity a commercial line was priced for, out of its own description.
@@ -970,10 +989,20 @@ def _description(bom_row: Dict[str, Any]) -> str:
     if code and text.upper().startswith(code.upper()):
         text = text[len(code):]
     for marker in ("[AI ESTIMATE", "—  MATERIAL UNPRICED", "— MATERIAL UNPRICED",
-                   "MATERIAL UNPRICED", "— costed in Sheet Steel", "— costed in sheet steel"):
+                   "MATERIAL UNPRICED"):
         cut = text.find(marker)
         if cut > 0:
             text = text[:cut]
+    # Trim the "— costed in <block> below" cross-reference suffix off the DESCRIPTION for every
+    # block, not just Sheet Steel — otherwise a wire/tube/board row keeps the pointer in its
+    # name. Case-insensitive, on the earliest block marker present.
+    _low = text.lower()
+    _cuts = [_low.find(_m) for _m in _COSTED_IN_BLOCK_MARKERS if _low.find(_m) > 0]
+    # allow for the leading em dash / hyphen the marker usually follows
+    if _cuts:
+        _c = min(_cuts)
+        _dash = max(text.rfind("—", 0, _c), text.rfind("-", 0, _c))
+        text = text[:_dash if _dash > 0 and _c - _dash <= 3 else _c]
     text = text.strip(" —-—\t")
     return (text[:60] or "—")
 
@@ -1150,7 +1179,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # the same rows the tables below print — never typed, so they cannot drift from them.
     _unpriced = [r for r in bom
                  if r.get("price") in (None, "")
-                 and "costed in sheet steel" not in str(r.get("text") or "").lower()]
+                 and not _is_costed_in_a_block(r.get("text"))]
     _indicative = [r for r in bom
                    if any(t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE)
                    and _money(r.get("price"))]
@@ -1218,8 +1247,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # labelled total. Where the two differ the difference is stated in pounds — an
     # explanation that quietly covers 81% of a total is worse than one that says which 19% it
     # cannot see, because only the second sends anybody looking.
-    _pointers = sum(1 for r in bom
-                    if "costed in sheet steel" in str(r.get("text") or "").lower())
+    _pointers = sum(1 for r in bom if _is_costed_in_a_block(r.get("text")))
     if material_rows or labour_rows:
         add("## This document against the sheet")
         add("")
@@ -2080,7 +2108,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             # Pre-read-back fallback: the workbook scan, as before.
             for row in sorted(bom, key=lambda r: -((_money(r.get("price")) or 0)
                                                    * (_money(r.get("qty")) or 0))):
-                if "costed in sheet steel" in str(row.get("text") or "").lower():
+                if _is_costed_in_a_block(row.get("text")):
                     continue
                 _u, _q = _money(row.get("price")), _money(row.get("qty"))
                 _rec = scan.get(str(row.get("code") or "").upper()) or {}
