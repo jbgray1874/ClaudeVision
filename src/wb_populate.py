@@ -4845,18 +4845,40 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
           "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
          mat_rows)
 
-    # AI Provenance — where each bought-in price came from
+    # AI Price Provenance — the unit £ and its source, for EVERY priced line.
+    #
+    # EVERY PRICED LINE, NOT JUST THE BOUGHT-INS. This listed only page_roles 'bought_in', so a
+    # sheet-metal job showed a "Price Provenance" tab holding two placeholder lines
+    # (PACKAGING/DELIVERY) and nothing else — the sheet, the wires and the powder, every line
+    # that actually carries money, were absent. A tab titled Price Provenance that omits the
+    # priced lines reads as broken and sends a reader to the fuller AI Provenance tab for the
+    # one thing this one is named for. So it now carries a row per priced line: the fabricated
+    # ones name where the figure was struck (the nest/section block, via the cost method), the
+    # bought-ins name their catalogue/commodity source as before.
     prov_rows = []
     for pe in pes:
-        if "bought_in" in [str(r).lower() for r in (pe.get("page_roles") or [])]:
-            prov_rows.append([
-                pe.get("part_number"), pe.get("description"),
-                pe.get("unit_cost_gbp"),
-                pe.get("cost_source") or pe.get("source"),
-                "verified" if pe.get("price_verified") else "UNVERIFIED",
-                pe.get("supplier") or "",
-                " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
-            ])
+        _me_pv = pe.get("material_estimate") or {}
+        _roles_pv = [str(r).lower() for r in (pe.get("page_roles") or [])]
+        _unit_pv = (_safe(pe.get("unit_cost_gbp"))
+                    or _safe(_me_pv.get("cost_per_part_gbp"))
+                    or _safe(_me_pv.get("unit_material_cost_gbp")))
+        _is_placeholder = bool(pe.get("_commercial_placeholder")
+                               or str(pe.get("source") or "") == "commercial_placeholder"
+                               or str(pe.get("part_number") or "").upper() in ("PACKAGING", "DELIVERY"))
+        # A line earns a provenance row if it carries a price, is a bought-in, or is a
+        # commercial placeholder we deliberately hold at £0 (so its £0 is explained, not blank).
+        if _unit_pv is None and "bought_in" not in _roles_pv and not _is_placeholder:
+            continue
+        _src_pv = (pe.get("cost_source") or pe.get("source")
+                   or _me_pv.get("cost_method") or "not named")
+        prov_rows.append([
+            pe.get("part_number"), pe.get("description"),
+            _unit_pv if _unit_pv is not None else pe.get("unit_cost_gbp"),
+            _src_pv,
+            "verified" if pe.get("price_verified") else "UNVERIFIED",
+            pe.get("supplier") or "",
+            " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
+        ])
     # NAMED FOR WHAT IT IS, AND NOT WHAT THE OTHER WRITER CALLS ITS SHEET.
     #
     # This is bought-in PRICE provenance; estimation_report.add_provenance_sheet writes a
