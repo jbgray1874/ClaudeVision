@@ -1067,6 +1067,14 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # prices it (or asks for the missing datum), and route_compiler's stock_form impossibility
         # marks laser/fold NOT_APPLICABLE on it. Robomac/weld/dress are not impossible for wire and
         # survive. No fourth laser-writer patch: the strip anchors on stock_form == "wire".
+        # THE SIGNAL AVAILABLE HERE IS THE NAME, NOT THE OPS. This pass runs BEFORE
+        # textual_operations are inferred from the drawing notes (that happens further down at
+        # the infer_operations_from_text block), so keying off a wire_forming op here would read
+        # an empty list — which is exactly why the first version of this fix never fired on
+        # 11762-17. The part's DESCRIPTION / number is set from the BOM and model at build time,
+        # so it is what we can rely on now; a wire_forming op, if it is already present, only
+        # reinforces it. WIRE and ROD are decisive on their own; BAR is ambiguous with a flat
+        # bar / crossbar sheet part, so it needs an explicit diameter callout to qualify.
         if (not _is_wire_part and not part.get("_bar_recognised")
                 and not part.get("flat_pattern_detected")):
             _desc_pn = (str(part.get("description") or "") + " "
@@ -1075,26 +1083,27 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                          ((part.get("textual_operations") or [])
                           + (part.get("operations") or [])
                           + (part.get("inferred_operations") or []))}
-            _named_wire = (re.search(r"\b(WIRE|BAR|ROD)\b", _desc_pn) is not None
-                           and "WIRE MESH" not in _desc_pn)
+            _name_wire = (re.search(r"\b(WIRE|ROD)\b", _desc_pn) is not None
+                          and "WIRE MESH" not in _desc_pn)
+            _name_bar = re.search(r"\bBAR\b", _desc_pn) is not None
             _has_wire_op = "wire_forming" in _ops_seen
-            # DIAMETER, not gauge. An EXPLICIT "N DIA" / "Ø N" callout is trusted anywhere; the
-            # SolidWorks min-bbox value misread into the thickness field is only taken as the Ø
-            # for a ROUTED wire (a wire_forming op) — never to reclassify a part on its name
-            # alone, or a plain gauge would turn every "...BAR..." sheet part into wire.
+            # DIAMETER, not gauge. An explicit "N DIA" / "Ø N" callout is trusted anywhere.
             _dia_explicit = None
-            if _named_wire or _has_wire_op:
+            if _name_wire or _name_bar or _has_wire_op:
                 _m = (re.search(r"(?:Ø\s*|\bDIA\s*)(\d+(?:\.\d+)?)", _desc_pn)
                       or re.search(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*DIA\b", _desc_pn))
                 if _m:
                     _dia_explicit = _safe_float(_m.group(1))
-            _dia = _dia_explicit
-            if _dia is None and _has_wire_op and part.get("normalized_thickness_mm"):
-                _dia = _safe_float(part.get("normalized_thickness_mm"))
-            # A ROUTED wire (a wire_forming op) is wire on the op alone. A NAME on its own needs
-            # an EXPLICIT diameter callout to qualify, so a sheet part merely called "...BAR..."
-            # is not swept in by a stray gauge.
-            if _has_wire_op or (_named_wire and _dia_explicit):
+            # QUALIFY on a wire_forming op, a decisive WIRE/ROD name, or a BAR name WITH a
+            # diameter. Not on BAR alone, and not on a bare gauge — that would sweep in sheet.
+            if _has_wire_op or _name_wire or (_name_bar and _dia_explicit):
+                # Diameter: the explicit callout, else the SolidWorks min-bbox value misread into
+                # the thickness field — safe to take as the Ø only now the part is confirmed wire
+                # (a solid round bar's min bounding box IS its diameter). May be absent (04M
+                # WIRE STAND gives none); the estimator then asks for it rather than inventing one.
+                _dia = _dia_explicit
+                if _dia is None and part.get("normalized_thickness_mm"):
+                    _dia = _safe_float(part.get("normalized_thickness_mm"))
                 part["_bar_recognised"] = True
                 if _dia:
                     part["wire_gauge_mm"] = _dia
