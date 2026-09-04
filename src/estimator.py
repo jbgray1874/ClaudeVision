@@ -4353,6 +4353,42 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # SDI BOM-code stubs (FIXING/VINYL priced from UDEF, or flagged unpriced) must also keep
     # their upstream state — a genuine catalogue price, or an honest "estimator to price".
     if _preset_src == "sdi_bom_code_unpriced":
+        # RECOGNISED BUT UNPRICED IS NOT THE SAME AS UNPRICEABLE.
+        #
+        # This branch returns £0/None for a bought-in the recogniser flagged for pricing — a
+        # code the catalogue could not match. But a GENERICALLY-NAMED STANDARD COMMODITY (a
+        # pallet, a perforated-panel clip) has a fixed config figure keyed on its description,
+        # and this stub short-circuits estimate_part BEFORE _resolve_part_system_cost, so the
+        # commodity table there is never reached and the line shipped as £0 — a bought-in
+        # reading as free. 11762-17's PERFO PLASTIC LOCKING CLIP is exactly this: 'STD PART'
+        # for a code, £1.20 sitting in config, and three runs of £0 because the price lived
+        # past the return. Consult the DB-free commodity table here, at the source, so the
+        # record itself carries the buy price — no bench-fitting uplift (a standard commodity
+        # is placed during the assembly labour the parent already carries), flagged PROVISIONAL.
+        _com = None
+        try:
+            from pricing_service import standard_commodity_price as _std_commodity
+            _com = _std_commodity(part)
+        except Exception:                                        # noqa: BLE001
+            _com = None
+        _com_unit = _safe_float(_com.get("unit_price_gbp")) if _com else None
+        if _com_unit is not None and _com_unit > 0:
+            _com_unit = _round_money(_com_unit)
+            _com_ext = _round_money(_com_unit * quantity)
+            part["material_estimate"] = {
+                "unit_material_cost_gbp": _com_unit, "cost_per_part_gbp": _com_unit,
+                "extended_material_cost_gbp": _com_ext,
+                "cost_method": "standard_commodity_provisional"}
+            part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
+            part["unit_cost_gbp"] = _com_unit
+            part["unit_total_cost_gbp"] = _com_unit
+            part["extended_total_cost_gbp"] = _com_ext
+            part["costing_basis"] = "standard_commodity_provisional"
+            part["source"] = "standard_commodity_provisional"
+            part.setdefault("review_flags", []).append(
+                _com.get("review_reason")
+                or "Provisional standard-commodity price — confirm against a supplier quote.")
+            return part
         # Recognised but unpriced — pass through £0/None, flagged, NOT re-costed by geometry.
         part["material_estimate"] = {"unit_material_cost_gbp": None, "cost_per_part_gbp": None,
                                      "extended_material_cost_gbp": None,

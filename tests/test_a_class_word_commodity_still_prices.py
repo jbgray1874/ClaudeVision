@@ -70,6 +70,35 @@ def test_a_commodity_provisional_takes_no_bench_fitting_uplift():
     assert pe.get("cost_breakdown", {}).get("costing_basis") == "system_cost_per_part"
 
 
+def _clip_stub(qty: int = 1) -> dict:
+    """The RECOGNISED-BUT-UNPRICED bought-in stub extract_bought_in_from_pages produces — a
+    code the catalogue could not match. This is the shape the real clip arrives as, and it
+    short-circuits estimate_part before _resolve_part_system_cost."""
+    return {"part_number": "STD PART", "description": _CLIP_DESC,
+            "source": "sdi_bom_code_unpriced", "unit_cost_gbp": None,
+            "quantity": qty, "page_roles": ["bought_in"]}
+
+
+def test_a_recognised_but_unpriced_commodity_stub_is_priced_at_source():
+    """The stub path returned £0 before ever reaching the pricing chokepoint. A known commodity
+    is priced right there instead of shipping as a bought-in that reads as free."""
+    pe = estimator.estimate_part(_clip_stub(), job_quantity=20)
+    assert pe["unit_total_cost_gbp"] == 1.2
+    assert wb_populate._bom_line_price(pe) == 1.2
+    assert pe.get("cost_breakdown", {}).get("costing_basis") == "standard_commodity_provisional" \
+        or pe.get("costing_basis") == "standard_commodity_provisional"
+
+
+def test_a_recognised_but_unpriceable_stub_still_passes_through_unpriced():
+    """A genuine no-price bought-in (a fixing with no catalogue match) must stay estimator-to-price,
+    not be captured by the commodity table."""
+    fixing = {"part_number": "FIXING", "description": "M6x20 SOCKET CAP SCREW",
+              "source": "sdi_bom_code_unpriced", "unit_cost_gbp": None, "quantity": 1}
+    pe = estimator.estimate_part(fixing, job_quantity=20)
+    assert pe.get("unit_total_cost_gbp") is None
+    assert pe.get("costing_basis") == "sdi_bom_code_estimator_to_price"
+
+
 def test_a_fabricated_part_is_not_captured_as_a_commodity():
     """The commodity table must not touch a real fabricated leaf."""
     bp = {"part_number": "11762-17-02M", "description": "BACK PLATE",
