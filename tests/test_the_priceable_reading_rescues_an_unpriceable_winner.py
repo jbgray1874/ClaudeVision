@@ -558,3 +558,55 @@ def test_a_miss_written_as_an_empty_record_is_still_not_a_cached_answer(monkeypa
 def test_only_a_line_that_really_costs_nothing_is_reported(part, expected, why):
     found = inv.check_a_material_we_cannot_price_is_declared(_job(part))
     assert [v["severity"] for v in found] == expected, why
+
+
+# ── a bought-in line is not a material we failed to rate ─────────────────────────────
+# 11762-02-03G VINYL GRAPHIC. The engine correctly classified it bought-in -- it landed on
+# the bought-in BOM, not nested as 0.9mm steel -- and priced it at GBP 22.42 from the
+# bought-in path. But that money never fills material_estimate, so this check, reading only
+# the material-rate fields, called the SAME part a BLOCKING under-charge that "costs NOTHING".
+# One part, two stories. Make/buy is bought_in_policy's single answer; this check reads it
+# rather than re-deriving a vinyl-gate of its own. A bought-in that is genuinely unpriced is
+# owned by check_prices_are_reproducible and check_every_unpriced_line_says_why.
+def _vinyl_graphic(**over):
+    """03G as the summary carries it: bought-in by family, no material_estimate money."""
+    part = {"part_number": "11762-02-03G", "normalized_material": "VINYL",
+            "material_family": "bought_in"}
+    part.update(over)
+    return part
+
+
+def test_a_priced_bought_in_graphic_does_not_block_when_its_money_is_off_material_estimate():
+    """The 03G case exactly: priced elsewhere, empty material_estimate, must not fire."""
+    import bought_in_policy as bip
+    part = _vinyl_graphic()
+    assert bip.is_bought_in(part) is True, "the fixture must be a bought-in for this to test it"
+    assert inv.check_a_material_we_cannot_price_is_declared(_job(part)) == []
+
+
+def test_a_bought_in_graphic_does_not_block_even_carrying_a_zero_material_estimate():
+    """A recorded 0.0 on a MADE part is the under-charge this check exists for -- but on a
+    PURCHASED part the material cost is meant to be zero (the price is on the bought-in line),
+    so the zero here is not evidence of anything missing."""
+    part = _vinyl_graphic(material_estimate={"unit_material_cost_gbp": 0.0})
+    assert inv.check_a_material_we_cannot_price_is_declared(_job(part)) == []
+
+
+def test_bought_in_by_page_role_is_also_excluded():
+    """Whichever signal made it bought-in, the exclusion follows the classifier, not a field."""
+    part = {"part_number": "SOMEPART", "normalized_material": "VINYL",
+            "page_roles": ["bought_in"]}
+    import bought_in_policy as bip
+    assert bip.is_bought_in(part) is True
+    assert inv.check_a_material_we_cannot_price_is_declared(_job(part)) == []
+
+
+def test_a_fabricated_part_with_no_rate_still_blocks_after_the_exclusion():
+    """THE REGRESSION GUARD. The ABS door is a part we CUT -- is_bought_in is False -- so the
+    exclusion must not touch it. A real material, no rate, no cost is still ours to answer."""
+    import bought_in_policy as bip
+    door = {"part_number": "11650-01-05A", "normalized_material": "ABS"}
+    assert bip.is_bought_in(door) is False, "an ABS blank is fabricated, not purchased"
+    found = inv.check_a_material_we_cannot_price_is_declared(_job(door))
+    assert [v["severity"] for v in found] == [BLOCKING]
+    assert "UNDER-CHARGED" in found[0]["message"]

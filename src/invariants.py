@@ -1388,6 +1388,22 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         return []
     substituted, unpriceable, indicated = [], [], []
     for part in parts:
+        # A PURCHASED PART IS NOT A MATERIAL WE FAILED TO RATE. This check's premise -- "there is
+        # no rate to enter against, no estimator input fixes this" -- holds only for stock we CUT.
+        # A bought-in line (VINYL, a fixing, a print) is priced from a catalogue or a market
+        # figure, not a GBP/m2 sheet rate, and an estimator CAN enter its price. On 11762-02 the
+        # 03G graphic carried GBP 22.42 from the bought-in path while this check, reading only the
+        # material-rate fields, called the SAME part a BLOCKING under-charge that "costs NOTHING"
+        # -- one part, two stories. Make/buy is bought_in_policy's single answer, not this check's
+        # to re-derive from its own vinyl-gate; a bought-in that is genuinely unpriced is owned by
+        # check_prices_are_reproducible and check_every_unpriced_line_says_why, so nothing here
+        # goes silent by stepping aside.
+        try:
+            import bought_in_policy as _bip
+            if _bip.is_bought_in(part):
+                continue
+        except Exception:                                    # noqa: BLE001
+            pass
         # PRICED FROM A MARKET LOOKUP IS NOT UNPRICED, and it is not a rate either. The line
         # carries money, so the under-charge is closed; the money is an LLM estimate, so the
         # job cannot go out firm on it -- check_prices_are_firm sees the stamp and says so.
