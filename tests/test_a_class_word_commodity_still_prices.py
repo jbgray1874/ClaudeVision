@@ -105,3 +105,40 @@ def test_a_fabricated_part_is_not_captured_as_a_commodity():
           "normalized_material": "MILD STEEL", "quantity": 1}
     sc = estimator._resolve_part_system_cost(bp)
     assert sc["applied_unit_cost"] is None
+
+
+# THE PATH THE REAL CLIP TAKES. It is a canonical BOM bought-in with NO pricing record —
+# estimate_part is never called on it, so it is not in part_estimates. wb_populate mints the
+# BOM row directly in canonicalise_part_estimates_for_workbook. That mint used to write a
+# withheld £0; it now prices a known commodity by description.
+
+def _summary_with_canonical_clip():
+    return {"canonical_route_shadow": {"nodes": [
+        {"part_number": "STD PART", "kind": "bought_in",
+         "description": _CLIP_DESC, "qty_per_unit": 1},
+        {"part_number": "FIXING", "kind": "bought_in",
+         "description": "M6x20 SOCKET CAP SCREW", "qty_per_unit": 4},
+        {"part_number": "11762-17-02M", "kind": "leaf", "description": "BACK PLATE"},
+    ]}}
+
+
+def test_the_populate_mint_prices_a_class_word_commodity_with_no_pricing_record():
+    """A canonical bought-in the pricer never saw is minted straight onto the BOM. A known
+    commodity gets its config buy price there, not a withheld blank that reads as free."""
+    import wb_populate
+    pes = [{"part_number": "11762-17-02M", "description": "BACK PLATE",
+            "material_estimate": {"unit_material_cost_gbp": 0.21}}]
+    out = wb_populate.canonicalise_part_estimates_for_workbook(_summary_with_canonical_clip(), pes)
+    clip = next(p for p in out if str(p.get("part_number")) == "STD PART")
+    assert wb_populate._bom_line_price(clip) == 1.2
+    assert clip.get("extended_total_cost_gbp") == 1.2
+    assert not clip.get("_price_explicitly_withheld")
+
+
+def test_the_populate_mint_leaves_a_non_commodity_bought_in_estimator_to_price():
+    """A FIXING with no commodity match must stay a withheld estimator-to-price row."""
+    import wb_populate
+    out = wb_populate.canonicalise_part_estimates_for_workbook(_summary_with_canonical_clip(), [])
+    fixing = next(p for p in out if str(p.get("part_number")) == "FIXING")
+    assert fixing.get("_price_explicitly_withheld") is True
+    assert wb_populate._bom_line_price(fixing) is None

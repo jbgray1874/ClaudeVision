@@ -1696,13 +1696,62 @@ def canonicalise_part_estimates_for_workbook(
 
     # An explicit bought-in BOM line must remain visible even when no pricing record was
     # created. It is safer as an unpriced estimator row than absent from the BOM.
+    #
+    # THIS IS WHERE A CLASS-WORD COMMODITY ACTUALLY REACHES THE SHEET.
+    #
+    # 11762-17's "STD PART / PERFO PLASTIC LOCKING CLIP" is a canonical BOM bought-in that never
+    # got a pricing record — estimate_part is never called on it, so it is NOT in part_estimates,
+    # and every pricing fix in estimator.py sat on a line this one never crosses. It is minted
+    # HERE, and it shipped £0 four runs running because this mint only ever wrote a withheld
+    # placeholder. But a generically-named standard commodity has a fixed config figure keyed on
+    # its DESCRIPTION (the class word 'STD PART' in the code column is no obstacle). Consult the
+    # DB-free commodity table at the mint: on a hit, write the buy price onto the row — material
+    # only, no bench-fitting uplift, flagged PROVISIONAL — instead of a blank the sheet reads as
+    # free. A bought-in with no commodity match still mints as the estimator-to-price row below.
     for identity, node in nodes.items():
         if node.get("kind") != "bought_in" or identity in normalised:
             continue
+        _bi_desc = node.get("description") or ""
+        _bi_qty = node.get("qty_per_unit") or 1
+        _bi_com = None
+        try:
+            from pricing_service import standard_commodity_price as _std_commodity
+            _bi_com = _std_commodity({"description": _bi_desc, "part_number": identity})
+        except Exception:                                        # noqa: BLE001
+            _bi_com = None
+        _bi_unit = _safe(_bi_com.get("unit_price_gbp")) if _bi_com else None
+        if _bi_unit is not None and _bi_unit > 0:
+            _bi_unit = round(float(_bi_unit), 2)
+            _bi_ext = round(_bi_unit * int(_bi_qty or 1), 2)
+            normalised[identity] = {
+                "part_number": identity,
+                "description": _bi_desc,
+                "quantity": _bi_qty,
+                "page_roles": ["bought_in"],
+                "unit_cost_gbp": _bi_unit,
+                "unit_material_cost_gbp": _bi_unit,
+                "unit_total_cost_gbp": _bi_unit,
+                "extended_total_cost_gbp": _bi_ext,
+                "material_estimate": {
+                    "unit_material_cost_gbp": _bi_unit,
+                    "cost_per_part_gbp": _bi_unit,
+                    "extended_material_cost_gbp": _bi_ext,
+                    "cost_method": "standard_commodity_provisional",
+                },
+                "costing_basis": "standard_commodity_provisional",
+                "source": "standard_commodity_provisional",
+                "review_flag": True,
+                "review_flags": [
+                    _bi_com.get("review_reason")
+                    or "Provisional standard-commodity price — confirm against a supplier quote."
+                ],
+            }
+            order.append(identity)
+            continue
         normalised[identity] = {
             "part_number": identity,
-            "description": node.get("description") or "",
-            "quantity": node.get("qty_per_unit") or 1,
+            "description": _bi_desc,
+            "quantity": _bi_qty,
             "page_roles": ["bought_in"],
             "material_estimate": {},
             "_price_explicitly_withheld": True,
