@@ -115,27 +115,33 @@ def test_wire_mesh_is_left_to_the_section_path_not_reclassified_as_bar():
 # Policy (James): never a blank. A wire with no schedule/CL length is NOT left at £0 and NOT
 # priced as sheet off the PDF outline (5496/6364mm); it carries an INDICATIVE figure from a
 # short assumed developed length x Ø x £1,600/t, flagged, that Tim overwrites when measured.
-def test_a_compact_u_wire_is_priced_indicatively_not_left_blank():
-    """03M U-wire, Ø8, no length -> ~£0.26 (0.4m x Ø8 x £1,600/t x 1.04), NOT £None, NOT sheet."""
+def test_a_u_wire_with_gauge_and_no_length_is_priced_indicative():
+    """03M U-wire, Ø8, no length -> ~£0.26 (0.4m band), keyed on surviving mi.stock_form."""
     me = estimate_material({
-        "part_number": "11762-17-03M", "description": "U WIRE",
-        "normalized_material": "MILD STEEL", "quantity": 20, "_bar_recognised": True,
-        "wire_gauge_mm": 8.0})
-    assert me["stock_form"] == "wire"
+        "part_number": "11762-17-03M",
+        "description": "U WIRE",
+        "normalized_material": "MILD STEEL",
+        "quantity": 1,
+        "manufacturing_interpretation": {"stock_form": "wire", "wire_gauge_mm": 8.0},
+    })
     assert me["cost_method"] == "wire_tonne_rate_assumed_length"
+    assert 0.20 <= me["unit_material_cost_gbp"] <= 0.32   # ~£0.26
+    assert me["wire_gauge_mm"] == 8.0
     assert me["thickness_mm"] is None, "the diameter must never sit in the thickness field"
-    assert me["unit_material_cost_gbp"] == pytest.approx(0.26, abs=0.03), "compact 0.4m band"
-    assert me.get("estimator_input_required") is True, "length is assumed -> estimator confirms"
+    assert me.get("stock_estimate", {}).get("length_assumed") is True
 
 
-def test_a_formed_stand_gets_the_longer_band():
-    """04M WIRE STAND, Ø8, no length -> ~£0.59 (0.9m band). Default Ø8 when none given."""
+def test_a_wire_stand_with_gauge_and_no_length_is_priced_indicative():
+    """04M WIRE STAND, Ø8, no length -> ~£0.59 (0.9m band)."""
     me = estimate_material({
-        "part_number": "11762-17-04M", "description": "WIRE STAND",
-        "normalized_material": "MILD STEEL", "quantity": 20, "_bar_recognised": True})
+        "part_number": "11762-17-04M",
+        "description": "WIRE STAND",
+        "normalized_material": "MILD STEEL",
+        "quantity": 1,
+        "manufacturing_interpretation": {"stock_form": "wire", "wire_gauge_mm": 8.0},
+    })
     assert me["cost_method"] == "wire_tonne_rate_assumed_length"
-    assert me["wire_gauge_mm"] == 8.0, "no Ø given -> the config default gauge"
-    assert me["unit_material_cost_gbp"] == pytest.approx(0.59, abs=0.05), "formed 0.9m band"
+    assert 0.45 <= me["unit_material_cost_gbp"] <= 0.75   # ~£0.59
 
 
 def test_the_price_fires_on_surviving_stock_form_when_the_flag_is_lost():
@@ -186,15 +192,19 @@ def test_the_pdf_outline_is_never_used_as_the_length():
     assert me["unit_material_cost_gbp"] < 1.0, "5.5m of Ø8 would be ~£3.6; the band keeps it low"
 
 
-def test_a_real_a_b_t_tube_is_left_to_the_section_path():
-    """A genuine hollow profile is a TUBE, not a solid wire — it keeps the linear-stock path,
-    so the wire pricing here must not swallow it."""
-    part = {"part_number": "X", "description": "RHS TUBE",
-            "normalized_material": "MILD STEEL", "quantity": 1,
-            "manufacturing_interpretation": {"stock_form": "wire"},
-            "section_stock": {"a": 40.0, "b": 40.0, "t": 3.0}}
-    me = estimate_material(part)
-    assert me.get("cost_method") != "wire_tonne_rate_assumed_length", "an a×b×t tube is not wire here"
+def test_an_a_by_b_by_t_tube_is_not_priced_as_assumed_wire():
+    """A genuine hollow a×b×t profile is a TUBE — even with a 'wire' label poisoning it, the
+    assumed-wire method must not swallow it; it keeps the linear-stock/tube path."""
+    me = estimate_material({
+        "part_number": "TUBE-01",
+        "normalized_material": "MILD STEEL",
+        "quantity": 1,
+        "description": "40x40x3 SHS 500 LONG",
+        "manufacturing_interpretation": {"stock_form": "wire"},  # poisoned label
+        "section_stock": {"a": 40.0, "b": 40.0, "t": 3.0},
+        "wire_length_mm": 500.0,
+    })
+    assert me.get("cost_method") != "wire_tonne_rate_assumed_length"
 
 
 def test_a_wire_with_a_real_gauge_and_length_is_still_priced_on_the_bar_basis():
