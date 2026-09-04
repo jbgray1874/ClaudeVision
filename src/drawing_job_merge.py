@@ -407,6 +407,25 @@ def _arbitrate_pierces(flat: Dict[str, Any], raw: Dict[str, Any]) -> Optional[Di
                      f"not a measurement")}
 
 
+def bend_count_disagreement(bend_count_dxf, sw_bend_count):
+    """A review message when the DXF BENDLINES layer and the SOLIDWORKS bend count differ, else
+    None.
+
+    Both count folds. bend_count_dxf -- the measured BENDLINES layer, what the press brake bends
+    from -- is the one the engine uses, but a silent win hides that the model and the flat
+    disagree: on 11762-02-02M the DXF read 5 folds and SW 4, one fold of labour apart. Fires
+    ONLY when both sources exist and differ; an absent source is a gap the other fills, not a
+    disagreement, so it says nothing."""
+    if bend_count_dxf is None or sw_bend_count is None:
+        return None
+    _dxf, _sw = int(bend_count_dxf or 0), int(sw_bend_count or 0)
+    if _dxf == _sw:
+        return None
+    return (f"BEND COUNT DISAGREES: DXF BENDLINES layer shows {_dxf}, the SOLIDWORKS bend count "
+            f"shows {_sw}. The DXF is what the press brake folds from, so {_dxf} is used -- "
+            f"confirm the fold count.")
+
+
 def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str, Any]:
     """
     Augment a part dict with DXF geometry.
@@ -690,6 +709,13 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
         _bcx = part.get("bend_count_dxf")
         _ebl = _gr.get("estimated_bend_line_count")
         _resolved_bends = int((_bcx if _bcx is not None else (_ebl if _ebl is not None else 0)) or 0)
+        # TWO SOURCES FOR ONE COUNT: SAY SO WHEN THEY DISAGREE. The DXF BENDLINES layer and the
+        # SOLIDWORKS API both count folds, and bend_count_dxf now wins where both exist (it is
+        # the press-brake truth) -- but a silent win hides that the model and the flat disagree.
+        # On 11762-02-02M the DXF read 5 and SW 4, one fold of labour apart.
+        _bend_msg = bend_count_disagreement(_bcx, _ebl)
+        if _bend_msg:
+            part.setdefault("review_flags", []).append(_bend_msg)
         # A MEASURED ZERO, NOT AN ABSENT LAYER. See dxf_declares_bend_layer: a cut-only
         # export carries no bend layer, and reading its silence as "does not fold" ruled the
         # fold off 11350's left arm — a part the drawing shows formed. Where the layer is

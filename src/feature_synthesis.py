@@ -38,6 +38,17 @@ def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
     # bend). A DXF-confirmed 0 must mean 0 folds — not fall through to proxies.
     if part.get("flat_pattern_detected") and part.get("geometry_source") == "dxf_flat_pattern":
         _gr = part.get("geometry_rollup") or {}
+        # THE BENDLINES LAYER IS THE PRESS-BRAKE TRUTH, AND IT OUTRANKS AN SW BEND COUNT.
+        # estimated_bend_line_count in the rollup can be overwritten by the SOLIDWORKS API,
+        # which counts model bends and can disagree with the DXF: on 11762-02-02M the DXF
+        # BENDLINES layer carried 5 folds and the SW value was 4, so the Fold op was booked
+        # one bend light. bend_count_dxf is only ever the measured BENDLINES count, so when it
+        # is present it wins -- the same rule the fold rule-out already applies. It is absent
+        # when the layer measured zero (a cut-only export sets no bend layer), and there the
+        # rollup's authoritative measured-zero still decides, so a 0-fold part is untouched.
+        _dxf_bl = part.get("bend_count_dxf")
+        if _dxf_bl is not None:
+            return int(_dxf_bl or 0)
         return int(_gr.get("estimated_bend_line_count", 0) or 0)
     angle_count = len(part.get("angles_deg", []))
     fold_value_count = len(part.get("fold_values_mm", []))
