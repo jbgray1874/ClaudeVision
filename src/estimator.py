@@ -2894,36 +2894,81 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         part.get("_bar_recognised")
         or str(_mi_wire.get("stock_form") or "").lower() == "wire"
         or str(_me_wire.get("stock_form") or "").lower() == "wire")
-    if _is_wire_stock and not _is_section_or_wire_candidate(part, material):
+    # SECTION vs WIRE. A hollow a×b×t profile is a TUBE and keeps its own linear-stock path
+    # below; a solid round wire/bar is priced HERE. The old conjunct excluded anything
+    # _is_section_or_wire_candidate calls "section/wire" -- which fires on the bare word WIRE in
+    # the description -- so "U WIRE" / "WIRE STAND" were skipped and fell to the sheet/default
+    # rate card at £0.63 / £45. Guard on a REAL tube profile only.
+    _ss_wire = part.get("section_stock") or {}
+    _is_profile_tube = bool(_ss_wire.get("a") and _ss_wire.get("b") and _ss_wire.get("t"))
+    if _is_wire_stock and not _is_profile_tube:
+        _wb_w = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
         _wg = (_safe_float(part.get("wire_gauge_mm"))
                or _safe_float(_mi_wire.get("wire_gauge_mm"))
-               or _safe_float(_me_wire.get("wire_gauge_mm")))
+               or _safe_float(_me_wire.get("wire_gauge_mm"))
+               or float(getattr(config, "WIRE_DEFAULT_GAUGE_MM", 8.0)))
+        # LENGTH: a schedule / CL length only (the sole writer of wire_length_mm). A PDF cut path
+        # (5496 / 6364mm on 11762-17) is an OUTLINE, never a developed length, so it is NOT used.
         _wl = _safe_float(part.get("wire_length_mm"))
-        _missing = [n for n, v in (("diameter", _wg), ("developed length", _wl)) if not v]
+        _length_assumed = False
+        if not _wl or _wl <= 0:
+            # Assume a SHORT developed length by FORM until the detail is measured: a compact
+            # formed wire (a U, a hook, a clip) is a fraction of a stand / frame. Config-driven,
+            # keyed on the description, never a part number.
+            _desc_w = str(part.get("description") or part.get("part_number") or "").upper()
+            _bands = getattr(config, "WIRE_ASSUMED_DEVELOPED_LENGTH_MM",
+                             {"compact": 400.0, "formed": 900.0})
+            _compact_kw = getattr(config, "WIRE_COMPACT_KEYWORDS",
+                                  ("U WIRE", "U-WIRE", "HOOK", "CLIP", "LOOP", "PIN", "CLASP"))
+            _wl = float(_bands.get("compact", 400.0) if any(k in _desc_w for k in _compact_kw)
+                        else _bands.get("formed", 900.0))
+            _wl = min(_wl, 1500.0)
+            _length_assumed = True
+        _rate_t = float(_wb_w.get("wire_cost_per_tonne_gbp") or 1600.0)
+        _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
+        _area_m2 = 3.14159265 * ((_wg / 2000.0) ** 2)
+        _kg_per_m = _area_m2 * 7850.0
+        _mpt = (1000.0 / _kg_per_m) if _kg_per_m > 0 else None
+        _unit = _ext = _mass = None
+        if _mpt and _mpt > 0:
+            _ppm = _rate_t / _mpt
+            _unit = (_ppm / 1000.0) * _wl * (1.0 + _scrap)
+            _ext = _unit * quantity
+            _mass = _wl / 1000.0 / _mpt * 1000.0
         part.setdefault("review_flags", []).append(
-            f"{part.get('part_number')}: wire/bar stock — {' and '.join(_missing)} not measured "
-            f"(no bar/wire schedule, SolidWorks cut-list or CL dimension; a PDF cut path is not a "
-            f"length). Material left for the estimator; NOT priced as sheet.")
+            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at £{_rate_t:.0f}/t"
+            + (" — [AI ESTIMATE - INDICATIVE, NOT A QUOTE]; developed length ASSUMED, overwrite "
+               "when a schedule / CL callout or Tim gives it (a PDF outline is not a length)."
+               if _length_assumed else "."))
         return {
             "material": material,
             "thickness_mm": None,               # a DIAMETER is not a thickness
             "blank_length_mm": _wl,
             "blank_width_mm": None,
             "blank_area_m2": None,
-            "unit_material_cost_gbp": None,
-            "cost_per_part_gbp": None,
-            "extended_material_cost_gbp": None,
-            "cost_method": "wire_stock_estimator_to_confirm",
+            "unit_material_mass_kg": round(_mass, 5) if _mass is not None else None,
+            "unit_material_cost_gbp": round(_unit, 4) if _unit is not None else None,
+            "cost_per_part_gbp": round(_unit, 4) if _unit is not None else None,
+            "extended_material_cost_gbp": round(_ext, 2) if _ext is not None else None,
+            "stock_estimate": {
+                "wire_length_mm": _wl, "wire_gauge_mm": _wg,
+                "length_assumed": _length_assumed,
+                "metres_per_tonne": round(_mpt, 1) if _mpt else None,
+            },
+            "cost_method": ("wire_tonne_rate_assumed_length" if _length_assumed
+                            else "workbook_bar_formula"),
             "stock_form": "wire",
             "wire_gauge_mm": _wg,
             "wire_length_mm": _wl,
             "requires_flat_blank": False,
-            "estimator_input_required": True,
+            "estimator_input_required": _length_assumed,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
             "price_source": _build_price_source_metadata(
-                external_result, fallback_source="wire_stock_estimator_to_confirm",
-                applied=False),
+                external_result, fallback_source="config_wire_cost_per_tonne",
+                applied=True,
+                applied_basis=("assumed_length_x_tonne_rate" if _length_assumed
+                               else "bar_diameter_x_length_gauge_lookup")),
         }
 
     # Section/tube/wire path: uses linear stock mass estimate when profile+length is available.

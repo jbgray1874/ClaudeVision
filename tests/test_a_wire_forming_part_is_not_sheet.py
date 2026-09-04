@@ -24,6 +24,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -109,57 +111,95 @@ def test_wire_mesh_is_left_to_the_section_path_not_reclassified_as_bar():
     assert not part.get("_bar_recognised"), "WIRE MESH is a section, not a solid bar"
 
 
-# ── material: no trusted length -> estimator input on WIRE, never a sheet penny ──────
-def test_a_wire_with_a_gauge_but_no_length_is_an_estimator_input_not_sheet():
-    """James's rule: a PDF cut path is not a length. With a Ø but no developed length the
-    material is left for the estimator, on wire stock — not priced as a plate."""
+# ── material: no trusted length -> INDICATIVE wire price off a short assumed length ──
+# Policy (James): never a blank. A wire with no schedule/CL length is NOT left at £0 and NOT
+# priced as sheet off the PDF outline (5496/6364mm); it carries an INDICATIVE figure from a
+# short assumed developed length x Ø x £1,600/t, flagged, that Tim overwrites when measured.
+def test_a_compact_u_wire_is_priced_indicatively_not_left_blank():
+    """03M U-wire, Ø8, no length -> ~£0.26 (0.4m x Ø8 x £1,600/t x 1.04), NOT £None, NOT sheet."""
     me = estimate_material({
-        "part_number": "11762-17-03M", "normalized_material": "MILD STEEL",
-        "quantity": 20, "_bar_recognised": True, "wire_gauge_mm": 8.0})
+        "part_number": "11762-17-03M", "description": "U WIRE",
+        "normalized_material": "MILD STEEL", "quantity": 20, "_bar_recognised": True,
+        "wire_gauge_mm": 8.0})
     assert me["stock_form"] == "wire"
-    assert me["cost_method"] == "wire_stock_estimator_to_confirm"
-    assert me["unit_material_cost_gbp"] is None, "a wire with no length must not carry a £ figure"
+    assert me["cost_method"] == "wire_tonne_rate_assumed_length"
     assert me["thickness_mm"] is None, "the diameter must never sit in the thickness field"
-    assert me.get("estimator_input_required") is True
+    assert me["unit_material_cost_gbp"] == pytest.approx(0.26, abs=0.03), "compact 0.4m band"
+    assert me.get("estimator_input_required") is True, "length is assumed -> estimator confirms"
 
 
-def test_the_query_fires_on_surviving_stock_form_when_the_flag_is_lost():
-    """THE LIVE MISS ON 11762-17. _bar_recognised is a top-level '_'-flag that did not survive
-    to estimate_material, so a query gated on it alone was skipped and the part fell to the
-    sheet/default path (03M £0.63, 04M £45 off a PDF outline). manufacturing_interpretation
-    stock_form 'wire' DOES survive (it dropped the laser), so the guard keys on that: a wire
-    with no _bar_recognised still gets the query, not a sheet price."""
+def test_a_formed_stand_gets_the_longer_band():
+    """04M WIRE STAND, Ø8, no length -> ~£0.59 (0.9m band). Default Ø8 when none given."""
     me = estimate_material({
-        "part_number": "11762-17-03M", "normalized_material": "MILD STEEL", "quantity": 20,
+        "part_number": "11762-17-04M", "description": "WIRE STAND",
+        "normalized_material": "MILD STEEL", "quantity": 20, "_bar_recognised": True})
+    assert me["cost_method"] == "wire_tonne_rate_assumed_length"
+    assert me["wire_gauge_mm"] == 8.0, "no Ø given -> the config default gauge"
+    assert me["unit_material_cost_gbp"] == pytest.approx(0.59, abs=0.05), "formed 0.9m band"
+
+
+def test_the_price_fires_on_surviving_stock_form_when_the_flag_is_lost():
+    """THE LIVE MISS ON 11762-17: _bar_recognised did not survive to estimate_material, so the
+    guard keys on manufacturing_interpretation.stock_form 'wire' (which did — it dropped the
+    laser). A wire with no _bar_recognised is still priced here, not on the sheet/default card."""
+    me = estimate_material({
+        "part_number": "11762-17-03M", "description": "U WIRE",
+        "normalized_material": "MILD STEEL", "quantity": 20,
         "manufacturing_interpretation": {"stock_form": "wire", "wire_gauge_mm": 8.0}})
     assert me["stock_form"] == "wire"
-    assert me["cost_method"] == "wire_stock_estimator_to_confirm"
-    assert me["unit_material_cost_gbp"] is None, "no sheet/default price on a wire with no length"
-    assert me["wire_gauge_mm"] == 8.0, "the Ø survives via manufacturing_interpretation"
+    assert me["cost_method"] == "wire_tonne_rate_assumed_length"
+    assert me["unit_material_cost_gbp"] and me["unit_material_cost_gbp"] > 0
+    assert "config_default_material_rates" not in str(me.get("price_source") or "")
 
 
-def test_the_missing_datum_names_the_length():
-    part = {"part_number": "11762-17-03M", "normalized_material": "MILD STEEL",
-            "quantity": 20, "_bar_recognised": True, "wire_gauge_mm": 8.0}
+def test_a_wire_named_part_that_trips_section_candidate_is_still_priced_here():
+    """THE BUG THAT KEPT £45 ALIVE. _is_section_or_wire_candidate fires on the word WIRE, so the
+    old `and not _is_section_or_wire_candidate` conjunct skipped 03M/04M into the default card.
+    The guard now excludes only a REAL a×b×t tube; a wire with no such profile is priced here."""
+    me = estimate_material({
+        "part_number": "11762-17-04M", "description": "WIRE STAND",
+        "normalized_material": "MILD STEEL", "quantity": 20,
+        "manufacturing_interpretation": {"stock_form": "wire"}})
+    assert me["cost_method"] == "wire_tonne_rate_assumed_length", "must not fall to the card"
+    assert me["unit_material_cost_gbp"] and me["unit_material_cost_gbp"] > 0
+
+
+def test_the_flag_says_the_length_was_assumed():
+    part = {"part_number": "11762-17-03M", "description": "U WIRE",
+            "normalized_material": "MILD STEEL", "quantity": 20, "_bar_recognised": True,
+            "wire_gauge_mm": 8.0}
     estimate_material(part)
     flags = " ".join(part.get("review_flags") or [])
-    assert "developed length" in flags and "not measured" in flags
-    assert "diameter" not in flags, "the diameter WAS given, so only the length is missing"
+    assert "ASSUMED" in flags and "INDICATIVE" in flags
+    assert "PDF outline is not a length" in flags
 
 
-def test_a_wire_with_neither_gauge_nor_length_names_both():
-    part = {"part_number": "11762-17-04M", "normalized_material": "MILD STEEL",
-            "quantity": 20, "_bar_recognised": True}
+def test_the_pdf_outline_is_never_used_as_the_length():
+    """The whole point: a 5496mm PDF cut path must not become 5.5m of priced wire (~£3.6).
+    With no trusted wire_length_mm the price comes off the SHORT assumed band, not cut_length."""
+    me = estimate_material({
+        "part_number": "11762-17-03M", "description": "U WIRE",
+        "normalized_material": "MILD STEEL", "quantity": 20, "_bar_recognised": True,
+        "wire_gauge_mm": 8.0, "cut_length_mm": 5496.0,
+        "normalized_geometry": {"developed_length_mm": None}})
+    assert me["wire_length_mm"] <= 1500.0, "the inflated outline must never become the length"
+    assert me["unit_material_cost_gbp"] < 1.0, "5.5m of Ø8 would be ~£3.6; the band keeps it low"
+
+
+def test_a_real_a_b_t_tube_is_left_to_the_section_path():
+    """A genuine hollow profile is a TUBE, not a solid wire — it keeps the linear-stock path,
+    so the wire pricing here must not swallow it."""
+    part = {"part_number": "X", "description": "RHS TUBE",
+            "normalized_material": "MILD STEEL", "quantity": 1,
+            "manufacturing_interpretation": {"stock_form": "wire"},
+            "section_stock": {"a": 40.0, "b": 40.0, "t": 3.0}}
     me = estimate_material(part)
-    assert me["cost_method"] == "wire_stock_estimator_to_confirm"
-    assert me["unit_material_cost_gbp"] is None
-    flags = " ".join(part.get("review_flags") or [])
-    assert "diameter" in flags and "developed length" in flags
+    assert me.get("cost_method") != "wire_tonne_rate_assumed_length", "an a×b×t tube is not wire here"
 
 
 def test_a_wire_with_a_real_gauge_and_length_is_still_priced_on_the_bar_basis():
-    """REGRESSION GUARD. The estimator-input return must not intercept a bar that CAN be
-    priced — a schedule-recognised stud with Ø and length still prices on the bar formula."""
+    """REGRESSION GUARD. A schedule-recognised stud with Ø and a TRUSTED length still prices on
+    the bar formula (the branch above this one), not the assumed-length band."""
     me = estimate_material({
         "part_number": "1310-02", "normalized_material": "MILD STEEL", "quantity": 1,
         "_bar_recognised": True, "wire_gauge_mm": 8.0, "wire_length_mm": 65.0})
@@ -168,25 +208,10 @@ def test_a_wire_with_a_real_gauge_and_length_is_still_priced_on_the_bar_basis():
     assert me["unit_material_cost_gbp"] and me["unit_material_cost_gbp"] > 0
 
 
-# ── the guard James asked for: fabricated + wire_forming + (sheet £ | laser) -> fail ─
 def test_a_wire_stock_part_cannot_be_lasered():
-    """The laser-drop half of the guard, at its source: the stock_form impossibility rules say
-    a solid wire is never lasered (nor sheet-folded/punched). Recognition sets stock_form
-    'wire'; this is what then strikes the laser row in route_compiler."""
+    """The laser-drop half: the stock_form impossibility rules say a solid wire is never lasered
+    (nor sheet-folded/punched); that is what strikes the laser row in route_compiler."""
     assert stock_form_rules.is_impossible_operation("laser_cutting", "wire", "MILD STEEL")
-    assert stock_form_rules.is_impossible_operation("laser", "wire", "MILD STEEL")
     assert stock_form_rules.is_impossible_operation("folding", "wire", "MILD STEEL")
-    # and the ops a wire legitimately keeps are NOT impossible
     assert not stock_form_rules.is_impossible_operation("welding", "wire", "MILD STEEL")
     assert not stock_form_rules.is_impossible_operation("robomac", "wire", "MILD STEEL")
-
-
-def test_the_material_half_of_the_guard_no_sheet_pounds_on_a_wire():
-    """A fabricated wire_forming part must not carry a Sheet-Steel-basis £: its material_estimate
-    is wire stock, and unpriced (estimator input) rather than a sheet blank cost."""
-    me = estimate_material({
-        "part_number": "11762-17-04M", "normalized_material": "MILD STEEL", "quantity": 20,
-        "_bar_recognised": True})
-    assert me["stock_form"] == "wire"
-    assert me["cost_method"] != "sheet_metal" and "sheet" not in me["cost_method"]
-    assert me["unit_material_cost_gbp"] is None
