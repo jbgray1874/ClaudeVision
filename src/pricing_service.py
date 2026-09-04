@@ -1020,7 +1020,14 @@ class PricingService:
         if not _desc_u.strip():
             return None
         for _tok, _c in table.items():
-            if str(_tok).upper() in _desc_u:
+            # A key may name ONE token ("PALLET") or several joined by "+" ("PERFO+CLIP"),
+            # in which case EVERY token must appear in the description. This keeps a
+            # generically-named commodity from over-matching: "PERFO+CLIP" prices the
+            # perforated-panel locking clip without also capturing a fabricated clip or a
+            # plain cable clip that happens to carry the word "CLIP". A single-token key is
+            # the len==1 case, so existing entries behave exactly as before.
+            _needed = [t.strip() for t in str(_tok).upper().split("+") if t.strip()]
+            if _needed and all(t in _desc_u for t in _needed):
                 try:
                     _price = float(_c.get("price_gbp") or 0)
                 except (TypeError, ValueError):

@@ -366,12 +366,23 @@ COMMERCIAL_LINE_ASK_MARKET = False
 # catalogue, at which point the DB rate wins (this is only consulted on the fallback path, after
 # the catalogue and history miss). This is the COMPONENT pallet the display is built on — distinct
 # from PACKAGING_CONFIG["pallet"], which is the per-order SHIPPING pallet share. Confirm each price.
-#   token (matched as an UPPER-CASE substring of the description) -> {price_gbp, label}
+#   token -> {price_gbp, label}. A token is matched as an UPPER-CASE substring of the
+#   description; join tokens with "+" ("PERFO+CLIP") to require that EVERY one is present,
+#   which keeps a generic word from over-matching a part it does not name.
 STANDARD_COMMODITY_PRICE_GBP = {
     "PALLET": {
         "price_gbp": 12.00,
         "label": "standard 1200x1000 UK pallet (new) — PROVISIONAL, confirm new/recon and "
                  "whether an ISPM-15 heat-treated stamp is needed for export",
+    },
+    # 11762-17 item "STD PART / PERFO PLASTIC LOCKING CLIP" — the plastic clip that locks a
+    # bottle-shelf into a perforated panel. No SDI part code, so the purchasing DB cannot
+    # match it and the line read as £0.00. Both tokens are required so this prices the
+    # perforated-panel clip only, not any part that merely says "CLIP". Per-each provisional.
+    "PERFO+CLIP": {
+        "price_gbp": 1.20,
+        "label": "perforated-panel plastic locking clip — PROVISIONAL per-each, confirm "
+                 "against a supplier quote or add the item to the purchasing catalogue",
     },
 }
 

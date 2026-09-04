@@ -56,3 +56,34 @@ def test_the_config_carries_the_pallet_and_documents_the_distinction():
     assert "PALLET" in table and table["PALLET"]["price_gbp"] > 0
     # the component pallet is a separate figure from the shipping-pallet share
     assert config.PACKAGING_CONFIG["pallet"]["price_gbp"] != table["PALLET"]["price_gbp"]
+
+
+# 11762-17: STD PART / PERFO PLASTIC LOCKING CLIP. No SDI code, so the DB cannot match it and
+# the line read as £0.00. A multi-token "PERFO+CLIP" key requires BOTH words, so it prices the
+# perforated-panel clip only — not a fabricated clip or a plain cable clip.
+
+def test_the_perfo_clip_prices_from_the_config_provisional():
+    out = _svc()._standard_commodity_price(
+        {"description": "PERFO PLASTIC LOCKING CLIP - BOTTLE LOCK", "part_number": "STD PART"})
+    assert out is not None
+    assert out["unit_price_gbp"] == 1.20
+    assert out["source_type"] == "standard_commodity_provisional"
+    assert out["price_is_reproducible"] is True
+    assert out["review_flag"] is True            # provisional, not firm
+
+
+def test_a_bare_clip_without_perfo_is_not_captured():
+    """The generic word alone must not fire the multi-token key — a cable clip is not this."""
+    assert _svc()._standard_commodity_price(
+        {"description": "ADHESIVE CABLE CLIP", "part_number": "STD PART"}) is None
+
+
+def test_perfo_alone_without_clip_is_not_captured():
+    """A perforated panel is not the clip; both tokens are required."""
+    assert _svc()._standard_commodity_price(
+        {"description": "PERFORATED PANEL 1MM MS", "part_number": "01M"}) is None
+
+
+def test_the_config_carries_the_perfo_clip():
+    table = config.STANDARD_COMMODITY_PRICE_GBP
+    assert "PERFO+CLIP" in table and table["PERFO+CLIP"]["price_gbp"] > 0
