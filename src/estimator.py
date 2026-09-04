@@ -2874,16 +2874,30 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
 
     # RECOGNISED AS WIRE/BAR BUT MISSING A TRUSTED DIAMETER OR LENGTH.
     #
-    # The bar formula above prices only when it has BOTH a gauge and a length; without them the
-    # old code fell straight through to the sheet path at the bottom of this function and priced
-    # the DIAMETER as a plate — 11762-17-03M/04M came out at £0.11/£0.13 of "sheet" on an 8mm
-    # blank. A wire has no flat blank, so that number is meaningless. And the length must be a
-    # REAL developed length (a bar/wire schedule, a SolidWorks cut-list, a CL dimension) — a PDF
-    # vector cut path (5496/6364mm here, pdf_geometry_inflation_suspected) is an inflated outline,
-    # which on Ø8 is kilograms of error, so it is deliberately NOT used as a length upstream.
-    # Surface the gap as an estimator input on WIRE stock instead of inventing a sheet price.
-    if part.get("_bar_recognised"):
-        _wg = _safe_float(part.get("wire_gauge_mm"))
+    # The bar formula above prices only when it has BOTH a gauge and a TRUSTED length (one from a
+    # bar/wire schedule — the only writers of wire_length_mm). Without them the old code fell
+    # straight through to the sheet/default path at the bottom of this function and priced the
+    # DIAMETER as a plate — 11762-17-03M came out £0.63 and 04M £45.00 off a 5496/6364mm PDF
+    # cut OUTLINE (pdf_geometry_inflation_suspected), not a developed centreline. The workbook
+    # withheld those, but they were still stamped into material_estimate and shown in Provenance:
+    # two answers for one line. A wire has no flat blank; a PDF outline is not a length.
+    #
+    # KEY THE GUARD ON stock_form == "wire", NOT on _bar_recognised. The latter is a top-level
+    # "_"-prefixed flag that does not survive to here (the run that dropped the laser proves
+    # stock_form "wire" DOES survive, on manufacturing_interpretation). Sections keep their own
+    # linear-stock path below, so exclude them. Result: a recognised wire with no trusted length
+    # is an estimator input on WIRE stock, and Provenance reads the SAME cost_method the sheet
+    # does — one answer, no invented kilos.
+    _mi_wire = part.get("manufacturing_interpretation") or {}
+    _me_wire = part.get("material_estimate") or {}
+    _is_wire_stock = bool(
+        part.get("_bar_recognised")
+        or str(_mi_wire.get("stock_form") or "").lower() == "wire"
+        or str(_me_wire.get("stock_form") or "").lower() == "wire")
+    if _is_wire_stock and not _is_section_or_wire_candidate(part, material):
+        _wg = (_safe_float(part.get("wire_gauge_mm"))
+               or _safe_float(_mi_wire.get("wire_gauge_mm"))
+               or _safe_float(_me_wire.get("wire_gauge_mm")))
         _wl = _safe_float(part.get("wire_length_mm"))
         _missing = [n for n, v in (("diameter", _wg), ("developed length", _wl)) if not v]
         part.setdefault("review_flags", []).append(

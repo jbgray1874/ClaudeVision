@@ -1105,18 +1105,24 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 if _dia is None and part.get("normalized_thickness_mm"):
                     _dia = _safe_float(part.get("normalized_thickness_mm"))
                 part["_bar_recognised"] = True
+                # stock_form on manufacturing_interpretation is the SURVIVING channel — the
+                # estimator and route both read it, and unlike the top-level _bar_recognised flag
+                # it reaches costing intact (it is what drops the laser). Carry the Ø the same way
+                # so the estimator can name the gauge even when the top-level field is lost.
+                _mi = part.setdefault("manufacturing_interpretation", {})
+                if isinstance(_mi, dict):
+                    _mi["stock_form"] = "wire"
                 if _dia:
                     part["wire_gauge_mm"] = _dia
                     # A DIAMETER is not a sheet THICKNESS — the misread that priced it as plate.
                     part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
+                    if isinstance(_mi, dict):
+                        _mi["wire_gauge_mm"] = _dia
                 # LENGTH IS NOT THE PDF CUT PATH. 5496 / 6364 mm are inflated vector outlines
                 # (pdf_geometry_inflation_suspected), not developed wire length; on Ø8 that is
                 # kilograms, not pennies. Leave wire_length_mm UNSET unless a bar/wire schedule
                 # already gave one — the estimator then asks for the length rather than pricing
                 # kilos off an outline. (Length order: schedule > SW body length > CL dim > ask.)
-                _mi = part.setdefault("manufacturing_interpretation", {})
-                if isinstance(_mi, dict):
-                    _mi["stock_form"] = "wire"
 
         # Sheet mild steel inheritance — wire detection wins over bare MILD STEEL on drawing
         inherited_steel = (

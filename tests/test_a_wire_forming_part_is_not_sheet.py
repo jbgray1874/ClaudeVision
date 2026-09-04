@@ -123,6 +123,21 @@ def test_a_wire_with_a_gauge_but_no_length_is_an_estimator_input_not_sheet():
     assert me.get("estimator_input_required") is True
 
 
+def test_the_query_fires_on_surviving_stock_form_when_the_flag_is_lost():
+    """THE LIVE MISS ON 11762-17. _bar_recognised is a top-level '_'-flag that did not survive
+    to estimate_material, so a query gated on it alone was skipped and the part fell to the
+    sheet/default path (03M £0.63, 04M £45 off a PDF outline). manufacturing_interpretation
+    stock_form 'wire' DOES survive (it dropped the laser), so the guard keys on that: a wire
+    with no _bar_recognised still gets the query, not a sheet price."""
+    me = estimate_material({
+        "part_number": "11762-17-03M", "normalized_material": "MILD STEEL", "quantity": 20,
+        "manufacturing_interpretation": {"stock_form": "wire", "wire_gauge_mm": 8.0}})
+    assert me["stock_form"] == "wire"
+    assert me["cost_method"] == "wire_stock_estimator_to_confirm"
+    assert me["unit_material_cost_gbp"] is None, "no sheet/default price on a wire with no length"
+    assert me["wire_gauge_mm"] == 8.0, "the Ø survives via manufacturing_interpretation"
+
+
 def test_the_missing_datum_names_the_length():
     part = {"part_number": "11762-17-03M", "normalized_material": "MILD STEEL",
             "quantity": 20, "_bar_recognised": True, "wire_gauge_mm": 8.0}
