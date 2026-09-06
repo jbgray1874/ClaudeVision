@@ -182,6 +182,9 @@ def test_the_nodes_run_in_date_order():
     known = {
         "15 SEP 2026": _dt.date(2026, 9, 15),
         "25 SEP 2026": _dt.date(2026, 9, 25),
+        # P2 (Production Design Extraction) go-live, re-planned from 24 Sep on 4 Sep 2026. It
+        # took the slot Client Briefing's ~NOV 2026 node held until that project went on hold.
+        "29 SEP 2026": _dt.date(2026, 9, 29),
         "SEPT / OCT 2026": _dt.date(2026, 9, 30),   # the target window opens end-Sept
         "~NOV 2026": _dt.date(2026, 11, 1),
         "4 JAN 2027": _dt.date(2027, 1, 4),

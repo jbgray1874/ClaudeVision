@@ -88,6 +88,26 @@ _SUPERSEDED = [
         r"Two workstreams are live and running <b>in parallel</b>, not in sequence\.",
         id="two-workstreams",
     ),
+    # 4 Sep 2026: Client Briefing went on hold and Muhammad moved to the manufacturing
+    # workstream. The live-phase claims below were stated on the dashboard, the roadmap, the
+    # programme page and the service page, each in its own words.
+    pytest.param(
+        "Client Briefing is on hold from 4 Sep 2026",
+        r"(?:Requirements gathering with Stuart to 21 Sep"
+        r"|Sign off the scope document by 21 Sep"
+        r"|Requirements gathering is the live phase"
+        r"|In progress, 25%"
+        r"|status:'In build \\u00b7 25%')",
+        id="client-briefing-on-hold",
+    ),
+    # 4 Sep 2026: P2 re-planned from 24 to 29 Sep, and every PDM phase moved with it. A
+    # date chip is the shortest possible way to assert the old state, so it is what is
+    # checked; prose that says "was 24 Sep" is history and stays readable.
+    pytest.param(
+        "P2 goes live on 29 Sep 2026, not 24 Sep",
+        r"text-align:center\">24 Sep 26</span>",
+        id="p2-date",
+    ),
 ]
 
 
