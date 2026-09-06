@@ -410,27 +410,35 @@ def _part_cost_credibility(mfg: Optional[Dict[str, Any]], est_part: Dict[str, An
     if "bought_in" in [str(r).lower() for r in (mfg.get("page_roles") or [])]:
         return True, []
 
-    # A WIRE / BAR PART IS NOT A FLAT, SO THE FLAT-PATTERN DOUBTS DO NOT APPLY.
+    # A LINEAR-STOCK PART (WIRE / BAR / TUBE / SECTION) IS NOT A FLAT, SO THE FLAT-PATTERN
+    # DOUBTS DO NOT APPLY.
     #
-    # A wire's cost rests on a section tonne-rate and its gauge, not on a blank read from a
-    # DXF or inflated off a PDF view — so no_part_dxf and pdf_geometry_inflation are the wrong
-    # doubts for it, exactly as they are for a bought-in that never has a flat pattern. Left in,
-    # they put a wire's whole extended cost (mostly forming/weld LABOUR, which no geometry
-    # reading touches) into the "doubted" column and dragged the credible-cost ratio to a
-    # figure that read as "5% of this job is trustworthy" on a job that is almost all solid.
-    # Where the developed length was assumed, that caveat travels on the part's own INDICATIVE
-    # review flag (the wire pricing sets it), so nothing that was flagged stops being flagged.
+    # A wire, bar, tube or section is costed from a section rate and its gauge/profile, not from
+    # a blank read off a DXF or inflated off a PDF view — so no_part_dxf and pdf_geometry_inflation
+    # are the wrong doubts for it, exactly as they are for a bought-in that never has a flat
+    # pattern. Left in, they put the part's whole extended cost (mostly forming/weld/bend LABOUR,
+    # which no geometry reading touches) into the "doubted" column: on 11762-17 the wires read as
+    # "5% of this job is trustworthy", and on 7332-01 the tube LEG (£24.08, no flat DXF because a
+    # tube has none) dragged the ratio to 28%. This is the same family the route compiler already
+    # treats as one — ("tube","wire","section","bar"). Where a developed length was assumed, that
+    # caveat still travels on the part's own INDICATIVE review flag, so nothing flagged stops being
+    # flagged.
+    _LINEAR_STOCK = {"wire", "bar", "tube", "section", "profile", "extrusion", "rod"}
     _me_cred = est_part.get("material_estimate") or {}
     _mi_cred = (est_part.get("manufacturing_interpretation")
                 or mfg.get("manufacturing_interpretation") or {})
     _cm_cred = str(_me_cred.get("cost_method") or est_part.get("cost_method") or "").lower()
-    _is_wire_bar = (
-        str(_me_cred.get("stock_form") or "").lower() in ("wire", "bar")
-        or str(_mi_cred.get("stock_form") or "").lower() in ("wire", "bar")
+    _ss_cred = est_part.get("section_stock") or mfg.get("section_stock") or {}
+    _is_linear_stock = (
+        str(_me_cred.get("stock_form") or "").lower() in _LINEAR_STOCK
+        or str(_mi_cred.get("stock_form") or "").lower() in _LINEAR_STOCK
         or bool(est_part.get("_bar_recognised"))
+        or bool(_ss_cred.get("a") and _ss_cred.get("b") and _ss_cred.get("t"))
+        or bool(_ss_cred.get("length_mm"))
         or _cm_cred.startswith("wire_") or "bar_formula" in _cm_cred
+        or "section" in _cm_cred or "tube" in _cm_cred
     )
-    if _is_wire_bar:
+    if _is_linear_stock:
         return True, []
 
     rf_blob = " ".join(str(x) for x in (est_part.get("risk_flags") or []))

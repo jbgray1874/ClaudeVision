@@ -35,6 +35,22 @@ def test_a_bar_formula_part_is_credible_too():
     assert estimator._part_cost_credibility({}, bar)[0] is True
 
 
+def test_a_tube_part_is_credible_despite_no_dxf():
+    """7332-01's LEG is a tube (Tubebend, section stock) — no flat DXF because a tube has none.
+    It was doubted at £24.08 and dragged the ratio to 28%. A tube is costed from a section rate,
+    so the flat-pattern doubts do not apply."""
+    leg = {"part_number": "7332-01-002", "description": "LEG",
+           "extended_total_cost_gbp": 24.08,
+           "material_estimate": {"stock_form": "tube", "cost_method": "section_catalogue"}}
+    assert estimator._part_cost_credibility({}, leg)[0] is True
+
+
+def test_a_section_stock_part_is_credible():
+    rail = {"part_number": "X", "description": "RAIL", "extended_total_cost_gbp": 10.0,
+            "section_stock": {"a": 25, "b": 25, "t": 2}, "material_estimate": {}}
+    assert estimator._part_cost_credibility({}, rail)[0] is True
+
+
 def test_a_genuine_no_dxf_sheet_part_is_still_doubted():
     """The exemption is for wire/bar only — a flat part with no DXF and an inflated PDF outline
     must still be flagged, or the credibility check would stop meaning anything."""
