@@ -4863,7 +4863,19 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     """Append the engine's own detail/provenance sheets under NON-colliding names,
     so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
     # AI Labour Detail — the engine's own labour breakdown (informational)
-    pes = (summary.get("estimate_summary") or {}).get("part_estimates") or summary.get("parts") or []
+    #
+    # THE SAME LIST THE ESTIMATE SHEET IS BUILT FROM. These tabs annotate the Estimate
+    # sheet's lines — the unit £, its source, the geometry behind it — so they must read the
+    # exact rows the sheet carries. The Estimate sheet is built from canonical_part_estimates
+    # (canonicalise merges recogniser duplicates AND MINTS explicit bought-in BOM lines that
+    # never got a pricing record: the class-word commodities and the market/AI lines). Reading
+    # the pre-canonical part_estimates here left every minted bought-in off both AI tabs — so
+    # 11762-17's £1.20 clip carried a price on the sheet and NO provenance row, and the report
+    # read that absence as "source not named" on a line that has a source. Prefer the canonical
+    # list; fall back to the pre-canonical one for the no-workbook / no-cutover path.
+    _es = summary.get("estimate_summary") or {}
+    pes = (_es.get("canonical_part_estimates")
+           or _es.get("part_estimates") or summary.get("parts") or [])
 
     def _add(title: str, header: List[str], rows: List[List[Any]]):
         # ensure name doesn't clash with structural sheets

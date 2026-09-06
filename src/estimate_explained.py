@@ -832,6 +832,30 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
 
 _INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
 
+# THE ENGINE'S OWN SOURCE TOKENS, SAID IN WORDS. The AI Price Provenance tab carries the
+# cost_method / source verbatim — "standard_commodity_provisional", "market_ai_indicative" —
+# because that is the machine's record. Printed straight onto an estimator's Source column it
+# reads as jargon, and "config rate card" (the old label) claimed a firmness these lines do
+# not have. Each one is an INDICATIVE figure with a stated basis, so it is said as one.
+_SOURCE_TOKENS = {
+    "standard_commodity_provisional":
+        "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
+    "market_ai_indicative": "market/AI indication — NOT A QUOTE, replace it",
+    "config rate card": "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
+    "system_cost_not_found": "no rate found — estimator to price",
+}
+
+
+def _humanise_source(raw: str) -> str:
+    """An engine source token in words an estimator can act on, or the token untouched.
+
+    Matches on the token as the tab spells it (lower-cased, spaces or underscores), so the
+    same phrase reads the same whether the machine wrote 'market_ai_indicative' or a human
+    typed 'market AI indicative' into the cell.
+    """
+    key = re.sub(r"[\s_]+", "_", str(raw or "").strip().lower())
+    return _SOURCE_TOKENS.get(key, _SOURCE_TOKENS.get(key.replace("_", " "), raw))
+
 # EVERY FABRICATED BLOCK, NOT JUST THE STEEL ONE. A BOM line whose own text says its money is
 # costed in another block (Sheet Steel / Other Sheet / Tube / Wire) is deliberately £0 here —
 # pricing it again would double it. The unpriced/outstanding-input detectors used to test only
@@ -888,6 +912,13 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
             or {})
     named = str(prov.get("Price Source") or prov.get("price_source")
                 or prov.get("Source") or prov.get("source") or "").strip()
+    # An engine source token ("standard_commodity_provisional", "market_ai_indicative") is
+    # translated to its fully-worded INDICATIVE phrase and marked so the market/AI re-wrap
+    # below leaves it alone — the phrase already carries its own qualifier. This is also
+    # where the class-word commodity (the £1.20 clip) at last names its source instead of
+    # falling to "source not named": the provenance row now exists for every minted bought-in.
+    _named_worded = _humanise_source(named)
+    _named_is_engine_phrase = bool(named) and _named_worded != named
 
     # A CATEGORY WORD IS NOT A CODE, AND SAYING SO IS THE ANSWER.
     #
@@ -958,6 +989,11 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
                 + (f" of {_qty}, ÷ {_qty} per unit" if _qty else ", divided per unit")
                 + " — NOT A QUOTE. To make it a firm house rate on every job, set "
                   "`config.COMMERCIAL_LINE_GBP_PER_ORDER` and this becomes a catalogue price")
+    # A recognised engine token is returned in its own words, ahead of the market/AI wrap —
+    # the phrase already says "INDICATIVE / NOT A QUOTE", and re-wrapping it would print the
+    # raw token in parentheses. A named supplier still leads where one is stated.
+    if _named_is_engine_phrase and not supplier:
+        return _named_worded
     if any(token in supplier.lower() for token in _INDICATIVE):
         return f"AI market indication ({supplier}) — NOT A QUOTE, replace it"
     if any(token in named.lower() for token in _INDICATIVE):
