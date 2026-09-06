@@ -1458,22 +1458,43 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
 
 
 def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
+    """How long the section is, and — on the part — WHERE that came from.
+
+    THE LAST RUNG IS A GUESS AND IT WAS INDISTINGUISHABLE FROM A MEASUREMENT.
+    Four real sources are tried, then the biggest number found anywhere on the part. On
+    7332-01-002 nothing earlier matched, so the leg's length was "the largest dimension on the
+    drawing" — which priced a 1.4m leg on an A3 stand at £5.86 each, 24% of the job's material,
+    and carried 1.5kg into the plating mass. Nothing downstream could tell that figure from a
+    cut-list reading, because the function returned a bare float either way.
+
+    It now stamps `_section_length_source` so the caller can refuse to price a guess.
+    """
     _ss_len = _safe_float((part.get("section_stock") or {}).get("length_mm"))
     if _ss_len is not None and _ss_len > 0:
+        part["_section_length_source"] = "section_stock_cut_list"
         return _ss_len
     direct = _safe_float(part.get("length_mm"))
     if direct is not None and direct > 0:
+        part["_section_length_source"] = "stated_length"
         return direct
     geom = part.get("normalized_geometry", {}) or {}
     developed = _safe_float(geom.get("developed_length_mm"))
     if developed is not None and developed > 0:
+        part["_section_length_source"] = "developed_length"
         return developed
     overall = _safe_float(part.get("overall_length_mm"))
     if overall is not None and overall > 0:
+        part["_section_length_source"] = "overall_length"
         return overall
     dims = [_safe_float(v) for v in part.get("all_dimensions_mm", [])]
     dims = [v for v in dims if v is not None and v > 0]
-    return max(dims) if dims else None
+    if dims:
+        # NOT A READING. The largest dimension on a drawing is as likely to be the stand's
+        # height or a GA overall as this part's cut length.
+        part["_section_length_source"] = "largest_dimension_guess"
+        return max(dims)
+    part["_section_length_source"] = "none"
+    return None
 
 
 def _is_section_or_wire_candidate(part: Dict[str, Any], material: Optional[str]) -> bool:
@@ -3364,6 +3385,24 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         if not (side_a_mm and side_b_mm and wall_t_mm):
             side_a_mm, side_b_mm, wall_t_mm = _parse_section_profile(str(part.get("description") or ""))
         length_mm = _infer_section_length_mm(part)
+        # A LENGTH NOBODY STATED IS NOT A LENGTH. Section stock is priced per metre, so the
+        # length IS the money — and the last rung of the search is "the biggest number on the
+        # part", which on 7332-01-002 produced a 1.4m leg for an A3 stand: £5.86 each, 24% of
+        # the job's material, and 1.5kg of the plating mass. A figure that confident and that
+        # wrong is worse than a gap, because nothing on the sheet says it was invented.
+        #
+        # Refuse it. The line goes out unpriced with the reason the vocabulary already has for
+        # exactly this ("the dimension or quantity it needs was never measured") and lands on
+        # OUTSTANDING ESTIMATOR INPUTS, where a person supplies the cut length.
+        if length_mm and str(part.get("_section_length_source")) == "largest_dimension_guess":
+            part.setdefault("review_flags", []).append(
+                f"section length NOT STATED anywhere on this part — the only figure available "
+                f"is the largest dimension on the drawing ({length_mm:,.0f}mm), which is as "
+                f"likely to be the assembly's overall size as this part's cut length. Priced "
+                f"per metre, that guess IS the money, so the line is left for you to fill: "
+                f"enter the cut length (or add it to the SolidWorks cut list).")
+            part["_consumable_qty_unknown"] = True
+            length_mm = None
 
         # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
         # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,

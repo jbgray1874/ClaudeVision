@@ -366,7 +366,20 @@ def _description_tokens(value: Any) -> Set[str]:
 
 
 def _bought_in_record(record: Mapping[str, Any]) -> bool:
-    return bool(
+    """Do we BUY this part, or make it?
+
+    MEASURED GEOMETRY OF ITS OWN OUTRANKS A TRANSCRIBED ROLE. bought_in_policy states the rule
+    already — "a part with its own measured flat is a fabricated leaf whatever a transcribed
+    hierarchy says" — but it was only ever used to RAISE a conflict for a person, never to
+    decide the kind. So 7332-01-001 BASE, which the Sheet Steel block nests as 5mm steel and
+    the labour block charges £3.03 of laser to cut, was published as "bought_in" on the
+    Canonical BOM and the provenance tab: a part the sheet demonstrably fabricates, described
+    to an estimator as one we purchase.
+
+    The costing is unaffected — the money was already on the nest and there is no second charge.
+    This is the classification catching up with what the sheet does.
+    """
+    _stated = bool(
         record.get("is_bought_in")
         or "bought_in" in {
             str(item).strip().lower()
@@ -374,6 +387,15 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
         }
         or str(record.get("material_family") or "").strip().lower() == "bought_in"
     )
+    if not _stated:
+        return False
+    try:
+        from bought_in_policy import has_fabrication_evidence
+    except Exception:                                                # noqa: BLE001
+        return True
+    # Its own measured flat means we cut it. The conflict is still flagged for a person by
+    # estimator.bought_in_conflict; this only stops the graph publishing the losing answer.
+    return not has_fabrication_evidence(dict(record))
 
 
 def _drawing_code_aliases(identities: Iterable[str],
