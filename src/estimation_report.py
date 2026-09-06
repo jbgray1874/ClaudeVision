@@ -147,12 +147,29 @@ def reading_and_pricing_counts(provenance):
             out["read_med"] += 1
         elif _r is not None:
             out["read_low"] += 1
+        # AWAITING A RATE IS NOT THE SAME AS CARRYING NO NUMBER. This counted every row whose
+        # "material price" field read UNKNOWN as pending — which swept in the nest pointers
+        # (a fabricated leaf costed in the Sheet Steel block), the assembly parent (£0, its
+        # material is its children's) and any duplicate. Those are correctly nil, owned by
+        # NOBODY, and putting them on "awaiting your rate" is exactly why the footer said 5
+        # while the honest gap list is 2. A positive price, or a stated (non-UNKNOWN) price
+        # field, is priced; an otherwise-blank row is pending ONLY when a person (estimator or
+        # engine) owns it, per the SAME canonical classifier the row already carries — never
+        # when it is correctly nil.
         _mp = next((f.get("status") for f in _fields
                     if f.get("field") == "material price"), None)
-        if _mp == UNKNOWN:
-            out["pending"] += 1
-        else:
+        _unit = _p.get("unit_cost") or _p.get("extended_cost") or 0
+        try:
+            _unit_num = float(_unit)
+        except (TypeError, ValueError):
+            _unit_num = 0.0
+        _owner = str((_p.get("unpriced_reason") or {}).get("owner") or "").lower()
+        if _unit_num > 0 or (_mp is not None and _mp != UNKNOWN):
             out["priced"] += 1
+        elif _owner == "nobody":
+            pass                                    # correctly nil — awaiting no one
+        else:
+            out["pending"] += 1
     return out
 def source_label(source: str) -> str:
     """Human-readable explanation of where a value came from.
