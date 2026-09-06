@@ -845,15 +845,49 @@ _INDICATIVE = _MARKET_AI + ("indicative",)         # firmness: not a firm quote,
 # because that is the machine's record. Printed straight onto an estimator's Source column it
 # reads as jargon, and "config rate card" (the old label) claimed a firmness these lines do
 # not have. Each one is an INDICATIVE figure with a stated basis, so it is said as one.
-_SOURCE_TOKENS = {
-    "standard_commodity_provisional":
-        "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
-    "market_ai_indicative": "market/AI indication — NOT A QUOTE, replace it",
-    "config rate card": "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
-    "subcontract_plating_indicative":
-        "SDI subcontract plating rate, £/kg from config (INDICATIVE) — confirm against a plater quote",
-    "system_cost_not_found": "no rate found — estimator to price",
-}
+#
+# ONE VOCABULARY. These are costed_facts.PRICE_ORIGIN_LABELS, the words the record itself
+# prints; keeping a second copy here is how the tab and the e-mail came to phrase one origin
+# two ways.
+from costed_facts import PRICE_ORIGIN_LABELS as _SOURCE_TOKENS  # noqa: E402
+from costed_facts import (INDICATIVE_HOUSE as _HOUSE, INDICATIVE_MARKET as _MARKET,  # noqa: E402
+                          costed_job as _costed_job, record_lines as _record_lines)
+
+
+def _record_line(record: Optional[Dict[str, Dict[str, Any]]], bom_row: Dict[str, Any]
+                 ) -> Optional[Dict[str, Any]]:
+    """The record's line for a workbook BOM row, or None."""
+    if not record:
+        return None
+    code = str(bom_row.get("code") or "").strip().upper()
+    return (record.get(code) or record.get(code.replace(" ", ""))
+            or record.get(str(bom_row.get("text") or "").strip().split(" ")[0].upper()))
+
+
+def _split_by_firmness(bom: List[Dict[str, Any]], record: Optional[Dict[str, Dict[str, Any]]],
+                       gaps: Dict[str, Any]) -> tuple:
+    """(house, market): the BOM rows the record classes as an INDICATIVE house rate, and
+    those it classes as an AI/market indication. ONE split, used by the Explanation tab's
+    question 2, its settle table, the e-mail's banner, §3 footer and §5 — so the four can no
+    longer disagree about which lines those are or what they add up to."""
+    house_codes = {str(c).upper() for c in (gaps.get("indicative_house") or [])}
+    market_codes = {str(c).upper() for c in (gaps.get("indicative_market") or [])}
+    house, market = [], []
+    for r in bom:
+        line = _record_line(record, r)
+        if line is None:
+            # A workbook row the run JSON does not know (a line typed onto the sheet by
+            # hand): the record cannot classify it, so the supplier cell's own words do.
+            if _money(r.get("price")) and any(
+                    t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE):
+                market.append(r)
+            continue
+        code = str(line.get("part_number") or r.get("code") or "").upper()
+        if code in market_codes:
+            market.append(r)
+        elif code in house_codes:
+            house.append(r)
+    return house, market
 
 
 def _humanise_source(raw: str) -> str:
@@ -900,7 +934,8 @@ def _order_qty_hint(bom_row: Dict[str, Any]) -> str:
 
 
 def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]],
-                  steel_index: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+                  steel_index: Optional[Dict[str, Dict[str, Any]]] = None,
+                  record: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     """Which book priced this line, in words an estimator can act on.
 
     THE FABRICATED PARTS ARE NOT UNPRICED. Every "-M" line carries a blank in the BOM's
@@ -999,6 +1034,21 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
                 + (f" of {_qty}, ÷ {_qty} per unit" if _qty else ", divided per unit")
                 + " — NOT A QUOTE. To make it a firm house rate on every job, set "
                   "`config.COMMERCIAL_LINE_GBP_PER_ORDER` and this becomes a catalogue price")
+    # THE RECORD ANSWERS FIRST. Once the read-back has run, costed_facts.costed_job has
+    # already classified this line — origin AND firmness, from the part record the sheet was
+    # built from, not from whatever the AI Price Provenance tab happened to spell. 7332-01's
+    # leg read "not named" here while the record knew it was priced at the section trade
+    # rate; the plating read "AI market indication" here while the record knew it was a
+    # config £/kg. The nest pointers, the unpriced and the nil-by-design keep the wording
+    # above, which is already the record's own.
+    _line = _record_line(record, bom_row)
+    if _line is not None:
+        _origin = _line.get("price_origin") or {}
+        _cls = str(_origin.get("class") or "")
+        if _origin.get("label") and _cls and not _cls.startswith("nest_") \
+                and _cls not in ("unrecorded", "nil_by_design", "unpriced",
+                                 "unpriced_commercial"):
+            return str(_origin["label"])
     # A recognised engine token is returned in its own words, ahead of the market/AI wrap —
     # the phrase already says "INDICATIVE / NOT A QUOTE", and re-wrapping it would print the
     # raw token in parentheses. A named supplier still leads where one is stated.
@@ -1169,10 +1219,21 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
     wb = openpyxl.load_workbook(workbook, data_only=True)
     scan_doc = _load_scan(scan_json)
     final = _final_estimate(scan_doc)
+    # THE ONE RECORD. Built from the run JSON after the read-back: the sheet's charged rows
+    # joined to the canonical parts, each line classified once for origin and firmness.
+    # Both renderers read their gap lists, their source labels and their material labels
+    # from it — never re-deriving them from the workbook cells.
+    try:
+        _record = _costed_job(scan_doc) if isinstance(scan_doc, dict) else {}
+        _lines = _record_lines(scan_doc) if isinstance(scan_doc, dict) else {}
+    except Exception:                                                # noqa: BLE001
+        _record, _lines = {}, {}
     return {
         "wb": wb,
         "stem": workbook.stem,
         "scan_doc": scan_doc,
+        "record": _record,
+        "record_lines": _lines,
         "scan": _scan_parts(scan_doc),
         "final": final,
         "sufficiency": _data_sufficiency(scan_doc),
@@ -1209,6 +1270,8 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     material, provenance, routes = g["material"], g["provenance"], g["routes"]
     bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
     page_index = g["page_index"]
+    record, record_lines = g["record"], g["record_lines"]
+    _gaps = (record or {}).get("gaps") or {}
 
     lines: List[str] = []
     add = lines.append
@@ -1235,11 +1298,23 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     _unpriced = [r for r in bom
                  if not _money(r.get("price"))
                  and not _is_costed_in_a_block(r.get("text"))]
-    _indicative = [r for r in bom
+    # HOUSE RATE OR MARKET GUESS — THE RECORD SAYS WHICH, ONCE. This tested the supplier
+    # cell for the word "indicative" and called every hit an AI market indication; the
+    # e-mail tested a different string and summed a different column. Same two lines,
+    # three answers. Both now read costed_facts' split and its extended sums.
+    if record:
+        _house, _market = _split_by_firmness(bom, record_lines, _gaps)
+        _house_gbp = float(_gaps.get("indicative_house_gbp") or 0.0)
+        _market_gbp = float(_gaps.get("indicative_market_gbp") or 0.0)
+    else:
+        _house = []
+        _market = [r for r in bom
                    if any(t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE)
                    and _money(r.get("price"))]
-    _indicative_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
-                                for r in _indicative), 2)
+        _house_gbp = 0.0
+        _market_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
+                                for r in _market), 2)
+    _indicative = _house + _market
     add("## The questions, answered first")
     add("")
     add(f"- **What does a unit cost, and of what?** "
@@ -1254,10 +1329,14 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
            + ", ".join(r["code"] or _description(r) for r in _unpriced[:8])
            + ("…" if len(_unpriced) > 8 else "") + ". "
            if _unpriced else "No line is unpriced. ")
-        + (f"{len(_indicative)} line(s) worth {_gbp(_indicative_gbp)} are AI market "
+        + (f"{len(_market)} line(s) worth {_gbp(_market_gbp)} are AI market "
            f"indications, not catalogue prices: "
-           + ", ".join(r["code"] or _description(r) for r in _indicative[:8]) + "."
-           if _indicative else "No line rests on an AI market indication."))
+           + ", ".join(r["code"] or _description(r) for r in _market[:8]) + ". "
+           if _market else "No line rests on an AI market indication. ")
+        + (f"{len(_house)} line(s) worth {_gbp(_house_gbp)} are priced on an SDI house "
+           f"rate marked INDICATIVE — a figure to verify, not to replace: "
+           + ", ".join(r["code"] or _description(r) for r in _house[:8]) + "."
+           if _house else ""))
     add(f"- **How much of this was measured rather than reasoned?** "
         + _measured_sentence(material, scan))
     add(f"- **Where is the money?** " + _blocks_sentence(material_rows, labour_rows))
@@ -1278,7 +1357,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add("")
         add("| Line | What it is | Qty | On the sheet | What it needs | Which file and page |")
         add("|---|---|---|---|---|---|")
-        _todo = ([(r, "indicative") for r in _indicative]
+        _todo = ([(r, "market") for r in _market] + [(r, "house") for r in _house]
                  + [(r, "unpriced") for r in _unpriced])
         for row, kind in sorted(
                 _todo, key=lambda pair: -((_money(pair[0].get("price")) or 0)
@@ -1286,11 +1365,17 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
             _ext = round(_unit * _qty, 2) if _unit and _qty else None
             _rec = scan.get(row["code"].upper()) or {}
+            _label = str(((_record_line(record_lines, row) or {}).get("price_origin")
+                          or {}).get("label") or "")
             add(f"| {row['code'] or '—'} | {_description(row)} | {_fmt(row.get('qty'))} "
                 + (f"| {_gbp(_ext)} — an AI market indication, not a catalogue price "
                    f"| **Overwrite it, or accept it deliberately.** It moves between runs, "
                    f"so an estimate resting on it cannot be reproduced. "
-                   if kind == "indicative" else
+                   if kind == "market" else
+                   f"| {_gbp(_ext)} — an SDI house rate marked INDICATIVE "
+                   f"| **Verify it, or accept it deliberately.** "
+                   f"{_label or 'A configured rate, reproducible between runs.'} "
+                   if kind == "house" else
                    "| **£0.00 — the line is costing nothing** "
                    "| **A rate.** Nothing we can query holds a price for this code. ")
                 + f"| {_where(_rec, pack, page_index)} |")
@@ -1368,13 +1453,20 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                  if blank_l or blank_w else "not a cut part")
         page = _where(rec, pack, page_index)
         _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
+        # WHAT THE LINE IS MADE OF, from the record. The stub that mints a commercial line
+        # or a plating service carries MILD STEEL because every stub does, and the AI
+        # Material Detail tab printed it beside PACKAGING. The record says what kind of
+        # line it is and labels it accordingly.
+        _line = _record_line(record_lines, row)
+        _mat_label = (_line.get("material_label") if _line and _line.get("material_label")
+                      else _fmt(mat.get("Material")))
         add(f"| {row['code'] or '—'} "
             f"| {_description(row)} "
             f"| {_fmt(row.get('qty'))} "
             f"| {_fmt(row.get('price'))} "
             f"| {_gbp(round(_unit * _qty, 2)) if _unit and _qty else '—'} "
-            f"| {_price_source(row, provenance, steel)} "
-            f"| {_fmt(mat.get('Material'))} "
+            f"| {_price_source(row, provenance, steel, record=record_lines)} "
+            f"| {_mat_label} "
             f"| {_fmt(mat.get('Gauge'), 'none — not sheet')} "
             f"| {blank} "
             f"| {page} |")
@@ -1949,6 +2041,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     order_qty = g["order_qty"] or 1
     page_index = g["page_index"]
     job = str(g["stem"]).split("_")[0]
+    record, record_lines = g["record"], g["record_lines"]
+    _gaps = (record or {}).get("gaps") or {}
 
     # A LINE AT £0.00 IS THE ONE THIS SECTION EXISTS FOR, AND IT WAS NOT COUNTED.
     #
@@ -1964,13 +2058,26 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         price = _money(row.get("price"))
         return price is None or price == 0
     _unpriced = [r for r in bom if _reads_as_free(r)]
-    # The source string is what names an indication — the supplier cell often holds the
-    # engine's own marker rather than a supplier, and _price_source is what the table prints.
-    _indicative = [r for r in bom
+    # HOUSE RATE OR MARKET GUESS — THE RECORD SAYS WHICH. This searched the printed source
+    # phrase for "indicative" and called every hit an AI market indication, so the
+    # plating's config £/kg and the felt pad's config commodity were reported to Tim as
+    # figures that "move between runs". They do not. The same split the Explanation tab
+    # uses, from costed_facts, with the same extended sum.
+    if record:
+        _house, _market = _split_by_firmness(bom, record_lines, _gaps)
+        _house_gbp = float(_gaps.get("indicative_house_gbp") or 0.0)
+        _market_gbp = float(_gaps.get("indicative_market_gbp") or 0.0)
+    else:
+        _house = []
+        _market = [r for r in bom
                    if _money(r.get("price"))
                    and any(t in (f"{r.get('supplier') or ''} "
                                  f"{_price_source(r, provenance, scan) or ''}").lower()
                            for t in _INDICATIVE)]
+        _house_gbp = 0.0
+        _market_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
+                                for r in _market), 2)
+    _indicative = _market + _house
     needs_a_person = _unpriced + _indicative
     labour = _setup_and_run(labour_rows, order_qty)
     untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
@@ -2150,7 +2257,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 _code or "—", str(r.get("description") or "—"),
                 _fmt(r.get("qty_per_unit")), _gbp_or(r.get("unit_price_gbp"), "—"),
                 _gbp_or(r.get("total_value_gbp"), "0.00"),
-                (_price_source(_srow, provenance, scan) if _srow else "")
+                (_price_source(_srow, provenance, scan, record=record_lines) if _srow else "")
                 or str(r.get("supplier") or "") or "source not named on the sheet",
                 # THE DRAWING NUMBER, then the files. The header carries both columns and the
                 # fallback path below fills both; this read-back path emitted only the file
@@ -2171,7 +2278,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                     row.get("code") or "—", _description(row), _fmt(row.get("qty")),
                     _gbp_or(_u, "—"),
                     _gbp_or(round(_u * _q, 2) if _u and _q else None, "0.00"),
-                    _price_source(row, provenance, scan) or "source not named on the sheet",
+                    _price_source(row, provenance, scan, record=record_lines)
+                    or "source not named on the sheet",
                     # THE NUMBER OFF THE TITLE BLOCK, not just the file it is printed in.
                     # Section 2 carried this and these two did not, so a reader checking a
                     # bought-in line or an operation had the filename and had to open it to
@@ -2183,17 +2291,24 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(_table(["Line", "What it is", "Qty", "£/ea", "£ ext", "Source",
                     "Drawing no.", "Which drawing files and pages"],
                    _brows, numeric={2, 3, 4}))
-        if _indicative:
-            _ind_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
-                                 for r in _indicative), 2)
-            _one = len(_indicative) == 1
-            add(f"<p><b>{len(_indicative)} of those lines "
+        if _market:
+            _one = len(_market) == 1
+            add(f"<p><b>{len(_market)} of those lines "
                 f"{'is an AI market indication' if _one else 'are AI market indications'} "
                 f"rather than "
-                f"{'a catalogue price' if _one else 'catalogue prices'} — {_gbp(_ind_gbp)}"
+                f"{'a catalogue price' if _one else 'catalogue prices'} — {_gbp(_market_gbp)}"
                 f"{'' if _one else ' between them'}.</b> "
                 f"{'It moves' if _one else 'They move'} between runs, so an estimate "
                 f"resting on {'it' if _one else 'them'} cannot be reproduced.</p>")
+        if _house:
+            _one = len(_house) == 1
+            add(f"<p><b>{len(_house)} of those lines "
+                f"{'is priced on an SDI house rate' if _one else 'are priced on SDI house rates'}"
+                f" marked INDICATIVE — {_gbp(_house_gbp)}"
+                f"{'' if _one else ' between them'}.</b> "
+                f"{'It is' if _one else 'They are'} configured, so {'it' if _one else 'they'} "
+                f"reproduce between runs; verify against a supplier or plater quote, or "
+                f"accept deliberately.</p>")
 
     # ── HOW PACKAGING AND DELIVERY WERE WORKED OUT ────────────────────────────────
     #
@@ -2282,7 +2397,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(f"<p><b>Material reconciliation.</b> The blocks above come to "
             f"{_gbp(_lines_total)} against the sheet's Total Material Cost of "
             f"{_gbp(_mat_sheet)}"
-            + (f" — they agree.</p>" if abs(_gap) < 0.01 else
+            # A PENNY IS ROUNDING, NOT A MISSING BLOCK. Each row is read at two decimals
+            # and the sheet sums the unrounded cells, so a £0.01 gap is arithmetic. Saying
+            # "a block was not read back" about a penny sent 7332-01's reader hunting for
+            # a block that was on the page.
+            + (f" — they agree.</p>" if abs(_gap) < 0.005 else
+               f" — they agree to the penny ({_gbp(abs(_gap))} of rounding across the "
+               f"rows).</p>" if abs(_gap) <= 0.02 else
                f", a difference of {_gbp(abs(_gap))}. That difference is on the sheet and "
                f"on no line here, which means a block was not read back. Treat the sheet's "
                f"figure as the total.</p>"))
@@ -2328,19 +2449,27 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                           key=lambda r: -((_money(r.get("price")) or 0)
                                           * (_money(r.get("qty")) or 0))):
             _u, _q = _money(row.get("price")), _money(row.get("qty"))
-            _is_ind = row in _indicative
+            _is_market = row in _market
+            _is_house = row in _house
+            _label = str(((_record_line(record_lines, row) or {}).get("price_origin")
+                          or {}).get("label") or "")
             _nrows.append([
                 row.get("code") or "—", _description(row),
                 _gbp_or(round(_u * _q, 2) if _u and _q else None, "£0.00"),
                 ("An AI market indication, not a catalogue price. Overwrite it, or accept it "
-                 "deliberately." if _is_ind else
+                 "deliberately." if _is_market else
+                 f"An SDI house rate marked INDICATIVE — verify it, or accept it "
+                 f"deliberately. {_label}".strip() if _is_house else
                  "The line is costing nothing — nothing we can query holds a rate for this."),
                 _where(scan.get(str(row.get("code") or "").upper()) or {}, pack, page_index),
             ])
         add(_table(["Line", "What it is", "On the sheet now", "What's needed",
                     "Which drawing files and pages"], _nrows, numeric={2}))
-        add("<p>Overwrite anything tagged <b>AI ESTIMATE — INDICATIVE, NOT A QUOTE</b> and "
-            "the sheet recalculates.</p>")
+        if _market:
+            add("<p>Overwrite anything tagged <b>AI ESTIMATE — INDICATIVE, NOT A QUOTE</b> "
+                "and the sheet recalculates.</p>")
+        else:
+            add("<p>Enter a figure against any line above and the sheet recalculates.</p>")
 
     # 6 ─ every operation, and who decided it
     #
@@ -2534,12 +2663,18 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             f"{'It sums' if _unpriced_n == 1 else 'They sum'} as free, so the unit cost above "
             f"is understated by whatever {'it is' if _unpriced_n == 1 else 'they are'} worth. "
             f"§5 lists {'it' if _unpriced_n == 1 else 'them'}.")))
-    _ind_gbp = round(sum(_money(r.get("price")) or 0 for r in _indicative), 2)
-    if _indicative:
-        _focus.append((_ind_gbp, (
-            f"<b>{_plural(len(_indicative), 'line')} priced from a market indication</b>, "
-            f"{_gbp(_ind_gbp)} in total — a figure to check against a supplier, not a "
+    # THE SAME SUM §3 PRINTS. This summed unit prices (£16.03 on 7332-01) while §3 summed
+    # price × qty (£16.63); both now read the record's extended figure.
+    if _market:
+        _focus.append((_market_gbp, (
+            f"<b>{_plural(len(_market), 'line')} priced from a market indication</b>, "
+            f"{_gbp(_market_gbp)} in total — a figure to check against a supplier, not a "
             f"quotation. §5.")))
+    if _house:
+        _focus.append((_house_gbp, (
+            f"<b>{_plural(len(_house), 'line')} priced on an SDI house rate marked "
+            f"INDICATIVE</b>, {_gbp(_house_gbp)} in total — configured and reproducible; "
+            f"verify against a supplier or plater quote. §5.")))
     _freight_gbp = round(sum(_money(c.get("unit_gbp")) or 0 for c in _commercial), 2)
     _unit_gbp = _money(totals.get("unit")) or 0
     if _freight_gbp and _unit_gbp:

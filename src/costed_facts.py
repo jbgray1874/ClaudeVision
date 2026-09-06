@@ -1045,3 +1045,578 @@ def other_sheet_parts_per_sheet(part_length_mm, part_width_mm,
     nest = _nest_by_rule("workbook_other_sheet_J51", part_length_mm, part_width_mm,
                          sheet_length_mm, sheet_width_mm)
     return (nest or {}).get("parts_per_sheet")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# THE ONE RECORD EVERY DELIVERABLE READS
+# ═══════════════════════════════════════════════════════════════════════════════════════
+#
+# On 7332-01's 17:17 run the workbook said one thing and its own paperwork said four others
+# about the same twelve lines. The covering e-mail called two configured house rates "AI
+# market indications" (the Explanation tab, on the next sheet, said no line rested on one),
+# summed them to £16.03 in its banner and £16.63 in its footer, and printed "not named" for
+# a leg whose provenance row named the rate. The AI Provenance tab listed folding on a tube
+# the route had ruled out of folding, showed a 9,106 mm cut path against a 1,397 mm leg, and
+# labelled £5.13 of nest-versus-net-part basis "Powder / scrap" under a heading that said
+# nothing was coated. The report warned that plating was uncharged beside a £15.83 plating
+# line, and the quote promised "Boxed for transport" with packaging at £0.
+#
+# None of those writers was wrong about the job. Each was right about its own reading and
+# there were five readings. This block is the sixth, and it is the only one: built ONCE from
+# the calculated workbook rows joined to the canonical parts and the compiled route, and
+# every surface below it reads what it says rather than working the answer out again.
+#
+# WHAT IS IN IT, and why each thing is a field rather than a sentence:
+#
+#   charged vs engine     The sheet charges a nested part its share of a whole sheet; the
+#                         engine's own figure is net-part. Both are real. CHARGED is the
+#                         money; ENGINE is provenance. A writer that has both cannot print
+#                         £2.02 as the price of a £2.82 line.
+#   price origin          WHERE the figure came from (nest, config house rate, catalogue,
+#                         market/AI, nobody yet) — separately from
+#   firmness              HOW FIRM it is (firm, indicative house rate, indicative market
+#                         figure, unpriced, nil by design). "Indicative" is not a source and
+#                         "AI" is not a firmness; conflating them is how a config rate was
+#                         reported as a model guess.
+#   operations            From the compiler decisions that actually put the part on a priced
+#                         row — never from a department name inverted through its aliases.
+#   length                For section stock: the millimetres, the rung, and the reader.
+#   gaps                  The lists the banner, the Explanation, the footer and §5 all print.
+#                         One list each, summed once.
+#   release               provisional / reviewable, with the reasons, for the quote's banner.
+
+COSTED_JOB_SCHEMA = "costed_job.v1"
+
+# Firmness — how far the figure can be leaned on. Five words, used everywhere.
+FIRM = "firm"                           # the sheet's own arithmetic or a catalogue price
+INDICATIVE_HOUSE = "indicative_house"   # a configured SDI rate, reproducible, to VERIFY
+INDICATIVE_MARKET = "indicative_market" # an AI / market lookup, moves between runs, to REPLACE
+UNPRICED = "unpriced"                   # carries no money and somebody owes a figure
+NIL = "nil"                             # correctly nothing — an assembly, a cross-reference
+
+# The engine's own source tokens, said in words an estimator can act on. Kept HERE so the
+# Explanation tab, the covering e-mail and the two provenance tabs phrase one origin one way.
+PRICE_ORIGIN_LABELS: Dict[str, str] = {
+    "standard_commodity_provisional":
+        "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
+    "config_commercial_indicative":
+        "SDI house rate for this commercial line (INDICATIVE) — confirm",
+    "config rate card":
+        "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
+    "subcontract_plating_indicative":
+        "SDI subcontract plating rate, £/kg from config (INDICATIVE) — confirm against a plater quote",
+    # The section trade rate is a house MATERIAL rate — the same standing as the sheet's own
+    # £/tonne cell, which nobody calls provisional. Named, so the line no longer reads "not
+    # named"; not on the to-verify list, so the leg is not counted beside the plating hold.
+    "section_stock_config_rate":
+        "SDI section-stock trade rate, £/kg from config — verify against the section size",
+    "section_stock_flat_rate":
+        "flat-product £/kg rate (INDICATIVE, likely UNDER-READS section) — set the section trade rate",
+    "market_ai_indicative": "AI market indication — NOT A QUOTE, replace it",
+    "system_cost_not_found": "no rate found — estimator to price",
+}
+
+_MARKET_AI_TOKENS = ("grok", "llm", "xai", "market")
+_CATALOGUE_TOKENS = ("udef", "pma", "erp", "bought_in_price", "price_book", "catalog",
+                     "historical", "supplier_quote", "sheet_rate_live")
+_FABRICATED_BLOCKS = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
+                      "tube": "Tube", "wire": "Wire"}
+
+
+def _final_estimate_of(source: Any) -> Dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    fe = source.get("final_estimate")
+    if not isinstance(fe, dict) and isinstance(source.get("estimate_summary"), dict):
+        fe = source["estimate_summary"].get("final_estimate")
+    return fe if isinstance(fe, dict) else {}
+
+
+def _material_row_key(row: Mapping[str, Any]) -> str:
+    """The identity a read-back material row joins on — the BOM's code column, or the first
+    word of a fabricated block's description, which is where wb_populate writes the part
+    number. Same rule as wep_readback_from_xlsx._row_key, restated here so this module has
+    no import of the Excel adapter."""
+    code = str(row.get("part_code") or "").strip()
+    if code:
+        return code.upper()
+    return str(row.get("description") or "").strip().split(" ")[0].upper()
+
+
+def _line_kind(part: Mapping[str, Any], node: Optional[Mapping[str, Any]]) -> str:
+    """leaf / assembly / bought_in / commercial / service — the canonical node's kind with
+    the two kinds the graph does not distinguish named on top of it."""
+    pn = str(part.get("part_number") or "").strip().upper()
+    method = str((part.get("material_estimate") or {}).get("cost_method")
+                 or part.get("cost_source") or part.get("source") or "").lower()
+    if part.get("_commercial_placeholder") or str(part.get("source") or "") == \
+            "commercial_placeholder" or pn in ("PACKAGING", "DELIVERY"):
+        return "commercial"
+    if part.get("_plating_placeholder") or "plating" in method or pn.endswith("-PLATE"):
+        return "service"
+    if isinstance(node, Mapping) and node.get("kind"):
+        return str(node["kind"])
+    if str(part.get("canonical_kind") or ""):
+        return str(part["canonical_kind"])
+    roles = [str(r).lower() for r in (part.get("page_roles") or [])]
+    if "bought_in" in roles or str(part.get("normalized_material") or "").upper() == "BOUGHT_IN":
+        return "bought_in"
+    return "leaf"
+
+
+def _material_label(part: Mapping[str, Any], kind: str) -> str:
+    """What the Material column should say. A commercial line and a subcontract service are
+    not made of anything; the stub that minted them carries MILD STEEL because every stub
+    does, and printing that put 'MILD STEEL' beside PACKAGING on three tabs."""
+    if kind == "commercial":
+        return "— (commercial line)"
+    if kind == "service":
+        return "— (subcontract service)"
+    mat = str(part.get("normalized_material") or part.get("material") or "").strip()
+    if kind == "bought_in":
+        return mat if mat and mat.upper() != "BOUGHT_IN" else "— (bought-in)"
+    return mat or "Unknown"
+
+
+def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
+                  charged_unit: Optional[float], engine_unit: float,
+                  sheet_row: Any, cross_ref: bool) -> Dict[str, Any]:
+    """{class, firmness, owner, label} — where the figure came from and how firm it is.
+
+    ONE CLASSIFIER. The covering e-mail tested the words 'indicative' and 'market' on the
+    same string and treated a hit as an AI lookup; the Explanation tab tested only the
+    supplier cell; the AI Price Provenance tab printed the raw method token or 'not named'.
+    Three tests, three answers about one line."""
+    me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
+    ps = me.get("price_source") if isinstance(me.get("price_source"), Mapping) else {}
+    method = str(me.get("cost_method") or part.get("cost_source") or part.get("source") or "")
+    supplier = str(part.get("supplier") or "").strip()
+    tokens = " ".join(str(x) for x in (
+        method, ps.get("source_name"), ps.get("source_type"), ps.get("supplier_source"),
+        supplier)).lower()
+    money = charged_unit if charged_unit is not None else engine_unit
+
+    if cross_ref and block in _FABRICATED_BLOCKS:
+        # A BOM row whose money is on a fabricated block. Nil HERE by design; the money is
+        # reported on the fabricated line for the same part.
+        pass
+    if block in _FABRICATED_BLOCKS and money:
+        label = f"costed by nest on the {_FABRICATED_BLOCKS[block]} block"
+        if block in ("tube", "wire"):
+            label = f"costed by length on the {_FABRICATED_BLOCKS[block]} block"
+        if sheet_row:
+            label += f" — Estimate!{int(sheet_row)}"
+        return {"class": f"nest_{block}", "firmness": FIRM, "owner": None, "label": label}
+    if kind == "assembly" and not money:
+        return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
+                "label": "nothing to charge here — an assembly's material is its members'"}
+    if kind == "commercial" and not money:
+        return {"class": "unpriced_commercial", "firmness": UNPRICED, "owner": "estimator",
+                "label": "NOT PRICED — held at £0 until the estimators' own figure lands; "
+                         "enter the per-unit amount"}
+    if any(t in tokens for t in _MARKET_AI_TOKENS):
+        who = supplier or ps.get("supplier_source") or "AI/market lookup"
+        return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
+                "label": f"AI market indication ({who}) — NOT A QUOTE, replace it"}
+    for key, label in PRICE_ORIGIN_LABELS.items():
+        if key in ("market_ai_indicative", "system_cost_not_found"):
+            continue
+        if key.replace(" ", "_") in tokens.replace(" ", "_"):
+            if not money:
+                break
+            # A section priced at the config trade rate names the rate it used.
+            if key == "section_stock_config_rate":
+                if me.get("rate_gbp_per_kg"):
+                    label = (f"SDI section-stock trade rate £{_num(me.get('rate_gbp_per_kg')):.2f}/kg "
+                             f"from config — verify against the section size")
+                return {"class": "section_config_rate", "firmness": FIRM, "owner": None,
+                        "label": label}
+            return {"class": ("section_flat_rate" if key.startswith("section_stock")
+                              else "config_house_rate"),
+                    "firmness": INDICATIVE_HOUSE, "owner": "estimator", "label": label}
+    if money and any(t in tokens for t in _CATALOGUE_TOKENS):
+        who = supplier or str(ps.get("supplier_source") or ps.get("source_name") or "catalogue")
+        return {"class": "catalogue", "firmness": FIRM, "owner": None,
+                "label": f"catalogue — {who}"}
+    if money and supplier:
+        return {"class": "catalogue", "firmness": FIRM, "owner": None,
+                "label": f"catalogue — {supplier}"}
+    if money:
+        return {"class": "unrecorded", "firmness": FIRM, "owner": None,
+                "label": "priced — the line records no source; see AI Provenance"}
+    # No money and not nil by design: somebody owes a figure. Ask the shared reason
+    # vocabulary who, rather than inventing a fourth opinion here.
+    owner, why = "estimator", "no catalogue row, price file or quote holds a rate for this"
+    try:
+        from estimator_inputs import unpriced_reason_for_row
+        reason = unpriced_reason_for_row(part) or {}
+        owner = str(reason.get("owner") or owner)
+        why = str(reason.get("why") or reason.get("detail") or why)
+    except Exception:                                                # noqa: BLE001
+        pass
+    if owner == "nobody":
+        return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody", "label": why}
+    return {"class": "unpriced", "firmness": UNPRICED, "owner": owner,
+            "label": f"NOT PRICED — {why}"}
+
+
+def _operations_from_decisions(source: Any, part_number: Any) -> List[str]:
+    """The operations that put this part on a priced row, named by the compiler's decisions.
+
+    NOT the department inverted. A Tubebend row inverts to tube_bending, tubebend, folding
+    AND fold because the tube remap sends folding to that department — so the leg's
+    provenance listed the very operation the route had ruled out. The decision on the row
+    says 'tubebend' and nothing else."""
+    known = _decisions_by_id(source)
+    out: List[str] = []
+    for did in decision_ids_for_part(source, part_number):
+        d = known.get(did) or {}
+        op = str(d.get("operation") or "").strip()
+        if op and str(d.get("status") or "required") == "required" and op not in out:
+            out.append(op)
+    if out:
+        return out
+    # No decision ids on the rows (a pre-cutover run): the first alias of each department,
+    # never all of them.
+    for r in priced_rows_for_part(source, part_number):
+        ops = _row_engine_ops(r)
+        if ops and ops[0] not in out:
+            out.append(ops[0])
+    return out
+
+
+def costed_job(source: Any) -> Dict[str, Any]:
+    """THE record. Pure: same summary in, same record out. Cheap enough to call from every
+    writer; persisted by main.py after the read-back for the audit trail only."""
+    if not isinstance(source, dict):
+        return {"schema": COSTED_JOB_SCHEMA, "lines": [], "gaps": {}, "release": {}}
+    nodes = _canonical_nodes(source)
+    fe = _final_estimate_of(source)
+    totals = job_totals(source)
+    mat_rows = [r for r in (fe.get("material_rows") or []) if isinstance(r, dict)]
+    calculated = bool(mat_rows) and totals.get("source") == "excel_calculated"
+
+    # Material rows by canonical identity: the fabricated block row carries the money, the
+    # BOM row for the same part is its cross-reference.
+    money_rows: Dict[str, Dict[str, Any]] = {}
+    bom_rows: Dict[str, Dict[str, Any]] = {}
+    for r in mat_rows:
+        key = canonical_identity(source, _material_row_key(r))
+        if not key:
+            continue
+        if str(r.get("block") or "bom") == "bom":
+            bom_rows.setdefault(key, r)
+        else:
+            money_rows.setdefault(key, r)
+
+    es = source.get("estimate_summary") if isinstance(source.get("estimate_summary"), dict) else {}
+    order_qty = None
+    try:
+        order_qty = int(((es or {}).get("estimate_workbook_inputs") or {}).get("assumed_job_quantity")
+                        or source.get("assumed_job_quantity") or 0) or None
+    except (TypeError, ValueError):
+        order_qty = None
+
+    lines: List[Dict[str, Any]] = []
+    for part in job_parts(source):
+        pn = str(part.get("part_number") or "").strip()
+        if not pn:
+            continue
+        identity = canonical_identity(source, pn)
+        node = nodes.get(identity)
+        kind = _line_kind(part, node)
+        qty = canonical_quantity(source, pn)
+        if qty is None:
+            qty = _num(part.get("quantity")) or 1.0
+        engine_unit, engine_ext = part_material_cost(part)
+
+        row = money_rows.get(identity)
+        bom = bom_rows.get(identity)
+        block = str(row.get("block")) if row else ("bom" if bom else None)
+        cross_ref = bool(bom) and "costed in" in str(bom.get("description") or "").lower()
+        charged_unit = charged_ext = None
+        sheet_row = None
+        if calculated:
+            if row is not None:
+                charged_ext = _num(row.get("total_value_gbp"))
+                q = _num(row.get("qty_per_unit")) or qty or 1.0
+                charged_unit = round(charged_ext / q, 4) if q else charged_ext
+                sheet_row = row.get("workbook_row") or row.get("row")
+            elif bom is not None:
+                charged_ext = _num(bom.get("total_value_gbp"))
+                charged_unit = _num(bom.get("unit_price_gbp"))
+                sheet_row = bom.get("workbook_row") or bom.get("row")
+        origin = _price_origin(part, kind, block, charged_unit, engine_unit, sheet_row, cross_ref)
+
+        me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
+        se = me.get("stock_estimate") if isinstance(me.get("stock_estimate"), Mapping) else {}
+        length = None
+        if se.get("section_length_mm") or se.get("wire_length_mm"):
+            length = {"mm": _num(se.get("section_length_mm") or se.get("wire_length_mm")),
+                      "source": str(se.get("section_length_source") or ""),
+                      "reader": str(se.get("section_length_reader") or ""),
+                      "indicative": bool(se.get("section_length_indicative"))}
+        profile = None
+        if isinstance(part.get("section_stock"), Mapping):
+            ss = part["section_stock"]
+            profile = {k: ss.get(k) for k in ("a", "b", "t", "profile_form") if ss.get(k) is not None}
+
+        lines.append({
+            "part_number": pn,
+            "identity": identity,
+            "description": str(part.get("description") or ""),
+            "kind": kind,
+            "qty_per_unit": qty,
+            "material_label": _material_label(part, kind),
+            "thickness_mm": part.get("normalized_thickness_mm"),
+            "block": block,
+            "sheet_row": sheet_row,
+            "cross_reference": cross_ref,
+            "charged_unit_gbp": charged_unit,
+            "charged_ext_gbp": charged_ext,
+            "engine_unit_gbp": round(engine_unit, 4),
+            "engine_ext_gbp": round(engine_ext, 4),
+            "money_basis": "excel_calculated" if charged_ext is not None else "engine_pre_excel",
+            "price_origin": origin,
+            "operations": _operations_from_decisions(source, pn),
+            "length": length,
+            "section_profile": profile,
+            "review_flags": [str(f) for f in (part.get("review_flags") or []) if f],
+            "plating_members": list(part.get("_plating_members_costed") or []),
+            "plating_excluded": list(part.get("_plating_members_deferred") or []),
+        })
+
+    # ── the gap lists, once ─────────────────────────────────────────────────────
+    def _money_of(line: Dict[str, Any]) -> float:
+        v = line.get("charged_ext_gbp")
+        return _num(v) if v is not None else _num(line.get("engine_ext_gbp"))
+
+    unpriced = [l for l in lines if l["price_origin"]["firmness"] == UNPRICED]
+    house = [l for l in lines if l["price_origin"]["firmness"] == INDICATIVE_HOUSE]
+    market = [l for l in lines if l["price_origin"]["firmness"] == INDICATIVE_MARKET]
+    gaps = {
+        "unpriced": [l["part_number"] for l in unpriced],
+        "unpriced_owners": {l["part_number"]: l["price_origin"]["owner"] for l in unpriced},
+        "indicative_house": [l["part_number"] for l in house],
+        "indicative_house_gbp": round(sum(_money_of(l) for l in house), 2),
+        "indicative_market": [l["part_number"] for l in market],
+        "indicative_market_gbp": round(sum(_money_of(l) for l in market), 2),
+    }
+
+    # ── plating, as a field and not a truncated description ─────────────────────
+    plating: Dict[str, Any] = {"charged": False}
+    for l in lines:
+        if l["kind"] == "service" and _money_of(l) > 0:
+            parent = None
+            node = nodes.get(l["identity"]) or {}
+            parents = node.get("parents") if isinstance(node, Mapping) else None
+            if isinstance(parents, (list, tuple)) and parents:
+                parent = str(parents[0])
+            elif isinstance(parents, Mapping) and parents:
+                parent = str(next(iter(parents)))
+            if not parent and l["part_number"].upper().endswith("-PLATE"):
+                parent = l["part_number"][:-6]
+            plating = {"charged": True, "line": l["part_number"], "parent": parent,
+                       "members": l["plating_members"], "excluded": l["plating_excluded"],
+                       "ext_gbp": _money_of(l), "label": l["price_origin"]["label"]}
+            break
+
+    # ── what a person has to decide, worst first ────────────────────────────────
+    decisions: List[Dict[str, Any]] = []
+    for l in unpriced:
+        decisions.append({
+            "part": l["part_number"], "kind": "missing_price",
+            "issue": f"{l['part_number']} carries no price",
+            "assumption": "held at £0 — the unit cost is understated by whatever it is worth",
+            "action": ("enter the per-unit figure" if l["kind"] == "commercial"
+                       else "supply a rate or a supplier quote"),
+            "owner": l["price_origin"]["owner"], "gbp_at_stake": None})
+    if plating.get("charged"):
+        decisions.append({
+            "part": plating.get("parent") or plating.get("line"), "kind": "manufacturing_decision",
+            "issue": f"Which members of {plating.get('parent') or 'the weldment'} are plated after welding",
+            "assumption": (f"mass priced on {', '.join(plating.get('members') or []) or 'no member'}"
+                           + (f"; excluded because their own detail states another finish: "
+                              f"{', '.join(plating.get('excluded'))}" if plating.get("excluded") else "")),
+            "action": "confirm the plated member list and the process against the plater's quote",
+            "owner": "estimator", "gbp_at_stake": plating.get("ext_gbp")})
+    for l in lines:
+        ln = l.get("length") or {}
+        if ln and ln.get("reader") and ln.get("reader") not in ("none",):
+            transcribed = ln.get("reader") in ("llm_full_extract", "inference") or ln.get("indicative")
+            if transcribed:
+                decisions.append({
+                    "part": l["part_number"], "kind": "manufacturing_decision",
+                    "issue": f"Cut length of {l['part_number']}: {ln.get('mm'):,.0f} mm",
+                    "assumption": (f"{'taken as the largest dimension on the part' if ln.get('indicative') else 'transcribed by ' + str(ln.get('reader'))}"
+                                   f" — priced per metre, so the length is the money"),
+                    "action": "confirm the developed length against the GA / model",
+                    "owner": "estimator", "gbp_at_stake": _money_of(l)})
+    for l in house:
+        decisions.append({
+            "part": l["part_number"], "kind": "indicative_rate",
+            "issue": f"{l['part_number']} is priced on an SDI house rate marked INDICATIVE",
+            "assumption": l["price_origin"]["label"],
+            "action": "verify against a supplier / plater quote, or accept it deliberately",
+            "owner": "estimator", "gbp_at_stake": _money_of(l)})
+    for l in market:
+        decisions.append({
+            "part": l["part_number"], "kind": "market_figure",
+            "issue": f"{l['part_number']} rests on an AI market indication",
+            "assumption": l["price_origin"]["label"],
+            "action": "replace it with a catalogue or supplier price — it moves between runs",
+            "owner": "estimator", "gbp_at_stake": _money_of(l)})
+
+    # ── release status ──────────────────────────────────────────────────────────
+    reasons: List[str] = []
+    if unpriced:
+        reasons.append(f"{len(unpriced)} line(s) carry no price: {', '.join(gaps['unpriced'])}")
+    if market:
+        reasons.append(f"{len(market)} line(s) rest on an AI market indication")
+    inv = source.get("invariants") if isinstance(source.get("invariants"), dict) else None
+    if inv is not None:
+        blocking = [v for v in (inv.get("violations") or [])
+                    if isinstance(v, dict) and v.get("severity") == "blocking"]
+        if blocking:
+            reasons.append(f"{len(blocking)} consistency check(s) blocking")
+    else:
+        reasons.append("the consistency checks have not run")
+    if not calculated:
+        reasons.append("the calculated sheet was not read back")
+    manufacturing = [d for d in decisions if d["kind"] == "manufacturing_decision"]
+    if manufacturing:
+        reasons.append(f"{len(manufacturing)} manufacturing decision(s) open")
+    blocking_n = (sum(1 for v in (inv.get("violations") or [])
+                      if isinstance(v, dict) and v.get("severity") == "blocking")
+                  if inv is not None else 0)
+    status = ("provisional" if (unpriced or market or not calculated or blocking_n or inv is None)
+              else ("reviewable" if (house or manufacturing) else "firm"))
+    # DRAFT is narrower than PROVISIONAL. A quote is a draft while a person still owes it
+    # something — a price, a replacement for a market guess, a manufacturing decision, or a
+    # blocking check to clear. "The checks have not run yet" and "the sheet was not read
+    # back" keep the estimate provisional but say nothing about the quote's scope; the
+    # LLM-only path already marks those runs in its own words.
+    draft = bool(unpriced or market or blocking_n or manufacturing)
+    outstanding = len(unpriced) + len(market) + len(manufacturing) + blocking_n
+
+    return {
+        "schema": COSTED_JOB_SCHEMA,
+        "run": {
+            "order_qty": order_qty,
+            "unit_gbp": totals.get("unit_gbp"),
+            "material_gbp": totals.get("material_gbp"),
+            "labour_gbp": totals.get("labour_gbp"),
+            "totals_source": totals.get("source"),
+            "code_version": str(source.get("engine_version") or source.get("commit")
+                                or (source.get("run") or {}).get("commit") or ""),
+        },
+        "lines": lines,
+        "gaps": gaps,
+        "plating": plating,
+        "finishes_charged": costed_finish_label(source, default=""),
+        "decisions_required": decisions,
+        "release": {"status": status, "reasons": reasons, "draft": draft,
+                    "outstanding": outstanding,
+                    "prices_outstanding": len(unpriced) + len(market),
+                    "decisions_open": len(manufacturing)},
+    }
+
+
+def costed_line(source: Any, part_number: Any) -> Optional[Dict[str, Any]]:
+    """One line of the record, by part number or any alias of it."""
+    pn = canonical_identity(source, part_number)
+    for line in costed_job(source).get("lines") or []:
+        if line.get("identity") == pn or str(line.get("part_number") or "").upper() == \
+                str(part_number or "").strip().upper():
+            return line
+    return None
+
+
+RESIDUAL_LABEL = "Rounding / unreconciled residual"
+
+
+def record_lines(source: Any) -> Dict[str, Dict[str, Any]]:
+    """{PART NUMBER (upper): line} for one record — the join every writer needs."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for line in costed_job(source).get("lines") or []:
+        for key in (line.get("part_number"), line.get("identity")):
+            k = str(key or "").strip().upper()
+            if k and k not in out:
+                out[k] = line
+    return out
+
+
+def charged_material_rows_present(source: Any) -> bool:
+    """True once the read-back has recorded the sheet's material rows — the condition for
+    any per-part money to be the CHARGED figure rather than the engine's."""
+    fe = _final_estimate_of(source)
+    return any(isinstance(r, dict) for r in (fe.get("material_rows") or [])) \
+        and job_totals(source).get("source") == "excel_calculated"
+
+
+def packaging_status(source: Any) -> str:
+    """'charged' when a commercial packaging line carries money, 'unpriced' when the line
+    exists and is held at £0, 'absent' when the job carries no packaging line at all.
+
+    The quote's 'Boxed for transport' row and its packing bullet promise work the price
+    contains. On 7332-01 PACKAGING was on the sheet at £0 by James's decision, and the
+    quote promised the box anyway. Only 'unpriced' is that defect; a job with no packaging
+    line has not declared packaging as a scope item either way."""
+    status = "absent"
+    for line in costed_job(source).get("lines") or []:
+        if line.get("kind") != "commercial":
+            continue
+        if "PACK" not in str(line.get("part_number") or "").upper():
+            continue
+        v = line.get("charged_ext_gbp")
+        v = _num(v) if v is not None else _num(line.get("engine_ext_gbp"))
+        if v > 0:
+            return "charged"
+        status = "unpriced"
+    return status
+
+
+def packaging_is_charged(source: Any) -> bool:
+    """True when a commercial packaging line carries money on the sheet."""
+    return packaging_status(source) == "charged"
+
+
+def charged_breakdown_by_material(source: Any,
+                                  residual_label: str = RESIDUAL_LABEL) -> List[Tuple[str, float]]:
+    """The material money by type, from the CHARGED figures, so it adds back to the sheet.
+
+    The residual row that used to be called 'Powder / scrap / other workbook material'
+    was the difference between the engine's net-part column and the sheet's nest-based
+    total — a basis difference, not a consumable. Built from the charged lines it is a
+    few pence of rounding at most, and it is labelled as rounding rather than as a process
+    the job does not have."""
+    job = costed_job(source)
+    totals: Dict[str, float] = {}
+    for l in job.get("lines") or []:
+        if l.get("cross_reference") and l.get("charged_ext_gbp") in (None, 0, 0.0):
+            continue
+        v = l.get("charged_ext_gbp")
+        v = _num(v) if v is not None else _num(l.get("engine_ext_gbp"))
+        if not v:
+            continue
+        label = l["material_label"]
+        if l["kind"] == "commercial":
+            label = "Packaging / delivery"
+        elif l["kind"] == "service":
+            label = "Subcontract plating"
+        elif l["kind"] == "bought_in":
+            label = "Bought-in"
+        totals[label] = totals.get(label, 0.0) + v
+    sheet = job.get("run", {}).get("material_gbp")
+    if sheet is not None and totals:
+        residual = round(float(sheet) - sum(totals.values()), 4)
+        if abs(residual) >= 0.005:
+            totals[residual_label] = residual
+    return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+
+__all__ += ["costed_job", "costed_line", "record_lines", "charged_breakdown_by_material",
+            "charged_material_rows_present", "packaging_is_charged", "packaging_status",
+            "RESIDUAL_LABEL",
+            "PRICE_ORIGIN_LABELS", "FIRM", "INDICATIVE_HOUSE", "INDICATIVE_MARKET",
+            "UNPRICED", "NIL", "COSTED_JOB_SCHEMA"]

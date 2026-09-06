@@ -449,11 +449,41 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
             if _k:
                 _decided_against.setdefault(_k, set()).add(_op)
 
+    # A ROW ON THE PARENT COVERS THE MEMBERS. Welding is charged once, on the weldment
+    # 7332-01-101, as an assembly-scoped event; its five members carry the word "welding"
+    # on their own records and were reported as work nobody charged for. The compiled
+    # hierarchy says which parts sit under which assembly, so a part's coverage is its own
+    # rows and its ancestors' rows — and its ancestors' ruled-out operations, because a
+    # powder decided against on the weldment is decided against on its members.
+    _parents: Dict[str, List[str]] = {}
+    for _node in (_canon.get("nodes") or []):
+        if isinstance(_node, dict) and _node.get("part_number"):
+            _parents[str(_node["part_number"]).strip().upper()] = [
+                str(x).strip().upper() for x in (_node.get("parents") or []) if x]
+
+    def _ancestors(_pn: str) -> set:
+        seen: set = set()
+        frontier = list(_parents.get(_pn, []))
+        while frontier:
+            _a = frontier.pop()
+            if _a in seen:
+                continue
+            seen.add(_a)
+            frontier.extend(_parents.get(_a, []))
+        return seen
+
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
         pn = str(p.get("part_number") or "?")
-        _covered = (_by_part.get(pn.strip().upper(), set()) | _job_wide
-                    | _decided_against.get(pn.strip().upper(), set()))
+        _key = pn.strip().upper()
+        _covered = (_by_part.get(_key, set()) | _job_wide
+                    | _decided_against.get(_key, set()))
+        for _a in _ancestors(_key):
+            _covered |= _by_part.get(_a, set()) | _decided_against.get(_a, set())
+        # Bench handling IS the assemble/pack row: the department that charges assembly
+        # charges the handling with it, whichever alias the part record carries.
+        if _covered & {"assembly", "assemble", "assemble/pack"}:
+            _covered.add("handling")
         for op in (p.get("operations") or p.get("textual_operations") or []):
             if isinstance(op, str) and op and op.strip().lower() not in _covered:
                 named.setdefault(op, []).append(pn)
@@ -2588,6 +2618,8 @@ _FINISH_PROCESS_WORDS = (
     "ANODIS", "ANODIZ", "PLATE", "PLATED", "GALVANIS", "CHROME", "BRUSHED",
     "ETCH", "WRAP", "FILM",
 )
+# The plate finishes — the ones a subcontract plating line pays for when one is costed.
+_PLATING_WORDS = ("PLATE", "PLATED", "CHROME", "GALVANIS", "ANODIS", "ANODIZ")
 # SHEENS ARE NOT PROCESSES. GLOSS, MATT, SATIN and SILK were in the list above and every
 # powder finish SDI writes says "POWDER COATED - MATT". 11650's cabinet fired this check on
 # ten powder-coated steel parts whose P.Coat row was costed on the same sheet -- the exact
@@ -2709,6 +2741,16 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
             or r.get("description") or "")
         for r in priced if isinstance(r, dict)).lower()
     finish_is_costed = any(op in costed_ops for op in _COSTABLE_FINISH_OPS)
+    # PLATING IS CHARGED AS A SUBCONTRACT LINE, NOT AN OPERATION. 7332-01's back panel and
+    # frame state PLATED; the sheet carries £15.83 of subcontract plating for exactly that
+    # finish; this check reported the finish as supplied free and said powder was the only
+    # finish the engine can cost. Ask the shared post-costing reader whether plating money
+    # is on the job before calling a plate finish uncosted.
+    try:
+        from costed_facts import _subcontract_plating_is_costed as _plating_costed_fn
+        _plating_costed = bool(_plating_costed_fn(summary))
+    except Exception:                                            # noqa: BLE001
+        _plating_costed = False
 
     uncosted, unrecognised = [], []
     for part in parts:
@@ -2736,6 +2778,8 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         # _FINISH_PROCESS_WORDS is already the set of processes this engine has NO rate
         # for; powder and diamond polish are deliberately absent. So naming one is
         # sufficient on its own and the job-level flag is not consulted.
+        if named and _plating_costed and all(w in _PLATING_WORDS for w in named):
+            continue        # the plate finish the sheet charges as a subcontract line
         if named:
             uncosted.append({"part_number": part.get("part_number"),
                              "finish": text[:80], "words": named[:3]})
@@ -2770,9 +2814,10 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         out.append(_violation(
             "stated_finish_not_costed", WARNING,
             f"{len(uncosted)} part(s) state a finish the sheet charges nothing for: {listed}. "
-            f"Powder is the only finish this engine can cost, and no powder operation is on "
-            f"this route. Paint, vinyl, laminate, print and foil are real work on board and "
-            f"plastic and are being supplied free. ESTIMATOR TO PRICE THE FINISH.",
+            f"Powder, diamond polish and subcontract plating are the finishes this engine can "
+            f"cost, and none of them is charged against these parts. Paint, vinyl, laminate, "
+            f"print and foil are real work on board and plastic and are being supplied free. "
+            f"ESTIMATOR TO PRICE THE FINISH.",
             count=len(uncosted), parts=uncosted[:20]))
     if unrecognised:
         listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in unrecognised[:4])

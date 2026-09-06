@@ -1212,6 +1212,28 @@ def main() -> None:
                                 _m_es[_k] = _s_es[_k]
                     print(f"   [wep-readback] calculated totals merged into the run — the "
                           f"report sheets can now reconcile against them", flush=True)
+                    # THE ONE RECORD, BUILT HERE AND STAMPED ON THE JSON. costed_job is
+                    # pure and every writer calls it for itself; the persisted copy is the
+                    # audit trail of what the deliverables were built from. Written back to
+                    # the canonical file, because the quote and the report are generated
+                    # from that file, not from this summary.
+                    try:
+                        from costed_facts import costed_job as _costed_job
+                        summary["costed_job"] = _costed_job(summary)
+                        _stamped["costed_job"] = summary["costed_job"]
+                        with open(_canon_json, "w", encoding="utf-8") as _fh_cj:
+                            json.dump(_stamped, _fh_cj, indent=2, ensure_ascii=False,
+                                      default=str)
+                        _cj_gaps = summary["costed_job"].get("gaps") or {}
+                        print(f"   [costed-job] one record from the calculated rows: "
+                              f"{len(summary['costed_job'].get('lines') or [])} lines, "
+                              f"unpriced {_cj_gaps.get('unpriced') or []}, house-indicative "
+                              f"£{_cj_gaps.get('indicative_house_gbp') or 0:.2f}, market "
+                              f"£{_cj_gaps.get('indicative_market_gbp') or 0:.2f} — every "
+                              f"deliverable reads it", flush=True)
+                    except Exception as _cj_exc:
+                        print(f"   [costed-job] record not stamped ({_cj_exc}) — the "
+                              f"deliverables build it in memory", flush=True)
             except Exception as _fe_exc:
                 print(f"   [wep-readback] totals not merged ({_fe_exc}) — the report sheets "
                       f"will show engine figures and say so", flush=True)
@@ -1424,6 +1446,14 @@ def main() -> None:
                       "or an ERP export until resolved.", flush=True)
             if isinstance(_doc, dict) and _canon_json3:
                 try:
+                    # The record's release block reads the verdict just stamped; refresh
+                    # the persisted copy so the file does not say the checks never ran.
+                    try:
+                        from costed_facts import costed_job as _costed_job2
+                        _doc["costed_job"] = _costed_job2(_doc)
+                        summary["costed_job"] = _doc["costed_job"]
+                    except Exception:                                # noqa: BLE001
+                        pass
                     Path(_canon_json3).write_text(
                         json.dumps(_doc, indent=2, ensure_ascii=False), encoding="utf-8")
                 except Exception as _iw:

@@ -3608,6 +3608,15 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 # on the record and the sheet leaves the scrap column alone.
                 "waste_included": True,
                 "waste_factor_applied": round(waste_factor, 4),
+                # NAME THE BOOK THAT PRICED IT. This branch carried no cost_method, so every
+                # tab that asks "where did the £ come from" fell to "not named" on the leg
+                # while the AI Provenance tab, reading the price_source metadata instead,
+                # said "SDI config rate (INDICATIVE)". One line, two answers. The method
+                # says which rate was used so one classifier can say the same thing on
+                # every surface.
+                "cost_method": ("section_stock_config_rate" if (_sec_rate and _sec_rate > 0)
+                                else "section_stock_flat_rate"),
+                "rate_gbp_per_kg": price_per_kg,
                 "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)} | _len_stamp,
                 # This branch has a full a×b×t hollow-section profile + a real cut length, so it IS a
                 # tube — declare it as one (like the catalogue branch above) so the workbook routes it

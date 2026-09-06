@@ -635,6 +635,21 @@ def material_breakdown(summary: Dict[str, Any]) -> List[Tuple[str, float]]:
     if not parts:
         return []
     canonical = priced_route_known(summary)
+    # FROM THE CHARGED ROWS ONCE THE SHEET HAS BEEN READ BACK. Built from the engine's
+    # net-part figures this block fell £5.13 short of the sheet on 7332-01 and named the
+    # shortfall "Powder / scrap" under a heading that said NOTHING COATED. The difference
+    # was the nest-versus-net-part BASIS, not a consumable. From the charged lines the
+    # breakdown IS the sheet's money, and any residual is a penny of rounding — labelled
+    # powder only when powder is actually charged on the job.
+    try:
+        from costed_facts import (charged_material_rows_present, charged_breakdown_by_material,
+                                  RESIDUAL_LABEL, has_operation)
+        if canonical and charged_material_rows_present(summary):
+            _powder = has_operation(summary, "powder_coating", "powder")
+            return charged_breakdown_by_material(
+                summary, residual_label=POWDER_SCRAP_LABEL if _powder else RESIDUAL_LABEL)
+    except Exception:                                            # noqa: BLE001
+        pass
     est = {p.get("part_number"): p
            for p in (summary.get("estimate_summary") or {}).get("part_estimates", [])
            if p.get("part_number")}

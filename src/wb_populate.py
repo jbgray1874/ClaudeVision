@@ -4880,34 +4880,48 @@ def _geom_source_words(recorded: Any) -> str:
     }.get(key, key.replace("_", " "))
 
 
-def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
-    """Append the engine's own detail/provenance sheets under NON-colliding names,
-    so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
-    # AI Labour Detail — the engine's own labour breakdown (informational)
-    #
-    # THE SAME LIST THE ESTIMATE SHEET IS BUILT FROM. These tabs annotate the Estimate
-    # sheet's lines — the unit £, its source, the geometry behind it — so they must read the
-    # exact rows the sheet carries. The Estimate sheet is built from canonical_part_estimates
-    # (canonicalise merges recogniser duplicates AND MINTS explicit bought-in BOM lines that
-    # never got a pricing record: the class-word commodities and the market/AI lines). Reading
-    # the pre-canonical part_estimates here left every minted bought-in off both AI tabs — so
-    # 11762-17's £1.20 clip carried a price on the sheet and NO provenance row, and the report
-    # read that absence as "source not named" on a line that has a source. Prefer the canonical
-    # list; fall back to the pre-canonical one for the no-workbook / no-cutover path.
+def _ai_tab_parts(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """THE SAME LIST THE ESTIMATE SHEET IS BUILT FROM. These tabs annotate the Estimate
+    sheet's lines — the unit £, its source, the geometry behind it — so they must read the
+    exact rows the sheet carries. The Estimate sheet is built from canonical_part_estimates
+    (canonicalise merges recogniser duplicates AND MINTS explicit bought-in BOM lines that
+    never got a pricing record: the class-word commodities and the market/AI lines). Reading
+    the pre-canonical part_estimates here left every minted bought-in off both AI tabs — so
+    11762-17's £1.20 clip carried a price on the sheet and NO provenance row, and the report
+    read that absence as "source not named" on a line that has a source. Prefer the canonical
+    list; fall back to the pre-canonical one for the no-workbook / no-cutover path."""
     _es = summary.get("estimate_summary") or {}
-    pes = (_es.get("canonical_part_estimates")
-           or _es.get("part_estimates") or summary.get("parts") or [])
+    return (_es.get("canonical_part_estimates")
+            or _es.get("part_estimates") or summary.get("parts") or [])
 
-    def _add(title: str, header: List[str], rows: List[List[Any]]):
-        # ensure name doesn't clash with structural sheets
-        if title in CELL_MAP["structural_sheets"] or title in wb.sheetnames:
-            title = "AI " + title
-        ws = wb.create_sheet(title=title[:31])  # Excel 31-char sheet name limit
-        ws.append(header)
-        for r in rows:
-            ws.append(r)
 
-    # AI Material Detail
+def _ai_tab_classifier(summary: Dict[str, Any]):
+    """(kind_of, origin_of) — the record's own classifiers, so the Material and Price
+    Source columns say what every other deliverable says. These tabs are written BEFORE
+    Excel calculates, so the money they carry is the engine's; the classification is not."""
+    try:
+        from costed_facts import (_line_kind, _material_label, _price_origin,
+                                  _canonical_nodes, canonical_identity, part_material_cost)
+        _nodes = _canonical_nodes(summary)
+
+        def kind_of(pe):
+            return _line_kind(pe, _nodes.get(canonical_identity(summary, pe.get("part_number"))))
+
+        def label_of(pe):
+            return _material_label(pe, kind_of(pe))
+
+        def origin_of(pe):
+            _unit, _ = part_material_cost(pe)
+            return _price_origin(pe, kind_of(pe), None, None, _unit, None, False)
+        return label_of, origin_of
+    except Exception:                                                # noqa: BLE001
+        return (lambda pe: pe.get("normalized_material")), (lambda pe: {})
+
+
+def _material_detail_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """The AI Material Detail rows."""
+    pes = _ai_tab_parts(summary)
+    _label_of, _ = _ai_tab_classifier(summary)
     mat_rows = []
     for pe in pes:
         me = pe.get("material_estimate") or {}
@@ -4930,20 +4944,24 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
             _blank_l = me.get("blank_length_mm")
             _blank_w = me.get("blank_width_mm")
             _gauge = pe.get("normalized_thickness_mm")
+        # WHAT THE LINE IS MADE OF, from the record's classifier. The stub that mints a
+        # commercial line or a plating service carries MILD STEEL because every stub does,
+        # and this column printed it beside PACKAGING, DELIVERY and the plating on 7332-01.
         mat_rows.append([
             pe.get("part_number"), pe.get("description"),
-            pe.get("normalized_material"),
+            _label_of(pe),
             _blank_l, _blank_w, _gauge,
             me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
             (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
             _geom_source_words(pe.get("geometry_source")),
         ])
-    _add("AI Material Detail",
-         ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
-          "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
-         mat_rows)
+    return mat_rows
 
-    # AI Price Provenance — the unit £ and its source, for EVERY priced line.
+
+def _price_provenance_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """The AI Price Provenance rows — the unit £ and its source, for EVERY priced line."""
+    pes = _ai_tab_parts(summary)
+    _, _origin_of = _ai_tab_classifier(summary)
     #
     # EVERY PRICED LINE, NOT JUST THE BOUGHT-INS. This listed only page_roles 'bought_in', so a
     # sheet-metal job showed a "Price Provenance" tab holding two placeholder lines
@@ -4969,6 +4987,14 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
             continue
         _src_pv = (pe.get("cost_source") or pe.get("source")
                    or _me_pv.get("cost_method") or "not named")
+        # THE RECORD'S WORDS FOR THE SOURCE. The raw token ("section_stock_config_rate",
+        # or nothing at all → "not named") is the machine's record; the estimator's column
+        # says what it means. The classes the record cannot name better than the token
+        # keep the token.
+        _origin = _origin_of(pe) or {}
+        _cls = str(_origin.get("class") or "")
+        if _origin.get("label") and _cls and _cls not in ("unrecorded", "nil_by_design"):
+            _src_pv = str(_origin["label"])
         prov_rows.append([
             pe.get("part_number"), pe.get("description"),
             _unit_pv if _unit_pv is not None else pe.get("unit_cost_gbp"),
@@ -4977,6 +5003,28 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
             pe.get("supplier") or "",
             " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
         ])
+    return prov_rows
+
+
+def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
+    """Append the engine's own detail/provenance sheets under NON-colliding names,
+    so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
+    def _add(title: str, header: List[str], rows: List[List[Any]]):
+        # ensure name doesn't clash with structural sheets
+        if title in CELL_MAP["structural_sheets"] or title in wb.sheetnames:
+            title = "AI " + title
+        ws = wb.create_sheet(title=title[:31])  # Excel 31-char sheet name limit
+        ws.append(header)
+        for r in rows:
+            ws.append(r)
+
+    # AI Material Detail
+    _add("AI Material Detail",
+         ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
+          "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
+         _material_detail_rows(summary))
+
+    # AI Price Provenance — the unit £ and its source, for EVERY priced line.
     # NAMED FOR WHAT IT IS, AND NOT WHAT THE OTHER WRITER CALLS ITS SHEET.
     #
     # This is bought-in PRICE provenance; estimation_report.add_provenance_sheet writes a
@@ -4985,7 +5033,7 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     # duplicate tab seen on 2085. Two sheets, two purposes, two names.
     _add("AI Price Provenance",
          ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier", "Review Flags"],
-         prov_rows)
+         _price_provenance_rows(summary))
 
     # The costing sheet shows only accepted required rows. These two review sheets preserve
     # the full hierarchy and every route decision, including ruled-out and unverified work.

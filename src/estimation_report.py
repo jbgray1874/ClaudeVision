@@ -283,6 +283,18 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
                               part_material_cost, priced_route_known,
                               priced_rows_for_part)
     _canonical = priced_route_known(summary)
+    # THE ONE RECORD. Once the sheet has been read back, the money on this tab is the
+    # money the sheet CHARGED — the nest figure for a sheet part, the section figure for
+    # a tube — joined to the canonical part. The engine's own net-part figure is kept in
+    # the rate column, labelled as not charged, so the two calculators are shown as two
+    # calculators rather than the smaller one presented as the provenance of the larger.
+    try:
+        from costed_facts import (record_lines as _record_lines,
+                                  charged_material_rows_present as _charged_present)
+        _rec = _record_lines(summary) if _canonical else {}
+        _charged = bool(_charged_present(summary)) if _canonical else False
+    except Exception:                                            # noqa: BLE001
+        _rec, _charged = {}, False
 
     # WHICH DRAWING EACH PART CAME FROM — the same reader the covering note and section 9 of
     # the report use, so the three surfaces cannot name different files for one part. Two
@@ -331,8 +343,13 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # Material only — see costed_facts.part_material_cost. The engine's
         # unit_total_cost_gbp is labour-inclusive and reconciles to nothing on a canonical
         # job; labour lives on the department rows, not on the part.
+        _line = _rec.get(str(pn).strip().upper()) if _rec else None
+        _engine_unit, _engine_ext = part_material_cost(part)
         if _canonical:
-            unit, ext = part_material_cost(part)
+            unit, ext = _engine_unit, _engine_ext
+            if _charged and _line is not None and _line.get("charged_ext_gbp") is not None:
+                unit = float(_line.get("charged_unit_gbp") or 0.0)
+                ext = float(_line.get("charged_ext_gbp") or 0.0)
         else:
             unit = float(_pe.get("unit_total_cost_gbp") or 0)
             ext  = float(_pe.get("extended_total_cost_gbp") or 0)
@@ -342,7 +359,13 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # + inferred lists here made one workbook describe two different routes: laser,
         # powder and weld against timber panels the Estimate sheet charges saw, glue, CNC
         # and spray for. Falls back to the raw lists only when no workbook rows exist.
-        ops = operations_for_part(summary, pn, _pe)
+        #
+        # FROM THE DECISIONS, NOT THE DEPARTMENT INVERTED. The Tubebend row inverted to
+        # tube_bending, tubebend, folding AND fold — the fold the route had ruled out, on
+        # the tab that documents the route. The record names the operation the decision
+        # on the row says.
+        ops = (list(_line.get("operations") or []) if _line is not None and _canonical
+               else operations_for_part(summary, pn, _pe))
         _ops_priced = True
         if not ops and not _canonical:
             # No workbook — nothing is priced yet, so the drawing's own reading is the best
@@ -464,6 +487,20 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             _words = _geom_source_words(geo if geo != "pdf" else "")
             geo_source = (_words if _words != "not recorded" else
                           f"PDF vector extraction (reliability {geo_conf_raw:.0%})")
+        # A SECTION IS PRICED BY LENGTH, SO THE LENGTH IS ITS GEOMETRY. The leg printed
+        # 9,106 mm here — the page-summed cut path — against the 1,397 mm it was priced
+        # on, and "PDF vector extraction" for a length a language model transcribed. The
+        # record carries the millimetres, the rung and the reader; print those.
+        _len = (_line or {}).get("length") if _line is not None else None
+        if _len and _len.get("mm"):
+            cut_len = float(_len["mm"])
+            _prof = (_line or {}).get("section_profile") or {}
+            _dims = " × ".join(str(_prof[k]) for k in ("a", "b", "t") if _prof.get(k))
+            geo_source = ((f"section stock {_dims} × " if _dims else "section length ")
+                          + f"{cut_len:,.0f} mm — {_len.get('source') or 'length'} read by "
+                          + f"{_len.get('reader') or 'an unrecorded reader'}"
+                          + (" (INDICATIVE — taken as the largest dimension)"
+                             if _len.get("indicative") else ""))
         # ── Cost provenance ────────────────────────────────────────────────────
         hist_match   = None
         if _DB_OK and pn and pn != "—":
@@ -476,7 +513,11 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # Bought-in components are catalogue-priced with no fabrication geometry, so
         # the zero-cost / unresolved-material / no-thickness review flags do not apply.
         if not _bought:
-            if unit == 0.0 and mat not in ("BOUGHT_IN",):
+            # A NESTED PART THE ENGINE ROUNDS TO NOTHING IS NOT A ZERO-COST REVIEW. The
+            # 15.88 mm cap is £0.00 net-part and £0.04 on the sheet; it was flagged. An
+            # assembly is nil by design. Only a LEAF with no money anywhere is the gap.
+            _kind = str((_line or {}).get("kind") or "leaf")
+            if unit == 0.0 and ext == 0.0 and mat not in ("BOUGHT_IN",) and _kind == "leaf":
                 flags.append("Zero cost — thickness or geometry missing")
             if mat in ("Unknown", "UNKNOWN", "LED", "CARD"):
                 flags.append(f"Material unresolved: {mat!r}")
@@ -508,6 +549,16 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         _ps = ((_pe.get("material_estimate") or {}).get("price_source")
                or _pe.get("price_source") or {})
         rate_basis = _price_basis_label(_ps, mat)
+        # THE RECORD'S LABEL, where there is one: origin and firmness in the words every
+        # other deliverable uses. Then the engine's own figure, if it differs from what
+        # was charged, named as exactly that.
+        _origin = (_line or {}).get("price_origin") or {}
+        if _origin.get("label"):
+            rate_basis = str(_origin["label"])
+        if _charged and _line is not None and _line.get("charged_ext_gbp") is not None \
+                and abs(_engine_ext - ext) >= 0.01:
+            rate_basis += (f" · engine net-part figure £{_engine_ext:,.2f} — not charged; "
+                           f"the sheet's £{ext:,.2f} is the money")
         # ── Route text, and the audit trail behind it ──────────────────────────
         _ops_text = (", ".join(ops) if ops
                      else ("none charged" if _canonical else "—"))
@@ -857,7 +908,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         else:
             _gap = float(_mat) - _col_mat
             _gap_txt = ""
-            if abs(_gap) >= 0.01:
+            if abs(_gap) >= 0.02:
                 # DO NOT NAME A PROCESS THIS JOB DOES NOT HAVE. The label was fixed text, so a
                 # job with NOTHING COATED still had its residual called "powder", and an
                 # estimator reading "Powder / scrap £5.13" on a plated stand rightly stopped
@@ -888,6 +939,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                             f"Neither figure is wrong — this column is per-part provenance, the "
                             f"sheet is the money. The MATERIAL COST BREAKDOWN below shows the "
                             f"residual as its own row. ")
+            elif abs(_gap) >= 0.005:
+                # A PENNY IS ROUNDING. Each row is charged at two decimals and the sheet
+                # sums the unrounded cells; a £0.01 gap is arithmetic, not a basis.
+                _gap_txt = (f"The £{abs(_gap):,.2f} difference is rounding across the rows; "
+                            f"the column is the sheet's own charged figures. ")
             _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
                         f"sheet's £{float(_mat):,.2f}. {_gap_txt}")
         _lab_txt = (f"Labour is £{float(_lab):,.2f}, charged per department row across "

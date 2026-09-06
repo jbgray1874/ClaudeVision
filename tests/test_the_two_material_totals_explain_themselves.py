@@ -120,8 +120,13 @@ def test_nothing_is_said_when_there_is_nothing_to_say():
     the real notes invisible."""
     at = CODE.index("_gap = float(_mat) - _col_mat")
     window = CODE[at:at + 1600]
-    assert "abs(_gap) >= 0.01" in window, (
+    # A PENNY IS ROUNDING. Once the column carries the sheet's own charged figures (each
+    # read at two decimals, summed by the sheet unrounded) a £0.01 gap is arithmetic, and
+    # the basis explanation is reserved for a difference that has a basis.
+    assert "abs(_gap) >= 0.02" in window, (
         "the explanation is printed unconditionally, including when the two agree")
+    assert "abs(_gap) >= 0.005" in CODE[at:at + 3200], (
+        "a penny of rounding is not named as rounding")
 
 
 def test_both_tabs_still_agree_on_which_is_authoritative():

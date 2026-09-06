@@ -658,7 +658,8 @@ def _ga_image_data_uri(summary: Dict[str, Any]) -> Optional[str]:
 
 # ── content assembly ────────────────────────────────────────────────────────
 def _collect_operations(parts: List[Dict[str, Any]],
-                        summary: Optional[Dict[str, Any]] = None) -> List[str]:
+                        summary: Optional[Dict[str, Any]] = None,
+                        packing_charged: bool = True) -> List[str]:
     """Distinct operations across all parts, in a stable order, mapped to plain language.
 
     Driven by the operations we actually COSTED (labour cost lines / process times), not by
@@ -712,7 +713,11 @@ def _collect_operations(parts: List[Dict[str, Any]],
     # actually in the job. Clean assembly and packing apply to everything.
     _mats = " ".join(str(p.get("normalized_material") or "") for p in parts).upper()
     _has_film = any(k in _mats for k in ("ACRYLIC", "PERSPEX", "POLYCARB", "STEEL", "ALUMIN", "ZINTEC"))
-    tails = ["Clean assembly and inspection", "Individual packing for transport"]
+    # PACKING IS PROMISED ONLY WHEN IT IS PRICED. 7332-01 carried PACKAGING on the sheet at
+    # £0 and this list still promised "Individual packing for transport".
+    tails = ["Clean assembly and inspection"]
+    if packing_charged:
+        tails.append("Individual packing for transport")
     if _has_film:
         tails.insert(0, "Protective film removal")
     for tail in tails:
@@ -894,7 +899,19 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     parts = _job_parts(summary) or (es.get("part_estimates") or [])
     material = _materials_line(parts)
     finish = _finish_line(summary, parts)
-    ops = _collect_operations(parts, summary)
+
+    # THE ONE RECORD decides scope and release. What is excluded, and whether this page is
+    # a draft, are read from costed_facts.costed_job — the same record the workbook tabs,
+    # the report and the covering e-mail read — never re-derived here.
+    try:
+        from costed_facts import costed_job as _costed_job, packaging_status as _pack_status
+        _record = _costed_job(summary)
+        _packing = _pack_status(summary)
+    except Exception:                                            # noqa: BLE001
+        _record, _packing = {}, "absent"
+    _release = _record.get("release") or {}
+    _draft = bool(_release.get("draft"))
+    ops = _collect_operations(parts, summary, packing_charged=(_packing != "unpriced"))
 
     # THE INVARIANT GATE, READ BY THE DOCUMENT THAT LEAVES THE BUILDING.
     # The checks ran and wrote their verdict onto the job, and the quote was generated
@@ -945,6 +962,33 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # Report and the job report's drawing-pack section — every document the estimator works
     # from names those parts, and they decide what the customer hears.
     exc_block = ""
+    # A COMMERCIAL EXCLUSION IS DIFFERENT, AND IT IS DECLARED. Packaging and delivery held
+    # at £0 on the sheet are not in this price; a quotation that says nothing about them
+    # promises them. One line, in the words of the record, not the engine's findings.
+    if _packing == "unpriced":
+        exc_block = """
+      <div class="inc">
+        <h3>Not included in this price</h3>
+        <ul>
+          <li>Packaging and delivery not included — to be priced before issue</li>
+        </ul>
+      </div>"""
+
+    # DRAFT UNTIL THE DECISIONS ARE MADE. A visible status, in the sheet's own tone rather
+    # than a red disclaimer, while a price is outstanding, a market figure stands, a check
+    # blocks, or a manufacturing decision is open. Read from the record's release block.
+    draft_block = ""
+    if _draft:
+        _bits = []
+        if _release.get("prices_outstanding"):
+            _n = int(_release["prices_outstanding"])
+            _bits.append(f"{_n} price{'s' if _n != 1 else ''} outstanding")
+        if _release.get("decisions_open"):
+            _n = int(_release["decisions_open"])
+            _bits.append(f"{_n} decision{'s' if _n != 1 else ''} open")
+        draft_block = (
+            '\n    <div class="draft">DRAFT — not for issue'
+            + (" · " + " · ".join(_bits) if _bits else "") + "</div>")
 
     ga_block = ""
     if ga_uri:
@@ -984,12 +1028,21 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # another form: it is the removal of a claim the run cannot support.
     from run_readers import run_was_llm_only
     _llm = run_was_llm_only(summary)
+    # A DRAFT HAS NO OFFER WINDOW EITHER. The same reasoning as the LLM-only case: "valid
+    # for 30 days" is a promise with a date on it, and a page with prices outstanding
+    # cannot make it.
     _validity_row = ("<tr><td>Basis</td><td>Indicative — for internal comparison</td></tr>"
                      if _llm else
+                     "<tr><td>Basis</td><td>Draft — not for issue</td></tr>"
+                     if _draft else
                      f"<tr><td>Valid for</td><td>{VALID_DAYS} days</td></tr>")
     _validity_foot = ("Prices ex VAT, GBP. Indicative."
                       if _llm else
+                      "Prices ex VAT, GBP. Draft — not for issue."
+                      if _draft else
                       f"Prices ex VAT, GBP. Valid {VALID_DAYS} days from quotation date.")
+    _packing_row = ("Not included — packaging and delivery to be priced"
+                    if _packing == "unpriced" else "Boxed for transport")
 
     _lead_open = (
         f"Manufactured to drawing {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}. "
@@ -1013,6 +1066,8 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
           -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
   .sheet {{ max-width:820px; margin:24px auto; background:var(--bg); border:1px solid var(--line);
             border-radius:4px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.04); }}
+  .draft {{ background:var(--soft); color:var(--muted); border-bottom:1px solid var(--line);
+           font-size:12px; letter-spacing:.06em; text-transform:uppercase; padding:8px 28px; }}
   .head {{ display:flex; align-items:center; justify-content:space-between; gap:16px;
            padding:26px 40px 22px; border-bottom:4px solid var(--sdi-yellow); }}
   /* The customer block is the logo, not a labelled field: a caption above the embedded
@@ -1082,7 +1137,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
 </style>
 </head>
 <body>
-  <div class="sheet">
+  <div class="sheet">{draft_block}
     <div class="head">
       <div class="sdi">{sdi_logo}</div>
       <div class="mark">
@@ -1104,7 +1159,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
             <tr><td>Material</td><td>{_esc(material)}</td></tr>
             <tr><td>Quantity</td><td>{_num(qty) if qty else '—'}</td></tr>
             <tr><td>Finish</td><td>{_esc(finish)}</td></tr>
-            <tr><td>Packing</td><td>Boxed for transport</td></tr>
+            <tr><td>Packing</td><td>{_packing_row}</td></tr>
           </table>
         </div>
         <div class="spec">
