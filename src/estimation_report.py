@@ -307,6 +307,22 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
     except Exception:                                            # noqa: BLE001
         _srcof, _pack, _pages = None, [], {}
 
+    # THE ESTIMATOR'S ACTION, PER LINE, from the record's decision list — the same list the
+    # report leads with and the e-mail panel prints. A line with nothing to do says so.
+    _actions: Dict[str, List[str]] = {}
+    try:
+        from costed_facts import costed_job as _cj
+        for _d in (_cj(summary).get("decisions_required") or []):
+            if isinstance(_d, dict) and _d.get("part"):
+                _actions.setdefault(str(_d["part"]).strip().upper(), []).append(
+                    str(_d.get("action") or "").strip())
+    except Exception:                                            # noqa: BLE001
+        _actions = {}
+
+    def _action_for(_pn: Any) -> str:
+        acts = [a for a in _actions.get(str(_pn or "").strip().upper(), []) if a]
+        return "; ".join(dict.fromkeys(acts)) if acts else "none — priced from the sheet"
+
     def _drawing_files_for(part: Dict[str, Any], bought: bool) -> str:
         if _srcof is None:
             return ""
@@ -344,6 +360,11 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # unit_total_cost_gbp is labour-inclusive and reconciles to nothing on a canonical
         # job; labour lives on the department rows, not on the part.
         _line = _rec.get(str(pn).strip().upper()) if _rec else None
+        # A commercial line or a subcontract service is not made of anything; the record
+        # says what kind of line it is, and MILD STEEL beside PACKAGING is the defect.
+        _line_kind = str((_line or {}).get("kind") or "") if _line is not None else ""
+        if _line_kind in ("commercial", "service"):
+            mat = str(_line.get("material_label") or mat)
         _engine_unit, _engine_ext = part_material_cost(part)
         if _canonical:
             unit, ext = _engine_unit, _engine_ext
@@ -397,6 +418,12 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             # steel. On 10575-01-001 that put `dxf_matched_no_geometry` in the Mat. Source
             # column — a geometry state, reported as the material's provenance.
             mat_source_str = source_label(part.get("material_source"))
+        # A commercial line or a subcontract service is not made of anything; the record
+        # says what kind of line it is, and MILD STEEL beside PACKAGING is the defect.
+        if _line_kind == "commercial":
+            mat_source_str = "a commercial allowance — no fabrication material"
+        elif _line_kind == "service":
+            mat_source_str = "a subcontract service on the parts it names"
         # ── Thickness provenance ───────────────────────────────────────────────
         # DXF filename FIRST — most reliable, and avoids real 2mm/3mm acrylic
         # being wrongly stripped as tolerance-table values.
@@ -603,6 +630,12 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "priced_by":         _priced_by,
             "unit_cost":         unit,
             "extended_cost":     ext,
+            # The engine's own net-part figure and whether the money above is the sheet's.
+            "engine_extended_cost": round(_engine_ext, 4),
+            "charged":           bool(_charged and _line is not None
+                                      and _line.get("charged_ext_gbp") is not None),
+            # What a person has to do about this line, from the record's decisions.
+            "estimator_action":  _action_for(pn),
             "overall_status":    _status,
             "overall_label":     _assessment["overall_label"],
             "overall_reason":    _assessment.get("reason") or "",
@@ -678,11 +711,11 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
             c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
         return c
     # ── Title block ────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:P1")
+    ws.merge_cells("A1:O1")
     cell(1, 1, "SDI Intelligence — Estimate Provenance Report",
          bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG, align="center", size=13)
     ws.row_dimensions[1].height = 28
-    ws.merge_cells("A2:P2")
+    ws.merge_cells("A2:O2")
     pdf_name = scan_meta.get("pdf_name") or summary.get("source_file") or "—"
     job_no   = scan_meta.get("job_number") or "—"
     scan_dt  = scan_meta.get("scan_date") or datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -698,7 +731,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
          bg="2F5496", fg=C_HEADER_FG, align="center", size=10)
     ws.row_dimensions[2].height = 18
     # ── Legend ─────────────────────────────────────────────────────────────────
-    ws.merge_cells("A3:P3")
+    ws.merge_cells("A3:O3")
     cell(3, 1,
          # WHOSE QUESTION THIS TAB ANSWERS, on the line the reader already looks at.
          #
@@ -736,7 +769,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     if not isinstance(_fe, dict):
         _fe = (summary.get("estimate_summary") or {}).get("final_estimate")
     if not isinstance(_fe, dict) or not _fe:
-        ws.merge_cells("A4:P4")
+        ws.merge_cells("A4:O4")
         cell(4, 1,
              "THE CALCULATED SHEET WAS NOT READ BACK — Excel did not return this workbook's "
              "computed totals (Excel busy or absent, or a workbook that would not open). "
@@ -747,98 +780,109 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     else:
         ws.row_dimensions[4].height = 6  # spacer
     # ── Column headers ─────────────────────────────────────────────────────────
-    # The money columns are the ENGINE's per-part figures. Once Excel has calculated the
-    # sheet they are not what the job is charged, and a column headed plainly "Unit £" next
-    # to a Sell Price that disagrees is the report contradicting itself.
+    # VALUE USED → SOURCE → EVIDENCE → ESTIMATOR ACTION. Seventeen columns became these:
+    # each datum sits beside the source that gave it, the money is the sheet's CHARGED
+    # figure with the engine's own beside it as not charged, the confidence percentage is a
+    # word about the evidence, and the last thing on the row is what a person has to do.
     from costed_facts import priced_route_known as _prk
-    _money_basis = " material" if _prk(summary) else ""
+    _canonical = bool(_prk(summary))
     headers = [
         ("Part Number",       15), ("Description",     28), ("Qty", 5),
-        ("Material",          14), ("Mat. Source",      32), ("Conf.",  8),
-        ("Thickness",          9), ("Thk. Source",      22), ("Geometry Source", 26),
-        ("Cut (mm)",          10), ("Ops",              22),
-        (f"Unit £{_money_basis}",  11), (f"Ext £{_money_basis}", 11),
-        ("Rate / source",     34), ("Priced by — sheet row / decision", 26),
-        # WHICH DRAWING, NOT WHICH KIND OF DRAWING. Mat. Source, Thk. Source and Geometry
-        # Source name the KIND of evidence — "the drawing", "dxf_flat_pattern" — and in a
-        # pack of eleven sheets that names none of them. The covering note and section 9 of
-        # the report both name the file now; this tab is the third surface reading the same
-        # facts and it must not be the one that still makes somebody go looking.
+        ("Material — source", 30), ("Thickness — source", 24),
+        ("Geometry / size — source", 34), ("Operations charged", 22),
+        ("Charged £ unit" if _canonical else "Engine £ unit", 12),
+        ("Charged £ ext" if _canonical else "Engine £ ext", 12),
+        ("Engine £ ext — not charged", 14),
+        ("Price source", 40), ("Priced by — sheet row / decision", 26),
+        ("Evidence", 12), ("Estimator action", 44),
+        # WHICH DRAWING, NOT WHICH KIND OF DRAWING. In a pack of eleven sheets "the drawing"
+        # names none of them; this is the file, as the covering note and the report name it.
         ("Which drawing files and pages", 44),
-        # A BLANK IN A MONEY COLUMN READS AS FREE, on this sheet as much as on the Estimate
-        # tab. The three kinds of nothing need different people: one must NOT be priced
-        # (its material is costed in another block), one is waiting on the estimator, and
-        # one is work this engine cannot charge for at all.
-        ("Not priced — why / who", 46),
     ]
+    _LAST = get_column_letter(len(headers))
     for ci, (hdr, width) in enumerate(headers, 1):
         c = cell(5, ci, hdr, bold=True, bg=C_SECTION, fg=C_HEADER_FG,
                  align="center", size=10)
         ws.column_dimensions[get_column_letter(ci)].width = width
     ws.row_dimensions[5].height = 20
+    # THE EVIDENCE, AS A WORD. "measured" — a model, a DXF or the estimators' calculator;
+    # "transcribed" — read from the drawing, reproducible, not verified; "inferred" — a
+    # default or an inference is standing in; "unread" — a required field has no reading.
+    _EVIDENCE = {"measured": "measured", "confirmed": "measured", "reported": "transcribed",
+                 "assumed": "inferred", "unknown": "unread", "n/a": "n/a"}
     # ── Part rows ──────────────────────────────────────────────────────────────
     row = 6
     for i, p in enumerate(provenance):
         bg = C_ALT_ROW if i % 2 == 0 else "FFFFFF"
-        # Bought-ins get a neutral grey; fabricated parts keep the confidence colour.
-        # Shaded by STATUS, from the shared table, so both tabs colour a status the same
+        # Shaded by STATUS, from the shared table, so every tab colours a status the same
         # way. A bought-in is no longer given a neutral grey that reads as "fine": an
         # unpriced placeholder shades UNKNOWN like anything else missing a required field.
         from confidence import STATUS_FILL as _SF
         conf_bg = _SF.get(p.get("overall_status"), ("EDEDED", "555555"))[0]
+
+        def _with_source(value: str, source: str) -> str:
+            source = str(source or "").strip()
+            return f"{value} — {source}" if source and source != "—" else value
+
         cell(row, 1,  p["part_number"],        bg=bg,       border=True)
         cell(row, 2,  p["description"],        bg=bg,       border=True, wrap=True)
         cell(row, 3,  p["quantity"],            bg=bg,       align="center", border=True)
-        cell(row, 4,  p["material"],            bg=conf_bg,  bold=True, border=True)
-        cell(row, 5,  p["material_source"],     bg=conf_bg,  border=True, wrap=True, size=9)
-        cell(row, 6,  {"n/a": "N/A"}.get(p.get("material_status"),
-                                          str(p.get("material_status") or "").upper()),
-                                                bg=conf_bg,  align="center", border=True)
-        cell(row, 7,  f"{p['thickness_mm']}mm" if p["thickness_mm"] else "—",
-                                                bg=bg,       align="center", border=True)
-        cell(row, 8,  p["thickness_source"],    bg=bg,       border=True, size=9, wrap=True)
-        cell(row, 9,  p["geometry_source"],     bg=bg,       border=True, size=9, wrap=True)
-        cell(row, 10, f"{p['cut_length_mm']:.0f}" if p["cut_length_mm"] else "—",
-                                                bg=bg,       align="right", border=True)
-        cell(row, 11, p["operations"],          bg=bg,       border=True, size=9, wrap=True)
-        cell(row, 12, f"£{p['unit_cost']:.2f}", bg=bg,       align="right",
+        _mat_cell = (str(p["material_source"]) if str(p["material"]) == "Bought-in"
+                     else _with_source(str(p["material"]), p["material_source"]))
+        cell(row, 4,  _mat_cell, bg=conf_bg, bold=True, border=True, wrap=True, size=9)
+        cell(row, 5,  _with_source(f"{p['thickness_mm']}mm" if p["thickness_mm"] else "—",
+                                   p["thickness_source"] if p["thickness_mm"] else ""),
+             bg=bg, border=True, size=9, wrap=True)
+        _geo = str(p["geometry_source"] or "")
+        if p["cut_length_mm"] and "mm" not in _geo:
+            _geo += f" · cut {p['cut_length_mm']:,.0f} mm"
+        cell(row, 6,  _geo, bg=bg, border=True, size=9, wrap=True)
+        cell(row, 7,  p["operations"],          bg=bg,       border=True, size=9, wrap=True)
+        cell(row, 8,  f"£{p['unit_cost']:.2f}", bg=bg,       align="right",
              bold=True, border=True)
-        cell(row, 13, f"£{p['extended_cost']:.2f}", bg=bg,   align="right",
+        cell(row, 9,  f"£{p['extended_cost']:.2f}", bg=bg,   align="right",
              bold=True, border=True)
+        _eng = float(p.get("engine_extended_cost") or 0.0)
+        _differs = p.get("charged") and abs(_eng - float(p["extended_cost"] or 0)) >= 0.01
+        cell(row, 10, f"£{_eng:.2f}" if _differs else "—", bg=bg, align="right",
+             border=True, size=9, fg="666666")
         _rb = p.get("rate_basis") or "—"
-        cell(row, 14, _rb, bg=(C_LOW if _rb.startswith("⚠") else bg),
-             border=True, size=9, wrap=True)
-        cell(row, 15, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
-        cell(row, 16, p.get("drawing_files") or "—", bg=bg, border=True, size=8, wrap=True)
-        # WHOSE BLANK THIS IS. Coloured by owner, not by severity of the number: an engine
-        # gap is work that will be done and invoiced with nothing on the sheet asking anyone
-        # to price it, so it is the one an estimator cannot fix and the one that gets the
-        # warning fill. A line that is correctly nil is left plain — it needs no action, and
-        # colouring it would teach people to ignore the colour.
+        # The engine-figure note is its own column now; keep the source column to the source.
+        _rb = _rb.split(" · engine net-part figure")[0]
+        # WHOSE BLANK THIS IS. An engine gap is work that will be done and invoiced with
+        # nothing on the sheet asking anyone to price it — the one an estimator cannot fix,
+        # and the one that gets the warning fill. A line correctly nil is left plain.
         _ur = p.get("unpriced_reason") or {}
         if _ur:
             _owner = {"estimator": "ESTIMATOR TO PRICE",
                       "engine": "ENGINE GAP — THIS JOB IS UNDER-CHARGED",
                       "nobody": "nothing to charge here"}.get(_ur.get("owner"), "")
             _txt = f"{_ur.get('why')}" + (f" — {_ur['detail']}" if _ur.get("detail") else "")
-            cell(row, 17, f"{_owner}: {_txt}",
-                 bg=(C_LOW if _ur.get("undercharging") else bg),
-                 border=True, size=8, wrap=True)
-        else:
-            cell(row, 17, "—", bg=bg, border=True, size=8, align="center")
+            _rb = f"{_owner}: {_txt}" if _owner else _txt
+        cell(row, 11, _rb,
+             bg=(C_LOW if (_rb.startswith("⚠") or _ur.get("undercharging")) else bg),
+             border=True, size=9, wrap=True)
+        cell(row, 12, p.get("priced_by") or "—", bg=bg, border=True, size=8, wrap=True)
+        cell(row, 13, _EVIDENCE.get(str(p.get("overall_status") or "").lower(),
+                                    str(p.get("overall_status") or "—")),
+             bg=conf_bg, align="center", border=True, size=9)
+        _act = str(p.get("estimator_action") or "—")
+        cell(row, 14, _act, bg=(bg if _act.startswith("none") else "FFF2CC"),
+             border=True, size=9, wrap=True)
+        cell(row, 15, p.get("drawing_files") or "—", bg=bg, border=True, size=8, wrap=True)
         ws.row_dimensions[row].height = 28
         row += 1
         # ── Flags / warnings ───────────────────────────────────────────────────
         if p["flags"]:
             for flag in p["flags"]:
-                ws.merge_cells(f"B{row}:P{row}")
+                ws.merge_cells(f"B{row}:{_LAST}{row}")
                 cell(row, 1, "⚠",              bg=C_LOW, align="center", size=9)
                 cell(row, 2, f"REVIEW: {flag}", bg=C_LOW, size=9, wrap=True)
                 ws.row_dimensions[row].height = 16
                 row += 1
         # ── Override rules that fired ──────────────────────────────────────────
         if p["overrides_fired"]:
-            ws.merge_cells(f"B{row}:P{row}")
+            ws.merge_cells(f"B{row}:{_LAST}{row}")
             cell(row, 1, "🧠",                  bg=C_RULE, align="center", size=9)
             cell(row, 2, "Learning: " + " | ".join(p["overrides_fired"]),
                  bg=C_RULE, size=9)
@@ -850,7 +894,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 avg  = hm.get("AvgCost") or hm.get("avg_cost") or 0
                 cnt  = hm.get("SampleCount") or hm.get("sample_count") or 0
                 hmat = hm.get("Material") or hm.get("material") or "?"
-                ws.merge_cells(f"B{row}:P{row}")
+                ws.merge_cells(f"B{row}:{_LAST}{row}")
                 cell(row, 1, "📚",              bg=C_HIST, align="center", size=9)
                 cell(row, 2,
                      f"Historical: {cnt} SDI estimate(s) for this part as "
@@ -860,7 +904,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 row += 1
     # ── Summary footer ─────────────────────────────────────────────────────────
     row += 1
-    ws.merge_cells(f"A{row}:L{row}")
+    ws.merge_cells(f"A{row}:H{row}")
     # Authoritative total: WB Sell Price (live formula) when found, else engine sum.
     _total_label = ("SELL PRICE (from Estimate sheet)" if _sell_ref
                     else "UNIT COST (calculated by the Estimate sheet)" if _wb_unit is not None
@@ -868,10 +912,10 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     cell(row, 1,  _total_label, bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
          align="right", size=11)
     if _sell_ref:
-        cell(row, 13, _sell_ref, bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
+        cell(row, 9, _sell_ref, bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
              align="right", size=12, num_fmt="£#,##0.00")
     else:
-        cell(row, 13, f"£{_engine_total:.2f}",  bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
+        cell(row, 9, f"£{_engine_total:.2f}",  bold=True, bg=C_HEADER_BG, fg=C_HEADER_FG,
              align="right", size=12)
     ws.row_dimensions[row].height = 22
     # Two calculators on one page. The Ext £ column sums the engine's per-part figures; the
@@ -880,7 +924,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     # purpose is to be checkable.
     if _totals["source"] == "excel_calculated":
         row += 1
-        ws.merge_cells(f"A{row}:P{row}")
+        ws.merge_cells(f"A{row}:O{row}")
         # Same basis as the Decision Report: reconcile the MATERIAL column against the
         # sheet's material total, and state labour as what it is — a department-row charge
         # with no per-part figure. The engine part-sum is an obsolete labour-inclusive
@@ -969,7 +1013,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         _missing = []
     if _missing:
         row += 2
-        ws.merge_cells(f"A{row}:P{row}")
+        ws.merge_cells(f"A{row}:O{row}")
         _names = "; ".join(
             f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
             for m in _missing[:8])
@@ -1009,7 +1053,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         ws.row_dimensions[row].height = 28
 
     row += 2
-    ws.merge_cells(f"A{row}:P{row}")
+    ws.merge_cells(f"A{row}:O{row}")
     # READING SEPARATED FROM PRICING, because they are two different questions and merging
     # them destroyed the tab's trust. The old summary took each part's WEAKEST field — and on
     # an estimate that field is almost always the price, which is "NOT YET PRICED, estimator to

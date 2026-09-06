@@ -11417,10 +11417,14 @@ def test_the_provenance_sheets_trace_every_part_to_a_sheet_row_and_a_decision():
     _rows2 = {ws2.cell(row=r, column=1).value: r for r in range(6, ws2.max_row + 1)}
     eq(ws2.cell(row=_rows2["BI-KNOB"], column=3).value, 4,
        "the provenance sheet charges the same quantity as the Estimate tab")
+    # The column is found by its heading: the tab was cut to value → source → evidence →
+    # action and the trail moved left with it.
+    _hdr2 = [str(ws2.cell(row=5, column=c).value or "") for c in range(1, ws2.max_column + 1)]
+    _trail_col = next(i + 1 for i, h in enumerate(_hdr2) if h.startswith("Priced by"))
     ok("d0011-weld" in " ".join(
-        str(ws2.cell(row=r, column=15).value or "") for r in _rows2.values())
+        str(ws2.cell(row=r, column=_trail_col).value or "") for r in _rows2.values())
        or "d0003-laser" in " ".join(
-           str(ws2.cell(row=r, column=15).value or "") for r in _rows2.values()),
+           str(ws2.cell(row=r, column=_trail_col).value or "") for r in _rows2.values()),
        "the provenance sheet carries the decision trail")
     _all2 = " ".join(str(c.value) for r in ws2.iter_rows() for c in r if c.value)
     ok("RECONCILIATION" in _all2 and "41.44" in _all2,
@@ -12319,8 +12323,11 @@ def test_the_two_provenance_writers_do_not_fight_over_one_sheet_name():
     import wb_populate as W
 
     _src = inspect.getsource(W._append_ai_sheets)
-    ok('_add("AI Price Provenance"' in _src,
-       "the price-provenance sheet must not claim the report's name")
+    # The price-provenance TAB has since been folded into AI Provenance (it carried the
+    # engine's figures beside a sheet charging different money). What must still hold is
+    # that this writer never claims the report's sheet name.
+    ok('_add("AI Price Provenance"' not in _src,
+       "the engine-figure price-provenance tab is no longer written")
     ok('_add("AI Provenance"' not in _src,
        "and must not leave the collision behind under a different call")
 

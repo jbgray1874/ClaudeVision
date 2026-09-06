@@ -377,10 +377,14 @@ def _column_headed(ws, title: str) -> int:
 
 
 def test_the_sheet_has_a_column_for_it_and_fills_it():
+    # The "why / who" moved INTO the Price source column when the tab was cut to value →
+    # source → evidence → action: a blank's explanation is its source, owner first.
     ws = _sheet(_wb_job([{"part_number": "MAG CATCH", "description": "H", "quantity": 1}],
                         final_estimate={"material_rows": []}))
-    col = _column_headed(ws, "Not priced — why / who")
+    col = _column_headed(ws, "Price source")
     assert "ESTIMATOR TO PRICE" in str(ws.cell(row=6, column=col).value)
+    act = _column_headed(ws, "Estimator action")
+    assert str(ws.cell(row=6, column=act).value or "").strip()
 
 
 def test_the_provenance_tab_names_the_drawing_a_part_came_from():

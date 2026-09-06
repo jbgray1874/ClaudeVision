@@ -5018,22 +5018,15 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         for r in rows:
             ws.append(r)
 
-    # AI Material Detail
-    _add("AI Material Detail",
-         ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
-          "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
-         _material_detail_rows(summary))
-
-    # AI Price Provenance — the unit £ and its source, for EVERY priced line.
-    # NAMED FOR WHAT IT IS, AND NOT WHAT THE OTHER WRITER CALLS ITS SHEET.
+    # NO "AI Material Detail" AND NO "AI Price Provenance" TABS ANY MORE.
     #
-    # This is bought-in PRICE provenance; estimation_report.add_provenance_sheet writes a
-    # whole-estimate provenance report and asked for the same name. openpyxl does not
-    # overwrite, so the job shipped with "AI Provenance" and "AI Provenance1" — the
-    # duplicate tab seen on 2085. Two sheets, two purposes, two names.
-    _add("AI Price Provenance",
-         ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier", "Review Flags"],
-         _price_provenance_rows(summary))
+    # Both were written HERE, before Excel calculates, so they carried the engine's per-part
+    # figures — and sat in the same workbook as an Estimate sheet and an AI Provenance tab
+    # charging different money for the same lines (7332-01's base: £4.42 here, £7.65 on the
+    # sheet). Every column they held is on AI Provenance, which is written after the
+    # read-back from the charged rows. James: "we do have too many tabs in that overall
+    # spreadsheet." The two row builders above are kept: the AI Explanation tab and the
+    # covering note read them from the run JSON instead of from a sheet.
 
     # The costing sheet shows only accepted required rows. These two review sheets preserve
     # the full hierarchy and every route decision, including ruled-out and unverified work.

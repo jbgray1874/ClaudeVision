@@ -1207,6 +1207,35 @@ def _fmt(value: Any, dash: str = "—") -> str:
     return str(value)
 
 
+_AI_ROW_HEADERS = {
+    "material": ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
+                 "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
+    "provenance": ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier",
+                   "Review Flags"],
+}
+
+
+def _json_ai_rows(scan_doc: Any, which: str) -> Dict[str, Dict[str, Any]]:
+    """The AI Material Detail / AI Price Provenance rows, from the run JSON, keyed by part
+    and by the headers the tabs used to carry — so the readers below are unchanged."""
+    if not isinstance(scan_doc, dict):
+        return {}
+    try:
+        import wb_populate as _wb
+        rows = (_wb._material_detail_rows(scan_doc) if which == "material"
+                else _wb._price_provenance_rows(scan_doc))
+    except Exception:                                                # noqa: BLE001
+        return {}
+    headers = _AI_ROW_HEADERS[which]
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        rec = {h: (r[i] if i < len(r) else None) for i, h in enumerate(headers)}
+        key = str(rec.get("Part") or "").upper()
+        if key and key not in out:
+            out[key] = rec
+    return out
+
+
 def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
     """Everything both the document and the covering email are written from.
 
@@ -1249,10 +1278,16 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
                        for r in (final.get("material_rows") or [])
                        if isinstance(r, dict) and r.get("block") == "steel"
                        and str(r.get("description") or "").strip()},
-        "material": {str(r.get("Part") or "").upper(): r
-                     for r in _sheet(wb, "AI Material Detail")},
-        "provenance": {str(r.get("Part") or "").upper(): r
-                       for r in _sheet(wb, "AI Price Provenance")},
+        # THE TWO AI TABS THESE USED TO READ ARE GONE FROM THE WORKBOOK. The same rows are
+        # built from the run JSON by the functions that used to write them — same keys, so
+        # nothing downstream changed. A workbook that still carries the tabs is read as
+        # before.
+        "material": ({str(r.get("Part") or "").upper(): r
+                      for r in _sheet(wb, "AI Material Detail")}
+                     or _json_ai_rows(scan_doc, "material")),
+        "provenance": ({str(r.get("Part") or "").upper(): r
+                        for r in _sheet(wb, "AI Price Provenance")}
+                       or _json_ai_rows(scan_doc, "provenance")),
         "routes": _sheet(wb, "Canonical Route"),
         "bom": _estimate_bom(wb),
         "order_qty": _order_quantity(wb),
@@ -1947,7 +1982,28 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
                     f"costed part.")
             add("")
 
+    # DECISIONS FIRST. The section "What a person still has to settle" is emitted where its
+    # inputs are computed, between the questions and the reconciliation; the estimator
+    # wants it above everything else, as the report has it. Hoisted rather than rewritten,
+    # so the section's own tests and the tab's parser see the same block.
+    lines = _hoist_section(lines, "## What a person still has to settle",
+                           before="## The questions, answered first")
     return "\n".join(lines)
+
+
+def _hoist_section(lines: List[str], heading: str, before: str) -> List[str]:
+    """Move the '## heading' section (to the next '## ') in front of '## before'."""
+    if heading not in lines or before not in lines:
+        return lines
+    start = lines.index(heading)
+    if start < lines.index(before):
+        return lines
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+               len(lines))
+    block = lines[start:end]
+    rest = lines[:start] + lines[end:]
+    at = rest.index(before)
+    return rest[:at] + block + rest[at:]
 
 
 # ── the covering note, in the shape an estimator actually reads ──────────────

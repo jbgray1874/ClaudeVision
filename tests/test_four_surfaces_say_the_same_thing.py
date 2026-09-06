@@ -57,17 +57,8 @@ def surfaces(tmp_path_factory):
         ws.cell(r, 10, m["unit_price_gbp"])
         ws.cell(r, 11, m["qty_per_unit"])
         r += 1
-    for title, header, rows in (
-            ("AI Material Detail", ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
-                                    "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
-             W._material_detail_rows(job)),
-            ("AI Price Provenance", ["Part", "Desc", "Unit £", "Price Source", "Verified",
-                                     "Supplier", "Review Flags"],
-             W._price_provenance_rows(job))):
-        s = wb.create_sheet(title)
-        s.append(header)
-        for row in rows:
-            s.append(row)
+    # No AI Material Detail and no AI Price Provenance tab: the workbook no longer carries
+    # them, and the e-mail and the Explanation read those rows from the run JSON.
     wb.create_sheet("Canonical Route")
     xlsx = d / "7332-01_20260906_171743.xlsx"
     wb.save(xlsx)

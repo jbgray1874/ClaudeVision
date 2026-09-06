@@ -56,16 +56,19 @@ def test_the_provenance_tab_has_the_column():
 
 
 def test_the_column_is_written_on_every_row():
-    assert 'cell(row, 16, p.get("drawing_files") or "—"' in REPORT
+    # The tab was cut to value → source → evidence → action; the drawing column is the last
+    # one, column 15, and it is still written on every part row.
+    assert 'cell(row, 15, p.get("drawing_files") or "—"' in REPORT
 
 
 def test_nothing_else_still_writes_to_that_column():
-    """Inserting a column shifts everything after it. The 'Not priced' cell used to be 16 and
-    would have been overwritten in silence — the row would look right and one column would be
-    the wrong one."""
+    """Inserting a column shifts everything after it. A cell written at the drawing column's
+    index by another writer would overwrite it in silence — the row would look right and one
+    column would be the wrong one. The header list and the last cell written must agree."""
     import re
-    hits = sorted({int(m.group(1)) for m in re.finditer(r"cell\(row, (1[4-9]),", REPORT)})
-    assert hits == [14, 15, 16, 17], f"columns written on a part row: {hits}"
+    hits = sorted({int(m.group(1)) for m in re.finditer(r"cell\(row, (1[0-9]),", REPORT)})
+    assert hits == [10, 11, 12, 13, 14, 15], f"columns written on a part row: {hits}"
+    assert REPORT.count('cell(row, 15,') == 1, "two writers on the drawing column"
 
 
 def test_a_bought_in_says_it_has_no_drawing():
