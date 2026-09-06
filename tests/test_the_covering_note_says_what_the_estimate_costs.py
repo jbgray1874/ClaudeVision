@@ -3,7 +3,7 @@ test_the_covering_note_says_what_the_estimate_costs.py
 
 WHAT WENT OUT WITH 12349-02:
 
-    Subject: SDI Intelligence estimate, PROVISIONAL. not reported/unit at 7 off. 12349-02
+    Subject: SDI Intelligence estimate, PROVISIONAL. not reported/unit at 7 of. 12349-02
     Body:    not reported per unit, ex VAT
              12349-02_20260902_153051.xlsx
              12349-02_llm_extract.json
@@ -151,7 +151,7 @@ def note(tmp_path_factory):
 # ── the headline that was missing ──────────────────────────────────────────────
 
 def test_the_unit_cost_reaches_the_subject_line(note):
-    assert "£930.39/unit at 7 off" in note["subject"]
+    assert "£930.39/unit at 7 of" in note["subject"]
     assert "not reported" not in note["subject"]
 
 

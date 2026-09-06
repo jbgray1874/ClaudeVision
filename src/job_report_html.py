@@ -567,7 +567,7 @@ def _render_header(h: Dict[str, Any], has_parity: bool,
   <div class="meta">
     <span><b>Job</b> {_esc(h['stem'])}</span>
     <span><b>Drawing pack</b> {h['page_count']} pages &middot; {h['pdf_count']} PDFs &middot; {h['dxf_matched']} DXFs matched</span>
-    <span><b>Quantity basis</b> {_esc(h['quantity'])} off</span>
+    <span><b>Quantity basis</b> {_esc(h['quantity'])} of</span>
   </div>
 </header>"""
 

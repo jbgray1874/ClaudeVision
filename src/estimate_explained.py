@@ -1514,7 +1514,7 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         _run = round(_charged - _setup, 2)
         add("## What the labour is: set-up, and run time")
         add("")
-        add(f"This estimate is for **{order_qty} off**. Of the {_gbp(_charged)} of labour on "
+        add(f"This estimate is for **{order_qty} of**. Of the {_gbp(_charged)} of labour on "
             f"it, **{_gbp(_setup)} is set-up** and **{_gbp(_run)} is run time**. Set-up is a "
             f"one-off per department row and is spread across the order, so it falls as the "
             f"quantity rises. Run time per unit does not move at any quantity — it is the "
@@ -1928,12 +1928,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     _need = (f"{_plural(len(needs_a_person), 'line')} need a person."
              if needs_a_person else "No line is waiting on a person.")
     subject = (f"{job} — SDI Intelligence estimate, {_state}"
-               f"{_gbp(totals.get('unit'))}/unit at {order_qty} off. {_need}")
+               f"{_gbp(totals.get('unit'))}/unit at {order_qty} of. {_need}")
 
     h: List[str] = [f'<div style="{_EMAIL_CSS}">']
     add = h.append
     add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
-        f"{order_qty} off &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
+        f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
     add(f'<p style="font-size:26px;margin:12px 0 4px"><b>{_e(_gbp(totals.get("unit")))}</b>'
         f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT</span></p>')
     add("<p>Every figure below is read from the workbook's own calculated cells — nothing "
@@ -1959,7 +1959,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     if _other:
         _rows.append([(final.get("unit_price_composition") or {}).get("basis")
                       or "the unit cell's own uplift", f"+{_gbp(_other)}"])
-    _rows.append([f"Unit cost, {order_qty} off", _gbp(totals.get("unit"))])
+    _rows.append([f"Unit cost, {order_qty} of", _gbp(totals.get("unit"))])
     add(_table(["", "£"], _rows, numeric={1}))
     # NAMED BY BLOCK, from the rows themselves. This said "bought-in and commercial X plus
     # sheet steel Y", where X was (material - steel) — so on any job with an acrylic, MDF or
@@ -2002,7 +2002,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         _at_one = next((_money(r.get("unit")) for r in _qs_rows
                         if int(r.get("quantity") or 0) == _base), None)
         add(f"<h4>At the other quantities</h4>")
-        add(_table(["Off", "Material £", "Labour £", "Unit £", "vs " + str(_base) + " off"],
+        add(_table(["Of", "Material £", "Labour £", "Unit £", "vs " + str(_base) + " of"],
                    [[_fmt(r.get("quantity")), _gbp_or(r.get("material"), "—"),
                      _gbp_or(r.get("labour"), "—"), _gbp_or(r.get("unit"), "—"),
                      ("—" if not _at_one or not _money(r.get("unit"))

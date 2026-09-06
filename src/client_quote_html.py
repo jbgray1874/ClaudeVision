@@ -1094,7 +1094,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         <div>
           <div class="u">Unit price</div>
           <div class="unit">{_money(unit_price)}</div>
-          <div class="per">per unit, ex VAT · indicative{(' · ' + _num(qty) + ' off') if qty else ''}</div>
+          <div class="per">per unit, ex VAT · indicative{(' · ' + _num(qty) + ' of') if qty else ''}</div>
         </div>
         <div class="right">
           <div class="u">Order value</div>
