@@ -331,14 +331,13 @@ PACKAGING_CONFIG = {
 #
 #   £ PER ORDER, not per unit — commercial_lines divides by the order quantity and writes the
 #   divisor onto the line, so an estimator changing the quantity can see what moved.
-#   These are INDICATIVE house holds for 7332-01, entered so the two lines stop reading £0
-#   (estimating bounces a zero). They are per-ORDER; commercial_lines divides by the order
-#   quantity (÷6 here → PACKAGING £2.00/unit, DELIVERY £2.50/unit) and flags the line for
-#   verify. DELIVERY assumes a UK-mainland parcel (~4 kg); if 7332 ships as a pallet use 45.00
-#   (£7.50/unit). Tim confirms or overwrites both.
+#   HELD EMPTY BY DECISION (2026-09): the estimators are pricing packaging and delivery from
+#   their own calculation this week, so the two lines stay at the honest £0 "estimator to price"
+#   until those real figures land — a real number in days beats an INDICATIVE guess now. Put the
+#   per-order figures back here when they arrive (commercial_lines divides by the order quantity
+#   and flags the line); e.g. {"PACKAGING": 12.00, "DELIVERY": 15.00} → £2.00 / £2.50 per unit
+#   at qty 6. The wiring is ready; it just needs the numbers.
 COMMERCIAL_LINE_GBP_PER_ORDER = {
-    "PACKAGING": 12.00,   # carton + protective pack for the order of 6, INDICATIVE
-    "DELIVERY":  15.00,   # UK-mainland parcel, INDICATIVE; use 45.00 if it ships as a pallet
 }
 
 # --- ...and whether to ask the market when there is no house figure ---------------

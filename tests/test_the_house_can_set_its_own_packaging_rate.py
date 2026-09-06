@@ -47,14 +47,22 @@ def test_the_setting_the_code_tells_people_to_edit_exists():
     assert isinstance(config.COMMERCIAL_LINE_GBP_PER_ORDER, dict)
 
 
-def test_the_house_holds_are_present_and_flagged_indicative():
-    """The dict was once empty on purpose — an unflagged invented figure was judged worse than
-    the indication it replaced. That reasoning is now met a different way: 7332-01 carries
-    INDICATIVE per-order holds so the two lines stop reading £0 (estimating bounces a zero),
-    and the resulting line is flagged for verify rather than presented as firm. Not silent, not
-    falsely firm."""
-    assert config.COMMERCIAL_LINE_GBP_PER_ORDER.get("PACKAGING") == 12.00
-    assert config.COMMERCIAL_LINE_GBP_PER_ORDER.get("DELIVERY") == 15.00
+def test_it_ships_empty_so_nothing_is_invented():
+    """Held empty by decision: the estimators are pricing packaging and delivery from their own
+    calculation, so the two lines stay at the honest £0 "estimator to price" until those real
+    figures land. A real number in days beats an invented one now — and an unflagged invented
+    figure was always judged worse than the indication it replaced.
+
+    The MECHANISM is exercised by the tests below with a monkeypatched rate, so the ladder's
+    first rung stays covered while the shipped dict carries no guess."""
+    assert not config.COMMERCIAL_LINE_GBP_PER_ORDER
+
+
+def test_a_house_hold_when_set_is_priced_and_flagged_indicative(monkeypatch):
+    """When the estimators' figures do land, the rung fires: per-order ÷ order quantity, and the
+    line is flagged for verify rather than presented as a firm catalogue price."""
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {"PACKAGING": 12.00},
+                        raising=False)
     line = commercial_lines._line("PACKAGING", {"order_quantity": 6}, "boxes", "PACKAGING")
     assert line["unit_gbp"] == 2.00                       # £12 / 6
     assert line["price_source"]["indicative"] is True     # flagged for verify, not firm
