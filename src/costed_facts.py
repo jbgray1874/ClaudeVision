@@ -677,11 +677,49 @@ def costed_finish_label(source: Any, default: str = "As drawing") -> str:
     Deliberately does NOT consult powder_coating_summary or any drawing finish field. A
     powder line can survive in a material summary after the powder labour has been gated
     off a part, and the customer-facing sentence must not promise a process the priced
-    sheet does not contain."""
-    for op, label in _FINISH_OPS:
-        if has_operation(source, op):
-            return label
-    return default
+    sheet does not contain.
+
+    EVERY CHARGED FINISH, NOT THE FIRST ONE FOUND. This returned on the first match, so a
+    stand carrying BOTH a diamond-polished acrylic lens and £15.83 of subcontract plating went
+    to the customer described as "Diamond polished" alone — the plating paid for and unnamed.
+    The reverse of the promise-what-you-do-not-charge rule, and just as wrong: the quote must
+    name what the price contains.
+
+    Plating is charged as a subcontract BOM LINE rather than an operation, so it is not in
+    _FINISH_OPS and has to be recognised from the priced rows."""
+    labels = [label for op, label in _FINISH_OPS if has_operation(source, op)]
+    if _subcontract_plating_is_costed(source) and "Plated" not in labels:
+        labels.append("Plated")
+    labels = list(dict.fromkeys(labels))
+    if not labels:
+        return default
+    if len(labels) == 1:
+        return labels[0]
+    return ", ".join(labels[:-1]) + " and " + labels[-1].lower()
+
+
+def _subcontract_plating_is_costed(source: Any) -> bool:
+    """True when a subcontract plating line carries money on this job.
+
+    Plating does not appear as an operation — it is a bought-in/commercial row priced on the
+    plated mass — so the finish label cannot find it the way it finds powder or polish."""
+    try:
+        rows = job_parts(source) or []
+    except Exception:                                                # noqa: BLE001
+        rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        method = str((row.get("material_estimate") or {}).get("cost_method")
+                     or row.get("cost_source") or row.get("source") or "").lower()
+        if "plating" not in method:
+            continue
+        try:
+            if float(row.get("unit_cost_gbp") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 # ── risk flags vs the route that was actually priced ─────────────────────────

@@ -858,13 +858,36 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
             _gap = float(_mat) - _col_mat
             _gap_txt = ""
             if abs(_gap) >= 0.01:
+                # DO NOT NAME A PROCESS THIS JOB DOES NOT HAVE. The label was fixed text, so a
+                # job with NOTHING COATED still had its residual called "powder", and an
+                # estimator reading "Powder / scrap £5.13" on a plated stand rightly stopped
+                # trusting the tab. Powder is named only when a powder figure actually exists;
+                # otherwise the residual is what it really is on this job.
+                #
+                # And the bigger half of the gap is not scrap at all: it is the two costing
+                # BASES. The sheet charges a nested part its share of a WHOLE SHEET (cost per
+                # sheet / parts per sheet), so it carries the drop and the skeleton; this column
+                # shows the engine's NET-PART price (blank mass x £/kg, or blank area x £/m²),
+                # which charges only the metal in the part. Said once, plainly, instead of
+                # lumped under a process name.
+                _has_powder = False
+                try:
+                    _pc = (summary.get("powder_coating_summary") or {}).get(
+                        "total_powder_cost_gbp")
+                    _has_powder = bool(_pc) and float(_pc) > 0
+                except (TypeError, ValueError, AttributeError):
+                    _has_powder = False
+                _resid = ("POWDER / SCRAP / OTHER WORKBOOK MATERIAL — the powder consumable and "
+                          "the per-line scrap uplift" if _has_powder else
+                          "NEST-vs-NET-PART BASIS, SCRAP AND OTHER WORKBOOK MATERIAL — no powder "
+                          "is charged on this job")
                 _gap_txt = (f"The £{abs(_gap):,.2f} difference is the sheet's "
-                            f"POWDER / SCRAP / OTHER WORKBOOK MATERIAL — the powder consumable "
-                            f"and the per-line scrap uplift, which belong to no single part and "
-                            f"so cannot appear in a per-part column. The MATERIAL COST "
-                            f"BREAKDOWN below shows it as its own row. Neither figure is "
-                            f"wrong — this column is per-part provenance, the sheet is the "
-                            f"money. ")
+                            f"{_resid}. The sheet charges a nested part its share of a WHOLE "
+                            f"SHEET, so it carries the drop and the skeleton; this column is the "
+                            f"engine's NET-PART price, which charges only the metal in the part. "
+                            f"Neither figure is wrong — this column is per-part provenance, the "
+                            f"sheet is the money. The MATERIAL COST BREAKDOWN below shows the "
+                            f"residual as its own row. ")
             _mat_txt = (f"The material column above sums to £{_col_mat:,.2f} against the "
                         f"sheet's £{float(_mat):,.2f}. {_gap_txt}")
         _lab_txt = (f"Labour is £{float(_lab):,.2f}, charged per department row across "

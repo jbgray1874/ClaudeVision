@@ -830,7 +830,15 @@ def _tracing_failures(scan: Dict[str, Dict[str, Any]], pack: List[str],
 
 # ── the money's provenance ───────────────────────────────────────────────────
 
-_INDICATIVE = ("grok", "llm", "xai", "indicative", "market")
+# TWO DIFFERENT QUESTIONS, ONE TUPLE — AND THAT IS THE BUG.
+#
+# "grok/llm/xai/market" say WHERE a figure came from. "indicative" says HOW FIRM it is. Mixed
+# together, every configured SDI rate we deliberately stamp "(INDICATIVE)" matched as an AI
+# market lookup: 7332-01's felt pad (£0.20, a fixed config commodity) and its plating (£15.83,
+# config £/kg subcontract) were both reported to Tim as "AI market indication". That tells him
+# to distrust the wrong thing — these are house rates to VERIFY, not model guesses to replace.
+_MARKET_AI = ("grok", "llm", "xai", "market")      # provenance: an AI/market lookup
+_INDICATIVE = _MARKET_AI + ("indicative",)         # firmness: not a firm quote, whatever its source
 
 # THE ENGINE'S OWN SOURCE TOKENS, SAID IN WORDS. The AI Price Provenance tab carries the
 # cost_method / source verbatim — "standard_commodity_provisional", "market_ai_indicative" —
@@ -842,6 +850,8 @@ _SOURCE_TOKENS = {
         "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
     "market_ai_indicative": "market/AI indication — NOT A QUOTE, replace it",
     "config rate card": "SDI standard-commodity rate (INDICATIVE) — confirm against a supplier quote",
+    "subcontract_plating_indicative":
+        "SDI subcontract plating rate, £/kg from config (INDICATIVE) — confirm against a plater quote",
     "system_cost_not_found": "no rate found — estimator to price",
 }
 
@@ -994,9 +1004,11 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
     # raw token in parentheses. A named supplier still leads where one is stated.
     if _named_is_engine_phrase and not supplier:
         return _named_worded
-    if any(token in supplier.lower() for token in _INDICATIVE):
+    # ONLY A GENUINE AI/MARKET LOOKUP GETS THE MARKET WRAP. A configured SDI rate stamped
+    # "(INDICATIVE)" is a house figure to verify, not a model guess to replace.
+    if any(token in supplier.lower() for token in _MARKET_AI):
         return f"AI market indication ({supplier}) — NOT A QUOTE, replace it"
-    if any(token in named.lower() for token in _INDICATIVE):
+    if any(token in named.lower() for token in _MARKET_AI):
         return f"AI market indication ({named}) — NOT A QUOTE, replace it"
     if supplier:
         return f"catalogue — {supplier}"
@@ -1213,8 +1225,15 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # ASKED AND ANSWERED IN THAT ORDER. A document that opens with four hundred rows makes
     # the reader derive the five facts they came for. These are the five, each computed from
     # the same rows the tables below print — never typed, so they cannot drift from them.
+    # A REAL ZERO IS NOT A PRICE. This tested for a blank cell only, and the commercial
+    # placeholders are deliberately materialised as a numeric 0.0 — so PACKAGING and DELIVERY
+    # slipped past as "priced" and this tab announced "No line is unpriced" three rows above
+    # its own table saying "NOT PRICED — needs a rate" against both. The same module already
+    # knows better twice over (_price_source, and the covering note's _reads_as_free, which is
+    # why the email correctly said "2 lines carry no price" on the very same run). _money
+    # returns None for a blank and 0.0 for a zero — both falsy, both unpriced.
     _unpriced = [r for r in bom
-                 if r.get("price") in (None, "")
+                 if not _money(r.get("price"))
                  and not _is_costed_in_a_block(r.get("text"))]
     _indicative = [r for r in bom
                    if any(t in f"{r.get('supplier') or ''}".lower() for t in _INDICATIVE)

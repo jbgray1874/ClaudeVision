@@ -3520,7 +3520,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 value=None if (_is_commercial or _waste_already_in) else 0.04)
         # A line the material block covers, or an assembly, is not a gap somebody fills.
         from estimator_inputs import UNPRICED as _GAP
-        if price is None and _line["status"] == _GAP:
+        # A REAL ZERO IS NOT A PRICE. The category half (_line["status"]) already excludes
+        # cross-references, duplicates and assemblies — that stays. The PRICE half tested
+        # `price is None`, and a commercial placeholder is written as a numeric 0.0, so
+        # PACKAGING and DELIVERY never reached the checklist: the banner read "1 ESTIMATOR
+        # INPUT REQUIRED" (the margin alone) while two lines carried no money at all, and the
+        # sheet claimed to be one input away from being a price. _safe returns None for a blank
+        # and 0.0 for a zero — both falsy, both a gap somebody has to fill.
+        if not _safe(price) and _line["status"] == _GAP:
             _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
             # A BLANK THAT LOOKS LIKE A ZERO IS WORSE THAN AN ERROR.
             #

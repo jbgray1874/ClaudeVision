@@ -140,6 +140,18 @@ def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Group part_estimates into material streams (steel / bought-in / acrylic / boards)."""
     parts = _extract_parts(summary)
     streams: Dict[str, Dict[str, Any]] = {}
+    # WHICH PARTS ACTUALLY NESTED, from the workbook read-back. Empty on a run with no read-back,
+    # in which case the material-string rule below stands exactly as before.
+    _fe = ((summary.get("estimate_summary") or {}).get("final_estimate")
+           or summary.get("final_estimate") or {})
+    _steel_pns = {
+        str(_x).strip().upper()
+        for _r in (_fe.get("material_rows") or []) if isinstance(_r, dict)
+        and _r.get("block") == "steel"
+        for _x in ((_r.get("part_numbers") or [])
+                   or [str(_r.get("description") or "").split()[0] if _r.get("description") else ""])
+        if _x
+    }
 
     def bucket(part: Dict[str, Any]) -> str:
         pn = str(part.get("part_number") or "").upper()
@@ -152,8 +164,14 @@ def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
             return "Acrylic"
         if pn.startswith("VINYL") or "BOARD" in mat or "DISPLAY" in mat:
             return "Display boards"
+        # "SHEET STEEL" MEANS A ROW IN THE SHEET STEEL BLOCK, not a part whose material string
+        # contains STEEL. Bucketing on the word counted section stock, the assembly parent and
+        # the commercial BOM lines as sheet-steel parts, so the report announced TEN sheet-steel
+        # parts against a Sheet Steel block holding FIVE. Where the workbook has been read back
+        # we know exactly which parts nested; where it has not, the old behaviour stands.
         if "STEEL" in mat or mat in ("MILD_STEEL", "CR4", "MS"):
-            return "Sheet steel"
+            if not _steel_pns or pn in _steel_pns:
+                return "Sheet steel"
         return "Other material"
 
     for p in parts:

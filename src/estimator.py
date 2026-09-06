@@ -5200,10 +5200,16 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         else:
             risk_flags.append("missing_material_price")
 
-    requested_ops = set((process.get("times_min") or {}).keys())
-    costed_ops = set((labour.get("costs_gbp") or {}).keys())
-    missing_ops = requested_ops - costed_ops
-    for op in sorted(missing_ops):
+    # ASK THE COSTER WHAT IT COULD NOT RATE, rather than subtracting two maps that disagree.
+    #
+    # This derived "no rate for this op" as times_min - costs_gbp. `times_min` is built BEFORE
+    # the route strips run, so an op the acrylic route legitimately removed from the run/setup
+    # maps still sat in the stale map and came out as a missing RATE — which is how the report
+    # told an estimator that acrylic laser cutting costs nothing on 7332-01-007 while the sheet
+    # charged Laser (Acrylic) £1.47 on the very same part. estimate_labour_costs already keeps
+    # the honest list: it appends to missing_rate_operations only where an op HAS time and no
+    # resolvable rate. One writer, one answer.
+    for op in sorted(labour.get("missing_rate_operations") or []):
         risk_flags.append(f"missing_labour_rate:{op}")
 
     return {
