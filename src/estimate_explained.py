@@ -2729,10 +2729,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # quote counts them; the panel that says "what needs your eye" cannot leave them out.
     for d in _mfg:
         _at = _money(d.get("gbp_at_stake")) or 0.0
+        _action = str(d.get("action") or "")
+        _action = _action[:1].upper() + _action[1:]      # not .capitalize(): "GA" stays "GA"
         _focus.append((_at, (
             f"<b>{_e(str(d.get('issue') or 'A manufacturing decision is open'))}.</b> "
             f"{_e(str(d.get('assumption') or ''))}. "
-            f"{_e(str(d.get('action') or '')).capitalize()}"
+            f"{_e(_action)}"
             + (f" — {_gbp(_at)} rides on it." if _at else ".") + " §5.")))
     _freight_gbp = round(sum(_money(c.get("unit_gbp")) or 0 for c in _commercial), 2)
     _unit_gbp = _money(totals.get("unit")) or 0

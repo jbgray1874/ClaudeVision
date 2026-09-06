@@ -277,8 +277,18 @@ def engine_note(deliverables: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
         found = _SUBJECT_LINE.search(html[:1000])
         if not found:
             continue
+        # THE ENGINE'S OWN PLAIN TEXT, when it filed one beside the HTML. A tag-strip of
+        # the HTML ran every table cell into the next; the engine's rendering keeps the
+        # shape. The strip stays as the fallback for a note written before the sibling.
+        text = ""
+        try:
+            sibling = Path(path).with_suffix(".txt")
+            if sibling.exists():
+                text = sibling.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
         return {"subject": found.group(1), "html": html,
-                "text": re.sub(r"<[^>]+>", " ", html)}
+                "text": text or re.sub(r"<[^>]+>", " ", html)}
     return None
 
 

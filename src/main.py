@@ -1334,40 +1334,8 @@ def main() -> None:
                     print(f"   [qty-sweep] variants not written ({_sw_exc}) — the estimate "
                           f"itself is unaffected.", flush=True)
 
-            # THE COVERING NOTE, WRITTEN WHERE THE NUMBERS ARE.
-            #
-            # The mail service composed this, and by design has never read an estimate — so
-            # it could say nothing about the job beyond the one figure it was handed, and
-            # when that figure did not arrive, 12349-02's note went out headed "not
-            # reported/unit at 7 off" over a list of filenames. James: "the write up is very
-            # poor."
-            #
-            # It is written here instead, from the same _gather() the full document uses, so
-            # the note and the document are one reading rendered twice and cannot disagree.
-            # Filed as a deliverable; the service attaches and sends it, and composes nothing.
-            try:
-                from estimate_explained import covering_email as _covering_email
-                _note = _covering_email(
-                    Path(xlsx_path),
-                    Path((summary.get("saved_output_paths") or {}).get("json") or "")
-                    if (summary.get("saved_output_paths") or {}).get("json") else None,
-                    client=str(summary.get("client") or ""),
-                    deliverables=[str(v) for v in
-                                  (summary.get("saved_output_paths") or {}).values() if v],
-                    quantity_sweep=summary.get("quantity_sweep"),
-                )
-                _note_path = Path(xlsx_path).with_name(
-                    f"{Path(xlsx_path).stem}_covering_email.html")
-                _note_path.write_text(
-                    f"<!-- subject: {_note['subject']} -->\n{_note['html']}",
-                    encoding="utf-8")
-                (summary.setdefault("saved_output_paths", {}))["covering_email"] = str(
-                    _note_path)
-                print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
-                      flush=True)
-            except Exception as _note_exc:
-                print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
-                      f"fall back to its own short note.", flush=True)
+            # The covering note is written at the END of the run — after the checks and after
+            # the quote and the report exist — see THE COVERING NOTE, WRITTEN LAST below.
 
         # ── Invariants: does this job hold together? ─────────────────────────────────
         # Everything above has finished writing. The workbook has calculated, the read-back
@@ -1526,6 +1494,7 @@ def main() -> None:
                     # None = deliberately suppressed by the credibility gate, which has
                     # already said why. Do not print a path that does not exist.
                     if _qpath:
+                        (summary.setdefault("saved_output_paths", {}))["quote"] = str(_qpath)
                         print(f"   [deliverables] client quote -> {_qpath}", flush=True)
                 except Exception as _q_exc:
                     print(f"   [deliverables] client quote skipped ({_q_exc}) — run continues.", flush=True)
@@ -1601,6 +1570,7 @@ def main() -> None:
                         bundle_path=(str(_bundle_json) if _bundle_json else None),
                         job_stem=str(scan_label),
                     )
+                    (summary.setdefault("saved_output_paths", {}))["report"] = str(_rhtml)
                     print(f"   [deliverables] job report -> {_rhtml}", flush=True)
 
                     # Retrievable LLM extract sidecar — the transcribed source data (BOM
@@ -1621,6 +1591,66 @@ def main() -> None:
                               flush=True)
                 except Exception as _p_exc:
                     print(f"   [deliverables] job report skipped ({_p_exc}) — run continues.", flush=True)
+
+        # THE COVERING NOTE, WRITTEN LAST, WHERE THE NUMBERS ARE.
+        #
+        # The mail service composed this, and by design has never read an estimate — so it
+        # could say nothing about the job beyond the one figure it was handed, and when that
+        # figure did not arrive, 12349-02's note went out headed "not reported/unit at 7 off"
+        # over a list of filenames. James: "the write up is very poor."
+        #
+        # It is written here instead, from the same _gather() the full document uses, so the
+        # note and the document are one reading rendered twice and cannot disagree. Filed as
+        # a deliverable; the service attaches and sends it as the message, and composes
+        # nothing.
+        #
+        # LAST, NOT BEFORE THE CHECKS. It used to be written before the invariants ran and
+        # before the quote and the report existed, so it said PROVISIONAL whatever the job
+        # was, and its "Attached:" line named the files that happened to exist at that moment
+        # — the JSON, and not the report. Now it reads the record's release status and the
+        # checks' verdict for its provisional flag, and lists what the service will actually
+        # attach: not the JSON, not itself, and not the quote while the estimate is held.
+        if xlsx_path:
+            _sop = summary.setdefault("saved_output_paths", {})
+            _inv_rec = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+            try:
+                from costed_facts import costed_job as _costed_job3
+                _rel3 = (_costed_job3(summary).get("release") or {})
+            except Exception:                                        # noqa: BLE001
+                _rel3 = {}
+            _provisional = bool(_rel3.get("draft")) or not (_inv_rec and _inv_rec.get("may_quote_firm"))
+            _attach = []
+            for _k, _v in _sop.items():
+                if _k in ("json", "covering_email", "quantity_variants") or not _v \
+                        or isinstance(_v, (list, dict)):
+                    continue
+                if _k == "quote" and _provisional:
+                    continue        # the service holds the quote while the estimate is provisional
+                _attach.append(str(_v))
+            try:
+                from estimate_explained import covering_email as _covering_email
+                _note = _covering_email(
+                    Path(xlsx_path),
+                    Path(_sop.get("json") or "") if _sop.get("json") else None,
+                    client=str(summary.get("client") or ""),
+                    deliverables=_attach,
+                    provisional=_provisional,
+                    quantity_sweep=summary.get("quantity_sweep"),
+                )
+                _note_path = Path(xlsx_path).with_name(
+                    f"{Path(xlsx_path).stem}_covering_email.html")
+                _note_path.write_text(
+                    f"<!-- subject: {_note['subject']} -->\n{_note['html']}",
+                    encoding="utf-8")
+                # The plain-text alternative, for the mail service to send alongside the
+                # HTML — its own tag-strip ran table cells together.
+                _note_path.with_suffix(".txt").write_text(_note["text"], encoding="utf-8")
+                _sop["covering_email"] = str(_note_path)
+                print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
+                      flush=True)
+            except Exception as _note_exc:
+                print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
+                      f"fall back to its own short note.", flush=True)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:
