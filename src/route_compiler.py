@@ -58,6 +58,15 @@ TUBE_INAPPLICABLE_OPERATIONS = frozenset({
     "laser_cutting", "punch", "guillotine",
 })
 
+# A TUBE IS STILL BENT. These are the flat-sheet bending words a drawing uses; on a tube the
+# PROCESS is impossible (no press brake) but the BEND is real, so the operation is replaced by
+# the tube bender's own rather than deleted. Dropping it outright took £8.70 of Tubebend off
+# 7332-01's leg between two runs and bent the leg for free — the same "remap, not drop" lesson
+# the cut already carries in wb_populate._TUBE_OP_REMAP.
+TUBE_BEND_SOURCE_OPERATIONS = frozenset({
+    "fold", "folding", "linebend", "line_bend",
+})
+
 CONFIDENCE_VALUE = {"low": 0.25, "medium": 0.60, "high": 0.90}
 
 OPERATION_ALIASES = {
@@ -1845,6 +1854,21 @@ def arbitrate_event(
     )
 
 
+def _record_stock_form(record: Any) -> str:
+    """The stock form the gates read: the record's own, else its material estimate's.
+
+    estimate_part writes 'tube' onto the part when it costs a hollow section, and the material
+    estimate carries it too; a reader that consults only one of the two misses the tube half the
+    time, which is how a gate keyed on stock form silently never fires."""
+    if not isinstance(record, Mapping):
+        return ""
+    return str(
+        record.get("stock_form")
+        or (record.get("material_estimate") or {}).get("stock_form")
+        or ""
+    ).strip().lower()
+
+
 def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
                              graph: Mapping[str, Any]) -> str:
     """The finish to test a part against in the powder/plate gate — a weldment parent inherits
@@ -2572,6 +2596,44 @@ def compile_job_route(
             reason=reason,
             route_id=template.route_id,
         ))
+
+        # THE PRESS BRAKE IS WHAT IS IMPOSSIBLE, NOT THE BEND.
+        #
+        # Ruling folding out on a tube removed the only claim wb_populate._TUBE_OP_REMAP had to
+        # relabel as Tubebend (TBEN), and under the cutover a labour row exists only where a
+        # REQUIRED decision does — so the bend came off the sheet entirely and 7332-01's leg was
+        # bent for free (£8.70 of labour lost between two runs, labour £36.00 -> £27.30). The
+        # drawing's intent was real; only the process was wrong. Raise the tube bender's own
+        # operation in its place, exactly as the cut is remapped rather than dropped. Fold,
+        # line-bend and punch stay impossible on a tube; this adds the one that IS possible.
+        # Keyed on the stock form, never on a part number.
+        if (template.scope == "part"
+                and clean_operation(template.operation) in TUBE_BEND_SOURCE_OPERATIONS
+                and _record_stock_form(record) == "tube"):
+            tube_route_id = (
+                f"{template.route_id}:tubebend" if template.route_id
+                else stable_id("route", {"parent_decision": event_id,
+                                         "operation": "tubebend"})
+            )
+            tube_event_id = stable_id("decision", {
+                "route_id": tube_route_id,
+                "operation": "tubebend",
+                "scope": "part",
+                "target_id": template.target_id,
+            })
+            if tube_event_id not in claims_by_event:
+                add_claim(tube_event_id, make_claim(
+                    "tubebend", REQUIRED, "drawing_deterministic",
+                    subject_id=template.target_id,
+                    target_id=template.target_id,
+                    scope="part",
+                    participants=[template.target_id],
+                    qty_per_unit=template.qty_per_unit,
+                    sequence=template.sequence,
+                    reason=("the drawing states a bend and the stock form is tube — bent on the "
+                            "tube bender, not the press brake"),
+                    route_id=tube_route_id,
+                ))
 
     decisions = [
         arbitrate_event(event_id, claims)
