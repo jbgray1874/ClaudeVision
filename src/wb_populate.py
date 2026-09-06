@@ -1748,6 +1748,53 @@ def canonicalise_part_estimates_for_workbook(
             }
             order.append(identity)
             continue
+        # NO FIXED COMMODITY FIGURE, BUT AN ITEM CANNOT SHIP AT £0 — it bounces straight back.
+        # Ask the same price chain every other line uses (catalogue / UDEF / history / market),
+        # which now names the supplier it points at. On a hit, price the line INDICATIVE with that
+        # source; only if even that finds nothing does it fall to the explicit "estimator to
+        # price" row below. DB-free offline (the chain returns nothing without a PricingService),
+        # so a fixture still lands on the honest withheld row.
+        _bi_llm = None
+        _bi_sc = None
+        try:
+            from estimator import _resolve_part_system_cost as _rpsc
+            _bi_sc = _rpsc({"part_number": identity, "description": _bi_desc,
+                            "page_roles": ["bought_in"], "quantity": _bi_qty})
+            _bi_llm = _safe((_bi_sc or {}).get("applied_unit_cost"))
+        except Exception:                                        # noqa: BLE001
+            _bi_llm = None
+        if _bi_llm is not None and _bi_llm > 0:
+            _sel = ((_bi_sc.get("result") or {}).get("selected") or {})
+            _sup = (((_sel.get("metadata") or {}).get("supplier_name"))
+                    or _sel.get("source") or "market/AI estimate")
+            _bi_llm = round(float(_bi_llm), 2)
+            _bi_ext = round(_bi_llm * int(_bi_qty or 1), 2)
+            normalised[identity] = {
+                "part_number": identity,
+                "description": _bi_desc,
+                "quantity": _bi_qty,
+                "page_roles": ["bought_in"],
+                "unit_cost_gbp": _bi_llm,
+                "unit_material_cost_gbp": _bi_llm,
+                "unit_total_cost_gbp": _bi_llm,
+                "extended_total_cost_gbp": _bi_ext,
+                "material_estimate": {
+                    "unit_material_cost_gbp": _bi_llm,
+                    "cost_per_part_gbp": _bi_llm,
+                    "extended_material_cost_gbp": _bi_ext,
+                    "cost_method": "market_ai_indicative",
+                },
+                "costing_basis": "market_ai_indicative",
+                "source": str(_sel.get("source") or "market_ai_indicative"),
+                "supplier": _sup,
+                "review_flag": True,
+                "review_flags": [
+                    f"INDICATIVE market/AI price from {_sup} — no catalogue rate for this "
+                    f"class-word line; verify before quoting."
+                ],
+            }
+            order.append(identity)
+            continue
         normalised[identity] = {
             "part_number": identity,
             "description": _bi_desc,
