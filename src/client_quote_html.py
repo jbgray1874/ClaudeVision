@@ -144,6 +144,29 @@ def _normalise_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
+# A drawing/job code token: 3+ leading digits, optional -NN / /NN groups (7332-01, 12349-02, 7332).
+_JOB_CODE_TOKEN = re.compile(r"^\d{3,}(?:[-/]\d+)*$")
+
+
+def _clean_customer_name(name: str) -> str:
+    """Strip a job/drawing-number token a customer name has picked up: 'Harrods 7332-01' ->
+    'Harrods'.
+
+    THE JOB NUMBER IN THE NAME IS WHY THE LOGO NEVER MATCHES. _normalise_key keeps digits, so
+    'Harrods 7332-01' keys to 'harrods733201' and no saved 'Harrods' logo file can ever match it
+    — and the same job-numbered string prints as the heading. 7332-01's quote read 'Harrods
+    7332-01' with no mark. The job/drawing reference already appears on its own line, so the
+    customer block should carry the customer alone.
+
+    Only tokens that ARE a drawing code are dropped (3+ leading digits with optional -NN groups),
+    so a genuine digit-bearing brand — 3M, 7-Eleven — is left exactly as it is."""
+    if not name:
+        return name
+    kept = [tok for tok in str(name).split() if not _JOB_CODE_TOKEN.match(tok)]
+    cleaned = " ".join(kept).strip(" -–—")
+    return cleaned or str(name).strip()
+
+
 def _title_material(m: str) -> str:
     return (m or "").replace("_", " ").title()
 
@@ -895,6 +918,10 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     _inv_banner = ""  # retained for the fixture that asserts it stays empty
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
+    # Strip any job/drawing code the name carried ('Harrods 7332-01' -> 'Harrods') BEFORE the logo
+    # lookup — _normalise_key keeps digits, so the code otherwise blocks the logo file match — and
+    # before the text fallback, so the heading reads as the customer, not the customer plus a code.
+    customer = _clean_customer_name(customer)
     logo_markup = _load_logo_markup(customer)
     cust_header = logo_markup if logo_markup else f'<div style="font-size:18px;font-weight:600;color:#282928;">{_esc(customer)}</div>'
     sdi_logo = _sdi_logo_markup()
