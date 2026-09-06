@@ -4545,7 +4545,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
         part["unit_cost_gbp"] = _cp
         part["unit_total_cost_gbp"] = _cp
-        part["extended_total_cost_gbp"] = 0.0
+        # A PRICED PLACEHOLDER CARRIES ITS COST TO THE TOTAL. This was hard-set to 0.0, so a
+        # packaging/delivery line that had just been given a house rate (£2.00 / £2.50 a unit)
+        # showed £2.00 each and a LINE TOTAL of £0 — priced on the sheet, absent from the money.
+        # The comment above says the priced case must survive; this is where it does. An
+        # unpriced placeholder (_cp == 0) is still a clean £0, exactly as before.
+        part["extended_total_cost_gbp"] = round(_cp * max(1, int(quantity or 1)), 2)
         return part
 
     # A bought-in line that already carries a price from the deterministic recogniser or
