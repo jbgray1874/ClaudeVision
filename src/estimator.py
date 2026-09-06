@@ -3349,6 +3349,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _sec_rate = _safe_float(_sec_rate)
             if _sec_rate and _sec_rate > 0:
                 price_per_kg = _sec_rate
+                # INDICATIVE, NOT FIRM. The config section rate is a single global trade hold —
+                # right for small thin tube, high for a large section — so it prices the line
+                # (no more flat-rate under-read) but is flagged for verify against the actual
+                # section size, like the other INDICATIVE holds on this job.
+                part.setdefault("review_flags", []).append(
+                    f"section material priced at the INDICATIVE trade rate GBP {price_per_kg:.2f}/kg "
+                    f"(config.SECTION_STOCK_PRICE_GBP_PER_KG, a global hold) — verify against the "
+                    f"section size; a large section is cheaper per kg than this")
             elif price_per_kg is not None:
                 part.setdefault("review_flags", []).append(
                     f"section material priced at the FLAT-PRODUCT rate GBP {price_per_kg:.2f}/kg. "

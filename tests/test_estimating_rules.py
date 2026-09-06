@@ -6575,9 +6575,11 @@ def test_section_stock_is_not_priced_like_sheet():
     quote and a loss, and it would have been silent — the number looks like a material cost
     because it is one, just the wrong one.
 
-    The rate is left as None on purpose. Inventing one is how "Salvage / Rework" happened.
-    While it is None the engine prices at the flat rate and FLAGS EVERY LINE, which is
-    visible and wrong rather than invisible and wrong.
+    The rate now carries an INDICATIVE global hold (GBP 7.29/kg, the trade figure for that
+    tube) so no section ships at the flat-rate under-read — "everything is priced". Because one
+    scalar over-reads a LARGE section as much as it rescues a small one, the line is FLAGGED for
+    verify when the hold is used, and Tim replaces it with a size-aware rate. When the hold is
+    absent the engine still prices at the flat rate and flags the under-read.
     """
     import math
     import config
@@ -6597,8 +6599,12 @@ def test_section_stock_is_not_priced_like_sheet():
 
     ok(hasattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG"),
        "there is a lever for the real rate")
-    eq(getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG"), None,
-       "left unset — a guessed rate is what put a panel bender in the salvage department")
+    _rate = getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG")
+    ok(isinstance(_rate, (int, float, dict)) and _rate,
+       "set to an INDICATIVE trade hold so no section ships at the flat-rate under-read")
+    if isinstance(_rate, (int, float)):
+        ok(_rate / _flat > 5,
+           f"and the hold is a section rate, not the flat one (got {_rate}/kg)")
 
     _est = open(__import__("estimator").__file__, encoding="utf-8").read()
     # The exact READ, not just the name — the name also appears in the flag text, so a
@@ -6607,7 +6613,10 @@ def test_section_stock_is_not_priced_like_sheet():
        "the estimator actually reads the lever")
     ok("price_per_kg = _sec_rate" in _est, "and uses it as the rate when it is set")
     ok("this line UNDER-READS" in _est,
-       "and flags every section line while it is unset, so the gap is visible on the part")
+       "and still flags the flat-rate under-read when no hold is set")
+    ok("INDICATIVE trade rate" in _est,
+       "and flags the line for verify when the INDICATIVE hold IS used — one scalar "
+       "over-reads a large section as much as it rescues a small one")
     ok("if isinstance(_sec_rate, dict):" in _est,
        "a per-material rate is accepted too — steel, stainless and aluminium tube do not "
        "cost the same")

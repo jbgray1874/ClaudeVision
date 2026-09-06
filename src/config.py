@@ -1656,7 +1656,14 @@ CANONICAL_ROUTE_WORKBOOK_CUTOVER = (
     not in {"0", "false", "no", "off"}
 )
 
-SECTION_STOCK_PRICE_GBP_PER_KG = None
+# Section / tube stock is NOT sold at the flat-product £/kg — small thin tube is several times
+# dearer per kilo. Left unset, a section falls to the flat rate (~£0.80/kg) and under-reads
+# badly: 7332-01-002's 12.7×1.2 leg came out £0.64 against a real ~£7.29/kg. This is an
+# INDICATIVE global trade hold (the engine's own cited figure for that tube) so no section ships
+# under-read; it is flagged for verify on the line, because one scalar over-reads a LARGE
+# section as much as it rescues a small one. Tim replaces it with a size-aware rate/table. May
+# also be a dict keyed by UPPER-CASE material name.
+SECTION_STOCK_PRICE_GBP_PER_KG = 7.29
 
 SECTION_STOCK_POLICY = {
     "enabled": True,
