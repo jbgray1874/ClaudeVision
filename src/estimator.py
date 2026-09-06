@@ -4611,6 +4611,20 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _rt["manual_labour_acrylic"] = round(_rt.get("manual_labour_acrylic", 0.0) + float(_drv.get("flame_min_per_assembly", 1.2)), 4)
             _st.setdefault("manual_labour_acrylic", float(_drv.get("flame_setup_min", 15.0)))
 
+        # THE COMPILER HAS TO KNOW ABOUT AN OP TO CHARGE IT UNDER CUTOVER. These acrylic ops
+        # are written straight into the process time-map — they are the acrylic route itself,
+        # not words read off the drawing — so nothing put them on the part's operation list.
+        # Under the canonical-route cutover a required OperationDecision is the ONLY thing that
+        # becomes a labour row, so an op the compiler never saw was priced by the estimator and
+        # then silently dropped from the sheet: 7332-01-007's lens carried a Diamond Polish the
+        # workbook never charged. Record each acrylic op that actually survives in the time-map
+        # (laser is popped above when the part is not lasered) so the compiler raises a required
+        # decision for it and the cutover charges exactly what the estimator costed.
+        for _acr_op in ("laser_cutting", "diamond_polish", "manual_labour_acrylic",
+                        "linebend", "glue"):
+            if _rt.get(_acr_op) or _st.get(_acr_op):
+                record_operation(part, _acr_op, "acrylic_route_rule")
+
         process["acrylic_ops_canonical"] = True
         process["acrylic_route_v2"] = True
         process["acrylic_bonded_detected"] = _bonded
