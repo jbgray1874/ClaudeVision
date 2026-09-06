@@ -1028,6 +1028,182 @@ def _commercial_order_quantity(summary: Any) -> int:
     return 1
 
 
+# ── SUBCONTRACT PLATING ──────────────────────────────────────────────────────────────
+# A PLATED weldment (7332-01's Harrods stand: title block "PLATED / Harrods 1") is finished by
+# a subcontract plater, not through SDI's own powder booth. Its finish is therefore a subcontract
+# line priced on the plated STEEL MASS x a trade £/kg, never a P.Coat booth-labour row (the
+# powder gate already rules powder out on a plated part) and never the £0 it read before. The
+# rate is an INDICATIVE trade-zinc figure that stays blocking until a plater quote confirms.
+
+_PLATE_METAL_TOKENS = ("STEEL", "ALUMIN", "BRASS", "COPPER", "ZINTEC", "GALV", "METAL", "IRON")
+
+
+def _is_plate_finish(text: Any) -> bool:
+    """True when the drawing's finish words name a plating family (PLATED/ZINC/NICKEL/…)."""
+    try:
+        from finish_rules import finish_families
+        return "plate" in finish_families(str(text or ""))
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
+def _is_plate_metal(text: Any) -> bool:
+    return any(tok in str(text or "").upper() for tok in _PLATE_METAL_TOKENS)
+
+
+def _part_finish_text(part: Dict[str, Any]) -> str:
+    return " ".join(str(v) for v in (
+        part.get("normalized_finish"), part.get("finish"), part.get("surface_finish"),
+    ) if v) or " ".join(str(v) for v in (part.get("surface_finishes") or []))
+
+
+def _part_material_text(part: Dict[str, Any]) -> str:
+    return " ".join(str(v) for v in (
+        part.get("normalized_material"), part.get("material"),
+    ) if v) or " ".join(str(v) for v in (part.get("materials") or []))
+
+
+def _child_parent_map(parts: Any, summary: Any) -> Dict[str, set]:
+    """child part_number -> {parent part_numbers}, from the parts' own child lists and the LLM
+    extract's assemblies. Best-effort; empty where the hierarchy is not stated."""
+    parents: Dict[str, set] = {}
+
+    def _add(parent: Any, child: Any) -> None:
+        p = str(parent or "").strip().upper()
+        c = str(child or "").strip().upper()
+        if p and c:
+            parents.setdefault(c, set()).add(p)
+
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        pn = part.get("part_number")
+        for ch in (part.get("assembly_children") or part.get("children") or []):
+            _add(pn, ch.get("part_number") if isinstance(ch, dict) else ch)
+    lex = (summary or {}).get("llm_full_extract") if isinstance(summary, dict) else {}
+    for asm in ((lex or {}).get("assemblies") or []):
+        if not isinstance(asm, dict):
+            continue
+        pn = asm.get("part_number")
+        for ch in (asm.get("children") or []):
+            _add(pn, ch.get("part_number") if isinstance(ch, dict) else ch)
+    return parents
+
+
+def _ancestors(pn: Any, parents: Dict[str, set], _seen: Optional[set] = None) -> set:
+    pn = str(pn or "").strip().upper()
+    _seen = _seen if _seen is not None else set()
+    out: set = set()
+    for p in parents.get(pn, ()):  # type: ignore[union-attr]
+        if p in _seen:
+            continue
+        _seen.add(p)
+        out.add(p)
+        out |= _ancestors(p, parents, _seen)
+    return out
+
+
+def plated_steel_member_pns(parts: Any, summary: Any) -> set:
+    """Every METAL part_number a plating finish covers: a part whose own finish is a plate
+    family, or one that sits under a PLATED weldment (an assembly parent stated PLATED). Acrylic
+    and board members are excluded — the plater does not plate the lens. The plated weldment
+    line itself is not a member; its material lives in these children."""
+    parents = _child_parent_map(parts, summary)
+    plated_weldments = {
+        str(p.get("part_number") or "").strip().upper()
+        for p in (parts or []) if isinstance(p, dict)
+        and (p.get("is_assembly_parent") or p.get("is_sub_assembly"))
+        and _is_plate_finish(_part_finish_text(p))
+    }
+    members: set = set()
+    for part in (parts or []):
+        if not isinstance(part, dict):
+            continue
+        pn = str(part.get("part_number") or "").strip().upper()
+        if not pn or pn in plated_weldments:
+            continue
+        if not _is_plate_metal(_part_material_text(part)):
+            continue
+        if _is_plate_finish(_part_finish_text(part)) or (
+                _ancestors(pn, parents) & plated_weldments):
+            members.add(pn)
+    return members
+
+
+def plating_unit_price(mass_kg: Any, order_qty: Any,
+                       policy: Dict[str, Any]) -> Tuple[Optional[float], str, str]:
+    """Per-unit subcontract plating cost from the plated mass, honouring the plater's per-batch
+    vat minimum. Returns (unit_gbp or None, note, cost_method). None where no rate is configured
+    or no mass resolved — the caller then keeps the line as a blocking 'estimator to price'."""
+    rate = (policy or {}).get("gbp_per_kg")
+    if rate in (None, ""):
+        return None, "no plating rate configured — estimator to price", "estimator_to_price"
+    mass = _safe_float(mass_kg) or 0.0
+    if mass <= 0:
+        return (None, "plated mass could not be derived from the members — estimator to price",
+                "estimator_to_price")
+    q = max(1, int(order_qty or 1))
+    vat_min = float((policy or {}).get("vat_minimum_gbp") or 0.0)
+    line_cost = mass * float(rate) * q
+    order_cost = max(line_cost, vat_min)
+    unit = round(order_cost / q, 2)
+    hit_min = order_cost > line_cost + 1e-9
+    note = (f"{mass:.1f} kg plated × £{float(rate):.2f}/kg"
+            + (f", plater vat minimum £{vat_min:.0f} spread over {q} off" if hit_min
+               else f" × {q} off")
+            + " — INDICATIVE zinc/passivate, verify against a plater quote")
+    return unit, note, "subcontract_plating_indicative"
+
+
+def _member_mass_kg(pe: Dict[str, Any]) -> float:
+    me = pe.get("material_estimate") or {}
+    m = (_safe_float(me.get("unit_material_mass_kg"))
+         or _safe_float((pe.get("cost_breakdown", {}).get("material", {}) or {}).get(
+             "unit_material_mass_kg")) or 0.0)
+    q = _safe_float(pe.get("quantity")) or 1.0
+    return m * q
+
+
+def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any,
+                              order_qty: Any) -> int:
+    """Price the plating placeholder line(s) from the members' own costed masses, AFTER the part
+    loop so the figure agrees with the sheet. A resolved mass gives an INDICATIVE price; an
+    unresolved one leaves the line as a named blocking gap — never a silent £0."""
+    policy = getattr(config, "PLATE_SUBCONTRACT_POLICY", {}) or {}
+    by_pn = {str(pe.get("part_number") or "").strip().upper(): pe for pe in part_estimates}
+    priced = 0
+    for pe in part_estimates:
+        if not pe.get("_plating_placeholder"):
+            continue
+        members = {str(m).strip().upper() for m in (pe.get("_plating_members") or [])}
+        mass = sum(_member_mass_kg(by_pn[m]) for m in members if m in by_pn)
+        unit, note, method = plating_unit_price(mass, order_qty, policy)
+        qty = max(1, int(pe.get("quantity") or 1))
+        ext = round((unit or 0.0) * qty, 2)
+        pe["unit_material_cost_gbp"] = unit or 0.0
+        pe["unit_cost_gbp"] = unit or 0.0
+        pe["unit_total_cost_gbp"] = unit or 0.0
+        pe["extended_total_cost_gbp"] = ext
+        pe["material_estimate"] = {
+            "unit_material_cost_gbp": unit or 0.0,
+            "cost_per_part_gbp": unit or 0.0,
+            "extended_material_cost_gbp": ext,
+            "unit_material_mass_kg": round(mass, 3),
+            "cost_method": method,
+        }
+        pe["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
+        pe["cost_source"] = method
+        pe["source"] = method
+        pe["price_verified"] = False
+        pe["review_flag"] = True
+        pe["_price_explicitly_withheld"] = unit is None
+        pe["review_flags"] = [
+            note + " ; confirm the process (trade zinc vs a named Harrods plate spec — "
+            "nickel is not this rate) and the derived plated mass"]
+        priced += 1
+    return priced
+
+
 def _sheet_catalogue_token(material: Any) -> Optional[str]:
     """The word to look this material up by in the parts catalogue, or None.
 
@@ -6213,6 +6389,49 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if debug:
             print("[DEBUG] Added Packaging + Delivery placeholder lines (unpriced, flagged)")
 
+        # A PLATED weldment goes out to a subcontract plater, not SDI's own powder booth, so it
+        # carries a plating LINE priced on the plated steel mass — never a P.Coat row (the powder
+        # gate already rules powder out on a plated part) and never the £0 it read before. One
+        # line per plated weldment, minted here so it flows through the canonical graph and the
+        # sheet exactly like the packaging/delivery lines; its price is set post-loop from the
+        # members' own costed masses so the figure agrees with the sheet.
+        try:
+            _plate_policy = getattr(config, "PLATE_SUBCONTRACT_POLICY", {}) or {}
+            _plate_members = (plated_steel_member_pns(parts, summary)
+                              if _plate_policy.get("gbp_per_kg") is not None else set())
+        except Exception:                                       # noqa: BLE001
+            _plate_members = set()
+        if _plate_members:
+            _plated_weldments = [
+                p for p in parts if isinstance(p, dict)
+                and (p.get("is_assembly_parent") or p.get("is_sub_assembly"))
+                and _is_plate_finish(_part_finish_text(p))]
+            _wpn = (str(_plated_weldments[0].get("part_number")).strip()
+                    if _plated_weldments else "PLATING")
+            _plate_code = f"{_wpn}-PLATE"
+            _have = {str(p.get("part_number", "")).strip().upper()
+                     for p in parts if p.get("part_number")}
+            if _plate_code.upper() not in _have:
+                _pstub = _bought_in_part_stub(
+                    _plate_code,
+                    f"{_wpn} plating — INDICATIVE zinc/passivate, verify against plater quote", 1)
+                _pstub["source"] = "commercial_placeholder"
+                _pstub["_commercial_placeholder"] = True
+                _pstub["_plating_placeholder"] = True
+                _pstub["_plating_members"] = sorted(_plate_members)
+                _pstub["_plating_weldment"] = _wpn
+                _pstub["textual_operations"] = []
+                _pstub["inferred_operations"] = []
+                _pstub["price_verified"] = False
+                _pstub["review_flag"] = True
+                _pstub["review_flags"] = [
+                    "Subcontract plating on a PLATED weldment — priced post-loop on the plated "
+                    "steel mass; confirm process and mass."]
+                parts.append(_pstub)
+                if debug:
+                    print(f"[DEBUG] Added subcontract plating line for {_wpn} "
+                          f"({len(_plate_members)} plated member(s))")
+
         # SDI Intelligence — powder coating / wet spray is declared once in the
         # drawing title block (e.g. "POWDER COATED"), not per part. Stamp the
         # finish op onto fabricated metal parts so booth labour + powder
@@ -6373,6 +6592,15 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                   f"non-firm market/LLM indicative so no real part shows a blank price")
     except Exception as _e_lr:                                   # noqa: BLE001
         print(f"   [always-a-number] last-resort pricing skipped: {_e_lr}")
+    # Price the subcontract plating line(s) now that every member has a costed mass, so the
+    # plated-mass figure agrees with the sheet. Runs before the totals below so the plating cost
+    # is in them.
+    try:
+        _plated_n = apply_subcontract_plating(part_estimates, summary, _order_qty)
+        if _plated_n:
+            print(f"   [plating] priced {_plated_n} subcontract plating line(s) on plated mass")
+    except Exception as _e_pl:                                   # noqa: BLE001
+        print(f"   [plating] subcontract plating pass skipped: {_e_pl}")
     material_total_raw = sum((item.get("material_estimate", {}).get("extended_material_cost_gbp") or 0.0) for item in part_estimates)
     labour_total_raw = sum((item.get("labour_estimate", {}).get("total_labour_cost_gbp") or 0.0) for item in part_estimates)
     material_total = _round_money(material_total_raw)

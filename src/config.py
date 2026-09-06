@@ -397,6 +397,22 @@ STANDARD_COMMODITY_PRICE_GBP = {
     },
 }
 
+# SUBCONTRACT PLATING — a PLATED weldment goes out to a plater, not through SDI's own powder
+# booth, so its finish is a subcontract line priced on the plated MASS, not booth hours. This is
+# distinct from POWDER_COSTING_POLICY (booth labour + consumable) and must never reuse it.
+#
+# gbp_per_kg is an INDICATIVE trade-zinc + passivate rate (Jackson-type card ~£2.50/kg); a
+# decorative / named "Harrods" plate spec (nickel, etc.) is NOT this rate — the review flag says
+# so and the line stays blocking until a plater quote confirms. vat_minimum_gbp is the plater's
+# per-batch floor: a small order is charged the minimum however light it is, so the ORDER total
+# is max(mass x rate x qty, vat_minimum); the per-unit line is that divided back by the order.
+# Set gbp_per_kg to None to withhold the rate entirely (the line then reads "estimator to price").
+PLATE_SUBCONTRACT_POLICY = {
+    "gbp_per_kg": 2.50,
+    "vat_minimum_gbp": 95.0,
+    "label": "plating — INDICATIVE zinc/passivate, verify against plater quote",
+}
+
 # ── ESTIMATOR MANUAL-OVERRIDE OUTPUTS ────────────────────────────────────────────────
 # Where the estimator-override loop (client_quote_regen) writes its two deliverables. The
 # regenerated CLIENT QUOTE lands in the AISheets share so the portal can serve it; the amended
