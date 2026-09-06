@@ -39,6 +39,20 @@ _FIRM_CATALOGUE_SOURCES = (
 )
 
 
+def _ai_indicative_supplier(result: Dict[str, Any]) -> str:
+    """A supplier NAME for an AI/LLM market estimate, so the sheet names a source rather than
+    'an AI'. The web-SEARCH path already carries the real scraped supplier; this is for the
+    LLM-ESTIMATE path, which returns no supplier but does return `verify_against` — the UK
+    suppliers it says to check the figure against. Name the first (the company the estimate
+    points at), tagged indicative, and fall back to the provider only when it named none."""
+    _va = [str(v).strip() for v in (result.get("verify_against") or []) if str(v).strip()]
+    if _va:
+        _extra = f" +{len(_va) - 1} more" if len(_va) > 1 else ""
+        return f"{_va[0]}{_extra} (AI-indicative — verify)"
+    _prov = str(result.get("llm_provider") or "").strip()
+    return f"AI market estimate ({_prov})" if _prov else "AI market estimate"
+
+
 def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """A stable, reproducible provisional for a generically-named standard bought-in — a
     PALLET, a perforated-panel clip — from config.STANDARD_COMMODITY_PRICE_GBP, keyed on the
@@ -1166,7 +1180,10 @@ class PricingService:
             "review_flag": True,
             "review_reason": result.get("review_reason", "Indicative web/AI price — verify before quoting."),
             "web_query": result.get("web_query"),
-            "supplier_name": result.get("supplier_name", "web/AI estimate"),
+            # NAME THE SUPPLIER, NOT "AN AI". The web-search path carries the scraped supplier;
+            # the LLM-estimate path carries none, so name the company its verify_against points
+            # at (tagged AI-indicative) instead of the generic "web/AI estimate".
+            "supplier_name": result.get("supplier_name") or _ai_indicative_supplier(result),
             "price_date": result.get("price_date"),
             "low_estimate_gbp": result.get("low_estimate_gbp"),
             "high_estimate_gbp": result.get("high_estimate_gbp"),
