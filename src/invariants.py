@@ -1563,6 +1563,18 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         # because that is the record the money came from, and it REPORTS a disagreement
         # rather than resolving it out of sight -- two blanks on one part is a real defect
         # and it is reported below as itself, not as a cut path that does not fit.
+        # A TUBE HAS NO FLAT BLANK, SO IT CANNOT DISAGREE WITH ONE.
+        #
+        # This compares a cut path against the rectangle the part is profiled from. Section
+        # stock is not profiled from a rectangle at all — it is cut to length from a bar of
+        # tube — so whatever length x width is lying on the record is not the blank that priced
+        # it, and the comparison is meaningless. 7332-01's leg blocked the job on exactly that:
+        # a 15.88 x 15.88 figure against a 9,106 mm cut path, "5,000x too long", when the part
+        # is a 12.7 x 1.2 tube priced by mass per metre and no blank was ever used.
+        _sf = str(part.get("stock_form")
+                  or (part.get("material_estimate") or {}).get("stock_form") or "").lower()
+        if _sf in ("tube", "section", "bar", "wire", "profile", "extrusion", "rod"):
+            continue
         import costed_facts as _cf
         _blank = _cf.blank_dimensions(part)
         length = _blank["length_mm"] or 0.0

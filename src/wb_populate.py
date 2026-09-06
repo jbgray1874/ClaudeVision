@@ -3502,8 +3502,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _is_commercial = bool(pe.get("_commercial_placeholder")) or str(
             pe.get("source") or "") == "commercial_placeholder" or str(
             code or "").strip().upper() in ("PACKAGING", "DELIVERY")
+        # AN ALLOWANCE ALREADY IN THE PRICE IS NOT CHARGED AGAIN.
+        #
+        # Two kinds of line arrive here with their waste already inside the unit rate, and the
+        # sheet's own 4% multiplied it a second time:
+        #   - SECTION/TUBE stock, priced mass x rate x SECTION_STOCK_POLICY waste_factor. 7332's
+        #     leg pair shipped £12.19 against a true £11.72 — the same 4% twice.
+        #   - A FIXED per-each purchased commodity (the felt pad's £0.20 config rate). You buy
+        #     four pads and stick on four pads; there is no cut loss to allow for, and £0.80
+        #     became £0.83.
+        # Sheet and board keep their allowance — a panel is still scratched.
+        _me_scrap = pe.get("material_estimate") or {}
+        _method = str(_me_scrap.get("cost_method") or pe.get("cost_source") or "").lower()
+        _waste_already_in = bool(_me_scrap.get("waste_included")) or _method in (
+            "standard_commodity_provisional", "subcontract_plating_indicative")
         ws.cell(row=row, column=b["col_scrap"],
-                value=None if _is_commercial else 0.04)  # 4% default; WB applies
+                value=None if (_is_commercial or _waste_already_in) else 0.04)
         # A line the material block covers, or an assembly, is not a gap somebody fills.
         from estimator_inputs import UNPRICED as _GAP
         if price is None and _line["status"] == _GAP:

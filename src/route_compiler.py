@@ -1244,9 +1244,23 @@ def build_part_graph(
     if top_ids:
         _roots = set(top_ids)
         for node in nodes:
+            # A GENERATED ORDER-LEVEL LINE HAS NO PARENT BECAUSE IT HAS NO PLACE IN THE
+            # HIERARCHY, and that is not a disconnection to repair. The exemption was a list of
+            # names, so the moment the engine generated a line the list had never heard of — a
+            # subcontract plating line — the job blocked on a node that is working as intended.
+            # Ask what the record IS, not what it is called: a commercial/generated placeholder
+            # is exempt whatever its code. The three names stay for records that predate the
+            # marker.
+            _drec = records.get(node.part_number) or {}
+            _generated_line = bool(
+                _drec.get("_commercial_placeholder")
+                or _drec.get("_plating_placeholder")
+                or str(_drec.get("source") or "") == "commercial_placeholder"
+            )
             if (
                 node.part_number not in _roots
                 and not node.parents
+                and not _generated_line
                 and node.part_number not in {"PACKAGING", "DELIVERY", "POWDER"}
             ):
                 # WHY IT HAS NO PARENT IS A DIFFERENT QUESTION FROM WHICH NODE IT IS, and it

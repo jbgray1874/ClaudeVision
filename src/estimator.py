@@ -3413,6 +3413,13 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "unit_material_cost_gbp": round(unit_cost, 2) if unit_cost is not None else None,
                 "cost_per_part_gbp": round(unit_cost, 2) if unit_cost is not None else None,
                 "extended_material_cost_gbp": round(extended, 2) if extended is not None else None,
+                # THE WASTE IS ALREADY IN THIS NUMBER. unit_cost above is mass x rate x
+                # waste_factor (SECTION_STOCK_POLICY, 4% cut loss/trim). The workbook then
+                # writes its own 4% scrap into the BOM row and multiplies again, so the leg pair
+                # shipped at £12.19 instead of £11.72 — the same allowance charged twice. Say so
+                # on the record and the sheet leaves the scrap column alone.
+                "waste_included": True,
+                "waste_factor_applied": round(waste_factor, 4),
                 "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)},
                 # This branch has a full a×b×t hollow-section profile + a real cut length, so it IS a
                 # tube — declare it as one (like the catalogue branch above) so the workbook routes it
@@ -6488,6 +6495,17 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _pstub["review_flags"] = [
                     "Subcontract plating on a PLATED weldment — priced post-loop on the plated "
                     "steel mass; confirm process and mass."]
+                # GIVE IT THE PARENT IT ACTUALLY HAS. A generated line with no edge arrives at
+                # the graph as a disconnected root and blocks the job ("bom_node_disconnected").
+                # This line is a finish ON the weldment, so the weldment owns it — which also
+                # puts it under 101 in the Canonical BOM where an estimator reads the plating
+                # beside the thing being plated. Attaching by name-set exemption instead would
+                # be a per-job special case, which is exactly what we do not do.
+                if _plated_weldments:
+                    _wparent = _plated_weldments[0]
+                    _wkids = _wparent.setdefault("assembly_children", [])
+                    if isinstance(_wkids, list) and _plate_code not in _wkids:
+                        _wkids.append(_plate_code)
                 parts.append(_pstub)
                 if debug:
                     print(f"[DEBUG] Added subcontract plating line for {_wpn} "
