@@ -61,3 +61,35 @@ def test_a_mixed_finish_weldment_is_not_collapsed():
 def test_a_part_that_states_its_own_finish_is_returned_as_is():
     g = _graph([], {"008": "PLATED"})
     assert rc.weldment_finish_for_gate({"normalized_finish": "PLATED"}, "008", g) == "PLATED"
+
+
+# END-TO-END: the powder on 101 is an ASSEMBLY-scope claim. A finish gate that only looked at
+# scope 'part' left it charged (£15.92) while the leaf 008 correctly dropped it. The gate now
+# rules out an assembly-scope finish claim too.
+
+def _compile_plated_weldment(finish, powder_scope="assembly"):
+    return {d["operation"] + "@" + d["target_id"]: d for d in rc.compile_job_route(
+        [{"part_number": "7332-01-101", "description": "FRAME WELDMENT",
+          "normalized_finish": finish, "is_assembly_parent": True,
+          "assembly_children": ["7332-01-008"]},
+         {"part_number": "7332-01-008", "description": "BACK PANEL",
+          "normalized_finish": finish}],
+        {"assemblies": [{"part_number": "7332-01-101",
+                         "children": [{"part_number": "7332-01-008", "qty": 1}]}],
+         "bom": [{"part_number": "7332-01-101", "qty": 1, "type": "fabricated"},
+                 {"part_number": "7332-01-008", "qty": 1, "type": "fabricated"}],
+         "routes": [{"operation": "powder_coating", "part_numbers": ["7332-01-101"],
+                     "scope": powder_scope, "target_id": "7332-01-101"}]})["decisions"]}
+
+
+def test_assembly_scope_powder_on_a_plated_weldment_is_ruled_out():
+    d = _compile_plated_weldment("PLATED")
+    dec = d.get("powder_coating@7332-01-101")
+    assert dec is not None and dec["status"] == "not_applicable"
+    assert "plate" in str(dec.get("reason") or "").lower()
+
+
+def test_assembly_scope_powder_on_a_powder_weldment_stands():
+    d = _compile_plated_weldment("POWDER COATED")
+    dec = d.get("powder_coating@7332-01-101")
+    assert dec is not None and dec["status"] != "not_applicable"

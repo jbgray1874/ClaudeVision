@@ -2512,7 +2512,15 @@ def compile_job_route(
     from finish_rules import finish_contradiction
     for event_id, event_claims in list(claims_by_event.items()):
         template = event_claims[0]
-        if template.scope != "part":
+        # A FINISH IS GATED ON A PART AND ON AN ASSEMBLY ALIKE.
+        #
+        # Powder-coating a weldment is an ASSEMBLY-scope op — the whole object goes in the oven
+        # — so 7332-01-101's powder claim is scope 'assembly', and a gate that only looked at
+        # scope 'part' never saw it. The leaf 008 (part scope) correctly dropped powder for a
+        # PLATED finish while the weldment 101, PLATED on its own record, kept a £15.92 P.Coat
+        # row. The stock-form impossibility stays part-only (an assembly has no stock form), but
+        # the FINISH contradiction now runs for an assembly too.
+        if template.scope not in ("part", "assembly"):
             continue
         # THE MERGED RECORD, NOT THE RAW ONE.
         #
@@ -2522,37 +2530,29 @@ def compile_job_route(
         # entirely — the rule was correct and simply never saw the evidence, which is the
         # same failure mode as the gate the cutover switched off.
         record = graph["records"].get(template.target_id) or {}
-        # A bar is recognised from its own drawing's bar schedule, upstream of costing, and
-        # only where no flat pattern was detected — a part with a flat blank is not a bar.
-        stock_form = "wire" if (
-            record.get("_bar_recognised")
-            or record.get("bar_schedule")
-        ) else str(record.get("stock_form")
-                   or (record.get("material_estimate") or {}).get("stock_form") or "")
-        material = str(
-            record.get("normalized_material") or record.get("material") or "")
         # THE STATED FINISH IS ASKED FIRST, because its reason is the more useful one.
         #
-        # Both rules can rule out powder on a timber panel: the drawing says LACQUERED, and
-        # separately the oven would destroy it. An estimator reading "the drawing says
-        # LACQUERED" can check the drawing; "board cannot go through the oven" is true but
-        # tells them nothing they can act on. So the specific evidence speaks when there is
-        # any, and the physical rule is what catches the panel whose finish nobody read —
-        # which is 12422-24, where an Egger laminate decor resolves to no finish family at
-        # all and nothing contradicted the assembly's powder note.
-        reason = None
-        if True:
-            # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES.
-            #
-            # The other half of the gates the cutover switched off. These packs carry a
-            # range-wide specification legend that applies to the customer's whole product
-            # family, which is how a lacquered timber panel came back out of the canonical
-            # path with a P.Coat row and a powder-coated face with a Diamond Polish row.
-            # Fires only where the part's own finish is stated and unambiguous.
-            reason = finish_contradiction(
-                template.operation,
-                weldment_finish_for_gate(record, template.target_id, graph))
-        if not reason:
+        # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES. These packs carry a
+        # range-wide specification legend for the whole product family, which is how a lacquered
+        # timber panel came back with a P.Coat row and a powder-coated face with a Diamond
+        # Polish row. weldment_finish_for_gate reads the part's own finish, or a weldment
+        # parent's inherited from its members. finish_contradiction returns None for a
+        # non-finish op, so this is a no-op on welding/cutting/etc.
+        reason = finish_contradiction(
+            template.operation,
+            weldment_finish_for_gate(record, template.target_id, graph))
+        if not reason and template.scope == "part":
+            # The physical stock-form rule is part-only — it catches the panel whose finish
+            # nobody read (12422-24's Egger laminate, no finish family, oven would destroy it).
+            # A bar is recognised from its own drawing's bar schedule, upstream of costing, and
+            # only where no flat pattern was detected — a part with a flat blank is not a bar.
+            stock_form = "wire" if (
+                record.get("_bar_recognised")
+                or record.get("bar_schedule")
+            ) else str(record.get("stock_form")
+                       or (record.get("material_estimate") or {}).get("stock_form") or "")
+            material = str(
+                record.get("normalized_material") or record.get("material") or "")
             reason = impossibility_reason(template.operation, stock_form, material)
         if not reason:
             continue
@@ -2560,8 +2560,8 @@ def compile_job_route(
             template.operation, NOT_APPLICABLE, "drawing_deterministic",
             subject_id=template.target_id,
             target_id=template.target_id,
-            scope="part",
-            participants=[template.target_id],
+            scope=template.scope,
+            participants=template.participants or [template.target_id],
             sequence=template.sequence,
             reason=reason,
             route_id=template.route_id,
