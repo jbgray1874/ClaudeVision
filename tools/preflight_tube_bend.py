@@ -53,14 +53,28 @@ def main() -> int:
     import estimator as e
     import route_compiler as rc
 
-    # Cost each part so the section/tube branch stamps stock_form onto the record, exactly as a
-    # real run does before the compiler reads it.
-    for p in parts:
-        if isinstance(p, dict):
-            try:
-                e.estimate_part(p, job_quantity=int(summary.get("assumed_job_quantity") or 1))
-            except Exception as exc:                                   # noqa: BLE001
-                print(f"  ! {p.get('part_number')}: estimate_part skipped ({exc})")
+    # ONLY THE CANDIDATES. Costing every part ran estimate_part across the whole job — minutes
+    # on a box with a live pricing service, and the verdict never printed. A part can only be a
+    # tube if it already carries a section profile, says so in its description, or has been
+    # tagged; nothing else can change into one, so nothing else needs costing to find out.
+    def _candidate(p) -> bool:
+        if not isinstance(p, dict):
+            return False
+        if p.get("section_stock") or str(p.get("stock_form") or "").lower() in (
+                "tube", "section"):
+            return True
+        blob = f"{p.get('description') or ''} {p.get('normalized_material') or ''}".upper()
+        return any(w in blob for w in ("TUBE", "CHS", "RHS", "SHS", "BOX SECTION"))
+
+    cands = [p for p in parts if _candidate(p)]
+    print(f"parts: {len(parts)}   tube candidates to cost: {len(cands)}", flush=True)
+    qty = int(summary.get("assumed_job_quantity") or 1)
+    for p in cands:
+        print(f"  costing {p.get('part_number')} ...", flush=True)
+        try:
+            e.estimate_part(p, job_quantity=qty)
+        except Exception as exc:                                       # noqa: BLE001
+            print(f"  ! {p.get('part_number')}: estimate_part skipped ({exc})", flush=True)
 
     tubes = [p for p in parts
              if isinstance(p, dict) and str(p.get("stock_form") or "").lower() == "tube"]
@@ -73,7 +87,7 @@ def main() -> int:
     for d in graph.get("decisions") or []:
         by_part.setdefault(str(d.get("target_id")), []).append(d)
 
-    print(f"\ntube parts: {len(tubes)}")
+    print(f"\ntube parts: {len(tubes)}", flush=True)
     free_bends = []
     for p in tubes:
         pn = str(p.get("part_number"))

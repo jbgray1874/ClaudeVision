@@ -1548,9 +1548,19 @@ FALLBACK_PRICING_POLICY = {
 AI_ESTIMATE_XLSX_TEMPLATE = SPREADSHEETS_DIR / "EmptyEstimating" / "Blank Estimate Sheet 2026.xlsx"
 
 WORKBOOK_EQUIVALENT_PRICING = {
-    # overhead_absorption_factor: the hard-coded 0.92 divisor in workbook M105 formula.
-    # =((M59+M103)/(1-M107))/0.92  — covers machine downtime, rework, indirect costs (~8.7% uplift).
-    "overhead_absorption_factor": 0.92,
+    # overhead_absorption_factor: the divisor in the workbook's M105 formula.
+    # =((M59+M103)/(1-M107))/<factor>  — machine downtime, rework, indirect costs.
+    #
+    # THE TEMPLATE MOVED AND THIS CONSTANT DID NOT. It read 0.92 while the live workbook divides
+    # by 0.93, so the engine's workbook-equivalent parity figure disagreed with the sheet it
+    # exists to reconcile against — about £0.91 a unit on 7332-01, silently, in the engine's
+    # favour. Two runs settle it beyond argument:
+    #     05:33  49.87/0.92 = 54.21   49.87/0.93 = 53.62   sheet: 53.62
+    #     12:37  77.48/0.92 = 84.22   77.48/0.93 = 83.31   sheet: 83.31
+    # The WORKBOOK is authoritative — wep_readback_from_xlsx parses the divisor out of the live
+    # formula and reports it ("absorption divisor 0.93 written into the formula"). This value is
+    # only the fallback for a path with no workbook to read, so it must track the template.
+    "overhead_absorption_factor": 0.93,
     # M107: rebate fraction. TTI default 0.066 (6.6%). Grossed into unit cost before margin.
     "default_m107": 0.066,
     # M109: sell margin fraction. 0.0 in blank template; estimator fills this in.
