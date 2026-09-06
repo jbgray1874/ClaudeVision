@@ -331,12 +331,14 @@ PACKAGING_CONFIG = {
 #
 #   £ PER ORDER, not per unit — commercial_lines divides by the order quantity and writes the
 #   divisor onto the line, so an estimator changing the quantity can see what moved.
-#   HELD EMPTY BY DECISION (2026-09): the estimators are pricing packaging and delivery from
-#   their own calculation this week, so the two lines stay at the honest £0 "estimator to price"
-#   until those real figures land — a real number in days beats an INDICATIVE guess now. Put the
-#   per-order figures back here when they arrive (commercial_lines divides by the order quantity
-#   and flags the line); e.g. {"PACKAGING": 12.00, "DELIVERY": 15.00} → £2.00 / £2.50 per unit
-#   at qty 6. The wiring is ready; it just needs the numbers.
+#   HELD EMPTY BY DECISION: the estimators are producing their own calculation for packaging
+#   and delivery, so both lines stay at the honest £0 "estimator to price" until those real
+#   figures land. A real number from the people who ship the job beats an invented one, and an
+#   invented figure here would carry no "check me" flag of its own.
+#
+#   When the calculation arrives, put the per-ORDER figures here and nothing else changes —
+#   commercial_lines divides by the order quantity and flags the line for verify. e.g.
+#   {"PACKAGING": 12.00, "DELIVERY": 15.00} gives £2.00 / £2.50 per unit at qty 6.
 COMMERCIAL_LINE_GBP_PER_ORDER = {
 }
 

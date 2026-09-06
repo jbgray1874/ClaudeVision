@@ -1124,8 +1124,25 @@ def plated_steel_member_pns(parts: Any, summary: Any) -> set:
             continue
         if not _is_plate_metal(_part_material_text(part)):
             continue
-        if _is_plate_finish(_part_finish_text(part)) or (
-                _ancestors(pn, parents) & plated_weldments):
+        _own = _part_finish_text(part)
+        if _is_plate_finish(_own):
+            members.add(pn)
+            continue
+        # A MEMBER'S OWN STATED FINISH OUTRANKS THE WELDMENT'S.
+        #
+        # Inheriting the parent's plate down every metal child swept in 7332-01's BASE 001,
+        # which the drawing states RAW — about 5.3 kg of 5mm steel that no plater ever sees.
+        # At £2.50/kg that is most of an £20.12 plate line charged for a part that is not
+        # plated. A part that states a recognised finish of its own is not silently reassigned
+        # to its parent's; only a member that states NOTHING inherits.
+        try:
+            from finish_rules import finish_families as _ff
+            _fams = _ff(_own)
+        except Exception:                                        # noqa: BLE001
+            _fams = set()
+        if _fams and "plate" not in _fams:
+            continue                                             # stated RAW/bare/etc — not plated
+        if _ancestors(pn, parents) & plated_weldments:
             members.add(pn)
     return members
 
@@ -1176,6 +1193,10 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         if not pe.get("_plating_placeholder"):
             continue
         members = {str(m).strip().upper() for m in (pe.get("_plating_members") or [])}
+        # NAME WHO IS IN THE MASS. £20.12 is only checkable if the line says which parts the
+        # plater is quoted for — an estimator cannot confirm a plated weight against a number
+        # with no member list, and a RAW part wrongly swept in is invisible without it.
+        _contrib = sorted(m for m in members if m in by_pn and _member_mass_kg(by_pn[m]) > 0)
         mass = sum(_member_mass_kg(by_pn[m]) for m in members if m in by_pn)
         unit, note, method = plating_unit_price(mass, order_qty, policy)
         qty = max(1, int(pe.get("quantity") or 1))
@@ -1197,9 +1218,18 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         pe["price_verified"] = False
         pe["review_flag"] = True
         pe["_price_explicitly_withheld"] = unit is None
+        pe["_plating_members_costed"] = _contrib
         pe["review_flags"] = [
-            note + " ; confirm the process (trade zinc vs a named Harrods plate spec — "
-            "nickel is not this rate) and the derived plated mass"]
+            note
+            + (f" ; plated members: {', '.join(_contrib)}" if _contrib
+               else " ; no plated member resolved a mass")
+            + " ; confirm the process (trade zinc vs a named Harrods plate spec — "
+              "nickel is not this rate) and that this member list is what the plater quotes"]
+        # The member list on the DESCRIPTION too, so it survives onto the sheet line itself and
+        # not only into a review flag an estimator has to go looking for.
+        if _contrib:
+            _base = str(pe.get("description") or "").split(" — plated members:")[0]
+            pe["description"] = f"{_base} — plated members: {', '.join(_contrib)}"
         priced += 1
     return priced
 

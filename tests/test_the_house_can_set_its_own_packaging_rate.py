@@ -48,24 +48,26 @@ def test_the_setting_the_code_tells_people_to_edit_exists():
 
 
 def test_it_ships_empty_so_nothing_is_invented():
-    """Held empty by decision: the estimators are pricing packaging and delivery from their own
-    calculation, so the two lines stay at the honest £0 "estimator to price" until those real
-    figures land. A real number in days beats an invented one now — and an unflagged invented
-    figure was always judged worse than the indication it replaced.
+    """Held empty by decision: the estimators are producing their own calculation for packaging
+    and delivery, so both lines stay at the honest £0 "estimator to price" until it lands. A
+    real number from the people who ship the job beats an invented one, and an invented figure
+    here would carry no "check me" flag of its own.
 
-    The MECHANISM is exercised by the tests below with a monkeypatched rate, so the ladder's
-    first rung stays covered while the shipped dict carries no guess."""
+    The MECHANISM stays covered by the tests below with a monkeypatched rate, so the ladder's
+    first rung is exercised while the shipped dict carries no guess."""
     assert not config.COMMERCIAL_LINE_GBP_PER_ORDER
 
 
 def test_a_house_hold_when_set_is_priced_and_flagged_indicative(monkeypatch):
-    """When the estimators' figures do land, the rung fires: per-order ÷ order quantity, and the
+    """When the estimators' figures land, the rung fires: per-order ÷ order quantity, and the
     line is flagged for verify rather than presented as a firm catalogue price."""
-    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {"PACKAGING": 12.00},
-                        raising=False)
-    line = commercial_lines._line("PACKAGING", {"order_quantity": 6}, "boxes", "PACKAGING")
-    assert line["unit_gbp"] == 2.00                       # £12 / 6
-    assert line["price_source"]["indicative"] is True     # flagged for verify, not firm
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER",
+                        {"PACKAGING": 12.00, "DELIVERY": 15.00}, raising=False)
+    for code, unit in (("PACKAGING", 2.00), ("DELIVERY", 2.50)):
+        line = commercial_lines._line(code, {"order_quantity": 6}, "shipment", code)
+        assert line["unit_gbp"] == unit
+        assert line["price_source"]["indicative"] is True   # verify, not firm
+        assert line["estimator_input_required"] is False    # priced, not a blank
 
 
 @pytest.mark.parametrize("key", ["PACKAGING", "DELIVERY"])

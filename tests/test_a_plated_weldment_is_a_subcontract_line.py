@@ -76,6 +76,31 @@ def test_the_plated_members_are_the_steel_ones_under_the_plated_weldment_plus_pl
     assert "7332-01-007" not in members     # acrylic lens is not plated
 
 
+def test_a_member_that_states_RAW_is_not_plated_even_under_a_plated_weldment():
+    """7332-01's BASE 001 is stated RAW — about 5.3 kg of 5mm steel no plater ever sees.
+    Inheriting the weldment's plate down every metal child swept it in and the 12:37 sheet
+    charged £20.12 on 8.05 kg; without it the mass is ~2.7 kg and the £95 vat minimum sets the
+    line at £15.83. A part that states a recognised finish of its own is not reassigned to its
+    parent's; only a member that states NOTHING inherits."""
+    parts = _parts_7332()
+    for p in parts:
+        if p["part_number"] == "7332-01-001":
+            p["normalized_finish"] = "RAW"
+    members = e.plated_steel_member_pns(parts, _summary_7332())
+    assert "7332-01-001" not in members            # RAW base is not plated
+    assert "7332-01-008" in members                # stated PLATED still is
+    assert "7332-01-002" in members                # states nothing -> inherits the weldment's
+
+
+def test_the_raw_member_is_what_moved_the_plate_price():
+    """The arithmetic that proves the 12:37 £20.12 was the RAW base being charged."""
+    pol = {"gbp_per_kg": 2.50, "vat_minimum_gbp": 95.0}
+    with_base, _, _ = e.plating_unit_price(8.05, 6, pol)     # base wrongly included
+    without_base, _, _ = e.plating_unit_price(2.70, 6, pol)  # base excluded -> vat floor
+    assert with_base == 20.12
+    assert without_base == 15.83
+
+
 def test_no_plated_weldment_no_members():
     parts = [{"part_number": "X-1", "normalized_material": "MILD STEEL",
               "normalized_finish": "POWDER COATED", "is_assembly_parent": True}]
