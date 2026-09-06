@@ -3292,6 +3292,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             if _cat and _cat.get("unit_price_gbp"):
                 _cat_unit = float(_cat["unit_price_gbp"])
                 _cat_ext = round(_cat_unit * quantity, 2)
+                part["stock_form"] = "tube"   # so the compiler's fold/punch gate sees a tube
                 return {
                     "material": material,
                     "thickness_mm": thickness,
@@ -3358,6 +3359,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             waste_factor = 1.0 + (float(policy.get("waste_factor_pct", 4.0)) / 100.0)
             unit_cost = (unit_mass_kg * price_per_kg * waste_factor) if price_per_kg is not None else None
             extended = (unit_cost * quantity) if unit_cost is not None else None
+            # TAG THE PART ITSELF, not only the material estimate. The route compiler's
+            # impossibility gate reads record.stock_form to rule out flat-sheet ops on a tube
+            # (fold / line-bend / punch). It reads the part record, so a stock_form that lived
+            # only on material_estimate never reached it — which is why 7332-01-002's leg still
+            # carried a compiler folding=required against a Tubebend sheet. Write it here.
+            part["stock_form"] = "tube"
             return {
                 "material": material,
                 "thickness_mm": thickness,
