@@ -1342,6 +1342,23 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     add(f"- **Where is the money?** " + _blocks_sentence(material_rows, labour_rows))
     add(f"- **Does this document add up to the sheet?** "
         + _reconciles_sentence(material_rows, labour_rows, totals))
+    # THE TWO FACTS THE REPORT AND THE QUOTE STATE THAT THIS TAB DID NOT. The finish the
+    # price contains, and whether the estimate can go out — both from the record, in the
+    # words the other deliverables use, so a reader with two documents open sees one job.
+    _mfg = [d for d in ((record or {}).get("decisions_required") or [])
+            if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
+    _rel = (record or {}).get("release") or {}
+    if record:
+        add(f"- **What finish is charged?** "
+            + (f"{(record or {}).get('finishes_charged')}." if (record or {}).get("finishes_charged")
+               else "No finish operation or subcontract finish carries money on this sheet."))
+        add(f"- **Can this go out?** "
+            + (f"No — {_rel.get('outstanding') or 0} input(s) outstanding: "
+               f"{_rel.get('prices_outstanding') or 0} price(s), "
+               f"{_rel.get('decisions_open') or 0} manufacturing decision(s). The quote is a draft "
+               f"and the sheet is provisional until they are settled."
+               if _rel.get("draft") else
+               "Nothing is waiting on a person; release is subject to the consistency checks."))
     add("")
 
     # ── what a person still has to do ────────────────────────────────────────
@@ -1349,12 +1366,27 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     # true and an estimator cannot act on it: they want the codes, the money each one is
     # worth, the page to look at and whether it is waiting on them or on us. This is the list
     # that has been retyped into every covering email so far.
-    if _unpriced or _indicative:
+    if _unpriced or _indicative or _mfg:
         add("## What a person still has to settle")
         add("")
-        add(f"{len(_unpriced) + len(_indicative)} line(s). Until these are answered the "
-            f"estimate is not a quote, and the banner on the sheet says so.")
+        add(f"{len(_unpriced) + len(_indicative)} line(s)"
+            + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else "")
+            + ". Until these are answered the estimate is not a quote, and the banner on the "
+              "sheet says so.")
         add("")
+    if _mfg:
+        # THE DECISIONS THE REPORT LISTS FIRST, listed here too. Plating scope and a
+        # transcribed cut length are not lines to price; they are the calls Tim makes, and
+        # a tab that lists only the prices reads as if there were nothing else to decide.
+        add("| Decision | Part | Current assumption | Action | £ at stake |")
+        add("|---|---|---|---|---|")
+        for d in _mfg:
+            _at = d.get("gbp_at_stake")
+            add(f"| **{d.get('issue') or ''}** | {d.get('part') or '—'} "
+                f"| {d.get('assumption') or ''} | {d.get('action') or ''} "
+                f"| {_gbp(_at) if _at else '—'} |")
+        add("")
+    if _unpriced or _indicative:
         add("| Line | What it is | Qty | On the sheet | What it needs | Which file and page |")
         add("|---|---|---|---|---|---|")
         _todo = ([(r, "market") for r in _market] + [(r, "house") for r in _house]
@@ -2086,9 +2118,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                              for r in material_rows if r.get("block") == "steel"), 2)
     _bought_total = round((totals.get("material") or 0) - _steel_total, 2)
 
+    _mfg = [d for d in ((record or {}).get("decisions_required") or [])
+            if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
     _state = "PROVISIONAL. " if provisional else ""
     _need = (f"{_plural(len(needs_a_person), 'line')} need a person."
              if needs_a_person else "No line is waiting on a person.")
+    if _mfg:
+        _need += f" {_plural(len(_mfg), 'decision')} open."
     subject = (f"{job} — SDI Intelligence estimate, {_state}"
                f"{_gbp(totals.get('unit'))}/unit at {order_qty} of. {_need}")
 
@@ -2470,6 +2506,20 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 "and the sheet recalculates.</p>")
         else:
             add("<p>Enter a figure against any line above and the sheet recalculates.</p>")
+    if _mfg:
+        # THE DECISIONS, NOT JUST THE PRICES. The report leads with these and the quote
+        # counts them in its draft strip; a note that listed only the unpriced lines told
+        # Tim there was nothing else to decide. From the record, in the report's words.
+        if not needs_a_person:
+            add(f"<h3>5. {_plural(len(_mfg), 'decision')} that need you</h3>")
+        else:
+            add(f"<h4>And {_plural(len(_mfg), 'manufacturing decision')} still open</h4>")
+        add(_table(["Decision", "Part", "Current assumption", "Action", "£ at stake"],
+                   [[str(d.get("issue") or ""), str(d.get("part") or "—"),
+                     str(d.get("assumption") or ""), str(d.get("action") or ""),
+                     _gbp_or(d.get("gbp_at_stake"), "—")] for d in _mfg], numeric={4}))
+        add("<p>The finish this price contains: <b>"
+            f"{_e((record or {}).get('finishes_charged') or 'none charged')}</b>.</p>")
 
     # 6 ─ every operation, and who decided it
     #
@@ -2675,6 +2725,15 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             f"<b>{_plural(len(_house), 'line')} priced on an SDI house rate marked "
             f"INDICATIVE</b>, {_gbp(_house_gbp)} in total — configured and reproducible; "
             f"verify against a supplier or plater quote. §5.")))
+    # THE MANUFACTURING DECISIONS, EACH ON ITS OWN LINE. The report puts them first and the
+    # quote counts them; the panel that says "what needs your eye" cannot leave them out.
+    for d in _mfg:
+        _at = _money(d.get("gbp_at_stake")) or 0.0
+        _focus.append((_at, (
+            f"<b>{_e(str(d.get('issue') or 'A manufacturing decision is open'))}.</b> "
+            f"{_e(str(d.get('assumption') or ''))}. "
+            f"{_e(str(d.get('action') or '')).capitalize()}"
+            + (f" — {_gbp(_at)} rides on it." if _at else ".") + " §5.")))
     _freight_gbp = round(sum(_money(c.get("unit_gbp")) or 0 for c in _commercial), 2)
     _unit_gbp = _money(totals.get("unit")) or 0
     if _freight_gbp and _unit_gbp:

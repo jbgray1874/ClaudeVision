@@ -1042,9 +1042,9 @@ def _render_review_items(review: Dict[str, Any]) -> str:
         rows = '<tr><td colspan="3" class="mini">No provisional or low-confidence items flagged for this job.</td></tr>'
 
     return f"""<h2>3 &nbsp;Review items &amp; limitations</h2>
-<p>None of the following break the total — the estimate is structurally sound. They are points where a
-value is <b>provisional</b> or <b>derived with limited confidence</b>, listed so an estimator can review
-them deliberately.</p>
+<p>None of the following change the arithmetic. They are points where a value is <b>provisional</b> or
+<b>derived with limited confidence</b>, listed so an estimator can review them deliberately. Whether the
+estimate can go out is answered under Decisions required at the top of the page, not here.</p>
 <table>
   <thead><tr><th>Item</th><th>Nature</th><th>Impact</th></tr></thead>
   <tbody>{rows}</tbody>
@@ -1522,19 +1522,30 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
                  "The drawing pack read cleanly with no significant faults detected.")
     parity_note = (" The engine's figures are compared against the manual estimate in section 1a." if has_parity else "")
     _inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    # NO REASSURANCE THE TOP OF THE PAGE CONTRADICTS. The record's open decisions are stated
+    # in this verdict too, so a reader who lands here from a search does not read "every
+    # check passed" on a job whose plating scope is still Tim's call.
+    _rel = (_record_for(summary).get("release") or {})
+    _open = int(_rel.get("decisions_open") or 0) + int(_rel.get("prices_outstanding") or 0)
+    _open_note = (f" {_open} input(s) are still outstanding — listed under Decisions required "
+                  f"at the top of this page." if _open else "")
     if _inv is not None and not _inv.get("may_quote_firm"):
         _lead = (f"<b>This estimate is PROVISIONAL and must not be released as a firm price.</b> "
                  f"{_inv.get('blocking', 0)} consistency check(s) failed and "
-                 f"{_inv.get('unverified', 0)} could not be run — listed in section 8. The "
-                 f"structure is sound (material streams separated, no double-counting) and the "
-                 f"workbook Unit Cost is <b>{_money(hl['unit'])}</b>, but that figure is not yet "
-                 f"one the engine can stand behind.")
+                 f"{_inv.get('unverified', 0)} could not be run — listed in section 8. Material "
+                 f"streams are separated and nothing is counted twice, and the workbook Unit "
+                 f"Cost is <b>{_money(hl['unit'])}</b>, but that figure is not yet one the "
+                 f"engine can stand behind.{_open_note}")
     elif _inv is None:
-        _lead = (f"The estimate is <b>structurally sound</b>: material streams are correctly "
-                 f"separated and there is no double-counting. The workbook Unit Cost is "
-                 f"<b>{_money(hl['unit'])}</b>. The consistency checks did NOT run on this job, "
-                 f"so none of these figures have been verified against the workbook — treat as "
-                 f"provisional.")
+        _lead = (f"Material streams are correctly separated and there is no double-counting. "
+                 f"The workbook Unit Cost is <b>{_money(hl['unit'])}</b>. The consistency "
+                 f"checks did NOT run on this job, so none of these figures have been verified "
+                 f"against the workbook — treat as provisional.{_open_note}")
+    elif _open:
+        _lead = (f"Every consistency check passed — material rows and labour rows each "
+                 f"reconcile to the workbook's own totals, and those totals to the unit price "
+                 f"— <b>but the estimate is not releasable</b>.{_open_note} The workbook Unit "
+                 f"Cost is <b>{_money(hl['unit'])}</b>.")
     else:
         _lead = (f"The estimate is <b>structurally sound</b> and every consistency check passed: "
                  f"material rows and labour rows each reconcile to the workbook's own totals, "
