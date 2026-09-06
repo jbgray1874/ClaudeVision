@@ -1898,6 +1898,106 @@ def check_a_measured_plate_is_not_charged_for_folding(summary: Any) -> List[Dict
         parts=bad, count=len(bad))]
 
 
+def check_a_section_length_is_a_reading_or_says_it_is_not(summary: Any) -> List[Dict[str, Any]]:
+    """A priced length of section stock was read off something, or the line says it was not.
+
+    SECTION IS PRICED PER METRE, SO THE LENGTH IS THE MONEY. The length search ends in a
+    fallback — the largest dimension found anywhere on the part — and until this build that
+    figure reached the sheet indistinguishable from a cut-list reading. The estimator now
+    stamps the rung and the reader on the line (stock_estimate.section_length_source /
+    _reader) and prices a fallback INDICATIVE with a flag. This is the check that the
+    stamp and the flag are both there, at the only point where it is settled: the priced
+    record.
+
+    THREE VERDICTS, and the money decides the severity:
+      BLOCKING — a section is priced from a fallback figure that is a cut-path total on the
+                 same record (7332's 9,106 mm page sum) or longer than any bar of stock.
+                 That is not a length, and the price is built on it.
+      BLOCKING — a section is priced from the fallback and NO flag says so. A silent guess
+                 is the defect this exists for.
+      WARNING  — a section is priced from the fallback, flagged INDICATIVE. The number
+                 stands; an estimator confirms the height off the GA.
+      WARNING  — the fallback is more than three times the largest overall size anything on
+                 the job states. Not blocking: a GA row often states its footprint and not
+                 its height, and a leg IS the height.
+    A reading (section_stock from the LLM transcript, a weldment cut list, a stated length)
+    is not judged here — except that a reading which happens to equal a cut-path total is
+    named, as a warning, because a transcription can copy the wrong number too.
+    """
+    import blank_credibility as _bc
+    from estimator import SECTION_LENGTH_FALLBACK
+
+    records = _parts(summary)
+    holders = [h for h in (summary if isinstance(summary, dict) else {},
+                           (summary or {}).get("estimate_summary") or {}) if isinstance(h, dict)]
+    for holder in holders:
+        for key in ("part_estimates", "parts"):
+            v = holder.get(key)
+            if isinstance(v, list):
+                records = records + [p for p in v if isinstance(p, dict)]
+    if not records:
+        return _unevaluated("section_length_provenance", "No part records were found on this job.")
+
+    envelope = _bc.stated_job_envelope_mm(summary)
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for p in records:
+        pn = str(p.get("part_number") or "").strip()
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        se = me.get("stock_estimate") if isinstance(me.get("stock_estimate"), dict) else {}
+        _sf = str(p.get("stock_form") or me.get("stock_form") or "").lower()
+        if _sf not in ("tube", "section", "bar", "profile", "extrusion", "rod"):
+            continue
+        length = _num(se.get("section_length_mm"))
+        price = _num(me.get("unit_material_cost_gbp"))
+        if not pn or pn in seen or not length or not price:
+            continue        # unpriced lines are the unpriced-line checks' business
+        seen.add(pn)
+        src = str(se.get("section_length_source") or p.get("_section_length_source") or "")
+        reader = str(se.get("section_length_reader") or p.get("_section_length_reader") or "")
+        flags = " ".join(str(f) for f in (p.get("review_flags") or []) if f).lower()
+        flagged = "length not stated" in flags
+        if src == SECTION_LENGTH_FALLBACK:
+            absurd = _bc.section_length_is_absurd(p, length)
+            if absurd:
+                out.append(_violation(
+                    "section_priced_from_a_cut_path", BLOCKING,
+                    f"{pn} is priced as {length:,.0f} mm of section at GBP {price:.2f}, but "
+                    f"that length is the fallback (largest dimension on the part) and it "
+                    f"{absurd}. The material price on this line is built on a number that "
+                    f"is not a length.",
+                    part_number=pn, length_mm=length, source=src, reader=reader))
+                continue
+            if not flagged:
+                out.append(_violation(
+                    "section_length_fallback_unflagged", BLOCKING,
+                    f"{pn} is priced from a fallback length ({length:,.0f} mm, the largest "
+                    f"dimension found on the part) and nothing on the line says so. A guess "
+                    f"the sheet cannot tell from a reading is the defect this check exists for.",
+                    part_number=pn, length_mm=length, source=src, reader=reader))
+                continue
+            over = _bc.section_length_is_absurd(p, length, envelope_mm=envelope)
+            out.append(_violation(
+                "section_length_fallback_indicative", WARNING,
+                f"{pn} is priced INDICATIVE from a fallback length of {length:,.0f} mm (the "
+                f"largest dimension on the part, not a stated cut length)"
+                + (f" — and that figure {over}" if over else "")
+                + ". The line says so; confirm the height off the GA before the price is firm.",
+                part_number=pn, length_mm=length, source=src, reader=reader,
+                job_envelope_mm=envelope))
+            continue
+        hit = _bc.section_length_matches_a_cut_path(p, length)
+        if hit:
+            _who = reader or src or "an unnamed source"
+            out.append(_violation(
+                "section_reading_equals_the_cut_path", WARNING,
+                f"{pn}'s stated section length ({length:,.0f} mm, read by {_who}) is the "
+                f"same figure as {hit}. A transcription can copy the wrong number; check the "
+                f"cut length on the drawing.",
+                part_number=pn, length_mm=length, source=src, reader=reader))
+    return out
+
+
 def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
     """Report route-compiler discrepancies without changing the live gate during shadow mode.
 
@@ -3177,6 +3277,7 @@ CHECKS = (
     check_prices_are_reproducible,
     check_price_disagreement_is_declared,
     check_a_measured_plate_is_not_charged_for_folding,
+    check_a_section_length_is_a_reading_or_says_it_is_not,
     check_canonical_route_shadow,
     check_bom_lines_survive_the_merge,
     check_an_assembly_is_not_charged_as_a_blank,

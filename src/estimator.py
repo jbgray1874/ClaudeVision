@@ -1457,43 +1457,69 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     }
 
 
+# The rung of the length search that is a fallback, not a reading. Named once so the
+# estimator, the invariant and the pre-flight all test for the same string.
+SECTION_LENGTH_FALLBACK = "max_dimension_fallback"
+
+
 def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
     """How long the section is, and — on the part — WHERE that came from.
 
-    THE LAST RUNG IS A GUESS AND IT WAS INDISTINGUISHABLE FROM A MEASUREMENT.
-    Four real sources are tried, then the biggest number found anywhere on the part. On
-    7332-01-002 nothing earlier matched, so the leg's length was "the largest dimension on the
-    drawing" — which priced a 1.4m leg on an A3 stand at £5.86 each, 24% of the job's material,
-    and carried 1.5kg into the plating mass. Nothing downstream could tell that figure from a
-    cut-list reading, because the function returned a bare float either way.
+    THE LAST RUNG IS A FALLBACK AND IT WAS INDISTINGUISHABLE FROM A READING. Four real
+    sources are tried, then the biggest number found anywhere on the part, and the function
+    returned a bare float either way. So nothing downstream could say whether a leg's 1,397 mm
+    was the cut length the LLM transcribed off the drawing (it was, on 7332-01-002:
+    section_stock.length_mm, source llm_full_extract) or the page reader's summed cut path.
 
-    It now stamps `_section_length_source` so the caller can refuse to price a guess.
+    Two stamps now travel with the number:
+      _section_length_source  — the RUNG: section_stock / stated_length / developed_length /
+                                overall_length / max_dimension_fallback / none
+      _section_length_reader  — WHO read it: the section_stock's own source or detection
+                                path (llm_full_extract, weldment_cut_list, canonical_profile,
+                                inference ...), a field's _source sibling, or the
+                                all_dimensions_mm list for the fallback.
+
+    The fallback is still returned — a stand's height is usually a fair INDICATIVE length
+    for its leg — and the CALLER decides whether it is priced, flagged, or refused.
     """
-    _ss_len = _safe_float((part.get("section_stock") or {}).get("length_mm"))
+    _ss = part.get("section_stock") or {}
+    _ss_len = _safe_float(_ss.get("length_mm"))
     if _ss_len is not None and _ss_len > 0:
-        part["_section_length_source"] = "section_stock_cut_list"
+        part["_section_length_source"] = "section_stock"
+        part["_section_length_reader"] = str(
+            _ss.get("source") or _ss.get("detection_path") or "section_stock")
         return _ss_len
     direct = _safe_float(part.get("length_mm"))
     if direct is not None and direct > 0:
         part["_section_length_source"] = "stated_length"
+        part["_section_length_reader"] = str(
+            part.get("length_mm_source") or part.get("geometry_source") or "stated_length")
         return direct
     geom = part.get("normalized_geometry", {}) or {}
     developed = _safe_float(geom.get("developed_length_mm"))
     if developed is not None and developed > 0:
         part["_section_length_source"] = "developed_length"
+        part["_section_length_reader"] = str(
+            geom.get("developed_length_mm_source") or geom.get("geometry_source")
+            or part.get("geometry_source") or "normalized_geometry")
         return developed
     overall = _safe_float(part.get("overall_length_mm"))
     if overall is not None and overall > 0:
         part["_section_length_source"] = "overall_length"
+        part["_section_length_reader"] = str(
+            part.get("overall_length_mm_source") or part.get("geometry_source")
+            or "overall_length")
         return overall
     dims = [_safe_float(v) for v in part.get("all_dimensions_mm", [])]
     dims = [v for v in dims if v is not None and v > 0]
     if dims:
         # NOT A READING. The largest dimension on a drawing is as likely to be the stand's
-        # height or a GA overall as this part's cut length.
-        part["_section_length_source"] = "largest_dimension_guess"
+        # height, a GA overall, or the page reader's cut path as this part's cut length.
+        part["_section_length_source"] = SECTION_LENGTH_FALLBACK
+        part["_section_length_reader"] = "all_dimensions_mm"
         return max(dims)
     part["_section_length_source"] = "none"
+    part["_section_length_reader"] = "none"
     return None
 
 
@@ -3385,24 +3411,41 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         if not (side_a_mm and side_b_mm and wall_t_mm):
             side_a_mm, side_b_mm, wall_t_mm = _parse_section_profile(str(part.get("description") or ""))
         length_mm = _infer_section_length_mm(part)
-        # A LENGTH NOBODY STATED IS NOT A LENGTH. Section stock is priced per metre, so the
-        # length IS the money — and the last rung of the search is "the biggest number on the
-        # part", which on 7332-01-002 produced a 1.4m leg for an A3 stand: £5.86 each, 24% of
-        # the job's material, and 1.5kg of the plating mass. A figure that confident and that
-        # wrong is worse than a gap, because nothing on the sheet says it was invented.
+        # THE LENGTH IS THE MONEY, SO THE LINE SAYS WHERE THE LENGTH CAME FROM. Section stock
+        # is priced per metre. When the length is a reading (7332-01-002: 1,397 mm, transcribed
+        # by the LLM as section_stock.length_mm) it is priced like any other reading. When it
+        # is the FALLBACK — the largest dimension found anywhere on the part — it is still
+        # priced, because a stand's height is usually a fair figure for its leg and a blank
+        # helps nobody, but it is priced INDICATIVE with a flag naming the figure, so the
+        # estimator confirms the height off the GA rather than discovering it in the total.
         #
-        # Refuse it. The line goes out unpriced with the reason the vocabulary already has for
-        # exactly this ("the dimension or quantity it needs was never measured") and lands on
-        # OUTSTANDING ESTIMATOR INPUTS, where a person supplies the cut length.
-        if length_mm and str(part.get("_section_length_source")) == "largest_dimension_guess":
-            part.setdefault("review_flags", []).append(
-                f"section length NOT STATED anywhere on this part — the only figure available "
-                f"is the largest dimension on the drawing ({length_mm:,.0f}mm), which is as "
-                f"likely to be the assembly's overall size as this part's cut length. Priced "
-                f"per metre, that guess IS the money, so the line is left for you to fill: "
-                f"enter the cut length (or add it to the SolidWorks cut list).")
-            part["_consumable_qty_unknown"] = True
-            length_mm = None
+        # It is REFUSED only when the fallback figure cannot be a length of stock at all: it is
+        # a cut-path total from the same record (7332's 9,106 mm page sum), or longer than any
+        # bar of section. That test lives in blank_credibility so the invariant and the
+        # pre-flight ask it the same way. An earlier cut of this guard refused EVERY fallback,
+        # which would have zeroed a leg on the strength of a diagnosis that was never
+        # established — the real run had a transcribed length all along.
+        _len_src = str(part.get("_section_length_source") or "")
+        _len_reader = str(part.get("_section_length_reader") or "")
+        _len_indicative = False
+        if length_mm and _len_src == SECTION_LENGTH_FALLBACK:
+            import blank_credibility as _bc_len
+            _absurd = _bc_len.section_length_is_absurd(part, length_mm)
+            if _absurd:
+                part.setdefault("review_flags", []).append(
+                    f"section length NOT STATED — the only figure on the part is the largest "
+                    f"dimension found ({length_mm:,.0f}mm), and that figure {_absurd}. Not "
+                    f"priced: enter the cut length (or add it to the SolidWorks cut list).")
+                part["_consumable_qty_unknown"] = True
+                length_mm = None
+            else:
+                _len_indicative = True
+                part.setdefault("review_flags", []).append(
+                    f"section length not stated — taken as largest dimension "
+                    f"{length_mm:,.0f}mm (INDICATIVE); confirm the cut length off the GA")
+        _len_stamp = {"section_length_source": _len_src or "none",
+                      "section_length_reader": _len_reader or "none",
+                      "section_length_indicative": _len_indicative}
 
         # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
         # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,
@@ -3446,7 +3489,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "unit_material_cost_gbp": round(unit_cost, 4),
                 "cost_per_part_gbp": round(unit_cost, 4),
                 "extended_material_cost_gbp": round(extended, 2),
-                "stock_estimate": {"wire_length_mm": length_mm, "metres_per_tonne": metres_per_tonne, "price_per_metre_gbp": round(price_per_metre, 6)},
+                "stock_estimate": {"wire_length_mm": length_mm, "metres_per_tonne": metres_per_tonne, "price_per_metre_gbp": round(price_per_metre, 6)} | _len_stamp,
                 "cost_method": "workbook_wire_formula",
                 "stock_form": "wire",
                 "requires_flat_blank": False,
@@ -3483,7 +3526,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                         "catalogue_part_code": _cat.get("part_code"),
                         "catalogue_description": _cat.get("description"),
                         "catalogue_length_mm": _cat.get("catalogue_length_mm"),
-                    },
+                    } | _len_stamp,
                     "stock_form": "tube",
                     "supplier": _cat.get("supplier"),
                     "requires_flat_blank": False,
@@ -3565,7 +3608,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 # on the record and the sheet leaves the scrap column alone.
                 "waste_included": True,
                 "waste_factor_applied": round(waste_factor, 4),
-                "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)},
+                "stock_estimate": {"section_length_mm": round(length_mm, 2), "kg_per_m": round(kg_per_m, 4)} | _len_stamp,
                 # This branch has a full a×b×t hollow-section profile + a real cut length, so it IS a
                 # tube — declare it as one (like the catalogue branch above) so the workbook routes it
                 # to the tube/BOM block and prices it by length, NOT into the Sheet Steel block as a
@@ -3580,7 +3623,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     applied=applied_price_per_kg is not None,
                     applied_basis=external_price.get("applied_basis") if applied_price_per_kg is not None else "config_fallback_GBP_per_kg",
                 )
-                | {"section_profile_mm": {"a": side_a_mm, "b": side_b_mm, "t": wall_t_mm}},
+                | {"section_profile_mm": {"a": side_a_mm, "b": side_b_mm, "t": wall_t_mm}}
+                | _len_stamp,
             }
 
     # Stated-weight path: when the drawing declares a part weight (e.g. "WEIGHT: 885g"),

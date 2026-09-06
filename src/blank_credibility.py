@@ -117,6 +117,128 @@ def cut_path_is_measured(source: Any) -> bool:
     return str(source or "").strip().lower() in MEASURING_CUT_PATH_SOURCES
 
 
+# ── a section length that is really a cut path ───────────────────────────────────────
+#
+# Section stock is priced per metre, so the length IS the money, and the last rung of the
+# length search is "the largest number found anywhere on the part". Usually that is the
+# part's own height and a fair INDICATIVE figure — 1.4 m of leg on a 453 mm base is not
+# absurd. What IS absurd is when the biggest number on the record is the page reader's
+# summed cut path (7332's 9,106 mm, every vector on the sheet added together) and it gets
+# priced as nine metres of tube. The estimator, the invariant and the pre-flight must all
+# ask that question the same way, so it is asked here, once.
+
+# Every place a cut-path total is written on a part record. The page-summed one is the
+# usual offender, but a measured DXF cut path is equally not a stock length.
+CUT_PATH_KEYS = ("cut_length_mm", "raw_cut_length_mm", "total_cut_length_mm",
+                 "dxf_measured_cut_length", "estimated_cut_length_mm")
+
+# How close a "length" has to sit to a cut-path figure to be that figure. The largest
+# dimension is a max() over floats that were parsed, so exact equality is the normal case;
+# 2% covers a rounded copy of the same number.
+CUT_PATH_MATCH_TOLERANCE = 0.02
+
+# The longest bar of section anyone delivers. A single member longer than the stock it is
+# cut from was not read off a cut list.
+MAX_SECTION_STOCK_MM = 7500.0
+
+
+def cut_path_figures(part: Any) -> Dict[str, float]:
+    """Every cut-path-like number on the record, keyed by where it was found."""
+    out: Dict[str, float] = {}
+    if not isinstance(part, dict):
+        return out
+    holders = (("part", part),
+               ("manufacturing_features", part.get("manufacturing_features")),
+               ("normalized_geometry", part.get("normalized_geometry")),
+               ("geometry_rollup", part.get("geometry_rollup")))
+    for where, holder in holders:
+        if not isinstance(holder, dict):
+            continue
+        for key in CUT_PATH_KEYS:
+            value = _num(holder.get(key))
+            if value and value > 0:
+                out[f"{where}.{key}"] = value
+    return out
+
+
+def section_length_matches_a_cut_path(part: Any, length_mm: Any) -> Optional[str]:
+    """The cut-path figure this length is a copy of, or None when it is not one."""
+    length = _num(length_mm)
+    if not length or length <= 0:
+        return None
+    for where, figure in cut_path_figures(part).items():
+        if abs(length - figure) / figure <= CUT_PATH_MATCH_TOLERANCE:
+            return f"{where} ({figure:,.0f} mm)"
+    return None
+
+
+def stated_job_envelope_mm(summary: Any) -> Optional[float]:
+    """The largest overall size anything on the job STATES, or None when nothing does.
+
+    Read from the whole-document extract's per-row overall_size_mm (the GA row carries the
+    stand's envelope) and from a concept brief's assembly_summary. Deliberately the maximum
+    over every row: the question it serves is "could a single member be three times longer
+    than the biggest thing on this job", and for that the envelope of the largest assembly
+    is the right yardstick. A job that states no overall size returns None and the ratio
+    test is skipped, not guessed.
+    """
+    import re
+    if not isinstance(summary, dict):
+        return None
+    best: Optional[float] = None
+    rows = ((summary.get("llm_full_extract") or {}).get("parts") or [])
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw = row.get("overall_size_mm")
+        values = []
+        if isinstance(raw, (int, float)):
+            values = [float(raw)]
+        elif isinstance(raw, (list, tuple)):
+            values = [v for v in (_num(x) for x in raw) if v]
+        elif isinstance(raw, dict):
+            values = [v for v in (_num(x) for x in raw.values()) if v]
+        elif raw:
+            values = [float(m) for m in re.findall(r"\d+(?:\.\d+)?", str(raw))]
+        for v in values:
+            if v > 0 and (best is None or v > best):
+                best = v
+    dims = ((summary.get("assembly_summary") or {}).get("overall_dimensions_mm") or {})
+    if isinstance(dims, dict):
+        for v in (_num(x) for x in dims.values()):
+            if v and v > 0 and (best is None or v > best):
+                best = v
+    return best
+
+
+def section_length_is_absurd(part: Any, length_mm: Any,
+                             envelope_mm: Any = None,
+                             max_envelope_ratio: float = 3.0) -> Optional[str]:
+    """WHY a fallback section length cannot be priced, or None when it may be (INDICATIVE).
+
+    Three tests, all of them about the number being something other than a length of tube:
+      - it is a cut-path figure from the same record;
+      - it is longer than any bar of section stock;
+      - it is more than `max_envelope_ratio` times the assembly's stated overall size, when
+        the caller has one (the estimator does not; the pre-flight and the invariant do).
+    A length that passes has not been verified — it has merely not been caught.
+    """
+    length = _num(length_mm)
+    if not length or length <= 0:
+        return None
+    hit = section_length_matches_a_cut_path(part, length)
+    if hit:
+        return f"is the cut path — it matches {hit}, a total of cutting, not a length of stock"
+    if length > MAX_SECTION_STOCK_MM:
+        return (f"is longer than any bar of section stock ({length:,.0f} mm against a "
+                f"{MAX_SECTION_STOCK_MM:,.0f} mm maximum)")
+    envelope = _num(envelope_mm)
+    if envelope and envelope > 0 and length > max_envelope_ratio * envelope:
+        return (f"is {length / envelope:.1f}x the assembly's stated overall size "
+                f"({envelope:,.0f} mm) — no member is that much longer than the thing it is in")
+    return None
+
+
 # The size range a sheet fabrication's overall dimension can credibly take. Below this a
 # number is a hole pitch, a radius, a gauge or a scale bar; above it, nothing SDI cuts.
 MIN_SHEET_PART_MM = 10.0
