@@ -233,7 +233,11 @@ def _price_basis_label(price_source: Dict[str, Any], material: str = "") -> str:
     if stype == "web_catalog" or "catalog" in low:
         return f"Supplier catalogue{_supp}"
     if "config" in low or stype == "config":
-        return "Config rate card"
+        # NOT "Config rate card" — that claimed a firmness a config default does not have.
+        # A config rate is an INDICATIVE hold (a standard-commodity provisional, a section/
+        # linear-stock default) that an estimator or Tim overwrites; say so, as the covering
+        # note and the AI Price Provenance tab now do.
+        return "SDI config rate (INDICATIVE) — verify"
     if stype == "external":
         return (supp or src) + (f", {pdate}" if pdate else "")
     return src or "—"

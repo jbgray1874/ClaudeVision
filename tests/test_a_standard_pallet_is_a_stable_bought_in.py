@@ -87,3 +87,36 @@ def test_perfo_alone_without_clip_is_not_captured():
 def test_the_config_carries_the_perfo_clip():
     table = config.STANDARD_COMMODITY_PRICE_GBP
     assert "PERFO+CLIP" in table and table["PERFO+CLIP"]["price_gbp"] > 0
+
+
+# 7332-01: P/P / BLACK FELT PAD, SELF-ADHESIVE, 25mm DIA. The drawing prints the class word
+# "P/P", so the DB cannot match it and the line read as £0.00 — which estimating bounces. A
+# 25mm self-adhesive felt pad is a stock commodity; 20p is a fair INDICATIVE per-each hold that
+# Tim overwrites. Keyed FELT+PAD (both tokens), never "P/P" alone.
+
+def test_the_felt_pad_prices_from_the_config_provisional():
+    out = _svc()._standard_commodity_price(
+        {"description": "BLACK FELT PAD, SELF-ADHESIVE, 25mm DIA", "part_number": "P/P"})
+    assert out is not None
+    assert out["unit_price_gbp"] == 0.20
+    assert out["source_type"] == "standard_commodity_provisional"
+    assert out["price_is_reproducible"] is True
+    assert "INDICATIVE" in out["provenance"]          # labelled, not a bare number
+
+
+def test_the_pp_class_word_alone_does_not_fire_the_felt_pad():
+    """P/P marks many purchased parts; only a description that says FELT PAD is this line."""
+    assert _svc()._standard_commodity_price(
+        {"description": "RUBBER BUFFER", "part_number": "P/P"}) is None
+
+
+def test_a_felt_without_pad_is_not_captured():
+    """Both tokens required — a felt sheet is not the stick-on pad."""
+    assert _svc()._standard_commodity_price(
+        {"description": "GREEN FELT SHEET 2mm", "part_number": "P/P"}) is None
+
+
+def test_the_config_carries_the_felt_pad_labelled_indicative():
+    table = config.STANDARD_COMMODITY_PRICE_GBP
+    assert "FELT+PAD" in table and table["FELT+PAD"]["price_gbp"] == 0.20
+    assert "INDICATIVE" in table["FELT+PAD"]["label"]

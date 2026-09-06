@@ -384,6 +384,17 @@ STANDARD_COMMODITY_PRICE_GBP = {
         "label": "perforated-panel plastic locking clip — PROVISIONAL per-each, confirm "
                  "against a supplier quote or add the item to the purchasing catalogue",
     },
+    # 7332-01 item "P/P / BLACK FELT PAD, SELF-ADHESIVE, 25mm DIA" — the stick-on foot pad.
+    # No SDI part code (the drawing prints the class word "P/P"), so the line read as £0.00 and
+    # estimating bounces a zero. A 25mm self-adhesive felt pad is a stock commodity: a retail
+    # pack is ~£3.50/16 -> ~£0.22 each, trade lower, so 20p is a fair INDICATIVE per-each hold.
+    # Keyed FELT+PAD (both tokens), NOT "P/P" alone — "P/P" is a class word that would over-match
+    # anything the drawing marks as a purchased part. No bench-fitting uplift: the assembly
+    # labour already covers sticking them on. Tim confirms or overwrites.
+    "FELT+PAD": {
+        "price_gbp": 0.20,
+        "label": "Self-adhesive felt pad 25 mm (INDICATIVE) — confirm against a supplier quote",
+    },
 }
 
 # ── ESTIMATOR MANUAL-OVERRIDE OUTPUTS ────────────────────────────────────────────────
