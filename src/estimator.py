@@ -6171,8 +6171,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             except Exception:                               # noqa: BLE001
                 _cline = None
             _unit = (_cline or {}).get("unit_gbp")
-            if _cline and _cline.get("note"):
-                _desc = f"{_desc.split(' — ')[0]} — {_cline['note']}"
+            # A LINE AND A ZERO ON THE SHEET — NOT AN ESSAY. Packaging and delivery are the two
+            # deliberate £0 order-lever lines; the estimator wants a clean row, not the
+            # withheld-because-5.7x explanation baked into the BOM description. The full note is
+            # kept on the commercial_line record below, where the covering note and quote read
+            # it — the sheet line stays the short base label.
             _stub = _bought_in_part_stub(_code, _desc, 1)
             _stub["source"] = "commercial_placeholder"
             _stub["price_verified"] = False
