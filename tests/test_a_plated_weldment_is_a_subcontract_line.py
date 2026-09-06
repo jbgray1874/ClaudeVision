@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import estimator as e  # noqa: E402
+import route_compiler as rc  # noqa: E402
 
 
 _POLICY = {"gbp_per_kg": 2.50, "vat_minimum_gbp": 95.0, "label": "plating — INDICATIVE"}
@@ -157,6 +158,62 @@ def test_an_unresolved_mass_leaves_a_named_blocking_gap_not_a_silent_zero():
     assert plate["_price_explicitly_withheld"] is True
     assert plate["extended_total_cost_gbp"] == 0.0
     assert plate["material_estimate"]["cost_method"] == "estimator_to_price"
+
+
+# ── the member list and the parent column are two views of ONE hierarchy ──────
+def _real_shape():
+    """The shape that broke it: 101's children stated by the EXTRACT (so the parent's own
+    assembly_children list is skipped), and 002 reaching 101 only through that stated list."""
+    parts = [
+        {"part_number": "7332-01-101", "description": "FRAME WELDMENT",
+         "normalized_material": "MILD STEEL", "normalized_finish": "PLATED",
+         "is_assembly_parent": True},
+        {"part_number": "7332-01-001", "description": "BASE", "normalized_material": "MILD STEEL",
+         "normalized_finish": "RAW", "quantity": 1,
+         "material_estimate": {"unit_material_mass_kg": 5.30}},
+        {"part_number": "7332-01-002", "description": "LEG", "normalized_material": "MILD STEEL",
+         "quantity": 2, "material_estimate": {"unit_material_mass_kg": 0.773}},
+        {"part_number": "7332-01-008", "description": "BACK PANEL",
+         "normalized_material": "MILD STEEL", "normalized_finish": "PLATED", "quantity": 1,
+         "material_estimate": {"unit_material_mass_kg": 0.88}},
+        {"part_number": "7332-01-101-PLATE", "description": "plating",
+         "page_roles": ["bought_in"], "quantity": 1,
+         "_commercial_placeholder": True, "_plating_placeholder": True,
+         # the WRONG list the mint produced, which the pass must correct
+         "_plating_members": ["7332-01-008"]},
+    ]
+    summary = {"llm_full_extract": {"assemblies": [
+        {"part_number": "7332-01-101", "children": [
+            {"part_number": "7332-01-001"}, {"part_number": "7332-01-002"},
+            {"part_number": "7332-01-008"},
+            {"part_number": "7332-01-101-PLATE", "qty": 1}]}]}}
+    return parts, summary
+
+
+def test_the_member_list_is_re_derived_from_the_compiled_hierarchy():
+    """The mint read the parent's own child list and the LLM extract; 7332's 002 -> 101 edge came
+    from neither, so inheritance never fired and the plate named only 008 — the one part that
+    states PLATED itself. The pass now re-derives against the compiled graph."""
+    parts, summary = _real_shape()
+    e.apply_subcontract_plating(parts, summary, 6, parts)
+    plate = next(p for p in parts if p["part_number"].endswith("-PLATE"))
+    assert plate["_plating_members"] == ["7332-01-002", "7332-01-008"]
+    assert "7332-01-001" not in plate["_plating_members"]        # RAW base still excluded
+    assert plate["material_estimate"]["unit_material_mass_kg"] == 2.426
+    assert plate["unit_cost_gbp"] == 15.83                       # £95 vat floor over 6
+    assert "7332-01-002" in plate["description"]                 # named on the sheet line
+
+
+def test_the_plating_line_has_a_defensible_parent():
+    """Zero blockers is not the test — the plate must sit UNDER the weldment it plates. The
+    parent's own assembly_children is skipped for a parent the extract already states, so the
+    edge has to go where the graph actually reads it."""
+    parts, summary = _real_shape()
+    graph = rc.build_part_graph(parts, summary["llm_full_extract"])
+    plate = next(n for n in graph["nodes"] if n.part_number.endswith("-PLATE"))
+    assert plate.parents == ["7332-01-101"]
+    assert not [i for i in (graph.get("issues") or [])
+                if i.get("code") == "bom_node_disconnected"]
 
 
 def test_the_config_carries_the_plate_policy():

@@ -1103,12 +1103,19 @@ def _ancestors(pn: Any, parents: Dict[str, set], _seen: Optional[set] = None) ->
     return out
 
 
-def plated_steel_member_pns(parts: Any, summary: Any) -> set:
+def plated_steel_member_pns(parts: Any, summary: Any, parents: Any = None) -> set:
     """Every METAL part_number a plating finish covers: a part whose own finish is a plate
     family, or one that sits under a PLATED weldment (an assembly parent stated PLATED). Acrylic
     and board members are excluded — the plater does not plate the lens. The plated weldment
-    line itself is not a member; its material lives in these children."""
-    parents = _child_parent_map(parts, summary)
+    line itself is not a member; its material lives in these children.
+
+    `parents` is the hierarchy to read. Pass the COMPILED graph's map wherever one exists: the
+    local fallback below only knows the parent's own child list and the LLM extract, and 7332-01
+    proved that insufficient — the 002 -> 101 edge the Canonical BOM shows comes from the BOM
+    table, so inheritance never fired and the only member named was 008, the one part that
+    states PLATED on its own record. A member list that disagrees with the parent column an
+    estimator reads is worse than no member list at all."""
+    parents = parents if parents is not None else _child_parent_map(parts, summary)
     plated_weldments = {
         str(p.get("part_number") or "").strip().upper()
         for p in (parts or []) if isinstance(p, dict)
@@ -1181,13 +1188,49 @@ def _member_mass_kg(pe: Dict[str, Any]) -> float:
     return m * q
 
 
+def _compiled_parent_map(parts: Any, summary: Any) -> Dict[str, set]:
+    """The parent map the CANONICAL BOM will show, from the compiler itself.
+
+    Built by the same build_part_graph the workbook reads, so a member list derived from it
+    cannot disagree with the parent column beside it. Returns {} if the graph cannot be built —
+    the caller then falls back to the local reading rather than losing the line."""
+    try:
+        import route_compiler as _rc
+        _g = _rc.build_part_graph(
+            [p for p in (parts or []) if isinstance(p, dict)],
+            (summary or {}).get("llm_full_extract") or {} if isinstance(summary, dict) else {})
+        return {str(k).strip().upper(): {str(v).strip().upper() for v in (vs or set())}
+                for k, vs in (_g.get("parents") or {}).items()}
+    except Exception as exc:                                         # noqa: BLE001
+        print(f"   [plating] could not compile the hierarchy for the member list ({exc}); "
+              f"falling back to the stated one", flush=True)
+        return {}
+
+
 def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any,
-                              order_qty: Any) -> int:
+                              order_qty: Any, parts: Any = None) -> int:
     """Price the plating placeholder line(s) from the members' own costed masses, AFTER the part
     loop so the figure agrees with the sheet. A resolved mass gives an INDICATIVE price; an
     unresolved one leaves the line as a named blocking gap — never a silent £0."""
     policy = getattr(config, "PLATE_SUBCONTRACT_POLICY", {}) or {}
     by_pn = {str(pe.get("part_number") or "").strip().upper(): pe for pe in part_estimates}
+    # RE-DERIVE THE MEMBERS FROM THE HIERARCHY THE SHEET WILL SHOW. The list stamped at mint
+    # time was read from the parent's own child list and the LLM extract — neither of which
+    # carried 7332-01's 002 -> 101 edge (the BOM table did), so inheritance never fired and the
+    # plate named only 008, the part that states PLATED itself. Recomputing here, after the
+    # parts are costed and against the compiled graph, makes the member list and the Canonical
+    # BOM's parent column two views of one fact instead of two opinions.
+    _graph_parents = _compiled_parent_map(parts if parts is not None else part_estimates, summary)
+    if _graph_parents:
+        try:
+            _regathered = plated_steel_member_pns(
+                parts if parts is not None else part_estimates, summary, _graph_parents)
+        except Exception:                                            # noqa: BLE001
+            _regathered = set()
+        if _regathered:
+            for _pe in part_estimates:
+                if _pe.get("_plating_placeholder"):
+                    _pe["_plating_members"] = sorted(_regathered)
     priced = 0
     for pe in part_estimates:
         if not pe.get("_plating_placeholder"):
@@ -6495,15 +6538,35 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _pstub["review_flags"] = [
                     "Subcontract plating on a PLATED weldment — priced post-loop on the plated "
                     "steel mass; confirm process and mass."]
-                # GIVE IT THE PARENT IT ACTUALLY HAS. A generated line with no edge arrives at
-                # the graph as a disconnected root and blocks the job ("bom_node_disconnected").
-                # This line is a finish ON the weldment, so the weldment owns it — which also
-                # puts it under 101 in the Canonical BOM where an estimator reads the plating
-                # beside the thing being plated. Attaching by name-set exemption instead would
-                # be a per-job special case, which is exactly what we do not do.
+                # GIVE IT THE PARENT IT ACTUALLY HAS, IN THE FIELD THE GRAPH READS.
+                #
+                # This line is a finish ON the weldment, so the weldment owns it, and the
+                # Canonical BOM should show the plating beside the thing being plated.
+                # Appending to the parent's `assembly_children` does NOT achieve that: that
+                # source is skipped for any parent the extract already states children for
+                # ("the description rule only fills a hierarchy nobody expressed"), which 101
+                # is — so the edge was silently dropped and the plate came out parentless.
+                # The extract's own assemblies list IS honoured, so the edge goes there.
                 if _plated_weldments:
-                    _wparent = _plated_weldments[0]
-                    _wkids = _wparent.setdefault("assembly_children", [])
+                    _wpn_up = str(_plated_weldments[0].get("part_number") or "").strip()
+                    _lex = (summary.setdefault("llm_full_extract", {})
+                            if isinstance(summary, dict) else None)
+                    if isinstance(_lex, dict):
+                        _asms = _lex.setdefault("assemblies", [])
+                        if isinstance(_asms, list):
+                            _entry = next(
+                                (a for a in _asms if isinstance(a, dict)
+                                 and str(a.get("part_number") or "").strip() == _wpn_up), None)
+                            if _entry is None:
+                                _entry = {"part_number": _wpn_up, "children": []}
+                                _asms.append(_entry)
+                            _kids = _entry.setdefault("children", [])
+                            if isinstance(_kids, list) and not any(
+                                    isinstance(k, dict) and str(k.get("part_number") or "")
+                                    .strip() == _plate_code for k in _kids):
+                                _kids.append({"part_number": _plate_code, "qty": 1})
+                    # kept as corroboration for any reader that prefers the parent's own list
+                    _wkids = _plated_weldments[0].setdefault("assembly_children", [])
                     if isinstance(_wkids, list) and _plate_code not in _wkids:
                         _wkids.append(_plate_code)
                 parts.append(_pstub)
@@ -6675,7 +6738,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # plated-mass figure agrees with the sheet. Runs before the totals below so the plating cost
     # is in them.
     try:
-        _plated_n = apply_subcontract_plating(part_estimates, summary, _order_qty)
+        _plated_n = apply_subcontract_plating(part_estimates, summary, _order_qty, parts)
         if _plated_n:
             print(f"   [plating] priced {_plated_n} subcontract plating line(s) on plated mass")
     except Exception as _e_pl:                                   # noqa: BLE001
