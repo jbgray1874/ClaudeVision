@@ -1749,6 +1749,43 @@ def arbitrate_event(
     )
 
 
+def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
+                             graph: Mapping[str, Any]) -> str:
+    """The finish to test a part against in the powder/plate gate — a weldment parent inherits
+    its members' finish when it states none of its own.
+
+    A WELDMENT CARRIES NO FINISH OF ITS OWN. The drawing states it once for the whole object,
+    so stated_finish() on the parent record is empty and an INFERRED powder on the parent is
+    never contradicted — 7332-01-101 kept a £15.92 P.Coat row while the drawing said PLATED,
+    even though its own back panel (008) correctly dropped powder for exactly that reason.
+
+    When the parent has no finish of its own, inherit the one its MEMBERS agree on: only when
+    the members that state a finish resolve to a SINGLE recognised family (ignoring 'bare' — a
+    raw member is finished AT assembly, e.g. 7332-01-001 "raw then plated on the weldment") and
+    that family is not powder. A mixed set, or a powder set, leaves the parent's own (empty)
+    finish untouched, so a genuinely powder-coated weldment is unaffected. A part that states
+    its own finish is returned as-is, so leaves are unchanged."""
+    from finish_rules import stated_finish, finish_families
+    own = stated_finish(record)
+    if own:
+        return own
+    records = graph.get("records") or {}
+    kids = (graph.get("children") or {}).get(target_id) or ()
+    fams: Set[str] = set()
+    for kid in kids:
+        kf = stated_finish(records.get(kid) or {})
+        if kf:
+            fams |= finish_families(kf)
+    fams.discard("bare")
+    if len(fams) == 1 and "powder" not in fams:
+        fam = next(iter(fams))
+        for kid in kids:
+            kf = stated_finish(records.get(kid) or {})
+            if kf and fam in finish_families(kf):
+                return kf
+    return own
+
+
 def compile_job_route(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
@@ -2382,7 +2419,7 @@ def compile_job_route(
     # The rules themselves are in stock_form_rules, read by both the compiler and the
     # workbook renderer — a second copy here is how one of them goes quietly stale.
     from stock_form_rules import impossibility_reason
-    from finish_rules import finish_contradiction, stated_finish
+    from finish_rules import finish_contradiction
     for event_id, event_claims in list(claims_by_event.items()):
         template = event_claims[0]
         if template.scope != "part":
@@ -2423,7 +2460,8 @@ def compile_job_route(
             # path with a P.Coat row and a powder-coated face with a Diamond Polish row.
             # Fires only where the part's own finish is stated and unambiguous.
             reason = finish_contradiction(
-                template.operation, stated_finish(record))
+                template.operation,
+                weldment_finish_for_gate(record, template.target_id, graph))
         if not reason:
             reason = impossibility_reason(template.operation, stock_form, material)
         if not reason:
