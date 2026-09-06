@@ -46,7 +46,12 @@ IMPOSSIBLE_OPS_BY_STOCK_FORM: Dict[str, Set[str]] = {
     #
     # Putting a hole through a tube wall is not cutting it to length, and hole work has its
     # own operation, so punch stays impossible.
-    "tube": {"punch", "punching"},
+    #
+    # AND A TUBE IS NOT FOLDED. Folding/line-bending is a flat-sheet operation; a tube is bent
+    # on a tube bender (its own op) or cut and welded, never put through a press brake. 7332-01's
+    # square-tube leg carried a folding charge it can never incur. Cutting stays OUT of this set
+    # (a tube is sawn / laser-tube-cut, redirected by _TUBE_OP_REMAP — see the note above).
+    "tube": {"punch", "punching", "fold", "folding", "linebend", "line_bend"},
     # A SOLID ROUND BAR HAS NO FLAT BLANK EITHER, AND UNLIKE A TUBE IT HAS NO WALL.
     # It cannot be lasered, folded, punched, line-bent, guillotined or diamond-polished.
     # It is cut (Robomac / Saw) and welded. 1310-02 STUD (8mm dia x 65) carried Laser £4.91
