@@ -6372,7 +6372,15 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _stub["unit_cost_gbp"] = float(_unit or 0.0)
             _stub["unit_material_cost_gbp"] = float(_unit or 0.0)
             _stub["extended_total_cost_gbp"] = float(_unit or 0.0)
-            _stub["cost_source"] = ("market_indication" if _unit else "estimator_to_price")
+            # WHERE THE FIGURE CAME FROM decides how the line reads. A config house hold
+            # (config.COMMERCIAL_LINE_GBP_PER_ORDER) is an INDICATIVE per-order rate an
+            # estimator entered — priced and reproducible, but flagged for Tim to verify, not a
+            # firm catalogue price and not a market guess. Absent a hold, the line stays the
+            # honest £0 "estimator to price".
+            _cl_src = ((_cline or {}).get("price_source") or {})
+            _from_hold = bool(_cl_src.get("source_class") == "config_house_rate")
+            _stub["cost_source"] = ("config_commercial_indicative" if _from_hold
+                                    else ("market_indication" if _unit else "estimator_to_price"))
             if _cline:
                 _stub["commercial_line"] = _cline
             # No operations — these are pure commercial placeholders, not fabricated/handled
@@ -6382,6 +6390,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _stub["_commercial_placeholder"] = True
             _stub["review_flag"] = True
             _stub["review_flags"] = [
+                (f"INDICATIVE house rate £{float(_unit):.2f}/unit from "
+                 f"config.COMMERCIAL_LINE_GBP_PER_ORDER — verify before quoting (packaging "
+                 f"size / pallet count / destination).") if _from_hold and _unit else
                 "Commercial line — not derivable from drawings; estimator to price "
                 "(order-specific: packaging size / pallet count / destination)."
             ]

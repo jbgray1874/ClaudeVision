@@ -47,10 +47,17 @@ def test_the_setting_the_code_tells_people_to_edit_exists():
     assert isinstance(config.COMMERCIAL_LINE_GBP_PER_ORDER, dict)
 
 
-def test_it_ships_empty_so_nothing_is_invented():
-    """An invented house rate would be worse than the indication it replaced: it would carry
-    no flag, and nobody would ever check it."""
-    assert not config.COMMERCIAL_LINE_GBP_PER_ORDER
+def test_the_house_holds_are_present_and_flagged_indicative():
+    """The dict was once empty on purpose — an unflagged invented figure was judged worse than
+    the indication it replaced. That reasoning is now met a different way: 7332-01 carries
+    INDICATIVE per-order holds so the two lines stop reading £0 (estimating bounces a zero),
+    and the resulting line is flagged for verify rather than presented as firm. Not silent, not
+    falsely firm."""
+    assert config.COMMERCIAL_LINE_GBP_PER_ORDER.get("PACKAGING") == 12.00
+    assert config.COMMERCIAL_LINE_GBP_PER_ORDER.get("DELIVERY") == 15.00
+    line = commercial_lines._line("PACKAGING", {"order_quantity": 6}, "boxes", "PACKAGING")
+    assert line["unit_gbp"] == 2.00                       # £12 / 6
+    assert line["price_source"]["indicative"] is True     # flagged for verify, not firm
 
 
 @pytest.mark.parametrize("key", ["PACKAGING", "DELIVERY"])
@@ -71,13 +78,17 @@ def test_the_order_figure_is_divided_by_the_order_quantity(monkeypatch):
     assert line["unit_gbp"] == 8.50
 
 
-def test_a_held_rate_is_reported_as_a_catalogue_price_not_an_indication(monkeypatch):
+def test_a_held_rate_is_a_reproducible_house_hold_flagged_for_verify(monkeypatch):
+    """A held rate beats the market ask and is reproducible (same every run, so it does not
+    trip price_not_reproducible) — but it is an INDICATIVE house hold an estimator entered, not
+    a confirmed catalogue price, so it is flagged for verify rather than claimed as firm."""
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {"DELIVERY": 120.0},
                         raising=False)
     line = commercial_lines._line("DELIVERY", {"order_quantity": 4}, "haulage", "DELIVERY")
-    assert line["price_source"]["source_class"] == "catalogue"
+    assert line["price_source"]["source_class"] == "config_house_rate"
     assert line["price_source"]["reproducible"] is True
-    assert line["estimator_input_required"] is False
+    assert line["price_source"]["indicative"] is True
+    assert line["estimator_input_required"] is False          # it IS priced, not a blank
 
 
 # ── what the note says about them while they are still indications ─────────────

@@ -224,8 +224,12 @@ def _line(code: str, order: Dict[str, Any], description: str,
                            "described_as": description, "basis": dict(order)}
     _held = _held_rate(held_key)
     if _held is not None:
+        # A HOUSE HOLD, NOT A CONFIRMED CATALOGUE PRICE. The figure is reproducible (same every
+        # run, so it does not trip price_not_reproducible) but it is an INDICATIVE hold an
+        # estimator entered, not a quoted rate — so it is flagged for verify and carries no
+        # "firm" claim. Tim confirms or overwrites it in config.
         _order_gbp, _src = _held, {
-            "source_class": "catalogue", "reproducible": True,
+            "source_class": "config_house_rate", "reproducible": True, "indicative": True,
             "source_name": "config.COMMERCIAL_LINE_GBP_PER_ORDER"}
     else:
         # THE COUNT IS KEPT; THE PRICE IS WITHHELD. Asking a model to price the sentence gave
