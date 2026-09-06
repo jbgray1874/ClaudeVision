@@ -4974,6 +4974,18 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         for node in canonical.get("nodes") or []:
             if not isinstance(node, dict):
                 continue
+            # A COLLAPSED COLOURWAY IS SHOWN, NOT DROPPED SILENTLY. When the GA/GA2 collapse
+            # folded a duplicate general-arrangement root onto this one (7332-01: the Champagne
+            # Gold GA2 onto the kept GA) the dropped root was recorded on the node's evidence.
+            # Name it here so the BOM says the same stand also ships in the other colourway,
+            # rather than the second drawing vanishing without a trace.
+            _cvars = ((node.get("evidence") or {}).get("colourway_variants") or [])
+            _cnote = "; ".join(
+                f"{_v.get('part_number')}"
+                + (f" ({_v.get('description')})" if _v.get("description") else "")
+                + (f" rev {_v.get('revision')}" if _v.get("revision") else "")
+                for _v in _cvars if isinstance(_v, dict) and _v.get("part_number")
+            )
             bom_rows.append([
                 node.get("part_number"),
                 node.get("description"),
@@ -4985,10 +4997,12 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
                     for edge in (node.get("children") or [])
                     if isinstance(edge, dict)
                 ),
+                (f"also supplied as {_cnote} — colourway variant" if _cnote else ""),
             ])
         _add(
             "Canonical BOM",
-            ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children"],
+            ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children",
+             "Colourway variant"],
             bom_rows,
         )
 

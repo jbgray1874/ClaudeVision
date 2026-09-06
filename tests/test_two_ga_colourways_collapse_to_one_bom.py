@@ -49,6 +49,36 @@ def test_two_colourway_gas_collapse_keeping_the_higher_revision():
     # the dropped colourway is recorded, not lost
     variants = (g["records"].get("7332-01-101") or {}).get("colourway_variants") or []
     assert any(v.get("part_number") == "7332-01-102" for v in variants)
+    # and it rides on the surviving NODE's evidence, where the deliverables read it
+    node_variants = (nodes["7332-01-101"].evidence or {}).get("colourway_variants") or []
+    assert any(v.get("part_number") == "7332-01-102" for v in node_variants)
+
+
+def test_a_collapsed_colourway_is_named_on_the_canonical_bom_tab():
+    """The dropped GA2 is shown on the Canonical BOM tab, not lost to a console log."""
+    import openpyxl
+    import wb_populate as wp
+
+    node = {
+        "part_number": "7332-01-101", "description": "FRAME WELDMENT", "kind": "assembly",
+        "qty_per_unit": 1, "parents": [], "children": [],
+        "evidence": {"colourway_variants": [
+            {"part_number": "7332-01-102", "description": "FRAME WELDMENT (GOLD)",
+             "revision": "A"}]},
+    }
+    summary = {"estimate_summary": {
+        "part_estimates": [],
+        "canonical_route_shadow": {"nodes": [node], "decisions": []},
+    }}
+    wb = openpyxl.Workbook()
+    wp._append_ai_sheets(wb, summary, [])
+    assert "Canonical BOM" in wb.sheetnames
+    rows = [[c.value for c in r] for r in wb["Canonical BOM"].iter_rows()]
+    header = rows[0]
+    assert "Colourway variant" in header
+    keeper = next(r for r in rows[1:] if str(r[0]) == "7332-01-101")
+    note = str(keeper[header.index("Colourway variant")] or "")
+    assert "7332-01-102" in note and "colourway variant" in note.lower()
 
 
 def test_two_different_arrangements_are_both_kept():

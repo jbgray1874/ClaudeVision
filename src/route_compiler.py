@@ -1206,6 +1206,12 @@ def build_part_graph(
                 ),
                 "is_sub_assembly": bool(record.get("is_sub_assembly")),
                 "is_assembly_parent": bool(record.get("is_assembly_parent")),
+                # A COLLAPSED COLOURWAY IS NOT LOST, IT IS RECORDED. When the GA/GA2 collapse
+                # folds a duplicate general-arrangement root onto this one (7332-01: the
+                # Champagne Gold GA2 onto the kept GA), the dropped root is stored here so a
+                # reader can see the same stand also ships in the other colourway rather than
+                # the second drawing vanishing without trace.
+                "colourway_variants": list(record.get("colourway_variants") or []),
             },
         ))
 
