@@ -1056,6 +1056,96 @@ def build_part_graph(
         if _root and _root not in top_ids and children.get(_root):
             top_ids.append(_root)
 
+    # ── TWO GENERAL ARRANGEMENTS OF ONE STAND ARE ONE BOM, NOT TWO ──────────────────────
+    #
+    # A pack can carry the same assembly twice — a colourway pair, e.g. 7332-01-GA (revK) and
+    # 7332-01-GA2 (Rev[A]), the same Harrods stand in Champagne Gold. Each GA prints its OWN
+    # weldment number (7332-01-101, 7332-01-102), so both land here as roots and the cascade
+    # below books every leaf twice (base 1->2, legs 2->4) and mints two weldments' worth of
+    # weld/dress/powder. Unit £101.30 was ~1.5-2 stands of material.
+    #
+    # This is NOT the 12392 case — two DIFFERENT arrangements (a panel and a bracket set) that
+    # genuinely both ship, which the multi-root support above exists for. The discriminator is
+    # the CHILD SET: a colourway pair shares it exactly; two different arrangements do not. So
+    # collapse two roots ONLY when they share an assembly stem AND their children are
+    # (near-)identical — keep the highest-revision structure, fold the other into it, and record
+    # the dropped one as a colourway variant rather than losing it.
+    if len(top_ids) > 1:
+        def _assembly_stem(_id: str) -> str:
+            return re.sub(r"-[^-]+$", "", str(_id or ""))
+
+        def _rev_rank(_id: str) -> int:
+            _r = records.get(_id) or {}
+            _let = str(_r.get("revision") or _r.get("drawing_revision") or "").strip().upper()
+            _m = re.match(r"([A-Z])", _let)
+            if _m:
+                return ord(_m.group(1)) - ord("A")
+            _names = [str(_r.get("source_pdf_name") or ""), str(_r.get("source_pdf") or "")]
+            for _pg in (_r.get("pages") or []):
+                if isinstance(_pg, Mapping):
+                    _names.append(str(_pg.get("source_pdf_name") or ""))
+            for _n in _names:
+                _mm = re.search(r"REV(?:ISION)?[\s._()-]*([A-Z])", _n.upper())
+                if _mm:
+                    return ord(_mm.group(1)) - ord("A")
+            return -1
+
+        _by_stem: Dict[str, List[str]] = {}
+        for _r in top_ids:
+            _by_stem.setdefault(_assembly_stem(_r), []).append(_r)
+        _dropped: Dict[str, str] = {}
+        for _stem, _group in _by_stem.items():
+            if not _stem or len(_group) < 2:
+                continue
+            # cluster the same-stem roots by near-identical child set (Jaccard >= 0.8)
+            _clusters: List[List[str]] = []
+            for _r in _group:
+                _kids = frozenset(children.get(_r) or {})
+                if not _kids:
+                    continue                      # a root with no children is not an assembly
+                for _cl in _clusters:
+                    _ref = frozenset(children.get(_cl[0]) or {})
+                    _union = _kids | _ref
+                    if _union and len(_kids & _ref) / len(_union) >= 0.8:
+                        _cl.append(_r)
+                        break
+                else:
+                    _clusters.append([_r])
+            for _cl in _clusters:
+                if len(_cl) < 2:
+                    continue
+                _keep = sorted(_cl, key=lambda i: (-_rev_rank(i), i))[0]
+                for _other in _cl:
+                    if _other != _keep:
+                        _dropped[_other] = _keep
+        for _other, _keep in _dropped.items():
+            # The keeper already owns the shared leaves; move any child unique to the dropped
+            # root onto the keeper first so nothing under it is lost, then remove the duplicate
+            # root entirely so it neither cascades nor emits a second weldment.
+            for _cid, _q in (children.get(_other) or {}).items():
+                children.setdefault(_keep, {}).setdefault(_cid, _q)
+                parents.setdefault(_cid, set()).add(_keep)
+                (parents.get(_cid) or set()).discard(_other)
+            children.pop(_other, None)
+            parents.pop(_other, None)
+            _krec = records.setdefault(_keep, {})
+            _var = records.get(_other) or {}
+            _krec.setdefault("colourway_variants", []).append({
+                "part_number": _other,
+                "description": str(_var.get("description") or ""),
+                "revision": str(_var.get("revision") or _var.get("drawing_revision") or ""),
+            })
+            records.pop(_other, None)
+            raw.pop(_other, None)
+            extracted.pop(_other, None)
+        if _dropped:
+            top_ids = [t for t in top_ids if t not in _dropped]
+            _msg = "; ".join(f"{o}->{k}" for o, k in sorted(_dropped.items()))
+            print(f"   [graph] collapsed {len(_dropped)} duplicate general-arrangement "
+                  f"root(s) — same assembly, different colourway: {_msg}. Kept the "
+                  f"higher-revision structure; the other(s) recorded as colourway variants.",
+                  flush=True)
+
     identities: Set[str] = set(raw) | set(extracted) | set(children) | set(parents)
     identities.update(t for t in top_ids if t)
 
