@@ -1154,6 +1154,48 @@ def plated_steel_member_pns(parts: Any, summary: Any, parents: Any = None) -> se
     return members
 
 
+def plated_members_deferred_to_their_own_finish(parts: Any, summary: Any,
+                                                parents: Any = None) -> set:
+    """Metal parts inside a PLATED weldment whose OWN detail states a different finish.
+
+    THE ENGINE MUST NOT SETTLE THIS ONE. A weldment goes into the tank assembled, so every part
+    welded into it is plated in practice — whatever its own detail sheet said about the part as
+    supplied. 7332-01's leg 002 and base 001 both state RAW inside a PLATED weldment, and the
+    honest answer is that this is a weldment-vs-leaf question for the estimator, not a rule.
+
+    So the mass EXCLUDES them (never over-charge on an assumption) and the line NAMES them, so
+    the person who knows can put them back. Deciding it silently in either direction is the
+    failure mode: including them inflates a plate quote, excluding them quietly hides it behind
+    a vat minimum that happens to produce the same number."""
+    parents = parents if parents is not None else _child_parent_map(parts, summary)
+    plated_weldments = {
+        str(p.get("part_number") or "").strip().upper()
+        for p in (parts or []) if isinstance(p, dict)
+        and (p.get("is_assembly_parent") or p.get("is_sub_assembly"))
+        and _is_plate_finish(_part_finish_text(p))
+    }
+    deferred: set = set()
+    for part in (parts or []):
+        if not isinstance(part, dict):
+            continue
+        pn = str(part.get("part_number") or "").strip().upper()
+        if not pn or pn in plated_weldments:
+            continue
+        if not _is_plate_metal(_part_material_text(part)):
+            continue
+        own = _part_finish_text(part)
+        if not own or _is_plate_finish(own):
+            continue
+        try:
+            from finish_rules import finish_families as _ff
+            fams = _ff(own)
+        except Exception:                                            # noqa: BLE001
+            fams = set()
+        if fams and "plate" not in fams and (_ancestors(pn, parents) & plated_weldments):
+            deferred.add(pn)
+    return deferred
+
+
 def plating_unit_price(mass_kg: Any, order_qty: Any,
                        policy: Dict[str, Any]) -> Tuple[Optional[float], str, str]:
     """Per-unit subcontract plating cost from the plated mass, honouring the plater's per-batch
@@ -1240,6 +1282,12 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # plater is quoted for — an estimator cannot confirm a plated weight against a number
         # with no member list, and a RAW part wrongly swept in is invisible without it.
         _contrib = sorted(m for m in members if m in by_pn and _member_mass_kg(by_pn[m]) > 0)
+        try:
+            _deferred = sorted(plated_members_deferred_to_their_own_finish(
+                parts if parts is not None else part_estimates, summary,
+                _graph_parents or None))
+        except Exception:                                            # noqa: BLE001
+            _deferred = []
         mass = sum(_member_mass_kg(by_pn[m]) for m in members if m in by_pn)
         unit, note, method = plating_unit_price(mass, order_qty, policy)
         qty = max(1, int(pe.get("quantity") or 1))
@@ -1262,17 +1310,32 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         pe["review_flag"] = True
         pe["_price_explicitly_withheld"] = unit is None
         pe["_plating_members_costed"] = _contrib
+        pe["_plating_members_deferred"] = _deferred
+        # THE OPEN QUESTION GOES ON THE LINE, NOT INTO A DECISION.
+        #
+        # A weldment goes into the tank assembled, so a part welded into a PLATED weldment is
+        # plated in practice even where its own detail says RAW — but that is the estimator's
+        # weldment-vs-leaf call, not a rule this engine gets to apply. The mass excludes them
+        # (never over-charge on an assumption) and the line NAMES them so the person who knows
+        # can put them back. Silently excluding is as wrong as silently including: it hides the
+        # question behind a vat minimum that happens to produce the same number either way.
         pe["review_flags"] = [
             note
             + (f" ; plated members: {', '.join(_contrib)}" if _contrib
                else " ; no plated member resolved a mass")
+            + (f" ; NOT included, own detail states another finish: {', '.join(_deferred)} — "
+               f"a weldment is plated assembled, so if these go in the tank they belong in the "
+               f"mass; weldment-vs-leaf is your call" if _deferred else "")
             + " ; confirm the process (trade zinc vs a named Harrods plate spec — "
               "nickel is not this rate) and that this member list is what the plater quotes"]
         # The member list on the DESCRIPTION too, so it survives onto the sheet line itself and
         # not only into a review flag an estimator has to go looking for.
-        if _contrib:
+        if _contrib or _deferred:
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
-            pe["description"] = f"{_base} — plated members: {', '.join(_contrib)}"
+            _desc = f"{_base} — plated members: {', '.join(_contrib) or 'none'}"
+            if _deferred:
+                _desc += f" (excluded, own detail differs: {', '.join(_deferred)})"
+            pe["description"] = _desc
         priced += 1
     return priced
 
