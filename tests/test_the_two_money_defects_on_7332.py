@@ -227,6 +227,25 @@ def test_the_preflight_passes_a_transcribed_leg(tmp_path, capsys):
     assert "PASS" in out
 
 
+def test_the_preflight_refuses_the_llm_extract_sidecar(tmp_path):
+    """On 7332 the newest .json under output/ was 7332-01_llm_extract.json — the whole-
+    document extract written beside the workbook, whose rows carry tube_section, not
+    section_stock — and the pre-flight said 'no tube parts on this job' about a file that
+    was never the job. Named explicitly it is refused; found by glob it is skipped."""
+    import preflight_tube_bend as pf
+    extract = {"source": "llm_full_extract", "found": True,
+               "parts": [{"part_number": "7332-01-002", "tube_section": "15.875x15.875x1.2",
+                          "cut_length_mm": 1397.0}]}
+    side = tmp_path / "7332-01_llm_extract.json"
+    side.write_text(json.dumps(extract), encoding="utf-8")
+    assert pf._looks_like_a_job(extract) is False
+    assert pf._looks_like_a_job({"parts": [{"part_number": "7332-01-002"}]}) is True
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        pf.main([str(side)])
+    assert "not a job document" in str(exc.value)
+
+
 def test_the_preflight_fails_a_tube_priced_from_the_cut_path(tmp_path, capsys, monkeypatch):
     """Belt and braces: if the estimator's own guard ever lets a cut-path figure through as
     a priced fallback length, the pre-flight catches it before the run, not after."""

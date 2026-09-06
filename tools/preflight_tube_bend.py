@@ -40,14 +40,46 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 BEND_OPS = {"fold", "folding", "linebend", "line_bend", "tubebend", "tube_bending"}
 
 
+# Files that live beside a job's outputs and are NOT the job: the whole-document LLM extract
+# (rows carry tube_section / cut_length_mm, never section_stock), parity bundles, priced
+# re-exports. On 7332 the newest .json under output/ was the extract sidecar, and the
+# pre-flight answered "no tube parts on this job" about a file that was never the job.
+_SIDECAR_SUFFIXES = ("_llm_extract.json", "_parity_bundle.json", ".priced_estimate.json",
+                     ".workbook_parity.json", ".estimate_parity.json", ".formula_parse.json",
+                     ".historical_job_record.json")
+
+
+def _looks_like_a_job(doc: Any) -> bool:
+    """A saved job document: part RECORDS (the shape estimate_part costs), not an extract."""
+    if not isinstance(doc, dict):
+        return False
+    if str(doc.get("source") or "") in ("llm_full_extract", "llm_full_extract_inference"):
+        return False
+    parts = (doc.get("parts") or (doc.get("scan") or {}).get("parts")
+             or doc.get("part_records") or [])
+    return any(isinstance(p, dict) and p.get("part_number") for p in parts)
+
+
 def _newest_job_json() -> str:
     here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     hits = []
     for pat in ("output/json/*.json", "output/estimates/*.json", "output/*.json"):
         hits.extend(glob.glob(os.path.join(here, pat)))
+    hits = [h for h in hits if not h.lower().endswith(_SIDECAR_SUFFIXES)]
     if not hits:
         sys.exit("no job JSON found under output/ — pass one as an argument")
-    return max(hits, key=os.path.getmtime)
+    # Newest first, but the newest file that IS a job: a stray sidecar with an unlisted
+    # suffix is skipped by shape, and the skip is printed so nobody trusts a silent choice.
+    for path in sorted(hits, key=os.path.getmtime, reverse=True):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except Exception:                                              # noqa: BLE001
+            continue
+        if _looks_like_a_job(doc):
+            return path
+        print(f"  (skipped {os.path.basename(path)} — not a job document)")
+    sys.exit("no JSON under output/ holds part records — pass the job JSON as an argument")
 
 
 def _num(v: Any) -> Optional[float]:
@@ -65,6 +97,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(path, encoding="utf-8") as fh:
         summary = json.load(fh)
 
+    if not _looks_like_a_job(summary):
+        sys.exit("that file is not a job document — an LLM extract sidecar or a parity "
+                 "bundle, not the saved job. Pass the job JSON (output\\json\\<job>.json).")
     parts = (summary.get("parts")
              or (summary.get("scan") or {}).get("parts")
              or summary.get("part_records") or [])
