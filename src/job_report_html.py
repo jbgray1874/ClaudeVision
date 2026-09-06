@@ -1,10 +1,18 @@
 """
 job_report_html.py — SDI Intelligence unified job report (generic, data-driven).
 
-Produces the rich 7-section review report for ANY job from its summary JSON:
+THE ESTIMATOR'S PAGE. Four sections read from the one post-costing record
+(costed_facts.costed_job), in the order an estimator works:
+
+  Summary                       quantity, material, labour, unit cost, release status
+  Decisions required            issue, part, current assumption, action, owner, £ at stake
+  Bill of materials and hierarchy   expandable assemblies; charged material per line
+  Manufacturing route           the priced department rows and the decisions behind them
+
+Then, collapsed under "Evidence and diagnostics", the audit the report always carried:
   1. Estimate at a glance          5. What to focus on when checking
   2. What the engine got right     6. Design recommendations
-  3. Review items & limitations    7. Verdict
+  3. Review items & limitations    7. Verdict (with sections 8–14 beneath it)
   4. Drawing analysis
 
 When a parity bundle is supplied (a manual estimate exists), an additional
@@ -496,6 +504,26 @@ _CSS = """
   .chk li:before{content:"\\25A1";position:absolute;left:4px;top:7px;font-size:17px;color:var(--steel);}
   .chk li:last-child{border-bottom:none;}
 
+  /* ── THE ESTIMATOR'S PAGE ─────────────────────────────────────────────────────
+     Summary, decisions, BOM and route above the fold; the diagnostics collapsed. */
+  .release{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:14px 18px;}
+  .release .tag{font-size:12.5px;padding:5px 13px;}
+  .release ul{margin:4px 0 0;flex-basis:100%;}
+  table.dec td{vertical-align:top;}
+  details.diag{margin-top:44px;border-top:3px solid var(--navy);padding-top:6px;}
+  details.diag>summary{cursor:pointer;font-size:20px;color:var(--navy);font-weight:700;
+    padding:12px 0;list-style:none;}
+  details.diag>summary::-webkit-details-marker{display:none;}
+  details.diag>summary:before{content:"\\25B8";display:inline-block;margin-right:10px;color:var(--steel);}
+  details.diag[open]>summary:before{content:"\\25BE";}
+  details.asm{border:1px solid var(--line);border-radius:9px;padding:4px 14px 8px;margin:12px 0;
+    background:var(--card);}
+  details.asm>summary{cursor:pointer;font-weight:650;color:var(--navy2);padding:8px 0;}
+  details.asm details.asm{margin-left:18px;}
+  details.asm table{margin:6px 0 4px;}
+  td code{white-space:nowrap;}
+  td.n .mini{white-space:nowrap;}
+
   /* ── PRINTED, BECAUSE THIS IS THE DOCUMENT THAT GETS WALKED THROUGH ────────────────
      There were no print rules at all, and the default handling of this page loses
      content in three ways that a reader sees as "the bottom is missing":
@@ -529,6 +557,10 @@ _CSS = """
     .split > * { margin-bottom:10px; }
     /* Nothing on this page is interactive on paper; the underline just adds noise. */
     a { color:inherit; text-decoration:none; }
+    /* The diagnostics print in full — the script opens them on beforeprint — and the
+       disclosure arrows mean nothing on paper. */
+    details.diag>summary:before, details.asm>summary::-webkit-details-marker { display:none; }
+    details.asm { page-break-inside:auto; break-inside:auto; }
   }
   /* Scoped styles for the detailed parity tables reused from parity_report_html
      (kept under .parity-detail so their .num/.over/.pn/.pill do not collide). */
@@ -581,7 +613,7 @@ def _render_header(h: Dict[str, Any], has_parity: bool,
   {_marks}
   <div class="kicker">SDI Intelligence &middot; {kind}</div>
   <h1>Job {_esc(h['job_no'])} — {_esc(h['name'])}</h1>
-  <div class="sub">Automated estimate analysis &amp; drawing-quality audit</div>
+  <div class="sub">Estimator's working copy &mdash; decisions first, the evidence behind them below</div>
   <div class="meta">
     <span><b>Job</b> {_esc(h['stem'])}</span>
     <span><b>Drawing pack</b> {h['page_count']} pages &middot; {h['pdf_count']} PDFs &middot; {h['dxf_matched']} DXFs matched</span>
@@ -2233,13 +2265,13 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     review = _extract_review_items(summary)
     dq = _extract_drawing_quality(summary)
 
+    record = _record_for(summary)
+
     title = f"Job {h['job_no']} {h['name']} — Estimate Review"
-    body = "\n".join([
-        _render_header(h, has_parity, summary),
-        f'<p class="lead">This report presents the engine model\'s estimate for job {_esc(h["job_no"])}, '
-        f'together with a detailed audit of the drawing pack: what the drawings gave us cleanly, where they '
-        f'were inconsistent or hard to read, and how Design could make future jobs more reliable to estimate.</p>',
-        _render_headline(hl, h, streams),
+    # THE ESTIMATOR'S PAGE: decisions before diagnostics. The four sections above the fold
+    # read the one record; everything the report used to open with is kept, in full, under
+    # Evidence and diagnostics — collapsed, and opened for print.
+    diagnostics = "\n".join([
         _render_glance(streams, hl),
         _render_parity(bundle) if has_parity else "",
         _render_whats_right(summary, streams),
@@ -2248,10 +2280,25 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         _render_checklist(review, dq),
         _render_design_recs(dq),
         _render_verdict(hl, dq, has_parity, summary),
+    ])
+    body = "\n".join([
+        _render_header(h, has_parity, summary),
+        _render_summary(summary, record, h, hl),
+        _render_decisions(record),
+        _render_bom_tree(summary, record),
+        _render_route(summary, record),
+        '<details class="diag"><summary>Evidence and diagnostics — how the figures were read, '
+        'checked and reconciled</summary>',
+        '<p class="mini">Everything below is the working behind the four sections above: the '
+        'drawing audit, the checks, the provenance of every row. Open it to investigate a '
+        'flagged item; it opens itself for printing.</p>',
+        diagnostics,
+        '</details>',
         f'<div class="foot">SDI Intelligence &middot; ClaudeVision automated estimating engine &middot; '
-        f'Job {_esc(h["stem"])}<br>Unit Cost {_money(hl["unit"])} is the workbook-computed figure. '
-        f'Provisional items and drawing recommendations are listed for estimator and Design review. '
+        f'Job {_esc(h["stem"])}<br>Unit Cost {_money((record.get("run") or {}).get("unit_gbp") if (record.get("run") or {}).get("totals_source") == "excel_calculated" else hl["unit"])} is the workbook-computed figure. '
+        f'Decisions required and drawing recommendations are listed for estimator and Design review. '
         f'Generated for internal review.</div>',
+        _PRINT_SCRIPT,
     ])
 
     return f"""<!DOCTYPE html>
@@ -2391,3 +2438,440 @@ def _explained_inline(text: Any) -> str:
                 rebuilt += (f"<{tag}>{part}</{tag}>" if index % 2 else part)
             out = rebuilt
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ESTIMATOR'S PAGE
+#
+# James, on the 7332-01 report: too much repetition and conflicting reassurance; decisions
+# before diagnostics. "Confirm whether frame members 001–005 are plated after welding"
+# matters more than pages about the extraction tools.
+#
+# So the page is now five things in this order — Summary, Decisions required, Bill of
+# materials and hierarchy, Manufacturing route — each read from costed_facts.costed_job, the
+# one record every deliverable reads; and then Evidence and diagnostics, which is everything
+# the report used to be, collapsed under one heading. Nothing there was deleted: it is where
+# an estimator goes to investigate a flagged item, and it opens itself for printing.
+#
+# The four sections above the fold derive nothing. The money is the sheet's charged figure,
+# the classification is the record's, the decisions are the record's list. That is the
+# condition for the page and the workbook tabs and the covering e-mail agreeing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DECISION_KIND_WORDS = {
+    "missing_price": ("t-bad", "Missing price"),
+    "market_figure": ("t-bad", "Market figure"),
+    "manufacturing_decision": ("t-warn", "Manufacturing decision"),
+    "indicative_rate": ("t-info", "Indicative rate"),
+}
+_DECISION_ORDER = {"missing_price": 0, "market_figure": 1, "manufacturing_decision": 2,
+                   "indicative_rate": 3}
+
+# Plain string, not an f-string: it carries braces. Opens the diagnostics for print, because
+# a closed <details> prints closed and the evidence would be absent from the paper copy.
+_PRINT_SCRIPT = """<script>
+(function(){
+  function openAll(){document.querySelectorAll('details.diag').forEach(function(d){d.open=true;});}
+  window.addEventListener('beforeprint', openAll);
+  if (window.matchMedia) {
+    var mq = window.matchMedia('print');
+    var on = function(e){ if (e.matches) openAll(); };
+    if (mq.addEventListener) { mq.addEventListener('change', on); } else if (mq.addListener) { mq.addListener(on); }
+  }
+})();
+</script>"""
+
+
+def _record_for(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The one record, built fresh — pure and cheap — never read from a stale stamp."""
+    try:
+        from costed_facts import costed_job
+        rec = costed_job(summary)
+        if isinstance(rec, dict):
+            return rec
+    except Exception:                                            # noqa: BLE001
+        pass
+    return {"lines": [], "gaps": {}, "release": {}, "decisions_required": [], "run": {},
+            "plating": {}}
+
+
+def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str, str, List[str]]:
+    """(tag class, one-line status, reasons) — the release status in the words the quote's
+    draft strip uses, so the two documents cannot disagree about whether this can go out.
+
+    NO GENERIC REASSURANCE. "Every check passed" is said only when nothing is outstanding
+    either; a job with a plating decision open is not described as clean because its
+    arithmetic reconciles."""
+    rel = record.get("release") or {}
+    inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
+    reasons = [str(r) for r in (rel.get("reasons") or []) if r]
+    if rel.get("draft"):
+        n = int(rel.get("outstanding") or 0)
+        return ("t-bad", f"Not for release — {n} input{'s' if n != 1 else ''} outstanding",
+                reasons)
+    if inv is None:
+        return "t-warn", "Unverified — the consistency checks did not run", reasons
+    if not inv.get("may_quote_firm"):
+        return ("t-bad", "Not for release — a consistency check failed or could not run",
+                reasons)
+    if rel.get("status") == "firm":
+        return ("t-good", "Releasable — every check passed and nothing is outstanding",
+                reasons)
+    if rel.get("status") == "reviewable":
+        return ("t-warn", "Reviewable — SDI house rates marked INDICATIVE are still to verify",
+                reasons)
+    return ("t-warn", "Unverified — " + (reasons[0] if reasons
+                                         else "the calculated sheet was not read back"),
+            reasons)
+
+
+def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
+                    h: Dict[str, Any], hl: Dict[str, Any]) -> str:
+    """Quantity, material, labour, unit cost and release status. Then the five facts an
+    estimator asks first, each from the record."""
+    run = record.get("run") or {}
+    calculated = run.get("totals_source") == "excel_calculated"
+    unit = run.get("unit_gbp") if calculated else hl.get("unit")
+    material = run.get("material_gbp") if calculated else hl.get("material")
+    labour = run.get("labour_gbp") if calculated else hl.get("labour")
+    qty = run.get("order_qty") or h.get("quantity")
+    cls, head, reasons = _release_words(record, summary)
+    gaps = record.get("gaps") or {}
+    lines = record.get("lines") or []
+    charged = [l for l in lines if (l.get("charged_ext_gbp") or l.get("engine_ext_gbp"))]
+    plating = record.get("plating") or {}
+    finishes = str(record.get("finishes_charged") or "")
+
+    facts: List[str] = []
+    if lines:
+        facts.append(f"<b>{len(lines)}</b> lines on the bill of materials, <b>{len(charged)}</b> "
+                     f"carrying money on the sheet.")
+    if gaps.get("unpriced"):
+        facts.append(f"<b>{len(gaps['unpriced'])} unpriced</b>, held at £0: "
+                     f"{_esc(', '.join(gaps['unpriced']))}. The unit cost is understated by "
+                     f"whatever they are worth.")
+    if gaps.get("indicative_market"):
+        facts.append(f"<b>{len(gaps['indicative_market'])} on an AI market indication</b> "
+                     f"({_money(gaps.get('indicative_market_gbp'))}) — replace before issue: "
+                     f"{_esc(', '.join(gaps['indicative_market']))}.")
+    if gaps.get("indicative_house"):
+        facts.append(f"<b>{len(gaps['indicative_house'])} on an SDI house rate marked "
+                     f"INDICATIVE</b> ({_money(gaps.get('indicative_house_gbp'))}) — "
+                     f"configured, reproducible, to verify: "
+                     f"{_esc(', '.join(gaps['indicative_house']))}.")
+    if finishes:
+        facts.append(f"Finish charged: <b>{_esc(finishes)}</b>.")
+    if plating.get("charged"):
+        _mem = ", ".join(plating.get("members") or []) or "no member"
+        _exc = plating.get("excluded") or []
+        facts.append(f"Plating {_money(plating.get('ext_gbp'))} is priced on <b>{_esc(_mem)}</b>"
+                     + (f"; excluded because their own detail states another finish: "
+                        f"{_esc(', '.join(_exc))}" if _exc else "") + ".")
+    basis = ("the Estimate sheet's own calculated cells" if calculated else
+             "the engine's figures — the sheet has not been read back, so nothing here is "
+             "the charged money yet")
+    reason_html = ("".join(f"<li>{_esc(r)}</li>" for r in reasons[:6]) if reasons else "")
+    return f"""<h2>Summary</h2>
+<div class="headline">
+  <div class="fig"><div class="lab">Unit cost</div><div class="val">{_money(unit)}</div><div class="note">per unit, ex VAT</div></div>
+  <div class="fig"><div class="lab">Material</div><div class="val">{_money(material)}</div><div class="note">sheet, section, bought-in, commercial</div></div>
+  <div class="fig"><div class="lab">Labour</div><div class="val">{_money(labour)}</div><div class="note">per department row</div></div>
+  <div class="fig"><div class="lab">Quantity</div><div class="val">{_esc(qty) if qty else '—'}</div><div class="note">order quantity the sheet was priced at</div></div>
+</div>
+<div class="card release"><span class="tag {cls}">{_esc(head)}</span>
+{('<ul class="clean mini">' + reason_html + '</ul>') if reason_html else ''}
+</div>
+<ul class="clean">{''.join(f'<li>{f}</li>' for f in facts)}</ul>
+<p class="mini">Figures are {basis}.</p>"""
+
+
+def _render_decisions(record: Dict[str, Any]) -> str:
+    """Specific issue, affected part, current assumption, action, owner, £ at stake —
+    worst first. The list an estimator works through, before any diagnostics."""
+    decs = [d for d in (record.get("decisions_required") or []) if isinstance(d, dict)]
+    rel = record.get("release") or {}
+    if not decs:
+        if rel.get("draft"):
+            return ('<h2>Decisions required</h2><div class="callout warn"><b>Inputs are '
+                    'outstanding but not itemised here</b> — a consistency check is blocking. '
+                    'See the consistency checks under Evidence and diagnostics.</div>')
+        return ('<h2>Decisions required</h2><div class="callout info">Nothing on this estimate '
+                'is waiting on a person. Every line carries a price with a named source and '
+                'no manufacturing decision is open.</div>')
+    decs.sort(key=lambda d: (_DECISION_ORDER.get(str(d.get("kind")), 9),
+                             -float(d.get("gbp_at_stake") or 0)))
+    rows = ""
+    for i, d in enumerate(decs, start=1):
+        cls, word = _DECISION_KIND_WORDS.get(str(d.get("kind")), ("t-info", "Decision"))
+        gbp = d.get("gbp_at_stake")
+        rows += (f'<tr><td class="n">{i}</td>'
+                 f'<td><span class="tag {cls}">{word}</span></td>'
+                 f'<td><b>{_esc(d.get("issue") or "")}</b></td>'
+                 f'<td><code>{_esc(d.get("part") or "—")}</code></td>'
+                 f'<td>{_esc(d.get("assumption") or "")}</td>'
+                 f'<td>{_esc(d.get("action") or "")}</td>'
+                 f'<td>{_esc(d.get("owner") or "")}</td>'
+                 f'<td class="n">{_money(gbp) if gbp not in (None, "", 0, 0.0) else "—"}</td></tr>')
+    n = len(decs)
+    return f"""<h2>Decisions required</h2>
+<p>{n} item{'s' if n != 1 else ''}, worst first. Until these are answered the estimate is a
+draft and the quote says so.</p>
+<div class="scroll"><table class="dec">
+  <thead><tr><th class="n">#</th><th>Kind</th><th>Issue</th><th>Part</th><th>Current assumption</th><th>Action required</th><th>Owner</th><th class="n">£ at stake</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table></div>"""
+
+
+def _line_dimensions(line: Dict[str, Any], part: Dict[str, Any]) -> str:
+    """The value used, its source, and whether it is a reading — attached to the datum."""
+    ln = line.get("length") or {}
+    if ln and ln.get("mm"):
+        prof = line.get("section_profile") or {}
+        dims = " × ".join(str(prof[k]) for k in ("a", "b", "t") if prof.get(k))
+        txt = (f"{dims} × " if dims else "length ") + f"{float(ln['mm']):,.0f} mm"
+        who = ln.get("reader") or ""
+        rung = ln.get("source") or ""
+        note = " · ".join(x for x in (rung, f"read by {who}" if who else "") if x)
+        if ln.get("indicative"):
+            note = (note + " · " if note else "") + "INDICATIVE — largest dimension"
+        return f"{_esc(txt)}" + (f'<br><span class="mini">{_esc(note)}</span>' if note else "")
+    me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+    length = me.get("blank_length_mm") or part.get("blank_length_mm")
+    width = me.get("blank_width_mm") or part.get("blank_width_mm")
+    thk = line.get("thickness_mm") or part.get("normalized_thickness_mm")
+    if length and width:
+        txt = f"{_num(length, 2).rstrip('0').rstrip('.')} × {_num(width, 2).rstrip('0').rstrip('.')}"
+        if thk:
+            txt += f" × {thk} mm"
+        src = str(part.get("geometry_source") or "")
+        words = ""
+        try:
+            from wb_populate import _geom_source_words
+            words = _geom_source_words(src) if src and src != "pdf" else ""
+        except Exception:                                        # noqa: BLE001
+            words = ""
+        if words and words != "not recorded":
+            return f"{_esc(txt)}<br><span class=\"mini\">{_esc(words)}</span>"
+        return _esc(txt)
+    if thk and line.get("kind") in ("leaf", "assembly"):
+        return f"{thk} mm"
+    return "—"
+
+
+def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """Expandable assemblies; each line with quantity, material, dimensions, source and the
+    CHARGED material. The engine's own figure is named only where it differs, as not
+    charged — never presented as the provenance of the charged amount."""
+    lines = [l for l in (record.get("lines") or []) if isinstance(l, dict)]
+    if not lines:
+        return ('<h2>Bill of materials and hierarchy</h2><div class="callout warn">No costed '
+                'lines — the run carries no part list this page can describe.</div>')
+    by_pn: Dict[str, Dict[str, Any]] = {}
+    for l in lines:
+        for key in (l.get("part_number"), l.get("identity")):
+            k = str(key or "").strip().upper()
+            if k:
+                by_pn.setdefault(k, l)
+    try:
+        from costed_facts import _canonical_nodes, job_parts
+        nodes = _canonical_nodes(summary)
+        parts = {str(p.get("part_number") or "").strip().upper(): p for p in job_parts(summary)}
+    except Exception:                                            # noqa: BLE001
+        nodes, parts = {}, {}
+    children: Dict[str, List[str]] = {}
+    roots: List[str] = []
+    for pn, node in nodes.items():
+        parents = [str(p).strip().upper() for p in (node.get("parents") or []) if p]
+        if not parents:
+            roots.append(pn)
+        for p in parents:
+            children.setdefault(p, []).append(pn)
+    # Lines the graph does not know still belong on the page, at the root.
+    for l in lines:
+        k = str(l.get("identity") or l.get("part_number") or "").upper()
+        if k and k not in nodes and k not in roots:
+            roots.append(k)
+
+    def money_of(l: Dict[str, Any]) -> float:
+        v = l.get("charged_ext_gbp")
+        if v is None:
+            v = l.get("engine_ext_gbp")
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def subtotal(pn: str, seen: set) -> float:
+        if pn in seen:
+            return 0.0
+        seen.add(pn)
+        total = money_of(by_pn.get(pn) or {})
+        for k in children.get(pn, []):
+            total += subtotal(k, seen)
+        return total
+
+    def row(pn: str) -> str:
+        l = by_pn.get(pn) or {"part_number": pn, "description": (nodes.get(pn) or {}).get("description", ""),
+                              "kind": (nodes.get(pn) or {}).get("kind", ""), "qty_per_unit": (nodes.get(pn) or {}).get("qty_per_unit")}
+        part = parts.get(pn) or {}
+        origin = l.get("price_origin") or {}
+        charged = l.get("charged_ext_gbp")
+        engine = l.get("engine_ext_gbp")
+        if charged is not None:
+            money = _money(charged)
+            if engine is not None and abs(float(engine) - float(charged)) >= 0.01 and float(engine or 0):
+                money += f'<br><span class="mini">engine {_money(engine)} — not charged</span>'
+        elif engine:
+            money = f'{_money(engine)}<br><span class="mini">engine figure — not yet the sheet\'s</span>'
+        else:
+            money = "—"
+        qty = l.get("qty_per_unit")
+        qty_txt = _num(qty, 2).rstrip("0").rstrip(".") if qty not in (None, "") else "—"
+        src = str(origin.get("label") or "")
+        flags = [f for f in (l.get("review_flags") or []) if f][:2]
+        return (f'<tr><td><code>{_esc(l.get("part_number") or pn)}</code></td>'
+                f'<td>{_esc(l.get("description") or "")}'
+                + (f'<br><span class="mini">{_esc(" · ".join(str(f) for f in flags))}</span>' if flags else "")
+                + f'</td><td class="n">{qty_txt}</td>'
+                f'<td>{_esc(l.get("material_label") or "")}</td>'
+                f'<td>{_line_dimensions(l, part)}</td>'
+                f'<td>{_esc(src)}</td>'
+                f'<td class="n">{money}</td></tr>')
+
+    head = ('<thead><tr><th>Part</th><th>Description</th><th class="n">Qty/unit</th>'
+            '<th>Material</th><th>Dimensions</th><th>Price source</th>'
+            '<th class="n">Charged £</th></tr></thead>')
+
+    def render(pn: str, seen: set, depth: int = 0) -> str:
+        if pn in seen:
+            return ""
+        seen.add(pn)
+        kids = children.get(pn, [])
+        if not kids:
+            return f'<table>{head}<tbody>{row(pn)}</tbody></table>' if depth == 0 else row(pn)
+        l = by_pn.get(pn) or {}
+        node = nodes.get(pn) or {}
+        leaf_rows = "".join(row(k) for k in kids if not children.get(k))
+        sub = "".join(render(k, seen, depth + 1) for k in kids if children.get(k))
+        for k in kids:
+            seen.add(k)
+        own = row(pn) if money_of(l) else ""
+        return (f'<details class="asm" open><summary><code>{_esc(l.get("part_number") or pn)}</code> '
+                f'{_esc(l.get("description") or node.get("description") or "")} &middot; '
+                f'{_esc(str(node.get("kind") or l.get("kind") or "assembly"))} &middot; '
+                f'qty/unit {_esc(node.get("qty_per_unit") or l.get("qty_per_unit") or 1)} &middot; '
+                f'{len(kids)} member{"s" if len(kids) != 1 else ""} &middot; '
+                f'members charged {_money(subtotal(pn, set()))}</summary>'
+                f'<div class="scroll"><table>{head}<tbody>{own}{leaf_rows}</tbody></table></div>{sub}</details>')
+
+    seen: set = set()
+    blocks = [render(r, seen) for r in roots if children.get(r)]
+    # The lines that hang off no assembly — the commercial lines, a stray bought-in — in ONE
+    # table rather than a table each, plus anything reachable only through a cycle.
+    loose = [r for r in roots if not children.get(r) and r not in seen]
+    for r in loose:
+        seen.add(r)
+    stray = [str(l.get("identity") or l.get("part_number")).upper() for l in lines
+             if str(l.get("identity") or l.get("part_number")).upper() not in seen]
+    loose_rows = "".join(row(pn) for pn in loose + stray)
+    if loose_rows:
+        blocks.append(f'<h3>Lines outside the assemblies</h3><div class="scroll"><table>{head}'
+                      f'<tbody>{loose_rows}</tbody></table></div>')
+    run = record.get("run") or {}
+    total = sum(money_of(l) for l in lines if not (l.get("cross_reference") and not l.get("charged_ext_gbp")))
+    sheet = run.get("material_gbp")
+    recon = ""
+    if sheet is not None:
+        gap = round(float(sheet) - total, 2)
+        recon = (f'<p class="mini">Charged material on these lines: {_money(total)} against the '
+                 f"sheet's Total Material Cost of {_money(sheet)}"
+                 + (" — they agree." if abs(gap) < 0.005 else
+                    f" — {_money(abs(gap))} of rounding across the rows." if abs(gap) <= 0.02 else
+                    f", a difference of {_money(abs(gap))} on the sheet and on no line here.")
+                 + "</p>")
+    return (f'<h2>Bill of materials and hierarchy</h2>'
+            f'<p>Every line the sheet carries, under the assembly it belongs to. <b>Charged £</b> is '
+            f"the sheet's own figure for the line — a nested part's share of a whole sheet, a "
+            f'section by length, a bought-in at its unit price. Where the engine\'s own net-part '
+            f'figure differs it is shown beneath, as not charged.</p>'
+            + "".join(blocks) + recon)
+
+
+def _render_route(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """Target parts, operation, quantity basis, throughput, set-up and charge — the rows the
+    sheet actually prices, joined to the decisions that put each part on them."""
+    try:
+        from costed_facts import _workbook_rows, costed_operations
+        rows = _workbook_rows(summary)
+    except Exception:                                            # noqa: BLE001
+        rows, costed_operations = None, None
+    fe = ((summary.get("estimate_summary") or {}).get("final_estimate")
+          if isinstance(summary.get("estimate_summary"), dict) else None) \
+        or summary.get("final_estimate") or {}
+    calc = {}
+    for r in (fe.get("labour_rows") or []) if isinstance(fe, dict) else []:
+        if isinstance(r, dict) and r.get("workbook_row"):
+            try:
+                calc[int(float(r["workbook_row"]))] = r
+            except (TypeError, ValueError):
+                continue
+    if not rows:
+        ops = []
+        try:
+            ops = sorted(costed_operations(summary) or {}) if costed_operations else []
+        except Exception:                                        # noqa: BLE001
+            ops = []
+        return ('<h2>Manufacturing route</h2><div class="callout warn"><b>No workbook route.</b> '
+                'The Estimate sheet has not been built or read back for this run, so there are no '
+                'priced department rows to show.'
+                + (f' The engine\'s own costed operations are: {_esc(", ".join(ops))}.' if ops else '')
+                + '</div>')
+    body = ""
+    total = 0.0
+    for r in sorted(rows, key=lambda r: float(r.get("workbook_row") or 0)):
+        try:
+            wr = int(float(r.get("workbook_row") or 0))
+        except (TypeError, ValueError):
+            wr = 0
+        c = calc.get(wr) or {}
+        charge = r.get("total_value_gbp")
+        try:
+            total += float(charge or 0)
+        except (TypeError, ValueError):
+            pass
+        parts_ = ", ".join(str(p) for p in (r.get("part_numbers") or []) if p)
+        ops = ", ".join(str(o) for o in (r.get("engine_operations") or []) if o)
+        dids = " · ".join(str(d) for d in (r.get("decision_ids") or []) if d)
+        basis = r.get("rate_basis") or ""
+        body += (f'<tr><td class="n">{wr or "—"}</td>'
+                 f'<td><b>{_esc(r.get("wb_operation") or "")}</b>'
+                 + (f'<br><span class="mini">{_esc(ops)}</span>' if ops else "")
+                 + f'</td><td>{_esc(c.get("department") or "")}</td>'
+                 f'<td>{_esc(parts_) or "—"}</td>'
+                 f'<td class="n">{_esc(r.get("qty_per_unit") if r.get("qty_per_unit") not in (None, "") else "—")}</td>'
+                 f'<td class="n">{_num(c.get("setup_minutes"), 0) if c.get("setup_minutes") not in (None, "") else "—"}</td>'
+                 f'<td class="n">{_num(r.get("batch_hours") or c.get("batch_hours"), 2) if (r.get("batch_hours") or c.get("batch_hours")) not in (None, "") else "—"}</td>'
+                 f'<td class="n">{_money(c.get("dept_rate_gbp_per_hour")) if c.get("dept_rate_gbp_per_hour") not in (None, "") else "—"}</td>'
+                 f'<td class="n">{_money(charge) if charge not in (None, "") else "—"}</td>'
+                 f'<td>{_esc(basis)}'
+                 + (f'<br><span class="mini">{_esc(dids)}</span>' if dids else "")
+                 + '</td></tr>')
+    sheet = (record.get("run") or {}).get("labour_gbp")
+    foot = ""
+    if sheet is not None:
+        gap = round(float(sheet) - total, 2)
+        foot = (f'<p class="mini">{len(rows)} rows, {_money(total)} against the sheet\'s Total '
+                f'Labour Cost of {_money(sheet)}'
+                + (" — they agree." if abs(gap) < 0.005 else
+                   f" — {_money(abs(gap))} of rounding." if abs(gap) <= 0.02 else
+                   f" — {_money(abs(gap))} is on the sheet and not in this table; treat the "
+                   f"sheet's figure as the total.")
+                + "</p>")
+    else:
+        foot = f'<p class="mini">{len(rows)} rows, {_money(total)}. The sheet has not been read back.</p>'
+    return f"""<h2>Manufacturing route</h2>
+<p>The department rows the Estimate sheet prices, in sheet order. Batch hours are for the whole order; £ is per unit. Set-up is the quantity story: raise the order and it spreads.</p>
+<div class="scroll"><table>
+  <thead><tr><th class="n">Row</th><th>Operation</th><th>Dept</th><th>Target parts</th><th class="n">Qty/unit</th><th class="n">Set-up min</th><th class="n">Batch hrs</th><th class="n">£/hr</th><th class="n">£ per unit</th><th>Rate basis · decisions</th></tr></thead>
+  <tbody>{body}</tbody>
+</table></div>{foot}"""
