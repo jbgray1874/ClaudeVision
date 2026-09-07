@@ -601,7 +601,11 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
     # (e.g. 1_5mm -> 1.5mm) and does NOT fire on a part-number tail such as
     # 1455-C-002_1mm, where it would merge "002_1mm" -> "002.1mm", break the
     # part-number regex, and silently drop the flat from discovery.
-    stem_norm = re.sub(r"(?<![\d-])(\d{1,2})_(\d+mm)", lambda m: f"{m.group(1)}.{m.group(2)}", stem,
+    # The lookbehind must also refuse a LETTER: "10975-02-A01_2mm" is a lettered detail
+    # code followed by a thickness, and treating its "01_2mm" as a decimal turned the part
+    # token into "A01.2mm" — unparseable, so the only flat in the pack matched nothing.
+    # An underscore before the digits stays allowed; that is the genuine 1_5mm case.
+    stem_norm = re.sub(r"(?<![A-Za-z0-9-])(\d{1,2})_(\d+mm)", lambda m: f"{m.group(1)}.{m.group(2)}", stem,
                        flags=re.IGNORECASE)
     tokens = re.split(r"[_\s]+", stem_norm)
 
@@ -648,7 +652,8 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
             _segments = part_number.split("-")
             _kept = _segments[:2]
             for _seg in _segments[2:]:
-                if _seg.upper() == "GA" or re.match(r"^\d{1,3}[A-Z]?$", _seg, re.IGNORECASE):
+                if _seg.upper() == "GA" or re.match(r"^\d{1,3}[A-Z]?$", _seg, re.IGNORECASE) \
+                        or re.match(r"^[A-Z]{1,2}\d{1,3}$", _seg, re.IGNORECASE):
                     _kept.append(_seg)
                 else:
                     break

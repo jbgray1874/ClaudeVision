@@ -56,7 +56,12 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
     cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     patterns: Sequence[str] = cfg.get(
         "part_number_from_dxf_patterns",
-        [r"(?P<pn>\d{4,5}-\d{2}-\d{3}[A-Z]?)"],
+        # Digit-first detail codes (-001, -003M) and LETTER-FIRST ones (-A01, -G01) both
+        # exist in the wild — 10975-02's whole pack is lettered, and with only the first
+        # pattern the run staged two DXFs and matched zero: the flat's own code parsed as
+        # nothing, and the 2 mm token and the BENDLINES count died with it.
+        [r"(?P<pn>\d{4,5}-\d{2}-\d{3}[A-Z]?)",
+         r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})"],
     )
     for pattern in patterns:
         match = re.search(pattern, stem, flags=re.IGNORECASE)

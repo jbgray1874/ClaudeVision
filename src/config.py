@@ -135,6 +135,9 @@ DRAWING_JOB_DISCOVERY = {
     "part_number_from_dxf_patterns": [
         # 2–3 digit suffix, optional letter  e.g. 9376-01-001  12242-01-01M  11367-09-08A
         r"(?P<pn>\d{4,5}-\d{2}-\d{2,3}[A-Z]?)",
+        # LETTER-FIRST detail  e.g. 10975-02-A01 / -G01 / -X01 — a whole pack can be
+        # lettered, and without this the run staged two DXFs and matched zero.
+        r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{1,2}\d{1,3})",
         # GA / sub-assembly  e.g. 9376-01-GA (ignored downstream for geometry merge)
         r"(?P<pn>\d{4,5}-\d{2}-[A-Z]{2,4})",
     ],

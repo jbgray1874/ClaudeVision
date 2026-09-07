@@ -295,3 +295,56 @@ def test_text_cued_drilling_yields_to_a_measured_flat_with_no_hole_note():
         source = "drawing_deterministic"
     assert rc._unsupported_drill_reason(_M(), measured_no_holes) is None, \
         "a measured claim is never second-guessed by this rule"
+
+
+# ── the runtime names, exactly as the box spells them ────────────────────────────────────
+
+def test_the_lettered_detail_code_parses_from_every_real_spelling():
+    """James's staging folder: '10975-02-A01_2mm ACRY_Rev B.DXF' — hyphens intact. The miss
+    had three stacked causes, each pinned here: the decimal-thickness pre-join ate
+    'A01_2mm' into 'A01.2mm'; the descriptive-word trim dropped letter-first details
+    (G01 truncated to the parent 10975-02); and config's pattern list knew only
+    digit-first codes. Every older convention must still parse identically."""
+    from pathlib import Path
+    import dxf_reader
+    import drawing_job_merge as djm
+    expect = {
+        "10975-02-A01_2mm ACRY_Rev B.DXF": "10975-02-A01",
+        "10975-02-G01.SLDPRT": "10975-02-G01",
+        "7332-01-002_3mm MS_Rev K.DXF": "7332-01-002",
+        "9376-01-001_MS_1_5mm_revL.DXF": "9376-01-001",
+        "12349-02-69-01A_2mm_revA.DXF": "12349-02-69-01A",
+        "9233-12-GA_UK_MW_Dressing_Kit_2020.DXF": "9233-12-GA",
+    }
+    for name, pn in expect.items():
+        assert djm.part_number_from_dxf_path(Path(name)) == pn, name
+    parsed = dxf_reader._parse_filename(Path("10975-02-A01_2mm ACRY_Rev B.DXF"))
+    assert parsed["part_number"] == "10975-02-A01"
+    assert parsed["thickness_mm"] == 2.0, "the 2 mm gauge token must survive the parse"
+    # The GA drawing-sheet export is NOT a flat: it parses no part and must stay
+    # unmatched rather than pairing with anything or minting an orphan.
+    assert djm.part_number_from_dxf_path(
+        Path("0355255 - A4 Table Top Graphic Holder - 10975_REV B.DXF")) is None
+
+
+def test_the_hyphenated_runtime_name_pairs_end_to_end(tmp_path):
+    import shutil
+    import drawing_job_merge as djm
+    src = os.path.join(os.path.dirname(__file__), "fixtures",
+                       "1097502A01_2mm_ACRY_Rev_B.DXF")
+    dxf = tmp_path / "10975-02-A01_2mm ACRY_Rev B.DXF"
+    shutil.copy(src, dxf)
+    summary = {"manufacturing_writeup": {"parts": [
+        {"part_number": "10975-02-A01", "description": "L-STAND",
+         "normalized_material": "ACRYLIC"},
+        {"part_number": "10975-02-GA", "description": "L-STAND ASSEMBLY",
+         "is_assembly_parent": True},
+    ]}}
+    out = djm.augment_summary_with_dxf(summary, [str(dxf)])
+    report = out.get("dxf_augmentation") or {}
+    matched = [m for m in report.get("matched", [])
+               if str(m.get("part_number", "")).upper() == "10975-02-A01"]
+    assert matched, f"unmatched: {report.get('unmatched_dxf')}"
+    part = out["manufacturing_writeup"]["parts"][0]
+    assert part.get("bend_count_dxf") == 2
+    assert str(part.get("dxf_source_file") or "").startswith("10975-02-A01")
