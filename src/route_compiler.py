@@ -99,6 +99,50 @@ DEFAULT_OPERATION_SEQUENCE = {
 }
 
 
+def _squashed(value: Any) -> str:
+    """A-Z0-9 only, uppercased — the spelling that survives wraps, carets and spaces."""
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _interleave_of(whole: str, a: str, b: str, min_each: int = 0) -> bool:
+    """True when `whole` is a character-perfect interleave of prefixes of `a` and `b`
+    (both orders preserved), consuming at least `min_each` characters from each — the
+    shape a wrapped BOM row takes when the text extractor zips it with its neighbour.
+    min_each=0 with full lengths is the classic whole-string interleave. Standard
+    two-sequence DP over positions in `a`."""
+    if not whole or not a or not b or len(whole) > len(a) + len(b):
+        return False
+    states = {0}                                       # chars consumed from a
+    for k, ch in enumerate(whole):
+        nxt = set()
+        for i in states:
+            j = k - i                                  # chars consumed from b
+            if i < len(a) and a[i] == ch:
+                nxt.add(i + 1)
+            if 0 <= j < len(b) and b[j] == ch:
+                nxt.add(i)
+        if not nxt:
+            return False
+        states = nxt
+    n = len(whole)
+    return any(i >= min_each and (n - i) >= min_each for i in states)
+
+
+def _record_by_squashed_key(records: Mapping[str, Any], target_id: Any):
+    """The unique record whose squashed key contains, or is contained by, the target's —
+    None otherwise. Ten characters of overlap required, so a fragment can find its full
+    configured name but a project number cannot claim a part."""
+    sq = _squashed(target_id)
+    if len(sq) < 10:
+        return None
+    hits = []
+    for key, rec in (records or {}).items():
+        ks = _squashed(key)
+        if len(ks) >= 10 and ks != sq and (sq in ks or ks in sq):
+            hits.append(rec)
+    return hits[0] if len(hits) == 1 else None
+
+
 def clean_part_number(value: Any) -> str:
     """The canonical spelling of a part number, or "" when the code names no part.
 
@@ -654,6 +698,32 @@ def _raw_identity_aliases(
             aliases[identity] = _target
         elif identity.upper() in _claimed and _target.upper() not in _claimed:
             aliases[_target] = identity
+
+    # ── A CONFIGURED NAME AND ITS FRAGMENTS ARE ONE PART ─────────────────────────────
+    # SolidWorks virtual components are named "Base^OwningAssembly", and a BOM table wraps
+    # that long name over printed lines. On 10975-02 the wrap became three identities —
+    # the model's full "10975 EPDM Closed Cell Tape^10975-02-GA", a wrapped middle line
+    # "CELL TAPE^10975-02-", and a squashed first line "10975EPDMCLOSEDCELL" — so one roll
+    # of tape was priced twice, left unpriced once, and the gates missed its record.
+    #
+    # An identity whose squashed spelling (A-Z0-9 only) is a long substring of a
+    # caret-named identity's is a fragment of that name, not a part. Ten characters means
+    # a genuine different part cannot satisfy it by accident, and the FULLEST spelling
+    # survives so every field lands on one record.
+    _all_ids = [i for i in set(raw) | set(extracted) if i not in aliases]
+    _carets = sorted((i for i in _all_ids if "^" in str(i)),
+                     key=lambda i: -len(_squashed(i)))
+    for identity in _all_ids:
+        sq = _squashed(identity)
+        if len(sq) < 10:
+            continue
+        for host in _carets:
+            hs = _squashed(host)
+            if host == identity or hs == sq or len(hs) <= len(sq):
+                continue
+            if sq in hs:
+                aliases[identity] = host
+                break
     return aliases
 
 
@@ -1180,6 +1250,51 @@ def build_part_graph(
     identities: Set[str] = set(raw) | set(extracted) | set(children) | set(parents)
     identities.update(t for t in top_ids if t)
 
+    # ── A ZIPPED BOM ROW IS NOT A PART ────────────────────────────────────────────────
+    # When a wrapped BOM row's text interleaves with its neighbour's, the extractor mints
+    # a chimera: 10975-02's "1100997755-E0P2D-GM0 · 1Closed GRAPHIC" is "10975-02-G01
+    # GRAPHIC" and "10975 EPDM Closed" zipped character by character, and it reached the
+    # sheet as a real line asking the estimator to price a part that does not exist. An
+    # identity that is a perfect interleave of two OTHER identities on this job, and that
+    # nothing claims as a child, is that artefact — quarantined with the reason on the
+    # graph, never silently.
+    _sq_ids = {i: _squashed(i) for i in identities}
+    _interleave_issues: List[Dict[str, Any]] = []
+    _suspects = []
+    for ident, sq in _sq_ids.items():
+        if len(sq) < 12 or "^" in ident:
+            continue
+        # A code that scans as an SDI drawing number is a real part whatever else is true;
+        # the chimera's ten-digit head cannot pass this.
+        if re.match(r"^\d{4,5}-\d{2}\b", str(ident)):
+            continue
+        if ident in children or any(ident in (children.get(p) or {}) for p in children):
+            continue
+        for a in identities:
+            for b in identities:
+                if a == b or a == ident or b == ident:
+                    continue
+                sa, sb = _sq_ids[a], _sq_ids[b]
+                if len(sa) < 5 or len(sb) < 5:
+                    continue
+                if _interleave_of(sq, sa, sb, min_each=5):
+                    _suspects.append((ident, a, b))
+                    break
+            else:
+                continue
+            break
+    for ident, a, b in _suspects:
+        identities.discard(ident)
+        _interleave_issues.append({
+            "code": "bom_row_interleave_artifact",
+            "identity": ident,
+            "detail": (f"{ident} is a character interleave of {a} and {b} — a wrapped BOM "
+                       f"row zipped with its neighbour by the text extractor, not a part. "
+                       f"Dropped from the graph; both real parts remain."),
+        })
+        print(f"   [graph] dropped interleave artefact {ident} "
+              f"(= {a} + {b} zipped)", flush=True)
+
     quantities: Dict[str, float] = {}
 
     def add_descendants(identity: str, factor: float, path: Set[str]) -> None:
@@ -1246,7 +1361,7 @@ def build_part_graph(
             },
         ))
 
-    graph_issues = []
+    graph_issues = list(_interleave_issues)
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -2595,7 +2710,16 @@ def compile_job_route(
         # here meant a stock form or finish that only the extract carried bypassed the gate
         # entirely — the rule was correct and simply never saw the evidence, which is the
         # same failure mode as the gate the cutover switched off.
-        record = graph["records"].get(template.target_id) or {}
+        #
+        # AND A GATE THAT CANNOT FIND THE RECORD MUST STILL LOOK. On 10975-02 the tape's
+        # wrapped BOM name shattered ("CELL TAPE^10975-02-" vs the model's full configured
+        # name), the exact-key lookup returned {}, material read "", and powder coating on
+        # an ACRYLIC-labelled foam tape sailed through every rule written to stop it. When
+        # the key misses, a unique record whose squashed spelling contains (or is contained
+        # by) the target's is the same part under a fuller name — found, not guessed: the
+        # fallback demands uniqueness and ten matching characters, or it stays empty.
+        record = graph["records"].get(template.target_id) or \
+            _record_by_squashed_key(graph["records"], template.target_id) or {}
         # THE STATED FINISH IS ASKED FIRST, because its reason is the more useful one.
         #
         # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES. These packs carry a

@@ -4979,6 +4979,17 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         _W = _safe_float(part.get("overall_width_mm")) or _safe_float(_ng.get("blank_width_mm")) or 0.0
         _holes = _safe_int(part.get("hole_count")) or _safe_int(_geom.get("estimated_hole_count")) or 0
         _bends = _safe_int(part.get("bend_count_dxf")) or _safe_int(_geom.get("estimated_bend_line_count")) or 0
+        # THE BEND SURVIVES THE READER THAT WON. On 10975-02 the native flat pattern beat
+        # the 2 mm DXF for geometry but published no bend count, so _bends was 0, Linebend
+        # was never booked, and the part's two heat-bends (DOWN 90 / UP 180 on the drawing)
+        # were formed for free — the mirror of the 7332 fold bug: the wrong op was stopped
+        # and the right one never charged. When no reader counted bends, the drawing's own
+        # callouts and the model's feature count still testify; only a model that MEASURED
+        # zero bends says the part is flat.
+        if not _bends and not _model_measured_zero_bends(part):
+            _bends = (_safe_int((part.get("manufacturing_features") or {}).get("bend_count"))
+                      or _safe_int(part.get("fold_count_textual"))
+                      or len(part.get("angles_deg") or []))
         if _L > 0 and _W > 0:
             _spd = float(_drv.get("laser_cut_mm_per_sec", 50.0)) or 50.0
             _pps = (select_sheet_size(part.get("normalized_material"), _L, _W) or {}).get("parts_per_sheet") or 1

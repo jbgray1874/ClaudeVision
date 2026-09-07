@@ -905,6 +905,51 @@ _ASSEMBLY_PC_PHRASES = [
     "EPOXY COAT",
 ]
 
+# ── THE SPECIFICATION LEGEND IS NOT WORK ─────────────────────────────────────────────
+# Every sheet of an M&S / SDI pack carries the same boilerplate border: "WELD
+# SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED", "POWDERCOATING: BETWEEN 80-120
+# MICRON", the China material table, the tolerance block. Those are conditions for work
+# the drawing might call up, not calls for work — and on 10975-02 the part that claimed
+# the GA page was three strips of EPDM tape, which then collected welding, weld dressing
+# and £91 of powder coating from the border text. Operation cues are read from the page
+# with the legend removed; everything else (materials, dimensions, part numbers) still
+# reads the full text.
+_LEGEND_START_RE = re.compile(
+    r"(?:FINISH|WELD|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:"
+    r"|GENERAL TOLERANCES\s*:"
+    r"|TIMBER PRODUCTS\s*:"
+    r"|GLASS:\s*NO GLASS"
+    r"|WIRING:\s*ALL ELECTRICAL",
+    re.IGNORECASE,
+)
+_LEGEND_STOP_RE = re.compile(
+    r"(?:FINISH|WELD|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:"
+    r"|GENERAL TOLERANCES\s*:|TIMBER PRODUCTS\s*:|GLASS\s*:|WIRING\s*:"
+    r"|DRAWING\s+No|DRAWN\b|CHECKED\b|REVISION TABLE|ITEM\s+DWG"
+    r"|WEIGHT\s*:|MATERIAL\s*:|FINISH\s*:|SCALE\b|MAX LOADING",
+    re.IGNORECASE,
+)
+
+
+def _strip_specification_legend(text: Any) -> str:
+    """The page text with the boilerplate specification legend removed, for operation-cue
+    scanning only. Spans run from a legend heading to the next title-block field or legend
+    heading; a heading used as a stop is consumed by the next pass of the loop."""
+    s = str(text or "")
+    out: List[str] = []
+    pos = 0
+    while pos < len(s):
+        m = _LEGEND_START_RE.search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            break
+        out.append(s[pos:m.start()])
+        stop = _LEGEND_STOP_RE.search(s, m.end())
+        # A stop that is itself a legend heading is consumed by the next pass of the
+        # loop; a plain title-block field survives into the kept text.
+        pos = stop.start() if stop else len(s)
+    return " ".join(part for part in out if part)
+
 
 def _page_lookup_key(page: Dict[str, Any], summary: Dict[str, Any]) -> Optional[int]:
     """Stable page key for merged folder jobs — job_page_number wins over colliding PDF locals."""
@@ -1189,18 +1234,21 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             continue
 
         current_ops: List[str] = part.get("textual_operations", [])
-        if geo_reliability == 0.0 and not current_ops and combined_text.strip():
+        # OPERATION CUES ARE READ WITH THE LEGEND REMOVED — see _strip_specification_legend.
+        cue_text = _strip_specification_legend(combined_text)
+        cue_upper = cue_text.upper()
+        if geo_reliability == 0.0 and not current_ops and cue_text.strip():
             finishes = part.get("surface_finishes", [])
             try:
                 inferred = _infer_ops_from_text(
-                    combined_text,
+                    cue_text,
                     finishes=finishes,
                     has_fold_geometry=False,
                     has_cut_length=False,
                 )
             except TypeError:
                 try:
-                    inferred = _infer_ops_from_text(combined_text)
+                    inferred = _infer_ops_from_text(cue_text)
                 except Exception:
                     inferred = []
             except Exception:
@@ -1225,17 +1273,17 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             print(f"   [weld-decision] {_pn_dbg}: assembly_part={is_assembly_part} "
                   f"page_roles={list(page_roles)} weld_phrase={_wp_hit!r} "
                   f"-> weld={'YES' if (is_assembly_part and _wp_hit) else 'no'}", flush=True)
-        if is_assembly_part and combined_text.strip():
+        if is_assembly_part and cue_text.strip():
             ops_set = set(part.get("textual_operations", []))
             changed = False
 
-            if any(phrase in combined_upper for phrase in _ASSEMBLY_WELD_PHRASES):
+            if any(phrase in cue_upper for phrase in _ASSEMBLY_WELD_PHRASES):
                 for op in ("welding", "dress_welds"):
                     if op not in ops_set:
                         ops_set.add(op)
                         changed = True
 
-            if any(phrase in combined_upper for phrase in _ASSEMBLY_PC_PHRASES):
+            if any(phrase in cue_upper for phrase in _ASSEMBLY_PC_PHRASES):
                 if "powder_coating" not in ops_set:
                     ops_set.add("powder_coating")
                     changed = True

@@ -2248,8 +2248,26 @@ def augment_summary_with_dxf(
 
         pn = part_number_from_dxf_path(path)
         if not pn:
-            report["unmatched_dxf"].append({"path": str(path), "reason": "no_part_number_in_filename"})
-            continue
+            # THE HYPHENS ARE NOT PART OF THE NAME. "1097502A01_2mm_ACRY_Rev_B.DXF" is
+            # 10975-02-A01's flat with the separators dropped by whoever exported it; the
+            # grammar patterns need the hyphens and matched nothing, so the only DXF in the
+            # pack paired with no part — which cost A01 its 2 mm gauge token and its
+            # BENDLINES count, and with them the Linebend. A unique BOM part whose squashed
+            # spelling (A-Z0-9 only, eight characters or more) appears in the squashed
+            # filename is that part; two candidates or none, and the file stays unmatched.
+            _stem_sq = re.sub(r"[^A-Z0-9]", "", path.stem.upper())
+            _hits = [k for k in parts_by_key
+                     if len(re.sub(r"[^A-Z0-9]", "", k)) >= 8
+                     and re.sub(r"[^A-Z0-9]", "", k) in _stem_sq]
+            if len(_hits) == 1:
+                pn = str(parts_by_key[_hits[0]].get("part_number") or _hits[0])
+                report["matched"].append({
+                    "path": str(path), "part_number": pn,
+                    "reason": "squashed_filename_match"})
+            else:
+                report["unmatched_dxf"].append(
+                    {"path": str(path), "reason": "no_part_number_in_filename"})
+                continue
 
         part = _lookup_part(parts_by_key, pn)
         if not part and not _dxf_code_is_in_this_job(pn, parts_by_key):

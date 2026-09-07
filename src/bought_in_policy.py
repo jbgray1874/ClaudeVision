@@ -27,6 +27,8 @@ is labour on a purchased item, and by costing time it is already too late to ask
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, List
 
 # The one module that knows how SDI's part numbers are spelled. Identity-only and
@@ -119,6 +121,20 @@ def _upper(v: Any) -> str:
     return str(v or "").strip().upper()
 
 
+# The words a draughtsman uses for things that come off a roll or out of a bag. \bTAPE\b is
+# a word, so TAPERED does not match; the glued token 10975EPDMCLOSEDCELL does not match
+# either, which is fine — its DESCRIPTION says TAPE and the description is checked too.
+_CONSUMABLE_RE = re.compile(
+    r"\b(?:EPDM|VHB|GASKET|GROMMET|VELCRO|SELF[- ]?ADHESIVE|DOUBLE[- ]SIDED"
+    r"|FOAM\s+(?:TAPE|PAD|STRIP)|(?:FELT|FOAM|RUBBER)\s+PAD|HOOK\s+(?:&|AND)\s+LOOP"
+    r"|TAPE)\b")
+
+
+def _is_named_consumable(part: Dict[str, Any]) -> bool:
+    text = " ".join(_upper(part.get(k)) for k in ("description", "part_number", "name"))
+    return bool(_CONSUMABLE_RE.search(text))
+
+
 def bought_in_reason(part: Dict[str, Any]) -> str:
     """WHICH rule decided, in words, or "" for a part we make.
 
@@ -177,6 +193,18 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
     # material" is an absence.
     if part_code_conventions.purchased_suffix(_upper(part.get("part_number"))):
         return "SDI's numbering marks it bought (-X), not a part we cut"
+
+    # A CONSUMABLE NAMED AS ONE. "EPDM TAPE 25X1MM - TAPE 113C" is not a part anybody cuts,
+    # whatever material string it inherited from the assembly that configured it. On
+    # 10975-02 the tape arrived wearing the GA's ACRYLIC, classified as a leaf, claimed the
+    # GA page, and left the route compiler welded, dressed and powder-coated — £120 of the
+    # job's £163 labour on three strips of foam tape. The description is the draughtsman's
+    # own word for what the thing is, and it outranks an inherited material. Geometry still
+    # outranks the name: a part with fabrication evidence of its own is not a consumable
+    # however it is described, and an SDI material-suffix code stays ours to cut.
+    if _is_named_consumable(part) and not has_fabrication_evidence(part) \
+            and not part_code_conventions.material_suffix(_upper(part.get("part_number"))):
+        return "a named consumable (tape / gasket / adhesive) with no fabrication evidence"
 
     fam = str(part.get("material_family") or "").strip().lower()
     if fam == "bought_in":
