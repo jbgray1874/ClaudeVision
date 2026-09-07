@@ -7,13 +7,13 @@ Keep the attachments together; the e-mail refers to them.
 
 ---
 
-**To:** James Ryan; Jack Calow
+**To:** Matt; Charlotte
 **Cc:** Yogesh Kumar; Muhammad Yazir
 **Subject:** SDI Intelligence — programme status 7 Sep: five jobs a week in parallel run, Drawing Search into UAT, workstation to order this week
 
 ---
 
-James, Jack,
+Matt, Charlotte,
 
 Eleven days on from the first combined report, here is where the three workstreams stand, and the
 two decisions I need from you this week. The full report is attached; the portal pages are
