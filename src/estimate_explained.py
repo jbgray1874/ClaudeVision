@@ -741,7 +741,8 @@ def _what_they_are(lines: List[Dict[str, Any]]) -> str:
 
 def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]],
                       steel: Dict[str, Any],
-                      material: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+                      material: Dict[str, Dict[str, Any]],
+                      record: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Lines with no sheet of their own, and whether their price depended on one.
 
     A LINE WITH NO SHEET IS ONLY A PROBLEM IF ITS PRICE RESTED ON ONE. A bought-in bolt has
@@ -760,6 +761,7 @@ def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]]
         out.append({
             "code": row.get("code"), "desc": _description(row),
             "cut": bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")),
+            "section": bool(((record or {}).get(code) or {}).get("length")),
             "gbp": round(unit * qty, 2) if unit and qty else None,
             "priced": row.get("price") not in (None, ""),
         })
@@ -1891,9 +1893,14 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             if rec.get("pages"):
                 continue
             cut_here = bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L"))
+            # A SECTION IS NOT CUT FROM SHEET. The leg's 15.88 × 15.88 profile sat in the
+            # Blank L column and this table told the reader its "blank and gauge" came from
+            # nowhere. The record knows it is priced by length.
+            section_here = bool(((record_lines or {}).get(code) or {}).get("length"))
             unit, qty = _money(row.get("price")), _money(row.get("qty"))
             no_sheet.append({
                 "code": row["code"], "desc": _description(row), "cut": cut_here,
+                "section": section_here,
                 "gbp": round(unit * qty, 2) if unit and qty else None,
                 "priced": row.get("price") not in (None, ""),
             })
@@ -1960,7 +1967,11 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
             add("| Line | What it is | £ on this job | Does the missing sheet move the £ |")
             add("|---|---|---|---|")
             for item in sorted(no_sheet, key=lambda n: -(n["gbp"] or 0)):
-                if item["cut"]:
+                if item.get("section"):
+                    impact = ("**Yes** — this is section stock priced by length, so its "
+                              "profile and cut length came from somewhere other than a "
+                              "detail drawing. Check them against the GA or the model.")
+                elif item["cut"]:
                     impact = ("**Yes** — this is cut from sheet, so its blank and gauge came "
                               "from somewhere other than a detail drawing. Check them.")
                 elif not item["priced"]:
@@ -2679,7 +2690,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                     "What it could not give"], _qrows))
 
     # Drawings the pack does not contain, and whether that costs anything.
-    _no_sheet = _missing_drawings(bom, scan, g["steel"], material)
+    _no_sheet = _missing_drawings(bom, scan, g["steel"], material, record=record_lines)
     if _no_sheet:
         _bites = [n for n in _no_sheet if n["cut"] or not n["priced"]]
         add(f"<p><b>{_plural(len(_no_sheet), 'line')} with no sheet of their own"
@@ -2693,7 +2704,10 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         if _bites:
             add(_table(["Line", "What it is", "£ on this job", "Does the missing sheet bite?"],
                        [[n["code"] or "—", n["desc"], _gbp_or(n["gbp"], "no price"),
-                         ("Yes — we cut this part and had no drawing of it to size it from"
+                         ("Yes — section stock priced by length, with no drawing of its own "
+                          "to take the profile and cut length from"
+                          if n.get("section") else
+                          "Yes — we cut this part and had no drawing of it to size it from"
                           if n["cut"] else
                           "Yes — it has no price and no sheet to read one from")]
                         for n in _bites], numeric={2}))

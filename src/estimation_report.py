@@ -1287,6 +1287,13 @@ def _append_traceability_blocks(ws, row: int, summary: Dict[str, Any],
         if pn:
             issues.append(["No DXF flat for this part", pn,
                            "geometry came from the model or the sheet, not a flat pattern"])
+    # A MODELLED PART IN NO ASSEMBLY BOM — a fixture, a jig, a setup block in the job
+    # folder. The SolidWorks reader names them; they are not costed into the job.
+    _sw = summary.get("solidworks_native") if isinstance(summary.get("solidworks_native"), dict) else {}
+    for pn in ((_sw.get("applied") or {}).get("not_in_bom_parts") or []):
+        issues.append(["Modelled but in no assembly BOM", str(pn),
+                       "a fixture, jig or setup part in the model folder — not a component "
+                       "of the product, not costed; confirm"])
     heading("4 — IDENTITY AND TRACKING THROUGH THE PACK — where a part's name did not carry "
             "across the drawings, what was costed that nothing drew, and what was read that "
             "nothing costed")

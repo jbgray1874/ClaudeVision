@@ -1759,6 +1759,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                          "or setup part, not a component of the product. Confirm before "
                          "costing it into the job")
             out["not_in_bom"] += 1
+            # NAMED, NOT JUST COUNTED. The count reached the console and nothing else; the
+            # AI Provenance tab's identity block names the part so an estimator can say
+            # "that is the setup block" without opening the model folder.
+            out.setdefault("not_in_bom_parts", []).append(          # type: ignore[union-attr]
+                str(part.get("part_number") or part.get("name") or "?"))
 
         if nat is None:
             continue

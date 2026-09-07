@@ -682,10 +682,35 @@ def _collect_operations(parts: List[Dict[str, Any]],
     # from the one shared post-costing source so the quote, the internal report and the
     # Decision Report cannot each derive a different answer.
     from costed_facts import costed_operations
+    # ALIASES OF ONE DEPARTMENT ARE ONE LINE. A Fold row can invert to both "folding" and
+    # "fold", and 7332-01's quote listed "Precision folding and forming to drawing" and
+    # "Fold" as two things we do. Siblings come from the same department map the sheet is
+    # built from, so the first alias seen speaks for the department.
+    # From OP_NAME_MAP ALONE — not the tube remap, which sends "folding" to the Tubebend
+    # department for a tube job and would make a press-brake fold on another part a
+    # sibling of tube bending.
+    try:
+        from wb_populate import OP_NAME_MAP as _NAME_MAP
+        _by_dept: Dict[str, set] = {}
+        for _eng, _dept in (_NAME_MAP or {}).items():
+            if _dept:
+                _by_dept.setdefault(str(_dept).strip().lower(), set()).add(
+                    str(_eng).strip().lower())
+        _siblings: Dict[str, set] = {}
+        for _low in _by_dept.values():
+            for _o in _low:
+                _siblings.setdefault(_o, set()).update(_low)
+    except Exception:                                            # noqa: BLE001
+        _siblings = {}
+    _spoken: set = set()
     # Pass the SUMMARY: workbook_labour (the canonical accepted route) hangs off it, not
     # off the parts list. Handing over parts alone silently drops to the pre-filter
     # engine fields, which is what put powder and weld dressing on a timber crate.
     for op in costed_operations(summary if isinstance(summary, dict) else parts):
+        _key = str(op).strip().lower()
+        if _key in _spoken:
+            continue
+        _spoken |= _siblings.get(_key, {_key})
         _add(op)
 
     # 3. Fallback ONLY if the estimate carries no costed operations at all (e.g. a parts-free
