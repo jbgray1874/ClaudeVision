@@ -85,7 +85,16 @@ IMPOSSIBLE_OPS_BY_MATERIAL: Dict[str, Set[str]] = {
     # coated area on a sheet whose own finish resolver had just concluded that nothing in
     # the job is coated. Enumerating the members of a physical class is how the twelfth
     # member gets billed for an oven it would melt in.
-    "acrylic": {"punch", "punching"},
+    # AND NEVER PRESS-BRAKED. A cold press brake cracks acrylic; the material is formed hot
+    # on the line-bender, and the acrylic route books that as Linebend from the DXF's own
+    # BENDLINES count. Without this row a "DOWN 90°" callout read off the drawing text put
+    # FOLD on a 2 mm acrylic wrap — the same class of defect as folding the 7332-01 tube.
+    # linebend is deliberately NOT in this set: ruling the bend itself out would charge the
+    # forming nowhere at all.
+    "acrylic": {"punch", "punching", "fold", "folding"},
+    "perspex": {"punch", "punching", "fold", "folding"},
+    "polycarb": {"punch", "punching", "fold", "folding"},
+    "pmma": {"punch", "punching", "fold", "folding"},
 }
 
 # ── WHAT IS NOT METAL ───────────────────────────────────────────────────────────────
@@ -167,6 +176,11 @@ def impossibility_reason(operation: str, stock_form: str = "",
                     f"not make its non-metal parts powder-coatable.")
     for mat_key, impossible in IMPOSSIBLE_OPS_BY_MATERIAL.items():
         if mat_key in mat and key in impossible:
+            if key in ("fold", "folding"):
+                # The bend is real; the press brake is what is impossible. Said so, because
+                # this reason travels onto the decision an estimator reads.
+                return (f"a cold press brake cracks {mat_key} — the bend is formed hot on "
+                        f"the line-bender and charged as Linebend, not {key}")
             return f"{key} is not physically possible on {mat_key}"
     return None
 

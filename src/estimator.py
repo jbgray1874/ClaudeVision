@@ -5030,6 +5030,13 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _rt.pop(_pw, None)
             _st.pop(_pw, None)
         part["acrylic_no_powder"] = True   # signal downstream: suppress the powder BOM line
+        # And never press-braked. A "DOWN 90°" callout in the drawing text raises FOLD long
+        # before this branch runs; the forming is real but it is the line-bender's, and it
+        # is booked as Linebend from the bend count below. Leaving the metal fold's minutes
+        # in the time-map would charge the same two bends twice.
+        for _fl in ("folding", "fold"):
+            _rt.pop(_fl, None)
+            _st.pop(_fl, None)
 
         if _bends > 0:
             _rt["linebend"] = round(_rt.get("linebend", 0.0) + float(_drv.get("min_per_linebend", 1.0)) * _bends, 4)

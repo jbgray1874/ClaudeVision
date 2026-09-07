@@ -31,3 +31,19 @@ def test_punch_stays_impossible_and_tubebend_is_fine():
     assert sfr.impossibility_reason("punch", "tube") is not None
     assert sfr.impossibility_reason("tubebend", "tube") is None
     assert sfr.impossibility_reason("drill", "tube") is None
+
+
+# ── and neither is acrylic: 10975-02-A01, the A4 graphic holder ──────────────────────────
+
+def test_acrylic_is_line_bent_not_press_braked():
+    """A 2 mm acrylic wrap with two BENDLINES and 'DOWN 90°' in its drawing text must not
+    carry FOLD. The bend is real — it is the line-bender's, booked as Linebend by the
+    acrylic route — so only the press-brake op is impossible, never linebend itself."""
+    from stock_form_rules import impossibility_reason
+    reason = impossibility_reason("folding", "sheet", "ACRYLIC")
+    assert reason and "line-bender" in reason and "Linebend" in reason
+    assert impossibility_reason("fold", "", "acrylic")
+    assert impossibility_reason("folding", "sheet", "PERSPEX")
+    # The forming itself must survive, and metal is untouched.
+    assert impossibility_reason("linebend", "sheet", "ACRYLIC") is None
+    assert impossibility_reason("folding", "sheet", "MILD STEEL") is None
