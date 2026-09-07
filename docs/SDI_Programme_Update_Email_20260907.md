@@ -137,11 +137,11 @@ quoted alongside. Full spec attached; every figure in it is measured from what w
 
 ## Where to look
 
-- Portal dashboard — http://localhost:8072/#dashboard
-- SDI Estimating Intelligence — http://localhost:8072/#aisvc-estimating · guide: http://localhost:8072/guide
-- SDI Technical Design Intelligence — http://localhost:8072/#aisvc-technical-design
-- SDI Drawing Search Intelligence — http://localhost:8072/#aisvc-drawing-search · guide: http://localhost:8072/#fixture-guide
-- SDI Client Briefing Intelligence (on hold) — http://localhost:8072/#aisvc-client-briefing
+- Portal dashboard — http://10.0.0.5:8071/#dashboard
+- SDI Estimating Intelligence — http://10.0.0.5:8071/#aisvc-estimating · guide: http://10.0.0.5:8071/guide
+- SDI Technical Design Intelligence — http://10.0.0.5:8071/#aisvc-technical-design
+- SDI Drawing Search Intelligence — http://10.0.0.5:8071/#aisvc-drawing-search · guide: http://10.0.0.5:8071/#fixture-guide
+- SDI Client Briefing Intelligence (on hold) — http://10.0.0.5:8071/#aisvc-client-briefing
 
 Attached: *SDI Programme Status — 7 September 2026* (combined report); *SDI Shared Workstation*
 (capital request, 3 September); *SDI Project Plan Tracker — week 04 Sep* (Yogesh); *SDI Estimator
