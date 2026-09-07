@@ -269,19 +269,23 @@
       </div>
     </div>
   </header>
-  <p class="lead">What each deliverable is for, what the numbers on it mean, and what the engine
-  is asking you to decide. Every run produces the same set: a workbook you edit, two tabs that
-  explain it, and a report that tells you how much of it to trust.</p>
+  <p class="lead">What each document is for, which question it answers, and what the engine is
+  asking you to decide. You are not expected to read everything: each surface answers <b>one</b>
+  question, and this guide starts with the three you actually ask. Examples throughout are from a
+  real run — <b>7332-01</b>, a Harrods stand at 6 off.</p>
 
   <div class="toc">
     <a href="#start"><b>Start here</b><span>The one rule</span></a>
+    <a href="#ninety"><b>90 seconds</b><span>Three questions, three places</span></a>
     <a href="#run"><b>Running a job</b><span>Units, drawings, go</span></a>
+    <a href="#tabs"><b>The five tabs</b><span>What lives where now</span></a>
     <a href="#estimate"><b>Estimate sheet</b><span>The workbook you edit</span></a>
-    <a href="#provenance"><b>AI Provenance tab</b><span>Where each number came from</span></a>
-    <a href="#decisions"><b>Decision Report tab</b><span>What the engine had to choose</span></a>
-    <a href="#report"><b>Job report (HTML)</b><span>How much to trust it</span></a>
+    <a href="#explanation"><b>AI Explanation tab</b><span>The answers, decisions first</span></a>
+    <a href="#provenance"><b>AI Provenance tab</b><span>The evidence, line by line</span></a>
+    <a href="#report"><b>Job report (HTML)</b><span>The estimator's page</span></a>
     <a href="#missing"><b>Missing drawings</b><span>Priced from what we have</span></a>
-    <a href="#quote"><b>Client quote</b><span>What the customer sees</span></a>
+    <a href="#quote"><b>Client quote</b><span>What the customer would see</span></a>
+    <a href="#email"><b>Covering e-mail</b><span>The note the engine wrote</span></a>
     <a href="#regen"><b>Amended sheet</b><span>Re-issuing after your edits</span></a>
     <a href="#parity"><b>Parity report</b><span>Your estimate against the engine's</span></a>
   </div>
@@ -296,9 +300,39 @@
   </div>
   <p>So your job reading these documents is not to check arithmetic. It is to answer the
   questions the engine could not: which material is it really, which gauge, is that price still
-  good, and does the offcut go on this job or to stock.</p>
+  good, is the whole frame plated or only the bracket.</p>
 
-  <h2 id="run">Running a job</h2>
+  <h2 id="ninety">Read it in 90 seconds — three questions, three places</h2>
+  <p class="lead">Every run makes one estimate and describes it four ways: the workbook, a
+  covering e-mail, a job report and a draft quote. <b>They all read one costed record</b>, so
+  the money, the sources and the open items are the same words everywhere. That means you can
+  answer the three questions that matter without opening most of it:</p>
+  <table>
+    <tr><th>The question</th><th>Where the answer is</th><th>On 7332-01 it says</th></tr>
+    <tr><td class="k">What does it cost?</td>
+      <td><b>Estimate sheet</b>, Unit Cost — the one authoritative figure. Every other document
+      quotes this cell, never its own arithmetic.</td>
+      <td class="mono">£80.09/unit at 6 off<br>(£40.89 material + £33.59 labour)</td></tr>
+    <tr><td class="k">Can it go out?</td>
+      <td><b>The release line</b> — the banner at the top of the job report, the DRAFT strip on
+      the quote, the e-mail subject. One tally, identical words on all of them.</td>
+      <td class="mono">Not for release — 6 to settle: 2 prices missing + 2 manufacturing
+      decisions + 2 indicative rates to verify</td></tr>
+    <tr><td class="k">What do I have to do?</td>
+      <td><b>The decisions table</b> — the first thing on the AI Explanation tab and on the job
+      report. Worst first, each with the current assumption, the action, and the £ at stake.</td>
+      <td>Confirm the 1,397&nbsp;mm leg length against the GA (£11.72 riding on it); say whether
+      the assembled frame is plated or only the bracket (£15.83); price packaging and delivery
+      (held at £0); verify two INDICATIVE house rates.</td></tr>
+  </table>
+  <div class="panel ok">
+    <p style="margin:0"><b>Everything else is evidence, not homework.</b> The rest of the
+    Explanation, the whole of AI Provenance and the report's collapsed diagnostics exist for the
+    moment a number surprises you. If nothing surprises you, the decisions table is the whole
+    job.</p>
+  </div>
+
+<h2 id="run">Running a job</h2>
   <p class="lead">On the estimating page: fill in <b>number of units, drawing number and client</b>,
   add the drawings, and press <b>SDI (UK) Intelligence Estimator</b>.</p>
   <table>
@@ -359,7 +393,25 @@
     what you want when somebody asks about a number six weeks later.</p>
   </div>
 
-  <h2 id="estimate">1 · The Estimate sheet — the workbook you edit</h2>
+    <h2 id="tabs">The workbook is five tabs — what lives where now</h2>
+  <p class="lead">Earlier estimates carried up to nine tabs, and reading them was a job in
+  itself. It is now five: your three, plus two written by the engine. The tabs that used to
+  exist — AI Material Detail, AI Price Provenance, Canonical BOM, Canonical Route and the
+  Decision Report — are <b>gone, not hidden</b>: everything they said that mattered was folded
+  into the two that remain, so there are fewer places to look, not fewer facts.</p>
+  <table>
+    <tr><th>Tab</th><th>Whose it is</th><th>The question it answers</th></tr>
+    <tr><td class="k">Estimate</td><td>Yours — the template you know, populated</td>
+      <td>What does it cost, and which cells are mine to fill?</td></tr>
+    <tr><td class="k">Labour · Material Price Break</td><td>Yours — untouched template tabs the
+      Estimate's formulas reference</td><td>—</td></tr>
+    <tr><td class="k">AI Explanation</td><td>The engine's — <b>the answers</b></td>
+      <td>What do I still have to settle, and why is the total what it is?</td></tr>
+    <tr><td class="k">AI Provenance</td><td>The engine's — <b>the evidence</b></td>
+      <td>Where did this particular number come from, and how firm is it?</td></tr>
+  </table>
+
+<h2 id="estimate">1 · The Estimate sheet — the workbook you edit</h2>
   <p class="lead">This is the working surface. It is the estimating template you already know,
   populated. Every figure is an Excel formula, so it recalculates when you change an input.</p>
 
@@ -416,10 +468,56 @@
     pays for its material twice.</p>
   </div>
 
-  <h2 id="provenance">2 · The AI Provenance tab — where each number came from</h2>
-  <p class="lead">One row per part, naming the source behind every value and how strong that
-  source is. This is where you go when a figure looks wrong and you want to know why it is what
-  it is.</p>
+    <h2 id="explanation">2 · The AI Explanation tab — the answers, decisions first</h2>
+  <p class="lead">The tab to open second, every time. It now looks like AI Provenance — the navy
+  banner, blue section headings, wrapped tables that grow instead of clipping — and it leads
+  with the only list you must read.</p>
+
+  <h3>What a person still has to settle — the first section, always</h3>
+  <p>One list, split the way you would split it yourself: things that <b>block</b> release
+  (a missing price, a manufacturing decision, a market figure standing in) and things that are
+  <b>advisory</b> (SDI house rates marked INDICATIVE — configured and reproducible, to verify or
+  deliberately accept). The tally is printed in one phrase, and the same phrase appears on the
+  report banner, the quote's DRAFT strip and the e-mail subject, so no two documents can count
+  the same items differently.</p>
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>On 7332-01 the decisions table reads:</b></p>
+    <table style="margin:0">
+      <tr><th>Decision</th><th>Current assumption</th><th>£ at stake</th></tr>
+      <tr><td class="k">Cut length of 7332-01-002: 1,397&nbsp;mm</td>
+        <td>Transcribed by the vision read — priced per metre, so the length <i>is</i> the
+        money. Confirm against the GA.</td><td class="mono">£11.72</td></tr>
+      <tr><td class="k">Which members of 7332-01-101 are plated</td>
+        <td>Mass priced on 008 only; 001–005 excluded because their own details state another
+        finish. Is the assembled frame plated?</td><td class="mono">£15.83</td></tr>
+      <tr><td class="k">PACKAGING · DELIVERY</td>
+        <td>Held at £0 by decision until estimating supplies its own calculation — the unit cost
+        is understated by whatever they are worth.</td><td class="mono">—</td></tr>
+      <tr><td class="k">Plate rate · felt pad rate</td>
+        <td>SDI house rates marked INDICATIVE — real, reproducible figures to verify against a
+        plater / supplier quote, not guesses to replace.</td><td class="mono">£16.63</td></tr>
+    </table>
+  </div>
+
+  <h3>Then the questions, answered</h3>
+  <table>
+    <tr><th>Section</th><th>What it does for you</th></tr>
+    <tr><td class="k">The questions, answered first</td><td>Why the unit cost is what it is,
+      what finish is charged (on 7332-01: <i>diamond polished and plated</i> — no powder), and
+      <b>Can this go out?</b> in the same one-phrase tally.</td></tr>
+    <tr><td class="k">This document against the sheet</td><td>Every pound reconciled to the
+      Estimate sheet's own totals, block by block. When the two agree to the penny it says so;
+      when they differ it names the row.</td></tr>
+    <tr><td class="k">Line by line</td><td>Each priced line with its source named in words —
+      catalogue, config rate, nest arithmetic, decision — so "where did £6.29 come from" has a
+      one-line answer (the Tubebend rate on the two legs, charged once each).</td></tr>
+  </table>
+
+  <h2 id="provenance">3 · The AI Provenance tab — the evidence, line by line</h2>
+  <p class="lead">The audit tab. One row per part reading <b>value → source → evidence →
+  action</b>: what was used, where it came from, how firm it is, and what — if anything — you
+  are being asked to do about it. You open it when a figure looks wrong; you do not read it
+  top to bottom.</p>
 
   <h3>The strength words</h3>
   <table>
@@ -436,56 +534,48 @@
       priced it yet.</td><td><span class="tag bad">gap</span></td></tr>
   </table>
 
-  <div class="panel ok">
-    <p style="margin:0 0 6px 0"><b>The summary line separates two different questions.</b></p>
-    <p style="margin:0"><span class="mono">Engine read the drawing &amp; model: 18 measured · 3
-    reported · 1 needs a look &nbsp;|&nbsp; Pricing: 13 priced · 9 awaiting your rate</span></p>
-    <p style="margin:6px 0 0 0">How well the engine <b>read</b> the job is not the same as how
-    much of it has been <b>priced</b>. An estimate is expected to arrive with prices outstanding —
-    that is your half of the work, not a fault in the reading.</p>
-  </div>
-
-  <h2 id="decisions">3 · The Decision Report tab — what the engine had to choose</h2>
-  <p class="lead">Most values decide themselves: one strongest source, nothing contradicting it.
-  This tab shows the ones that did not, because those are where your judgement is worth most.</p>
-
-  <h3>Two blocks below the part table</h3>
+  <h3>The blocks below the part table</h3>
   <table>
-    <tr><th>Block</th><th>What it lists</th></tr>
-    <tr><td class="k">Decisions that required resolution</td>
-      <td><b>Operations.</b> Two equally-ranked sources disagreed about whether an operation
-      applies, and the arbiter settled it. The losing claim is named so you can check it.</td></tr>
-    <tr><td class="k">What the part is — where two sources disagreed</td>
-      <td><b>Material and gauge.</b> The costlier arguments. Material sets the rate <i>and</i>
-      whether the part has a rate at all; gauge sets the rate <i>and</i> steps the cut time — so a
-      part costed on the wrong one is wrong twice. Widest disagreement first.</td></tr>
+    <tr><th>Block</th><th>What it shows — and when to use it</th></tr>
+    <tr><td class="k">Material cost breakdown</td><td>The material money by type, adding back to
+      the sheet's own total. On 7332-01: <span class="mono">MILD STEEL £21.43 · Subcontract
+      plating £15.83 · ACRYLIC £2.82 · Bought-in £0.80 → £40.89</span>. If a category surprises
+      you, that is the thread to pull.</td></tr>
+    <tr><td class="k">The build, as one tree</td><td>The assembly hierarchy with each member's
+      charged money and drawing files — how the GA, the weldment and the details hang
+      together.</td></tr>
+    <tr><td class="k">The route, part by part</td><td>For every operation: kept or ruled out,
+      decided by which source, and the Estimate row that charges it — so "why is there no
+      folding on the legs" is answered with the decision that removed it.</td></tr>
+    <tr><td class="k">Identity through the pack</td><td>Where a part's name did <i>not</i> track
+      cleanly — merged aliases, colourway twins collapsed, parts costed with no drawing of their
+      own, files matched to no part. This is where naming-convention trouble surfaces instead of
+      hiding.</td></tr>
   </table>
-  <p>The higher-ranked source was used and the figure stands. What you are being asked is simply:
-  <b>confirm which is right before this goes out firm.</b></p>
+  <p class="muted">If you are looking for the old <b>Decision Report</b> tab: its blocks live
+  here now — same content, one fewer tab.</p>
 
-  <h2 id="report">4 · The job report (HTML) — how much to trust it</h2>
-  <p class="lead">The narrative version, and the best single document for judging whether an
-  estimate is safe to quote from.</p>
+  <h2 id="report">4 · The job report (HTML) — the estimator's page</h2>
+  <p class="lead">The report opens with what you must act on and hides what you rarely need.
+  Read top to bottom only as far as you have to.</p>
   <table>
-    <tr><th>Section</th><th>Use it for</th></tr>
-    <tr><td class="k">At a glance</td><td>Unit cost, material and labour split, quantity.</td></tr>
-    <tr><td class="k">Drawings this estimate<br>was built from</td><td><b>The files that produced the
-      number, named.</b> Every drawing read, what each contributed, and — marked in red — any file that
-      was <b>present in the pack and not read</b>. A DWG nobody could convert is not a neutral fact: it
-      is geometry that sat in the folder and reached no number. This is the fastest way to catch the
-      expensive mistake, because somebody who knows the job reads six filenames and sees the seventh
-      is missing.</td></tr>
-    <tr><td class="k">What went right</td><td>The checks that passed — cost streams separated,
-      each part costed once, bought-ins recognised.</td></tr>
-    <tr><td class="k">Review items &amp; limitations</td><td>Per part: what to verify and why.
-      Every row names the part it is about.</td></tr>
-    <tr><td class="k">Drawing pack</td><td>What the pack contained and what it lacked —
-      <b>including drawings named on the BOM that were not supplied</b>.</td></tr>
-    <tr><td class="k">Estimating review</td><td>Everything outstanding, sorted into
-      <i>confirm or overwrite</i> (yours) and <i>missing or broken inputs</i>.</td></tr>
+    <tr><th>In order</th><th>What it is</th></tr>
+    <tr><td class="k">Summary</td><td>Unit cost, material / labour split, quantity, and the
+      release banner — <span class="mono">Not for release — 6 to settle: …</span> in the same
+      words as everywhere else.</td></tr>
+    <tr><td class="k">Decisions required</td><td>The same table the Explanation leads with:
+      issue, part, current assumption, action, owner, £ at stake. Worst first.</td></tr>
+    <tr><td class="k">The build (BOM)</td><td>The assembly tree with charged money on every
+      line. Where the engine's own figure differs from what the sheet charges, both are shown
+      and the sheet's is the money — <span class="mono">engine £2.02 — not charged</span> under
+      the acrylic's charged £2.82, for instance.</td></tr>
+    <tr><td class="k">The route</td><td>Operations per part, only what is actually charged.</td></tr>
+    <tr><td class="k">Diagnostics — collapsed</td><td>Parity, drawing-quality audit, checks,
+      design recommendations. Folded shut on purpose; they open when you need them and print
+      expanded.</td></tr>
   </table>
 
-  <h2 id="missing">5 · "Drawings missing — priced from what we have"</h2>
+<h2 id="missing">5 · "Drawings missing — priced from what we have"</h2>
   <div class="panel brand">
     <p style="margin:0"><b>An incomplete pack is priced, not refused.</b> The engine costs every
     line it can read, leaves the undrawn assemblies uncosted rather than inventing metal and weld
@@ -508,9 +598,9 @@
     <tr><td class="k">AI Provenance</td><td>A line stating <b>which parts the tab is not about</b> —
       a part with no drawing has no row worth reading, so it is named rather than left out
       silently.</td></tr>
-    <tr><td class="k">Decision Report</td><td><b>DRAWINGS MISSING FROM THIS PACK — NOTHING DECIDED,
-      NOTHING COSTED.</b> Every other block on that tab describes a decision made from evidence;
-      these parts had none.</td></tr>
+    <tr><td class="k">AI Provenance — identity block</td><td><b>Costed with no drawing of its
+      own</b> — each such part named, so a BOM line priced without its detail is a stated fact
+      rather than a silent one.</td></tr>
     <tr><td class="k">Run log</td><td>Named at the end of the run in the invariants block.</td></tr>
     <tr><td class="k">Client quote</td><td><b>Nothing.</b> The customer's page carries the price and
       the specification, labelled indicative. What they are told about scope is yours to say, in
@@ -520,17 +610,38 @@
   excluded, or ask for the detail pack and re-run. A thin total on an incomplete pack is an
   incomplete pack — not a cheap job.</p>
 
-  <h2 id="quote">6 · The client quote — what the customer sees</h2>
+    <h2 id="quote">6 · The client quote — what the customer would see</h2>
   <p class="lead">Deliberately the plainest document of the set. It carries the price, the
-  specification, what is included, and nothing about how the engine reached it.</p>
+  specification, what is included — and while anything is outstanding it says so on its face.</p>
   <ul>
-    <li>The price is labelled <b>indicative</b> everywhere it appears.</li>
-    <li>Internal reasoning — invariant names, confidence, engine workings — never appears on it.</li>
-    <li>It is generated from the job, so the material, finish and operations shown are the
-      engine's reading of the drawings.</li>
+    <li>While the estimate is provisional the quote is stamped
+      <b>DRAFT — not for issue</b> with the same one-phrase tally as the report, and the
+      automated e-mail <b>withholds it</b> — on 7332-01 the e-mail says plainly "No customer
+      quote is attached".</li>
+    <li>Unpriced packaging and delivery appear as an exclusion — <i>"Packaging and delivery not
+      included — to be priced before issue"</i> — never as a silent £0 promise of a box.</li>
+    <li>The finish it promises is the finish that is charged: on 7332-01, plated and diamond
+      polished. Internal reasoning never appears on it.</li>
   </ul>
 
-  <h2 id="regen">7 · Re-issuing a quote after you have edited the sheet</h2>
+  <h2 id="email">7 · The covering e-mail — the note the engine wrote</h2>
+  <p class="lead">When a run completes, the workbook, the report and this note go to the people
+  who asked for it. It is written from the same record as everything else, last, so it cannot
+  disagree with what it delivers.</p>
+  <table>
+    <tr><th>Part</th><th>What to take from it</th></tr>
+    <tr><td class="k">Subject line</td><td>The whole state in one line:
+      <span class="mono">7332-01 — SDI Intelligence estimate, PROVISIONAL. £80.09/unit at 6 of.
+      To settle: 2 prices missing + 2 manufacturing decisions + 2 indicative rates to
+      verify.</span> You can triage a run without opening anything.</td></tr>
+    <tr><td class="k">The panel</td><td>Each open item on its own line with the money at stake —
+      the same items as the decisions table, worded for a reader in a hurry.</td></tr>
+    <tr><td class="k">What is attached</td><td>The workbook and the report. The client quote is
+      attached only when nothing blocks it — a missing attachment is the engine being careful,
+      not a fault.</td></tr>
+  </table>
+
+<h2 id="regen">8 · Re-issuing a quote after you have edited the sheet</h2>
   <p class="lead">When you have amended the workbook — filled the rates, corrected a price, set a
   margin — the portal can turn your version into a fresh client quote.</p>
   <ol>
@@ -560,52 +671,7 @@
     that came back by email, or one kept locally.</p>
   </div>
 
-  <div class="foot">
-    <b>we.are.sdi</b> · SDI Estimating Intelligence · This guide describes the deliverables the
-    engine produces. Anything it prices is an estimate until an estimator has cleared the
-    outstanding items on it.
-  </div>
-</div>
-
-<script>
-/* Theme and page size — the same behaviour, and deliberately the SAME STORAGE KEYS, as the
-   portal. A preference that resets when you click from the dashboard into /estimating is not a
-   preference; three pages with three independent toggles would be worse than none.
-   Every localStorage access is wrapped: a private window or a policy that blocks site data
-   throws on access, and a page that will not render because it could not read a cosmetic
-   setting is a bad trade. Zoom rather than font-size because these layouts are in pixels. */
-(function(){
-  var root=document.documentElement, T='sdi.view.theme', Z='sdi.view.zoom', ZOOMS=[100,125,150,175,200];
-  function setTheme(light){
-    if(light) root.setAttribute('data-theme','light'); else root.removeAttribute('data-theme');
-    var b=document.getElementById('theme-btn'), l=document.getElementById('theme-lbl');
-    if(b){ b.setAttribute('aria-pressed',String(light));
-           b.title = light ? 'Switch to dark' : 'Switch to light';
-           b.setAttribute('aria-label', b.title); }
-    if(l) l.textContent = light ? 'Dark' : 'Light';
-    try{ localStorage.setItem(T, light?'light':'dark'); }catch(e){}
-  }
-  function setZoom(pc){
-    pc = ZOOMS.indexOf(pc)===-1 ? 100 : pc;
-    root.style.zoom = pc===100 ? '' : (pc/100);
-    var bs=document.querySelectorAll('.vc-z');
-    for(var i=0;i<bs.length;i++) bs[i].setAttribute('aria-pressed', String(Number(bs[i].dataset.zoom)===pc));
-    try{ localStorage.setItem(Z, String(pc)); }catch(e){}
-  }
-  var light=false, zoom=100;
-  try{ light = localStorage.getItem(T)==='light'; }catch(e){}
-  try{ var z=parseInt(localStorage.getItem(Z),10); if(ZOOMS.indexOf(z)!==-1) zoom=z; }catch(e){}
-  setTheme(light); setZoom(zoom);
-  var tb=document.getElementById('theme-btn');
-  if(tb) tb.addEventListener('click', function(){ setTheme(root.getAttribute('data-theme')!=='light'); });
-  var bs=document.querySelectorAll('.vc-z');
-  for(var i=0;i<bs.length;i++) (function(b){ b.addEventListener('click', function(){ setZoom(Number(b.dataset.zoom)); }); })(bs[i]);
-})();
-</script>
-</body>
-</html>
-
-  <h2 id="parity">8 · Parity — your estimate against the engine's</h2>
+    <h2 id="parity">9 · Parity — your estimate against the engine's</h2>
   <p class="lead">The one report that answers "is this thing any good?". It compares the engine's
   own reading of a job against a manual estimate for the same job — not sheet against sheet, but
   the engine's full working against your number, so you see where the two part company rather
@@ -653,3 +719,47 @@
     spread across it. The difference you are looking at is then partly quantity, not accuracy.</p>
   </div>
 
+  <div class="foot">
+    <b>we.are.sdi</b> · SDI Estimating Intelligence · Four documents, one costed record.
+    Anything the engine prices is an estimate until an estimator has settled the items on the
+    decisions table.
+  </div>
+</div>
+
+<script>
+/* Theme and page size — the same behaviour, and deliberately the SAME STORAGE KEYS, as the
+   portal. A preference that resets when you click from the dashboard into /estimating is not a
+   preference; three pages with three independent toggles would be worse than none.
+   Every localStorage access is wrapped: a private window or a policy that blocks site data
+   throws on access, and a page that will not render because it could not read a cosmetic
+   setting is a bad trade. Zoom rather than font-size because these layouts are in pixels. */
+(function(){
+  var root=document.documentElement, T='sdi.view.theme', Z='sdi.view.zoom', ZOOMS=[100,125,150,175,200];
+  function setTheme(light){
+    if(light) root.setAttribute('data-theme','light'); else root.removeAttribute('data-theme');
+    var b=document.getElementById('theme-btn'), l=document.getElementById('theme-lbl');
+    if(b){ b.setAttribute('aria-pressed',String(light));
+           b.title = light ? 'Switch to dark' : 'Switch to light';
+           b.setAttribute('aria-label', b.title); }
+    if(l) l.textContent = light ? 'Dark' : 'Light';
+    try{ localStorage.setItem(T, light?'light':'dark'); }catch(e){}
+  }
+  function setZoom(pc){
+    pc = ZOOMS.indexOf(pc)===-1 ? 100 : pc;
+    root.style.zoom = pc===100 ? '' : (pc/100);
+    var bs=document.querySelectorAll('.vc-z');
+    for(var i=0;i<bs.length;i++) bs[i].setAttribute('aria-pressed', String(Number(bs[i].dataset.zoom)===pc));
+    try{ localStorage.setItem(Z, String(pc)); }catch(e){}
+  }
+  var light=false, zoom=100;
+  try{ light = localStorage.getItem(T)==='light'; }catch(e){}
+  try{ var z=parseInt(localStorage.getItem(Z),10); if(ZOOMS.indexOf(z)!==-1) zoom=z; }catch(e){}
+  setTheme(light); setZoom(zoom);
+  var tb=document.getElementById('theme-btn');
+  if(tb) tb.addEventListener('click', function(){ setTheme(root.getAttribute('data-theme')!=='light'); });
+  var bs=document.querySelectorAll('.vc-z');
+  for(var i=0;i<bs.length;i++) (function(b){ b.addEventListener('click', function(){ setZoom(Number(b.dataset.zoom)); }); })(bs[i]);
+})();
+</script>
+</body>
+</html>

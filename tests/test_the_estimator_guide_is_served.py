@@ -50,8 +50,10 @@ def test_the_guide_is_served(client):
 
 def test_it_covers_every_deliverable_an_estimator_is_handed(client):
     body = client.get("/guide").text.lower()
-    for section in ("estimate sheet", "ai provenance", "decision report",
-                    "job report", "client quote"):
+    # The Decision Report tab is gone — folded into AI Provenance — and the set an
+    # estimator is actually handed now includes the Explanation tab and the e-mail.
+    for section in ("estimate sheet", "ai explanation", "ai provenance",
+                    "job report", "client quote", "covering e-mail"):
         assert section in body, section
 
 
@@ -103,3 +105,28 @@ def test_the_content_is_left_aligned_beside_the_menu(client):
 
 def test_the_guide_is_named_for_the_product(client):
     assert "SDI Estimating Intelligence Guide" in client.get("/guide").text
+
+
+def test_the_guide_answers_the_three_questions_up_front(client):
+    """The users' actual complaint: "really struggling to look at the extra explains".
+    The guide's answer is triage — three questions, one place each, before any tab is
+    described — and the one-phrase tally that is identical on every document."""
+    body = client.get("/guide").text
+    assert "Read it in 90 seconds" in body
+    assert "What does it cost?" in body and "Can it go out?" in body
+    assert "2 prices missing + 2 manufacturing decisions" in body
+    assert "80.09" in body, "the worked example is a real run, not lorem ipsum"
+
+
+def test_the_guide_describes_five_tabs_not_nine(client):
+    body = client.get("/guide").text
+    assert "five tabs" in body
+    for gone in ("AI Material Detail", "Canonical BOM", "Canonical Route"):
+        assert body.count(gone) <= 1, f"{gone} may be named only as retired"
+    assert 'id="explanation"' in body and 'id="provenance"' in body
+
+
+def test_the_parity_section_is_inside_the_document(client):
+    """It used to sit AFTER </html> — served, but outside the body every browser parses."""
+    body = client.get("/guide").text
+    assert body.index('id="parity"') < body.index("</body>")
