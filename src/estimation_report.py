@@ -1000,30 +1000,20 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
              bg=C_KB, size=9, wrap=True)
         ws.row_dimensions[row].height = 32
 
-    # WHAT THIS TAB COULD NOT DESCRIBE, BECAUSE NOTHING READ IT.
-    #
-    # A part with no drawing has no row worth reading here: no material source, no geometry, no
-    # price — it simply is not in the job the engine saw. Leaving it out silently makes this tab
-    # look like a complete account of the product when it is an account of the drawings that
-    # arrived. Named here so the reader knows which parts this tab is NOT about.
+    # ── 2, 3, 4: the hierarchy, the route, and identity through the pack ────────
+    # The Canonical BOM and Canonical Route tabs, folded in with presentation, and the
+    # tracking questions James set for this tab: which drawing, which reader, which price
+    # source, and where a part's name did not carry across the drawings. The undrawn lines
+    # that used to be one merged sentence here are rows in block 4.
     try:
-        from costed_facts import undrawn_bom_lines as _undrawn
-        _missing = _undrawn(summary)
-    except Exception:                                            # noqa: BLE001
-        _missing = []
-    if _missing:
+        row = _append_traceability_blocks(ws, row, summary, provenance, cell)
+    except Exception as _tb:                                     # noqa: BLE001
         row += 2
-        ws.merge_cells(f"A{row}:O{row}")
-        _names = "; ".join(
-            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
-            for m in _missing[:8])
-        _more = f" …and {len(_missing) - 8} more" if len(_missing) > 8 else ""
         cell(row, 1,
-             f"DRAWINGS MISSING FROM THIS PACK ({len(_missing)}) — no detail drawing was "
-             f"supplied for these, so nothing read them and nothing costed them. They are not "
-             f"in the figures above: {_names}{_more}",
+             f"The hierarchy, route and tracking blocks could not be built ({_tb}) — a "
+             f"rendering failure, not a job with nothing to trace.",
              bg=C_LOW, size=9, wrap=True, bold=True)
-        ws.row_dimensions[row].height = 30
+        ws.row_dimensions[row].height = 28
 
     # ── WHAT THE DECISION REPORT KNEW AND THIS TAB DID NOT ──────────────────────
     #
@@ -1079,6 +1069,246 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     ws.freeze_panes = "B6"
     # Tab colour
     ws.sheet_properties.tabColor = "1F3864"
+def _source_words(source: Any) -> str:
+    """Which reader or rule decided it, in the words the rest of the workbook uses."""
+    key = str(source or "").strip()
+    if not key:
+        return "unrecorded"
+    try:
+        from source_precedence import display_name
+        return display_name(key) or key
+    except Exception:                                            # noqa: BLE001
+        return key.replace("_", " ")
+
+
+def _append_traceability_blocks(ws, row: int, summary: Dict[str, Any],
+                                provenance: List[Dict[str, Any]], cell) -> int:
+    """Blocks 2–4 of the AI Provenance tab.
+
+    WHAT THIS TAB IS, in James's words: a view onto what the drawing extraction and the
+    estimating layer did. So for every part it has to say which drawing and page, which
+    reader or rule decided each thing, which source priced it — and where a part's identity
+    did not track through the pack, because names change between a GA and a detail sheet
+    and a DXF filename. The audience is the estimator; the same rows are how we diagnose a
+    run that went wrong.
+
+    Block 2 is the bill of materials as the compiler assembled it, indented under its
+    assemblies. Block 3 is the route decision by decision, kept and ruled out, grouped by
+    part. Block 4 is identity and tracking: names merged, colourways collapsed, lines costed
+    with no drawing, drawing files matched to no part or to more than one.
+    """
+    from wb_populate import canonical_route_payload, colourway_note
+    payload = canonical_route_payload(summary) or {}
+    nodes = [n for n in (payload.get("nodes") or []) if isinstance(n, dict)]
+    decisions = [d for d in (payload.get("decisions") or []) if isinstance(d, dict)]
+    prov_by = {str(p.get("part_number") or "").strip().upper(): p for p in provenance}
+    try:
+        from costed_facts import record_lines, _workbook_rows
+        lines = record_lines(summary)
+        rows_by_decision: Dict[str, List[int]] = {}
+        for r in (_workbook_rows(summary) or []):
+            for d in (r.get("decision_ids") or []):
+                try:
+                    rows_by_decision.setdefault(str(d), []).append(int(float(r.get("workbook_row") or 0)))
+                except (TypeError, ValueError):
+                    continue
+    except Exception:                                            # noqa: BLE001
+        lines, rows_by_decision = {}, {}
+    _LAST = "O"
+
+    def heading(text: str) -> None:
+        nonlocal row
+        row += 2
+        ws.merge_cells(f"A{row}:{_LAST}{row}")
+        cell(row, 1, text, bold=True, bg=C_SECTION, fg=C_HEADER_FG, size=11)
+        ws.row_dimensions[row].height = 22
+        row += 1
+
+    def header(cols: List[str]) -> None:
+        nonlocal row
+        for ci, h in enumerate(cols, 1):
+            cell(row, ci, h, bold=True, bg="D9E2F3", size=9, border=True)
+        row += 1
+
+    def money(pn: str) -> str:
+        line = lines.get(pn) or {}
+        v = line.get("charged_ext_gbp")
+        if v is None:
+            v = line.get("engine_ext_gbp")
+        try:
+            return f"£{float(v):.2f}" if v is not None else "—"
+        except (TypeError, ValueError):
+            return "—"
+
+    def drawing(pn: str) -> str:
+        return str((prov_by.get(pn) or {}).get("drawing_files") or "—")
+
+    # ── 2 · the hierarchy ────────────────────────────────────────────────────
+    by_pn = {str(n.get("part_number") or "").strip().upper(): n for n in nodes}
+    children: Dict[str, List[Any]] = {}
+    for n in nodes:
+        pn = str(n.get("part_number") or "").strip().upper()
+        for edge in (n.get("children") or []):
+            if isinstance(edge, dict) and edge.get("part_number"):
+                children.setdefault(pn, []).append(edge)
+    # A graph that records only parents (an older shadow, a fixture) still has a hierarchy.
+    if not children:
+        for n in nodes:
+            pn = str(n.get("part_number") or "").strip().upper()
+            for parent in (n.get("parents") or []):
+                children.setdefault(str(parent).strip().upper(), []).append(
+                    {"part_number": pn, "qty": n.get("qty_per_unit")})
+    # A node with no description takes the part's own, so the block reads as a BOM.
+    for pn, n in by_pn.items():
+        if not n.get("description"):
+            n = dict(n)
+            n["description"] = ((lines.get(pn) or {}).get("description")
+                                or (prov_by.get(pn) or {}).get("description") or "")
+            by_pn[pn] = n
+    roots = [str(n.get("part_number") or "").strip().upper() for n in nodes
+             if not (n.get("parents") or [])]
+    order: List[str] = []
+    if nodes:
+        heading("2 — THE BILL OF MATERIALS AS THE ENGINE ASSEMBLED IT — every line under the "
+                "assembly it belongs to; 'also called' is the name another drawing used for it")
+        header(["Part", "Description", "Kind", "Qty/unit", "Also called / variant",
+                "Charged £", "Which drawing files and pages"])
+        seen: set = set()
+
+        def walk(pn: str, depth: int) -> None:
+            nonlocal row
+            if pn in seen:
+                return
+            seen.add(pn)
+            order.append(pn)
+            n = by_pn.get(pn) or {"part_number": pn}
+            kids = children.get(pn, [])
+            aliases = [str(a) for a in ((n.get("evidence") or {}).get("raw_aliases") or [])
+                       if str(a).strip().upper() != pn]
+            note = "; ".join(x for x in (", ".join(aliases[:4]), colourway_note(n)) if x)
+            bg = "EEF3F9" if kids else ("F5F5F5" if depth % 2 else "FFFFFF")
+            cell(row, 1, ("    " * depth) + ("▸ " if kids else "") + str(n.get("part_number") or pn),
+                 bg=bg, bold=bool(kids), border=True, size=9)
+            cell(row, 2, str(n.get("description") or ""), bg=bg, border=True, size=9, wrap=True)
+            cell(row, 3, str(n.get("kind") or ""), bg=bg, border=True, size=9)
+            cell(row, 4, n.get("qty_per_unit") if n.get("qty_per_unit") is not None else "—",
+                 bg=bg, border=True, size=9, align="center")
+            cell(row, 5, note or "—", bg=bg, border=True, size=9, wrap=True)
+            cell(row, 6, money(pn), bg=bg, border=True, size=9, align="right")
+            cell(row, 7, drawing(pn), bg=bg, border=True, size=8, wrap=True)
+            ws.row_dimensions[row].height = 16
+            row += 1
+            for edge in kids:
+                walk(str(edge.get("part_number") or "").strip().upper(), depth + 1)
+
+        for r in roots:
+            walk(r, 0)
+        for n in nodes:
+            walk(str(n.get("part_number") or "").strip().upper(), 0)
+
+    # ── 3 · the route, decision by decision ──────────────────────────────────
+    if decisions:
+        heading("3 — THE ROUTE, DECISION BY DECISION — every operation the compiler "
+                "considered, kept or ruled out, who decided it, and the sheet row it charges")
+        header(["Part", "Operation", "Kept?", "Qty/unit", "Decided by", "Reason",
+                "Sheet row", "Decision ID"])
+        by_target: Dict[str, List[Dict[str, Any]]] = {}
+        for d in decisions:
+            by_target.setdefault(str(d.get("target_id") or "").strip().upper(), []).append(d)
+        targets = [pn for pn in order if pn in by_target] + \
+                  [pn for pn in by_target if pn not in order]
+        for pn in targets:
+            group = sorted(by_target[pn],
+                           key=lambda d: (0 if str(d.get("status")) == "required" else 1,
+                                          float(d.get("sequence") or 999)))
+            for d in group:
+                status = str(d.get("status") or "")
+                did = str(d.get("decision_id") or "")
+                charged_rows = rows_by_decision.get(did) or []
+                kept = ("charged" if status == "required" and charged_rows else
+                        "required — not on a priced row" if status == "required" else
+                        "ruled out" if status == "not_applicable" else status)
+                bg = ("FFFFFF" if kept == "charged" else
+                      "FFF2CC" if kept.startswith("required") else "EDEDED")
+                cell(row, 1, pn, bg=bg, border=True, size=9)
+                cell(row, 2, str(d.get("operation") or ""), bg=bg, border=True, size=9,
+                     bold=(kept == "charged"))
+                cell(row, 3, kept, bg=bg, border=True, size=9)
+                cell(row, 4, d.get("qty_per_unit") if d.get("qty_per_unit") is not None else "—",
+                     bg=bg, border=True, size=9, align="center")
+                cell(row, 5, _source_words(d.get("source")), bg=bg, border=True, size=9, wrap=True)
+                cell(row, 6, str(d.get("reason") or ""), bg=bg, border=True, size=8, wrap=True)
+                cell(row, 7, ", ".join(f"Estimate!{r}" for r in sorted(set(charged_rows))) or "—",
+                     bg=bg, border=True, size=8)
+                cell(row, 8, did, bg=bg, border=True, size=8)
+                ws.row_dimensions[row].height = 16
+                row += 1
+
+    # ── 4 · identity and tracking through the pack ───────────────────────────
+    issues: List[List[str]] = []
+    for n in nodes:
+        pn = str(n.get("part_number") or "").strip().upper()
+        aliases = [str(a) for a in ((n.get("evidence") or {}).get("raw_aliases") or [])
+                   if str(a).strip().upper() != pn]
+        if aliases:
+            issues.append(["Merged under one name", pn,
+                           f"also appears as {', '.join(aliases[:6])} — the same part under "
+                           f"another spelling, joined by the compiler; check that is right"])
+        cv = colourway_note(n)
+        if cv:
+            issues.append(["Colourway collapsed", pn, cv])
+    try:
+        from costed_facts import undrawn_bom_lines as _undrawn
+        for m in _undrawn(summary) or []:
+            issues.append(["Costed with no drawing of its own", str(m.get("part_number") or ""),
+                           (str(m.get("description") or "") + " — no detail sheet in the pack; "
+                            "priced from the BOM line alone").strip(" —")])
+    except Exception:                                            # noqa: BLE001
+        pass
+    dxf = summary.get("dxf_augmentation") if isinstance(summary.get("dxf_augmentation"), dict) else {}
+
+    def _basename(path: Any) -> str:
+        # The paths are Windows paths written on the box; split on either separator.
+        return re.split(r"[\\/]", str(path or ""))[-1] or "?"
+
+    for x in (dxf.get("unmatched_dxf") or []):
+        if isinstance(x, dict):
+            issues.append(["Drawing file matched to no part", _basename(x.get("path")),
+                           str(x.get("reason") or "no part number in the filename matched a "
+                                                  "BOM line").replace("_", " ")])
+    for x in (dxf.get("ambiguous_dxf") or []):
+        if isinstance(x, dict):
+            cands = x.get("candidates") or x.get("matches") or []
+            issues.append(["Drawing file matched to more than one part", _basename(x.get("path")),
+                           (", ".join(str(c) for c in cands) if cands else
+                            str(x.get("reason") or "")).replace("_", " ")])
+    for x in (dxf.get("parts_without_dxf") or []):
+        pn = str(x.get("part_number") if isinstance(x, dict) else x).strip()
+        if pn:
+            issues.append(["No DXF flat for this part", pn,
+                           "geometry came from the model or the sheet, not a flat pattern"])
+    heading("4 — IDENTITY AND TRACKING THROUGH THE PACK — where a part's name did not carry "
+            "across the drawings, what was costed that nothing drew, and what was read that "
+            "nothing costed")
+    if issues:
+        header(["What", "Part / file", "Detail"])
+        for kind, what, detail in issues:
+            bg = C_LOW if kind.startswith(("Costed with no", "Drawing file")) else "FFF2CC"
+            cell(row, 1, kind, bg=bg, border=True, size=9, bold=True)
+            cell(row, 2, what, bg=bg, border=True, size=9)
+            cell(row, 3, detail, bg=bg, border=True, size=9, wrap=True)
+            ws.merge_cells(f"C{row}:{_LAST}{row}")
+            ws.row_dimensions[row].height = 18
+            row += 1
+    else:
+        ws.merge_cells(f"A{row}:{_LAST}{row}")
+        cell(row, 1, "Every part tracked through the pack under one name, every costed line "
+                     "has a drawing, and every drawing file matched one part.",
+             bg="E8F6EF", size=9)
+        row += 1
+    return row
+
+
 def generate_standalone_report(summary: Dict[str, Any],
                                 output_path: str,
                                 scan_meta: Dict[str, Any] = None) -> str:

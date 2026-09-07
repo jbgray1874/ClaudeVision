@@ -33,7 +33,14 @@ def _provenance_sheet():
 
 
 def _rows(ws):
-    return [[c.value for c in row] for row in ws.iter_rows()]
+    """The part-table rows only — block 1 — which end at the first blank column-A row."""
+    out = []
+    for row in ws.iter_rows():
+        vals = [c.value for c in row]
+        if out and len(out) > 5 and vals[0] in (None, ""):
+            break
+        out.append(vals)
+    return out
 
 
 def test_the_supporting_tabs_are_four_not_six():
@@ -43,7 +50,63 @@ def test_the_supporting_tabs_are_four_not_six():
     W._append_ai_sheets(wb, job, [])
     er.add_provenance_sheet(wb, job, {"job_number": "7332"})
     generated = [n for n in wb.sheetnames if n != "Estimate"]
-    assert set(generated) == {"Canonical BOM", "Canonical Route", "AI Provenance"}, generated
+    # The AI Explanation tab is written by main.py after the read-back; of the tabs these
+    # two writers produce, one remains. The Canonical BOM and Route are blocks on it.
+    assert set(generated) == {"AI Provenance"}, generated
+
+
+def _tab_text(ws) -> str:
+    return "\n".join(" | ".join(str(c.value) for c in r if c.value is not None)
+                     for r in ws.iter_rows())
+
+
+def test_the_hierarchy_is_a_block_on_the_provenance_tab():
+    text = _tab_text(_provenance_sheet())
+    assert "2 — THE BILL OF MATERIALS AS THE ENGINE ASSEMBLED IT" in text
+    block = text.split("2 — THE BILL OF MATERIALS")[1].split("3 — THE ROUTE")[0]
+    assert "▸ 7332-01-GA" in block and "▸ 7332-01-101" in block
+    assert "    7332-01-002" in block.replace("\u00a0", " ")     # indented under the frame
+    assert "£11.72" in block and "£2.82" in block
+
+
+def test_the_route_block_keeps_the_ruled_out_decisions_beside_the_charged_ones():
+    text = _tab_text(_provenance_sheet())
+    block = text.split("3 — THE ROUTE")[1].split("4 — IDENTITY")[0]
+    leg = [ln for ln in block.splitlines() if ln.startswith("7332-01-002")]
+    kept = [ln for ln in leg if "tubebend" in ln]
+    ruled = [ln for ln in leg if "folding" in ln]
+    assert kept and "charged" in kept[0] and "Estimate!103" in kept[0]
+    assert ruled and "ruled out" in ruled[0] and "not physically possible" in ruled[0]
+    assert "decision:9e3d96e71416" in kept[0]
+    assert "the drawing" in kept[0], "who decided it, in words"
+
+
+def test_the_identity_block_says_what_did_not_track_through_the_pack():
+    import estimation_report as er
+    job = seventy_three_thirty_two()
+    leg = next(n for n in job["estimate_summary"]["canonical_route_shadow"]["nodes"]
+               if n["part_number"] == "7332-01-002")
+    leg["evidence"] = {"raw_aliases": ["7332-01-002", "7332-01-02 LEG"]}
+    job["dxf_augmentation"] = {
+        "unmatched_dxf": [{"path": "K:\\jobs\\7332\\7332-01-009_1mm MS.DXF",
+                           "reason": "no_bom_line_for_this_part_number"}],
+        "ambiguous_dxf": [], "parts_without_dxf": ["7332-01-002"],
+    }
+    wb = openpyxl.Workbook()
+    wb.active.title = "Estimate"
+    er.add_provenance_sheet(wb, job, {"job_number": "7332"})
+    text = _tab_text(wb["AI Provenance"])
+    block = text.split("4 — IDENTITY AND TRACKING")[1]
+    assert "Merged under one name | 7332-01-002 | also appears as 7332-01-02 LEG" in block
+    assert "Drawing file matched to no part | 7332-01-009_1mm MS.DXF" in block
+    assert "no bom line for this part number" in block
+    assert "No DXF flat for this part | 7332-01-002" in block
+
+
+def test_a_clean_pack_says_so_in_the_identity_block():
+    text = _tab_text(_provenance_sheet())
+    block = text.split("4 — IDENTITY AND TRACKING")[1]
+    assert "Every part tracked through the pack under one name" in block
 
 
 def test_the_provenance_tab_reads_value_source_evidence_action():

@@ -54,10 +54,13 @@ def test_two_colourway_gas_collapse_keeping_the_higher_revision():
     assert any(v.get("part_number") == "7332-01-102" for v in node_variants)
 
 
-def test_a_collapsed_colourway_is_named_on_the_canonical_bom_tab():
-    """The dropped GA2 is shown on the Canonical BOM tab, not lost to a console log."""
+def test_a_collapsed_colourway_is_named_on_the_provenance_tab():
+    """The dropped GA2 is shown on the AI Provenance tab — in the hierarchy block and in the
+    identity block — not lost to a console log. (The Canonical BOM tab it used to sit on was
+    folded into AI Provenance.)"""
     import openpyxl
     import wb_populate as wp
+    import estimation_report as er
 
     node = {
         "part_number": "7332-01-101", "description": "FRAME WELDMENT", "kind": "assembly",
@@ -67,18 +70,20 @@ def test_a_collapsed_colourway_is_named_on_the_canonical_bom_tab():
              "revision": "A"}]},
     }
     summary = {"estimate_summary": {
-        "part_estimates": [],
+        "part_estimates": [{"part_number": "7332-01-101", "description": "FRAME WELDMENT",
+                            "quantity": 1}],
         "canonical_route_shadow": {"nodes": [node], "decisions": []},
     }}
-    wb = openpyxl.Workbook()
-    wp._append_ai_sheets(wb, summary, [])
-    assert "Canonical BOM" in wb.sheetnames
-    rows = [[c.value for c in r] for r in wb["Canonical BOM"].iter_rows()]
-    header = rows[0]
-    assert "Colourway variant" in header
-    keeper = next(r for r in rows[1:] if str(r[0]) == "7332-01-101")
-    note = str(keeper[header.index("Colourway variant")] or "")
+    rows = wp.canonical_bom_rows(summary)
+    note = str(rows[0][wp.CANONICAL_BOM_HEADERS.index("Colourway variant")] or "")
     assert "7332-01-102" in note and "colourway variant" in note.lower()
+
+    wb = openpyxl.Workbook()
+    wb.active.title = "Estimate"
+    er.add_provenance_sheet(wb, summary, {"job_number": "7332"})
+    assert "Canonical BOM" not in wb.sheetnames
+    text = " ".join(str(c.value) for r in wb["AI Provenance"].iter_rows() for c in r if c.value)
+    assert "Colourway collapsed" in text and "7332-01-102" in text
 
 
 def test_two_different_arrangements_are_both_kept():

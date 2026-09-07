@@ -1236,6 +1236,19 @@ def _json_ai_rows(scan_doc: Any, which: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _json_route_rows(scan_doc: Any) -> List[Dict[str, Any]]:
+    """The Canonical Route rows from the run JSON, keyed by the headers the tab carried."""
+    if not isinstance(scan_doc, dict):
+        return []
+    try:
+        import wb_populate as _wb
+        rows = _wb.canonical_route_rows(scan_doc)
+        headers = _wb.CANONICAL_ROUTE_HEADERS
+    except Exception:                                                # noqa: BLE001
+        return []
+    return [{h: (r[i] if i < len(r) else None) for i, h in enumerate(headers)} for r in rows]
+
+
 def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
     """Everything both the document and the covering email are written from.
 
@@ -1288,7 +1301,8 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
         "provenance": ({str(r.get("Part") or "").upper(): r
                         for r in _sheet(wb, "AI Price Provenance")}
                        or _json_ai_rows(scan_doc, "provenance")),
-        "routes": _sheet(wb, "Canonical Route"),
+        # The Canonical Route tab is gone from the workbook; the same rows come from the JSON.
+        "routes": _sheet(wb, "Canonical Route") or _json_route_rows(scan_doc),
         "bom": _estimate_bom(wb),
         "order_qty": _order_quantity(wb),
         "pack": _pack_files(scan_doc),

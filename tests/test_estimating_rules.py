@@ -11414,7 +11414,11 @@ def test_the_provenance_sheets_trace_every_part_to_a_sheet_row_and_a_decision():
     wb2 = Workbook()
     add_provenance_sheet(wb2, _job, {"job_number": "12120"})
     ws2 = wb2["AI Provenance"]
-    _rows2 = {ws2.cell(row=r, column=1).value: r for r in range(6, ws2.max_row + 1)}
+    # FIRST occurrence per part: the hierarchy and route blocks lower down the same tab also
+    # begin their rows with the part number.
+    _rows2 = {}
+    for r in range(6, ws2.max_row + 1):
+        _rows2.setdefault(ws2.cell(row=r, column=1).value, r)
     eq(ws2.cell(row=_rows2["BI-KNOB"], column=3).value, 4,
        "the provenance sheet charges the same quantity as the Estimate tab")
     # The column is found by its heading: the tab was cut to value → source → evidence →

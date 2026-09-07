@@ -5028,70 +5028,67 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     # spreadsheet." The two row builders above are kept: the AI Explanation tab and the
     # covering note read them from the run JSON instead of from a sheet.
 
-    # The costing sheet shows only accepted required rows. These two review sheets preserve
-    # the full hierarchy and every route decision, including ruled-out and unverified work.
-    canonical = canonical_route_payload(summary)
-    if canonical:
-        bom_rows = []
-        for node in canonical.get("nodes") or []:
-            if not isinstance(node, dict):
-                continue
-            # A COLLAPSED COLOURWAY IS SHOWN, NOT DROPPED SILENTLY. When the GA/GA2 collapse
-            # folded a duplicate general-arrangement root onto this one (7332-01: the Champagne
-            # Gold GA2 onto the kept GA) the dropped root was recorded on the node's evidence.
-            # Name it here so the BOM says the same stand also ships in the other colourway,
-            # rather than the second drawing vanishing without a trace.
-            _cvars = ((node.get("evidence") or {}).get("colourway_variants") or [])
-            _cnote = "; ".join(
-                f"{_v.get('part_number')}"
-                + (f" ({_v.get('description')})" if _v.get("description") else "")
-                + (f" rev {_v.get('revision')}" if _v.get("revision") else "")
-                for _v in _cvars if isinstance(_v, dict) and _v.get("part_number")
-            )
-            bom_rows.append([
-                node.get("part_number"),
-                node.get("description"),
-                node.get("kind"),
-                node.get("qty_per_unit"),
-                ", ".join(node.get("parents") or []),
-                ", ".join(
-                    f"{edge.get('part_number')} x{edge.get('qty')}"
-                    for edge in (node.get("children") or [])
-                    if isinstance(edge, dict)
-                ),
-                (f"also supplied as {_cnote} — colourway variant" if _cnote else ""),
-            ])
-        _add(
-            "Canonical BOM",
-            ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children",
-             "Colourway variant"],
-            bom_rows,
-        )
+    # NO "Canonical BOM" AND NO "Canonical Route" TABS ANY MORE. Bare text, no presentation,
+    # and the same facts appear elsewhere. Both are folded into the AI Provenance tab, with
+    # presentation — the hierarchy indented under its assemblies, the route grouped by part
+    # with the ruled-out decisions beside the kept ones. The row builders below are kept:
+    # the covering note reads the route rows from the run JSON.
+    return
 
-        route_rows = []
-        for decision in canonical.get("decisions") or []:
-            if not isinstance(decision, dict):
-                continue
-            route_rows.append([
-                decision.get("sequence"),
-                decision.get("operation"),
-                decision.get("status"),
-                decision.get("target_id"),
-                decision.get("scope"),
-                decision.get("qty_per_unit"),
-                ", ".join(decision.get("participants") or []),
-                decision.get("source"),
-                decision.get("reason"),
-                decision.get("decision_id"),
-            ])
-        _add(
-            "Canonical Route",
-            [
-                "Seq", "Operation", "Status", "Target", "Scope", "Qty/unit",
-                "Participants", "Source", "Reason", "Decision ID",
-            ],
-            route_rows,
-        )
+
+CANONICAL_BOM_HEADERS = ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children",
+                         "Colourway variant"]
+CANONICAL_ROUTE_HEADERS = ["Seq", "Operation", "Status", "Target", "Scope", "Qty/unit",
+                           "Participants", "Source", "Reason", "Decision ID"]
+
+
+def colourway_note(node: Dict[str, Any]) -> str:
+    """A COLLAPSED COLOURWAY IS SHOWN, NOT DROPPED SILENTLY. When the GA/GA2 collapse folded
+    a duplicate general-arrangement root onto this one (7332-01: the Champagne Gold GA2 onto
+    the kept GA) the dropped root was recorded on the node's evidence. Named so the BOM says
+    the same stand also ships in the other colourway, rather than the second drawing
+    vanishing without a trace."""
+    _cvars = ((node.get("evidence") or {}).get("colourway_variants") or [])
+    _cnote = "; ".join(
+        f"{_v.get('part_number')}"
+        + (f" ({_v.get('description')})" if _v.get("description") else "")
+        + (f" rev {_v.get('revision')}" if _v.get("revision") else "")
+        for _v in _cvars if isinstance(_v, dict) and _v.get("part_number")
+    )
+    return f"also supplied as {_cnote} — colourway variant" if _cnote else ""
+
+
+def canonical_bom_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """The hierarchy as rows, one per canonical node (CANONICAL_BOM_HEADERS)."""
+    canonical = canonical_route_payload(summary)
+    rows: List[List[Any]] = []
+    for node in (canonical.get("nodes") or []) if canonical else []:
+        if not isinstance(node, dict):
+            continue
+        rows.append([
+            node.get("part_number"), node.get("description"), node.get("kind"),
+            node.get("qty_per_unit"), ", ".join(node.get("parents") or []),
+            ", ".join(f"{edge.get('part_number')} x{edge.get('qty')}"
+                      for edge in (node.get("children") or []) if isinstance(edge, dict)),
+            colourway_note(node),
+        ])
+    return rows
+
+
+def canonical_route_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """Every route decision as a row, kept and ruled out (CANONICAL_ROUTE_HEADERS)."""
+    canonical = canonical_route_payload(summary)
+    rows: List[List[Any]] = []
+    for decision in (canonical.get("decisions") or []) if canonical else []:
+        if not isinstance(decision, dict):
+            continue
+        rows.append([
+            decision.get("sequence"), decision.get("operation"), decision.get("status"),
+            decision.get("target_id"), decision.get("scope"), decision.get("qty_per_unit"),
+            ", ".join(decision.get("participants") or []), decision.get("source"),
+            decision.get("reason"), decision.get("decision_id"),
+        ])
+    return rows
 
 
 # ── standalone test entry ──────────────────────────────────────────────────
