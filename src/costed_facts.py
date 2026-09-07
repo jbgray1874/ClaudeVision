@@ -1145,6 +1145,56 @@ def _material_row_key(row: Mapping[str, Any]) -> str:
     return str(row.get("description") or "").strip().split(" ")[0].upper()
 
 
+_THICKNESS_SOURCE_WORDS = ("dxf", "solidworks", "native", "model", "cutlist", "cut_list",
+                           "title_block", "drawing", "filename")
+
+
+def thickness_conflict(part: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The gauge disagreement on this part that a person must resolve, or None.
+
+    GENERIC, NOT ACRYLIC-SHAPED. Two credible sources disagreeing about how thick the
+    stock is happens on steel and timber exactly as it happened on 10975-02, where the
+    SolidWorks model said 3 mm and the drawing's own DXF said 2 mm and the rank-winner
+    took it silently — the nest price and the cut time both ride on the answer, so a
+    silent winner is a silent re-price. The provenance log (_displaced) keeps every
+    refused observation with its source; a refused thickness from a drawing-or-model
+    class source that differs from the kept value by more than rounding is a decision,
+    not an arbitration the engine is entitled to."""
+    if not isinstance(part, Mapping):
+        return None
+    kept = _num(part.get("normalized_thickness_mm"))
+    if not kept or not (0.2 <= kept <= 50):
+        return None
+    displaced = ((part.get("_displaced") or {}).get("normalized_thickness_mm")
+                 if isinstance(part.get("_displaced"), Mapping) else None) or []
+    kept_src = str(part.get("normalized_thickness_mm_source") or "the winning reader")
+    rivals: List[Tuple[float, str]] = []
+    for entry in displaced:
+        if not isinstance(entry, Mapping) or entry.get("applied"):
+            continue
+        v = _num(entry.get("value"))
+        src = str(entry.get("source") or "")
+        if not v or not (0.2 <= v <= 50) or abs(v - kept) <= 0.05:
+            continue
+        if not any(w in src.lower() for w in _THICKNESS_SOURCE_WORDS):
+            continue
+        rivals.append((v, src))
+    if not rivals:
+        return None
+    others = "; ".join(f"{v:g} mm from {s}" for v, s in
+                       sorted(set(rivals), key=lambda t: t[0]))
+    return {
+        "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
+        "issue": f"Gauge of {part.get('part_number')}: {kept:g} mm was kept "
+                 f"({kept_src}) against {others}",
+        "assumption": f"nested and cut at {kept:g} mm — the sheet price and the cut "
+                      f"time both ride on the gauge",
+        "action": "confirm the gauge against the drawing revision; two readers measured "
+                  "different stock and neither outranks a person",
+        "owner": "estimator", "gbp_at_stake": None,
+    }
+
+
 def _same_value_spelled_twice(a: str, b: str) -> bool:
     """MILD_STEEL and MILD STEEL are one value. A 'disagreement' between two spellings of
     the same token is extraction housekeeping, not a manufacturing question, and it must
@@ -1493,6 +1543,30 @@ def costed_job(source: Any) -> Dict[str, Any]:
                                    f" — priced per metre, so the length is the money"),
                     "action": "confirm the developed length against the GA / model",
                     "owner": "estimator", "gbp_at_stake": _money_of(l)})
+    # ── the disagreements a person owns: gauge, and a BOM that states one line twice ──
+    _by_pn = {str(l.get("part_number") or "").upper(): l for l in lines}
+    for part in job_parts(source):
+        if not isinstance(part, Mapping):
+            continue
+        _tc = thickness_conflict(part)
+        if _tc:
+            _line = _by_pn.get(str(part.get("part_number") or "").upper())
+            if _line is not None:
+                _tc["gbp_at_stake"] = _money_of(_line) or None
+            decisions.append(_tc)
+        for _bc in (part.get("_bom_numeric_conflicts") or []):
+            if not isinstance(_bc, Mapping):
+                continue
+            decisions.append({
+                "part": str(part.get("part_number") or ""),
+                "kind": "manufacturing_decision",
+                "issue": (f"The BOM states this line twice with different figures: "
+                          f"{_bc.get('kept')!r} and {_bc.get('other')!r}"),
+                "assumption": f"priced on {_bc.get('kept')!r} — the other reading is "
+                              f"kept beside it, not chosen",
+                "action": "pick which figure is right; the drawing contradicts itself",
+                "owner": "estimator", "gbp_at_stake": None,
+            })
     for l in house:
         decisions.append({
             "part": l["part_number"], "kind": "indicative_rate",
@@ -1697,7 +1771,7 @@ def charged_breakdown_by_material(source: Any,
     return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
 
 
-__all__ += ["outstanding_summary"]
+__all__ += ["outstanding_summary", "thickness_conflict"]
 __all__ += ["costed_job", "costed_line", "record_lines", "charged_breakdown_by_material",
             "charged_material_rows_present", "packaging_is_charged", "packaging_status",
             "RESIDUAL_LABEL",

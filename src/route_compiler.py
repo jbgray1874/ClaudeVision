@@ -104,6 +104,53 @@ def _squashed(value: Any) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
+_DRILL_OPS = frozenset({"hole_machining", "drilling", "drill", "hole_drilling"})
+_HOLE_NOTE_RE = re.compile(
+    r"[Ø⌀]\s*\d|\bDIA(?:METER)?\b|\bDRILL\b|\bTAPPED\b|\bC'?SK\b|\bCOUNTERSUNK\b"
+    r"|\bHOLES?\b[^A-Z0-9]{0,12}\d|\d[^A-Z0-9]{0,3}HOLES?\b")
+
+
+def _unsupported_drill_reason(template, record: Mapping[str, Any]) -> Optional[str]:
+    """Why a text-cued drilling operation is not charged on this part, or None.
+
+    NOT A UNIVERSAL BAN. Secondary drilling can be real work that never shows on the
+    cutting flat, so a claim survives whenever a note actually calls a hole up — Ø5,
+    DRILL, TAPPED, CSK, '4 HOLES'. What does not survive is a bare text cue on a part
+    whose measured geometry says zero holes and whose own words never mention one:
+    10975-02-A01 carried £13.40 of Drill (Acrylic) with hole_sizes_mm = [] and no hole
+    note anywhere on its page."""
+    if clean_operation(template.operation) not in _DRILL_OPS:
+        return None
+    src = str(getattr(template, "source", "") or "").lower()
+    if "deterministic" in src or "measured" in src:
+        return None                                    # a measured claim stands
+    measured = bool(record.get("native_flat_pattern") or record.get("dxf_augmented")
+                    or record.get("dxf_measured_outline")
+                    or record.get("flat_pattern_detected"))
+    if not measured:
+        return None
+    holes = record.get("hole_count")
+    if holes is None:
+        hs = record.get("hole_sizes_mm")
+        if isinstance(hs, (list, tuple)):
+            holes = len(hs)
+    if holes is None or number(holes, 0.0):
+        return None
+    bits: List[str] = []
+    for key in ("description", "notes", "note_snippets", "combined_notes",
+                "textual_notes"):
+        v = record.get(key)
+        if isinstance(v, (list, tuple)):
+            bits.extend(str(x) for x in v)
+        elif v:
+            bits.append(str(v))
+    if _HOLE_NOTE_RE.search(" ".join(bits).upper()):
+        return None
+    return ("no hole was measured on the flat and no note on this part calls one up — "
+            "a text cue alone does not drill. A stated secondary-drilling note "
+            "(Ø, DRILL, TAPPED, CSK) brings this back")
+
+
 def _interleave_of(whole: str, a: str, b: str, min_each: int = 0) -> bool:
     """True when `whole` is a character-perfect interleave of prefixes of `a` and `b`
     (both orders preserved), consuming at least `min_each` characters from each — the
@@ -710,19 +757,56 @@ def _raw_identity_aliases(
     # caret-named identity's is a fragment of that name, not a part. Ten characters means
     # a genuine different part cannot satisfy it by accident, and the FULLEST spelling
     # survives so every field lands on one record.
+    def _rec_of(ident: str) -> Mapping[str, Any]:
+        return raw.get(ident) or extracted.get(ident) or {}
+
+    def _word_tokens(desc: Any) -> Set[str]:
+        return {t for t in _description_tokens(desc)
+                if not re.fullmatch(r"[\d.,]+(?:MM|X\d+MM)?", str(t).upper())}
+
     _all_ids = [i for i in set(raw) | set(extracted) if i not in aliases]
     _carets = sorted((i for i in _all_ids if "^" in str(i)),
                      key=lambda i: -len(_squashed(i)))
     for identity in _all_ids:
         sq = _squashed(identity)
-        if len(sq) < 10:
+        if len(sq) < 5:
             continue
         for host in _carets:
             hs = _squashed(host)
             if host == identity or hs == sq or len(hs) <= len(sq):
                 continue
-            if sq in hs:
+            if len(sq) >= 10 and sq in hs:
                 aliases[identity] = host
+                break
+            # A SHORT PREFIX NEEDS A SECOND WITNESS. "10975" alone is the project number;
+            # "10975" carrying the caret part's own commodity description ("EPDM TAPE
+            # 25X1MM - TAPE 113C LENGTH: 200.00") is the same BOM row read off the other
+            # sheet. Both records must classify bought-in and their descriptions must
+            # agree word for word once the numerals are set aside — and where the
+            # numerals DISAGREE (sheet 1 says LENGTH: 200.00, sheet 4 says 220.00) the
+            # conflict is recorded on the surviving record for a person, never chosen
+            # silently.
+            if hs.startswith(sq):
+                ri, rh = _rec_of(identity), _rec_of(host)
+                try:
+                    from bought_in_policy import is_bought_in as _bi
+                except Exception:                                # noqa: BLE001
+                    break
+                wi, wh = _word_tokens(ri.get("description")), \
+                    _word_tokens(rh.get("description"))
+                if not (wi and wh and _bi(dict(ri)) and _bi(dict(rh))
+                        and (wi <= wh or wh <= wi)):
+                    continue
+                aliases[identity] = host
+                _di = _description_tokens(ri.get("description")) - wi
+                _dh = _description_tokens(rh.get("description")) - wh
+                if _di and _dh and _di != _dh and isinstance(rh, dict):
+                    rh.setdefault("_bom_numeric_conflicts", []).append({
+                        "field": "description",
+                        "kept": str(rh.get("description") or ""),
+                        "other": str(ri.get("description") or ""),
+                        "from_identity": identity,
+                    })
                 break
     return aliases
 
@@ -2720,6 +2804,22 @@ def compile_job_route(
         # fallback demands uniqueness and ten matching characters, or it stays empty.
         record = graph["records"].get(template.target_id) or \
             _record_by_squashed_key(graph["records"], template.target_id) or {}
+        # UNRESOLVED OWNERSHIP FAILS VISIBLY. A part-scope claim whose record cannot be
+        # found — even under a fuller spelling — is a decision the gates never examined,
+        # and that is a fact the run must state rather than a silence: the reviewer's
+        # rule is "missing records make decisions unverified", never "missing records
+        # skip the safety checks quietly".
+        if not record and template.scope == "part":
+            issues.append({
+                "code": "route_claim_without_record",
+                "identity": template.target_id,
+                "operation": template.operation,
+                "detail": (f"{template.operation} is claimed on {template.target_id}, but "
+                           f"no part record could be found under that name or any fuller "
+                           f"spelling of it — the material, finish and stock-form gates "
+                           f"never examined this decision. Resolve the identity before "
+                           f"trusting the route."),
+            })
         # THE STATED FINISH IS ASKED FIRST, because its reason is the more useful one.
         #
         # A FINISH THE DRAWING STATES OUTRANKS A FINISH THE LEGEND IMPLIES. These packs carry a
@@ -2744,6 +2844,8 @@ def compile_job_route(
             material = str(
                 record.get("normalized_material") or record.get("material") or "")
             reason = impossibility_reason(template.operation, stock_form, material)
+        if not reason and template.scope == "part":
+            reason = _unsupported_drill_reason(template, record)
         if not reason:
             continue
         add_claim(event_id, make_claim(

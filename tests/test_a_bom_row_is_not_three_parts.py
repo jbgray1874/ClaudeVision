@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import bought_in_policy as bp  # noqa: E402
+import costed_facts as cf  # noqa: E402
 import document_builder as db  # noqa: E402
 import route_compiler as rc  # noqa: E402
 
@@ -198,3 +199,99 @@ def test_a_model_that_measured_zero_bends_stays_flat():
     est = estimator.estimate_part(part, job_quantity=1)
     rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
     assert not rt.get("linebend"), "a measured-flat part must not grow a bend from text"
+
+
+# ── the reviewers' acceptance points, round two ──────────────────────────────────────────
+
+def test_two_bends_book_twice_the_per_bend_minutes():
+    """A displayed Linebend must actually carry BOTH bends' minutes — a value that could
+    be one bend's would under-charge, one that doubled would over-charge."""
+    import config
+    import estimator
+    per_bend = float((getattr(config, "ACRYLIC_OP_DRIVERS", {}) or {})
+                     .get("min_per_linebend", 1.0))
+    part = {"part_number": "10975-02-A01", "description": "L-STAND",
+            "normalized_material": "ACRYLIC", "quantity": 1,
+            "overall_length_mm": 760.3, "overall_width_mm": 210.0,
+            "material_thickness_mm": 2.0,
+            "manufacturing_features": {"bend_count": 2},
+            "native_flat_pattern": True}
+    est = estimator.estimate_part(part, job_quantity=1)
+    rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
+    assert abs(rt.get("linebend", 0.0) - 2 * per_bend) < 0.01, \
+        f"two bends must book 2 × {per_bend} min; booked {rt.get('linebend')}"
+
+
+def test_unusual_supplier_codes_never_read_as_chimeras():
+    """Character interleaving is a heuristic, so it must be proven against genuine odd
+    codes, not only SDI-shaped ones."""
+    sq = rc._squashed
+    pool = ["10975-02-G01", "10975-02-GA", "79814P613",
+            "10975 EPDM CLOSED CELL TAPE^10975-02-GA", "M8 FLANGED NUTSERT"]
+    for supplier in ("79814P613", "M8X20-PAN-POZI-A2-70", "TAPE 113C-25X1-BLK",
+                     "3M-VHB-4910F-19MM"):
+        hit = any(rc._interleave_of(sq(supplier), sq(a), sq(b), min_each=5)
+                  for a in pool for b in pool
+                  if a != b and a != supplier and b != supplier)
+        assert not hit, f"{supplier} must survive the chimera check"
+
+
+def test_the_priced_project_number_row_folds_into_the_one_tape_line():
+    """Sheet 1's row was minted as bare '10975' and PRICED, beside the caret part — the
+    duplicate the first alias pass could not see. With the commodity description as the
+    second witness it is one line; and where the two sheets' figures disagree (LENGTH
+    200 vs 220), the conflict is recorded on the survivor, never chosen silently."""
+    full = "10975 EPDM CLOSED CELL TAPE^10975-02-GA"
+    host_rec = {"description": "EPDM TAPE 25X1MM - TAPE 113C LENGTH: 220.00"}
+    aliases = rc._raw_identity_aliases(
+        {"10975": {"description": "EPDM TAPE 25X1MM - TAPE 113C LENGTH: 200.00"}},
+        {full: host_rec})
+    assert aliases.get("10975") == full
+    conflicts = host_rec.get("_bom_numeric_conflicts") or []
+    assert conflicts and "200.00" in str(conflicts[0]["other"]) \
+        and "220.00" in str(conflicts[0]["kept"])
+
+
+def test_a_bare_project_number_with_a_different_description_stays_itself():
+    full = "10975 EPDM CLOSED CELL TAPE^10975-02-GA"
+    aliases = rc._raw_identity_aliases(
+        {"10975": {"description": "DISPLAY STAND ASSEMBLY"}},
+        {full: {"description": "EPDM TAPE 25X1MM"}})
+    assert "10975" not in aliases
+
+
+def test_a_gauge_disagreement_between_readers_is_a_decision():
+    """Generic: the model said 3 mm, the DXF said 2 mm, and the rank-winner took it
+    silently — on steel or acrylic alike that is a re-price nobody approved."""
+    import source_precedence as sp
+    part = {"part_number": "10975-02-A01"}
+    sp.apply_field(part, "normalized_thickness_mm", 3.0, "solidworks_flat_pattern")
+    sp.apply_field(part, "normalized_thickness_mm", 2.0, "dxf_filename")
+    d = cf.thickness_conflict(part)
+    assert d and d["kind"] == "manufacturing_decision"
+    assert "3 mm" in d["issue"] and "2 mm" in d["issue"]
+    agreed = {"part_number": "X"}
+    sp.apply_field(agreed, "normalized_thickness_mm", 3.0, "solidworks_flat_pattern")
+    sp.apply_field(agreed, "normalized_thickness_mm", 3.0, "dxf")
+    assert cf.thickness_conflict(agreed) is None, "agreement is not a decision"
+
+
+def test_text_cued_drilling_yields_to_a_measured_flat_with_no_hole_note():
+    class _T:
+        operation = "hole_machining"
+        source = "drawing_notes"
+    measured_no_holes = {"native_flat_pattern": True, "hole_sizes_mm": [],
+                         "description": "L-STAND", "notes": "SHARP EDGES REMOVED"}
+    assert rc._unsupported_drill_reason(_T(), measured_no_holes)
+    noted = {"native_flat_pattern": True, "hole_sizes_mm": [],
+             "description": "BRACKET", "notes": "DRILL 2 HOLES Ø5 AFTER FORMING"}
+    assert rc._unsupported_drill_reason(_T(), noted) is None, \
+        "a stated secondary-drilling note keeps the operation"
+    unmeasured = {"description": "BRACKET", "notes": ""}
+    assert rc._unsupported_drill_reason(_T(), unmeasured) is None, \
+        "with nothing measured, text evidence stands"
+
+    class _M(_T):
+        source = "drawing_deterministic"
+    assert rc._unsupported_drill_reason(_M(), measured_no_holes) is None, \
+        "a measured claim is never second-guessed by this rule"

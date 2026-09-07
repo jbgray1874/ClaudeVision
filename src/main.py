@@ -1325,6 +1325,20 @@ def main() -> None:
                         (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \
                             list(_swept.get("variants") or [])
                         summary["quantity_sweep"] = _swept
+                        # EACH VARIANT EXPLAINS ITS OWN QUANTITY. The AI Explanation tab
+                        # reads the workbook's calculated cells, so rewriting it on each
+                        # saved variant makes the tab's totals the variant's totals — the
+                        # 10-off sheet said £34.34 while its tabs still recited the 1-off
+                        # £185.92, and a tab that contradicts its own Estimate sheet reads
+                        # as a broken run, not a recalculated one.
+                        for _vp in (_swept.get("variants") or []):
+                            try:
+                                from estimate_explanation_tab import write_tab as _vtab
+                                _vtab(_vp, (summary.get("saved_output_paths") or {}).get("json"))
+                            except Exception as _vt_exc:         # noqa: BLE001
+                                print(f"   [qty-sweep] variant explanation not refreshed "
+                                      f"for {_vp} ({_vt_exc}) — the variant sheet itself "
+                                      f"is correct.", flush=True)
                         print(f"   [qty-sweep] {len(_swept.get('variants') or [])} variant "
                               f"workbook(s) filed at {', '.join(str(q) for q in _breaks)} off"
                               + ("" if _order_freight else
