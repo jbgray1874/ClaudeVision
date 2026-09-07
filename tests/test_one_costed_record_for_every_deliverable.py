@@ -522,3 +522,81 @@ def test_the_ai_price_provenance_rows_name_the_leg_and_do_not_call_packaging_ste
     assert mats["PACKAGING"][2] == "— (commercial line)"
     assert mats["7332-01-101-PLATE"][2] == "— (subcontract service)"
     assert mats["7332-01-001"][2] == "MILD STEEL"
+
+
+# ── the 12:10 review of 7332-01: four targeted defects, pinned ────────────────────────────
+
+def test_a_plate_line_minted_down_the_commercial_path_is_still_a_service():
+    """On the live run the plating stub arrived wearing _commercial_placeholder, and the
+    commercial test ran first — so 7332-01-101-PLATE classified as a commercial line,
+    £15.83 of subcontract plate filed under 'Packaging / delivery' in the material
+    breakdown, and the plate-membership decision vanished (it is only built from a
+    service line). A -PLATE line is a service whatever path minted it."""
+    part = {"part_number": "7332-01-101-PLATE", "_commercial_placeholder": True,
+            "source": "commercial_placeholder"}
+    assert cf._line_kind(part, None) == "service"
+    assert cf._line_kind({"part_number": "PACKAGING",
+                          "_commercial_placeholder": True}, None) == "commercial"
+
+
+def test_the_breakdown_files_the_plate_under_subcontract_plating():
+    job = seventy_three_thirty_two()
+    for line in cf.costed_job(job)["lines"]:
+        if line["part_number"] == "7332-01-101-PLATE":
+            assert line["kind"] == "service"
+    labels = dict(cf.charged_breakdown_by_material(job))
+    assert "Subcontract plating" in labels
+    assert "Packaging / delivery" not in labels or labels["Packaging / delivery"] == 0
+
+
+def test_plating_scope_is_a_decision_row_not_a_description():
+    decisions = cf.costed_job(seventy_three_thirty_two())["decisions_required"]
+    plate = [d for d in decisions if d["kind"] == "manufacturing_decision"
+             and "plated" in str(d["issue"]).lower()]
+    assert plate, "the plate-membership question must be its own decision row"
+    assert "7332-01-001" in str(plate[0]["assumption"]) or \
+        "no member" in str(plate[0]["assumption"])
+
+
+def test_review_flags_carry_no_raw_dicts_and_no_spelling_disagreements():
+    """The report's BOM notes printed {'severity': 'warning', ...} verbatim and asked the
+    estimator to choose between MILD STEEL and MILD_STEEL. Dict flags are the extractor
+    talking to itself; a two-spellings 'disagreement' is one value."""
+    flags = cf._estimator_flags([
+        {"severity": "warning", "field": "thickness", "reason": "No thickness extracted."},
+        "{'severity': 'info', 'field': 'detail_features'}",
+        "normalized_material: 'MILD_STEEL' from inference NOT applied — 'MILD STEEL' from "
+        "bom_tree is the stronger source and was kept. The two disagree; confirm which is right",
+        "thickness: '2.0' from dxf NOT applied — '1.5' from drawing_deterministic is the "
+        "stronger source and was kept. The two disagree; confirm which is right",
+    ])
+    assert flags == ["thickness: '2.0' from dxf NOT applied — '1.5' from "
+                     "drawing_deterministic is the stronger source and was kept. "
+                     "The two disagree; confirm which is right"]
+
+
+def test_outstanding_summary_is_one_phrase_from_either_a_summary_or_a_record():
+    """The HTML-only regeneration path reads the record straight from the saved JSON, so
+    the tally function must accept both shapes and give the same answer."""
+    job = seventy_three_thirty_two()
+    from_summary = cf.outstanding_summary(job)
+    from_record = cf.outstanding_summary(cf.costed_job(job))
+    assert from_summary == from_record
+    assert from_summary["phrase"] == ("2 prices missing + 2 manufacturing decisions "
+                                      "+ 2 indicative rates to verify")
+    assert from_summary["total"] == 6
+    assert from_summary["blocking"] == 4 and from_summary["advisory"] == 2
+
+
+def test_a_spelling_twin_never_becomes_a_review_flag_at_the_source():
+    import source_precedence as sp
+    part = {"part_number": "X"}
+    sp.apply_field(part, "normalized_material", "MILD STEEL", "drawing_deterministic")
+    sp.apply_field(part, "normalized_material", "MILD_STEEL", "dxf_filename")
+    assert not part.get("review_flags"), "an underscore is not a disagreement"
+    # A REAL disagreement still flags (fresh part: the twin above already corroborates
+    # MILD STEEL two-to-one, and a quorum question is not the equal-rank flag path).
+    other = {"part_number": "Y"}
+    sp.apply_field(other, "normalized_material", "MILD STEEL", "drawing_deterministic")
+    sp.apply_field(other, "normalized_material", "ACRYLIC", "dxf_filename")
+    assert any("disagree" in str(f) for f in other.get("review_flags", []))

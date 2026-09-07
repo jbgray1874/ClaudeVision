@@ -163,12 +163,19 @@ def test_the_finish_charged_is_the_same_words_everywhere(surfaces):
 
 
 def test_the_release_status_agrees(surfaces):
+    """ONE TALLY, ONE PHRASE, FOUR SURFACES. On the 12:10 run of 7332-01 the same five
+    open items were counted three different ways: banner 3, table 5, explanation 4+1,
+    quote 2+1, e-mail 2+2+1. Every surface now prints outstanding_summary's phrase, so
+    the counts cannot drift again."""
     rel = surfaces["record"]["release"]
     assert rel["draft"] and rel["outstanding"] == 4
-    assert "PROVISIONAL" in surfaces["subject"] and "2 decisions open" in surfaces["subject"]
-    assert "Not for release — 4 inputs outstanding" in surfaces["report"]
-    assert "DRAFT — not for issue · 2 prices outstanding · 2 decisions open" in surfaces["quote"]
-    assert "No — 4 input(s) outstanding" in surfaces["explanation"]
+    phrase = ("2 prices missing + 2 manufacturing decisions "
+              "+ 2 indicative rates to verify")
+    assert "PROVISIONAL" in surfaces["subject"]
+    assert f"To settle: {phrase}." in surfaces["subject"]
+    assert f"Not for release — 6 to settle: {phrase}" in surfaces["report"]
+    assert f"DRAFT — not for issue · {phrase}" in surfaces["quote"]
+    assert f"No — 6 to settle: {phrase}." in surfaces["explanation"]
 
 
 # ── what must NOT be on any surface ───────────────────────────────────────────

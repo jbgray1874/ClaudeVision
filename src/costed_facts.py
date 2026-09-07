@@ -33,6 +33,8 @@ equally the authority on the route, which is why (1) exists.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 __all__ = [
@@ -1143,17 +1145,56 @@ def _material_row_key(row: Mapping[str, Any]) -> str:
     return str(row.get("description") or "").strip().split(" ")[0].upper()
 
 
+def _same_value_spelled_twice(a: str, b: str) -> bool:
+    """MILD_STEEL and MILD STEEL are one value. A 'disagreement' between two spellings of
+    the same token is extraction housekeeping, not a manufacturing question, and it must
+    never reach an estimator as something to resolve."""
+    def norm(t: str) -> str:
+        return re.sub(r"\s+", " ", str(t).replace("_", " ").replace("-", " ")).strip().upper()
+    return norm(a) == norm(b) and bool(norm(a))
+
+
+def _estimator_flags(flags: Any) -> List[str]:
+    """The review flags a person can act on — plain sentences only.
+
+    The record used to carry str(flag) for everything, which put raw Python dicts
+    ({'severity': 'warning', 'field': 'thickness', ...}) into the report's BOM notes, and
+    asked the estimator to choose between 'MILD STEEL' and 'MILD_STEEL' as if the underscore
+    were a manufacturing disagreement. Dict flags are the extractor talking to itself — they
+    stay in the JSON for diagnosis and off every estimator surface. A kept/not-applied
+    sentence survives only when the two values actually differ."""
+    out: List[str] = []
+    for f in flags or []:
+        if not f or isinstance(f, Mapping):
+            continue
+        t = str(f).strip()
+        if not t or (t.startswith("{") and t.endswith("}")):
+            continue
+        m = re.search(r"'([^']*)' from \S+ (?:was |NOT )", t)
+        pair = re.findall(r"'([^']*)'", t)
+        if m and len(pair) >= 2 and _same_value_spelled_twice(pair[0], pair[1]):
+            continue
+        out.append(t)
+    return out
+
+
 def _line_kind(part: Mapping[str, Any], node: Optional[Mapping[str, Any]]) -> str:
     """leaf / assembly / bought_in / commercial / service — the canonical node's kind with
     the two kinds the graph does not distinguish named on top of it."""
     pn = str(part.get("part_number") or "").strip().upper()
     method = str((part.get("material_estimate") or {}).get("cost_method")
                  or part.get("cost_source") or part.get("source") or "").lower()
+    # PLATING BEFORE COMMERCIAL. The plating stub is minted down the same placeholder path
+    # as PACKAGING and DELIVERY, so on a live run it arrives wearing _commercial_placeholder.
+    # With the commercial test first, 7332-01-101-PLATE classified as a commercial line —
+    # which filed £15.83 of subcontract plate under "Packaging / delivery" in the material
+    # breakdown AND silenced the plate-membership decision (the plating field is only built
+    # from a service line). A -PLATE line is a service whatever path minted it.
+    if part.get("_plating_placeholder") or "plating" in method or pn.endswith("-PLATE"):
+        return "service"
     if part.get("_commercial_placeholder") or str(part.get("source") or "") == \
             "commercial_placeholder" or pn in ("PACKAGING", "DELIVERY"):
         return "commercial"
-    if part.get("_plating_placeholder") or "plating" in method or pn.endswith("-PLATE"):
-        return "service"
     if isinstance(node, Mapping) and node.get("kind"):
         return str(node["kind"])
     if str(part.get("canonical_kind") or ""):
@@ -1381,7 +1422,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "operations": _operations_from_decisions(source, pn),
             "length": length,
             "section_profile": profile,
-            "review_flags": [str(f) for f in (part.get("review_flags") or []) if f],
+            "review_flags": _estimator_flags(part.get("review_flags")),
             "plating_members": list(part.get("_plating_members_costed") or []),
             "plating_excluded": list(part.get("_plating_members_deferred") or []),
         })
@@ -1532,6 +1573,47 @@ def costed_line(source: Any, part_number: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def outstanding_summary(source: Any) -> Dict[str, Any]:
+    """THE ONE TALLY of what still needs a person, printed identically on every surface.
+
+    On the 12:10 run of 7332-01 the same five open items were counted three different ways:
+    the report banner said 3 inputs, its own table listed 5, the explanation said 4 lines +
+    1 decision, the quote said 2 prices + 1 decision. Every writer now calls this and prints
+    the phrase, so the tallies cannot drift apart again.
+
+    The rule, in Tim's terms: what BLOCKS release (missing prices, market figures to
+    replace, manufacturing decisions) is counted apart from what is ADVISORY (house rates
+    marked INDICATIVE — configured and reproducible, to verify or deliberately accept).
+
+    Accepts either a run summary or an already-built costed_job record, because the HTML
+    regeneration path reads the record straight from the saved JSON."""
+    job = source if (isinstance(source, Mapping) and "decisions_required" in source
+                     and "release" in source) else costed_job(source)
+    ds = [d for d in (job.get("decisions_required") or []) if isinstance(d, Mapping)]
+
+    def _n(kind: str) -> int:
+        return sum(1 for d in ds if d.get("kind") == kind)
+
+    prices, market = _n("missing_price"), _n("market_figure")
+    mfg, house = _n("manufacturing_decision"), _n("indicative_rate")
+    bits: List[str] = []
+    if prices:
+        bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
+    if market:
+        bits.append(f"{market} market figure{'s' if market != 1 else ''} to replace")
+    if mfg:
+        bits.append(f"{mfg} manufacturing decision{'s' if mfg != 1 else ''}")
+    if house:
+        bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
+    return {
+        "prices_missing": prices, "market_figures": market,
+        "manufacturing": mfg, "indicative": house,
+        "blocking": prices + market + mfg, "advisory": house,
+        "total": len(ds),
+        "phrase": " + ".join(bits) if bits else "nothing outstanding",
+    }
+
+
 RESIDUAL_LABEL = "Rounding / unreconciled residual"
 
 
@@ -1615,6 +1697,7 @@ def charged_breakdown_by_material(source: Any,
     return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
 
 
+__all__ += ["outstanding_summary"]
 __all__ += ["costed_job", "costed_line", "record_lines", "charged_breakdown_by_material",
             "charged_material_rows_present", "packaging_is_charged", "packaging_status",
             "RESIDUAL_LABEL",

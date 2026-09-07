@@ -1004,16 +1004,13 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # blocks, or a manufacturing decision is open. Read from the record's release block.
     draft_block = ""
     if _draft:
-        _bits = []
-        if _release.get("prices_outstanding"):
-            _n = int(_release["prices_outstanding"])
-            _bits.append(f"{_n} price{'s' if _n != 1 else ''} outstanding")
-        if _release.get("decisions_open"):
-            _n = int(_release["decisions_open"])
-            _bits.append(f"{_n} decision{'s' if _n != 1 else ''} open")
+        # THE ONE TALLY — outstanding_summary's phrase, the same words the report banner
+        # and the explanation print, so no two documents count the open items differently.
+        from costed_facts import outstanding_summary
+        _out = outstanding_summary(_record or summary)
         draft_block = (
             '\n    <div class="draft">DRAFT — not for issue'
-            + (" · " + " · ".join(_bits) if _bits else "") + "</div>")
+            + (" · " + _out["phrase"] if _out["total"] else "") + "</div>")
 
     ga_block = ""
     if ga_uri:

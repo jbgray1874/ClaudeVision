@@ -1403,10 +1403,10 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
         add(f"- **What finish is charged?** "
             + (f"{(record or {}).get('finishes_charged')}." if (record or {}).get("finishes_charged")
                else "No finish operation or subcontract finish carries money on this sheet."))
+        from costed_facts import outstanding_summary
+        _out = outstanding_summary(record)
         add(f"- **Can this go out?** "
-            + (f"No — {_rel.get('outstanding') or 0} input(s) outstanding: "
-               f"{_rel.get('prices_outstanding') or 0} price(s), "
-               f"{_rel.get('decisions_open') or 0} manufacturing decision(s). The quote is a draft "
+            + (f"No — {_out['total']} to settle: {_out['phrase']}. The quote is a draft "
                f"and the sheet is provisional until they are settled."
                if _rel.get("draft") else
                "Nothing is waiting on a person; release is subject to the consistency checks."))
@@ -1420,8 +1420,14 @@ def build(workbook: Path, scan_json: Optional[Path]) -> str:
     if _unpriced or _indicative or _mfg:
         add("## What a person still has to settle")
         add("")
-        add(f"{len(_unpriced) + len(_indicative)} line(s)"
-            + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else "")
+        # THE ONE TALLY — the same phrase the report banner and the quote's draft strip
+        # print, from outstanding_summary, so this section cannot count the same five
+        # things a third way.
+        from costed_facts import outstanding_summary as _osum
+        _o = _osum(record) if record else None
+        add((f"{_o['total']} to settle: {_o['phrase']}" if _o and _o["total"] else
+             f"{len(_unpriced) + len(_indicative)} line(s)"
+             + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else ""))
             + ". Until these are answered the estimate is not a quote, and the banner on the "
               "sheet says so.")
         add("")
@@ -2202,10 +2208,21 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     _mfg = [d for d in ((record or {}).get("decisions_required") or [])
             if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
     _state = "PROVISIONAL. " if provisional else ""
+    # THE ONE TALLY in the subject line too — the same phrase as the report banner, the
+    # explanation and the quote's draft strip, so the e-mail cannot count the same open
+    # items a fourth way ("2 unpriced + 2 INDICATIVE + 1 length" was the e-mail's version
+    # of the report's "3 inputs" and the table's five rows).
     _need = (f"{_plural(len(needs_a_person), 'line')} need a person."
              if needs_a_person else "No line is waiting on a person.")
     if _mfg:
         _need += f" {_plural(len(_mfg), 'decision')} open."
+    if record:
+        from costed_facts import outstanding_summary as _osum
+        _o = _osum(record)
+        if _o["total"]:
+            _need = f"To settle: {_o['phrase']}."
+        elif not needs_a_person:
+            _need = "Nothing is waiting on a person."
     subject = (f"{job} — SDI Intelligence estimate, {_state}"
                f"{_gbp(totals.get('unit'))}/unit at {order_qty} of. {_need}")
 

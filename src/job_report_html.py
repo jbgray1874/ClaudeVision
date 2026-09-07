@@ -1525,9 +1525,10 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
     # NO REASSURANCE THE TOP OF THE PAGE CONTRADICTS. The record's open decisions are stated
     # in this verdict too, so a reader who lands here from a search does not read "every
     # check passed" on a job whose plating scope is still Tim's call.
-    _rel = (_record_for(summary).get("release") or {})
-    _open = int(_rel.get("decisions_open") or 0) + int(_rel.get("prices_outstanding") or 0)
-    _open_note = (f" {_open} input(s) are still outstanding — listed under Decisions required "
+    from costed_facts import outstanding_summary
+    _out = outstanding_summary(_record_for(summary))
+    _open = _out["total"]
+    _open_note = (f" Still to settle: {_out['phrase']} — listed under Decisions required "
                   f"at the top of this page." if _open else "")
     if _inv is not None and not _inv.get("may_quote_firm"):
         _lead = (f"<b>This estimate is PROVISIONAL and must not be released as a firm price.</b> "
@@ -2517,8 +2518,13 @@ def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str
     inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
     reasons = [str(r) for r in (rel.get("reasons") or []) if r]
     if rel.get("draft"):
-        n = int(rel.get("outstanding") or 0)
-        return ("t-bad", f"Not for release — {n} input{'s' if n != 1 else ''} outstanding",
+        # THE ONE TALLY. The banner said "3 inputs" over a table of 5 items because it read
+        # release.outstanding (blocking only) while the table listed every decision. Both
+        # now come from outstanding_summary, so the headline count IS the table's row count.
+        from costed_facts import outstanding_summary
+        s = outstanding_summary(record)
+        return ("t-bad",
+                f"Not for release — {s['total']} to settle: {s['phrase']}",
                 reasons)
     if inv is None:
         return "t-warn", "Unverified — the consistency checks did not run", reasons

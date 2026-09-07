@@ -759,6 +759,17 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
             return True
 
     _cur_src_txt = _cur_src or "an earlier pass"
+    # ONE VALUE, TWO SPELLINGS, NO DISAGREEMENT. 'MILD_STEEL' from a filename and
+    # 'MILD STEEL' from the drawing are the same token; asking an estimator to "confirm
+    # which is right" between an underscore and a space is noise dressed as a decision.
+    # The refusal above still records the observation — only the flag is withheld.
+    def _same_token(a: Any, b: Any) -> bool:
+        import re as _re
+        na = _re.sub(r"\s+", " ", str(a).replace("_", " ").replace("-", " ")).strip().upper()
+        nb = _re.sub(r"\s+", " ", str(b).replace("_", " ").replace("-", " ")).strip().upper()
+        return bool(na) and na == nb
+    if _same_token(_cur, value):
+        return False
     if rank(source) == rank(_cur_src):
         # EQUAL RANK, DIFFERENT ANSWERS. Neither observation outranks the other, so nothing
         # here can resolve it — and letting the later one win would make the result depend on
