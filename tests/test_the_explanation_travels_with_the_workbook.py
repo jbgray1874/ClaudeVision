@@ -84,6 +84,39 @@ def test_the_tab_renders_the_document_rather_than_asking_again(name):
     assert f"estimate_explained.{name}" in source
 
 
+def test_a_variant_tab_prints_that_quantitys_money_not_the_baseline_headline(tmp_path):
+    """The 50-off workbook's Explanation recited the 1-off £68.74 beside the variant's own
+    £3.92 labour: the sweep's openpyxl save strips Excel's cached formula results, so the
+    tab's label scan found nothing and its JSON fallback answered for the wrong quantity.
+    The sweep read each variant's totals from a live Excel session — handed through
+    totals_override, they are the truth for this file and beat both other sources."""
+    import json
+    import openpyxl
+    from test_one_costed_record_for_every_deliverable import seventy_three_thirty_two
+
+    job = seventy_three_thirty_two()
+    wb = openpyxl.Workbook()
+    wb.active.title = "Estimate"
+    wb.active["D6"] = 50
+    xlsx = tmp_path / "10975-02_qty50.xlsx"
+    wb.save(xlsx)
+    jp = tmp_path / "10975-02.json"
+    jp.write_text(json.dumps(job), encoding="utf-8")
+
+    assert estimate_explanation_tab.write_tab(
+        xlsx, jp,
+        totals_override={"quantity": 50, "material": 7.64,
+                         "labour": 3.92, "unit": 12.44}) == "AI Explanation"
+    out = openpyxl.load_workbook(xlsx)["AI Explanation"]
+    text = " ".join(str(c.value) for row in out.iter_rows() for c in row if c.value)
+    assert "£12.44" in text, "the variant's own unit cost must headline its tab"
+    assert "£3.92" in text, "the variant's own labour must be stated"
+    _baseline_unit = (job.get("final_estimate") or {}).get("totals", {}).get("unit_gbp")
+    if _baseline_unit and abs(float(_baseline_unit) - 12.44) > 0.01:
+        assert f"£{float(_baseline_unit):.2f} — material" not in text, \
+            "the baseline headline must not survive on a variant"
+
+
 def test_the_tab_wears_the_provenance_tabs_clothes(tmp_path):
     """One product, one look. Tim's reviewer read the flat COM rendering: "the rendered
     action table clips descriptions, assumptions and instructions." The tab now uses AI

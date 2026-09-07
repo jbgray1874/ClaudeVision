@@ -392,3 +392,128 @@ def test_the_gauge_conflict_is_visible_whichever_side_wins():
     sp.apply_field(dxf_won, "normalized_thickness_mm", 3.0, "solidworks_flat_pattern")
     d = cf.thickness_conflict(dxf_won)
     assert d and "2 mm" in d["issue"] and "3 mm" in d["issue"]
+
+
+# ── the 17:11 replay's four binds — that run's own record shapes, no new matchers ────────
+
+def _live_seventeen_eleven_parts():
+    """The costed population as the 17:11 log printed it — the records the binds must
+    act on, not fixture-friendly reconstructions."""
+    return [
+        {"part_number": "10975-02-A01", "description": "L-STAND",
+         "normalized_material": "ACRYLIC", "quantity": 1,
+         "geometry_source": "dxf_flat_pattern", "geometry_reliability": 1.0,
+         "geometry_rollup": {"estimated_cut_length_mm": 1937.07,
+                             "estimated_hole_count": 0,
+                             "estimated_bend_line_count": 2}},
+        {"part_number": "10975-02-G01", "description": "GRAPHIC",
+         "normalized_material": "PAPER", "quantity": 1,
+         "page_roles": ["detail", "bought_in"]},
+        {"part_number": "10975EPDMCLOSEDCELL",
+         "description": "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C LENGTH: 200.00",
+         "normalized_material": "ACRYLIC", "quantity": 3},
+        {"part_number": "1100997755-E0P2D-GM0", "description": "1Closed GRAPHIC",
+         "quantity": 1, "page_roles": ["bought_in"]},
+        {"part_number": "CELL TAPE^10975-02-",
+         "description": "EPDM TAPE 25X1MM - TAPE 113C LENGTH: 220.00",
+         "normalized_material": "ACRYLIC", "quantity": 3,
+         "operations": ["handling"], "pages": [1]},
+    ]
+
+
+def test_the_live_tape_records_fold_to_one_line_with_the_length_decision():
+    """Bind 2. p.1 says LENGTH 200, p.4 says 220 — two BOM tables naming one commodity.
+    The graph aliased them for two runs while the sheet still priced both; the fold must
+    reach the RECORDS: one tape line survives, the other's evidence lands on it, and the
+    length disagreement is a recorded conflict, never a silent choice."""
+    parts = _live_seventeen_eleven_parts()
+    rc.apply_canonical_evidence_to_parts(parts)
+    tapes = [p for p in parts if "EPDM" in str(p.get("description", "")).upper()
+             or "TAPE" in str(p.get("part_number", "")).upper()]
+    assert len(tapes) == 1, \
+        f"one tape line, got {[p['part_number'] for p in tapes]}"
+    survivor = tapes[0]
+    conflicts = str(survivor.get("_bom_numeric_conflicts") or [])
+    assert "200" in conflicts and "220" in conflicts, \
+        f"the 200 vs 220 length fight must be recorded: {conflicts!r}"
+    assert any("folded into this line" in str(f)
+               for f in survivor.get("review_flags") or []), \
+        "the fold leaves its evidence on the survivor"
+    assert survivor.get("pages") == [1], \
+        "the dropped record's page evidence must fill the survivor's gap"
+
+
+def test_the_chimera_leaves_the_costed_population_not_only_the_graph():
+    """Bind 1. The 17:11 log dropped 1100997755-E0P2D-GM0 twice and the Estimate sheet
+    still carried it — the drop forgot the identity while the record stayed priced. The
+    quarantine must remove the record itself."""
+    parts = _live_seventeen_eleven_parts()
+    rc.apply_canonical_evidence_to_parts(parts)
+    assert not any(p.get("part_number") == "1100997755-E0P2D-GM0" for p in parts), \
+        "the zipped BOM row must leave the population the sheet is built from"
+    assert any(p.get("part_number") == "10975-02-G01" for p in parts), \
+        "the real graphic survives"
+
+
+def test_the_quarantine_reaches_every_list_and_keeps_the_evidence():
+    """Bind 1, the post-reconciliation half: the dual-path reader re-adds the row to
+    part_estimates AFTER the pre-cost purge, so the quarantine must take issues from the
+    final recompile and clear BOTH lists — filing the record on the summary, never a
+    silent delete."""
+    issues = [{"code": "bom_row_interleave_artifact",
+               "identity": "1100997755-E0P2D-GM0", "detail": "zipped"}]
+    parts = [{"part_number": "1100997755-E0P2D-GM0", "description": "1Closed GRAPHIC"},
+             {"part_number": "10975-02-G01", "description": "GRAPHIC"}]
+    estimates = [{"part_number": "1100997755-E0P2D-GM0", "unit_estimate": 0.0},
+                 {"part_number": "10975-02-G01", "unit_estimate": 0.0}]
+    summary: dict = {}
+    removed = rc.quarantine_interleave_artefacts([parts, estimates], issues,
+                                                 summary=summary)
+    assert len(removed) == 2
+    assert [p["part_number"] for p in parts] == ["10975-02-G01"]
+    assert [e["part_number"] for e in estimates] == ["10975-02-G01"]
+    stored = summary.get("quarantined_interleave_artefacts") or []
+    assert stored and stored[0]["part_number"] == "1100997755-E0P2D-GM0"
+    assert stored[0]["reason"] == "bom_row_interleave_artifact"
+
+
+def test_nobody_is_asked_for_the_phantoms_drawing():
+    """The 17:11 blocker told Tim to chase Design for 1100997755-E0P2D-GM0's detail
+    sheet. A quarantined chimera is not a missing drawing."""
+    import invariants
+    summary = {
+        "document_analysis": {"bom_rows": [
+            {"part_number": "1100997755-E0P2D-GM0", "description": "1Closed GRAPHIC",
+             "quantity": 1},
+        ]},
+        "pages": [],
+        "manufacturing_writeup": {"parts": []},
+        "quarantined_interleave_artefacts": [
+            {"part_number": "1100997755-E0P2D-GM0",
+             "reason": "bom_row_interleave_artifact"}],
+    }
+    out = invariants.check_the_pack_contains_the_drawings_its_bom_names(summary)
+    assert not any("1100997755" in str(v) for v in out), \
+        f"the phantom must not raise a missing-drawing blocker: {out}"
+    # And WITHOUT the quarantine record the same row still blocks — the skip is
+    # evidence-gated, not a blanket pardon.
+    summary.pop("quarantined_interleave_artefacts")
+    out = invariants.check_the_pack_contains_the_drawings_its_bom_names(summary)
+    assert any("1100997755" in str(v) for v in out)
+
+
+def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
+    """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
+    on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""
+    class _T:
+        operation = "hole_machining"
+        source = "drawing_notes"
+    live = {"geometry_source": "dxf_flat_pattern", "geometry_reliability": 1.0,
+            "geometry_rollup": {"estimated_hole_count": 0,
+                                "estimated_bend_line_count": 2},
+            "description": "L-STAND"}
+    assert rc._unsupported_drill_reason(_T(), live), \
+        "zero measured holes on the flat and no note — the drill claim must fall"
+    holed = dict(live, geometry_rollup={"estimated_hole_count": 4})
+    assert rc._unsupported_drill_reason(_T(), holed) is None, \
+        "measured holes keep the operation"

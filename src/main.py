@@ -1331,14 +1331,41 @@ def main() -> None:
                         # 10-off sheet said £34.34 while its tabs still recited the 1-off
                         # £185.92, and a tab that contradicts its own Estimate sheet reads
                         # as a broken run, not a recalculated one.
+                        # WITH THAT VARIANT'S OWN TOTALS. The variant file was saved by
+                        # openpyxl inside the sweep, which strips Excel's cached formula
+                        # results — so the tab's label scan finds nothing and its JSON
+                        # fallback recites the BASELINE quantity's headline. The 50-off
+                        # Explanation printed the 1-off £68.74 beside the variant's own
+                        # £3.92 labour. The sweep read each variant's totals out of a live
+                        # Excel session before the cache was lost: hand that row to the tab.
+                        _sweep_rows = {int(r.get("quantity") or 0): r
+                                       for r in (_swept.get("rows") or [])
+                                       if isinstance(r, dict)}
                         for _vp in (_swept.get("variants") or []):
                             try:
                                 from estimate_explanation_tab import write_tab as _vtab
-                                _vtab(_vp, (summary.get("saved_output_paths") or {}).get("json"))
+                                _qm = re.search(r"_qty(\d+)", str(_vp))
+                                _row = _sweep_rows.get(int(_qm.group(1))) if _qm else None
+                                _vtab(_vp, (summary.get("saved_output_paths") or {}).get("json"),
+                                      totals_override=_row)
                             except Exception as _vt_exc:         # noqa: BLE001
                                 print(f"   [qty-sweep] variant explanation not refreshed "
                                       f"for {_vp} ({_vt_exc}) — the variant sheet itself "
                                       f"is correct.", flush=True)
+                        # RE-CACHE THROUGH EXCEL. The openpyxl saves above (this tab, and
+                        # the baseline's tab + AI Provenance) leave every formula cell with
+                        # no cached value, so the saved files cannot independently confirm
+                        # their own totals — reading one back with data_only=True yields
+                        # nothing. One open/save round trip per file makes Excel calculate
+                        # and store the results. Windows-only, and a nicety: failure leaves
+                        # the workbooks exactly as written.
+                        try:
+                            from quantity_sweep import recache_workbooks as _recache
+                            _recache([xlsx_path] + list(_swept.get("variants") or []))
+                        except Exception as _rc_exc:             # noqa: BLE001
+                            print(f"   [qty-sweep] formula caches not refreshed "
+                                  f"({_rc_exc}) — totals compute when opened in Excel.",
+                                  flush=True)
                         print(f"   [qty-sweep] {len(_swept.get('variants') or [])} variant "
                               f"workbook(s) filed at {', '.join(str(q) for q in _breaks)} off"
                               + ("" if _order_freight else

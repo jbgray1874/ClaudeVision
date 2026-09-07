@@ -195,9 +195,14 @@ def add_explanation_sheet(wb, markdown: str, sheet_name: str = SHEET_NAME):
 
 
 def write_tab(xlsx_path: Any, scan_json: Any = None,
-              sheet_name: str = SHEET_NAME) -> Optional[str]:
+              sheet_name: str = SHEET_NAME,
+              totals_override: Any = None) -> Optional[str]:
     """Add (or replace) the explanation tab on a populated workbook. Returns the sheet name
-    written, or None with a printed reason."""
+    written, or None with a printed reason.
+
+    `totals_override` carries a quantity-sweep row ({material, labour, unit}) for a variant
+    workbook whose own formula caches were stripped by the openpyxl save — without it the
+    tab would print the baseline quantity's figures against this quantity's rows."""
     book = Path(xlsx_path)
     if not book.is_file():
         print(f"   [explanation-tab] workbook not found: {book} — skipped.", flush=True)
@@ -205,7 +210,8 @@ def write_tab(xlsx_path: Any, scan_json: Any = None,
 
     try:
         import estimate_explained
-        markdown = estimate_explained.build(book, Path(scan_json) if scan_json else None)
+        markdown = estimate_explained.build(book, Path(scan_json) if scan_json else None,
+                                            totals_override=totals_override)
     except Exception as exc:                                     # noqa: BLE001
         print(f"   [explanation-tab] the explanation could not be built "
               f"({type(exc).__name__}: {exc}) — workbook left as it was.", flush=True)

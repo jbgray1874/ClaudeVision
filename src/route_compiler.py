@@ -124,16 +124,38 @@ def _unsupported_drill_reason(template, record: Mapping[str, Any]) -> Optional[s
     src = str(getattr(template, "source", "") or "").lower()
     if "deterministic" in src or "measured" in src:
         return None                                    # a measured claim stands
+    # THE LIVE RECORD'S OWN KEYS. On the 16:37 run this gate existed and never fired: the
+    # measured flag lives in geometry_source ("solidworks_flat_pattern") and the hole
+    # evidence in hole_sizes_mm / estimated_hole_count, not in the four booleans the first
+    # version read. Evidence detection is a union of every spelling the pipeline writes.
+    _geom_src = str(record.get("geometry_source") or "").lower()
+    _ng = record.get("normalized_geometry") or {}
     measured = bool(record.get("native_flat_pattern") or record.get("dxf_augmented")
                     or record.get("dxf_measured_outline")
-                    or record.get("flat_pattern_detected"))
+                    or record.get("flat_pattern_detected")
+                    or "flat_pattern" in _geom_src or "dxf" in _geom_src
+                    or (number(record.get("geometry_reliability"), 0.0) >= 0.9
+                        and number(_ng.get("blank_length_mm"), 0.0)))
     if not measured:
         return None
-    holes = record.get("hole_count")
+    holes = None
+    for key in ("hole_count",):
+        if record.get(key) is not None:
+            holes = record.get(key)
+            break
     if holes is None:
         hs = record.get("hole_sizes_mm")
         if isinstance(hs, (list, tuple)):
             holes = len(hs)
+    if holes is None:
+        # geometry_rollup is the dict the 17:11 run actually carried the count in —
+        # estimated_hole_count: 0 on a dxf_flat_pattern read — while the first two are
+        # where earlier packs put it. All three spellings, first answer wins.
+        for src in (record.get("dxf_raw_geometry") or {},
+                    record.get("geometry_rollup") or {}, _ng):
+            if isinstance(src, Mapping) and src.get("estimated_hole_count") is not None:
+                holes = src.get("estimated_hole_count")
+                break
     if holes is None or number(holes, 0.0):
         return None
     bits: List[str] = []
@@ -761,8 +783,11 @@ def _raw_identity_aliases(
         return raw.get(ident) or extracted.get(ident) or {}
 
     def _word_tokens(desc: Any) -> Set[str]:
+        # Only PURE numbers are set aside (a length value, a quantity). A dimension token
+        # like 25X1MM is part of what the thing IS and must agree for a merge — otherwise
+        # a 25X1 tape and a 50X2 tape would read as one item with a "numeric conflict".
         return {t for t in _description_tokens(desc)
-                if not re.fullmatch(r"[\d.,]+(?:MM|X\d+MM)?", str(t).upper())}
+                if not re.fullmatch(r"[\d.,]+", str(t).upper())}
 
     _all_ids = [i for i in set(raw) | set(extracted) if i not in aliases]
     _carets = sorted((i for i in _all_ids if "^" in str(i)),
@@ -808,6 +833,53 @@ def _raw_identity_aliases(
                         "from_identity": identity,
                     })
                 break
+
+    # ── ONE CONSUMABLE, MANY SPELLINGS, NO HOST NEEDED ────────────────────────────────
+    # On the live 10975 pool the full configured name never appears as an identity, so the
+    # caret pass above had no host and the tape stayed three lines: "10975" (priced),
+    # "10975EPDMCLOSEDCELL" and "CELL TAPE^10975-02-". What the three share is the
+    # draughtsman's own words: every one describes "EPDM TAPE 25X1MM - TAPE 113C". Two
+    # bought-in records with no geometry whose descriptions agree word for word (pure
+    # numbers set aside) are one item stated twice; the fullest spelling survives, and a
+    # differing number (LENGTH: 200 vs 220) is recorded on it as a conflict for a person.
+    try:
+        from bought_in_policy import is_bought_in as _is_bi
+    except Exception:                                            # noqa: BLE001
+        _is_bi = None
+    if _is_bi is not None:
+        _pool = [i for i in (set(raw) | set(extracted)) if i not in aliases]
+        _groups: Dict[frozenset, List[str]] = {}
+        for ident in _pool:
+            rec = _rec_of(ident)
+            _ng = rec.get("normalized_geometry") or {}
+            if number(_ng.get("blank_length_mm"), 0.0) and \
+                    number(_ng.get("blank_width_mm"), 0.0):
+                continue                                         # measured = a real part
+            words = _word_tokens(rec.get("description"))
+            if len(words) < 3 or not _is_bi(dict(rec)):
+                continue
+            _groups.setdefault(frozenset(words), []).append(ident)
+        for _words, members in _groups.items():
+            if len(members) < 2:
+                continue
+            survivor = max(members, key=lambda i: (len(_squashed(i)), i))
+            s_rec = _rec_of(survivor)
+            s_nums = _description_tokens(s_rec.get("description")) - _word_tokens(
+                s_rec.get("description"))
+            for ident in members:
+                if ident == survivor:
+                    continue
+                aliases[ident] = survivor
+                i_rec = _rec_of(ident)
+                i_nums = _description_tokens(i_rec.get("description")) - _word_tokens(
+                    i_rec.get("description"))
+                if s_nums and i_nums and s_nums != i_nums and isinstance(s_rec, dict):
+                    s_rec.setdefault("_bom_numeric_conflicts", []).append({
+                        "field": "description",
+                        "kept": str(s_rec.get("description") or ""),
+                        "other": str(i_rec.get("description") or ""),
+                        "from_identity": ident,
+                    })
     return aliases
 
 
@@ -1352,8 +1424,11 @@ def build_part_graph(
         # the chimera's ten-digit head cannot pass this.
         if re.match(r"^\d{4,5}-\d{2}\b", str(ident)):
             continue
-        if ident in children or any(ident in (children.get(p) or {}) for p in children):
-            continue
+        # NO CHILD EXEMPTION. The first version skipped anything the hierarchy claimed as a
+        # child — and the zipped BOM row is claimed by the GA precisely BECAUSE it came off
+        # the BOM table, so the guard exempted its own target and 1100997755-E0P2D-GM0
+        # shipped again. The grammar test above is the protection for real parts; a code
+        # that scans as a drawing number never reaches the interleave check at all.
         for a in identities:
             for b in identities:
                 if a == b or a == ident or b == ident:
@@ -1369,6 +1444,19 @@ def build_part_graph(
             break
     for ident, a, b in _suspects:
         identities.discard(ident)
+        parents.pop(ident, None)
+        children.pop(ident, None)
+        for _kids in children.values():
+            if isinstance(_kids, dict):
+                _kids.pop(ident, None)
+        # OUT OF THE RECORD POOLS TOO. Dropping the identity from the graph while its
+        # record stayed in `records` left every later lookup able to resolve the chimera —
+        # which is exactly how 1100997755-E0P2D-GM0 was "dropped" twice in one log and
+        # still reached the Estimate sheet, the price checklist and a blocker asking
+        # Design for its drawing. The evidence survives in the issue below.
+        records.pop(ident, None)
+        raw.pop(ident, None)
+        extracted.pop(ident, None)
         _interleave_issues.append({
             "code": "bom_row_interleave_artifact",
             "identity": ident,
@@ -1578,6 +1666,7 @@ def apply_canonical_evidence_to_parts(
     Returns the compiled graph so the caller can record what it found.
     """
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner)
+    quarantine_interleave_artefacts(parts, graph.get("issues"))
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
     for part in parts or []:
@@ -1616,7 +1705,139 @@ def apply_canonical_evidence_to_parts(
             if "bought_in" not in {str(role).strip().lower() for role in roles}:
                 roles.append("bought_in")
             part["page_roles"] = roles
+
+    # ONE COMMODITY, ONE LINE — ON THE RECORDS, NOT ONLY IN THE GRAPH. The alias passes
+    # correctly resolved "10975", "10975EPDMCLOSEDCELL" and "CELL TAPE^10975-02-" to one
+    # identity, and the sheet still showed three tape lines: an alias in the graph does
+    # nothing to the three part RECORDS the estimator prices. Where several bought-in
+    # records resolve to one canonical identity, one record survives; the others fold into
+    # it — their evidence (pages, price, source) fills the survivor's gaps, a disagreeing
+    # quantity or length is recorded as a conflict for a person, and the duplicates leave
+    # the costed population so the item is priced once.
+    _by_identity: Dict[str, List[Dict[str, Any]]] = {}
+    for part in parts or []:
+        if isinstance(part, dict) and part.get("canonical_part_number"):
+            _by_identity.setdefault(
+                str(part["canonical_part_number"]), []).append(part)
+    _folded_ids: Set[int] = set()
+    for identity, members in _by_identity.items():
+        if len(members) < 2:
+            continue
+        node = nodes.get(identity)
+        if node is None or node.kind == "assembly":
+            continue
+        # The graph's kind only knows a STATED bought-in role, and the 17:11 tape stated
+        # none — it wore the GA's ACRYLIC and classified leaf. The policy's own answer
+        # (named consumable, no fabrication evidence) is the second witness: fold only
+        # when EVERY record is one we buy, whichever authority says so.
+        if node.kind != "bought_in":
+            try:
+                from bought_in_policy import is_bought_in as _fold_bi
+            except Exception:                                    # noqa: BLE001
+                continue
+            if not all(_fold_bi(dict(m)) for m in members):
+                continue
+        survivor = next(
+            (m for m in members
+             if clean_part_number(m.get("part_number") or m.get("item_number")) == identity),
+            max(members, key=lambda m: len(str(m.get("description") or ""))))
+        for member in members:
+            if member is survivor:
+                continue
+            for key, value in member.items():
+                if str(key).startswith("_") or key in (
+                        "part_number", "item_number", "quantity", "description",
+                        "canonical_part_number", "canonical_kind", "review_flags"):
+                    continue
+                if not survivor.get(key) and value:
+                    survivor[key] = value
+            _mq = number(member.get("quantity"), 0.0)
+            _sq2 = number(survivor.get("quantity"), 0.0)
+            if _mq and _sq2 and _mq != _sq2:
+                survivor.setdefault("_bom_numeric_conflicts", []).append({
+                    "field": "quantity", "kept": _sq2, "other": _mq,
+                    "from_identity": str(member.get("part_number") or ""),
+                })
+            survivor.setdefault("review_flags", []).append(
+                f"BOM row '{member.get('part_number')}' "
+                f"({str(member.get('description') or '').strip()}) is this same purchased "
+                f"item stated again — folded into this line rather than priced twice")
+            _folded_ids.add(id(member))
+            print(f"   [graph] folded duplicate bought-in record "
+                  f"'{member.get('part_number')}' into '{survivor.get('part_number')}' — "
+                  f"one commodity, one priced line", flush=True)
+    if _folded_ids and isinstance(parts, list):
+        parts[:] = [p for p in parts if id(p) not in _folded_ids]
     return graph
+
+
+def interleave_artefact_identities(issues: Any) -> Set[str]:
+    """The identities a graph compilation quarantined as zipped-BOM-row chimeras."""
+    out: Set[str] = set()
+    for issue in issues or []:
+        if isinstance(issue, Mapping) and \
+                str(issue.get("code") or "") == "bom_row_interleave_artifact":
+            ident = clean_part_number(issue.get("identity"))
+            if ident:
+                out.add(ident)
+    return out
+
+
+def quarantine_interleave_artefacts(part_lists: Any, issues: Any,
+                                    summary: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Remove the part RECORDS behind dropped interleave artefacts, keeping the evidence.
+
+    THE DROP HAS TO OUTLIVE THE GRAPH. build_part_graph correctly refused
+    1100997755-E0P2D-GM0 — twice in one run — and the workbook still priced it, because
+    the graph only forgot the identity while the part record itself stayed in the costed
+    population and the dual-path reconciler put its row straight back. Whoever compiles a
+    graph now hands its issues here, and the matching records leave every list they are in.
+
+    Accepts one list of part dicts or a list of such lists, mutates them in place, and
+    returns the removed records. When a summary is given, the removed records and the
+    reason are filed on it under quarantined_interleave_artefacts — evidence preserved,
+    never a silent delete — and the pack-completeness invariant reads that file so nobody
+    is asked to chase a drawing for a part that does not exist.
+    """
+    idents = interleave_artefact_identities(issues)
+    if not idents:
+        return []
+    lists = part_lists if isinstance(part_lists, tuple) or (
+        isinstance(part_lists, list) and part_lists and isinstance(part_lists[0], list)
+    ) else [part_lists]
+    removed: List[Dict[str, Any]] = []
+    for one in lists:
+        if not isinstance(one, list):
+            continue
+        kept: List[Any] = []
+        for part in one:
+            pn = clean_part_number(
+                part.get("part_number") or part.get("item_number")
+            ) if isinstance(part, dict) else ""
+            if pn and pn in idents:
+                removed.append(part)
+            else:
+                kept.append(part)
+        if len(kept) != len(one):
+            one[:] = kept
+    if removed:
+        _names = sorted({str(p.get("part_number") or "?") for p in removed})
+        print(f"   [graph] quarantined {len(removed)} record(s) behind dropped "
+              f"interleave artefact(s): {', '.join(_names)} — removed from the costed "
+              f"population, evidence kept on the run", flush=True)
+        if isinstance(summary, dict):
+            _store = summary.setdefault("quarantined_interleave_artefacts", [])
+            _stored_ids = {str(e.get("part_number") or "") for e in _store
+                          if isinstance(e, dict)}
+            for p in removed:
+                if str(p.get("part_number") or "") not in _stored_ids:
+                    _store.append({
+                        "part_number": str(p.get("part_number") or ""),
+                        "description": str(p.get("description") or ""),
+                        "reason": "bom_row_interleave_artifact",
+                        "record": p,
+                    })
+    return removed
 
 
 def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -1660,6 +1881,17 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                  + list(_da.get("bay_bom_rows") or []),
                                  job_drawing_numbers(summary),
                                  _assembly_page_owners(summary))
+    # THE DROP, AFTER THE LAST READER AS WELL AS BEFORE THE FIRST. The pre-cost pass
+    # quarantines the zipped-BOM-row chimera, and the dual-path reconciler then re-adds
+    # its row from the raw table read — which is how a part the log twice said was
+    # dropped still reached the Estimate sheet. This recompile is the final population,
+    # so the purge here is the one nothing can undo.
+    quarantine_interleave_artefacts(
+        [list_ for list_ in (
+            (summary.get("manufacturing_writeup") or {}).get("parts"),
+            final_estimates if isinstance(final_estimates, list) else None,
+        ) if isinstance(list_, list)],
+        compiled.get("issues"), summary=summary)
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
@@ -3135,6 +3367,7 @@ __all__ = [
     "REQUIRED", "RULED_OUT", "NOT_APPLICABLE", "UNVERIFIED",
     "PartNode", "OperationClaim", "OperationDecision",
     "build_part_graph", "make_claim", "arbitrate_event",
+    "interleave_artefact_identities", "quarantine_interleave_artefacts",
     "compile_job_route", "project_priced_route",
     "apply_canonical_evidence_to_parts",
     "refresh_canonical_route_after_reconciliation",

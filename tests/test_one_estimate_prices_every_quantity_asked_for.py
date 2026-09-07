@@ -129,8 +129,8 @@ def test_the_engine_accepts_the_flag_and_files_the_variants():
 def test_the_variants_cannot_cost_a_run_that_already_took_an_hour():
     src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     i = src.index("from quantity_sweep import sweep as _sweep")
-    assert "except Exception" in src[i - 200:i + 1800]
-    assert "variants not written" in src[i:i + 3400]
+    assert "except Exception" in src[i - 200:i + 3400]
+    assert "variants not written" in src[i:i + 5200]
 
 
 # ── the freight, which is the one thing a recalculated sheet gets plainly wrong ─

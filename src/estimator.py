@@ -5783,8 +5783,37 @@ def _is_job_identity_desc(desc: Any, job_tokens: set) -> bool:
     return dt.issubset(job_tokens)
 
 
+def _graphic_part_matching_dims(existing_parts, w: int, h: int):
+    """The job's own graphic/print part whose size is this callout's, or None.
+
+    A GRAPHIC-SIZE callout describes a part the BOM usually already carries. On 10975-02
+    the 297×210 callout minted VINYL-297X210 at a provisional £1.62 BESIDE 10975-02-G01 —
+    the same A4 paper graphic, unpriced and waiting for the print rate — so the job showed
+    the one artwork twice, once free and once guessed. When the BOM already owns the
+    graphic, the callout belongs to that line, not to a sibling."""
+    for p in existing_parts or []:
+        if not isinstance(p, dict):
+            continue
+        text = f"{p.get('description') or ''} {p.get('part_number') or ''}".upper()
+        mat = str(p.get("normalized_material") or p.get("material") or "").upper()
+        if not ("GRAPHIC" in text or "PRINT" in text
+                or mat in ("PAPER", "VINYL", "PRINTED")):
+            continue
+        pw = p.get("overall_length_mm") or p.get("overall_width_mm")
+        dims = {round(float(p.get(k) or 0)) for k in
+                ("overall_length_mm", "overall_width_mm", "overall_height_mm")}
+        dims.discard(0)
+        if not dims:
+            return p        # a graphic with no stated size still owns its own callout
+        if any(abs(d - w) <= 3 for d in dims) and any(abs(d - h) <= 3 for d in dims):
+            return p
+    return None
+
+
 def _recognise_vinyl_callouts(all_text: str, existing_pns: set,
-                              existing_descs: set) -> List[Dict[str, Any]]:
+                              existing_descs: set,
+                              existing_parts: Optional[List[Dict[str, Any]]] = None
+                              ) -> List[Dict[str, Any]]:
     """Recognise logo/vinyl callouts in drawing prose and price by UNIQUE dimension match.
 
     Catches vinyl referenced by description (not code) — e.g. page-9 'MILWAUKEE LOGO WHITE
@@ -5805,6 +5834,12 @@ def _recognise_vinyl_callouts(all_text: str, existing_pns: set,
         if not (10 <= w <= 3000 and 10 <= h <= 3000):
             continue
         seen_dims.add((w, h))
+        _owner = _graphic_part_matching_dims(existing_parts, w, h)
+        if _owner is not None:
+            _owner.setdefault("review_flags", []).append(
+                f"graphic callout {w}x{h}mm matches this line — price the print here; "
+                f"no separate vinyl/display-board line was minted for it")
+            continue
         verdict = _lookup_udef_vinyl_by_dimensions(w, h)
         if not verdict:
             continue
@@ -6067,7 +6102,8 @@ def extract_bought_in_from_pages(
     _already2 = set(existing_pns) | {str(b.get("part_number", "")).strip().upper() for b in bought_in}
     _existing_descs = {str(p.get("description", "")).strip().upper()
                        for p in existing_parts if p.get("description")}
-    _vinyl = _recognise_vinyl_callouts(all_text, _already2, _existing_descs)
+    _vinyl = _recognise_vinyl_callouts(all_text, _already2, _existing_descs,
+                                       existing_parts=existing_parts)
     if _vinyl:
         bought_in.extend(_vinyl)
         print(f"[DEBUG] Vinyl/logo callouts recognised: {len(_vinyl)} -> "

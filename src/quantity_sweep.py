@@ -178,6 +178,54 @@ def sweep(xlsx_path: Any, quantities: List[int],
             pass
 
 
+def recache_workbooks(paths: List[Any]) -> int:
+    """Open and re-save each workbook through Excel so its formula cells carry cached values.
+
+    EVERY openpyxl SAVE STRIPS THE CACHE. The explanation tab and AI Provenance are written
+    through openpyxl after the sweep, and an openpyxl save discards Excel's stored formula
+    results — so the filed workbooks answer data_only reads with nothing: the 50-off file
+    could not confirm its own £12.44, and any tool reading the saved file sees blanks where
+    Excel would show money. One calculate-and-save round trip per file puts the results back.
+
+    Windows-only and failure-isolated: returns how many files were refreshed, and a file it
+    cannot refresh is left exactly as written — the totals still compute on open in Excel.
+    """
+    if sys.platform != "win32":                                  # pragma: no cover
+        return 0
+    todo = [Path(p) for p in (paths or []) if p and Path(p).is_file()]
+    if not todo:
+        return 0
+    from wep_readback_from_xlsx import _close_excel, _open_xlsx_excel_com
+    done = 0
+    for book in todo:
+        excel = com_wb = None
+        try:
+            excel, com_wb = _open_xlsx_excel_com(book)
+            excel.CalculateFull()
+            com_wb.Save()
+            done += 1
+        except Exception as exc:                                 # noqa: BLE001
+            print(f"   [qty-sweep] cache not refreshed for {book.name} "
+                  f"({type(exc).__name__}: {exc}) — totals compute when opened in Excel.",
+                  flush=True)
+        finally:
+            try:
+                if com_wb is not None:
+                    com_wb.Close(SaveChanges=False)
+            except Exception:                                    # noqa: BLE001
+                pass
+            try:
+                if excel is not None:
+                    _close_excel(excel, None)
+            except Exception:                                    # noqa: BLE001
+                pass
+    if done:
+        print(f"   [qty-sweep] formula caches refreshed through Excel on {done} "
+              f"workbook(s) — saved files now carry their own calculated totals.",
+              flush=True)
+    return done
+
+
 # ── saved copies, and why each one shouts about itself ───────────────────────
 
 _BANNER_SHEET = "READ THIS FIRST"

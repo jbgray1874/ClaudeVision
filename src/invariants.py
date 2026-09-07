@@ -2454,12 +2454,25 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
             present.add(code)
     present.discard("")
 
+    # A QUARANTINED CHIMERA IS NOT A MISSING DRAWING. The graph proved these codes are a
+    # wrapped BOM row zipped with its neighbour by the text extractor — asking Design for
+    # 1100997755-E0P2D-GM0's detail sheet sends somebody chasing a part that does not
+    # exist. The evidence lives on the run under quarantined_interleave_artefacts.
+    _quarantined = {
+        str(e.get("part_number") or "").strip().upper()
+        for e in (summary.get("quarantined_interleave_artefacts") or [])
+        if isinstance(e, dict)
+    }
+    _quarantined.discard("")
+
     missing = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         code = str(row.get("part_number") or "").strip()
         if not code or not pcc.looks_like_a_drawing_number(code):
+            continue
+        if code.upper() in _quarantined or _bare(code) in _quarantined:
             continue
         if _bare(code) in present:
             continue

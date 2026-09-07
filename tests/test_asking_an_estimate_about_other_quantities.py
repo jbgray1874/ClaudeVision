@@ -42,9 +42,15 @@ def test_it_never_writes_to_the_workbook_it_was_given():
     source = (SRC / "quantity_sweep.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
+    # recache_workbooks is the one legitimate Save: it re-saves files main.py has JUST
+    # written through openpyxl (which strips Excel's cached formula results), restoring
+    # the caches with identical values. It never touches a file the run did not write.
+    recache = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "recache_workbooks")
     in_place = [n for n in ast.walk(tree)
                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                and n.func.attr in ("Save", "SaveCopyAs")]
+                and n.func.attr in ("Save", "SaveCopyAs")
+                and not any(n is inner for inner in ast.walk(recache))]
     assert not in_place, "Save writes to the file we were handed; there is no reason to"
 
     variant = next(n for n in ast.walk(tree)

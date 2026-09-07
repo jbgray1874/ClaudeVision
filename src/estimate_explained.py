@@ -1312,12 +1312,26 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
     }
 
 
-def build(workbook: Path, scan_json: Optional[Path]) -> str:
+def build(workbook: Path, scan_json: Optional[Path],
+          totals_override: Optional[Dict[str, Any]] = None) -> str:
     g = _gather(workbook, scan_json)
     wb, scan_doc, scan = g["wb"], g["scan_doc"], g["scan"]
     final, sufficiency, accepted = g["final"], g["sufficiency"], g["accepted"]
     labour_rows, material_rows = g["labour_rows"], g["material_rows"]
     totals, steel, steel_calc = g["totals"], g["steel"], g["steel_calc"]
+    # A QUANTITY VARIANT'S TOTALS COME FROM THE SWEEP, NOT THE FILE. A variant workbook is
+    # saved by openpyxl, and an openpyxl save strips Excel's cached formula results — so the
+    # label scan above finds nothing and the JSON fallback hands back the BASELINE quantity's
+    # figures. The sweep read each variant's totals out of a live Excel session before the
+    # cache was stripped; when the caller passes that row, it is the truth for this file and
+    # overrides both other sources.
+    if isinstance(totals_override, dict):
+        for _k in ("material", "labour", "unit"):
+            _v = _money(totals_override.get(_k))
+            if _v is not None:
+                totals[_k] = round(_v, 2)
+                totals.setdefault("_from", {})[_k] = (
+                    "the quantity sweep's Excel-calculated read of this variant")
     material, provenance, routes = g["material"], g["provenance"], g["routes"]
     bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
     page_index = g["page_index"]
