@@ -1167,10 +1167,19 @@ def thickness_conflict(part: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     displaced = ((part.get("_displaced") or {}).get("normalized_thickness_mm")
                  if isinstance(part.get("_displaced"), Mapping) else None) or []
-    kept_src = str(part.get("normalized_thickness_mm_source") or "the winning reader")
+    try:
+        from source_precedence import source_of
+        kept_src = source_of(part, "normalized_thickness_mm") or "the winning reader"
+    except Exception:                                            # noqa: BLE001
+        kept_src = str(part.get("normalized_thickness_mm_source") or "the winning reader")
     rivals: List[Tuple[float, str]] = []
     for entry in displaced:
-        if not isinstance(entry, Mapping) or entry.get("applied"):
+        # A reading that LOST is a rival whichever way it lost: refused on rank
+        # (applied: False) or overwritten by a later, stronger source (applied: True
+        # with displaced_by). Only the entry that still IS the value is not a rival.
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("applied") and not entry.get("displaced_by"):
             continue
         v = _num(entry.get("value"))
         src = str(entry.get("source") or "")

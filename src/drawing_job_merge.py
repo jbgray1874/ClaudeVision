@@ -2270,8 +2270,21 @@ def augment_summary_with_dxf(
                     "path": str(path), "part_number": pn,
                     "reason": "squashed_filename_match"})
             else:
-                report["unmatched_dxf"].append(
-                    {"path": str(path), "reason": "no_part_number_in_filename"})
+                # NAMED FOR WHAT IT IS, NOT FOR WHAT IT LACKS. A pack legitimately carries
+                # DXF exports of the DRAWING — views, dimensions, a title block — whose
+                # names are the job description rather than a part code ("0355255 - A4
+                # Table Top Graphic Holder - 10975_REV B"). One of those is not a failure
+                # to match; it is a different kind of file, and the report should say so
+                # with the content evidence, so nobody reads "no part number" as a gap.
+                _export = drawing_export_reason(path)
+                if _export:
+                    report["skipped"].append({
+                        "path": str(path),
+                        "reason": "drawing_export_not_a_flat",
+                        "detail": _export})
+                else:
+                    report["unmatched_dxf"].append(
+                        {"path": str(path), "reason": "no_part_number_in_filename"})
                 continue
 
         part = _lookup_part(parts_by_key, pn)

@@ -348,3 +348,47 @@ def test_the_hyphenated_runtime_name_pairs_end_to_end(tmp_path):
     part = out["manufacturing_writeup"]["parts"][0]
     assert part.get("bend_count_dxf") == 2
     assert str(part.get("dxf_source_file") or "").startswith("10975-02-A01")
+
+
+def test_one_flat_matches_and_the_drawing_export_is_excluded_with_a_reason(tmp_path):
+    """James's acceptance row, verbatim: stage BOTH real DXFs — exactly one manufacturing
+    flat matches; the 0355255 export is recognised as a drawing of the part (content
+    evidence: its dimension entities), never as a second flat and never as a bare
+    'no part number' gap."""
+    import shutil
+    import drawing_job_merge as djm
+    fx = os.path.join(os.path.dirname(__file__), "fixtures")
+    flat = tmp_path / "10975-02-A01_2mm ACRY_Rev B.DXF"
+    export = tmp_path / "0355255 - A4 Table Top Graphic Holder - 10975_REV B.DXF"
+    shutil.copy(os.path.join(fx, "1097502A01_2mm_ACRY_Rev_B.DXF"), flat)
+    shutil.copy(os.path.join(fx, "0355255 - A4 Table Top Graphic Holder - 10975_REV B.DXF"),
+                export)
+    summary = {"manufacturing_writeup": {"parts": [
+        {"part_number": "10975-02-A01", "description": "L-STAND",
+         "normalized_material": "ACRYLIC"},
+        {"part_number": "10975-02-GA", "description": "L-STAND ASSEMBLY",
+         "is_assembly_parent": True},
+    ]}}
+    out = djm.augment_summary_with_dxf(summary, [str(flat), str(export)])
+    report = out.get("dxf_augmentation") or {}
+    matched_pns = {str(m.get("part_number", "")).upper()
+                   for m in report.get("matched", []) if m.get("part_number")}
+    assert matched_pns == {"10975-02-A01"}, f"exactly one flat: {matched_pns}"
+    skipped = [s for s in report.get("skipped", [])
+               if s.get("reason") == "drawing_export_not_a_flat"]
+    assert skipped and "dimension" in str(skipped[0].get("detail", "")), \
+        f"the export must carry its content evidence: {report.get('skipped')}"
+    assert not any("0355255" in str(u.get("path", ""))
+                   for u in report.get("unmatched_dxf", [])), \
+        "the export is a recognised kind of file, not an unmatched gap"
+
+
+def test_the_gauge_conflict_is_visible_whichever_side_wins():
+    """Matching the DXF restores the 2 mm EVIDENCE — it must not silently settle the
+    gauge. Whichever reader wins the rank fight, the disagreement stays a decision."""
+    import source_precedence as sp
+    dxf_won = {"part_number": "10975-02-A01"}
+    sp.apply_field(dxf_won, "normalized_thickness_mm", 2.0, "dxf_filename")
+    sp.apply_field(dxf_won, "normalized_thickness_mm", 3.0, "solidworks_flat_pattern")
+    d = cf.thickness_conflict(dxf_won)
+    assert d and "2 mm" in d["issue"] and "3 mm" in d["issue"]
