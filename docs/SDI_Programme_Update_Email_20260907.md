@@ -1,7 +1,7 @@
-# Programme status e-mail — 6 September 2026
+# Programme status e-mail — 7 September 2026
 
-Paste-ready. Figures reconciled against the combined status report of 6 September
-(`reports/SDI-Programme-Status-2026-09-06.html`), Yogesh's status of 4 September and his
+Paste-ready. Figures reconciled against the combined status report of 7 September
+(`reports/SDI-Programme-Status-2026-09-07.html`), Yogesh's status of 4 September and his
 project plan tracker (week 04 Sep), and the shared workstation capital request of 3 September.
 Keep the attachments together; the e-mail refers to them.
 
@@ -9,20 +9,21 @@ Keep the attachments together; the e-mail refers to them.
 
 **To:** James Ryan; Jack Calow
 **Cc:** Yogesh Kumar; Muhammad Yazir
-**Subject:** SDI Intelligence — programme status 6 Sep: five jobs a week in parallel run, Drawing Search into UAT, workstation to order this week
+**Subject:** SDI Intelligence — programme status 7 Sep: five jobs a week in parallel run, Drawing Search into UAT, workstation to order this week
 
 ---
 
 James, Jack,
 
-Ten days on from the first combined report, here is where the three workstreams stand, and the
+Eleven days on from the first combined report, here is where the three workstreams stand, and the
 two decisions I need from you this week. The full report is attached; the portal pages are
 updated to match.
 
 ## In one paragraph
 
 The estimating engine has moved from producing workbooks to a **five-jobs-a-week parallel run**
-with James Ryan and Dave's estimating team, and one job has come back. Technical Design's second
+with James Ryan and Dave's estimating team, and one job has come back; over the weekend its four
+documents were made to read one costed record. Technical Design's second
 tool was **demoed and approved** on 2 September and the PDM phases have been re-planned against
 real deployment days. **Drawing Search goes into UAT on Monday 7 September**; Client Briefing is
 **on hold** and Muhammad moves to the manufacturing workstream. All three now have a home: **one
@@ -142,7 +143,7 @@ quoted alongside. Full spec attached; every figure in it is measured from what w
 - SDI Drawing Search Intelligence — http://localhost:8072/#aisvc-drawing-search · guide: http://localhost:8072/#fixture-guide
 - SDI Client Briefing Intelligence (on hold) — http://localhost:8072/#aisvc-client-briefing
 
-Attached: *SDI Programme Status — 6 September 2026* (combined report); *SDI Shared Workstation*
+Attached: *SDI Programme Status — 7 September 2026* (combined report); *SDI Shared Workstation*
 (capital request, 3 September); *SDI Project Plan Tracker — week 04 Sep* (Yogesh); *SDI Estimator
 Page — sample* (PNG); *SDI Drawing Search Intelligence — user guide* (Muhammad).
 
