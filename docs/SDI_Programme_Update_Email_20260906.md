@@ -53,6 +53,25 @@ What landed in the engine since 27 August, in plain terms:
 - **Parity reporting through the portal.** The engine's sheet against the estimator's, block by
   block, on every run where a manual sheet is attached, with the inputs behind each difference.
 - **One estimate at every quantity asked for**, one workbook per quantity — the norm now.
+- **One record behind every document, and a report an estimator works from** (7 Sep). The
+  Harrods run showed the workbook, the e-mail, the report and the quote describing one estimate
+  in four sets of words. They now all read one costed record, and the job report opens with the
+  decisions still open — issue, part, assumption, action, the money riding on it — before any
+  diagnostics. Sample attached (`SDI-Estimator-Page-Sample-20260907.png`).
+- **The workbook is five tabs, not nine** (7 Sep). The estimators' own three untouched, then an
+  AI Explanation tab that leads with the decisions and an AI Provenance tab that says, for every
+  line, the value used, its source, how firm the evidence is and what the estimator has to do —
+  and where a part's name did not track through the pack.
+
+**After the parallel run — the automated pipeline, and on demand.** The parallel run is what we
+are on now. Once through it, the engine becomes a button an estimator presses: **one button
+imports the full and latest drawing pack** from Document Manager, **one click generates the
+estimate with its explains and e-mails it with the client quote**, and **parity against the
+manual sheet runs with the estimate** where a manual sheet exists, or is added afterwards where
+the AI run comes first. Two pieces are in already: an estimator can **amend the estimate and
+regenerate the quote** from their own figure, and **print the PDFs and DXFs of a pack** from the
+portal. Beyond that, no timetable yet: **China quotations** (buttons in, analytics to follow) and
+**multi-PDF packs** (working, needs testing; runs against our model or purely against an LLM).
 
 Still open on this workstream: packaging and delivery are held at £0 by decision until the
 estimators provide their own calculation; the supplier price lists (Elite, Eagle, Thermaset) are
@@ -82,9 +101,13 @@ the portal (links below).
 
 **SDI Client Briefing Intelligence is on hold** from 4 September. Yogesh and I will pick it up as
 a set of AI real-time agents rather than a single application; a plan follows. **Muhammad moves to
-business analysis, user stories and documentation for the Manufacturing / CNC SDI Intelligence
-automations** — the workstream that closes the loop to the shop floor and has had no written
-record until now. He keeps Drawing Search through UAT and go-live.
+business analysis for the Manufacturing / CNC SDI Intelligence automations** — the workstream
+that closes the loop to the shop floor and has had no written record until now. Specifically: map
+the live production spreadsheet for BOMs and routes for the warehouse, so that process can be
+automated and is understood on the way into Sage X3; map the design DXF process onto CNC
+machining; and document both as a BRD and user stories, planned and executed with me. Client
+Briefing is written up to an extent before it is parked. He keeps Drawing Search through UAT and
+go-live, and his user guide is attached.
 
 ## 4 · The shared workstation — this week
 
@@ -120,7 +143,8 @@ quoted alongside. Full spec attached; every figure in it is measured from what w
 - SDI Client Briefing Intelligence (on hold) — http://localhost:8072/#aisvc-client-briefing
 
 Attached: *SDI Programme Status — 6 September 2026* (combined report); *SDI Shared Workstation*
-(capital request, 3 September); *SDI Project Plan Tracker — week 04 Sep* (Yogesh).
+(capital request, 3 September); *SDI Project Plan Tracker — week 04 Sep* (Yogesh); *SDI Estimator
+Page — sample* (PNG); *SDI Drawing Search Intelligence — user guide* (Muhammad).
 
 Happy to walk either of you through any of it.
 

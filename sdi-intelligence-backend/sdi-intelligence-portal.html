@@ -856,7 +856,7 @@
 
         <div class="tool reveal">
           <div class="th"><span class="nm">main.py</span><span class="chip c-done">Entry Point</span></div>
-          <div class="ds">The top-level runner. Accepts a job folder, orchestrates the full pipeline: PDF+DXF scan → SolidWorks native read → canonical BOM and route → per-part estimates → the populated estimating workbook (Estimate, Decision Report, AI Provenance) + JSON + deliverable HTML + audit log. Tim JSON overrides are intentionally absent — all pricing must come from drawings and the database.</div>
+          <div class="ds">The top-level runner. Accepts a job folder, orchestrates the full pipeline: PDF+DXF scan → SolidWorks native read → canonical BOM and route → per-part estimates → the populated estimating workbook (Estimate, AI Explanation, AI Provenance) + JSON with the costed record + deliverable HTML + audit log. Tim JSON overrides are intentionally absent — all pricing must come from drawings and the database.</div>
           <code>python -u main.py --search-root "K:\Estimating\AI Estimating\Live Enquiry\1282..." --folder-as-job</code>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> job folder PDFs/DXFs via <code>file_scan.py</code><br>
@@ -1007,7 +1007,7 @@
 
         <div class="tool reveal">
           <div class="th"><span class="nm">route_compiler.py</span><span class="chip c-done">Canonical Route</span></div>
-          <div class="ds">Compiles one decision per operation per part: is it required, not applicable, or unverified, and on whose authority. Contested decisions — where two equally-ranked sources disagreed — are recorded with the losing claim named, and surface on the Decision Report tab.</div>
+          <div class="ds">Compiles one decision per operation per part: is it required, not applicable, or unverified, and on whose authority. Contested decisions — where two equally-ranked sources disagreed — are recorded with the losing claim named, and surface at the foot of the AI Provenance tab.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> parts, BOM hierarchy, drawing cues<br>
             <b>Writes:</b> <code>canonical_route_shadow</code> in the job JSON
@@ -1064,26 +1064,35 @@
         </div>
 
         <div class="tool reveal">
-          <div class="th"><span class="nm">estimation_report.py</span><span class="chip c-done">AI Provenance tab</span></div>
-          <div class="ds">The per-part account of where every value came from and how strong it is. Its summary separates what the engine READ from what has been PRICED — an estimate is expected to arrive with rates outstanding, and folding that into one confidence band made a fully-read job read as a failure.</div>
+          <div class="th"><span class="nm">costed_facts.py</span><span class="chip c-prog">The one record</span></div>
+          <div class="ds">Built after the Estimate sheet calculates, from the sheet's own charged rows joined to the canonical parts: for every line the charged money (the engine's figure beside it, as not charged), one origin-and-firmness classification, the operations from the decisions on its rows, a section's length with its source and reader, plating as a field, the gap lists summed once, the decisions a person still owes, and a release status. Every deliverable reads it and derives nothing of its own.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
-            <b>Reads:</b> the job summary and confidence assessment<br>
+            <b>Reads:</b> the read-back and the canonical route<br>
+            <b>Writes:</b> <code>costed_job</code> onto the run JSON
+          </div>
+        </div>
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">estimation_report.py</span><span class="chip c-done">AI Provenance tab</span></div>
+          <div class="ds">The evidence tab, in four blocks: every line as value used → source → evidence (measured, transcribed, inferred) → estimator action, with the charged money; the bill of materials under its assemblies; the route decision by decision, kept and ruled out, with who decided it and the sheet row it charges; and identity through the pack — names that changed between drawings, lines costed with no drawing, drawing files matched to no part. Then the reconciliation, the breakdown and the contests.</div>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Reads:</b> the costed record, the canonical route and the confidence assessment<br>
             <b>Writes:</b> the AI Provenance sheet
           </div>
         </div>
 
         <div class="tool reveal">
-          <div class="th"><span class="nm">job_decision_report.py</span><span class="chip c-done">Decision Report tab</span></div>
-          <div class="ds">What the engine decided and on whose authority — plus the arguments it had to settle: operations where equally-ranked sources disagreed, and the costlier ones about material and gauge, widest disagreement first.</div>
+          <div class="th"><span class="nm">job_decision_report.py</span><span class="chip c-plan">Folded into AI Provenance</span></div>
+          <div class="ds">The Decision Report tab is no longer written — its part list was AI Provenance's part list twice over. What it held alone lives on at the foot of AI Provenance: who decided powder, the material breakdown that adds back to the sheet's own total, and the two contest tables (operations where equally-ranked sources disagreed; material and gauge, widest disagreement first).</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> the canonical route and the invariants<br>
-            <b>Writes:</b> the Decision Report sheet
+            <b>Writes:</b> the decision blocks onto AI Provenance
           </div>
         </div>
 
         <div class="tool reveal">
-          <div class="th"><span class="nm">job_report_html.py</span><span class="chip c-done">Internal Job Report</span></div>
-          <div class="ds">The narrative deliverable — what went right, the review items, the drawing-pack audit including drawings named on the BOM but absent from the pack, and the failed checks in plain English. The best single document for judging whether an estimate is safe to quote from.</div>
+          <div class="th"><span class="nm">job_report_html.py</span><span class="chip c-done">The estimator's page</span></div>
+          <div class="ds">Decisions before diagnostics. Summary (unit cost, material, labour, quantity, release status), then the decisions still open — issue, part, current assumption, action, owner, £ at stake — then the bill of materials under its assemblies with the charged material, then the priced route. Everything the report used to open with — the drawing-pack audit, the checks, the provenance — is kept in full beneath, collapsed, and opens itself for print.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> the job summary<br>
             <b>Writes:</b> <code>&lt;job&gt;_report.html</code>
@@ -1092,7 +1101,7 @@
 
         <div class="tool reveal">
           <div class="th"><span class="nm">client_quote_html.py</span><span class="chip c-done">Customer Quotation</span></div>
-          <div class="ds">The document that leaves the building. Deliberately the plainest of the set: price, specification, what is included. The engine's reasoning — invariant names, confidence, the gap list — is kept off it; scope is the estimator's to state in their own words.</div>
+          <div class="ds">The document that leaves the building. Deliberately the plainest of the set: price, specification, what is included. The engine's reasoning — invariant names, confidence, the gap list — is kept off it; scope is the estimator's to state in their own words. It reads the same costed record as everything else: packing is promised only when it is priced, an unpriced packaging line is declared as not included, and the page carries a visible DRAFT status with no offer window while inputs are outstanding.</div>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>Reads:</b> the job summary<br>
             <b>Writes:</b> <code>&lt;job&gt;_quote.html</code>
@@ -1634,8 +1643,8 @@
           <tr><td><b>Headline total</b></td><td>AI total vs manual benchmark. Target &plusmn;5%. Flag anything outside &plusmn;10%.</td><td><span class="chip c-done" style="font-size:10px">Primary</span></td></tr>
           <tr><td><b>Bought-in lines</b></td><td>Every ELECTRICS, FIXING*, SLOTTEDTUBE*, VINYL*, SUBPLAS* should have a price and supplier from UDEF. <code>catalogue_unpriced</code> = missing from UDEF &mdash; report code + description.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
           <tr><td><b>Quantities</b></td><td>Per-part quantities match the drawing BOM. Parts at qty&nbsp;1 that should be qty&nbsp;2 (e.g. legs) = BOM tree issue &mdash; note drawing number + part code.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
-          <tr><td><b>AI Provenance tab</b></td><td>Named <i>Quality Summary</i> in earlier builds. Shows how each field was arrived at &mdash; <code>CONFIRMED</code>, <code>MEASURED</code>, <code>REPORTED</code>, <code>ASSUMED</code>, <code>UNKNOWN</code> &mdash; rather than a single score per part. An <code>ASSUMED</code> material or gauge is what to look at first.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
-          <tr><td><b>Decision Report tab</b></td><td>One row per part with the reasoning behind it. Start here when a number looks wrong &mdash; it says <i>why</i> the engine decided what it did, and names anything it could not decide at all.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
+          <tr><td><b>AI Explanation tab</b></td><td>Start here. It opens with <i>what a person still has to settle</i> &mdash; the decisions and the unpriced lines, worst first, with the money at stake &mdash; then answers the questions in order: what a unit costs, what must be replaced before it is a quote, what was measured rather than reasoned, where the money is, whether it adds up to the sheet, what finish is charged, and whether it can go out.</td><td><span class="chip c-done" style="font-size:10px">Primary</span></td></tr>
+          <tr><td><b>AI Provenance tab</b></td><td>The evidence. For every line: the value used, its source, the evidence as a word (<i>measured</i>, <i>transcribed</i>, <i>inferred</i>, <i>unread</i>), the charged money with the engine's own figure beside it as not charged, the price source, the sheet row and decision that priced it, and the estimator's action. Below that: the BOM under its assemblies, the route decision by decision including what was ruled out and why, and <b>identity through the pack</b> &mdash; names that changed between drawings, lines costed with no drawing, drawing files that matched no part. A <i>transcribed</i> or <i>inferred</i> material or gauge is what to look at first.</td><td><span class="chip c-done" style="font-size:10px">Key</span></td></tr>
           <tr><td><b>Drawings the estimate was built from</b></td><td>On the HTML job report. Read the list against what you know is in the job &mdash; a pack missing a part is the expensive mistake, and a thin total on an incomplete pack is an incomplete pack, not a cheap job.</td><td><span class="chip c-done" style="font-size:10px">Primary</span></td></tr>
           <tr><td><b>Customer / revision</b></td><td>If blank on older drawings, fill in manually &mdash; does not affect calculations.</td><td><span class="chip c-plan" style="font-size:10px">Minor</span></td></tr>
           <tr><td><b>Labour lines</b></td><td>Laser, fold, weld, powder coat broadly in line with manual. Zero time on a part that clearly needs ops = flag.</td><td><span class="chip c-plan" style="font-size:10px">Check</span></td></tr>
@@ -2218,9 +2227,9 @@
         drawing inconsistency · <b>deterministic only</b> → kept, flagged · <b>vision only</b> → kept, flagged
         <code>B_RECOVERED</code>. Nothing either path found is ever dropped, and the label travels with the line
         into the workbook. The output is a <b>canonical BOM</b> and a <b>canonical route</b> with provenance per
-        field, gated by BLOCKING / WARNING invariants — and all five deliverables (workbook, client quote, job
-        report, AI Provenance, Decision Report) read from that one costed-facts layer, which is why they cannot
-        contradict each other.
+        field, gated by BLOCKING / WARNING invariants — and every deliverable (the workbook's AI Explanation and
+        AI Provenance tabs, the covering e-mail, the job report, the client quote) reads one costed record built
+        after the sheet calculates, which is why they cannot contradict each other.
       </div>
 
       <!-- ── THE PRICE CHAIN ────────────────────────────────────────────────────────────── -->
@@ -2749,7 +2758,7 @@
         <span class="chip c-done" style="margin-left:auto">Go-live · September / October 2026 (target)</span>
       </div>
       <div class="panel reveal">
-        <p style="margin:0 0 14px">Deterministic cost-estimating engine that reads SolidWorks PDF and DXF drawings and produces a costed five-tab Excel workbook — Estimate, Labour, Material Price Break, Decision Report and AI Provenance. Mirrors the SDI manual estimating workbook to the cell. In a five-jobs-a-week parallel run with James Ryan and Dave's estimating team &mdash; Tim, Howard and Tony &mdash; ahead of a targeted September / October 2026 go-live, decided on the reviews that come back. Since 27 Aug: the finished estimate is e-mailed automatically, an AI Explanation tab reconciles every pound to the sheet, parity against the manual sheet runs from the portal, and one estimate prices every quantity asked for.</p>
+        <p style="margin:0 0 14px">Deterministic cost-estimating engine that reads SolidWorks PDF and DXF drawings and produces a costed five-tab Excel workbook — Estimate, Labour, Material Price Break, AI Explanation and AI Provenance. Mirrors the SDI manual estimating workbook to the cell. In a five-jobs-a-week parallel run with James Ryan and Dave's estimating team &mdash; Tim, Howard and Tony &mdash; ahead of a targeted September / October 2026 go-live, decided on the reviews that come back. Since 27 Aug: the finished estimate is e-mailed automatically, an AI Explanation tab reconciles every pound to the sheet, parity against the manual sheet runs from the portal, and one estimate prices every quantity asked for. Since 7 Sep: one costed record behind every document, the job report as the estimator's page &mdash; decisions first &mdash; and the workbook cut to five tabs.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
           <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:12px">
             <div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Inputs</div>
@@ -2760,8 +2769,8 @@
             <div style="font-size:13px">Costed Excel workbook · Parity HTML · Normalised JSON · Audit trail</div>
           </div>
           <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:12px">
-            <div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Beyond go-live</div>
-            <div style="font-size:13px">Ongoing releases · accuracy improvements · extended by Workstream 2</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">After the parallel run</div>
+            <div style="font-size:13px">The automated pipeline and on demand: one button imports the latest pack, one click estimates, explains, e-mails and quotes · parity at run time or after · then China quotations and multi-PDF packs</div>
           </div>
         </div>
         <div style="font-size:12px;color:var(--ink-dim)"><b style="color:var(--ink)">Goal:</b> live cost estimate from any SolidWorks drawing set, automatically, at the accuracy of a senior estimator.</div>
@@ -3241,6 +3250,9 @@
       </div>
       <div class="panel reveal">
         <p style="margin:0 0 14px">Closing the design-to-manufacture loop — AI-generated G-code from DXF geometry, streamed directly to CNC machines. Integrates with the TRUMPF stack already running on SDI-APP01 (TruTops, TRUMPF SQL, the RabbitMQ brokers). The Python engine that extracts geometry from DXFs in Workstream 1 becomes the foundation for machine instruction generation.</p>
+        <div style="margin:0 0 14px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;font-size:13px;line-height:1.7">
+          <b>First, the written record &mdash; from September 2026, Muhammad Yazir with James Gray.</b> This workstream has had no tracker and no dates; the first job on it is business analysis. Map the <b>live production spreadsheet for BOMs and routes for the warehouse</b>, so that process can be automated and is understood on the way into <b>Sage X3</b>; map the <b>design DXF process onto CNC machining</b>; and document both as a <b>BRD and user stories</b>, with planning and execution alongside James. No dates are claimed until that record exists.
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div style="background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:14px">
             <div style="font-family:var(--mono);font-size:10px;color:var(--warn);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Capabilities</div>
@@ -3592,8 +3604,8 @@
             </div>
             <div style="background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:12px">
               <div style="font-family:var(--mono);font-size:10px;color:var(--accent);margin-bottom:6px">Sheet 4</div>
-              <div style="font-size:13px;font-weight:600;margin-bottom:4px">Decision Report</div>
-              <div class="muted" style="font-size:11.5px">The engine's reasoning — one row per part showing material, thickness, operations, confidence score and the WHY for every decision. Start here if something looks wrong.</div>
+              <div style="font-size:13px;font-weight:600;margin-bottom:4px">AI Explanation</div>
+              <div class="muted" style="font-size:11.5px">The estimator's tab. The decisions still open, worst first, then every line with its source, the nest arithmetic, every labour row, and the drawing audit. Start here.</div>
             </div>
             <div style="background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:12px">
               <div style="font-family:var(--mono);font-size:10px;color:var(--accent);margin-bottom:6px">Sheet 5</div>
@@ -3634,10 +3646,10 @@
               <li><b>Low DXF coverage</b> — fewer than ~60% of parts have a DXF file. Without flat-pattern geometry the engine can't measure area, weight or cut length reliably.</li>
               <li><b>Wire / mesh parts</b> — wire goods (baskets, grids) don't have flat DXFs by design. The engine flags these as insufficient rather than guess.</li>
               <li><b>No drawing pack</b> — if the folder contains only a GA drawing and no part drawings, coverage will be very low.</li>
-              <li><b>Drawings named on the BOM but not supplied</b> — the engine prices what it was given and states the gap: a red <b>DRAWINGS MISSING FROM THIS PACK</b> block on the Estimate sheet, a line on AI Provenance, and <b>NOTHING DECIDED, NOTHING COSTED</b> on the Decision Report, each naming the parts. <b>A thin total on an incomplete pack is an incomplete pack, not a cheap job</b> — ask for the detail drawings before quoting the whole product.</li>
+              <li><b>Drawings named on the BOM but not supplied</b> — the engine prices what it was given and states the gap: a red <b>DRAWINGS MISSING FROM THIS PACK</b> block on the Estimate sheet and a row per part in the <b>identity through the pack</b> block on AI Provenance. <b>A thin total on an incomplete pack is an incomplete pack, not a cheap job</b> — ask for the detail drawings before quoting the whole product.</li>
               <li><b>Unknown materials</b> — if the engine can't determine the material for most parts it suppresses rather than cost them wrong.</li>
             </ul>
-            <b style="display:block;margin-top:10px">What to do:</b> Check the Decision Report — it shows credibility % and flags exactly which parts are the problem. If the job has DXFs that weren't found, check the folder structure and re-run. If the job is genuinely wire goods, the wire model is the fix (in development).
+            <b style="display:block;margin-top:10px">What to do:</b> Check the job report's <b>Decisions required</b> and the AI Provenance tab's <b>identity through the pack</b> block — they name exactly which parts are the problem. If the job has DXFs that weren't found, check the folder structure and re-run. If the job is genuinely wire goods, the wire model is the fix (in development).
           </div>
         </div>
 
@@ -3772,6 +3784,22 @@
        +'<li><b>One estimate at every quantity asked for</b> (1, 50, 100, 250, 500), one workbook per quantity, with order-level freight divided per unit rather than a pallet landed on each.</li>'
        +'<li><b>A run is measured</b> \u2014 every phase timed, memory and CPU sampled during a live estimate. Those figures sized the shared workstation.</li>'
        +'</ul></div>'
+       +'<div style="margin-top:14px;padding:14px 16px;background:rgba(78,201,127,.06);border:1px solid rgba(78,201,127,.3);border-radius:6px">'
+       +'<b style="color:var(--ok)">Landed 7 Sep 2026.</b>'
+       +'<ul style="margin:9px 0 0 17px;line-height:1.85">'
+       +'<li><b>One record behind every document</b> \u2014 the workbook tabs, the covering e-mail, the job report and the quote all read one costed record built after the sheet calculates, so money, sources, gaps, decisions, finish and release status are the same on all four. The job report is now <b>the estimator\u2019s page</b>: unit cost and release status, then the decisions still open with the money riding on each, then the BOM under its assemblies and the priced route; the diagnostics collapsed beneath.</li>'
+       +'<li><b>The workbook is five tabs, not nine</b> \u2014 the estimators\u2019 own three, then AI Explanation (decisions first) and AI Provenance (value used \u2192 source \u2192 evidence \u2192 estimator action; the BOM hierarchy; the route decision by decision; identity through the pack).</li>'
+       +'</ul></div>'
+       +'<div style="margin-top:14px;padding:14px 16px;background:var(--bg-2);border:1px solid var(--line);border-radius:6px">'
+       +'<b>After the parallel run \u2014 the automated pipeline, and on demand.</b> The parts exist as separate controls on the estimating page; the next step joins them into one run and keeps each available on its own.'
+       +'<ul style="margin:9px 0 0 17px;line-height:1.85">'
+       +'<li><b>One button imports the full and latest drawing pack</b> from Document Manager into staging \u2014 latest revision by the data inside the file. <span class="chip c-plan" style="font-size:10px">Next</span></li>'
+       +'<li><b>One click generates the estimate with its explains and e-mails it with the client quote.</b> <span class="chip c-plan" style="font-size:10px">Next</span></li>'
+       +'<li><b>Parity at the time of the run</b> where a manual sheet exists, or <b>added afterwards</b> where the AI run comes first. <span class="chip c-prog" style="font-size:10px">Partly in</span></li>'
+       +'<li><b>Amend the estimate, then generate the quote</b> from the estimator\u2019s own figure. <span class="chip c-done" style="font-size:10px">In</span></li>'
+       +'<li><b>Print the PDFs and DXFs of a pack</b> from the portal. <span class="chip c-done" style="font-size:10px">In</span></li>'
+       +'<li><b>Beyond, no timetable:</b> China quotations (buttons in, analytics to follow) and multi-PDF packs (working, needs testing; runs against our model or purely against an LLM).</li>'
+       +'</ul></div>'
        +'<div style="margin-top:22px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase">Programme timeline</div>'
        +'<div style="display:grid;grid-template-columns:220px 1fr 100px;gap:14px 18px;align-items:center;padding:18px;background:var(--bg);border:1px solid var(--line);margin-top:8px">'
        + '<div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line)">Phase</div>'
@@ -3795,11 +3823,11 @@
        + '</div>'
        + '<div style="margin-top:8px;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase"><span>1 May</span><span>26 May</span><span>15 Jun</span><span style="color:var(--accent);font-weight:600">SEPT / OCT GO-LIVE</span></div>',
      inputs:['SolidWorks PDF', 'DXF files', 'job folder path'],
-     outputs:['Costed Excel workbook with AI Explanation tab', 'Covering e-mail, sent automatically', 'Job report HTML', 'Customer quote (withheld while provisional)', 'Parity report and ledger', 'Normalised JSON', 'Audit trail'],
+     outputs:['Costed Excel workbook \u2014 five tabs: Estimate, Labour, Material Price Break, AI Explanation, AI Provenance', 'Covering e-mail, sent automatically', 'Job report HTML \u2014 the estimator\u2019s page, decisions first', 'Customer quote (draft-marked, withheld while provisional)', 'Parity report and ledger', 'Normalised JSON with the costed record', 'Audit trail'],
      tech:['Python', 'PyMuPDF', 'pdfplumber', 'xAI Grok vision', 'SOLIDWORKS COM API', 'ezdxf', 'pyodbc \u2192 SQL Server'],
      phase:'Phase 1 \u00b7 GO-LIVE SEPT / OCT 2026',
      invoke:'Run from the estimating page on this portal: pick the pack, set the quantities, name the recipients, attach the manual sheet if there is one. The finished estimate is e-mailed on completion. See <b>AI Tools</b> for the command-line equivalent.',
-     next:'Reviews back on the four issued jobs, and the estimators\u2019 own packaging and delivery calculation \u2014 both lines are held at \u00a30 until it lands.'},
+     next:'Reviews back on the four issued jobs, and the estimators\u2019 own packaging and delivery calculation \u2014 both lines are held at \u00a30 until it lands. Then, past the parallel run: the automated pipeline \u2014 one button imports the latest pack, one click estimates, explains, e-mails and quotes.'},
 
     // Sits directly below Estimating because it is the workstream that feeds it: the DM API
     // endpoint has been serving the estimating app since 24-Aug-26. Refs (P1-P3.4, C1-C4, F1-F4)
@@ -3848,7 +3876,7 @@
      desc:'Find the fixture that already exists before anybody draws a new one.',
      detail:'Image and drawing search for the design studio \u2014 the project the delivery tracker calls the <b>Fixture Library</b>. CLIP-based visual search with PDF indexing over roughly 268,000 images, GPU-accelerated, behind a Flask UI with a scan cache. SDI has drawn the same bracket, the same shelf and the same plinth many times over, and until now the only index of that was what a designer happened to remember.'
        +'<div style="margin-top:20px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase">Where it is</div>'
-       +'<div style="margin-top:8px;line-height:1.75">Proof of concept, first build, unit testing and the first round of integration testing are complete. Integration testing on live data found that the <b>Renders folders were not being indexed</b> \u2014 about 162,000 of 268,000 images \u2014 and sent it back to development. Round 2 is running now: the remaining ~446,000 images are indexing, alongside wider matching rules, a security review and the user guide. <b>UAT with the studio designers starts Monday 7 Sep 2026</b> and runs to 25 Sep; the user guide is published on this portal as the <a href="#fixture-guide" style="color:var(--accent)">SDI Drawing Search Intelligence Guide</a>. Muhammad keeps this project through UAT and go-live while moving, from September, onto the business analysis for SDI Manufacturing Intelligence; Client Briefing, his other project, is on hold from 4 Sep.</div>'
+       +'<div style="margin-top:8px;line-height:1.75">Proof of concept, first build, unit testing and the first round of integration testing are complete. Integration testing on live data found that the <b>Renders folders were not being indexed</b> \u2014 about 162,000 of 268,000 images \u2014 and sent it back to development. Round 2 is running now: the remaining ~446,000 images are indexing, alongside wider matching rules, a security review and the user guide. <b>UAT with the studio designers starts Monday 7 Sep 2026</b> and runs to 25 Sep; the user guide is published on this portal as the <a href="#fixture-guide" style="color:var(--accent)">SDI Drawing Search Intelligence Guide</a>. Muhammad keeps this project through UAT and go-live while moving, from September, onto the business analysis for SDI Manufacturing Intelligence: mapping the live production spreadsheet for BOMs and routes for the warehouse, so that process can be automated and understood on the way into Sage X3, and mapping the design DXF process onto CNC machining \u2014 documented as a BRD and user stories, planned and executed with James Gray. Client Briefing, his other project, is on hold from 4 Sep, written up to an extent.</div>'
        +'<div style="margin-top:16px;padding:12px 14px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.22);border-radius:6px;line-height:1.65">'
        +'<b style="color:var(--accent)">Go-live has no buffer.</b> Studio-wide rollout is ~25 Sep 2026, the same day UAT ends \u2014 and UAT (7\u201325 Sep) overlaps both Development Round 2 (to 15 Sep) and Integration Testing Round 2 (15\u201320 Sep). Designers are testing a build still being hardened, and anything found late lands on the rollout date directly.'
        +'</div>'
@@ -3867,7 +3895,7 @@
      desc:'A client brief comes back with precedent attached, not with a blank sheet. On hold; returns as a set of AI real-time agents.',
      detail:'The client-facing project on the same tracker, where it is called <b>Client Briefing</b>. A brief is captured and turned into something structured, and that structure is run against what SDI has already built so the response carries precedent: the fixtures, the drawings, and the jobs they were made for. Approved by Stuart and Bec, and scoped around a large job of Stuart\u2019s that needs its requirements settled in detail before any of it is built.'
        +'<div style="margin-top:20px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase">Where it is</div>'
-       +'<div style="margin-top:8px;line-height:1.75"><b>On hold from 4 Sep 2026.</b> Proof of concept presented and approved; requirements gathering with Stuart stopped at 25%. Not cancelled: <b>James Gray and Yogesh Kumar pick it up as a set of AI real-time agents</b> rather than a single application \u2014 a different build from the one the tracker priced, and the code review and architecture work tasked at the 3 Sep daily AI meeting is its first step. A plan follows. Muhammad Yazir moves to the business analysis, user stories and documentation for the Manufacturing / CNC SDI Intelligence automations.</div>'
+       +'<div style="margin-top:8px;line-height:1.75"><b>On hold from 4 Sep 2026.</b> Proof of concept presented and approved; requirements gathering with Stuart stopped at 25%. Not cancelled: <b>James Gray and Yogesh Kumar pick it up as a set of AI real-time agents</b> rather than a single application \u2014 a different build from the one the tracker priced, and the code review and architecture work tasked at the 3 Sep daily AI meeting is its first step. A plan follows; the requirements gathered so far are written up. Muhammad Yazir moves to the business analysis, user stories and documentation for the Manufacturing / CNC SDI Intelligence automations \u2014 the live production spreadsheet for BOMs and routes into Sage X3, and the DXF-to-CNC process.</div>'
        +'<div style="margin-top:16px;padding:12px 14px;background:rgba(232,163,61,.06);border:1px solid rgba(232,163,61,.22);border-radius:6px;line-height:1.65">'
        +'<b style="color:var(--accent)">The dates below are withdrawn.</b> The tracker\u2019s plan \u2014 scope sign-off 21 Sep, build 25 Sep to 15 Oct, testing and UAT through October, release ~Nov 2026 \u2014 is kept for the record and none of it is current. No date is claimed until the agent-based plan exists.'
        +'</div>'
