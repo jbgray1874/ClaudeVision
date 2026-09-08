@@ -4387,26 +4387,27 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_times_min["folding"] = round(rule["setup_min"], 2)
         run_times_min["folding"] = round((bends * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
 
-    # THE COAT IS CHARGED WHERE THE METAL IS. On 11350-01 the assembly finish propagated
-    # the powder op onto the PEM stud (a purchased item that arrives finished) and onto
-    # both assembly parents (which have no blank of their own) — six min-floor charges
-    # for one coat, £10.02 of labour on £0.03 of powder. A bought-in never coats here,
-    # and a parent with no measurable area of its own is covered by its members' areas:
-    # the members carry the coat, charging the parent again is the same work twice.
+    # THE COAT IS CHARGED ON EVIDENCE, NOT ON CLASS. The first cut of this gate shed the
+    # op from every bought-in and every area-less parent, and the reviewer's probes
+    # broke both: a purchased UNFINISHED component can genuinely need coating, and a
+    # welded assembly can be coated after assembly. So: a bought-in sheds the op only
+    # when NO finish evidence of its own stands behind it (the blanket document stamp
+    # no longer reaches bought-ins, so an op that remains is claimed by something); and
+    # a parent with no measurable area of its own keeps the op but charges nothing —
+    # missing area is a question for a person, never a min-floor charge and never proof
+    # that the members already pay.
     _pc_roles = {str(r).lower() for r in (part.get("page_roles") or [])}
     _pc_bought = ("bought_in" in _pc_roles or bool(part.get("bought_in"))
                   or str(part.get("normalized_material") or "").upper() == "BOUGHT_IN")
     _pc_parent = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
-    _pc_rel = part.get("_powder_reliable_coated_m2")
-    _pc_has_area = _pc_rel is not None and float(_pc_rel or 0) > 0
-    if "powder_coating" in ops and (_pc_bought or (_pc_parent and not _pc_has_area)):
+    _pc_own_evidence = bool(part.get("surface_finishes")) or any(
+        "coat" in str(o).lower() or "powder" in str(o).lower()
+        for o in (part.get("textual_operations") or []))
+    if "powder_coating" in ops and _pc_bought and not _pc_own_evidence:
         ops = [o for o in ops if o != "powder_coating"]
         part.setdefault("review_flags", []).append(
-            "powder coat not charged on this line: "
-            + ("a purchased item arrives finished"
-               if _pc_bought else
-               "the assembly's coat is carried by its members' own areas — charging the "
-               "parent again would price the same coat twice"))
+            "powder coat not charged on this line: a purchased item with no finish "
+            "evidence of its own arrives finished")
     if "powder_coating" in ops:
         pc_rule = LABOUR_RULES["powder_coating"]
         setup_pm = float(pc_rule.get("setup_min_per_part", pc_rule.get("min_per_part", 0.75)))
@@ -4432,6 +4433,21 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _normal_pc_floor = float(pc_rule.get("min_run_min", 0.25))
         _pc_min = _wire_pc_floor if (_is_wire_op_part and not _has_flat_blank) else _normal_pc_floor
         run_min = max(_pc_min, run_min)
+        if _pc_parent and coated_m2 <= 0:
+            # AN ASSEMBLY CLAIMING THE COAT WITH NO AREA OF ITS OWN IS A QUESTION, NOT A
+            # CHARGE. 11350-01 min-floored both parents on top of the members — the same
+            # coat priced twice — but a welded assembly genuinely coated after assembly
+            # is real too, and the engine cannot tell those apart from here. So nothing
+            # is charged on the parent's line, the claim stays visible on the route, and
+            # the flag asks a person to rule on the scope.
+            run_min = 0.0
+            setup_pm = 0.0
+            coated_detail["powder_scope_question"] = True
+            part.setdefault("review_flags", []).append(
+                "powder is claimed on this assembly and it has no measurable coated area "
+                "of its own — the members' areas carry the coat unless a person rules "
+                "that the assembly is coated as one; nothing is charged on this line "
+                "meanwhile")
         setup_times_min["powder_coating"] = round(setup_pm, 2)
         run_times_min["powder_coating"] = round(run_min, 2)
         powder_coating_detail = {
@@ -6824,6 +6840,16 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                             "ALUMINIUM", "ALUMINUM", "ZINTEC", "BRIGHT_DRAWN"}
             for _p in parts:
                 if str(_p.get("normalized_material") or "").upper() not in _coat_metals:
+                    continue
+                # THE DOCUMENT'S FINISH DESCRIBES THE FABRICATED PRODUCT. This blanket
+                # stamped the coat onto a purchased PEM stud because its material reads
+                # MILD STEEL — a min-floor charge for coating an item that arrives
+                # finished. A purchased part is only coated when ITS OWN evidence says
+                # so (its row, its sheet, an LLM claim on it) — and those arrive
+                # through the per-part paths, which this stamp must not stand in for.
+                _p_roles = {str(r).lower() for r in (_p.get("page_roles") or [])}
+                if "bought_in" in _p_roles or _p.get("bought_in") \
+                        or str(_p.get("part_number") or "").upper().startswith("BI-"):
                     continue
                 _existing = list(_p.get("textual_operations") or []) + list(_p.get("inferred_operations") or [])
                 if _coat_op not in _existing:

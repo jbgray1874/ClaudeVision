@@ -1262,20 +1262,72 @@ def test_the_powder_consumable_row_is_not_a_sealed_identity():
     assert out == [], f"the powder consumable is commercial, never a leaked identity: {out}"
 
 
-def test_powder_is_never_charged_on_hardware_or_a_bare_parent():
-    """£10.02 of powder labour on £0.03 of powder: the assembly finish propagated the
-    op onto the PEM stud and both parents, six min-floor charges for one coat.
-    Structural: bought-ins never coat, and a parent with no measurable area of its own
-    is covered by its members."""
+def test_powder_charges_on_evidence_not_on_class():
+    """The reviewer's probes of the first gate: a purchased UNFINISHED component can
+    genuinely need coating, and a welded assembly can be coated after assembly. So the
+    document-level blanket stamp no longer reaches bought-ins at all; a bought-in sheds
+    the op only when NO finish evidence of its own stands behind it; and a parent with
+    no measurable area keeps the op, charges nothing, and asks a person to rule the
+    scope — missing area is a question, never proof the members already pay."""
     import os as _os
     src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
                              "estimator.py"), encoding="utf-8").read()
-    i = src.index('if "powder_coating" in ops and (_pc_bought')
-    window = src[max(0, i - 1600):i + 900]
-    assert "_pc_bought" in window and "_pc_parent" in window and "_pc_has_area" in window
-    assert "arrives finished" in window, "the skip must say why on the record"
-    assert 'ops = [o for o in ops if o != "powder_coating"]' in window, \
-        "the op is removed, not just its minutes — the sheet row scope follows the ops"
+    # The blanket stamp skips purchased records.
+    i = src.index("stamped onto metal parts from title-block finish")
+    stamp = src[max(0, i - 2400):i]
+    assert '"bought_in" in _p_roles' in stamp, \
+        "the document finish must not be blanket-stamped onto purchased items"
+    # The labour gate is evidence-driven, not class-driven.
+    j = src.index("_pc_own_evidence")
+    gate = src[max(0, j - 1200):j + 1400]
+    assert "_pc_bought and not _pc_own_evidence" in gate, \
+        "a purchased part WITH its own finish evidence must keep the coat"
+    # The area-less parent charges nothing and asks, instead of concluding.
+    k = src.index("powder_scope_question")
+    parent = src[max(0, k - 1400):k + 900]
+    assert "run_min = 0.0" in parent and "unless a person rules" in parent, \
+        "missing area on a parent is a question for a person, never a min-floor charge"
+
+
+def test_a_dual_path_row_reaches_the_graph_with_every_stated_owner():
+    """The reviewer's probe of the first ownership reader: the same nut under two
+    assemblies (4 under ASSY-FRAME, 2 under ASSY-DOOR) kept only the first owner. End-to-end:
+    real dual-path rows through the reconcile, into the record, into the graph — both
+    owners survive with their own quantities."""
+    import file_scan as fs
+    import route_compiler as rc
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "ASSY-FRAME", "description": "FRAME WELDMENT", "quantity": 1,
+         "is_sub_assembly": True, "page_roles": ["detail"],
+         "assembly_children": ["FRAME-LEAF"]},
+        {"part_number": "FRAME-LEAF", "description": "FRAME PLATE", "quantity": 1,
+         "page_roles": ["detail"]},
+        {"part_number": "ASSY-DOOR", "description": "DOOR ASSEMBLY", "quantity": 1,
+         "is_sub_assembly": True, "page_roles": ["detail"],
+         "assembly_children": ["DOOR-LEAF"]},
+        {"part_number": "DOOR-LEAF", "description": "DOOR SKIN", "quantity": 1,
+         "page_roles": ["detail"]},
+    ]}}
+    dp = {"rows": [
+        {"part_number": "", "description": "M4 WING NUT", "quantity": 4,
+         "bom_parent": "ASSY-FRAME"},
+        {"part_number": "", "description": "M4 WING NUT", "quantity": 2,
+         "bom_parent": "ASSY-DOOR"},
+    ]}
+    fs._reconcile_dualpath_into_part_estimates(summary, dp)
+    parts = summary["estimate_summary"]["part_estimates"]
+    nut = next(p for p in parts
+               if str(p.get("part_number") or "").upper().startswith("BI-"))
+    assert {e["parent"] for e in nut.get("bom_parents") or []} == {"ASSY-FRAME", "ASSY-DOOR"}, \
+        f"both stated occurrences must survive on the record: {nut.get('bom_parents')}"
+    graph = rc.build_part_graph(parts)
+    pn = str(nut["part_number"]).upper()
+    assert graph["parents"].get(pn) == {"ASSY-FRAME", "ASSY-DOOR"}, \
+        f"both owners must reach the graph: {graph['parents'].get(pn)}"
+    assert pn in graph["children"]["ASSY-FRAME"] and pn in graph["children"]["ASSY-DOOR"]
+    assert graph["quantities"][pn] == 6.0, \
+        f"4 under one assembly + 2 under the other is 6 nuts, not the first table's 4: " \
+        f"{graph['quantities'][pn]}"
 
 
 def test_the_missing_drawing_panel_carries_the_records_charged_money():

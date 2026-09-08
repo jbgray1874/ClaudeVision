@@ -1265,25 +1265,36 @@ def build_part_graph(
         _pid = aliases.get(_pid, _pid)
         if not _pid or _pid in parents or _pid in _claimed_before_bom:
             continue
-        _bp_raw = _part.get("bom_parent") or ""
-        if not _bp_raw:
+        # EVERY STATED OCCURRENCE, with its own quantity. The same nut can sit under two
+        # assemblies (4 under A-101, 2 under A-102) and both tables are evidence — the
+        # first cut of this reader kept only the first owner, which silently halved the
+        # hardware. bom_parents carries each distinct occurrence; the single bom_parent
+        # stays as the fallback for records that predate the list.
+        _bp_entries = []
+        for _e in (_part.get("bom_parents") or []):
+            if isinstance(_e, Mapping) and str(_e.get("parent") or "").strip():
+                _bp_entries.append((str(_e.get("parent")), number(_e.get("qty"), 0) or None))
+        if not _bp_entries and _part.get("bom_parent"):
+            _bp_entries.append((str(_part.get("bom_parent")), None))
+        if not _bp_entries:
             continue
-        _bp = ""
-        for _spelling in _code_spellings(_bp_raw):
-            _spelling = aliases.get(_spelling, _spelling)
-            if _spelling in raw or _spelling in extracted or _spelling in children \
-                    or _spelling in _drawings:
-                _bp = _spelling
-                break
-        if not _bp or _bp == _pid:
-            continue
-        _q = number(_part.get("quantity"), 1.0) or 1.0
-        children.setdefault(_bp, {})[_pid] = _q
-        parents.setdefault(_pid, set()).add(_bp)
-        records.setdefault(_bp, {})["is_sub_assembly"] = True
-        records[_bp]["hierarchy_source"] = "bom_table"
-        print(f"   [bom] '{_pid}' owned by '{_bp}' — the record carries the parent BOM "
-              f"whose table listed it", flush=True)
+        for _bp_raw, _bq in _bp_entries:
+            _bp = ""
+            for _spelling in _code_spellings(_bp_raw):
+                _spelling = aliases.get(_spelling, _spelling)
+                if _spelling in raw or _spelling in extracted or _spelling in children \
+                        or _spelling in _drawings:
+                    _bp = _spelling
+                    break
+            if not _bp or _bp == _pid:
+                continue
+            _q = _bq if _bq else (number(_part.get("quantity"), 1.0) or 1.0)
+            children.setdefault(_bp, {})[_pid] = _q
+            parents.setdefault(_pid, set()).add(_bp)
+            records.setdefault(_bp, {})["is_sub_assembly"] = True
+            records[_bp]["hierarchy_source"] = "bom_table"
+            print(f"   [bom] '{_pid}' owned by '{_bp}' (qty {_q:g}) — the record carries "
+                  f"the parent BOM whose table listed it", flush=True)
 
     # ── AND THE PAGE A PART WAS LISTED ON, when no reader gave it an owner ────────────
     # The last resort, and it exists because the readers above can all be empty at once.

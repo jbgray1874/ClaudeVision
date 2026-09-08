@@ -151,6 +151,22 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         from part_identity import synthesise_bought_in_code
         return synthesise_bought_in_code(_desc, _fallback) or _fallback or "BI-FIXING"
 
+    def _note_parent(_p, _r, _q):
+        """Record WHICH TABLE listed this row, per distinct occurrence. The same nut can
+        legitimately sit under two assemblies (4 under A-101 and 2 under A-102), and
+        keeping only the first owner silently halves the job's hardware — the graph
+        needs every stated occurrence with its own quantity."""
+        _bp = str(_r.get("bom_parent") or _r.get("source_pdf") or "").strip()
+        if not _bp:
+            return
+        _lst = _p.setdefault("bom_parents", [])
+        if isinstance(_lst, list) and not any(
+                isinstance(e, dict) and str(e.get("parent") or "").upper() == _bp.upper()
+                for e in _lst):
+            _lst.append({"parent": _bp, "qty": _q})
+        if not _p.get("bom_parent"):
+            _p["bom_parent"] = _bp
+
     _added = _updated = 0
     for _r in rows:
         if not _is_fastener_row(_r):
@@ -176,6 +192,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                 _cm.setdefault("review_flags", []).append(
                     f"Quantity set to {_qty} from dual-path BOM table read")
                 _updated += 1
+            _note_parent(_cm, _r, _qty)
             print(f"   [recon-row] CODE-MATCH '{_desc}' (code {_code}) -> qty {_qty}", flush=True)
             continue
 
@@ -198,12 +215,17 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                 _tm.setdefault("review_flags", []).append(
                     f"Quantity corrected {_old} -> {_qty} from dual-path BOM table read (matched '{_desc}')")
                 _updated += 1
+            _note_parent(_tm, _r, _qty)
             print(f"   [recon-row] TOKEN-MATCH '{_desc}' -> {_p_code(_tm)} qty {_qty}", flush=True)
             continue
 
         # 3) No match -> ADD clean bought-in row
         _cc = _clean_code(_desc, _code)
-        if any(_p_code(_p) == _cc.upper() for _p in _parts_recon):
+        _dup = next((_p for _p in _parts_recon if _p_code(_p) == _cc.upper()), None)
+        if _dup is not None:
+            # The row is a SECOND OCCURRENCE of a known item, not a duplicate to drop —
+            # its own table's parent and quantity still count.
+            _note_parent(_dup, _r, _qty)
             print(f"   [recon-row] SKIP-ADD '{_desc}' -> {_cc} already present", flush=True)
             continue
         _parts_recon.append({
@@ -224,6 +246,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             # child for a synthesised BI- code, so the record must carry the parent.
             "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "") or None,
         })
+        _note_parent(_parts_recon[-1], _r, _qty)
         _added += 1
         print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)
 
