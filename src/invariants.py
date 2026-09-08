@@ -2463,6 +2463,16 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
         for e in (summary.get("quarantined_interleave_artefacts") or [])
         if isinstance(e, dict)
     }
+    # The graph's own issue ledger is a second witness: the pre-cost compile and the
+    # post-reconcile shadow both record the drop even when the record purge ran without
+    # a summary to file evidence on.
+    for _issues in ((summary.get("canonical_part_graph_pre_cost") or {}).get("issues"),
+                    (((summary.get("estimate_summary") or {})
+                      .get("canonical_route_shadow") or {}).get("issues"))):
+        for _iss in _issues or []:
+            if isinstance(_iss, dict) and \
+                    str(_iss.get("code") or "") == "bom_row_interleave_artifact":
+                _quarantined.add(str(_iss.get("identity") or "").strip().upper())
     _quarantined.discard("")
 
     missing = []

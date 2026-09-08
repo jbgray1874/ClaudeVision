@@ -671,6 +671,22 @@ def _prefix_related(a: str, b: str) -> bool:
     return _long[len(_short)].isalnum()
 
 
+def _numeric_sets_contradict(a: Set[str], b: Set[str]) -> bool:
+    """Do two descriptions actually DISAGREE about a figure?
+
+    A recorded conflict becomes a manufacturing decision an estimator has to answer, so it
+    must mean a contradiction — 200 on one sheet and 220 on the other. The first version
+    fired on ANY difference between the numeric-token sets, and the survivor's own line
+    carries its part prefix ("10975") as a bare number, so "…LENGTH: 200.00" against
+    "10975 … LENGTH: 200.00" raised a phantom '200 vs 200' decision beside the real
+    200-vs-220 one. A superset states the same figures plus context; only two sets that
+    EACH hold a number the other lacks are two different answers to one question.
+    """
+    a = set(a or ())
+    b = set(b or ())
+    return bool(a - b) and bool(b - a)
+
+
 def _raw_identity_aliases(
     raw: Mapping[str, Mapping[str, Any]],
     extracted: Mapping[str, Mapping[str, Any]],
@@ -825,7 +841,7 @@ def _raw_identity_aliases(
                 aliases[identity] = host
                 _di = _description_tokens(ri.get("description")) - wi
                 _dh = _description_tokens(rh.get("description")) - wh
-                if _di and _dh and _di != _dh and isinstance(rh, dict):
+                if _numeric_sets_contradict(_di, _dh) and isinstance(rh, dict):
                     rh.setdefault("_bom_numeric_conflicts", []).append({
                         "field": "description",
                         "kept": str(rh.get("description") or ""),
@@ -873,7 +889,7 @@ def _raw_identity_aliases(
                 i_rec = _rec_of(ident)
                 i_nums = _description_tokens(i_rec.get("description")) - _word_tokens(
                     i_rec.get("description"))
-                if s_nums and i_nums and s_nums != i_nums and isinstance(s_rec, dict):
+                if _numeric_sets_contradict(s_nums, i_nums) and isinstance(s_rec, dict):
                     s_rec.setdefault("_bom_numeric_conflicts", []).append({
                         "field": "description",
                         "kept": str(s_rec.get("description") or ""),
@@ -1646,6 +1662,7 @@ def apply_canonical_evidence_to_parts(
     bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     known_assemblies: Optional[Iterable[str]] = None,
     page_owner: Optional[Mapping[int, str]] = None,
+    summary: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Make the canonical graph authoritative BEFORE costing, not after it.
 
@@ -1666,7 +1683,11 @@ def apply_canonical_evidence_to_parts(
     Returns the compiled graph so the caller can record what it found.
     """
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner)
-    quarantine_interleave_artefacts(parts, graph.get("issues"))
+    # THE EVIDENCE, FILED AT THE FIRST DROP. The refresh recompile may never re-mint the
+    # chimera's identity (its record is already gone from the parts), so if this call
+    # does not file the quarantine on the summary, the pack-completeness invariant still
+    # sends someone to Design for the phantom's drawing off the raw BOM row.
+    quarantine_interleave_artefacts(parts, graph.get("issues"), summary=summary)
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
     for part in parts or []:
@@ -1840,6 +1861,91 @@ def quarantine_interleave_artefacts(part_lists: Any, issues: Any,
     return removed
 
 
+def fold_bom_row_fragments(part_lists: Any, bom_rows: Any,
+                           summary: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Fold a minted BI- fragment of a wrapped BOM row into the line that owns the row.
+
+    THE SAME ROW, READ THREE TIMES. p.1's wrapped tape row reads "10975 EPDM Closed Cell
+    Tape^10975-02-GA EPDM TAPE 25X1MM …", and the late BI- minting pass turned the wrap
+    fragments "Cell Tape" and "Closed Cell Tape" into two PRICED lines beside the line
+    already carrying the row — £6.80 of phantom material on the 08:08 run. A BI- code with
+    no measured geometry whose entire wording sits inside ONE raw BOM row that another
+    retained bought-in line demonstrably claims is that row re-read, not a second
+    purchase. Evidence lands on the survivor and, when a summary is given, under
+    folded_bom_row_fragments — never a silent delete. Returns the folded identities.
+    """
+    try:
+        from bought_in_policy import is_bought_in as _bi
+    except Exception:                                            # noqa: BLE001
+        return []
+    lists = [one for one in (
+        part_lists if isinstance(part_lists, list) and part_lists
+        and isinstance(part_lists[0], list) else [part_lists]
+    ) if isinstance(one, list)]
+    if not lists:
+        return []
+    row_sq: List[tuple] = []
+    for r in bom_rows or []:
+        if isinstance(r, Mapping):
+            text = f"{r.get('part_number') or ''} {r.get('description') or ''}".strip()
+            s = _squashed(text)
+            if len(s) >= 16:
+                row_sq.append((s, text))
+    if not row_sq:
+        return []
+    pool: Dict[str, Dict[str, Any]] = {}
+    for one in lists:
+        for p in one:
+            if isinstance(p, dict) and p.get("part_number"):
+                pool.setdefault(clean_part_number(p.get("part_number")), p)
+    folded: Dict[str, str] = {}
+    for pn, part in pool.items():
+        if not pn.upper().startswith("BI-"):
+            continue
+        _ng = part.get("normalized_geometry") or {}
+        if number(_ng.get("blank_length_mm"), 0.0) or not _bi(dict(part)):
+            continue
+        frag = _squashed(str(part.get("description") or "") or pn[3:])
+        if len(frag) < 7:
+            continue
+        for s, row_text in row_sq:
+            if frag not in s or len(frag) >= len(s):
+                continue
+            for opn, other in pool.items():
+                if (opn == pn or opn in folded or opn.upper().startswith("BI-")
+                        or not isinstance(other, dict)):
+                    continue
+                osq_desc = _squashed(str(other.get("description") or ""))
+                osq_code = _squashed(opn)
+                claims = ((len(osq_desc) >= 8 and osq_desc in s)
+                          or (len(osq_code) >= 5 and osq_code in s))
+                if not claims or not _bi(dict(other)):
+                    continue
+                folded[pn] = opn
+                other.setdefault("review_flags", []).append(
+                    f"BI line '{pn}' ({str(part.get('description') or '').strip()}) is "
+                    f"a fragment of this line's own BOM row ('{row_text[:90]}') re-read "
+                    f"by a later pass — folded here, not priced as a second purchase")
+                if isinstance(summary, dict):
+                    summary.setdefault("folded_bom_row_fragments", []).append({
+                        "part_number": pn, "into": opn,
+                        "description": str(part.get("description") or ""),
+                        "bom_row": row_text, "record": part})
+                break
+            if pn in folded:
+                break
+    if folded:
+        gone = set(folded)
+        for one in lists:
+            one[:] = [p for p in one
+                      if not (isinstance(p, dict)
+                              and clean_part_number(p.get("part_number")) in gone)]
+        print(f"   [graph] folded {len(folded)} BI fragment line(s) of wrapped BOM "
+              f"row(s): " + "; ".join(f"{k} -> {v}" for k, v in sorted(folded.items())),
+              flush=True)
+    return sorted(folded)
+
+
 def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Recompile once the late readers have finished adding rows.
 
@@ -1886,12 +1992,14 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
     # its row from the raw table read — which is how a part the log twice said was
     # dropped still reached the Estimate sheet. This recompile is the final population,
     # so the purge here is the one nothing can undo.
-    quarantine_interleave_artefacts(
-        [list_ for list_ in (
-            (summary.get("manufacturing_writeup") or {}).get("parts"),
-            final_estimates if isinstance(final_estimates, list) else None,
-        ) if isinstance(list_, list)],
-        compiled.get("issues"), summary=summary)
+    _final_lists = [list_ for list_ in (
+        (summary.get("manufacturing_writeup") or {}).get("parts"),
+        final_estimates if isinstance(final_estimates, list) else None,
+    ) if isinstance(list_, list)]
+    quarantine_interleave_artefacts(_final_lists, compiled.get("issues"), summary=summary)
+    # AND THE WRAP FRAGMENTS, AT THE SAME BOUNDARY. The BI- minting pass runs during
+    # reconciliation, so only a purge HERE can see what it invented.
+    fold_bom_row_fragments(_final_lists, list(_da.get("bom_rows") or []), summary=summary)
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
@@ -3368,6 +3476,7 @@ __all__ = [
     "PartNode", "OperationClaim", "OperationDecision",
     "build_part_graph", "make_claim", "arbitrate_event",
     "interleave_artefact_identities", "quarantine_interleave_artefacts",
+    "fold_bom_row_fragments",
     "compile_job_route", "project_priced_route",
     "apply_canonical_evidence_to_parts",
     "refresh_canonical_route_after_reconciliation",

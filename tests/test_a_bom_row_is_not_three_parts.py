@@ -585,6 +585,89 @@ def test_a_variant_provenance_summary_carries_that_variants_totals():
         "the provenance writer reads job_totals — the overlay must reach it"
 
 
+_P1_ROW = {"part_number": "10975 EPDM Closed",
+           "description": "Cell Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C "
+                          "LENGTH: 200.00"}
+
+
+def test_bi_fragments_of_a_wrapped_bom_row_fold_into_the_line_that_owns_it():
+    """08:08's new ghosts: the late BI- minting pass turned the wrap fragments 'Cell
+    Tape' and 'Closed Cell Tape' into two PRICED lines beside the real tape — £6.80 of
+    phantom material. A BI- code whose whole wording sits inside one raw BOM row another
+    bought-in line claims is that row re-read, not a second purchase."""
+    survivor = {"part_number": "10975",
+                "description": "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C "
+                               "LENGTH: 200.00", "quantity": 3}
+    parts = [survivor,
+             {"part_number": "BI-CELLTAPE", "description": "Cell Tape"},
+             {"part_number": "BI-CLOSEDCELLTAPE", "description": "Closed Cell Tape"}]
+    estimates = [dict(p) for p in parts]
+    summary: dict = {}
+    folded = rc.fold_bom_row_fragments([parts, estimates], [_P1_ROW], summary=summary)
+    assert folded == ["BI-CELLTAPE", "BI-CLOSEDCELLTAPE"], folded
+    assert [p["part_number"] for p in parts] == ["10975"]
+    assert len(estimates) == 1
+    assert len(summary.get("folded_bom_row_fragments") or []) == 2
+    assert sum("fragment of this line's own BOM row" in str(f)
+               for f in survivor.get("review_flags") or []) == 2
+
+
+def test_a_bi_line_with_its_own_standing_is_not_folded():
+    """The fold is for wrap fragments only: a BI- line whose wording is NOT inside a
+    claimed row, or whose would-be survivor is fabricated, stays a real line."""
+    fabricated = {"part_number": "7332-01-001", "description": "FOOTPLATE BRACKET",
+                  "flat_pattern_detected": True, "normalized_material": "MILD STEEL"}
+    bi = {"part_number": "BI-FOOTPLATE", "description": "Footplate"}
+    parts = [fabricated, bi]
+    folded = rc.fold_bom_row_fragments(
+        [parts], [{"part_number": "7332-01-001",
+                   "description": "FOOTPLATE BRACKET WITH FOOTPLATE PAD FITTED"}])
+    assert folded == [], "a fabricated claimant cannot absorb a purchase line"
+    assert len(parts) == 2
+
+
+def test_matching_figures_with_extra_context_are_not_a_contradiction():
+    """08:08 raised a phantom '200 vs 200' decision beside the real 200-vs-220 one: the
+    survivor's own part prefix (10975) counted as a disagreeing figure. Only two sets
+    that EACH hold a number the other lacks are two answers to one question."""
+    assert not rc._numeric_sets_contradict({"10975", "200"}, {"200"})
+    assert rc._numeric_sets_contradict({"10975", "200"}, {"220"})
+    assert not rc._numeric_sets_contradict(set(), {"200"})
+    # And through the live pass: same length twice, different spellings — no decision.
+    host = {"description": "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C LENGTH: 200.00"}
+    aliases = rc._raw_identity_aliases(
+        {"10975EPDMCLOSEDCELL": host,
+         "CELL TAPE^10975-02-": {"description": "EPDM TAPE 25X1MM - TAPE 113C "
+                                                "LENGTH: 200.00"}}, {})
+    assert aliases.get("CELL TAPE^10975-02-") == "10975EPDMCLOSEDCELL"
+    assert not host.get("_bom_numeric_conflicts"), \
+        "agreement plus context is not a manufacturing decision"
+
+
+def test_one_bench_visit_books_one_setup():
+    """08:08 charged Manual labour (Acrylic) twice on A01 — the sequenced deburr and the
+    sequence-less route rule each minted a group, two 15-minute set-ups for one visit to
+    one bench. The sequence-less decision joins its department's existing group."""
+    import wb_populate as wbp
+    payload = {"nodes": [], "decisions": [
+        {"decision_id": "d1", "operation": "deburring", "target_id": "10975-02-A01",
+         "participants": ["10975-02-A01"], "status": "required", "scope": "part",
+         "sequence": 20, "qty_per_unit": 1},
+        {"decision_id": "d2", "operation": "manual_labour_acrylic",
+         "target_id": "10975-02-A01", "participants": ["10975-02-A01"],
+         "status": "required", "scope": "part", "sequence": None, "qty_per_unit": 1},
+    ]}
+    summary = {"estimate_summary": {"canonical_route_shadow": payload}}
+    estimates = [{"part_number": "10975-02-A01", "normalized_material": "ACRYLIC",
+                  "normalized_thickness_mm": 2.0}]
+    groups = wbp.canonical_labour_groups(summary, estimates, 1)
+    mana = [g for g in groups.values()
+            if g.get("wb_op") == "Manual labour (Acrylic)"]
+    assert len(mana) == 1, \
+        f"one bench, one group; got {[g['group_key'] for g in groups.values()]}"
+    assert set(mana[0]["decision_ids"]) == {"d1", "d2"}
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""

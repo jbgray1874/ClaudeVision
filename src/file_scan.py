@@ -3192,7 +3192,8 @@ def _finalize_scan_summary(
             summary.get("llm_full_extract") or {},
             (summary.get("document_analysis") or {}).get("bom_rows") or [],
             job_drawing_numbers(summary),
-            assembly_page_owners(summary))
+            assembly_page_owners(summary),
+            summary=summary)
         summary["canonical_part_graph_pre_cost"] = {
             "nodes": len(_canon_pre.get("nodes") or []),
             "issues": list(_canon_pre.get("issues") or []),

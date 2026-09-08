@@ -2090,6 +2090,16 @@ def canonical_labour_groups(
                 "canonical-setup", wb_op, material.upper(),
                 "%g" % thickness, "%g" % sequence if sequence is not None else "",
             )
+            # ONE BENCH, ONE SET-UP. The sequence-less acrylic manual rule landed beside
+            # the sequenced deburr on the same part as a SECOND Manual labour (Acrylic)
+            # row — two 15-minute set-ups for one visit to one bench. Decisions arrive
+            # sequence-first, so the sequenced group already exists: a decision with no
+            # sequence of its own joins its department's group instead of minting a twin.
+            if sequence is None:
+                for _existing in groups:
+                    if _existing[:4] == key[:4]:
+                        key = _existing
+                        break
 
         group = groups.setdefault(key, {
             "wb_op": wb_op,
