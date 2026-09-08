@@ -1339,6 +1339,13 @@ def test_the_coated_area_counts_the_bar_and_both_arms_exactly_once():
                                            "blank_length_mm": 258.35,
                                            "blank_width_mm": 79.8,
                                            "unit_material_cost_gbp": 0.45}}]
+    # And the -02 mirror's REAL shape: stock_form "unknown" on a measured, coated,
+    # sheet-metal flat still contributes — an unclassified form field is not a veto.
+    parts[2]["material_estimate"]["stock_form"] = "unknown"
+    parts[2]["normalized_material"] = "MILD STEEL"
+    assert abs(wbp.coated_sheet_area_m2(parts, says) - expect) < 1e-6, \
+        "stock_form 'unknown' with a measured blank must still coat"
+    parts[2]["material_estimate"]["stock_form"] = "sheet"
     assert abs(wbp.coated_sheet_area_m2(both, says) - expect) < 1e-6, \
         "two records of one mirrored identity are one part, not two contributions"
     # A part the route excludes contributes nothing, whichever way it is spelled.
@@ -1424,6 +1431,32 @@ def test_a_mixed_powder_scope_blocks_release_as_a_decision():
     tally = cf.outstanding_summary(job)
     assert tally["manufacturing"] >= 1 and tally["blocking"] >= 1, \
         f"and it must keep the quote a draft: {tally}"
+
+
+def test_an_assembly_scope_label_without_welding_is_not_a_stage():
+    """11350-02's live shape: the LLM/inference claims carry scope "assembly" for a
+    SCREWED product — a title-block statement, not a finishing stage. Without welding
+    evidence the members carry the coat: the deferring bar mints, the parent stands
+    down. (A welded or weldment-worded assembly keeps its stage — the sibling tests.)"""
+    from route_compiler import REQUIRED, compile_job_route
+    parts = [
+        {"part_number": "S-101", "description": "TICKET BAR SUB ASSEMBLY",
+         "quantity": 1, "textual_operations": ["powder_coating"],
+         "operation_scope": {"powder_coating": "assembly"},
+         "operation_sources": {"powder_coating": "llm_full_extract"}},
+        {"part_number": "S-01", "description": "BAR", "quantity": 1,
+         "surface_finishes": ["SEE ASSEMBLY DRAWING"]},
+    ]
+    extract = {"assemblies": [
+        {"part_number": "S-101", "children": [{"part_number": "S-01", "qty": 1}]},
+    ], "parts": [], "routes": []}
+    g = compile_job_route(parts, extract)
+    pw = {d["target_id"]: d["status"] for d in g["decisions"]
+          if d["operation"] == "powder_coating"}
+    assert pw.get("S-01") == REQUIRED, \
+        f"the screwed product's members carry the coat: {pw}"
+    assert pw.get("S-101") != REQUIRED, \
+        f"an assembly-scope LABEL without welding is not a stage: {pw}"
 
 
 def test_mixed_powder_scope_asks_a_person_and_deletes_nothing():

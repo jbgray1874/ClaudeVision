@@ -1483,7 +1483,7 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
         if _sq_pn and _sq_pn in _seen_squash:
             continue
         _sme = _sp.get("material_estimate") or {}
-        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: coated steel routed by weight must not drop from the powder sum
+        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", "unknown", ""):  # stated_weight: coated steel routed by weight; unknown: 11350's mirror record — a coated flat with measured blank and sheet-metal material whose form field was simply never classified
             continue
         if part_cannot_be_powder_coated(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area

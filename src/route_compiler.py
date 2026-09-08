@@ -3201,13 +3201,30 @@ def compile_job_route(
             [str(_r.get("normalized_finish") or ""), str(_r.get("finish") or "")]
             + [str(x) for x in (_r.get("surface_finishes") or [])]).upper()
 
+    def _pw_assembly_stage(_t: str, _scope: str) -> bool:
+        """Is this assembly-scope coat a genuine finishing STAGE the assembly itself
+        goes through? The scope label alone cannot say: 11350-02's inference and LLM
+        claims carry scope "assembly" for a SCREWED product whose members plainly hold
+        the coat. The shop's own rule decides — welded components become ONE object on
+        the booth line — so the protection needs welding evidence (a required welding
+        decision on the target, or weldment wording on its record), not a label."""
+        if _scope != "assembly":
+            return False
+        if _t in welded_targets:
+            return True
+        _r = raw.get(_t) or {}
+        _txt = (str(_r.get("description") or "") + " "
+                + str(_r.get("part_number") or "")).upper()
+        return "WELD" in _txt
+
     _pw_scopes = _powder_required_scopes()
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if (_d.operation == "powder_coating" and _d.status == UNVERIFIED
                 and kinds.get(_d.target_id) == "assembly"
                 and _d.target_id in _pw_scopes
-                and _pw_scopes.get(_d.target_id) != "assembly"):
+                and not _pw_assembly_stage(_d.target_id,
+                                           _pw_scopes.get(_d.target_id, ""))):
             _minted = []
             for _leaf in (_d.participants or []):
                 if kinds.get(_leaf) != "leaf":
@@ -3270,7 +3287,7 @@ def compile_job_route(
         if re.search(r"\bRAW\b", _ft):
             continue
         if not any(kinds.get(a) == "assembly"
-                   and _pw_scopes.get(a) != "assembly"
+                   and not _pw_assembly_stage(a, _pw_scopes.get(a, ""))
                    and _is_descendant(_pn, a, graph["parents"])
                    for a in _pw_scopes):
             continue
@@ -3303,10 +3320,11 @@ def compile_job_route(
         if not (_d.operation == "powder_coating" and _d.status == REQUIRED
                 and kinds.get(_d.target_id) == "assembly"):
             continue
-        if str(_d.scope or "") == "assembly":
-            # An EXPLICIT assembly-scope coat is a finishing stage the assembly itself
-            # goes through — the reviewer's "separately specified stage". Members'
-            # deferring words corroborate it; complete coverage cannot stand it down.
+        if _pw_assembly_stage(_d.target_id, str(_d.scope or "")):
+            # A WELDED assembly's coat is a finishing stage the assembly itself goes
+            # through — the reviewer's "separately specified stage". Members' deferring
+            # words corroborate it; complete coverage cannot stand it down. A scope
+            # label without welding evidence is a title-block statement, not a stage.
             continue
         _leaf_desc = {pn for pn, k in kinds.items()
                       if k == "leaf" and _is_descendant(pn, _d.target_id,
