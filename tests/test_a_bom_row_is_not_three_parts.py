@@ -1195,6 +1195,28 @@ def test_a_variant_tree_over_claimed_members_is_never_minted():
     assert any(p["part_number"] == "10975-02-GA" for p in lone)
 
 
+def test_an_assembly_that_shares_parts_but_owns_its_own_is_still_minted():
+    """The reviewer's caution on the variant guard, pinned: 'don't simply collapse
+    assemblies because they share components — some jobs legitimately require both'.
+    The guard fires ONLY when every known child is already claimed. A second assembly
+    that shares a bracket with the weldment but names a member of its own is a real
+    second structure and mints; the shared bracket counting under both is then the
+    two-roots invariant's question (which needs >=3 shared and >=80%), not this one's."""
+    from types import SimpleNamespace
+    import source_connectors.solidworks as sw
+    parts = ([{"part_number": "J-101", "description": "WELDMENT"}]
+             + [{"part_number": f"J-00{i}", "description": "PART"} for i in range(1, 5)])
+    hierarchy = {"J-101": [("J-001", 1.0), ("J-002", 1.0), ("J-003", 1.0)],
+                 "J-201": [("J-003", 1.0), ("J-004", 1.0)]}
+    sw.apply_native_hierarchy_to_parts(parts, SimpleNamespace(hierarchy=hierarchy))
+    codes = {p["part_number"] for p in parts}
+    assert "J-201" in codes, \
+        "sharing ONE member with a claimed assembly must not suppress a real second one"
+    j201 = next(p for p in parts if p["part_number"] == "J-201")
+    assert {c.upper() for c in j201.get("assembly_children") or []} == {"J-003", "J-004"}, \
+        "the minted assembly keeps exactly the members the model gave it"
+
+
 def test_two_roots_pricing_the_same_members_is_blocking():
     """The seal passed at 10:57 because every identity WAS in the graph — the defect was
     scope. Two top assemblies whose leaf sets substantially overlap must block."""
