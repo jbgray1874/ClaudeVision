@@ -1262,6 +1262,67 @@ def test_the_powder_consumable_row_is_not_a_sealed_identity():
     assert out == [], f"the powder consumable is commercial, never a leaked identity: {out}"
 
 
+def test_the_coat_is_one_scope_not_one_decision_per_name():
+    """11350's priced defect: powder decisions on both arms, the sub-assembly AND the
+    top assembly — four objects charged, two of them parents — while the bar sat behind
+    an unresolved pointer. A required powder decision on an assembly whose fabricated
+    members carry their own required powder is the product's finish statement, not a
+    second object in the booth."""
+    from route_compiler import REQUIRED, compile_job_route
+    _parts = [
+        {"part_number": "J-GA", "description": "STAND ASSEMBLY", "quantity": 1,
+         "textual_operations": ["powder_coating"]},
+        {"part_number": "J-101", "description": "BAR SUB ASSEMBLY", "quantity": 1,
+         "textual_operations": ["powder_coating"]},
+        {"part_number": "J-01", "description": "BAR", "quantity": 1,
+         "textual_operations": ["powder_coating"]},
+        {"part_number": "J-02", "description": "ARM", "quantity": 1,
+         "textual_operations": ["powder_coating"]},
+    ]
+    _extract = {"assemblies": [
+        {"part_number": "J-GA", "children": [
+            {"part_number": "J-101", "qty": 1}, {"part_number": "J-02", "qty": 1}]},
+        {"part_number": "J-101", "children": [{"part_number": "J-01", "qty": 1}]},
+    ], "parts": [], "routes": []}
+    _graph = compile_job_route(_parts, _extract)
+    _pw = {d["target_id"]: d["status"] for d in _graph["decisions"]
+           if d["operation"] == "powder_coating"}
+    assert _pw.get("J-01") == REQUIRED and _pw.get("J-02") == REQUIRED, \
+        f"the fabricated members carry the coat: {_pw}"
+    assert _pw.get("J-101") not in (REQUIRED,) and _pw.get("J-GA") not in (REQUIRED,), \
+        f"parents whose members are coated are the finish STATEMENT, not booth objects: {_pw}"
+    # THE WELDMENT CASE SURVIVES: members RAW, only the assembly coated — the parent IS
+    # the object that goes to the coater, and its decision must stand.
+    _parts_w = [
+        {"part_number": "W-101", "description": "FRAME WELDMENT", "quantity": 1,
+         "textual_operations": ["powder_coating", "welding"]},
+        {"part_number": "W-01", "description": "LEG", "quantity": 2,
+         "surface_finishes": ["RAW"]},
+    ]
+    _extract_w = {"assemblies": [
+        {"part_number": "W-101", "children": [{"part_number": "W-01", "qty": 2}]},
+    ], "parts": [], "routes": []}
+    _graph_w = compile_job_route(_parts_w, _extract_w)
+    _pw_w = {d["target_id"]: d["status"] for d in _graph_w["decisions"]
+             if d["operation"] == "powder_coating"}
+    assert _pw_w.get("W-101") == REQUIRED, \
+        f"a weldment coated as one object keeps its coat: {_pw_w}"
+
+
+def test_the_coated_area_membership_is_never_spelling_sensitive():
+    """The powder area was always exactly one arm because the route said
+    '11350-01-02 MIR' while the record spells itself '11350-01-02MIR' — the exact-string
+    membership test silently dropped the mirror from the coated-area sum. Structural:
+    the membership compares squashed."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "wb_populate.py"), encoding="utf-8").read()
+    i = src.index("def _route_says_coated")
+    window = src[max(0, i - 900):i + 700]
+    assert "_route_coated_squash" in window, \
+        "spelling must never decide coating — membership compares squashed"
+
+
 def test_powder_charges_on_evidence_not_on_class():
     """The reviewer's probes of the first gate: a purchased UNFINISHED component can
     genuinely need coating, and a welded assembly can be coated after assembly. So the

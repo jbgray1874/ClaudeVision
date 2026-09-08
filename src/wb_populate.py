@@ -3121,10 +3121,19 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # unchanged. A SET, including an empty one, is a decision and is obeyed.
     _route_coated = parts_the_route_says_are_coated(summary)
 
+    # SPELLING NEVER DECIDES COATING. The route said "11350-01-02 MIR" and the mirror's
+    # record spells itself "11350-01-02MIR" — the exact-string membership test dropped
+    # the right arm from the coated-area sum, which is why the powder area was always
+    # exactly one arm. Same identity rule as everywhere else: compare squashed.
+    _route_coated_squash = ({re.sub(r"[^A-Z0-9]", "", x) for x in _route_coated}
+                            if _route_coated is not None else None)
+
     def _route_says_coated(_part) -> bool:
         if _route_coated is None:
             return True                      # no ruling: the old behaviour, unchanged
-        return str(_part.get("part_number") or "").strip().upper() in _route_coated
+        _pn = str(_part.get("part_number") or "").strip().upper()
+        return (_pn in _route_coated
+                or re.sub(r"[^A-Z0-9]", "", _pn) in _route_coated_squash)
 
     if _route_coated is not None:
         _flag(f"powder follows the compiled route: {len(_route_coated)} part(s) decided "

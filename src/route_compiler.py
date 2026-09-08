@@ -3151,6 +3151,83 @@ def compile_job_route(
                 route_id=template.route_id,
             ))
 
+    # ── THE COAT IS ONE SCOPE, NOT ONE DECISION PER NAME ─────────────────────────────
+    # 11350: powder decisions landed on both arms, the sub-assembly AND the top assembly,
+    # while the bar — whose own sheet says SEE ASSEMBLY DRAWING — got only an UNVERIFIED
+    # pointer decision. The priced row then charged four objects including two parents
+    # and omitted the largest coated part. Same pattern as the stranded weld above, in
+    # two halves:
+    #
+    # (a) POINTER RESOLUTION. An unverified powder decision targeting an assembly with a
+    #     fabricated-leaf participant is the "SEE ASSEMBLY DRAWING" read. When that
+    #     assembly's own finish evidence is a REQUIRED powder decision, the member IS
+    #     coated: the leaf gets its own required event, and the pointer is recorded as
+    #     resolved rather than left blocking.
+    # (b) PARENT DEDUP. A required powder decision on an assembly whose fabricated
+    #     descendants carry their own required powder is the product's finish statement,
+    #     not a second object in the booth — the members' areas are the coat. A welded
+    #     assembly whose members are RAW keeps its decision: there the parent IS the
+    #     coated object.
+    def _powder_required_assembly_targets() -> Set[str]:
+        return {
+            d.target_id for eid, ecs in claims_by_event.items()
+            for d in [arbitrate_event(eid, ecs)]
+            if d.operation == "powder_coating" and d.status == REQUIRED
+        }
+
+    _pw_required = _powder_required_assembly_targets()
+    for event_id, event_claims in list(claims_by_event.items()):
+        _d = arbitrate_event(event_id, event_claims)
+        if (_d.operation == "powder_coating" and _d.status == UNVERIFIED
+                and kinds.get(_d.target_id) == "assembly"
+                and _d.target_id in _pw_required):
+            for _leaf in (_d.participants or []):
+                if kinds.get(_leaf) != "leaf":
+                    continue
+                _pr_route = stable_id("route", {
+                    "operation": "powder_coating", "target_id": _leaf,
+                    "participants": [_leaf]})
+                _pr_event = stable_id("decision", {
+                    "route_id": _pr_route, "operation": "powder_coating",
+                    "scope": "part", "target_id": _leaf})
+                add_claim(_pr_event, make_claim(
+                    "powder_coating", REQUIRED, "bom_tree",
+                    subject_id=_leaf, target_id=_leaf, scope="part",
+                    participants=[_leaf],
+                    qty_per_unit=graph_quantities.get(_leaf, 1.0),
+                    sequence=70,
+                    reason="the part's sheet defers its finish to the assembly, and "
+                           "the assembly's own evidence states the coat — the member "
+                           "is coated",
+                    route_id=_pr_route,
+                ))
+            add_claim(event_id, make_claim(
+                "powder_coating", NOT_APPLICABLE, "bom_tree",
+                subject_id=_d.target_id, target_id=_d.target_id, scope=_d.scope,
+                participants=list(_d.participants or []),
+                sequence=_d.sequence,
+                reason="pointer resolved: the assembly's finish corroborates the "
+                       "member's coat, minted as the member's own requirement",
+                route_id=_d.route_id or "",
+            ))
+    _pw_required = _powder_required_assembly_targets()
+    for event_id, event_claims in list(claims_by_event.items()):
+        _d = arbitrate_event(event_id, event_claims)
+        if (_d.operation == "powder_coating" and _d.status == REQUIRED
+                and kinds.get(_d.target_id) == "assembly"
+                and any(kinds.get(t) == "leaf"
+                        and _is_descendant(t, _d.target_id, graph["parents"])
+                        for t in _pw_required)):
+            add_claim(event_id, make_claim(
+                "powder_coating", NOT_APPLICABLE, "bom_tree",
+                subject_id=_d.target_id, target_id=_d.target_id, scope=_d.scope,
+                participants=list(_d.participants or []),
+                sequence=_d.sequence,
+                reason="the assembly's finish is carried by its coated members' own "
+                       "requirements — one coat, not a second object in the booth",
+                route_id=_d.route_id or "",
+            ))
+
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent
     # instead of deleting evidence from whichever record happens to be in hand.
     for event_id, event_claims in list(claims_by_event.items()):
