@@ -668,6 +668,106 @@ def test_one_bench_visit_books_one_setup():
     assert set(mana[0]["decision_ids"]) == {"d1", "d2"}
 
 
+def test_the_rows_own_ai_tag_keeps_the_market_warning_alive():
+    """08:08: the sheet row said "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]" while the part
+    behind it, its provenance lost in the fold, classified 'source unrecorded' — so the
+    headline stopped asking anyone to replace the figure. The row's own tag is a witness."""
+    bare = {"part_number": "10975", "description": "EPDM TAPE"}
+    tagged = cf._price_origin(bare, "bought_in", "bom", 4.37, 0.0, 13, False,
+                              row_text="10975 Tape^10975-02-GA EPDM TAPE "
+                                       "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]")
+    assert tagged["firmness"] == cf.INDICATIVE_MARKET, tagged
+    plain = cf._price_origin(bare, "bought_in", "bom", 4.37, 0.0, 13, False,
+                             row_text="10975 EPDM TAPE 25X1MM")
+    assert plain["firmness"] != cf.INDICATIVE_MARKET, \
+        "an untagged row must not invent a market classification"
+
+
+def test_price_provenance_travels_with_the_fold():
+    """The folded member carried the price_source; the survivor had a material_estimate of
+    its own with none — and the generic fill-empty copy kept neither."""
+    parts = [
+        {"part_number": "10975EPDMCLOSEDCELL",
+         "description": "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C LENGTH: 200.00",
+         "normalized_material": "ACRYLIC", "quantity": 3,
+         "material_estimate": {"material": "EPDM"}},
+        {"part_number": "CELL TAPE^10975-02-",
+         "description": "EPDM TAPE 25X1MM - TAPE 113C LENGTH: 220.00",
+         "normalized_material": "ACRYLIC", "quantity": 3,
+         "material_estimate": {"cost_method": "llm_market_estimate",
+                               "price_source": {"source_name": "xAI Grok LLM",
+                                                "source_type": "market"}}},
+    ]
+    rc.apply_canonical_evidence_to_parts(parts)
+    assert len(parts) == 1
+    me = parts[0].get("material_estimate") or {}
+    assert (me.get("price_source") or {}).get("source_name") == "xAI Grok LLM", \
+        "the survivor must inherit the price provenance it lacked"
+
+
+def test_the_report_tree_shows_no_phantom_members():
+    """The report's hierarchy printed 1100997755-E0P2D-GM0 and the folded tape spelling as
+    members with dashes in every column — graph edges with no line and no record behind
+    them. A member is a line, not an edge."""
+    import job_report_html as jrh
+    summary = {
+        "quarantined_interleave_artefacts": [
+            {"part_number": "1100997755-E0P2D-GM0"}],
+        "folded_bom_row_fragments": [{"part_number": "BI-CELLTAPE"}],
+        "estimate_summary": {"canonical_route_shadow": {"nodes": [
+            {"part_number": "10975-02-GA", "kind": "assembly", "parents": []},
+            {"part_number": "10975-02-A01", "kind": "leaf", "parents": ["10975-02-GA"]},
+            {"part_number": "1100997755-E0P2D-GM0", "kind": "bought_in",
+             "parents": ["10975-02-GA"]},
+            {"part_number": "BI-CELLTAPE", "kind": "bought_in",
+             "parents": ["10975-02-GA"]},
+        ]}},
+        "manufacturing_writeup": {"parts": [
+            {"part_number": "10975-02-GA", "description": "assembly"},
+            {"part_number": "10975-02-A01", "description": "L-STAND"},
+        ]},
+    }
+    record = {"lines": [
+        {"part_number": "10975-02-GA", "identity": "10975-02-GA", "kind": "assembly"},
+        {"part_number": "10975-02-A01", "identity": "10975-02-A01", "kind": "leaf",
+         "charged_ext_gbp": 2.12},
+    ], "run": {}}
+    html = jrh._render_bom_tree(summary, record)
+    assert "1100997755" not in html, "a quarantined edge must not render as a member"
+    assert "BI-CELLTAPE" not in html, "a folded fragment must not render as a member"
+    assert "10975-02-A01" in html
+
+
+def test_a_variant_tab_scales_the_labour_rows_not_only_the_headline(tmp_path):
+    """08:08's 50-off Explanation printed the 1-off £13.56 Linebend against its own £2.51
+    labour total. Every term of the sheet's arithmetic is on the row, so the variant's
+    rows are computed with the variant's quantity."""
+    import json
+    import openpyxl
+    import estimate_explained
+    wb = openpyxl.Workbook()
+    wb.active.title = "Estimate"
+    wb.active["D6"] = 50
+    xlsx = tmp_path / "10975-02_qty50.xlsx"
+    wb.save(xlsx)
+    job = {"final_estimate": {
+        "totals": {"material_gbp": 22.55, "labour_gbp": 40.38, "unit_gbp": 67.68},
+        "labour_rows": [{"operation": "Linebend", "dept": "LINE",
+                         "setup_minutes": 30, "batch_hours": 0.533333,
+                         "dept_rate_gbp_per_hour": 25.43,
+                         "total_value_gbp": 13.56}],
+    }}
+    jp = tmp_path / "10975-02.json"
+    jp.write_text(json.dumps(job), encoding="utf-8")
+    md = estimate_explained.build(
+        xlsx, jp, totals_override={"quantity": 50, "baseline_quantity": 1,
+                                   "material": 22.55, "labour": 2.51, "unit": 26.95})
+    assert "13.56" not in md, "the baseline row money must not survive on a variant"
+    # batch(50) = 0.5h set-up + 50 x 0.0333h run = 2.1667h; x £25.43 / 50 = £1.10/unit
+    assert "1.10" in md, "the variant's own per-unit row money must be printed"
+    assert "26.95" in md
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""

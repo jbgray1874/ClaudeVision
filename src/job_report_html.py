@@ -2695,9 +2695,27 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
         parts = {str(p.get("part_number") or "").strip().upper(): p for p in job_parts(summary)}
     except Exception:                                            # noqa: BLE001
         nodes, parts = {}, {}
+    # A MEMBER IS A LINE, NOT AN EDGE. The graph's edge ledger still names codes whose
+    # records were quarantined (the zipped BOM row) or folded (the tape's second
+    # spelling), and rendering those edges printed phantom members with dashes in every
+    # column — the reader is being shown a part that nothing costs and nothing holds.
+    # A code renders only if a costed line or a part record stands behind it; the
+    # quarantine and fold ledgers are excluded by name as well, whatever else knows them.
+    _gone = {
+        str(e.get("part_number") or "").strip().upper()
+        for key in ("quarantined_interleave_artefacts", "folded_bom_row_fragments")
+        for e in (summary.get(key) or []) if isinstance(e, dict)
+    }
+    _known = (set(by_pn) | set(parts)) - _gone
     children: Dict[str, List[str]] = {}
     roots: List[str] = []
     for pn, node in nodes.items():
+        if pn in _gone:
+            continue
+        # An assembly with no line of its own still structures the page; a LEAF edge with
+        # no line and no record behind it is the phantom this filter exists to drop.
+        if pn not in _known and str(node.get("kind") or "").lower() != "assembly":
+            continue
         parents = [str(p).strip().upper() for p in (node.get("parents") or []) if p]
         if not parents:
             roots.append(pn)

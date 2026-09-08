@@ -233,7 +233,7 @@ def test_the_table_carries_the_two_things_that_did_not_reprice():
     where the numbers are, not in a banner inside a workbook nobody opened."""
     src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
     i = src.index("THE PRICE BREAK, ON THE PAGE SOMEBODY FORWARDS")
-    block = src[i:i + 3500]
+    block = src[i:i + 5200]
     assert "Bought-in prices do not step down" in block
     assert "freight_repriced" in block, "it must say which of the two freights it used"
     assert "still priced at the baseline quantity" in block

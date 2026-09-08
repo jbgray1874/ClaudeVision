@@ -1332,6 +1332,34 @@ def build(workbook: Path, scan_json: Optional[Path],
                 totals[_k] = round(_v, 2)
                 totals.setdefault("_from", {})[_k] = (
                     "the quantity sweep's Excel-calculated read of this variant")
+        # AND THE ROW DETAIL, NOT ONLY THE HEADLINE. With the trio overridden the 50-off
+        # tab still printed the 1-off labour table — £13.56 of Linebend against a £2.51
+        # labour total three lines above it. Each row's money is the sheet's own
+        # arithmetic (hours = set-up + run x qty, £/unit = hours x rate / qty), and every
+        # term of it is on the row, so the variant's rows are computed with the variant's
+        # quantity rather than recited from the baseline.
+        _q = int(_money(totals_override.get("quantity")) or 0)
+        _b = int(_money(totals_override.get("baseline_quantity")) or 0)
+        if _q and _b and _q != _b:
+            _scaled = []
+            for _r in g["labour_rows"]:
+                _r2 = dict(_r)
+                _setup_h = (_money(_r.get("setup_minutes")) or 0.0) / 60.0
+                _batch_b = _money(_r.get("batch_hours"))
+                _rate = _money(_r.get("dept_rate_gbp_per_hour"))
+                if _batch_b is not None and _rate:
+                    _run_pu = max(0.0, _batch_b - _setup_h) / _b
+                    _batch_q = _setup_h + _run_pu * _q
+                    _r2["batch_hours"] = round(_batch_q, 6)
+                    _r2["total_value_gbp"] = round(_batch_q * _rate / _q, 4)
+                _scaled.append(_r2)
+            g["labour_rows"] = _scaled
+            labour_rows = _scaled
+    # The uplift the unit cell adds is the variant's own gap, not the baseline's £4.74.
+    _other_gbp = _money(_fe_totals(final).get("other_gbp"))
+    if isinstance(totals_override, dict) and None not in (
+            totals.get("unit"), totals.get("material"), totals.get("labour")):
+        _other_gbp = round(totals["unit"] - totals["material"] - totals["labour"], 2) or None
     material, provenance, routes = g["material"], g["provenance"], g["routes"]
     bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
     page_index = g["page_index"]
@@ -1385,9 +1413,9 @@ def build(workbook: Path, scan_json: Optional[Path],
     add(f"- **What does a unit cost, and of what?** "
         f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
         f"{_gbp(totals['labour'])}"
-        + (f", and the unit cell adds {_gbp(_money(_fe_totals(final).get('other_gbp')))} "
+        + (f", and the unit cell adds {_gbp(_other_gbp)} "
            f"({final.get('unit_price_composition', {}).get('basis') or 'per the sheet'})"
-           if _fe_totals(final).get("other_gbp") else "")
+           if _other_gbp else "")
         + ".")
     add(f"- **What must be replaced before this is a quote?** "
         + (f"{len(_unpriced)} line(s) carry no price at all — "
@@ -2326,17 +2354,28 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             + (f"{_plural(len(_saved), 'workbook')} filed alongside this one, one per "
                f"quantity, each opening on a page that says what it is. "
                if _saved else "")
+            # SAY ONLY WHAT THE SHEET ACTUALLY CARRIES. With freight at £0 this claimed
+            # the larger quantities were "overstated by the freight", and with every
+            # bought-in unpriced it promised discounts that exist nowhere — two caveats
+            # about money that is not on the sheet.
             + ("Packaging and delivery are re-priced at each quantity: they are worked out "
                "for the whole order and divided by it, so the pallet does not ride on every "
                "unit. "
                if (quantity_sweep or {}).get("freight_repriced") else
-               "<b>Packaging and delivery are still priced at the baseline quantity</b> on "
-               "these lines, so the larger quantities are overstated by the freight. ")
-            + "<b>Bought-in prices do not step down</b> — the template's quantity price-break "
-              "lookup is overwritten with a fixed price, so every bought-in line costs the "
-              "same at 500 off as at 1. Treat the larger quantities as the top of the range "
-              "and the shape of the curve as sound; the quantity you intend to quote should "
-              "be run properly.</p>")
+               ("<b>Packaging and delivery are still priced at the baseline quantity</b> on "
+                "these lines, so the larger quantities are overstated by the freight. "
+                if any(_money(v) for v in ((quantity_sweep or {})
+                                           .get("freight_on_sheet") or {}).values()) else
+                "<b>Packaging and delivery are unpriced (£0) at every quantity</b> — the "
+                "estimator's own per-order figures go in before any of these is quoted. "))
+            + (("<b>Bought-in prices do not step down</b> — the template's quantity "
+                "price-break lookup is overwritten with a fixed price, so every bought-in "
+                "line costs the same at 500 off as at 1. Treat the larger quantities as the "
+                "top of the range and the shape of the curve as sound; the quantity you "
+                "intend to quote should be run properly.</p>")
+               if any(_r.get("block") == "bom" and _money(_r.get("total_value_gbp"))
+                      for _r in material_rows) else
+               "The quantity you intend to quote should be run properly.</p>"))
 
     # 2 ─ THE FABRICATED MATERIAL, EVERY BLOCK OF IT.
     #

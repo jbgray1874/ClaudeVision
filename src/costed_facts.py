@@ -1280,7 +1280,8 @@ def _material_label(part: Mapping[str, Any], kind: str) -> str:
 
 def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                   charged_unit: Optional[float], engine_unit: float,
-                  sheet_row: Any, cross_ref: bool) -> Dict[str, Any]:
+                  sheet_row: Any, cross_ref: bool,
+                  row_text: str = "") -> Dict[str, Any]:
     """{class, firmness, owner, label} — where the figure came from and how firm it is.
 
     ONE CLASSIFIER. The covering e-mail tested the words 'indicative' and 'market' on the
@@ -1291,10 +1292,16 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     ps = me.get("price_source") if isinstance(me.get("price_source"), Mapping) else {}
     method = str(me.get("cost_method") or part.get("cost_source") or part.get("source") or "")
     supplier = str(part.get("supplier") or "").strip()
+    # THE ROW'S OWN TAG IS A WITNESS TOO. The 08:08 tape line printed "[AI ESTIMATE -
+    # INDICATIVE, NOT A QUOTE]" on the sheet while the part record behind it had lost its
+    # price_source through the identity fold — so one surface called it a market figure
+    # and the record called it "source unrecorded", and the headline tally stopped asking
+    # anyone to replace it. What wb_populate stamped onto the row travels with the row.
     tokens = " ".join(str(x) for x in (
         method, ps.get("source_name"), ps.get("source_type"), ps.get("supplier_source"),
-        supplier)).lower()
+        supplier, row_text)).lower()
     money = charged_unit if charged_unit is not None else engine_unit
+    _row_says_ai = "ai estimate" in tokens and "indicative" in tokens
 
     if cross_ref and block in _FABRICATED_BLOCKS:
         # A BOM row whose money is on a fabricated block. Nil HERE by design; the money is
@@ -1314,7 +1321,7 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
         return {"class": "unpriced_commercial", "firmness": UNPRICED, "owner": "estimator",
                 "label": "NOT PRICED — held at £0 until the estimators' own figure lands; "
                          "enter the per-unit amount"}
-    if any(t in tokens for t in _MARKET_AI_TOKENS):
+    if any(t in tokens for t in _MARKET_AI_TOKENS) or (money and _row_says_ai):
         who = supplier or ps.get("supplier_source") or "AI/market lookup"
         return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
                 "label": f"AI market indication ({who}) — NOT A QUOTE, replace it"}
@@ -1446,7 +1453,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 charged_ext = _num(bom.get("total_value_gbp"))
                 charged_unit = _num(bom.get("unit_price_gbp"))
                 sheet_row = bom.get("workbook_row") or bom.get("row")
-        origin = _price_origin(part, kind, block, charged_unit, engine_unit, sheet_row, cross_ref)
+        _row_text = " ".join(str((r or {}).get("description") or "")
+                             for r in (row, bom) if isinstance(r, dict))
+        origin = _price_origin(part, kind, block, charged_unit, engine_unit, sheet_row,
+                               cross_ref, row_text=_row_text)
 
         me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
         se = me.get("stock_estimate") if isinstance(me.get("stock_estimate"), Mapping) else {}

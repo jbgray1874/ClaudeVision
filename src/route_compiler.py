@@ -1772,6 +1772,17 @@ def apply_canonical_evidence_to_parts(
                     continue
                 if not survivor.get(key) and value:
                     survivor[key] = value
+            # PRICE PROVENANCE TRAVELS WITH THE FOLD. The generic copy above fills a
+            # wholly missing material_estimate, but a survivor with its own estimate and
+            # no price_source kept neither — and a line whose provenance is lost stops
+            # being counted as a market figure to replace. Nested, so merged explicitly.
+            _mme = member.get("material_estimate")
+            _sme = survivor.get("material_estimate")
+            if isinstance(_mme, dict) and _mme.get("price_source") \
+                    and isinstance(_sme, dict) and not _sme.get("price_source"):
+                _sme["price_source"] = _mme["price_source"]
+                if not _sme.get("cost_method") and _mme.get("cost_method"):
+                    _sme["cost_method"] = _mme["cost_method"]
             _mq = number(member.get("quantity"), 0.0)
             _sq2 = number(survivor.get("quantity"), 0.0)
             if _mq and _sq2 and _mq != _sq2:

@@ -1338,7 +1338,9 @@ def main() -> None:
                         # Explanation printed the 1-off £68.74 beside the variant's own
                         # £3.92 labour. The sweep read each variant's totals out of a live
                         # Excel session before the cache was lost: hand that row to the tab.
-                        _sweep_rows = {int(r.get("quantity") or 0): r
+                        _sweep_rows = {int(r.get("quantity") or 0):
+                                       dict(r, baseline_quantity=_swept.get(
+                                           "baseline_quantity"))
                                        for r in (_swept.get("rows") or [])
                                        if isinstance(r, dict)}
                         for _vp in (_swept.get("variants") or []):
