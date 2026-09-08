@@ -1428,6 +1428,11 @@ def build(workbook: Path, scan_json: Optional[Path],
 
     add(f"# {workbook.stem}")
     add("")
+    _rid_tab = str(scan_doc.get("run_id") or "") if isinstance(scan_doc, dict) else ""
+    if _rid_tab:
+        add(f"> Run `{_rid_tab}` · quantity {order_qty} — the workbook, e-mail, report "
+            f"and quote of this estimate all carry this run identity.")
+        add("")
     if not scan:
         add("> **Page numbers are unavailable** — no scan JSON was supplied, so the "
             "\"which sheet\" column reads *not supplied* throughout. Re-run with "
@@ -2890,6 +2895,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             "fix — nothing here needs anything from you:</p>")
         add("<ul>" + "".join(f"<li>{_e(o)}</li>" for o in _ours) + "</ul>")
 
+    _scan_doc_rid = g.get("scan_doc") if isinstance(g.get("scan_doc"), dict) else {}
+    _rid = str(_scan_doc_rid.get("run_id") or "")
+    if _rid:
+        add(f'<p style="color:#5b6b7d;font-size:12px;margin-top:14px">Run '
+            f'<code>{_e(_rid)}</code> &middot; quantity {order_qty} &middot; unit '
+            f'{_e(_gbp(totals.get("unit")))} — every attachment above carries this run.</p>')
     add(f'<p style="color:#5b6b7d;font-size:12px;margin-top:18px">Produced by SDI '
         f'Intelligence{" for " + _e(client) if client else ""}. '
         f'The full line-by-line document is the <b>AI Explanation</b> tab in the attached '

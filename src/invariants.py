@@ -3341,8 +3341,98 @@ def check_the_identity_gate_actually_ran(summary: Any) -> List[Dict[str, Any]]:
         failures=failures)]
 
 
+def check_the_sheet_carries_only_the_graphs_identities(summary: Any) -> List[Dict[str, Any]]:
+    """THE SEAL. Costing and rendering must consume the published graph's identities —
+    a row the graph never compiled, or one the identity gates removed, is exactly how the
+    zipped chimera and the tape fragments reached three estimates in a row while every
+    log said they were dropped. Two claims, separately:
+
+    * A LEDGERED name (folded fragment, quarantined artefact) on ANY sheet row is
+      BLOCKING — the engine's own record says that line does not exist.
+    * A MONEY-CARRYING row whose identity resolves to no node in the published graph is
+      BLOCKING — money the hierarchy has never heard of.
+
+    Exceptions, deliberately (a check without them is a warning factory): the commercial
+    class lines (PACKAGING/DELIVERY and kin) which are minted by an explicit stage and
+    carry no drawing identity; rows that resolve through canonical aliasing; and a bare
+    job-number code that is the unique squash-prefix of exactly one graph node (the bay
+    rollup's spelling of a real line). Jobs with no published graph or no read-back rows
+    return nothing — there is no seal to check, and silence must not read as clean."""
+    if not isinstance(summary, dict):
+        return []
+    try:
+        from costed_facts import (_canonical_nodes, _final_estimate_of,
+                                  canonical_identity, removed_identities)
+    except Exception as exc:                                        # noqa: BLE001
+        return _unevaluated("sheet_graph_seal",
+                            f"costed_facts could not be imported ({exc}).")
+    fe = _final_estimate_of(summary)
+    rows = [r for r in (fe.get("material_rows") or []) if isinstance(r, dict)]
+    nodes = _canonical_nodes(summary)
+    if not rows or not nodes:
+        return []
+    removed = removed_identities(summary)
+    _COMMERCIAL = {"PACKAGING", "DELIVERY", "CARRIAGE", "PALLET", "FREIGHT"}
+
+    def _squash(v: Any) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+    node_keys = {str(k).strip().upper() for k in nodes}
+    node_squash = {_squash(k): str(k).strip().upper() for k in nodes}
+    ledgered: List[str] = []
+    unsealed: List[str] = []
+    for r in rows:
+        code = str(r.get("part_code") or r.get("part_number")
+                   or str(r.get("description") or "").split(" ")[0]).strip().upper()
+        if not code or code in _COMMERCIAL:
+            continue
+        if code in removed:
+            ledgered.append(code)
+            continue
+        money = _num(r.get("total_value_gbp"))
+        if not money:
+            continue
+        ident = str(canonical_identity(summary, code) or code).strip().upper()
+        if ident in node_keys or code in node_keys:
+            continue
+        sq = _squash(code)
+        # the bay rollup's bare job-number spelling of a real node
+        if len(sq) >= 4 and sum(1 for k in node_squash if k.startswith(sq)) == 1:
+            continue
+        # A ROW THAT SPEAKS A NODE'S OWN WORDS IS THAT NODE. The bay spelling "10975"
+        # prefixes several nodes, but its row carries the survivor's full description
+        # verbatim — the description is the witness the bare code cannot be.
+        row_desc_sq = _squash(r.get("description"))
+        if row_desc_sq and any(
+                len(_squash(n.get("description"))) >= 12
+                and (_squash(n.get("description")) in row_desc_sq
+                     or row_desc_sq in _squash(n.get("description")))
+                for n in nodes.values() if isinstance(n, dict)):
+            continue
+        unsealed.append(code)
+    out: List[Dict[str, Any]] = []
+    if ledgered:
+        out.append(_violation(
+            "removed_identity_on_the_sheet", BLOCKING,
+            f"{len(ledgered)} sheet row(s) carry a name the identity gates REMOVED: "
+            f"{', '.join(sorted(set(ledgered))[:6])}. The engine's own ledger says these "
+            f"lines do not exist; a pass after the gates re-created them. Do not release "
+            f"— re-run, and if it repeats, the resurrecting pass is the defect.",
+            identities=sorted(set(ledgered))))
+    if unsealed:
+        out.append(_violation(
+            "priced_identity_outside_published_graph", BLOCKING,
+            f"{len(unsealed)} priced row(s) carry an identity the published graph never "
+            f"compiled: {', '.join(sorted(set(unsealed))[:6])}. Money the hierarchy has "
+            f"never heard of cannot be owned, checked or explained — find the pass that "
+            f"added the row after the final compile.",
+            identities=sorted(set(unsealed))))
+    return out
+
+
 CHECKS = (
     check_the_identity_gate_actually_ran,
+    check_the_sheet_carries_only_the_graphs_identities,
     check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,

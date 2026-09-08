@@ -1073,6 +1073,23 @@ def main() -> None:
         xlsx_path = None
         try:
             from wb_populate import populate_workbook
+            # ONE RUN, ONE NAME. Every deliverable carries this identity so "which engine
+            # produced this file" is checkable instead of guessed from timestamps — the
+            # release rule's "same run ID, quantity and pricing snapshot on every
+            # deliverable". Minted before the workbook so the saved JSON, the tabs, the
+            # HTML pages and the variants all inherit one value.
+            try:
+                import subprocess as _sp_rev
+                _git_rev = _sp_rev.run(
+                    ["git", "rev-parse", "--short", "HEAD"], capture_output=True,
+                    text=True, timeout=5,
+                    cwd=str(Path(__file__).resolve().parent)).stdout.strip()
+            except Exception:                                    # noqa: BLE001
+                _git_rev = ""
+            summary["run_id"] = (
+                f"{scan_label}-"
+                f"{__import__('datetime').datetime.now():%Y%m%d-%H%M%S}"
+                + (f"-{_git_rev}" if _git_rev else ""))
             xlsx_path = populate_workbook(summary, str(scan_label))
             if xlsx_path:
                 print(f"\nAI Estimate Sheet: {Path(xlsx_path).resolve()}")

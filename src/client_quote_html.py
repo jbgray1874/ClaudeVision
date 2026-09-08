@@ -1067,6 +1067,11 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
                       f"Prices ex VAT, GBP. Valid {VALID_DAYS} days from quotation date.")
     _packing_row = ("Not included — packaging and delivery to be priced"
                     if _packing == "unpriced" else "Boxed for transport")
+    # The run's own identity, so "which engine run produced this quote" is checkable.
+    _run_foot = ""
+    if isinstance(summary, dict) and summary.get("run_id"):
+        _run_foot = (f"<br>Ref {_esc(str(summary.get('run_id')))} · qty "
+                     f"{_esc(str(summary.get('assumed_job_quantity') or summary.get('quantity') or 1))}")
 
     _lead_open = (
         f"Manufactured to drawing {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}. "
@@ -1222,7 +1227,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
       </div>
       <div class="terms" style="text-align:right;">
         {_validity_foot}<br>
-        wearesdi is the trading name of SDI Displays Ltd.
+        wearesdi is the trading name of SDI Displays Ltd.{_run_foot}
       </div>
     </div>
   </div>

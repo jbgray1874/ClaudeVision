@@ -2338,7 +2338,11 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         f'<div class="foot">SDI Intelligence &middot; ClaudeVision automated estimating engine &middot; '
         f'Job {_esc(h["stem"])}<br>Unit Cost {_money((record.get("run") or {}).get("unit_gbp") if (record.get("run") or {}).get("totals_source") == "excel_calculated" else hl["unit"])} is the workbook-computed figure. '
         f'Decisions required and drawing recommendations are listed for estimator and Design review. '
-        f'Generated for internal review.</div>',
+        f'Generated for internal review.'
+        + (f'<br>Run <code>{_esc(summary.get("run_id"))}</code> &middot; quantity '
+           f'{_esc(summary.get("assumed_job_quantity") or summary.get("quantity") or 1)}'
+           if summary.get("run_id") else '')
+        + '</div>',
         _PRINT_SCRIPT,
     ])
 
