@@ -1340,6 +1340,36 @@ def test_a_dual_path_row_reaches_the_graph_with_every_stated_owner():
     assert g2["parents"].get("BI-BOLT") == {"ASSY-FRAME", "ASSY-DOOR"}, \
         f"a row-level owner must not silence the record's second one: " \
         f"{g2['parents'].get('BI-BOLT')}"
+    # And the reviewer's third probe: the SAME parent stated twice with a DIFFERENT
+    # quantity is a conflict for a person, never a silent overwrite. The row says 4
+    # under FRAME; the record says 2 under the same FRAME — the standing 4 holds and
+    # the disagreement lands in the same field the BOM duplicate-line conflicts use,
+    # so it reaches the estimator's decision list.
+    parts3 = [dict(p) for p in parts if p["part_number"] != nut["part_number"]]
+    bolt3 = {"part_number": "BI-BOLT", "description": "M6 BOLT", "quantity": 4,
+             "page_roles": ["bought_in"],
+             "bom_parents": [{"parent": "ASSY-FRAME", "qty": 2}]}
+    parts3.append(bolt3)
+    g3 = rc.build_part_graph(
+        parts3, bom_rows=[{"part_number": "BI-BOLT", "bom_parent": "ASSY-FRAME",
+                           "quantity": 4}])
+    assert g3["quantities"]["BI-BOLT"] == 4.0, \
+        f"the standing edge must not be overwritten: {g3['quantities']['BI-BOLT']}"
+    _bc = bolt3.get("_bom_numeric_conflicts") or []
+    assert _bc and _bc[0]["kept"] == 4 and _bc[0]["other"] == 2, \
+        f"the disagreement must be recorded as a conflict, not dropped: {_bc}"
+    # Same parent, same quantity: corroboration — counted once, no conflict raised.
+    parts4 = [dict(p) for p in parts if p["part_number"] != nut["part_number"]]
+    bolt4 = {"part_number": "BI-BOLT", "description": "M6 BOLT", "quantity": 4,
+             "page_roles": ["bought_in"],
+             "bom_parents": [{"parent": "ASSY-FRAME", "qty": 4}]}
+    parts4.append(bolt4)
+    g4 = rc.build_part_graph(
+        parts4, bom_rows=[{"part_number": "BI-BOLT", "bom_parent": "ASSY-FRAME",
+                           "quantity": 4}])
+    assert g4["quantities"]["BI-BOLT"] == 4.0
+    assert not bolt4.get("_bom_numeric_conflicts"), \
+        "two sources agreeing is corroboration, not a conflict"
 
 
 def test_the_missing_drawing_panel_carries_the_records_charged_money():

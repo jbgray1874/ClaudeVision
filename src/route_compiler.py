@@ -1294,6 +1294,23 @@ def build_part_graph(
             if not _bp or _bp == _pid:
                 continue
             _q = _bq if _bq else (number(_part.get("quantity"), 1.0) or 1.0)
+            # SAME PARENT TWICE IS EITHER CORROBORATION OR A CONFLICT — never an
+            # overwrite. A row-level edge saying 4 under FRAME and this record saying 2
+            # under the same FRAME silently became 2; two claims about one edge with
+            # different figures are a decision for a person, in the same field the BOM
+            # duplicate-line conflicts already use, so it reaches the estimator's list.
+            _standing = children.get(_bp, {}).get(_pid)
+            if _standing is not None:
+                if abs(float(_standing) - float(_q)) < 1e-9:
+                    continue                              # corroboration, count once
+                _part.setdefault("_bom_numeric_conflicts", []).append({
+                    "field": "quantity", "kept": _standing, "other": _q,
+                    "parent": _bp,
+                })
+                print(f"   [bom] '{_pid}' under '{_bp}': two claims disagree about the "
+                      f"quantity ({_standing:g} kept, {_q:g} recorded as a conflict for "
+                      f"a person) — neither overwrites the other", flush=True)
+                continue
             children.setdefault(_bp, {})[_pid] = _q
             parents.setdefault(_pid, set()).add(_bp)
             records.setdefault(_bp, {})["is_sub_assembly"] = True
