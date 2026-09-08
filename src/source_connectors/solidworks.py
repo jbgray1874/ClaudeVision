@@ -1514,7 +1514,14 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
         return stamped
     by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
                for p in parts if isinstance(p, dict) and p.get("part_number")}
-    for parent, kids in (job.hierarchy or {}).items():
+    # TWO PHASES: STAMP THE PARENTS THAT EXIST, THEN JUDGE THE ONES THAT DON'T. The
+    # minting decision below needs to know which children the job's REAL assemblies
+    # already claim — and within one call, an existing parent (7332's 101) may be
+    # stamped by a later dict entry than a mint candidate (102). All existing-record
+    # edges land first, so the claim census the mint consults is complete.
+    _items = list((job.hierarchy or {}).items())
+    _items.sort(key=lambda kv: by_code.get(_clean_pn(str(kv[0])).upper()) is None)
+    for parent, kids in _items:
         target = by_code.get(_clean_pn(str(parent)).upper())
         if target is None:
             # THE PARENT THE MODEL NAMES MAY HAVE NO RECORD OF ITS OWN. On 10975-02 the
@@ -1532,6 +1539,37 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
                 and _clean_pn(str(c)).upper() != _clean_pn(str(parent)).upper()
             ]
             if not _known_kids:
+                continue
+            # A SECOND TREE OVER THE SAME MEMBERS IS A VARIANT, NOT A SECOND PRODUCT.
+            # This mint re-opened 7332's #34: the model tree carries GA2 -> 102 over the
+            # SAME five frame parts the real GA -> 101 already owns, and minting them
+            # gave the job two priced weldments — legs 2 -> 4, £80.09 -> £111.01, every
+            # frame quantity doubled. A candidate whose known children are ALL already
+            # claimed by existing assemblies duplicates structure the job has; it is
+            # recorded as evidence on the claiming parent and never becomes a record.
+            _claimed = {
+                _clean_pn(str(c)).upper()
+                for p in parts if isinstance(p, dict)
+                for c in (p.get("assembly_children") or []) if str(c).strip()
+            }
+            _kids_up = {k.upper() for k in _known_kids}
+            if _kids_up and _kids_up <= _claimed:
+                print(f"   [hierarchy] '{_clean_pn(str(parent))}' NOT minted — every "
+                      f"member it names ({', '.join(sorted(_known_kids))}) already "
+                      f"belongs to an existing assembly. A model configuration tree over "
+                      f"the same members is a VARIANT of the product, not a second one; "
+                      f"kept as evidence, never priced.", flush=True)
+                for p in parts:
+                    if isinstance(p, dict) and any(
+                            _clean_pn(str(c)).upper() in _kids_up
+                            for c in (p.get("assembly_children") or [])):
+                        _flags = p.setdefault("review_flags", [])
+                        _msg = (f"the SolidWorks tree also shows these members under "
+                                f"'{_clean_pn(str(parent))}' — treated as a model "
+                                f"variant of this assembly, not a second product")
+                        if _msg not in _flags:
+                            _flags.append(_msg)
+                        break
                 continue
             target = {
                 "part_number": _clean_pn(str(parent)),

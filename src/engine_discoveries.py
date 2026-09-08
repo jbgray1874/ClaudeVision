@@ -90,6 +90,12 @@ _OURS = {
     "assembly_only_part_record",
     "nesting_rule_disagrees_with_the_cost_path",
     "price_row_identity_unjoinable",
+    # The identity/scope enforcement family: every one of these is the ENGINE failing to
+    # hold its own seal — never a drawing gap and never an estimator decision.
+    "identity_gate_did_not_enforce",
+    "removed_identity_on_the_sheet",
+    "priced_identity_outside_published_graph",
+    "two_roots_price_the_same_members",
 }
 
 # Declared assumptions with a named lever. Not a defect and not a decision — a number the

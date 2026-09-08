@@ -1673,8 +1673,12 @@ def build(workbook: Path, scan_json: Optional[Path],
             # block's "Rate Per Hour", which holds a throughput.
             line_total = _gbp_or((steel_calc.get(code) or {}).get("total_value_gbp"),
                                  "not read back")
+            _blk_word = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
+                         "tube": "Tube"}.get(
+                str((steel_calc.get(code) or {}).get("block") or "steel"),
+                "its nested")
             add(f"| ↳ `Estimate!{steel_row['row']}` "
-                f"| the same part, on the Sheet Steel block "
+                f"| the same part, on the {_blk_word} block "
                 f"| {_fmt(steel_row.get('qty'))} "
                 f"| — line total, not per part "
                 f"| **{line_total}** "

@@ -3430,9 +3430,72 @@ def check_the_sheet_carries_only_the_graphs_identities(summary: Any) -> List[Dic
     return out
 
 
+def check_two_roots_do_not_price_the_same_members(summary: Any) -> List[Dict[str, Any]]:
+    """TWO TREES OVER ONE SET OF PARTS IS ONE PRODUCT COUNTED TWICE. The 10:57 7332
+    replay priced GA -> 101 -> five frame parts AND GA2 -> 102 -> the same five parts:
+    every frame quantity doubled, £80.09 became £111.01, and the identity seal passed
+    because every identity WAS in the graph — the defect was scope, not identity. Two
+    top-level assemblies whose descendant leaf sets substantially overlap are a product
+    and its model variant, and pricing both is BLOCKING until a person selects one.
+
+    Deliberately scoped: at least three shared leaves and 80% of the smaller tree —
+    two genuinely different assemblies sharing a bracket must not trip it."""
+    if not isinstance(summary, dict):
+        return []
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+    nodes = {str(n.get("part_number") or "").strip().upper(): n
+             for n in (payload.get("nodes") or [])
+             if isinstance(n, dict) and n.get("part_number")}
+    if len(nodes) < 4:
+        return []
+    children: Dict[str, List[str]] = {}
+    roots: List[str] = []
+    for pn, node in nodes.items():
+        parents = [str(p).strip().upper() for p in (node.get("parents") or []) if p]
+        if not parents:
+            roots.append(pn)
+        for p in parents:
+            children.setdefault(p, []).append(pn)
+
+    def _leaves(root: str, seen: set) -> set:
+        if root in seen:
+            return set()
+        seen.add(root)
+        kids = children.get(root) or []
+        if not kids:
+            return {root}
+        out: set = set()
+        for k in kids:
+            out |= _leaves(k, seen)
+        return out
+
+    leaf_sets = {r: _leaves(r, set()) for r in roots if children.get(r)}
+    hits: List[str] = []
+    _roots = sorted(leaf_sets)
+    for i, a in enumerate(_roots):
+        for b in _roots[i + 1:]:
+            la, lb = leaf_sets[a], leaf_sets[b]
+            shared = la & lb
+            smaller = min(len(la), len(lb))
+            if len(shared) >= 3 and smaller and len(shared) / smaller >= 0.8:
+                hits.append(f"{a} and {b} share {len(shared)} of {smaller} member(s)")
+    if not hits:
+        return []
+    return [_violation(
+        "two_roots_price_the_same_members", BLOCKING,
+        f"{len(hits)} pair(s) of top-level assemblies price substantially the same "
+        f"members: {'; '.join(hits[:3])}. A model configuration tree over the same "
+        f"parts is a VARIANT of the product, not a second one — every shared member's "
+        f"quantity and its assembly labour are in the total twice. Select the one "
+        f"shipping assembly and re-run; do not release this estimate.",
+        pairs=hits)]
+
+
 CHECKS = (
     check_the_identity_gate_actually_ran,
     check_the_sheet_carries_only_the_graphs_identities,
+    check_two_roots_do_not_price_the_same_members,
     check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,

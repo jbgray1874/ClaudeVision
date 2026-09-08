@@ -1057,6 +1057,65 @@ def test_document_boilerplate_thickness_is_one_note_not_five_decisions():
     assert cf.boilerplate_thickness_values(model) == set()
 
 
+def test_a_variant_tree_over_claimed_members_is_never_minted():
+    """The 10:57 7332 replay: the GA mint (10975's fix) re-opened #34 by minting the
+    model's GA2 -> 102 tree over the SAME five frame parts the real GA -> 101 owns —
+    legs 2 -> 4, £80.09 -> £111.01. A candidate whose known children are all already
+    claimed by existing assemblies is a model VARIANT: evidence, never a record."""
+    from types import SimpleNamespace
+    import source_connectors.solidworks as sw
+    frame = [f"7332-01-00{i}" for i in range(1, 6)]
+    parts = ([{"part_number": "7332-01-GA", "description": "GA"},
+              {"part_number": "7332-01-101", "description": "FRAME WELDMENT"}]
+             + [{"part_number": pn, "description": "PART"} for pn in frame])
+    hierarchy = {"7332-01-GA": [("7332-01-101", 1.0)],
+                 "7332-01-101": [(pn, 1.0) for pn in frame],
+                 "7332-01-GA2": [("7332-01-102", 1.0)],
+                 "7332-01-102": [(pn, 1.0) for pn in frame]}
+    sw.apply_native_hierarchy_to_parts(parts, SimpleNamespace(hierarchy=hierarchy))
+    codes = {p["part_number"] for p in parts}
+    assert "7332-01-102" not in codes and "7332-01-GA2" not in codes, \
+        f"a second tree over the same members must not become records: {sorted(codes)}"
+    hold_101 = next(p for p in parts if p["part_number"] == "7332-01-101")
+    assert {c.upper() for c in hold_101.get("assembly_children") or []} == \
+        {pn.upper() for pn in frame}, "the real weldment keeps its members"
+    assert any("model variant" in str(f) for f in hold_101.get("review_flags") or []), \
+        "the variant tree is kept as evidence on the claiming parent"
+    # And 10975's genuine mint still works: nothing claims A01/G01, so GA is minted.
+    lone = [{"part_number": "10975-02-A01"}, {"part_number": "10975-02-G01"}]
+    sw.apply_native_hierarchy_to_parts(lone, SimpleNamespace(hierarchy={
+        "10975-02-GA": [("10975-02-A01", 1.0), ("10975-02-G01", 1.0)]}))
+    assert any(p["part_number"] == "10975-02-GA" for p in lone)
+
+
+def test_two_roots_pricing_the_same_members_is_blocking():
+    """The seal passed at 10:57 because every identity WAS in the graph — the defect was
+    scope. Two top assemblies whose leaf sets substantially overlap must block."""
+    import invariants
+    frame = [f"7332-01-00{i}" for i in range(1, 6)]
+    nodes = ([{"part_number": "7332-01-GA", "parents": []},
+              {"part_number": "7332-01-101", "parents": ["7332-01-GA"]},
+              {"part_number": "7332-01-GA2", "parents": []},
+              {"part_number": "7332-01-102", "parents": ["7332-01-GA2"]}]
+             + [{"part_number": pn, "parents": ["7332-01-101", "7332-01-102"]}
+                for pn in frame])
+    doubled = {"estimate_summary": {"canonical_route_shadow": {"nodes": nodes}}}
+    out = invariants.check_two_roots_do_not_price_the_same_members(doubled)
+    assert out and out[0]["severity"] == invariants.BLOCKING
+    assert "GA2" in out[0]["message"]
+    # Two genuinely different assemblies sharing one bracket do not trip it.
+    clean_nodes = [{"part_number": "J-GA1", "parents": []},
+                   {"part_number": "J-GA2", "parents": []},
+                   {"part_number": "J-01", "parents": ["J-GA1"]},
+                   {"part_number": "J-02", "parents": ["J-GA1"]},
+                   {"part_number": "J-03", "parents": ["J-GA1"]},
+                   {"part_number": "J-11", "parents": ["J-GA2"]},
+                   {"part_number": "J-12", "parents": ["J-GA2"]},
+                   {"part_number": "J-SHARED", "parents": ["J-GA1", "J-GA2"]}]
+    clean = {"estimate_summary": {"canonical_route_shadow": {"nodes": clean_nodes}}}
+    assert invariants.check_two_roots_do_not_price_the_same_members(clean) == []
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""
