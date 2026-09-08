@@ -7105,10 +7105,24 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # 2085 and 12120 projections agree and the cutover is explicitly enabled.
     try:
         from route_compiler import compile_job_route, project_priced_route
+        # The writeup's finish text rides along: it is the population that actually
+        # carries "SEE ASSEMBLY DRAWING" when the estimate records do not (11350-02's
+        # bar), and the coat pass must read the field the report already prints.
+        _finish_by_pn = {}
+        for _wp in (((summary or {}).get("manufacturing_writeup") or {}).get("parts")
+                    or []) if isinstance(summary, dict) else []:
+            if not isinstance(_wp, dict):
+                continue
+            _wpn = str(_wp.get("part_number") or "").strip().upper()
+            if _wpn:
+                _finish_by_pn[_wpn] = " ".join(
+                    [str(_wp.get("normalized_finish") or "")]
+                    + [str(x) for x in (_wp.get("surface_finishes") or [])])
         _route_graph = compile_job_route(
             parts,
             (summary or {}).get("llm_full_extract")
             if isinstance(summary, dict) else {},
+            finish_text_by_pn=_finish_by_pn,
         )
         canonical_route_shadow = project_priced_route(
             _route_graph, part_estimates)

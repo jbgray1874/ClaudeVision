@@ -2586,6 +2586,7 @@ def compile_job_route(
     bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     known_assemblies: Optional[Iterable[str]] = None,
     page_owner: Optional[Mapping[int, str]] = None,
+    finish_text_by_pn: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
@@ -3195,11 +3196,35 @@ def compile_job_route(
     # person, never a mint.
     _PW_POINTER_HINTS = ("SEE ASSEMBLY", "REFER TO ASSEMBLY", "SEE ASSY")
 
+    # WRITEUP FIRST, THEN THE RECORD, THEN THE EXTRACT. On 11350-02 the bar's
+    # SEE ASSEMBLY DRAWING existed only on the writeup record (the drawing-quality
+    # table printed it) while the population this compiler receives carried null
+    # finishes — a rule that only works when the lucky population is filled is not a
+    # coat rule. The caller passes the writeup's finish text; the record and the
+    # extract's own per-part finish remain as fallbacks.
+    _lex_finish: Dict[str, str] = {}
+    for _lp in (llm_extract.get("parts") or []):
+        if not isinstance(_lp, Mapping):
+            continue
+        _lpn = clean_part_number(_lp.get("part_number"))
+        if _lpn:
+            _lex_finish[_lpn] = " ".join(
+                [str(_lp.get("finish") or ""), str(_lp.get("surface_finish") or "")]
+                + [str(x) for x in (_lp.get("surface_finishes") or [])])
+
+    _finish_by_squash = {
+        re.sub(r"[^A-Z0-9]", "", str(k).upper()): str(v)
+        for k, v in (finish_text_by_pn or {}).items()}
+
     def _leaf_finish_text(_pn: str) -> str:
         _r = raw.get(_pn) or {}
+        _wu = (str((finish_text_by_pn or {}).get(_pn) or "")
+               or _finish_by_squash.get(re.sub(r"[^A-Z0-9]", "", str(_pn).upper()), ""))
         return " ".join(
-            [str(_r.get("normalized_finish") or ""), str(_r.get("finish") or "")]
-            + [str(x) for x in (_r.get("surface_finishes") or [])]).upper()
+            [_wu]
+            + [str(_r.get("normalized_finish") or ""), str(_r.get("finish") or "")]
+            + [str(x) for x in (_r.get("surface_finishes") or [])]
+            + [_lex_finish.get(_pn, "")]).upper()
 
     def _pw_assembly_stage(_t: str, _scope: str) -> bool:
         """Is this assembly-scope coat a genuine finishing STAGE the assembly itself

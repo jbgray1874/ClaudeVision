@@ -1413,6 +1413,21 @@ def test_a_leaf_pointer_with_no_event_of_its_own_still_joins_the_coat():
     assert pw.get("Q-01") == REQUIRED, \
         f"the deferring member joins the coat even with no event to resolve: {pw}"
     assert pw.get("Q-101") != REQUIRED, f"and the parent then stands down: {pw}"
+    # And 11350-02's EXACT live shape: the record the compiler receives carries NULL
+    # finishes — the deferral exists only on the writeup, handed in as finish text.
+    parts2 = [
+        {"part_number": "Q-101", "description": "BAR SUB ASSEMBLY", "quantity": 1,
+         "textual_operations": ["powder_coating"],
+         "operation_sources": {"powder_coating": "llm_full_extract"}},
+        {"part_number": "Q-01", "description": "BAR", "quantity": 1},
+    ]
+    g3 = compile_job_route(parts2, extract, finish_text_by_pn={
+        "Q-01": "SEE ASSEMBLY DRAWING NOTTINGHAM POWDER COATED"})
+    pw3 = {d["target_id"]: d["status"] for d in g3["decisions"]
+           if d["operation"] == "powder_coating"}
+    assert pw3.get("Q-01") == REQUIRED, \
+        f"the writeup's own finish text must reach the coat pass: {pw3}"
+    assert pw3.get("Q-101") != REQUIRED, f"and the parent stands down: {pw3}"
 
 
 def test_a_mixed_powder_scope_blocks_release_as_a_decision():
