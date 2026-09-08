@@ -1131,12 +1131,21 @@ def _append_traceability_blocks(ws, row: int, summary: Dict[str, Any],
         row += 1
 
     def money(pn: str) -> str:
+        # The column says "Charged £", so only the sheet's own figure prints bare. The
+        # engine's fallback is BATCH money on an assembly node (GA carried £215.65 of
+        # engine rollup on 7332-01 while the unit was £80.34) — printing it unlabelled
+        # made Tim's review require knowing which figures to ignore. It is named for
+        # what it is instead, matching the HTML report's own tree.
         line = lines.get(pn) or {}
         v = line.get("charged_ext_gbp")
-        if v is None:
+        engine_only = v is None
+        if engine_only:
             v = line.get("engine_ext_gbp")
         try:
-            return f"£{float(v):.2f}" if v is not None else "—"
+            if v is None:
+                return "—"
+            return (f"engine £{float(v):.2f} — not charged" if engine_only
+                    else f"£{float(v):.2f}")
         except (TypeError, ValueError):
             return "—"
 

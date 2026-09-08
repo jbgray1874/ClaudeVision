@@ -1787,6 +1787,13 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
 
     prices, market = _n("missing_price"), _n("market_figure")
     mfg, house = _n("manufacturing_decision"), _n("indicative_rate")
+    # A kind none of the four buckets recognises must still be SEEN: on the 12:28 run of
+    # 7332-01 an "advisory" entry sat in the list, the headline said "7 to settle" and
+    # the phrase added to 6, because total counted every row and the phrase counted four
+    # kinds. The headline and the phrase are one tally or they are two lies — so every
+    # row lands in a named bucket, and an unclassified kind is counted as blocking, not
+    # quietly dropped: an open item nobody classified is not thereby advisory.
+    other = len(ds) - (prices + market + mfg + house)
     bits: List[str] = []
     if prices:
         bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
@@ -1796,10 +1803,12 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         bits.append(f"{mfg} manufacturing decision{'s' if mfg != 1 else ''}")
     if house:
         bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
+    if other:
+        bits.append(f"{other} other open item{'s' if other != 1 else ''}")
     return {
         "prices_missing": prices, "market_figures": market,
-        "manufacturing": mfg, "indicative": house,
-        "blocking": prices + market + mfg, "advisory": house,
+        "manufacturing": mfg, "indicative": house, "other": other,
+        "blocking": prices + market + mfg + other, "advisory": house,
         "total": len(ds),
         "phrase": " + ".join(bits) if bits else "nothing outstanding",
     }

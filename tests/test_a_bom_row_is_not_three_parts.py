@@ -1108,6 +1108,62 @@ def test_shared_drawing_thickness_becomes_one_grouped_decision_naming_the_parts(
     assert not per_part, f"the value must not also appear per part: {per_part}"
 
 
+def test_the_headline_tally_and_the_phrase_are_one_number():
+    """The 12:28 7332 run: report and AI Explanation said '7 to settle' while the phrase
+    added to 6 — an entry whose kind fit no phrase bucket sat in total and in no bucket.
+    Every row now lands in a named bucket, an unclassified kind is counted as blocking
+    (an open item nobody classified is not thereby advisory), and the headline number
+    always equals the sum of the phrase's numbers."""
+    import re as _re
+    rec = {"decisions_required": [
+        {"kind": "missing_price"}, {"kind": "missing_price"},
+        {"kind": "manufacturing_decision"}, {"kind": "manufacturing_decision"},
+        {"kind": "indicative_rate"}, {"kind": "indicative_rate"},
+        {"kind": "some_future_kind_nobody_classified"},
+    ], "release": {}}
+    s = cf.outstanding_summary(rec)
+    assert s["total"] == 7
+    nums = [int(n) for n in _re.findall(r"\d+", s["phrase"])]
+    assert sum(nums) == s["total"], \
+        f"headline {s['total']} vs phrase adding to {sum(nums)}: {s['phrase']!r}"
+    assert "other open item" in s["phrase"], "the unclassified row must be SEEN"
+    assert s["blocking"] == 5, "an unclassified open item blocks; it is not advisory"
+    # A clean four-bucket job stays exactly as every surface already prints it.
+    clean = {"decisions_required": rec["decisions_required"][:6], "release": {}}
+    s2 = cf.outstanding_summary(clean)
+    assert s2["total"] == 6 and "other" not in s2["phrase"]
+
+
+def test_the_quality_tab_reads_the_canonical_population():
+    """The 12:28 quality table printed the drawing reader's refused 1.2 mm on every sheet
+    row while the nest table carried the real gauges — it read the raw
+    estimate_summary.part_estimates instead of the one part list every deliverable must
+    describe. Structural: add_quality_summary_sheet resolves through job_parts."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "quality_summary.py"), encoding="utf-8").read()
+    i = src.index("def add_quality_summary_sheet")
+    block = src[i:i + 1600]
+    assert "job_parts" in block, "the tab must read the canonical population first"
+    assert block.index("job_parts") < block.index('es.get("part_estimates")'), \
+        "part_estimates is the fallback for workbook-less runs, never the first read"
+
+
+def test_provenance_hierarchy_never_prints_engine_money_as_charged():
+    """GA carried £215.65 of engine batch rollup in the AI Provenance hierarchy's
+    'Charged £' column on 7332-01 while the unit was £80.34 — the engine fallback
+    printed bare, so Tim had to know which figures to ignore. Structural: the fallback
+    is named for what it is, matching the HTML report's own tree."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "estimation_report.py"), encoding="utf-8").read()
+    i = src.index("def money(pn: str)")
+    block = src[i:i + 1300]
+    assert "not charged" in block, \
+        "engine money in a column headed 'Charged £' must be labelled, never bare"
+    assert "engine_only" in block
+
+
 def test_a_variant_tree_over_claimed_members_is_never_minted():
     """The 10:57 7332 replay: the GA mint (10975's fix) re-opened #34 by minting the
     model's GA2 -> 102 tree over the SAME five frame parts the real GA -> 101 owns —
