@@ -966,6 +966,61 @@ def test_the_quote_never_speaks_of_an_operation_spelled_like_its_department():
     assert cf._row_engine_ops(row) == ["linebend"]
 
 
+def test_a_ghosts_name_does_not_outlive_its_line_on_the_review_panels():
+    """09:36's report still ASKED about BI-CELLTAPE in the confidence and material
+    panels — the review signals were recorded before the fold. Every panel excludes the
+    removal ledgers."""
+    import job_report_html as jrh
+    summary = {
+        "folded_bom_row_fragments": [{"part_number": "BI-CELLTAPE"}],
+        "quarantined_interleave_artefacts": [{"part_number": "1100997755-E0P2D-GM0"}],
+        "estimate_summary": {"estimate_review_signals": {"parts_flagged": [
+            {"part_number": "BI-CELLTAPE",
+             "reasons": [{"code": "low_part_confidence", "detail": 0.2}]},
+            {"part_number": "10975-02-A01",
+             "reasons": [{"code": "low_part_confidence", "detail": 0.4}]},
+        ]}},
+        "manufacturing_writeup": {"parts": [
+            {"part_number": "BI-CELLTAPE", "risk_flags": ["missing_material_spec"]},
+            {"part_number": "10975-02-A01"},
+        ]},
+    }
+    review = jrh._extract_review_items(summary)
+    text = str(review)
+    assert "BI-CELLTAPE" not in text, \
+        f"a folded ghost must not be asked about: {text[:300]}"
+    assert "10975-02-A01" in text, "real parts keep their flags"
+    assert cf.removed_identities(summary) == {"BI-CELLTAPE", "1100997755-E0P2D-GM0"}
+
+
+def test_the_contested_panel_names_open_decisions_instead_of_all_clear():
+    """'NOTHING WAS CONTESTED' printed flat beside two open manufacturing decisions.
+    Structural: the no-contest branch consults the shared tally and speaks of open
+    decisions when there are any."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "job_decision_report.py"), encoding="utf-8").read()
+    i = src.index("elif not _contested:")
+    block = src[i:i + 2200]
+    assert "outstanding_summary" in block, "the panel must ask the shared tally"
+    assert "MANUFACTURING DECISION" in block
+    assert "NOTHING WAS CONTESTED" in block, "the true all-clear survives for clean jobs"
+
+
+def test_the_estimate_banner_carries_the_shared_tally():
+    """One phrase on every surface — banner included. Structural: main.py rewrites the
+    PROVISIONAL banner cells with outstanding_summary's phrase after the read-back and
+    before the explanation tab (so the sweep's variants inherit it)."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src", "main.py"),
+               encoding="utf-8").read()
+    i = src.index("PROVISIONAL — to settle:")
+    assert "outstanding_summary" in src[i - 2500:i], \
+        "the banner phrase must be the record's, not a new count"
+    assert i < src.index("from estimate_explanation_tab import write_tab"), \
+        "the rewrite must land before the tab writes and the sweep copies"
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""

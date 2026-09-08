@@ -793,12 +793,31 @@ def append_decision_blocks(ws, row: int, summary: Dict[str, Any]) -> int:
             row += 1
     elif not _contested:
         row += 2
-        _c(ws, row, 1,
-           "NOTHING WAS CONTESTED ON THIS JOB — no operation and no datum had two sources "
-           "disagreeing at the same rank. Every value above came from a single strongest "
-           "source. That is not the same as corroborated: where only one reader looked, "
-           "there was nothing to disagree with it.",
-           bg=C_LIGHT, size=9, wrap=True, italic=True)
+        # "NOTHING WAS CONTESTED" is a claim about SAME-RANK fights only — and printed
+        # flat, it read as an all-clear on a job whose e-mail was carrying two open
+        # manufacturing decisions. When decisions are open, this panel says so first.
+        try:
+            from costed_facts import outstanding_summary as _osum
+            _open_n = int((_osum(summary) or {}).get("manufacturing") or 0)
+        except Exception:                                        # noqa: BLE001
+            _open_n = 0
+        if _open_n:
+            _c(ws, row, 1,
+               f"{_open_n} MANUFACTURING DECISION{'S ARE' if _open_n != 1 else ' IS'} "
+               f"OPEN FOR A PERSON — see the decisions list on the e-mail and report "
+               f"(gauge and stated-twice figures are settled by source rank meanwhile, "
+               f"never silently). No two sources disagreed at the SAME rank, so every "
+               f"value above came from a single strongest source — which is not the same "
+               f"as corroborated: where only one reader looked, there was nothing to "
+               f"disagree with it.",
+               bg=C_LIGHT, size=9, wrap=True, italic=True)
+        else:
+            _c(ws, row, 1,
+               "NOTHING WAS CONTESTED ON THIS JOB — no operation and no datum had two "
+               "sources disagreeing at the same rank. Every value above came from a "
+               "single strongest source. That is not the same as corroborated: where "
+               "only one reader looked, there was nothing to disagree with it.",
+               bg=C_LIGHT, size=9, wrap=True, italic=True)
         ws.row_dimensions[row].height = 28
     return row
 

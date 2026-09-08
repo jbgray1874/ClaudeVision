@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import re
 
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 __all__ = [
     "costed_operations",
@@ -1398,6 +1398,25 @@ def _operations_from_decisions(source: Any, part_number: Any) -> List[str]:
         ops = _row_engine_ops(r)
         if ops and ops[0] not in out:
             out.append(ops[0])
+    return out
+
+
+def removed_identities(source: Any) -> Set[str]:
+    """Every identity the identity gates removed from the costed population.
+
+    The fold and quarantine ledgers are the evidence that a line was deliberately taken
+    off the job. Any panel that lists parts — review flags, confidence lists, ask-the-
+    drawing-office rows — must exclude these, or a ghost's NAME outlives its line and the
+    reader is asked about a part that nothing costs and nothing holds."""
+    out: Set[str] = set()
+    if not isinstance(source, dict):
+        return out
+    for key in ("folded_bom_row_fragments", "quarantined_interleave_artefacts"):
+        for e in (source.get(key) or []):
+            if isinstance(e, dict):
+                pn = str(e.get("part_number") or "").strip().upper()
+                if pn:
+                    out.add(pn)
     return out
 
 

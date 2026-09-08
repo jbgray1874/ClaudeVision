@@ -1248,6 +1248,45 @@ def main() -> None:
         #
         # Failure-isolated by the writer itself — a workbook without this tab is still a
         # complete estimate, and nothing here may cost a run that has already taken an hour.
+        # ONE PHRASE, THE BANNER INCLUDED. The Estimate banner counted workbook input
+        # CELLS ("4 ESTIMATOR INPUTS REQUIRED") while the e-mail, report and quote all
+        # carried the shared tally ("3 prices missing + 1 market figure + 2 manufacturing
+        # decisions") — two counts of one job on the reader's first glance. The banner is
+        # rewritten after the read-back, when the costed record exists, with the same
+        # phrase every other surface prints. The sweep runs later, so the variants
+        # inherit it.
+        if xlsx_path:
+            try:
+                from costed_facts import outstanding_summary as _osum_b
+                _phrase_b = str((_osum_b(summary) or {}).get("phrase") or "").strip()
+                if _phrase_b:
+                    import openpyxl as _b_opxl
+                    _bwb = _b_opxl.load_workbook(str(xlsx_path))
+                    try:
+                        _bws = (_bwb["Estimate"] if "Estimate" in _bwb.sheetnames
+                                else _bwb.active)
+                        _bhits = 0
+                        for _brow in _bws.iter_rows():
+                            for _bcell in _brow:
+                                if isinstance(_bcell.value, str) and \
+                                        _bcell.value.startswith("PROVISIONAL —"):
+                                    _bcell.value = (
+                                        f"PROVISIONAL — to settle: {_phrase_b} "
+                                        f"(see OUTSTANDING ESTIMATOR INPUTS below)")
+                                    _bhits += 1
+                        if _bhits:
+                            _bwb.save(str(xlsx_path))
+                            print(f"   [banner] {_bhits} banner cell(s) now carry the "
+                                  f"shared tally: {_phrase_b}", flush=True)
+                    finally:
+                        try:
+                            _bwb.close()
+                        except Exception:                        # noqa: BLE001
+                            pass
+            except Exception as _b_exc:                          # noqa: BLE001
+                print(f"   [banner] shared tally not applied ({_b_exc}) — the banner "
+                      f"keeps its own count.", flush=True)
+
         if xlsx_path:
             try:
                 from estimate_explanation_tab import write_tab as _write_explanation_tab

@@ -208,10 +208,24 @@ def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Low-confidence parts, flagged parts, risk flags, provisional rates."""
     parts = _extract_parts(summary)
+    # A GHOST'S NAME MUST NOT OUTLIVE ITS LINE. The review signals were recorded before
+    # the identity gates folded the wrapped-row fragments away, so the confidence and
+    # missing-material panels kept asking about BI- codes that no longer exist anywhere
+    # the money is. Every panel here excludes the removal ledgers.
+    try:
+        from costed_facts import removed_identities as _removed_ids
+        _gone_ids = _removed_ids(summary)
+    except Exception:                                            # noqa: BLE001
+        _gone_ids = set()
+    parts = [p for p in parts
+             if str(p.get("part_number") or "").strip().upper() not in _gone_ids]
     review = {"flagged_parts": [], "risk_flag_tally": {}, "provisional": []}
 
     ers = _get(summary, "estimate_summary", "estimate_review_signals", default={}) or {}
-    flagged = ers.get("parts_flagged") or []
+    flagged = [f for f in (ers.get("parts_flagged") or [])
+               if not (isinstance(f, dict)
+                       and str(f.get("part_number") or f.get("part") or "")
+                       .strip().upper() in _gone_ids)]
 
     # ── THE FINDINGS, KEPT APART ────────────────────────────────────────────────
     #
