@@ -3320,7 +3320,29 @@ def check_a_short_run_is_charged_for_the_sheet_it_uses(summary: Any) -> List[Dic
     return out
 
 
+def check_the_identity_gate_actually_ran(summary: Any) -> List[Dict[str, Any]]:
+    """A GATE THAT SHRUGS IS NOT A GATE. The last-gate quarantine/fold in wb_populate is
+    the enforcement that a removed identity stays removed; if it raised and was skipped,
+    the sheet was written from an UNENFORCED population while the log read like a clean
+    run. The failure is recorded where it happened; this turns it into a verdict."""
+    if not isinstance(summary, dict):
+        return []
+    failures = [f for f in (summary.get("identity_gate_failures") or [])
+                if isinstance(f, dict)]
+    if not failures:
+        return []
+    _named = "; ".join(f"{f.get('where')}: {f.get('error')}" for f in failures[:3])
+    return [_violation(
+        "identity_gate_did_not_enforce", BLOCKING,
+        f"{len(failures)} identity-gate enforcement failure(s) — the quarantine/fold "
+        f"that keeps removed duplicates off the sheet raised and was skipped, so the "
+        f"costed population is unenforced and may carry lines the graph already "
+        f"rejected ({_named}). Fix the error and re-run; do not release this estimate.",
+        failures=failures)]
+
+
 CHECKS = (
+    check_the_identity_gate_actually_ran,
     check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,
     check_a_material_we_cannot_price_is_declared,

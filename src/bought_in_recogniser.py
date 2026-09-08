@@ -688,14 +688,21 @@ def recognise_bought_in_in_prose(
         # the row was captured (and folded to one line), and this loop then re-read the
         # wrap fragments "cell tape" and "closed cell tape" out of the SAME text and
         # minted two priced twins beside it — on every run, whatever removed them before.
-        # If the prose around the match carries an existing part's own code or
-        # description (squashed, ≥10 chars), the words belong to a line the BOM already
-        # has, and no new item is minted from them.
+        # PROXIMITY ALONE IS NOT PROOF. "Fit closed cell tape to the underside of
+        # 10975-02-A01" puts the acrylic HOST's code within 90 characters of a genuine
+        # purchase, and the first version suppressed it. The nearby known entry must
+        # itself SPEAK OF this item: its own code or description has to carry at least
+        # one of the phrase's words. The tape fragments sit beside 10975EPDMCLOSEDCELL,
+        # whose code carries CLOSED and CELL; A01's code carries no tape word at all.
         _ctx_sq = re.sub(r"[^a-z0-9]", "", up[max(0, idx - 90):idx + len(needle) + 90])
+        _phrase_words = [w for w in re.findall(r"[a-z0-9]+", phrase.lower())
+                         if len(w) >= 4]
         _covered = ""
         for _known in list(existing_pns) + list(existing_descriptions):
             _ks = re.sub(r"[^a-z0-9]", "", str(_known or "").lower())
-            if len(_ks) >= 10 and _ks in _ctx_sq:
+            if len(_ks) < 10 or _ks not in _ctx_sq:
+                continue
+            if any(w in _ks for w in _phrase_words):
                 _covered = str(_known)
                 break
         if _covered:

@@ -1640,8 +1640,17 @@ def canonicalise_part_estimates_for_workbook(
                                + list(_da_rows.get("bay_bom_rows") or []),
                                summary=summary)
     except Exception as _gate_exc:                               # noqa: BLE001
-        print(f"   [wb_populate] last-gate quarantine/fold skipped "
-              f"({type(_gate_exc).__name__}: {_gate_exc})", flush=True)
+        # FAIL CLOSED. A gate that shrugs and continues is not a gate: the sheet would be
+        # written from an unenforced population while the log reads like a clean run. The
+        # failure is recorded on the summary and the invariants turn it into a BLOCKING
+        # verdict, so the estimate is marked not-releasable rather than quietly wrong.
+        print(f"   [wb_populate] LAST-GATE ENFORCEMENT FAILED "
+              f"({type(_gate_exc).__name__}: {_gate_exc}) — recorded as a blocking "
+              f"check; the population below is UNENFORCED.", flush=True)
+        summary.setdefault("identity_gate_failures", []).append({
+            "where": "wb_populate.canonicalise_part_estimates_for_workbook",
+            "error": f"{type(_gate_exc).__name__}: {_gate_exc}",
+        })
     nodes = {
         str(node.get("part_number") or "").strip().upper(): node
         for node in canonical_route_payload(summary).get("nodes") or []
@@ -1766,8 +1775,24 @@ def canonicalise_part_estimates_for_workbook(
     # DB-free commodity table at the mint: on a hit, write the buy price onto the row — material
     # only, no bench-fitting uplift, flagged PROVISIONAL — instead of a blank the sheet reads as
     # free. A bought-in with no commodity match still mints as the estimator-to-price row below.
+    # A REMOVED IDENTITY STAYS REMOVED. This mint exists for a canonical bought-in that
+    # never got a pricing record — and the last-gate fold above creates exactly that
+    # shape on purpose: it removes a duplicate's record while the shadow graph still
+    # carries its node. Without this ledger check the function removed both tape
+    # fragments and then re-minted them, priced, three lines below — "folded" in the log
+    # and back on the sheet in the same call.
+    _removed_ids = {
+        str(e.get("part_number") or "").strip().upper()
+        for key in ("folded_bom_row_fragments", "quarantined_interleave_artefacts")
+        for e in (summary.get(key) or []) if isinstance(e, dict)
+    }
     for identity, node in nodes.items():
         if node.get("kind") != "bought_in" or identity in normalised:
+            continue
+        if identity.strip().upper() in _removed_ids:
+            print(f"   [wb_populate] '{identity}' not re-minted — its record was folded "
+                  f"or quarantined by the identity gate; the graph node describes a "
+                  f"removed duplicate, not a missing purchase.", flush=True)
             continue
         _bi_desc = node.get("description") or ""
         _bi_qty = node.get("qty_per_unit") or 1

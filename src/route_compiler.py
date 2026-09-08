@@ -2007,10 +2007,31 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
         (summary.get("manufacturing_writeup") or {}).get("parts"),
         final_estimates if isinstance(final_estimates, list) else None,
     ) if isinstance(list_, list)]
-    quarantine_interleave_artefacts(_final_lists, compiled.get("issues"), summary=summary)
+    _removed = list(quarantine_interleave_artefacts(
+        _final_lists, compiled.get("issues"), summary=summary))
     # AND THE WRAP FRAGMENTS, AT THE SAME BOUNDARY. The BI- minting pass runs during
     # reconciliation, so only a purge HERE can see what it invented.
-    fold_bom_row_fragments(_final_lists, list(_da.get("bom_rows") or []), summary=summary)
+    _removed += list(fold_bom_row_fragments(
+        _final_lists, list(_da.get("bom_rows") or []), summary=summary))
+    if _removed:
+        # RECOMPILE FROM THE CLEANED POPULATION. The shadow above was compiled BEFORE the
+        # purge, so it still carried a node per removed record — and any consumer that
+        # trusts the graph (the workbook's own missing-bought-in mint, the Canonical BOM
+        # display) faithfully resurrected them: "folded" in the log, priced on the sheet.
+        # The published graph must describe the population that survived.
+        raw_parts2 = list((summary.get("manufacturing_writeup") or {}).get("parts") or [])
+        raw_ids2 = {clean_part_number(i.get("part_number") or i.get("item_number"))
+                    for i in raw_parts2 if isinstance(i, Mapping)}
+        population2 = raw_parts2 + [
+            i for i in final_estimates
+            if isinstance(i, Mapping)
+            and clean_part_number(i.get("part_number") or i.get("item_number"))
+            not in raw_ids2]
+        compiled = compile_job_route(population2, summary.get("llm_full_extract") or {},
+                                     list(_da.get("bom_rows") or [])
+                                     + list(_da.get("bay_bom_rows") or []),
+                                     job_drawing_numbers(summary),
+                                     _assembly_page_owners(summary))
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary

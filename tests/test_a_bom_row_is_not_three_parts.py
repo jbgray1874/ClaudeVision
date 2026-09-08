@@ -810,10 +810,21 @@ def test_a_phrase_inside_a_captured_bom_row_is_never_minted(monkeypatch):
 def test_the_last_gate_removes_whatever_a_late_pass_minted():
     """08:52 proved a pass AFTER the post-reconcile fold re-mints the fragments onto the
     list the sheet is written from. canonicalise_part_estimates_for_workbook is the last
-    doorway, and the same fold stands in it."""
+    doorway, and the same fold stands in it — AND the reviewer's probe proved the first
+    version folded the records and then re-minted them from the graph's own bought-in
+    nodes three lines later. So the graph is POPULATED with the ghost nodes here, and
+    the assertion is on the RETURNED population, not the mutated input."""
     import wb_populate as wbp
     summary = {
-        "estimate_summary": {"canonical_route_shadow": {"nodes": [], "issues": []}},
+        "estimate_summary": {"canonical_route_shadow": {"nodes": [
+            {"part_number": "10975", "kind": "bought_in",
+             "description": "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C "
+                            "LENGTH: 200.00", "qty_per_unit": 3},
+            {"part_number": "BI-CELLTAPE", "kind": "bought_in",
+             "description": "Cell Tape", "qty_per_unit": 1},
+            {"part_number": "BI-CLOSEDCELLTAPE", "kind": "bought_in",
+             "description": "Closed Cell Tape", "qty_per_unit": 1},
+        ], "issues": []}},
         "document_analysis": {"bom_rows": [_P1_ROW]},
     }
     estimates = [
@@ -823,11 +834,55 @@ def test_the_last_gate_removes_whatever_a_late_pass_minted():
         {"part_number": "BI-CELLTAPE", "description": "Cell Tape"},
         {"part_number": "BI-CLOSEDCELLTAPE", "description": "Closed Cell Tape"},
     ]
-    wbp.canonicalise_part_estimates_for_workbook(summary, estimates)
-    codes = [e["part_number"] for e in estimates]
-    assert "BI-CELLTAPE" not in codes and "BI-CLOSEDCELLTAPE" not in codes, codes
-    assert "10975" in codes
+    returned = wbp.canonicalise_part_estimates_for_workbook(summary, estimates)
+    codes = [e["part_number"] for e in returned]
+    assert "BI-CELLTAPE" not in codes and "BI-CLOSEDCELLTAPE" not in codes, \
+        f"a folded identity must not be re-minted from its own graph node: {codes}"
+    assert any(str(c).startswith("10975") for c in codes), codes
     assert summary.get("folded_bom_row_fragments"), "the evidence is filed, not deleted"
+    assert not summary.get("identity_gate_failures"), "the gate must run, not fail"
+
+
+def test_a_gate_failure_is_a_blocking_verdict_not_a_shrug():
+    """The reviewer's point verbatim: catch-and-continue is not fail-closed. A recorded
+    enforcement failure becomes a BLOCKING invariant so the estimate cannot present as
+    clean while the population is unenforced."""
+    import invariants
+    bad = {"identity_gate_failures": [
+        {"where": "wb_populate.canonicalise_part_estimates_for_workbook",
+         "error": "KeyError: 'x'"}]}
+    out = invariants.check_the_identity_gate_actually_ran(bad)
+    assert out and out[0]["severity"] == invariants.BLOCKING
+    assert invariants.check_the_identity_gate_actually_ran({}) == []
+
+
+def test_a_purchase_beside_its_host_part_is_still_recognised(monkeypatch):
+    """The reviewer's counter-probe: 'Fit closed cell tape to the underside of
+    10975-02-A01 as shown' — the acrylic HOST's code within 90 characters must not
+    suppress a genuine purchase. Proximity counts only when the nearby known entry
+    itself speaks of the item."""
+    import bought_in_recogniser as bir
+
+    class _Ref:
+        loaded = True
+        vocab = {"closed cell tape": "tape"}
+
+        def best_priced_match(self, d):
+            return None
+
+        def electrical_priced_match(self, k):
+            return None
+
+    monkeypatch.setattr(bir, "get_reference", lambda gc: _Ref())
+
+    def _stub(pn, desc, qty):
+        return {"part_number": pn, "description": desc, "quantity": qty}
+
+    out = bir.recognise_bought_in_in_prose(
+        "Fit closed cell tape to the underside of 10975-02-A01 as shown",
+        get_connection=None, existing_pns={"10975-02-A01"},
+        existing_descriptions={"L-STAND"}, stub_builder=_stub)
+    assert len(out) == 1, "the host's code carries no tape word — this is a real purchase"
 
 
 def test_the_steel_scanner_reads_each_block_through_its_own_header(tmp_path):
@@ -863,6 +918,43 @@ def test_the_steel_scanner_reads_each_block_through_its_own_header(tmp_path):
     assert a01, sorted(out)
     assert a01["qty"] == 1 and a01["length"] == 760.25 and a01["width"] == 210
     assert a01["gauge"] == 2 and a01["cost_per_part"] == 2.12
+
+
+def test_the_fabricated_table_reaches_other_sheet_money(tmp_path):
+    """The geometry half read correctly while the money half stayed empty: the
+    calculated-results lookup accepted only block == 'steel', and A01 is other_sheet —
+    so its nest count and charged value could never reach the explanatory table."""
+    import json
+    import openpyxl
+    import estimate_explained
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Estimate"
+    ws["D6"] = 1
+    ws.cell(40, 3, "Other Sheet Material")
+    head = ["", "", "Part Description", "Qty Per Unit", "Part Length", "Part Width",
+            "Thickness", "Sheet Length", "Sheet Width", "Qty Per Sheet", "Scrap",
+            "Cost Per Part"]
+    for c, v in enumerate(head, start=1):
+        ws.cell(41, c, v)
+    row = ["", "", "10975-02-A01 L-STAND", 1, 760.25, 210, 2, 3050, 2030, 24,
+           1.04, 2.12]
+    for c, v in enumerate(row, start=1):
+        ws.cell(42, c, v)
+    xlsx = tmp_path / "10975-02.xlsx"
+    wb.save(xlsx)
+    jp = tmp_path / "10975-02.json"
+    jp.write_text(json.dumps({"final_estimate": {
+        "totals": {"material_gbp": 2.12, "labour_gbp": 0.0, "unit_gbp": 2.12},
+        "material_rows": [{"block": "other_sheet",
+                           "description": "10975-02-A01 L-STAND",
+                           "total_value_gbp": 2.12, "qty_per_sheet": 24,
+                           "workbook_row": 42}],
+    }}), encoding="utf-8")
+    md = estimate_explained.build(xlsx, jp)
+    fab = md[md.find("The fabricated parts, priced by nest"):]
+    assert "**£2.12**" in fab, "the sheet's charged value must reach the table"
+    assert "| 24 " in fab, "the calculated nest count must reach the table"
 
 
 def test_the_quote_never_speaks_of_an_operation_spelled_like_its_department():

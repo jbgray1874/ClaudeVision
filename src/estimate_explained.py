@@ -1333,9 +1333,15 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
         # The calculated steel rows, keyed the way the block's own description cell is keyed —
         # the read-back carries no part code for the fabricated blocks, only the description
         # the engine wrote into them, and that description begins with the part number.
+        # EVERY NESTED SHEET BLOCK, NOT ONLY STEEL. A01 is other_sheet, and the
+        # steel-only filter meant an acrylic job's calculated nest count and charged
+        # value could never reach the fabricated-material table — the geometry half read
+        # correctly (block-aware scanner above) while the money half stayed empty. Each
+        # row keeps its block so the renderer can name the block it came from.
         "steel_calc": {str(r.get("description") or "").split()[0].strip().upper(): r
                        for r in (final.get("material_rows") or [])
-                       if isinstance(r, dict) and r.get("block") == "steel"
+                       if isinstance(r, dict)
+                       and r.get("block") in ("steel", "other_sheet")
                        and str(r.get("description") or "").strip()},
         # THE TWO AI TABS THESE USED TO READ ARE GONE FROM THE WORKBOOK. The same rows are
         # built from the run JSON by the functions that used to write them — same keys, so
@@ -1719,7 +1725,8 @@ def build(workbook: Path, scan_json: Optional[Path],
                 f"| {_gbp_or(mat.get('Ext Material'), 'not resolved')} "
                 f"| `Estimate!{row['row']}` |")
         add("")
-        add("> **£ the sheet charges** is column M of the Sheet Steel row, and it is a LINE "
+        add("> **£ the sheet charges** is column M of the part's own nested block row — "
+            "Sheet Steel or Other Sheet Material — and it is a LINE "
             "TOTAL despite the column being headed *Cost Per Part*: "
             "`ROUNDUP(sheet price / nest per sheet, 2) x qty x scrap`. Do not divide it back "
             "out — the sheet computes no per-piece figure. That total is what is inside "
