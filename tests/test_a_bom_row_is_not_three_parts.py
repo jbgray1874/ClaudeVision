@@ -1164,6 +1164,48 @@ def test_provenance_hierarchy_never_prints_engine_money_as_charged():
     assert "engine_only" in block
 
 
+def test_pack_shortfalls_speak_from_evidence_on_both_surfaces():
+    """James's rule: when the engine codes around a pack — a drawing export staged as a
+    flat, a stray file, a BOM line with no drawing — the e-mail and report SAY so, or
+    the drawing office never hears it and every pack costs another engine fix.
+    Evidence-only: nothing is invented, everything traces to the run's own ledgers."""
+    summary = {
+        "invariants": {"violations": [
+            {"code": "bom_names_a_drawing_the_pack_does_not_contain",
+             "detail": {"missing": [{"part_number": "11350-01-02 MIR",
+                                     "description": "RIGHT ARM 200MM"}]}},
+            {"code": "detail_drawing_missing",
+             "message": "DBR60 has no detail drawing or catalogue sheet in the pack"},
+            # An ENGINE confession must never be blamed on the pack.
+            {"code": "datum_written_without_source",
+             "message": "a datum was written with no source"},
+        ]},
+        "dxf_augmentation": {
+            "skipped": [{"reason": "drawing_export_not_a_flat",
+                         "path": "C:\\jobs\\0355255 - export - 11350_REV B.DXF"}],
+            "unmatched_dxf": [{"path": "C:\\jobs\\OLD_BRACKET_1mm.dxf"}],
+        },
+    }
+    sf = cf.pack_shortfalls(summary)
+    text = " | ".join(sf)
+    assert "11350-01-02 MIR" in text and "no drawing" in text
+    assert "DBR60" in text
+    assert "0355255 - export - 11350_REV B.DXF" in text and "drawing export" in text
+    assert "OLD_BRACKET_1mm.dxf" in text and "matched no part" in text
+    assert "datum" not in text.lower(), \
+        "an engine confession is OURS — it must never be reported as a pack fault"
+    assert cf.pack_shortfalls({}) == []
+    # Structural: both writers read the one list.
+    import os as _os
+    for fname, anchor in (("estimate_explained.py", "7. The drawing pack"),
+                          ("job_report_html.py", "6 &nbsp;Design recommendations")):
+        src = open(_os.path.join(_os.path.dirname(__file__), "..", "src", fname),
+                   encoding="utf-8").read()
+        i = src.index(anchor)
+        assert "pack_shortfalls" in src[max(0, i - 3000):i + 3000], \
+            f"{fname} must surface the pack shortfalls beside '{anchor}'"
+
+
 def test_a_variant_tree_over_claimed_members_is_never_minted():
     """The 10:57 7332 replay: the GA mint (10975's fix) re-opened #34 by minting the
     model's GA2 -> 102 tree over the SAME five frame parts the real GA -> 101 owns —

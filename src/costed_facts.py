@@ -83,6 +83,63 @@ def undrawn_bom_lines(summary: Any) -> List[Dict[str, Any]]:
                             "description": str(m.get("description") or "").strip()})
     return out
 
+def pack_shortfalls(source: Any) -> List[str]:
+    """What the DRAWING PACK failed to supply or staged wrongly, in plain sentences.
+
+    James's rule: when the engine has to code around a pack — a drawing export staged as
+    a flat, a stray file matching no part, a BOM line with no drawing behind it — the
+    covering e-mail and the report must SAY so, or the drawing office never hears it and
+    every pack costs another engine fix. This is the one list both writers read.
+
+    EVIDENCE-ONLY. Every sentence here traces to something the run recorded: the
+    invariant violations engine_discoveries classifies as the drawing office's, the BOM
+    lines naming drawings the pack does not contain, and the DXF augmentation ledger's
+    own skip/unmatched entries. Nothing is inferred here, because a complaint to the
+    drawing office that the engine invented is worse than silence."""
+    if not isinstance(source, dict):
+        return []
+    out: List[str] = []
+    _seen: Set[str] = set()
+
+    def _add(s: str) -> None:
+        k = " ".join(s.split()).upper()
+        if s and k not in _seen:
+            _seen.add(k)
+            out.append(s)
+
+    def _fname(p: Any) -> str:
+        return str(p or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+    for m in undrawn_bom_lines(source):
+        _add(f"The BOM names {m['part_number']}"
+             + (f" ({m['description']})" if m.get("description") else "")
+             + " but the pack contains no drawing for it — the line is carried, "
+               "not measured.")
+    try:
+        import engine_discoveries as _ed
+        for v in ((source.get("invariants") or {}).get("violations") or []):
+            if not isinstance(v, dict):
+                continue
+            code = str(v.get("code") or "")
+            if code == "bom_names_a_drawing_the_pack_does_not_contain":
+                continue                     # itemised per part above
+            if _ed.classify(code) == "drawing":
+                _add(str(v.get("message") or code.replace("_", " ")))
+    except Exception:                                            # noqa: BLE001
+        pass
+    dxf = source.get("dxf_augmentation") or {}
+    for s in (dxf.get("skipped") or []):
+        if isinstance(s, dict) and str(s.get("reason") or "") == "drawing_export_not_a_flat":
+            _add(f"'{_fname(s.get('path'))}' is a drawing export, not a manufacturing "
+                 f"flat — it was staged alongside the real flats and had to be "
+                 f"recognised by its content and set aside, never measured as cut path.")
+    for u in (dxf.get("unmatched_dxf") or []):
+        if isinstance(u, dict) and u.get("path"):
+            _add(f"'{_fname(u.get('path'))}' matched no part in this job — a stray or "
+                 f"mis-named file in the pack.")
+    return out
+
+
 # Operations that describe a FINISH rather than a fabrication step, most-specific first —
 # a part can be both sprayed and polished, and the headline should name the dominant one.
 _FINISH_OPS: List[tuple] = [

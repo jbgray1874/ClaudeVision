@@ -2789,6 +2789,20 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
 
     # 7 ─ the drawing pack, in full
     add("<h3>7. The drawing pack</h3>")
+    # WHAT THE PACK COST US, SAID OUT LOUD. James's rule: when the engine has to code
+    # around a pack — a drawing export staged as a flat, a stray file, a BOM line with no
+    # drawing — the e-mail says so, or the drawing office never hears it and every pack
+    # costs another engine fix. Evidence-only, from the record's one list.
+    try:
+        from costed_facts import pack_shortfalls as _psf
+        _shortfalls = _psf(g.get("scan_doc") or {})
+    except Exception:                                            # noqa: BLE001
+        _shortfalls = []
+    if _shortfalls:
+        add(f"<p><b>{_plural(len(_shortfalls), 'pack issue')} the engine had to work "
+            f"around.</b> These are the pack's, not the estimate's — each was handled, "
+            f"but a cleaner pack removes the risk entirely:</p>")
+        add("<ul>" + "".join(f"<li>{_e(s)}</li>" for s in _shortfalls[:8]) + "</ul>")
     _sheets = sorted({int(p) for rec in scan.values() for p in (rec.get("pages") or [])
                       if isinstance(p, (int, float))})
     if _sheets:

@@ -1518,7 +1518,24 @@ _DESIGN_RECS = [
 ]
 
 
-def _render_design_recs(dq: Optional[Dict[str, Any]] = None) -> str:
+def _render_design_recs(dq: Optional[Dict[str, Any]] = None,
+                        summary: Optional[Dict[str, Any]] = None) -> str:
+    # THIS PACK'S SHORTFALLS FIRST, generic advice second. James's rule: when the engine
+    # had to code around the pack — a drawing export staged as a flat, a stray file, a
+    # BOM line with no drawing — the report says so, or the drawing office never hears
+    # it and every pack costs another engine fix. Evidence-only, from the record.
+    _shortfall_html = ""
+    try:
+        from costed_facts import pack_shortfalls
+        _sf = pack_shortfalls(summary or {})
+    except Exception:                                            # noqa: BLE001
+        _sf = []
+    if _sf:
+        _shortfall_html = (
+            '<div class="callout warn"><b>What this pack made the engine work around.</b> '
+            'Each was handled on this run — but every one is a pack fault, not an '
+            'estimating step, and a cleaner pack removes the risk entirely:<ul>'
+            + "".join(f"<li>{_esc(s)}</li>" for s in _sf[:8]) + "</ul></div>")
     # Build a concrete filename example from THIS job if a stray-space file was found;
     # otherwise use a neutral, job-agnostic example (never another job's real filename).
     file_example = "Remove spaces from DXF/PDF filenames — e.g. <code>PART_revA.dxf</code>, not <code>PART_revA .dxf</code>."
@@ -1532,6 +1549,7 @@ def _render_design_recs(dq: Optional[Dict[str, Any]] = None) -> str:
         body = body.replace("{FILE_EXAMPLE}", file_example)
         recs += f'<div class="rec"><div class="num">{i}</div><div class="body"><b>{title}</b> {body}</div></div>'
     return f"""<h2>6 &nbsp;Design recommendations — for consistent, reliable estimating</h2>
+{_shortfall_html}
 <p>These changes to how drawings are produced would let the engine <b>read</b> the drawings rather than
 <b>cope</b> with them — reducing variation job-to-job and making every future estimate more reliable.</p>
 {recs}
@@ -2319,7 +2337,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         _render_review_items(review),
         _render_drawing_analysis(dq, summary),
         _render_checklist(review, dq),
-        _render_design_recs(dq),
+        _render_design_recs(dq, summary),
         _render_verdict(hl, dq, has_parity, summary),
     ])
     body = "\n".join([
