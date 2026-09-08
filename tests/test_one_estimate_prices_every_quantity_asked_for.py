@@ -130,7 +130,10 @@ def test_the_variants_cannot_cost_a_run_that_already_took_an_hour():
     src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     i = src.index("from quantity_sweep import sweep as _sweep")
     assert "except Exception" in src[i - 200:i + 3400]
-    assert "variants not written" in src[i:i + 5200]
+    # The per-variant refresh block (explanation, provenance, re-cache) sits between the
+    # sweep call and its catch-all, so the window is generous — the assertion is that the
+    # catch-all EXISTS downstream of the import, not that it is nearby.
+    assert "variants not written" in src[i:i + 12000]
 
 
 # ── the freight, which is the one thing a recalculated sheet gets plainly wrong ─

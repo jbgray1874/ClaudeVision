@@ -374,6 +374,13 @@ OP_NAME_MAP_ACRYLIC = {
     "manual_labour":       "Manual labour (Acrylic)",
     "manual_labour_acrylic": "Manual labour (Acrylic)",   # engine emits the _acrylic-suffixed key
     "diamond_polish":      "Diamond Polish",
+    # SCRAPING IS NOT METAL BENCH WORK. 10975-02-A01's SCRAPED EDGES inferred a deburr,
+    # and with no acrylic entry it fell through to Manual labour (Metal) — a £31.18/hr
+    # metal bench row on an all-acrylic job, sitting BESIDE the acrylic manual row the
+    # route also booked. Mapped to the same acrylic hand department, the two share one
+    # tooling group: one row, one set-up, nothing duplicated and the scrape still paid for.
+    "deburr":              "Manual labour (Acrylic)",
+    "deburring":           "Manual labour (Acrylic)",
 }
 
 # TIMBER AND BOARD HAVE THEIR OWN DEPARTMENTS, AND THE RATE CARD HAS ALWAYS CARRIED THEM.
@@ -898,6 +905,37 @@ def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None,
                     and os_ in _FAB):
                 out.append(os_)
     return out
+
+
+def _group_material_family(candidate_ids, estimates, raw,
+                           material: str = "") -> tuple:
+    """(material, is_acrylic) for a labour decision, from EVERY part it covers.
+
+    THE REPRESENTATIVE IS NOT THE GROUP. An assembly-scope decision took its material from
+    whichever single participant happened to be found first — on 10975-02 that was the bay
+    root with no material at all, so an all-acrylic job's pack row priced as Assemble/pack
+    (Metal). The family belongs to the parts the work is done ON: no sheet metal among
+    them and at least one board/acrylic part means the acrylic bench, any sheet-metal
+    member means the metal one, exactly as a person would call it. A single-part decision
+    with a stated material keeps its own answer untouched.
+    """
+    mats = []
+    for cid in candidate_ids or []:
+        pe = estimates.get(cid) or {}
+        rp = raw.get(cid) or {}
+        m = str(pe.get("normalized_material")
+                or (pe.get("material_estimate") or {}).get("material")
+                or rp.get("normalized_material") or "").strip()
+        if m:
+            mats.append(m)
+    material = str(material or "").strip()
+    if not material and mats:
+        material = mats[0]
+    is_acrylic = _is_board(material)
+    if len(candidate_ids or []) > 1 and mats:
+        is_acrylic = (not any(_is_sheet_metal(m) for m in mats)
+                      and any(_is_board(m) for m in mats))
+    return material, is_acrylic
 
 
 def _map_operation(op: str, is_acrylic: bool, stock_form: str = "",
@@ -2005,7 +2043,11 @@ def canonical_labour_groups(
         ).lower()
         if not stock_form and representative_id in tube_pns:
             stock_form = "tube"
-        is_acrylic = _is_board(material)
+        # THE GROUP'S FAMILY, NOT THE FIRST PARTICIPANT'S. See _group_material_family —
+        # an assembly-scope row spanning several parts takes the bench its parts belong
+        # to, and a representative with no material no longer defaults the job to metal.
+        material, is_acrylic = _group_material_family(
+            candidate_ids, estimates, raw, material)
         # THE MATERIAL, HERE TOO. _map_operation takes it so a timber part reaches the joinery
         # departments the rate card carries instead of the acrylic ones; this call site did
         # not pass it, and this is the call site the CANONICAL ROUTE uses — which is to say,

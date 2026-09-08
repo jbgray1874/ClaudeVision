@@ -502,6 +502,89 @@ def test_nobody_is_asked_for_the_phantoms_drawing():
     assert any("1100997755" in str(v) for v in out)
 
 
+def test_the_model_named_parent_is_minted_and_holds_only_real_children():
+    """The GA is an assembly page, not a part record, so the model's three edges reported
+    NOT APPLIED while every child they named sat in the job. The parent is minted from
+    the model's own tree — but only when a child names an existing job part, and it holds
+    only those children: a model in the folder that nothing claims stays out."""
+    from types import SimpleNamespace
+    import source_connectors.solidworks as sw
+    parts = [
+        {"part_number": "10975-02-A01", "description": "L-STAND"},
+        {"part_number": "10975-02-G01", "description": "GRAPHIC"},
+    ]
+    job = SimpleNamespace(hierarchy={"10975-02-GA": [
+        ("10975-02-A01", 1.0), ("10975-02-G01", 1.0), ("10975-02-X01", 1.0)]})
+    stamped = sw.apply_native_hierarchy_to_parts(parts, job)
+    ga = next((p for p in parts if p.get("part_number") == "10975-02-GA"), None)
+    assert ga is not None, "the model's parent must gain a record to hold its children"
+    assert ga.get("is_assembly_parent") and ga.get("is_sub_assembly")
+    kids = {str(c).upper() for c in ga.get("assembly_children") or []}
+    assert kids == {"10975-02-A01", "10975-02-G01"}, \
+        f"only children that name job parts belong: {kids}"
+    assert any(s.get("part_number") == "10975-02-GA" for s in stamped)
+    # A tree whose children name NOTHING in the job mints nothing.
+    lonely = [{"part_number": "7332-01-001"}]
+    sw.apply_native_hierarchy_to_parts(
+        lonely, SimpleNamespace(hierarchy={"9999-99-GA": [("9999-99-A01", 1.0)]}))
+    assert len(lonely) == 1, "a foreign tree must not invent an assembly"
+
+
+def test_scraping_on_acrylic_is_acrylic_bench_work_not_metal():
+    """SCRAPED EDGES inferred a deburr, and deburr had no acrylic entry — a £31.18/hr
+    Manual labour (Metal) row landed on an all-acrylic job beside the acrylic manual row.
+    Same department now, so the two share one tooling group: one row, one set-up."""
+    import wb_populate as wbp
+    assert wbp._map_operation("deburring", True) == "Manual labour (Acrylic)"
+    assert wbp._map_operation("deburr", True) == "Manual labour (Acrylic)"
+    assert wbp._map_operation("deburring", False) == "Manual labour (Metal)", \
+        "steel deburr stays on the metal bench"
+
+
+def test_the_pack_row_takes_the_family_of_the_parts_it_packs():
+    """The assembly decision's representative was the bay root with no material, so the
+    17:11 pack row priced as Assemble/pack (Metal) on an all-acrylic job."""
+    import wb_populate as wbp
+    estimates = {
+        "10975": {},
+        "10975-02-A01": {"normalized_material": "ACRYLIC"},
+        "10975-02-G01": {"normalized_material": "PAPER"},
+    }
+    mat, is_acr = wbp._group_material_family(
+        ["10975", "10975-02-A01", "10975-02-G01"], estimates, {}, "")
+    assert is_acr, "no metal in the group and an acrylic member — the acrylic bench"
+    assert mat, "the group must yield a material for the row description"
+    # One steel member and the metal bench stands, exactly as every metal job prices today.
+    estimates["BRACKET"] = {"normalized_material": "MILD STEEL"}
+    _, is_acr = wbp._group_material_family(
+        ["BRACKET", "10975-02-A01"], estimates, {}, "")
+    assert not is_acr
+    # A single part with its own stated material keeps its own answer.
+    mat, is_acr = wbp._group_material_family(
+        ["10975-02-A01"], estimates, {}, "MILD STEEL")
+    assert mat == "MILD STEEL" and not is_acr
+
+
+def test_a_variant_provenance_summary_carries_that_variants_totals():
+    """The variants inherit the baseline's AI Provenance from the SaveAs, so the 50-off
+    file audited itself against the 1-off headline. The overlay hands the sheet-writer
+    the sweep's Excel-calculated figures without touching the run's own record."""
+    import quantity_sweep as qs
+    summary = {"estimate_summary": {"final_estimate": {"totals": {
+        "material_gbp": 7.641, "labour_gbp": 56.2901, "unit_gbp": 68.7431}}},
+        "other": "untouched"}
+    row = {"quantity": 50, "material": 7.64, "labour": 3.92, "unit": 12.44}
+    out = qs.variant_summary_with_totals(summary, row)
+    got = out["estimate_summary"]["final_estimate"]["totals"]
+    assert got["unit_gbp"] == 12.44 and got["labour_gbp"] == 3.92
+    base = summary["estimate_summary"]["final_estimate"]["totals"]
+    assert base["unit_gbp"] == 68.7431, "the run's own record must never be rewritten"
+    assert qs.variant_summary_with_totals(summary, None) is summary
+    import costed_facts as _cf
+    assert _cf.job_totals(out)["unit_gbp"] == 12.44, \
+        "the provenance writer reads job_totals — the overlay must reach it"
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""

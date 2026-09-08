@@ -1352,6 +1352,34 @@ def main() -> None:
                                 print(f"   [qty-sweep] variant explanation not refreshed "
                                       f"for {_vp} ({_vt_exc}) — the variant sheet itself "
                                       f"is correct.", flush=True)
+                            # AI PROVENANCE, WITH THIS VARIANT'S OWN MONEY. The variants
+                            # inherit the baseline's Provenance sheet from the SaveAs, so
+                            # the 50-off file audited itself against the 1-off £68.74.
+                            # Sources, decisions and per-part provenance do not change
+                            # with order size; the three headline figures do, and the
+                            # sweep's Excel-calculated row is what this file's own
+                            # Estimate sheet holds.
+                            try:
+                                import openpyxl as _v_opxl
+                                from estimation_report import add_provenance_sheet as _vprov
+                                from quantity_sweep import variant_summary_with_totals
+                                _vwb = _v_opxl.load_workbook(str(_vp))
+                                try:
+                                    _vprov(_vwb, variant_summary_with_totals(summary, _row),
+                                           {"pdf_name": str(scan_label),
+                                            "job_number": str(scan_label).split("-")[0][:6],
+                                            "scan_date": __import__("datetime").datetime.now()
+                                            .strftime("%d/%m/%Y %H:%M")})
+                                    _vwb.save(str(_vp))
+                                finally:
+                                    try:
+                                        _vwb.close()
+                                    except Exception:            # noqa: BLE001
+                                        pass
+                            except Exception as _vpr_exc:        # noqa: BLE001
+                                print(f"   [qty-sweep] variant provenance not refreshed "
+                                      f"for {_vp} ({_vpr_exc}) — the sheet keeps the "
+                                      f"baseline audit.", flush=True)
                         # RE-CACHE THROUGH EXCEL. The openpyxl saves above (this tab, and
                         # the baseline's tab + AI Provenance) leave every formula cell with
                         # no cached value, so the saved files cannot independently confirm

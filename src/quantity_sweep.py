@@ -178,6 +178,53 @@ def sweep(xlsx_path: Any, quantities: List[int],
             pass
 
 
+def variant_summary_with_totals(summary: Dict[str, Any],
+                                row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """A shallow overlay of the run summary whose final_estimate totals are one sweep row.
+
+    AI Provenance's headline money comes from costed_facts.job_totals, which reads
+    final_estimate.totals — the BASELINE quantity's read-back. Rewriting the sheet on a
+    variant with the unmodified summary would restate the 1-off £68.74 on the 50-off file.
+    The sweep row is what Excel calculated for THIS variant, so it overlays those three
+    figures; everything else (sources, decisions, per-part provenance — none of which
+    change with order size) is shared by reference, never copied.
+    """
+    if not isinstance(summary, dict) or not isinstance(row, dict):
+        return summary
+    over = {k: _money(row.get(src)) for k, src in
+            (("material_gbp", "material"), ("labour_gbp", "labour"),
+             ("unit_gbp", "unit"))}
+    if all(v is None for v in over.values()):
+        return summary
+    out = dict(summary)
+    patched = False
+    for path in (("final_estimate",), ("estimate_summary", "final_estimate")):
+        holder = out
+        ok = True
+        for key in path[:-1]:
+            nxt = holder.get(key)
+            if not isinstance(nxt, dict):
+                ok = False
+                break
+            nxt = dict(nxt)
+            holder[key] = nxt
+            holder = nxt
+        if not ok:
+            continue
+        fe = holder.get(path[-1])
+        if not isinstance(fe, dict):
+            continue
+        fe = dict(fe)
+        totals = dict(fe.get("totals") or {})
+        for key, value in over.items():
+            if value is not None:
+                totals[key] = value
+        fe["totals"] = totals
+        holder[path[-1]] = fe
+        patched = True
+    return out if patched else summary
+
+
 def recache_workbooks(paths: List[Any]) -> int:
     """Open and re-save each workbook through Excel so its formula cells carry cached values.
 

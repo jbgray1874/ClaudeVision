@@ -1517,7 +1517,38 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
     for parent, kids in (job.hierarchy or {}).items():
         target = by_code.get(_clean_pn(str(parent)).upper())
         if target is None:
-            continue
+            # THE PARENT THE MODEL NAMES MAY HAVE NO RECORD OF ITS OWN. On 10975-02 the
+            # GA is an assembly page — a drawing number the pack detects but never a part
+            # record — so this stamp found nothing to hold the children and the whole
+            # tree reported NOT APPLIED while every child it named was sitting in the
+            # job. The model's own assembly is the explicit, traceable commercial stage:
+            # mint the parent record, but ONLY when at least one of its children names an
+            # existing job part (the evidence that this tree belongs to this job), and
+            # give it only those children — a model in the folder that no BOM row and no
+            # record claims stays out, which is a different, named problem.
+            _known_kids = [
+                _clean_pn(str(c)) for c, _q in kids
+                if _clean_pn(str(c)) and _clean_pn(str(c)).upper() in by_code
+                and _clean_pn(str(c)).upper() != _clean_pn(str(parent)).upper()
+            ]
+            if not _known_kids:
+                continue
+            target = {
+                "part_number": _clean_pn(str(parent)),
+                "description": "assembly (from the SolidWorks model's own tree)",
+                "quantity": 1,
+                "is_sub_assembly": True,
+                "is_assembly_parent": True,
+                "page_roles": ["assembly"],
+                "review_flags": [
+                    "assembly parent minted from the SolidWorks model's component tree — "
+                    "no drawing sheet of its own; it owns structure and assembly labour, "
+                    "never material"],
+            }
+            parts.append(target)
+            by_code[_clean_pn(str(parent)).upper()] = target
+            kids = [(c, q) for c, q in kids
+                    if _clean_pn(str(c)).upper() in {k.upper() for k in _known_kids}]
         existing = [str(c) for c in (target.get("assembly_children") or [])
                     if str(c).strip()]
         seen = {c.upper() for c in existing}
