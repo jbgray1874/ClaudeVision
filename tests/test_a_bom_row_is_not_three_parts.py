@@ -1021,6 +1021,42 @@ def test_the_estimate_banner_carries_the_shared_tally():
         "the rewrite must land before the tab writes and the sweep copies"
 
 
+def _job_with_drawing_thickness_noise(n_parts: int, noise_mm: float = 1.2):
+    parts = []
+    for i in range(n_parts):
+        parts.append({
+            "part_number": f"7332-01-00{i + 1}",
+            "normalized_thickness_mm": 2.5 + i * 0.5,
+            "_displaced": {"normalized_thickness_mm": [
+                {"value": noise_mm, "source": "drawing_deterministic",
+                 "applied": False}]},
+        })
+    return {"manufacturing_writeup": {"parts": parts}}
+
+
+def test_document_boilerplate_thickness_is_one_note_not_five_decisions():
+    """The 7332 replay's regression: the drawing reader put 1.2 mm on EVERY steel part —
+    the GA's boilerplate, not five measurements — and gauge decisions multiplied from 2
+    to 7. The same refused drawing value on >=3 parts is the document talking."""
+    job = _job_with_drawing_thickness_noise(5)
+    boiler = cf.boilerplate_thickness_values(job)
+    assert boiler == {1.2}
+    for p in job["manufacturing_writeup"]["parts"]:
+        assert cf.thickness_conflict(p, boilerplate_mm=boiler) is None, \
+            f"{p['part_number']} must not raise a phantom gauge decision"
+    # And 10975's REAL single-part disagreement survives untouched: one part, one rival.
+    lone = _job_with_drawing_thickness_noise(1, noise_mm=1.0)
+    assert cf.boilerplate_thickness_values(lone) == set()
+    p = lone["manufacturing_writeup"]["parts"][0]
+    d = cf.thickness_conflict(p, boilerplate_mm=cf.boilerplate_thickness_values(lone))
+    assert d and "1 mm" in d["issue"], "a genuine per-part disagreement stays a decision"
+    # A model-source rival is never boilerplate, however many parts share it.
+    model = _job_with_drawing_thickness_noise(5)
+    for p in model["manufacturing_writeup"]["parts"]:
+        p["_displaced"]["normalized_thickness_mm"][0]["source"] = "solidworks_api"
+    assert cf.boilerplate_thickness_values(model) == set()
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""

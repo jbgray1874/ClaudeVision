@@ -1158,7 +1158,46 @@ _THICKNESS_SOURCE_WORDS = ("dxf", "solidworks", "native", "model", "cutlist", "c
                            "title_block", "drawing", "filename")
 
 
-def thickness_conflict(part: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+def boilerplate_thickness_values(source: Any) -> Set[float]:
+    """Document-level thickness text masquerading as per-part readings.
+
+    On 7332-01 the deterministic drawing reader put 1.2 mm on EVERY steel part — the
+    same figure from the GA's boilerplate, not six measurements — and the moment gauge
+    disagreements became decisions, five phantom decisions buried the two real ones. A
+    per-part reading is a claim about ONE part; the same drawing-read value REFUSED on
+    three or more parts whose stronger sources all disagree with it is the document
+    talking, and it is reported once as noise, never five times as a question."""
+    census: Dict[float, int] = {}
+    _pool = list(job_parts(source)) if isinstance(source, dict) else []
+    _pool += [p for p in ((source.get("manufacturing_writeup") or {}).get("parts") or [])
+              if isinstance(source, dict)]
+    _seen_pns: Set[str] = set()
+    for part in _pool:
+        if not isinstance(part, Mapping):
+            continue
+        _pn = str(part.get("part_number") or "").strip().upper()
+        if not _pn or _pn in _seen_pns:
+            continue
+        _seen_pns.add(_pn)
+        displaced = ((part.get("_displaced") or {}).get("normalized_thickness_mm")
+                     if isinstance(part.get("_displaced"), Mapping) else None) or []
+        for entry in displaced:
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("applied") and not entry.get("displaced_by"):
+                continue
+            if "drawing" not in str(entry.get("source") or "").lower():
+                continue
+            v = _num(entry.get("value"))
+            kept = _num(part.get("normalized_thickness_mm"))
+            if v and kept and abs(v - kept) > 0.05:
+                census[round(v, 2)] = census.get(round(v, 2), 0) + 1
+    return {v for v, n in census.items() if n >= 3}
+
+
+def thickness_conflict(part: Mapping[str, Any],
+                       boilerplate_mm: Optional[Set[float]] = None
+                       ) -> Optional[Dict[str, Any]]:
     """The gauge disagreement on this part that a person must resolve, or None.
 
     GENERIC, NOT ACRYLIC-SHAPED. Two credible sources disagreeing about how thick the
@@ -1195,6 +1234,10 @@ def thickness_conflict(part: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         if not v or not (0.2 <= v <= 50) or abs(v - kept) <= 0.05:
             continue
         if not any(w in src.lower() for w in _THICKNESS_SOURCE_WORDS):
+            continue
+        # A drawing-read value the whole JOB refused is boilerplate, not this part's rival.
+        if boilerplate_mm and "drawing" in src.lower() and any(
+                abs(v - b) <= 0.05 for b in boilerplate_mm):
             continue
         rivals.append((v, src))
     if not rivals:
@@ -1592,10 +1635,22 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     "owner": "estimator", "gbp_at_stake": _money_of(l)})
     # ── the disagreements a person owns: gauge, and a BOM that states one line twice ──
     _by_pn = {str(l.get("part_number") or "").upper(): l for l in lines}
+    _boiler = boilerplate_thickness_values(source)
+    if _boiler:
+        decisions.append({
+            "part": "", "kind": "advisory",
+            "issue": (f"The drawing reader put "
+                      f"{', '.join(f'{b:g} mm' for b in sorted(_boiler))} on several "
+                      f"parts and every stronger source disagreed — document boilerplate "
+                      f"read as a gauge, reported once here, not as a decision per part."),
+            "assumption": "each part's gauge stands on its own strongest source",
+            "action": "no action unless a part's stated gauge looks wrong on its drawing",
+            "owner": "engine", "gbp_at_stake": None,
+        })
     for part in job_parts(source):
         if not isinstance(part, Mapping):
             continue
-        _tc = thickness_conflict(part)
+        _tc = thickness_conflict(part, boilerplate_mm=_boiler)
         if _tc:
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
             if _line is not None:
