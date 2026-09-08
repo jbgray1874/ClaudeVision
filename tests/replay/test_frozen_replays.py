@@ -85,6 +85,70 @@ def test_frozen_replay(job: Path):
         assert int(tally.get("manufacturing") or 0) == int(facts["decisions_expected"])
 
     # ── names that must appear nowhere: record AND both rendered deliverables ──
+    _forbidden_names_check(job, facts, summary, lines)
+
+
+def _squash(s: str) -> str:
+    return "".join(ch for ch in str(s).upper() if ch.isalnum())
+
+
+@pytest.mark.parametrize("job", JOBS, ids=[j.name for j in JOBS])
+def test_frozen_stage_contracts(job: Path):
+    """Tier 2: the stage that failed this week EXECUTES on the frozen inputs.
+
+    Rendering an already-costed JSON catches reporting drift and nothing else — the
+    reviewer's exact criticism. This tier re-runs the workbook canonicalisation (the
+    identity gates, the multiplicity roll, the missing-bought-in mint) on the frozen
+    RAW population and holds its contracts: it invents no identity the accepted BOM
+    and the inputs do not know (the MIR spelling-variant mint), it never resurrects a
+    folded or quarantined identity, and it reproduces the canonical population the
+    accepted run recorded. Assembly-scope and extraction failures still need staged
+    input packs — this closes the mint-and-gate stage only, honestly."""
+    facts = _facts(job)
+    frozen = job / "summary.json"
+    if not frozen.is_file():
+        pytest.skip(f"{job.name}: accepted facts exist but no frozen summary.json — "
+                    f"copy output/json/{job.name}.json here to protect this pack")
+    import copy
+    summary = json.loads(frozen.read_text(encoding="utf-8"))
+    s = copy.deepcopy(summary)
+    raw = [p for p in ((s.get("estimate_summary") or {}).get("part_estimates") or [])
+           if isinstance(p, dict)]
+    if not raw:
+        pytest.skip(f"{job.name}: frozen summary carries no raw part_estimates")
+    import wb_populate
+    out = wb_populate.canonicalise_part_estimates_for_workbook(s, raw)
+    out_ids = {str(p.get("part_number") or "").strip().upper()
+               for p in out if isinstance(p, dict)} - {""}
+
+    # 1 · the stage invents nothing: every output identity is known to the accepted
+    #     BOM, to the inputs, or to the graph — compared SQUASHED, so a spelling
+    #     variant of a recorded part cannot slip through as a "new purchase".
+    known = {_squash(x) for x in (facts.get("bom_identities") or [])}
+    known |= {_squash(p.get("part_number")) for p in raw}
+    import costed_facts as cf
+    known |= {_squash(k) for k in cf._canonical_nodes(summary)}
+    invented = sorted(pn for pn in out_ids if _squash(pn) not in known)
+    assert not invented, f"{job.name}: the gate minted identities nobody accepted: {invented}"
+
+    # 2 · a removed identity stays removed.
+    gone = cf.removed_identities(summary)
+    resurrected = sorted(pn for pn in out_ids
+                         if _squash(pn) in {_squash(g) for g in gone})
+    assert not resurrected, f"{job.name}: folded identities re-minted: {resurrected}"
+
+    # 3 · the stage reproduces the accepted run's own canonical population.
+    stored = [p for p in ((summary.get("estimate_summary") or {})
+                          .get("canonical_part_estimates") or []) if isinstance(p, dict)]
+    if stored:
+        stored_ids = {str(p.get("part_number") or "").strip().upper()
+                      for p in stored} - {""}
+        assert out_ids == stored_ids, \
+            (f"{job.name}: canonicalise no longer reproduces the accepted population — "
+             f"gained {sorted(out_ids - stored_ids)}, lost {sorted(stored_ids - out_ids)}")
+
+
+def _forbidden_names_check(job: Path, facts: dict, summary: dict, lines: list) -> None:
     forbidden = [str(x) for x in (facts.get("forbidden_names_everywhere") or [])]
     if forbidden:
         import client_quote_html
