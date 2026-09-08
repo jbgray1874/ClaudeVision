@@ -3372,7 +3372,11 @@ def check_the_sheet_carries_only_the_graphs_identities(summary: Any) -> List[Dic
     if not rows or not nodes:
         return []
     removed = removed_identities(summary)
-    _COMMERCIAL = {"PACKAGING", "DELIVERY", "CARRIAGE", "PALLET", "FREIGHT"}
+    # POWDER belongs here with the other computed commercial/consumable lines: the sheet
+    # derives it from coated area, the graph deliberately never compiles it (the same
+    # exemption route_compiler grants it from disconnection checks), and 11350-01 went
+    # BLOCKING on its own powder consumable — a row working exactly as designed.
+    _COMMERCIAL = {"PACKAGING", "DELIVERY", "CARRIAGE", "PALLET", "FREIGHT", "POWDER"}
 
     def _squash(v: Any) -> str:
         return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())

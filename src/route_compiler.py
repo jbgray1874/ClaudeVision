@@ -1251,6 +1251,40 @@ def build_part_graph(
         records.setdefault(_parent_id, {})["is_sub_assembly"] = True
         records[_parent_id]["hierarchy_source"] = "bom_table"
 
+    # A RECORD THAT CARRIES ITS OWN TABLE'S OWNER joins the same way. The dual-path ADD
+    # writes synthesised BI- records for BOM rows whose code column is a dash — so the
+    # row-level edge above can never resolve a child for them — but the record itself
+    # knows which parent BOM listed it (11350-01: wing nuts on the GA's table, PEM studs
+    # on 101's), and dropping that fact left both fasteners BLOCKING as disconnected.
+    # Same refusals as _bom_stated_edges: the parent must already be known, the child
+    # must be unowned, and nothing is ever re-parented.
+    for _part in (parts or []):
+        if not isinstance(_part, Mapping):
+            continue
+        _pid = clean_part_number(_part.get("part_number") or "")
+        _pid = aliases.get(_pid, _pid)
+        if not _pid or _pid in parents or _pid in _claimed_before_bom:
+            continue
+        _bp_raw = _part.get("bom_parent") or ""
+        if not _bp_raw:
+            continue
+        _bp = ""
+        for _spelling in _code_spellings(_bp_raw):
+            _spelling = aliases.get(_spelling, _spelling)
+            if _spelling in raw or _spelling in extracted or _spelling in children \
+                    or _spelling in _drawings:
+                _bp = _spelling
+                break
+        if not _bp or _bp == _pid:
+            continue
+        _q = number(_part.get("quantity"), 1.0) or 1.0
+        children.setdefault(_bp, {})[_pid] = _q
+        parents.setdefault(_pid, set()).add(_bp)
+        records.setdefault(_bp, {})["is_sub_assembly"] = True
+        records[_bp]["hierarchy_source"] = "bom_table"
+        print(f"   [bom] '{_pid}' owned by '{_bp}' — the record carries the parent BOM "
+              f"whose table listed it", flush=True)
+
     # ── AND THE PAGE A PART WAS LISTED ON, when no reader gave it an owner ────────────
     # The last resort, and it exists because the readers above can all be empty at once.
     # On 12392 the deterministic BOM reader found no rows, so nothing carried bom_parent;
@@ -2971,6 +3005,11 @@ def compile_job_route(
                 "scope": "assembly",
                 "target_id": insertion_target,
             })
+            # ONE EVENT, NOT ONE PER FASTENER. qty_per_unit here is the EVENT's
+            # multiplicity; the four-stud workload is already charged downstream,
+            # where the projection multiplies the participants' own insert count
+            # into the batch hours (11350-01 row 99: 0.633 bh = 15 min set-up +
+            # 4 studs x 15 s x 23 units). Raising this qty double-counts.
             add_claim(insertion_event_id, make_claim(
                 "hardware_insertion", REQUIRED, "bom_tree",
                 subject_id=insertion_target,

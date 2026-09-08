@@ -217,6 +217,12 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                 f"Added from dual-path BOM table read (code '{_code}' -> '{_cc}'), "
                 f"qty {_qty} - price via waterfall, estimator to verify"],
             "confidence": {"overall": 0.0}, "source": "non_sdi_bom_row",
+            # WHICH TABLE LISTED IT IS THE OWNER THE PDF STATES. The dual-path row knows
+            # the parent BOM whose table it sits in (11350-01: wing nuts on the GA's
+            # table, PEM studs on 101's) — and dropping it here is why both fasteners
+            # blocked as bom_node_disconnected: the row-level edge cannot resolve a
+            # child for a synthesised BI- code, so the record must carry the parent.
+            "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "") or None,
         })
         _added += 1
         print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)

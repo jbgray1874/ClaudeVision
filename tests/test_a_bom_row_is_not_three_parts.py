@@ -1214,6 +1214,70 @@ def test_a_spelling_variant_of_a_recorded_part_is_never_minted_as_a_purchase():
     assert "not minted" in window and "two spellings" in window.lower()
 
 
+def test_a_fastener_row_with_no_code_still_gets_the_parent_its_table_states():
+    """11350-01: both fasteners blocked as bom_node_disconnected. The PDF BOM states
+    their owners — wing nuts on the GA's table, PEM studs on 101's — but their code
+    column is a dash, so the row-level edge can never resolve a child for the
+    synthesised BI- record. The record now carries its table's parent, and the graph
+    joins it under the same refusals: parent must be known, child must be unowned."""
+    import route_compiler as rc
+    parts = [
+        {"part_number": "11350-01-101", "description": "TICKET STRIP BAR WITH PEM STUDS",
+         "quantity": 1, "is_sub_assembly": True, "page_roles": ["detail"]},
+        {"part_number": "BI-PEMSTUD", "description": "M4X8 PEM STUD", "quantity": 4,
+         "page_roles": ["bought_in"], "source": "non_sdi_bom_row",
+         "bom_parent": "11350-01-101"},
+        {"part_number": "BI-NUT", "description": "M4 WING NUT", "quantity": 4,
+         "page_roles": ["bought_in"], "source": "non_sdi_bom_row",
+         "bom_parent": "NOBODY-KNOWS-THIS"},
+    ]
+    graph = rc.build_part_graph(parts)
+    assert "11350-01-101" in (graph["parents"].get("BI-PEMSTUD") or set()), \
+        f"the stated table owner must become the edge: {graph['parents']}"
+    assert not graph["parents"].get("BI-NUT"), \
+        "an owner the job does not know still makes no edge — a wrong parent is worse"
+    # And the dual-path ADD branch actually carries the field.
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "file_scan.py"), encoding="utf-8").read()
+    i = src.index('"source": "non_sdi_bom_row"')
+    assert "bom_parent" in src[i:i + 600], \
+        "the ADD branch must carry the parent BOM label onto the record"
+
+
+def test_the_powder_consumable_row_is_not_a_sealed_identity():
+    """11350-01 went BLOCKING on its own POWDER consumable — a computed commercial line
+    the graph deliberately never compiles, same class as PACKAGING/DELIVERY."""
+    import invariants
+    summary = {
+        "final_estimate": {"material_rows": [
+            {"part_code": "POWDER", "description": "POWDER Powder — computed from "
+             "coated surface area (0.0412 m2)", "total_value_gbp": 0.034, "block": "bom"},
+        ]},
+        "estimate_summary": {"canonical_route_shadow": {"nodes": [
+            {"part_number": "11350-01", "parents": []},
+        ]}},
+    }
+    out = invariants.check_the_sheet_carries_only_the_graphs_identities(summary)
+    assert out == [], f"the powder consumable is commercial, never a leaked identity: {out}"
+
+
+def test_powder_is_never_charged_on_hardware_or_a_bare_parent():
+    """£10.02 of powder labour on £0.03 of powder: the assembly finish propagated the
+    op onto the PEM stud and both parents, six min-floor charges for one coat.
+    Structural: bought-ins never coat, and a parent with no measurable area of its own
+    is covered by its members."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "estimator.py"), encoding="utf-8").read()
+    i = src.index('if "powder_coating" in ops and (_pc_bought')
+    window = src[max(0, i - 1600):i + 900]
+    assert "_pc_bought" in window and "_pc_parent" in window and "_pc_has_area" in window
+    assert "arrives finished" in window, "the skip must say why on the record"
+    assert 'ops = [o for o in ops if o != "powder_coating"]' in window, \
+        "the op is removed, not just its minutes — the sheet row scope follows the ops"
+
+
 def test_the_missing_drawing_panel_carries_the_records_charged_money():
     """The last surface still calling the charged right arm free: the "no sheet of its
     own" panel read only the BOM cell's price, and the MIR's £0.45 lives in Sheet
