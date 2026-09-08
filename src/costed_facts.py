@@ -1732,6 +1732,27 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        f"ride on it"),
             "owner": "estimator", "gbp_at_stake": None,
         })
+    # A MIXED COATING SCOPE BLOCKS RELEASE. When the route records powder required on an
+    # assembly AND on some (not all) of its members, both charges stand — and the ruling
+    # is a person's, so it must sit in the decision tally that keeps the quote a draft,
+    # never as an easily-missed warning in a ledger nobody reads before issuing.
+    _shadow_issues = (((source.get("estimate_summary") or {})
+                       .get("canonical_route_shadow") or {}).get("issues") or [])
+    for _iss in _shadow_issues:
+        if not isinstance(_iss, Mapping) \
+                or str(_iss.get("code")) != "powder_scope_mixed_members":
+            continue
+        decisions.append({
+            "part": str(_iss.get("part_number") or ""),
+            "kind": "manufacturing_decision",
+            "issue": str(_iss.get("message") or "the powder scope is mixed between "
+                         "the assembly and its members"),
+            "assumption": "both the assembly coat and the coated members' lines stand "
+                          "until ruled",
+            "action": "rule whether the assembly coat covers the coated members (drop "
+                      "their lines) or is a separate finishing stage (keep both)",
+            "owner": "estimator", "gbp_at_stake": None,
+        })
     for part in job_parts(source):
         if not isinstance(part, Mapping):
             continue

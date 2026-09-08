@@ -3175,6 +3175,19 @@ def compile_job_route(
             if d.operation == "powder_coating" and d.status == REQUIRED
         }
 
+    def _powder_required_scopes() -> Dict[str, str]:
+        """target -> scope of its required powder decision. The scope is the
+        distinguisher between two legitimate shapes: an EXPLICIT assembly-scope coat is
+        a finishing stage the weldment itself goes through (the booth object is the
+        assembly — never dedup it, never re-home it onto members), while a part-scope
+        statement on an assembly record is the product's finish read off a title block,
+        which the members carry."""
+        return {
+            d.target_id: str(d.scope or "") for eid, ecs in claims_by_event.items()
+            for d in [arbitrate_event(eid, ecs)]
+            if d.operation == "powder_coating" and d.status == REQUIRED
+        }
+
     # THE POINTER IS VERIFIED, NOT ASSUMED. An unverified assembly-target powder event is
     # only the "SEE ASSEMBLY DRAWING" read when the LEAF'S OWN record carries the
     # deferral wording — the same field the compatibility path read to create the event —
@@ -3188,12 +3201,13 @@ def compile_job_route(
             [str(_r.get("normalized_finish") or ""), str(_r.get("finish") or "")]
             + [str(x) for x in (_r.get("surface_finishes") or [])]).upper()
 
-    _pw_required = _powder_required_assembly_targets()
+    _pw_scopes = _powder_required_scopes()
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if (_d.operation == "powder_coating" and _d.status == UNVERIFIED
                 and kinds.get(_d.target_id) == "assembly"
-                and _d.target_id in _pw_required):
+                and _d.target_id in _pw_scopes
+                and _pw_scopes.get(_d.target_id) != "assembly"):
             _minted = []
             for _leaf in (_d.participants or []):
                 if kinds.get(_leaf) != "leaf":
@@ -3234,6 +3248,48 @@ def compile_job_route(
                     route_id=_d.route_id or "",
                 ))
 
+    # (a2) THE LEAF POINTER WITHOUT ITS EVENT. The compatibility path creates the
+    # unverified assembly-target event only when the deferral sits in normalized_finish;
+    # a leaf whose SEE ASSEMBLY wording lives in surface_finishes never got one — the
+    # 15:36 bar had NO powder decision at all, so pass (a) had nothing to resolve. The
+    # pointer is the leaf's own record either way: walk fabricated leaves directly —
+    # deferral wording present, no RAW conflict, no powder decision of their own — and
+    # when an ancestor assembly carries required powder, the member is coated.
+    _pw_scopes = _powder_required_scopes()
+    _pw_decided = {
+        d.target_id for eid, ecs in claims_by_event.items()
+        for d in [arbitrate_event(eid, ecs)]
+        if d.operation == "powder_coating"
+    }
+    for _pn, _kind in list(kinds.items()):
+        if _kind != "leaf" or _pn in _pw_decided:
+            continue
+        _ft = _leaf_finish_text(_pn)
+        if not any(h in _ft for h in _PW_POINTER_HINTS):
+            continue
+        if re.search(r"\bRAW\b", _ft):
+            continue
+        if not any(kinds.get(a) == "assembly"
+                   and _pw_scopes.get(a) != "assembly"
+                   and _is_descendant(_pn, a, graph["parents"])
+                   for a in _pw_scopes):
+            continue
+        _pr_route = stable_id("route", {
+            "operation": "powder_coating", "target_id": _pn, "participants": [_pn]})
+        _pr_event = stable_id("decision", {
+            "route_id": _pr_route, "operation": "powder_coating",
+            "scope": "part", "target_id": _pn})
+        add_claim(_pr_event, make_claim(
+            "powder_coating", REQUIRED, "bom_tree",
+            subject_id=_pn, target_id=_pn, scope="part",
+            participants=[_pn],
+            qty_per_unit=graph_quantities.get(_pn, 1.0),
+            sequence=70,
+            reason="the part's sheet defers its finish to the assembly, and the "
+                   "assembly's own evidence states the coat — the member is coated",
+            route_id=_pr_route,
+        ))
+
     # PARENT DEDUP NEEDS COMPLETE COVERAGE. `any` coated member was the overreach the
     # probe found: a welded frame with one coated child and one RAW child lost the
     # frame's coat entirely. The parent's decision stands down only when EVERY
@@ -3246,6 +3302,11 @@ def compile_job_route(
         _d = arbitrate_event(event_id, event_claims)
         if not (_d.operation == "powder_coating" and _d.status == REQUIRED
                 and kinds.get(_d.target_id) == "assembly"):
+            continue
+        if str(_d.scope or "") == "assembly":
+            # An EXPLICIT assembly-scope coat is a finishing stage the assembly itself
+            # goes through — the reviewer's "separately specified stage". Members'
+            # deferring words corroborate it; complete coverage cannot stand it down.
             continue
         _leaf_desc = {pn for pn, k in kinds.items()
                       if k == "leaf" and _is_descendant(pn, _d.target_id,

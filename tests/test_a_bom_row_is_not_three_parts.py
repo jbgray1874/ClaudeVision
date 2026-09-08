@@ -1332,6 +1332,15 @@ def test_the_coated_area_counts_the_bar_and_both_arms_exactly_once():
     expect = (0.758 * 0.07771 + 2 * 0.25835 * 0.0798) * 2.0
     assert abs(area - expect) < 1e-6, \
         f"bar + both arms, once each: got {area:.5f}, expected {expect:.5f}"
+    # BOTH spellings of the mirror present SIMULTANEOUSLY still count once — the
+    # reviewer's point that testing each spelling separately does not establish it.
+    both = parts + [{"part_number": "11350-01-02 MIR", "quantity": 1,
+                     "material_estimate": {"stock_form": "sheet",
+                                           "blank_length_mm": 258.35,
+                                           "blank_width_mm": 79.8,
+                                           "unit_material_cost_gbp": 0.45}}]
+    assert abs(wbp.coated_sheet_area_m2(both, says) - expect) < 1e-6, \
+        "two records of one mirrored identity are one part, not two contributions"
     # A part the route excludes contributes nothing, whichever way it is spelled.
     says_one = wbp.route_coated_membership({"11350-01-01"})
     assert abs(wbp.coated_sheet_area_m2(parts, says_one)
@@ -1372,6 +1381,49 @@ def test_a_genuine_pointer_resolves_and_a_conflicting_finish_does_not():
            if d["operation"] == "powder_coating"}
     assert pw2.get("P-01") != REQUIRED, \
         f"a leaf whose own evidence says RAW is a question, never a mint: {pw2}"
+
+
+def test_a_leaf_pointer_with_no_event_of_its_own_still_joins_the_coat():
+    """The reviewer's live-sheet bind: the compatibility path creates the unverified
+    assembly-target event only when the deferral sits in normalized_finish. A leaf
+    whose SEE ASSEMBLY wording lives only in surface_finishes had NO powder decision
+    at all — nothing for the resolver to see — and the bar stayed out of the booth.
+    The pointer is the leaf's own record either way."""
+    from route_compiler import REQUIRED, compile_job_route
+    parts = [
+        {"part_number": "Q-101", "description": "BAR SUB ASSEMBLY", "quantity": 1,
+         "textual_operations": ["powder_coating"],
+         "operation_sources": {"powder_coating": "llm_full_extract"}},
+        {"part_number": "Q-01", "description": "BAR", "quantity": 1,
+         "surface_finishes": ["SEE ASSEMBLY DRAWING"]},
+    ]
+    extract = {"assemblies": [
+        {"part_number": "Q-101", "children": [{"part_number": "Q-01", "qty": 1}]},
+    ], "parts": [], "routes": []}
+    g = compile_job_route(parts, extract)
+    pw = {d["target_id"]: d["status"] for d in g["decisions"]
+          if d["operation"] == "powder_coating"}
+    assert pw.get("Q-01") == REQUIRED, \
+        f"the deferring member joins the coat even with no event to resolve: {pw}"
+    assert pw.get("Q-101") != REQUIRED, f"and the parent then stands down: {pw}"
+
+
+def test_a_mixed_powder_scope_blocks_release_as_a_decision():
+    """The reviewer's safeguard: powder_scope_mixed_members must prevent customer-ready
+    release until resolved — a manufacturing decision in the one tally, never an
+    easily-missed warning."""
+    summary = {"estimate_summary": {"canonical_route_shadow": {"issues": [
+        {"code": "powder_scope_mixed_members", "part_number": "M-101",
+         "message": "powder is required on M-101 AND on M-01 while M-02 carry no coat"},
+    ]}}}
+    job = cf.costed_job(summary)
+    mixed = [d for d in job["decisions_required"]
+             if d.get("kind") == "manufacturing_decision"
+             and "M-101" in str(d.get("part"))]
+    assert mixed, f"the mixed scope must be a decision: {job['decisions_required']}"
+    tally = cf.outstanding_summary(job)
+    assert tally["manufacturing"] >= 1 and tally["blocking"] >= 1, \
+        f"and it must keep the quote a draft: {tally}"
 
 
 def test_mixed_powder_scope_asks_a_person_and_deletes_nothing():

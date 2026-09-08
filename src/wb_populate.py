@@ -1472,7 +1472,16 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
     display is garbled too — both are excluded rather than allowed to invent the powder
     line."""
     total = 0.0
+    _seen_squash: Set[str] = set()
     for _sp in parts or []:
+        # ONE IDENTITY, ONE CONTRIBUTION. If the mirror exists under BOTH spellings at
+        # once ("02 MIR" and "02MIR" as two records), the area must still count once —
+        # membership being squash-tolerant makes double-counting the new risk, so the
+        # sum dedupes by the same squash.
+        _sq_pn = re.sub(r"[^A-Z0-9]", "",
+                        str(_sp.get("part_number") or "").upper())
+        if _sq_pn and _sq_pn in _seen_squash:
+            continue
         _sme = _sp.get("material_estimate") or {}
         if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: coated steel routed by weight must not drop from the powder sum
             continue
@@ -1494,6 +1503,8 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
             continue
         if _sl and _sw:
             total += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
+            if _sq_pn:
+                _seen_squash.add(_sq_pn)
     return total
 
 
@@ -3161,7 +3172,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # calculation cannot see, so nothing is double-counted.
     _wire_powder_area_m2 = 0.0
     _wire_powder_diag = []
-    _all_pes_pw = ((summary.get("estimate_summary") or {}).get("part_estimates")
+    # THE SAME POPULATION THE BLOCKS READ. This read the RAW part_estimates while the
+    # Sheet Steel block reads the canonicalised list — so the mirror record (raw
+    # spelling, no blank fields of its own) contributed nothing to the coated area
+    # while its canonical twin sat fully measured in the steel block. One list for
+    # both writers, falling back to the raw pools only when no canonical list exists.
+    _all_pes_pw = (pes or (summary.get("estimate_summary") or {}).get("part_estimates")
                    or summary.get("parts") or [])
 
     # ── ONE DECISION OWNS POWDER ────────────────────────────────────────────────────
