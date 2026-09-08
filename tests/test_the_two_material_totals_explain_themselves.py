@@ -99,7 +99,7 @@ def test_it_sends_the_reader_to_where_the_figure_is_broken_out():
     # reason it built PROSE in the first place. Reading CODE here reported a sentence missing
     # that is on the page in front of the estimator.
     at = PROSE.index("_gap = float(_mat) - _col_mat")
-    window = PROSE[at:at + 1800]
+    window = PROSE[at:at + 3200]   # widened: the powder second-witness block sits inside
     assert "MATERIAL COST BREAKDOWN" in window, (
         "the sentence asks to be taken on trust instead of naming where the figure is shown")
     assert "Decision Report" not in window, (
