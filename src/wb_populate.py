@@ -1459,6 +1459,59 @@ def _no_material_was_costed(part) -> bool:
     return not stock_form and not material
 
 
+def coated_sheet_area_m2(parts, says_coated) -> float:
+    """The SHEET contribution to the coated-area sum, extracted so it is behaviourally
+    testable: given the parts and the coated-membership predicate, every coated flat
+    with a measured blank contributes L x W x 2 x qty exactly once — the bar and BOTH
+    arms of 11350, whichever way the mirror spells itself.
+
+    acrylic_excluded_from_powder (2026-07-15): acrylic / perspex / PMMA / polycarbonate
+    are diamond polished, NEVER powder coated (12439). A part absent from every material
+    block is absent from the booth too (11650-05). A part named TUBE is a hollow section
+    whose blank is garbled view geometry, and a single blank over 3.5 m2 on a retail
+    display is garbled too — both are excluded rather than allowed to invent the powder
+    line."""
+    total = 0.0
+    for _sp in parts or []:
+        _sme = _sp.get("material_estimate") or {}
+        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: coated steel routed by weight must not drop from the powder sum
+            continue
+        if part_cannot_be_powder_coated(_sp):
+            continue   # acrylic is not powder coated — contributes zero coated area
+        if not says_coated(_sp):
+            continue   # the route decided this part does not go through the booth
+        if _no_material_was_costed(_sp):
+            continue   # you cannot coat what you did not buy material for
+        _sdesc = str(_sp.get("part_description") or _sp.get("description")
+                     or _sme.get("description") or "").upper()
+        if "TUBE" in _sdesc:
+            continue
+        _sng = _sp.get("normalized_geometry") or {}
+        _sl = _safe(_sme.get("blank_length_mm") or _sng.get("blank_length_mm"))
+        _sw = _safe(_sme.get("blank_width_mm") or _sng.get("blank_width_mm"))
+        _sq = _safe(_sp.get("quantity"), 1) or 1
+        if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
+            continue
+        if _sl and _sw:
+            total += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
+    return total
+
+
+def route_coated_membership(route_coated: Optional[Set[str]]):
+    """The coated-membership predicate both powder writers share — squash-tolerant,
+    because the route said '11350-01-02 MIR' while the record spells itself
+    '11350-01-02MIR', and spelling must never decide coating."""
+    squash = ({re.sub(r"[^A-Z0-9]", "", x) for x in route_coated}
+              if route_coated is not None else None)
+
+    def says_coated(_part) -> bool:
+        if route_coated is None:
+            return True
+        _pn = str(_part.get("part_number") or "").strip().upper()
+        return _pn in route_coated or re.sub(r"[^A-Z0-9]", "", _pn) in squash
+    return says_coated
+
+
 def parts_the_route_says_are_coated(summary: Dict[str, Any]) -> Optional[Set[str]]:
     """Which parts the compiler decided go through the powder booth, or None.
 
@@ -3121,19 +3174,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # unchanged. A SET, including an empty one, is a decision and is obeyed.
     _route_coated = parts_the_route_says_are_coated(summary)
 
-    # SPELLING NEVER DECIDES COATING. The route said "11350-01-02 MIR" and the mirror's
-    # record spells itself "11350-01-02MIR" — the exact-string membership test dropped
-    # the right arm from the coated-area sum, which is why the powder area was always
-    # exactly one arm. Same identity rule as everywhere else: compare squashed.
-    _route_coated_squash = ({re.sub(r"[^A-Z0-9]", "", x) for x in _route_coated}
-                            if _route_coated is not None else None)
-
-    def _route_says_coated(_part) -> bool:
-        if _route_coated is None:
-            return True                      # no ruling: the old behaviour, unchanged
-        _pn = str(_part.get("part_number") or "").strip().upper()
-        return (_pn in _route_coated
-                or re.sub(r"[^A-Z0-9]", "", _pn) in _route_coated_squash)
+    # SPELLING NEVER DECIDES COATING — the shared squash-tolerant predicate; see
+    # route_coated_membership for the 11350 mirror story.
+    _route_says_coated = route_coated_membership(_route_coated)
 
     if _route_coated is not None:
         _flag(f"powder follows the compiled route: {len(_route_coated)} part(s) decided "
@@ -3159,47 +3202,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     #     167.04 x 113 x 2 / 1e6 = 0.03775 m2
     # which matches the template's own AB63 to five decimal places. The area maths agrees
     # with theirs; only the coverage RATE is in dispute.
-    _sheet_powder_area_m2 = 0.0
-    # acrylic_excluded_from_powder (2026-07-15): acrylic / perspex / PMMA / polycarbonate are
-    # diamond polished, NEVER powder coated. An acrylic part is a sheet form, so without this
-    # guard its area was summed into the coated total and a phantom POWDER BOM row was written
-    # (12439). Exclude acrylic/plastic from the coated-area sum. Steel parts are unaffected.
+    # The shared physical rule, aliased for the per-piece floor below (the sheet sum
+    # consults it inside coated_sheet_area_m2).
     _is_acrylic_pw = part_cannot_be_powder_coated
-    for _sp in _all_pes_pw:
-        _sme = _sp.get("material_estimate") or {}
-        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: it is coated steel routed by weight, must not drop from the powder sum (aligns with STEEL_STOCK_FORMS routing filter). Powder basis stays GROSS L x W; this only keeps steel parts in the sum when a valid blank area flips them onto the weight path.
-            continue
-        if _is_acrylic_pw(_sp):
-            continue   # acrylic is not powder coated — contributes zero coated area
-        if not _route_says_coated(_sp):
-            continue   # the route decided this part does not go through the booth
-        if _no_material_was_costed(_sp):
-            # YOU CANNOT COAT WHAT YOU DID NOT BUY MATERIAL FOR. 11650-05's two -HANDED
-            # records are derived from assembly pages, carry no stock form and no material,
-            # and every material block skips them as unclassifiable -- and they still
-            # contributed 0.48 m2 of coated area between them, which was the whole of the
-            # phantom powder line. A part absent from every material block is absent from
-            # the booth too.
-            continue
-        # A part named TUBE is a hollow section, NOT a flat coated sheet: its blank (if any) is
-        # garbled view geometry, and its true coated area is a thin cylinder surface, not L×W×2.
-        # Without this guard a tube the LLM missed (e.g. 10M read as a 2431×2431 blank) injects
-        # ~24 m² of phantom coated area and dominates the powder line. Skip it from the sheet sum.
-        _sdesc = str(_sp.get("part_description") or _sp.get("description")
-                     or _sme.get("description") or "").upper()
-        if "TUBE" in _sdesc:
-            continue
-        _sng = _sp.get("normalized_geometry") or {}
-        _sl = _safe(_sme.get("blank_length_mm") or _sng.get("blank_length_mm"))
-        _sw = _safe(_sme.get("blank_width_mm") or _sng.get("blank_width_mm"))
-        _sq = _safe(_sp.get("quantity"), 1) or 1
-        # Sanity guard: a single fabricated part on a retail display is never a >3.5 m² flat blank
-        # (2431×2431 = 5.9 m²). An area that large is garbled PDF view geometry — exclude it from
-        # the coated sum rather than let one bad blank invent the whole powder cost.
-        if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
-            continue
-        if _sl and _sw:
-            _sheet_powder_area_m2 += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
+    _sheet_powder_area_m2 = coated_sheet_area_m2(_all_pes_pw, _route_says_coated)
 
     # ── SECTION AREA TOO ────────────────────────────────────────────────────────
     # Sheet and wire were the only two contributors. A powder-coated tube, box section or

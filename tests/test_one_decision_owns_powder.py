@@ -137,7 +137,13 @@ def test_all_four_powder_accumulators_consult_the_route():
     """Sheet, wire, section and the per-piece floor each add mass independently. One that
     does not ask re-invents exactly the mass the others declined to book -- and the floor
     is the worst of them, because it needs no geometry at all to produce a number."""
-    assert _SRC.count("_route_says_coated(") >= 5, (
+    # The SHEET accumulator now consults the route through the extracted
+    # coated_sheet_area_m2 helper (behaviourally testable); the predicate is passed
+    # in rather than called inline, so it is counted as that call plus the three
+    # remaining inline consults (wire, section, floor).
+    assert "coated_sheet_area_m2(_all_pes_pw, _route_says_coated)" in _SRC, (
+        "the sheet accumulator no longer consults the route")
+    assert _SRC.count("_route_says_coated(") >= 3, (
         "an accumulator is not consulting the route: "
         f"only {_SRC.count('_route_says_coated(')} reference(s) found")
 

@@ -3175,15 +3175,36 @@ def compile_job_route(
             if d.operation == "powder_coating" and d.status == REQUIRED
         }
 
+    # THE POINTER IS VERIFIED, NOT ASSUMED. An unverified assembly-target powder event is
+    # only the "SEE ASSEMBLY DRAWING" read when the LEAF'S OWN record carries the
+    # deferral wording — the same field the compatibility path read to create the event —
+    # and a leaf whose own evidence states a conflicting finish (RAW) is a question for a
+    # person, never a mint.
+    _PW_POINTER_HINTS = ("SEE ASSEMBLY", "REFER TO ASSEMBLY", "SEE ASSY")
+
+    def _leaf_finish_text(_pn: str) -> str:
+        _r = raw.get(_pn) or {}
+        return " ".join(
+            [str(_r.get("normalized_finish") or ""), str(_r.get("finish") or "")]
+            + [str(x) for x in (_r.get("surface_finishes") or [])]).upper()
+
     _pw_required = _powder_required_assembly_targets()
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if (_d.operation == "powder_coating" and _d.status == UNVERIFIED
                 and kinds.get(_d.target_id) == "assembly"
                 and _d.target_id in _pw_required):
+            _minted = []
             for _leaf in (_d.participants or []):
                 if kinds.get(_leaf) != "leaf":
                     continue
+                _ft = _leaf_finish_text(_leaf)
+                if not any(h in _ft for h in _PW_POINTER_HINTS):
+                    continue          # this event is not the pointer read for this leaf
+                # \bRAW\b, because "SEE ASSEMBLY DRAWING" contains the letters R-A-W —
+                # the conflict test must match the word, not the substring.
+                if re.search(r"\bRAW\b", _ft):
+                    continue          # the leaf's own evidence conflicts — person rules
                 _pr_route = stable_id("route", {
                     "operation": "powder_coating", "target_id": _leaf,
                     "participants": [_leaf]})
@@ -3201,23 +3222,36 @@ def compile_job_route(
                            "is coated",
                     route_id=_pr_route,
                 ))
-            add_claim(event_id, make_claim(
-                "powder_coating", NOT_APPLICABLE, "bom_tree",
-                subject_id=_d.target_id, target_id=_d.target_id, scope=_d.scope,
-                participants=list(_d.participants or []),
-                sequence=_d.sequence,
-                reason="pointer resolved: the assembly's finish corroborates the "
-                       "member's coat, minted as the member's own requirement",
-                route_id=_d.route_id or "",
-            ))
+                _minted.append(_leaf)
+            if _minted:
+                add_claim(event_id, make_claim(
+                    "powder_coating", NOT_APPLICABLE, "bom_tree",
+                    subject_id=_d.target_id, target_id=_d.target_id, scope=_d.scope,
+                    participants=list(_d.participants or []),
+                    sequence=_d.sequence,
+                    reason="pointer resolved: the assembly's finish corroborates the "
+                           "member's coat, minted as the member's own requirement",
+                    route_id=_d.route_id or "",
+                ))
+
+    # PARENT DEDUP NEEDS COMPLETE COVERAGE. `any` coated member was the overreach the
+    # probe found: a welded frame with one coated child and one RAW child lost the
+    # frame's coat entirely. The parent's decision stands down only when EVERY
+    # fabricated leaf under it carries its own required powder — that is the finish
+    # statement fully delegated. Mixed evidence is a coating-scope question for a
+    # person: the parent keeps its charge and the question is recorded, because a
+    # deleted operation cannot be reviewed and an over-charge can.
     _pw_required = _powder_required_assembly_targets()
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
-        if (_d.operation == "powder_coating" and _d.status == REQUIRED
-                and kinds.get(_d.target_id) == "assembly"
-                and any(kinds.get(t) == "leaf"
-                        and _is_descendant(t, _d.target_id, graph["parents"])
-                        for t in _pw_required)):
+        if not (_d.operation == "powder_coating" and _d.status == REQUIRED
+                and kinds.get(_d.target_id) == "assembly"):
+            continue
+        _leaf_desc = {pn for pn, k in kinds.items()
+                      if k == "leaf" and _is_descendant(pn, _d.target_id,
+                                                        graph["parents"])}
+        _coated_desc = {pn for pn in _leaf_desc if pn in _pw_required}
+        if _leaf_desc and _coated_desc == _leaf_desc:
             add_claim(event_id, make_claim(
                 "powder_coating", NOT_APPLICABLE, "bom_tree",
                 subject_id=_d.target_id, target_id=_d.target_id, scope=_d.scope,
@@ -3227,6 +3261,20 @@ def compile_job_route(
                        "requirements — one coat, not a second object in the booth",
                 route_id=_d.route_id or "",
             ))
+        elif _coated_desc:
+            issues.append({
+                "code": "powder_scope_mixed_members",
+                "part_number": _d.target_id,
+                "coated_members": sorted(_coated_desc),
+                "uncoated_members": sorted(_leaf_desc - _coated_desc),
+                "message": (f"powder is required on {_d.target_id} AND on "
+                            f"{', '.join(sorted(_coated_desc))} while "
+                            f"{', '.join(sorted(_leaf_desc - _coated_desc))} carry no "
+                            f"coat of their own — the scope is genuinely mixed and a "
+                            f"person must rule whether the assembly coat covers the "
+                            f"coated members (drop their lines) or is a separate stage "
+                            f"(keep both). Both charges stand until ruled."),
+            })
 
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent
     # instead of deleting evidence from whichever record happens to be in hand.

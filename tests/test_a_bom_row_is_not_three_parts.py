@@ -1309,18 +1309,97 @@ def test_the_coat_is_one_scope_not_one_decision_per_name():
         f"a weldment coated as one object keeps its coat: {_pw_w}"
 
 
-def test_the_coated_area_membership_is_never_spelling_sensitive():
-    """The powder area was always exactly one arm because the route said
-    '11350-01-02 MIR' while the record spells itself '11350-01-02MIR' — the exact-string
-    membership test silently dropped the mirror from the coated-area sum. Structural:
-    the membership compares squashed."""
-    import os as _os
-    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
-                             "wb_populate.py"), encoding="utf-8").read()
-    i = src.index("def _route_says_coated")
-    window = src[max(0, i - 900):i + 700]
-    assert "_route_coated_squash" in window, \
-        "spelling must never decide coating — membership compares squashed"
+def test_the_coated_area_counts_the_bar_and_both_arms_exactly_once():
+    """Behavioural, as the reviewer required: the route names the bar and both arms
+    (mirror spelled WITH the space), the records spell the mirror WITHOUT it — and the
+    sheet-area sum still counts all three flats once each. 11350's powder area was
+    always exactly one arm because this membership was exact-string."""
+    import wb_populate as wbp
+    route_coated = {"11350-01-01", "11350-01-02", "11350-01-02 MIR"}
+    says = wbp.route_coated_membership(route_coated)
+    parts = [
+        {"part_number": "11350-01-01", "quantity": 1,
+         "material_estimate": {"stock_form": "sheet", "blank_length_mm": 758.0,
+                               "blank_width_mm": 77.71, "unit_material_cost_gbp": 0.59}},
+        {"part_number": "11350-01-02", "quantity": 1,
+         "material_estimate": {"stock_form": "sheet", "blank_length_mm": 258.35,
+                               "blank_width_mm": 79.8, "unit_material_cost_gbp": 0.45}},
+        {"part_number": "11350-01-02MIR", "quantity": 1,
+         "material_estimate": {"stock_form": "sheet", "blank_length_mm": 258.35,
+                               "blank_width_mm": 79.8, "unit_material_cost_gbp": 0.45}},
+    ]
+    area = wbp.coated_sheet_area_m2(parts, says)
+    expect = (0.758 * 0.07771 + 2 * 0.25835 * 0.0798) * 2.0
+    assert abs(area - expect) < 1e-6, \
+        f"bar + both arms, once each: got {area:.5f}, expected {expect:.5f}"
+    # A part the route excludes contributes nothing, whichever way it is spelled.
+    says_one = wbp.route_coated_membership({"11350-01-01"})
+    assert abs(wbp.coated_sheet_area_m2(parts, says_one)
+               - 0.758 * 0.07771 * 2.0) < 1e-6
+
+
+def test_a_genuine_pointer_resolves_and_a_conflicting_finish_does_not():
+    """The reviewer's pointer probes. A leaf whose own finish defers (SEE ASSEMBLY
+    DRAWING) under an assembly whose own evidence states the coat becomes a required
+    member — the exact 11350 bar shape, driven through the real compatibility path
+    that creates the unverified assembly-target event. A leaf whose own evidence
+    CONFLICTS (RAW beside the pointer) is never minted: the question stays visible."""
+    from route_compiler import REQUIRED, compile_job_route
+    def _job(leaf_finishes):
+        parts = [
+            {"part_number": "P-101", "description": "BAR SUB ASSEMBLY", "quantity": 1,
+             "textual_operations": ["powder_coating"],
+             # as on 11350: the assembly's coat is the LLM's read of its own title
+             # block (rank 40), not an unattributed word
+             "operation_sources": {"powder_coating": "llm_full_extract"}},
+            {"part_number": "P-01", "description": "BAR", "quantity": 1,
+             "textual_operations": ["powder_coating"],
+             "normalized_finish": "SEE ASSEMBLY DRAWING",
+             "surface_finishes": list(leaf_finishes)},
+        ]
+        extract = {"assemblies": [
+            {"part_number": "P-101", "children": [{"part_number": "P-01", "qty": 1}]},
+        ], "parts": [], "routes": []}
+        return compile_job_route(parts, extract)
+    g = _job([])
+    pw = {d["target_id"]: d["status"] for d in g["decisions"]
+          if d["operation"] == "powder_coating"}
+    assert pw.get("P-01") == REQUIRED, f"the deferring member is coated: {pw}"
+    assert pw.get("P-101") != REQUIRED, \
+        f"with the member coated, the assembly is the statement, not the object: {pw}"
+    g2 = _job(["RAW"])
+    pw2 = {d["target_id"]: d["status"] for d in g2["decisions"]
+           if d["operation"] == "powder_coating"}
+    assert pw2.get("P-01") != REQUIRED, \
+        f"a leaf whose own evidence says RAW is a question, never a mint: {pw2}"
+
+
+def test_mixed_powder_scope_asks_a_person_and_deletes_nothing():
+    """The reviewer's overreach probe, fixed: a welded frame with ONE coated child and
+    one RAW child must not lose the frame's coat — `any` coated member was the bug.
+    Mixed evidence keeps both charges standing and records the scope question."""
+    from route_compiler import REQUIRED, compile_job_route
+    parts = [
+        {"part_number": "M-101", "description": "FRAME WELDMENT", "quantity": 1,
+         "textual_operations": ["powder_coating", "welding"]},
+        {"part_number": "M-01", "description": "PANEL", "quantity": 1,
+         "textual_operations": ["powder_coating"]},
+        {"part_number": "M-02", "description": "LEG", "quantity": 2,
+         "surface_finishes": ["RAW"]},
+    ]
+    extract = {"assemblies": [
+        {"part_number": "M-101", "children": [
+            {"part_number": "M-01", "qty": 1}, {"part_number": "M-02", "qty": 2}]},
+    ], "parts": [], "routes": []}
+    g = compile_job_route(parts, extract)
+    pw = {d["target_id"]: d["status"] for d in g["decisions"]
+          if d["operation"] == "powder_coating"}
+    assert pw.get("M-101") == REQUIRED, \
+        f"mixed scope must not delete the frame's coat: {pw}"
+    _issues = [i for i in (g.get("issues") or [])
+               if i.get("code") == "powder_scope_mixed_members"]
+    assert _issues and "M-01" in str(_issues[0]) and "M-02" in str(_issues[0]), \
+        f"the mixed scope must be recorded as a person's question: {g.get('issues')}"
 
 
 def test_powder_charges_on_evidence_not_on_class():

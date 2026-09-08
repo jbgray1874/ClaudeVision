@@ -69,6 +69,10 @@ _ESTIMATOR = {
     "handed_pair_disagrees",
     "handed_pair_settled_on_cut_file",
     "short_run_pays_for_sheet_it_does_not_use",
+    # Powder required on an assembly AND on some (not all) of its members: the pack
+    # states a genuinely mixed scope, and only a person can rule whether the assembly
+    # coat covers the coated members or is a separate finishing stage.
+    "powder_scope_mixed_members",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it
