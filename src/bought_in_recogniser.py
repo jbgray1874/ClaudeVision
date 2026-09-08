@@ -683,6 +683,25 @@ def recognise_bought_in_in_prose(
         # of every such part, which then had no owner in the hierarchy.
         if _phrase_already_in_bom(desc, list(existing_descriptions) + list(existing_pns)):
             continue
+        # A PHRASE INSIDE AN ALREADY-CAPTURED ROW IS THAT ROW, NOT A NEW ITEM. 10975-02's
+        # wrapped tape row reads "10975 EPDM Closed Cell Tape^10975-02-GA EPDM TAPE …";
+        # the row was captured (and folded to one line), and this loop then re-read the
+        # wrap fragments "cell tape" and "closed cell tape" out of the SAME text and
+        # minted two priced twins beside it — on every run, whatever removed them before.
+        # If the prose around the match carries an existing part's own code or
+        # description (squashed, ≥10 chars), the words belong to a line the BOM already
+        # has, and no new item is minted from them.
+        _ctx_sq = re.sub(r"[^a-z0-9]", "", up[max(0, idx - 90):idx + len(needle) + 90])
+        _covered = ""
+        for _known in list(existing_pns) + list(existing_descriptions):
+            _ks = re.sub(r"[^a-z0-9]", "", str(_known or "").lower())
+            if len(_ks) >= 10 and _ks in _ctx_sq:
+                _covered = str(_known)
+                break
+        if _covered:
+            print(f"   [bought-in] '{phrase}' NOT minted: the words sit inside the BOM "
+                  f"row already captured as '{_covered}' — one row, one line.", flush=True)
+            continue
         # MINTED HERE, AND SAID SO. The prefix used to be written inline, which made it a
         # spelling rather than a fact: nothing downstream could ask whether a part number had
         # been read off a drawing or invented in this loop, so BI-BINDINGSCREW went to every

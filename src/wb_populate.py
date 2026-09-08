@@ -1622,6 +1622,26 @@ def canonicalise_part_estimates_for_workbook(
     part_estimates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """Apply canonical BOM identity and multiplicity without losing cost evidence."""
+    # THE LAST GATE ENFORCES THE DROPS. The graph quarantines the zipped-row chimera and
+    # folds the wrapped row's BI- fragments at the post-reconcile boundary — and 08:52
+    # showed the fragments back on the sheet anyway, re-minted by a pass that runs after
+    # that boundary and rides a list the fold never saw. Whatever created a record,
+    # nothing reaches the workbook past this function: the same quarantine and the same
+    # fold run once more here, on the exact list the rows are written from. Idempotent —
+    # on a clean population both are no-ops.
+    try:
+        from route_compiler import (fold_bom_row_fragments,
+                                    quarantine_interleave_artefacts)
+        _issues = (canonical_route_payload(summary) or {}).get("issues")
+        quarantine_interleave_artefacts(part_estimates, _issues, summary=summary)
+        _da_rows = ((summary.get("document_analysis") or {}))
+        fold_bom_row_fragments(part_estimates,
+                               list(_da_rows.get("bom_rows") or [])
+                               + list(_da_rows.get("bay_bom_rows") or []),
+                               summary=summary)
+    except Exception as _gate_exc:                               # noqa: BLE001
+        print(f"   [wb_populate] last-gate quarantine/fold skipped "
+              f"({type(_gate_exc).__name__}: {_gate_exc})", flush=True)
     nodes = {
         str(node.get("part_number") or "").strip().upper(): node
         for node in canonical_route_payload(summary).get("nodes") or []

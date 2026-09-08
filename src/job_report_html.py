@@ -925,10 +925,25 @@ not what a reader takes from a heading like this one.</td></tr>
                  f'a purchased item, so their cost is in the total twice. Remove one of the two '
                  f'lines before quoting.</td></tr>')
     else:
-        rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>No double-counting.</b> '
-                 'Every part number appears in exactly one cost stream — fabricated parts against '
-                 'their material, purchased items on the bill of materials. Checked, not assumed.'
-                 '</td></tr>')
+        # AN ALL-CLEAR MUST NOT OUTRUN ITS OWN CHECK. This test sees a part number in two
+        # streams; 08:52's duplicates were the SAME purchase under DIFFERENT minted names,
+        # which it cannot see — and the page said "No double-counting" above a sheet
+        # carrying the tape three times. Where the engine's own ledgers record removed
+        # duplicates, the row reports the cleanup instead of asserting purity.
+        _cleaned = (len(summary.get("folded_bom_row_fragments") or [])
+                    + len(summary.get("quarantined_interleave_artefacts") or []))
+        if _cleaned:
+            rows += (f'<tr><td><span class="tag t-good">Cleaned</span></td><td>'
+                     f'<b>{_cleaned} duplicate or artefact line(s) were removed before '
+                     f'costing</b> (see the run record: folded fragments and quarantined '
+                     f'interleave artefacts). No part number appears in two cost streams '
+                     f'on the sheet as issued.</td></tr>')
+        else:
+            rows += ('<tr><td><span class="tag t-good">Sound</span></td><td><b>No double-counting '
+                     'found.</b> No part number appears in two cost streams — fabricated parts '
+                     'against their material, purchased items on the bill of materials. '
+                     'Checked, not assumed — this check compares part numbers; one item under '
+                     'two invented names is caught upstream by the identity fold.</td></tr>')
 
     # estimate status — READ THE SAME GATE THE QUOTE READS.
     # estimate_status is the DATA-SUFFICIENCY verdict: did the engine have enough to reach a

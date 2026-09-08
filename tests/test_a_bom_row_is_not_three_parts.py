@@ -768,6 +768,112 @@ def test_a_variant_tab_scales_the_labour_rows_not_only_the_headline(tmp_path):
     assert "26.95" in md
 
 
+def test_a_phrase_inside_a_captured_bom_row_is_never_minted(monkeypatch):
+    """08:52's leak at the CREATOR: the prose recogniser re-read the wrapped tape row's
+    fragments and minted BI-CELLTAPE / BI-CLOSEDCELLTAPE beside the captured line, on
+    every run, whatever removed them before. Words that sit beside an existing part's own
+    code in the prose belong to that line."""
+    import bought_in_recogniser as bir
+
+    class _Ref:
+        loaded = True
+        vocab = {"closed cell tape": "tape", "cell tape": "tape"}
+
+        def best_priced_match(self, d):
+            return None
+
+        def electrical_priced_match(self, k):
+            return None
+
+    monkeypatch.setattr(bir, "get_reference", lambda gc: _Ref())
+
+    def _stub(pn, desc, qty):
+        return {"part_number": pn, "description": desc, "quantity": qty}
+
+    row_text = ("ITEM DWG NO. DESCRIPTION QTY 3 10975 EPDM Closed Cell "
+                "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C LENGTH: 200.00 3")
+    out = bir.recognise_bought_in_in_prose(
+        row_text, get_connection=None,
+        existing_pns={"10975EPDMCLOSEDCELL"},
+        existing_descriptions={"Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C "
+                               "LENGTH: 200.00"},
+        stub_builder=_stub)
+    assert out == [], f"the wrapped row's fragments must not become new lines: {out}"
+    # Control: the same phrase standing alone in prose is a genuine find.
+    out = bir.recognise_bought_in_in_prose(
+        "fit closed cell tape to the underside as shown",
+        get_connection=None, existing_pns={"10975-02-A01"},
+        existing_descriptions={"L-STAND"}, stub_builder=_stub)
+    assert len(out) == 1 and "Closed Cell Tape" in out[0]["description"]
+
+
+def test_the_last_gate_removes_whatever_a_late_pass_minted():
+    """08:52 proved a pass AFTER the post-reconcile fold re-mints the fragments onto the
+    list the sheet is written from. canonicalise_part_estimates_for_workbook is the last
+    doorway, and the same fold stands in it."""
+    import wb_populate as wbp
+    summary = {
+        "estimate_summary": {"canonical_route_shadow": {"nodes": [], "issues": []}},
+        "document_analysis": {"bom_rows": [_P1_ROW]},
+    }
+    estimates = [
+        {"part_number": "10975",
+         "description": "Tape^10975-02-GA EPDM TAPE 25X1MM - TAPE 113C LENGTH: 200.00",
+         "quantity": 3},
+        {"part_number": "BI-CELLTAPE", "description": "Cell Tape"},
+        {"part_number": "BI-CLOSEDCELLTAPE", "description": "Closed Cell Tape"},
+    ]
+    wbp.canonicalise_part_estimates_for_workbook(summary, estimates)
+    codes = [e["part_number"] for e in estimates]
+    assert "BI-CELLTAPE" not in codes and "BI-CLOSEDCELLTAPE" not in codes, codes
+    assert "10975" in codes
+    assert summary.get("folded_bom_row_fragments"), "the evidence is filed, not deleted"
+
+
+def test_the_steel_scanner_reads_each_block_through_its_own_header(tmp_path):
+    """08:52's AI Explanation described A01 as gauge 3,050, blank 210 x 2, qty 760.25 —
+    the empty Sheet Steel block's fixed columns applied to the Other Sheet block one
+    column adrift, with the block title and header swallowed as parts."""
+    import openpyxl
+    import estimate_explained
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Estimate"
+    # An empty Sheet Steel block, then the Other Sheet block with its own layout.
+    steel_head = ["", "", "Part Description", "", "Qty Per Unit", "Part Length",
+                  "Part Width", "Gauge", "Sheet Length", "Sheet Width", "Qty Per Sheet",
+                  "Scrap", "Cost Per Part"]
+    for c, v in enumerate(steel_head, start=1):
+        ws.cell(30, c, v)
+    ws.cell(40, 3, "Other Sheet Material")
+    other_head = ["", "", "Part Description", "Qty Per Unit", "Part Length",
+                  "Part Width", "Thickness", "Sheet Length", "Sheet Width",
+                  "Qty Per Sheet", "Scrap", "Cost Per Part"]
+    for c, v in enumerate(other_head, start=1):
+        ws.cell(41, c, v)
+    row = ["", "", "10975-02-A01 L-STAND", 1, 760.25, 210, 2, 3050, 2030, 24,
+           1.04, 2.12]
+    for c, v in enumerate(row, start=1):
+        ws.cell(42, c, v)
+    xlsx = tmp_path / "cols.xlsx"
+    wb.save(xlsx)
+    out = estimate_explained._steel_rows(openpyxl.load_workbook(xlsx))
+    assert "OTHER" not in out and "PART" not in out, sorted(out)
+    a01 = out.get("10975-02-A01")
+    assert a01, sorted(out)
+    assert a01["qty"] == 1 and a01["length"] == 760.25 and a01["width"] == 210
+    assert a01["gauge"] == 2 and a01["cost_per_part"] == 2.12
+
+
+def test_the_quote_never_speaks_of_an_operation_spelled_like_its_department():
+    """The quote printed 'Precision folding' on a job whose route ruled folding out:
+    'linebend' is both the engine word and the department title, so the department-shape
+    detection exploded it into every synonym including 'folding'."""
+    row = {"engine_operations": ["linebend"], "wb_operation": "Linebend",
+           "qty_per_unit": 1}
+    assert cf._row_engine_ops(row) == ["linebend"]
+
+
 def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     """Bind 3. The 17:11 record carries the count as geometry_rollup.estimated_hole_count
     on a dxf_flat_pattern read — the exact keys the £13.40 Drill line ignored."""

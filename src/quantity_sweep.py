@@ -343,9 +343,14 @@ def _save_variant(com_wb, book: Path, qty: int, baseline: int,
             [f"This is {book.name} recalculated at {qty} off. It was estimated at "
              f"{baseline} off, and two things did not re-price when the quantity changed."],
             [""],
+            # SAY WHAT THIS SHEET ACTUALLY CARRIES. With freight at GBP 0 the old wording
+            # promised "the real figure is lower" than nothing, and the step-down line
+            # asserted discounts nobody has established. Each caveat states the sheet's
+            # own condition.
             ([f"1. FREIGHT HAS BEEN RE-PRICED FOR {qty} OFF."]
              if repriced else
-             ["1. FREIGHT IS STILL PRICED AT " + str(baseline) + " OFF."]),
+             (["1. FREIGHT IS STILL PRICED AT " + str(baseline) + " OFF."] if carried
+              else ["1. FREIGHT IS UNPRICED (GBP 0.00) — AT EVERY QUANTITY."])),
             ([f"   Packaging and delivery are worked out for the whole order and divided "
               f"by it. The order figures from the {baseline}-off run have been divided by "
               f"{qty} instead: "
@@ -354,18 +359,21 @@ def _save_variant(com_wb, book: Path, qty: int, baseline: int,
                 "estimate — the ORDER cost of boxing and hauling is assumed unchanged, "
                 "which is close enough to compare quantities and is not a quotation."]
              if repriced else
-             [f"   Packaging and delivery are worked out for the whole order and divided by "
-              f"it, by the engine, at run time. This sheet still carries "
-              f"GBP {carried:,.2f} per unit from the {baseline}-off run. At {qty} off the "
-              f"real figure is lower, and it has to come from a proper run."]),
+             ([f"   Packaging and delivery are worked out for the whole order and divided by "
+               f"it, by the engine, at run time. This sheet still carries "
+               f"GBP {carried:,.2f} per unit from the {baseline}-off run. At {qty} off the "
+               f"real figure is lower, and it has to come from a proper run."] if carried
+              else ["   The estimator's own per-order packaging and delivery figures go "
+                    "in before any quantity is quoted; nothing here estimates them."])),
             [""],
             ["2. BOUGHT-IN PRICES DID NOT STEP DOWN."],
             ["   The template has a quantity price-break lookup and the engine writes a "
-             "fixed price over it, so every bought-in line costs the same at 100 off as at "
-             "1. This sheet therefore understates the discount available."],
+             "fixed price over it, so every bought-in line costs the same at 100 off as "
+             "at 1. Any quantity discount a supplier would actually give is NOT "
+             "reflected here."],
             [""],
-            ["Both overstate this variant. Use it to see the shape of the curve, and run the "
-             "job properly at the quantity you intend to quote."],
+            ["Use this sheet to see the shape of the curve, and run the job properly at "
+             "the quantity you intend to quote."],
             [""],
             ["What this sheet reads at " + str(qty) + " off:"],
             ["   Total Material Cost", f"GBP {row.get('material') or 0:,.2f}"],

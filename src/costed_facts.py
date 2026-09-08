@@ -265,7 +265,16 @@ def _row_engine_ops(row: Dict[str, Any]) -> List[str]:
     # name. Runs made with it are already on disk, so detect the shape rather than trust the
     # field: if the value is itself a known department, invert it instead of passing it
     # through as an operation nobody matches.
-    ops = [o for o in ops if o.strip().lower() not in inv] or [
+    # BUT AN OP SPELLED LIKE ITS DEPARTMENT IS STILL AN OP. "linebend" is both the engine
+    # word and (lowercased) the Linebend department, so the department-shape detection
+    # exploded it into every synonym — and the customer quote printed "Precision folding"
+    # for a job whose route had explicitly ruled folding out. A value that is a real
+    # engine vocabulary word passes through as itself; only a value that is ONLY a
+    # department title gets inverted.
+    _engine_words = {str(k).strip().lower() for ops_list in inv.values()
+                     for k in ops_list}
+    ops = [o for o in ops
+           if o.strip().lower() in _engine_words or o.strip().lower() not in inv] or [
         e for o in ops for e in inv.get(o.strip().lower(), [])]
     if ops:
         return ops

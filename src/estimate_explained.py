@@ -84,26 +84,70 @@ def _steel_rows(wb) -> Dict[str, Dict[str, Any]]:
     if "Estimate" not in wb.sheetnames:
         return {}
     ws = wb["Estimate"]
-    header_row = None
-    for r in range(1, min(ws.max_row, 120) + 1):
-        joined = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 26)).lower()
-        if "part length" in joined and "gauge" in joined and "part description" in joined:
-            header_row = r
-            break
-    if header_row is None:
-        return {}
+    # EVERY NESTED BLOCK, EACH THROUGH ITS OWN HEADER. The first version found ONE header
+    # and read fixed steel column positions below it — and on an acrylic job whose Sheet
+    # Steel block is empty, the scan ran on into Other Sheet Material, swallowed its title
+    # and header as parts ("OTHER", "PART") and read A01 one column adrift: gauge 3050
+    # (the sheet length), blank 210 x 2, qty 760.25. Columns are mapped from each header
+    # row's own text, so a block whose layout differs — or moves — reads correctly.
+    _NEEDLES = [("part description", "desc"), ("qty per unit", "qty"),
+                ("part length", "length"), ("part width", "width"),
+                ("sheet length", "sheet_l"), ("sheet width", "sheet_w"),
+                ("qty per sheet", "per_sheet"), ("per sheet", "per_sheet"),
+                ("gauge", "gauge"), ("thickness", "gauge"), ("scrap", "scrap"),
+                ("cost per part", "cost_per_part"), ("internal cut", "internal_cut"),
+                ("rate per hour", "rate_per_hour")]
+    header_rows: List[int] = []
+    for r in range(1, min(ws.max_row, 200) + 1):
+        joined = " ".join(str(ws.cell(r, c).value or "") for c in range(1, 30)).lower()
+        if "part description" in joined and ("gauge" in joined or "thickness" in joined) \
+                and ("part length" in joined or "part width" in joined):
+            header_rows.append(r)
     out: Dict[str, Dict[str, Any]] = {}
-    for r in range(header_row + 1, ws.max_row + 1):
-        text = str(ws.cell(r, _STEEL_COLS["desc"]).value or "").strip()
-        if not text:
-            # Blank template rows sit between the blocks; stop once we have started and
-            # then hit two in a row, rather than running on into "Other Sheet Material".
-            if out and not str(ws.cell(r + 1, _STEEL_COLS["desc"]).value or "").strip():
-                break
+    for hi, header_row in enumerate(header_rows):
+        cols: Dict[str, int] = {}
+        for c in range(1, 31):
+            t = " ".join(str(ws.cell(header_row, c).value or "").split()).lower()
+            if not t:
+                continue
+            for needle, field in _NEEDLES:
+                if field not in cols and needle in t:
+                    cols[field] = c
+                    break
+        if "desc" not in cols:
             continue
-        code = text.split()[0].strip().upper()
-        out[code] = {"row": r, "text": text,
-                     **{k: ws.cell(r, c).value for k, c in _STEEL_COLS.items() if k != "desc"}}
+        # A SPARSELY-LABELLED HEADER STILL READS. The steel template's columns sit at
+        # fixed offsets from the ones it does label, so any column with no header of its
+        # own defaults to its classic neighbour position — labelled columns always win.
+        if "qty" not in cols:
+            cols["qty"] = cols["desc"] + 2
+        if "length" in cols and "width" not in cols:
+            cols["width"] = cols["length"] + 1
+        if "gauge" in cols:
+            for _i, _f in enumerate(("sheet_l", "sheet_w", "per_sheet", "scrap",
+                                     "cost_per_part"), start=1):
+                cols.setdefault(_f, cols["gauge"] + _i)
+        stop = header_rows[hi + 1] if hi + 1 < len(header_rows) else ws.max_row + 1
+        started = False
+        for r in range(header_row + 1, stop):
+            text = str(ws.cell(r, cols["desc"]).value or "").strip()
+            if not text:
+                if started and not str(
+                        ws.cell(r + 1, cols["desc"]).value or "").strip():
+                    break
+                continue
+            low = text.lower()
+            # A block title or a stray heading is a boundary, never a part.
+            if "material" in low and ("sheet" in low or "other" in low or
+                                      "total" in low):
+                break
+            if low.startswith("part description"):
+                continue
+            started = True
+            code = text.split()[0].strip().upper()
+            out.setdefault(code, {"row": r, "text": text,
+                                  **{k: ws.cell(r, c).value
+                                     for k, c in cols.items() if k != "desc"}})
     return out
 
 
@@ -1355,11 +1399,18 @@ def build(workbook: Path, scan_json: Optional[Path],
                 _scaled.append(_r2)
             g["labour_rows"] = _scaled
             labour_rows = _scaled
-    # The uplift the unit cell adds is the variant's own gap, not the baseline's £4.74.
+    # The uplift the unit cell adds is the variant's own gap, not the baseline's £4.74 —
+    # and the basis SENTENCE recomputes too: "(material + labour) 50.82 -> 54.65" is the
+    # baseline's arithmetic and must not be recited on the 50-off page.
     _other_gbp = _money(_fe_totals(final).get("other_gbp"))
+    _basis_text = str((final.get("unit_price_composition") or {}).get("basis")
+                      or "per the sheet")
     if isinstance(totals_override, dict) and None not in (
             totals.get("unit"), totals.get("material"), totals.get("labour")):
         _other_gbp = round(totals["unit"] - totals["material"] - totals["labour"], 2) or None
+        _v_sub = round(totals["material"] + totals["labour"], 2)
+        _basis_text = (f"the sheet's own absorption — (material + labour) "
+                       f"{_v_sub:.2f} -> {totals['unit']:.2f} at this quantity")
     material, provenance, routes = g["material"], g["provenance"], g["routes"]
     bom, order_qty, pack = g["bom"], g["order_qty"], g["pack"]
     page_index = g["page_index"]
@@ -1413,8 +1464,7 @@ def build(workbook: Path, scan_json: Optional[Path],
     add(f"- **What does a unit cost, and of what?** "
         f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
         f"{_gbp(totals['labour'])}"
-        + (f", and the unit cell adds {_gbp(_other_gbp)} "
-           f"({final.get('unit_price_composition', {}).get('basis') or 'per the sheet'})"
+        + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
            if _other_gbp else "")
         + ".")
     add(f"- **What must be replaced before this is a quote?** "

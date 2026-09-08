@@ -57,6 +57,8 @@ OP_PLAIN_LANGUAGE = {
     "punch":               "CNC punching of holes and features",
     "punching":            "CNC punching of holes and features",
     "folding":             "Precision folding and forming to drawing",
+    "fold":                "Precision folding and forming to drawing",
+    "glue":                "Bonding and assembly",
     "bending":             "Precision bending and forming to drawing",
     "tube_bending":        "Tube bending and forming",
     "rolling":             "Rolling and forming",
