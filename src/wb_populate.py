@@ -1852,13 +1852,28 @@ def canonicalise_part_estimates_for_workbook(
         # so a fixture still lands on the honest withheld row.
         _bi_llm = None
         _bi_sc = None
+        # WHY NOT, ON THE RECORD. "Estimator to price" on 11350-01's wing nuts and PEM
+        # studs could mean SDILive has no row for them, the market/AI leg found nothing,
+        # or the chain never ran at all (no PricingService, an import error) — and the
+        # row said none of it, so the only person who could answer "do we genuinely not
+        # find these in SDILive?" was whoever re-runs it with a debugger. The chain's own
+        # account is captured here and lands on the withheld row and in the log.
+        _bi_chain_note = ""
         try:
             from estimator import _resolve_part_system_cost as _rpsc
             _bi_sc = _rpsc({"part_number": identity, "description": _bi_desc,
                             "page_roles": ["bought_in"], "quantity": _bi_qty})
             _bi_llm = _safe((_bi_sc or {}).get("applied_unit_cost"))
-        except Exception:                                        # noqa: BLE001
+            if _bi_llm is None:
+                _sel = (((_bi_sc or {}).get("result") or {}).get("selected") or {})
+                _bi_chain_note = ("the price chain ran (UDEF / catalogue / history / "
+                                  "market-AI) and returned nothing for this description"
+                                  + (f"; nearest source: {_sel.get('source')}"
+                                     if _sel.get("source") else ""))
+        except Exception as _bi_exc:                             # noqa: BLE001
             _bi_llm = None
+            _bi_chain_note = (f"the price chain could not run here — "
+                              f"{type(_bi_exc).__name__}: {_bi_exc}")
         if _bi_llm is not None and _bi_llm > 0:
             _sel = ((_bi_sc.get("result") or {}).get("selected") or {})
             _sup = (((_sel.get("metadata") or {}).get("supplier_name"))
@@ -1891,6 +1906,8 @@ def canonicalise_part_estimates_for_workbook(
             }
             order.append(identity)
             continue
+        print(f"   [wb_populate] '{identity}' unpriced — "
+              f"{_bi_chain_note or 'no price chain account recorded'}", flush=True)
         normalised[identity] = {
             "part_number": identity,
             "description": _bi_desc,
@@ -1901,6 +1918,7 @@ def canonicalise_part_estimates_for_workbook(
             "review_flag": True,
             "review_flags": [
                 "Explicit canonical BOM item has no pricing record; estimator to price."
+                + (f" ({_bi_chain_note}.)" if _bi_chain_note else "")
             ],
         }
         order.append(identity)
