@@ -1158,16 +1158,22 @@ _THICKNESS_SOURCE_WORDS = ("dxf", "solidworks", "native", "model", "cutlist", "c
                            "title_block", "drawing", "filename")
 
 
-def boilerplate_thickness_values(source: Any) -> Set[float]:
-    """Document-level thickness text masquerading as per-part readings.
+def boilerplate_thickness_values(source: Any) -> Dict[float, List[str]]:
+    """Document-level thickness text masquerading as per-part readings — with names.
 
     On 7332-01 the deterministic drawing reader put 1.2 mm on EVERY steel part — the
     same figure from the GA's boilerplate, not six measurements — and the moment gauge
-    disagreements became decisions, five phantom decisions buried the two real ones. A
-    per-part reading is a claim about ONE part; the same drawing-read value REFUSED on
-    three or more parts whose stronger sources all disagree with it is the document
-    talking, and it is reported once as noise, never five times as a question."""
-    census: Dict[float, int] = {}
+    disagreements became decisions, five phantom decisions buried the two real ones.
+
+    Two probes then broke the first cut of this census. It counted displaced ENTRIES,
+    so one part whose provenance log repeated the same refusal three times crossed the
+    threshold alone and its genuine disagreement vanished. And it treated the threshold
+    as proof of boilerplate, dismissing the value with "no action" — but three genuine
+    detail drawings can state the same gauge, and the engine cannot tell those apart
+    from a title-block note. So: the census counts DISTINCT part identities, and the
+    caller turns each value into ONE grouped decision naming the parts, never a
+    dismissal. Returns {value: sorted part numbers} for values refused on >=3 parts."""
+    census: Dict[float, Set[str]] = {}
     _pool = list(job_parts(source)) if isinstance(source, dict) else []
     _pool += [p for p in ((source.get("manufacturing_writeup") or {}).get("parts") or [])
               if isinstance(source, dict)]
@@ -1191,12 +1197,12 @@ def boilerplate_thickness_values(source: Any) -> Set[float]:
             v = _num(entry.get("value"))
             kept = _num(part.get("normalized_thickness_mm"))
             if v and kept and abs(v - kept) > 0.05:
-                census[round(v, 2)] = census.get(round(v, 2), 0) + 1
-    return {v for v, n in census.items() if n >= 3}
+                census.setdefault(round(v, 2), set()).add(_pn)
+    return {v: sorted(pns) for v, pns in census.items() if len(pns) >= 3}
 
 
 def thickness_conflict(part: Mapping[str, Any],
-                       boilerplate_mm: Optional[Set[float]] = None
+                       boilerplate_mm: Optional[Mapping[float, List[str]]] = None
                        ) -> Optional[Dict[str, Any]]:
     """The gauge disagreement on this part that a person must resolve, or None.
 
@@ -1235,7 +1241,9 @@ def thickness_conflict(part: Mapping[str, Any],
             continue
         if not any(w in src.lower() for w in _THICKNESS_SOURCE_WORDS):
             continue
-        # A drawing-read value the whole JOB refused is boilerplate, not this part's rival.
+        # A drawing-read value refused across the job is raised ONCE by the caller as a
+        # grouped decision naming every affected part — not once per part here. Skipping
+        # it is deferral to that group, never dismissal.
         if boilerplate_mm and "drawing" in src.lower() and any(
                 abs(v - b) <= 0.05 for b in boilerplate_mm):
             continue
@@ -1636,16 +1644,23 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # ── the disagreements a person owns: gauge, and a BOM that states one line twice ──
     _by_pn = {str(l.get("part_number") or "").upper(): l for l in lines}
     _boiler = boilerplate_thickness_values(source)
-    if _boiler:
+    # ONE decision per repeated value, naming every part it touched — never "no action".
+    # The threshold cannot tell a title-block note from three genuine detail drawings
+    # that state the same gauge, so a person confirms it once, not once per part.
+    for _bv in sorted(_boiler):
+        _bparts = _boiler[_bv]
         decisions.append({
-            "part": "", "kind": "advisory",
-            "issue": (f"The drawing reader put "
-                      f"{', '.join(f'{b:g} mm' for b in sorted(_boiler))} on several "
-                      f"parts and every stronger source disagreed — document boilerplate "
-                      f"read as a gauge, reported once here, not as a decision per part."),
-            "assumption": "each part's gauge stands on its own strongest source",
-            "action": "no action unless a part's stated gauge looks wrong on its drawing",
-            "owner": "engine", "gbp_at_stake": None,
+            "part": ", ".join(_bparts), "kind": "manufacturing_decision",
+            "issue": (f"{', '.join(_bparts)} each show {_bv:g} mm from the drawing "
+                      f"against their own stronger gauges — one document figure "
+                      f"repeated across {len(_bparts)} parts, or {len(_bparts)} real "
+                      f"specs"),
+            "assumption": (f"each part priced on its own strongest source, not the "
+                           f"repeated {_bv:g} mm"),
+            "action": (f"confirm once whether {_bv:g} mm is a document-level note or "
+                       f"the intended gauge for these parts — the nest and cut time "
+                       f"ride on it"),
+            "owner": "estimator", "gbp_at_stake": None,
         })
     for part in job_parts(source):
         if not isinstance(part, Mapping):

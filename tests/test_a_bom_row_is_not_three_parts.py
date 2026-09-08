@@ -1040,13 +1040,16 @@ def test_document_boilerplate_thickness_is_one_note_not_five_decisions():
     to 7. The same refused drawing value on >=3 parts is the document talking."""
     job = _job_with_drawing_thickness_noise(5)
     boiler = cf.boilerplate_thickness_values(job)
-    assert boiler == {1.2}
+    assert set(boiler) == {1.2}
+    assert boiler[1.2] == sorted(p["part_number"].upper()
+                                 for p in job["manufacturing_writeup"]["parts"]), \
+        "the census must name WHICH parts carried the value, not just count them"
     for p in job["manufacturing_writeup"]["parts"]:
         assert cf.thickness_conflict(p, boilerplate_mm=boiler) is None, \
             f"{p['part_number']} must not raise a phantom gauge decision"
     # And 10975's REAL single-part disagreement survives untouched: one part, one rival.
     lone = _job_with_drawing_thickness_noise(1, noise_mm=1.0)
-    assert cf.boilerplate_thickness_values(lone) == set()
+    assert cf.boilerplate_thickness_values(lone) == {}
     p = lone["manufacturing_writeup"]["parts"][0]
     d = cf.thickness_conflict(p, boilerplate_mm=cf.boilerplate_thickness_values(lone))
     assert d and "1 mm" in d["issue"], "a genuine per-part disagreement stays a decision"
@@ -1054,7 +1057,55 @@ def test_document_boilerplate_thickness_is_one_note_not_five_decisions():
     model = _job_with_drawing_thickness_noise(5)
     for p in model["manufacturing_writeup"]["parts"]:
         p["_displaced"]["normalized_thickness_mm"][0]["source"] = "solidworks_api"
-    assert cf.boilerplate_thickness_values(model) == set()
+    assert cf.boilerplate_thickness_values(model) == {}
+
+
+def test_repeated_history_entries_on_one_part_are_not_boilerplate():
+    """The reviewer's probe of 12f8558: ONE part whose provenance log repeated the same
+    drawing refusal three times crossed the >=3 threshold alone, and its genuine
+    2 mm vs 3 mm conflict disappeared. The census counts distinct part identities —
+    a part talking three times is still one part."""
+    part = {
+        "part_number": "10975-02-001",
+        "normalized_thickness_mm": 3.0,
+        "_displaced": {"normalized_thickness_mm": [
+            {"value": 2.0, "source": "drawing_deterministic", "applied": False},
+            {"value": 2.0, "source": "drawing_deterministic", "applied": False},
+            {"value": 2.0, "source": "drawing_deterministic", "applied": False},
+        ]},
+    }
+    job = {"manufacturing_writeup": {"parts": [part]}}
+    boiler = cf.boilerplate_thickness_values(job)
+    assert boiler == {}, f"one part is never a document-wide pattern: {boiler}"
+    d = cf.thickness_conflict(part, boilerplate_mm=boiler)
+    assert d and "2 mm" in d["issue"] and "3 mm" in d["issue"], \
+        "the genuine 2 mm vs 3 mm conflict must survive repeated history entries"
+
+
+def test_shared_drawing_thickness_becomes_one_grouped_decision_naming_the_parts():
+    """The reviewer's other probe: three genuine detail drawings can state the same
+    thickness — the threshold cannot tell that from a title-block note, so dismissing
+    it with 'no action' hides real conflicts. Independent parts sharing the refused
+    value become ONE estimator decision naming all of them, never a dismissal and
+    never one decision per part."""
+    job = _job_with_drawing_thickness_noise(5)
+    decisions = cf.costed_job(job).get("decisions_required") or []
+    grouped = [d for d in decisions if "1.2 mm" in str(d.get("issue"))]
+    assert len(grouped) == 1, \
+        f"one grouped decision, not {len(grouped)}: {[d.get('issue') for d in grouped]}"
+    g = grouped[0]
+    assert g["kind"] == "manufacturing_decision", \
+        "a repeated drawing value is a question for a person, not an engine advisory"
+    assert g["owner"] == "estimator"
+    for i in range(5):
+        assert f"7332-01-00{i + 1}" in str(g["part"]), \
+            f"the decision must name every affected part: {g['part']}"
+    assert "no action" not in str(g.get("action", "")).lower(), \
+        "the group is a decision to confirm, never a dismissal"
+    # And no part raises the same value again as its own per-part gauge decision.
+    per_part = [d for d in decisions
+                if d is not g and "1.2" in str(d.get("issue", ""))]
+    assert not per_part, f"the value must not also appear per part: {per_part}"
 
 
 def test_a_variant_tree_over_claimed_members_is_never_minted():
