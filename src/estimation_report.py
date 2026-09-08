@@ -972,6 +972,24 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                     _has_powder = bool(_pc) and float(_pc) > 0
                 except (TypeError, ValueError, AttributeError):
                     _has_powder = False
+                if not _has_powder:
+                    # THE SHEET'S OWN POWDER ROW IS THE SECOND WITNESS. 11350-01 charges
+                    # 3p of powder through the coated-area path, which never fills
+                    # powder_coating_summary — and this sentence said "no powder is
+                    # charged on this job" directly beside a POWDER row with money on
+                    # it. A read-back POWDER row carrying value means powder IS charged,
+                    # whichever book computed it.
+                    try:
+                        from costed_facts import _final_estimate_of
+                        for _r in (_final_estimate_of(summary).get("material_rows") or []):
+                            if (isinstance(_r, dict)
+                                    and str(_r.get("description") or "").strip()
+                                    .upper().startswith("POWDER")
+                                    and float(_r.get("total_value_gbp") or 0) > 0):
+                                _has_powder = True
+                                break
+                    except Exception:                            # noqa: BLE001
+                        pass
                 _resid = ("POWDER / SCRAP / OTHER WORKBOOK MATERIAL — the powder consumable and "
                           "the per-line scrap uplift" if _has_powder else
                           "NEST-vs-NET-PART BASIS, SCRAP AND OTHER WORKBOOK MATERIAL — no powder "

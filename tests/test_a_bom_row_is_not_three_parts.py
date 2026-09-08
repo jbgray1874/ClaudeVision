@@ -1214,6 +1214,52 @@ def test_a_spelling_variant_of_a_recorded_part_is_never_minted_as_a_purchase():
     assert "not minted" in window and "two spellings" in window.lower()
 
 
+def test_the_missing_drawing_panel_carries_the_records_charged_money():
+    """The last surface still calling the charged right arm free: the "no sheet of its
+    own" panel read only the BOM cell's price, and the MIR's £0.45 lives in Sheet
+    Steel. What is missing for such a part is its DRAWING, never its money."""
+    import estimate_explained as ee
+    rows = ee._missing_drawings(
+        bom=[{"code": "11350-01-02 MIR", "description": "RIGHT ARM 200MM",
+              "price": None, "qty": 1}],
+        scan={},
+        steel={"11350-01-02 MIR": {"total_value_gbp": 0.45}},
+        material={},
+        record={"11350-01-02 MIR": {"charged_ext_gbp": 0.45}})
+    assert rows and rows[0]["priced"] is True, \
+        "a part charged on the sheet must never read as unpriced here"
+    assert rows[0]["gbp"] == 0.45
+
+
+def test_the_withheld_why_reaches_the_estimate_row_itself():
+    """b89413c put the price chain's account on the record's review flags — and Tim
+    reads the Estimate sheet first, where the row still said a bare "enter a unit
+    rate". The account is appended to the row's own description note."""
+    import estimator_inputs as ei
+    part = {"part_number": "BI-NUT", "description": "M4 WING NUT",
+            "review_flags": [
+                "Explicit canonical BOM item has no pricing record; estimator to "
+                "price. (the price chain ran (UDEF / catalogue / history / market-AI) "
+                "and returned nothing for this description.)"]}
+    note = ei.material_input_note(part)
+    assert "the price chain ran" in note, f"the why must be on the sheet row: {note}"
+    plain = ei.material_input_note({"part_number": "X", "description": "Y"})
+    assert "price chain" not in plain, "no account, no parenthetical"
+
+
+def test_the_powder_sentence_consults_the_sheets_own_powder_row():
+    """"No powder is charged on this job" printed beside a POWDER row carrying £0.03 —
+    the sentence read only powder_coating_summary, which the coated-area path never
+    fills. Structural: the read-back POWDER material row is the second witness."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "estimation_report.py"), encoding="utf-8").read()
+    i = src.index("no powder ")
+    window = src[max(0, i - 3000):i + 500]
+    assert "_final_estimate_of" in window and "POWDER" in window, \
+        "the sheet's own POWDER row must be consulted before claiming no powder"
+
+
 def test_pack_shortfalls_speak_from_evidence_on_both_surfaces():
     """James's rule: when the engine codes around a pack — a drawing export staged as a
     flat, a stray file, a BOM line with no drawing — the e-mail and report SAY so, or

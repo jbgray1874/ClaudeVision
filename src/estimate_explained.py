@@ -802,12 +802,20 @@ def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]]
         if rec.get("pages"):
             continue
         unit, qty = _money(row.get("price")), _money(row.get("qty"))
+        # THE RECORD'S CHARGED MONEY, NOT ONLY THE BOM CELL. 11350-01's right arm is a
+        # cross-reference here (its £0.45 lives in Sheet Steel), and reading only this
+        # row's price cell made the one panel that survived the MIR join fix keep
+        # calling a charged part free. What is missing for such a part is its DRAWING,
+        # never its money — and the panel must say so with the same figure Canonical
+        # carries.
+        _line = (record or {}).get(code) or {}
+        _charged = _money(_line.get("charged_ext_gbp"))
         out.append({
             "code": row.get("code"), "desc": _description(row),
             "cut": bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")),
-            "section": bool(((record or {}).get(code) or {}).get("length")),
-            "gbp": round(unit * qty, 2) if unit and qty else None,
-            "priced": row.get("price") not in (None, ""),
+            "section": bool(_line.get("length")),
+            "gbp": (round(unit * qty, 2) if unit and qty else _charged or None),
+            "priced": row.get("price") not in (None, "") or bool(_charged),
         })
     return out
 

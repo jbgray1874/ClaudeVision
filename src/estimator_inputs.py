@@ -119,16 +119,29 @@ def material_input_note(part: Mapping[str, Any]) -> str:
     what the stock is as far as we read it, and which specific figure is missing. "Confirm
     the section rate" is actionable; "£-" is not.
     """
+    # THE WHY, ON THE ROW TIM READS FIRST. The mint records the price chain's own
+    # account (ran-and-missed vs could-not-run) on the withheld record's review flags —
+    # and it was reaching only the Provenance tab, while the Estimate row still said a
+    # bare "enter a unit rate". The sheet is where the estimator meets the line, so the
+    # account is appended here too.
+    _acct = ""
+    for _f in (part.get("review_flags") or []):
+        _s = str(_f)
+        _i = _s.find("the price chain")
+        if _i >= 0:
+            _acct = _s[_i:].rstrip(" .)")
+            break
+    _tail = f" ({_acct})" if _acct else ""
     section = section_summary(part)
     length = section_length_mm(part)
     if section or length:
         known = section or "section stock"
         if length:
             return (f"MATERIAL UNPRICED: {known}, cut length {length:g}mm — "
-                    f"confirm the length and enter a section rate (£/kg or £/m)")
+                    f"confirm the length and enter a section rate (£/kg or £/m){_tail}")
         return (f"MATERIAL UNPRICED: {known}, cut length NOT READ — "
-                f"enter the cut length and a section rate (£/kg or £/m)")
-    return "MATERIAL UNPRICED: enter a unit rate for this item"
+                f"enter the cut length and a section rate (£/kg or £/m){_tail}")
+    return f"MATERIAL UNPRICED: enter a unit rate for this item{_tail}"
 
 
 def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
