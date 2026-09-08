@@ -1328,6 +1328,18 @@ def test_a_dual_path_row_reaches_the_graph_with_every_stated_owner():
     assert graph["quantities"][pn] == 6.0, \
         f"4 under one assembly + 2 under the other is 6 nuts, not the first table's 4: " \
         f"{graph['quantities'][pn]}"
+    # And a ROW-LEVEL edge does not block the record's stated second owner: equal
+    # evidence accumulates, only a pre-BOM claim (extract/model) outranks.
+    parts2 = [dict(p) for p in parts if p["part_number"] != nut["part_number"]]
+    parts2.append({"part_number": "BI-BOLT", "description": "M6 BOLT", "quantity": 2,
+                   "page_roles": ["bought_in"],
+                   "bom_parents": [{"parent": "ASSY-DOOR", "qty": 2}]})
+    g2 = rc.build_part_graph(
+        parts2, bom_rows=[{"part_number": "BI-BOLT", "bom_parent": "ASSY-FRAME",
+                           "quantity": 4}])
+    assert g2["parents"].get("BI-BOLT") == {"ASSY-FRAME", "ASSY-DOOR"}, \
+        f"a row-level owner must not silence the record's second one: " \
+        f"{g2['parents'].get('BI-BOLT')}"
 
 
 def test_the_missing_drawing_panel_carries_the_records_charged_money():

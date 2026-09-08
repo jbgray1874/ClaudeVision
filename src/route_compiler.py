@@ -1263,7 +1263,12 @@ def build_part_graph(
             continue
         _pid = clean_part_number(_part.get("part_number") or "")
         _pid = aliases.get(_pid, _pid)
-        if not _pid or _pid in parents or _pid in _claimed_before_bom:
+        # STRONGER EVIDENCE IS PROTECTED; EQUAL EVIDENCE ACCUMULATES. The guard here was
+        # `_pid in parents`, which also refused a child that had just gained ONE
+        # row-level BOM edge — so a stated second owner from this record was dropped
+        # even though the row-level path deliberately supports two owners. Only a claim
+        # made BEFORE the BOM pass (extract, model) outranks a BOM-stated edge.
+        if not _pid or _pid in _claimed_before_bom:
             continue
         # EVERY STATED OCCURRENCE, with its own quantity. The same nut can sit under two
         # assemblies (4 under A-101, 2 under A-102) and both tables are evidence — the
