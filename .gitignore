@@ -74,3 +74,6 @@ Thumbs.db
 corpus/
 cache/
 .sdi-commit
+
+# Frozen-replay harness: accepted facts and frozen summaries are versioned evidence
+!tests/replay/**/*.json

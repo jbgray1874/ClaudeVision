@@ -1,0 +1,8 @@
+{
+  "_reviewed": "Approved 14:17 pack (7 Sep) — £80.09 = £40.89 material + £33.59 labour, six to settle. Money deliberately NOT pinned; structure only.",
+  "required_operations": {"7332-01-002": ["tubebend"]},
+  "forbidden_operations": {"7332-01-002": ["folding", "fold"],
+                           "7332-01-007": []},
+  "forbidden_names_everywhere": [],
+  "phrase_counts": {}
+}
