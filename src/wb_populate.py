@@ -1786,8 +1786,21 @@ def canonicalise_part_estimates_for_workbook(
         for key in ("folded_bom_row_fragments", "quarantined_interleave_artefacts")
         for e in (summary.get(key) or []) if isinstance(e, dict)
     }
+    # A SPELLING VARIANT IS NOT A MISSING PURCHASE. On 11350-01 the right arm existed in
+    # the population under one spelling while the PDF BOM's node carried another
+    # ("11350-01-02 MIR" with the hand as a separate token), so `identity in normalised`
+    # missed and this mint wrote an unpriced BOM row for a part the Sheet Steel block was
+    # already charging £0.45 — every reader then counted a charged part as a missing
+    # price. Identity is compared squashed (alphanumerics only) before minting.
+    _norm_squash = {re.sub(r"[^A-Z0-9]", "", str(k).upper()): k for k in normalised}
     for identity, node in nodes.items():
         if node.get("kind") != "bought_in" or identity in normalised:
+            continue
+        _id_squash = re.sub(r"[^A-Z0-9]", "", str(identity).upper())
+        if _id_squash and _id_squash in _norm_squash:
+            print(f"   [wb_populate] '{identity}' not minted — the population already "
+                  f"records it as '{_norm_squash[_id_squash]}'; two spellings of one "
+                  f"part are one line, not a purchase to invent.", flush=True)
             continue
         if identity.strip().upper() in _removed_ids:
             print(f"   [wb_populate] '{identity}' not re-minted — its record was folded "

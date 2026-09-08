@@ -1164,6 +1164,56 @@ def test_provenance_hierarchy_never_prints_engine_money_as_charged():
     assert "engine_only" in block
 
 
+def test_a_mirrored_arms_money_joins_its_own_identity():
+    """11350-01: the right arm's steel row reads "11350-01-02 MIR  RIGHT ARM 200MM", and
+    the first-word join keyed it to the LEFT arm — its £0.45 was dropped by setdefault,
+    its own line found only an unpriced BOM row, and every surface but the nest called a
+    charged part free (one count said 6 prices missing over a five-item list). The hand
+    token is part of the identity."""
+    assert cf._material_row_key(
+        {"description": "11350-01-02 MIR  RIGHT ARM 200MM"}) == "11350-01-02 MIR"
+    assert cf._material_row_key(
+        {"description": "11350-01-02  LEFT ARM 200MM"}) == "11350-01-02"
+    summary = {
+        "final_estimate": {
+            "totals": {"material_gbp": 1.52, "labour_gbp": 16.48, "unit_gbp": 19.35},
+            "material_rows": [
+                {"block": "steel", "description": "11350-01-02  LEFT ARM 200MM",
+                 "qty_per_unit": 1, "total_value_gbp": 0.45},
+                {"block": "steel", "description": "11350-01-02 MIR  RIGHT ARM 200MM",
+                 "qty_per_unit": 1, "total_value_gbp": 0.45},
+                {"block": "bom", "part_code": "11350-01-02 MIR",
+                 "description": "11350-01-02 MIR  RIGHT ARM 200MM", "qty_per_unit": 1},
+            ],
+        },
+        "estimate_summary": {"part_estimates": [
+            {"part_number": "11350-01-02", "description": "LEFT ARM 200MM"},
+            {"part_number": "11350-01-02 MIR", "description": "RIGHT ARM 200MM"},
+        ]},
+    }
+    lines = {l["part_number"]: l for l in cf.costed_job(summary)["lines"]}
+    mir = lines["11350-01-02 MIR"]
+    assert mir.get("charged_ext_gbp") == 0.45, \
+        f"the sheet charges the right arm £0.45 and the record must say so: {mir}"
+    assert lines["11350-01-02"].get("charged_ext_gbp") == 0.45, \
+        "the left arm keeps its own row — the twin's money is not summed into it"
+
+
+def test_a_spelling_variant_of_a_recorded_part_is_never_minted_as_a_purchase():
+    """The other half of 11350-01's MIR defect: the graph's BOM node spelled the right
+    arm one way, the population another, so `identity in normalised` missed and the
+    missing-bought-in mint wrote an unpriced BOM row for a part the Sheet Steel block
+    was charging. Structural: the mint compares identities SQUASHED before minting."""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(__file__), "..", "src",
+                             "wb_populate.py"), encoding="utf-8").read()
+    i = src.index('if node.get("kind") != "bought_in" or identity in normalised:')
+    window = src[i - 1200:i + 1200]
+    assert "_norm_squash" in window and "_id_squash" in window, \
+        "the mint must refuse a squash-match of a recorded identity"
+    assert "not minted" in window and "two spellings" in window.lower()
+
+
 def test_pack_shortfalls_speak_from_evidence_on_both_surfaces():
     """James's rule: when the engine codes around a pack — a drawing export staged as a
     flat, a stray file, a BOM line with no drawing — the e-mail and report SAY so, or

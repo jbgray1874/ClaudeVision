@@ -1204,11 +1204,24 @@ def _material_row_key(row: Mapping[str, Any]) -> str:
     """The identity a read-back material row joins on — the BOM's code column, or the first
     word of a fabricated block's description, which is where wb_populate writes the part
     number. Same rule as wep_readback_from_xlsx._row_key, restated here so this module has
-    no import of the Excel adapter."""
+    no import of the Excel adapter.
+
+    THE HAND IS PART OF THE IDENTITY. 11350-01's right arm writes its steel row as
+    "11350-01-02 MIR  RIGHT ARM 200MM" — the first word alone is the LEFT arm's code, so
+    the right arm's £0.45 joined its twin (and was dropped by setdefault), its own line
+    found only the unpriced BOM row, and every surface but the nest called a charged part
+    free — one count said 6 prices missing over a five-item list. A separate MIR/MIRROR
+    token after the code belongs to the code."""
     code = str(row.get("part_code") or "").strip()
     if code:
         return code.upper()
-    return str(row.get("description") or "").strip().split(" ")[0].upper()
+    toks = str(row.get("description") or "").strip().split()
+    if not toks:
+        return ""
+    key = toks[0].upper()
+    if len(toks) > 1 and toks[1].upper() in ("MIR", "MIRROR"):
+        key += " " + toks[1].upper()
+    return key
 
 
 _THICKNESS_SOURCE_WORDS = ("dxf", "solidworks", "native", "model", "cutlist", "cut_list",

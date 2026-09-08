@@ -592,7 +592,16 @@ def _row_key(row: Dict[str, Any]) -> str:
     code = str(row.get("part_code") or "").strip()
     if code:
         return code.upper()
-    return str(row.get("description") or "").strip().split(" ")[0].upper()
+    # THE HAND IS PART OF THE IDENTITY: "11350-01-02 MIR  RIGHT ARM" keys as
+    # "11350-01-02 MIR", not as its left-hand twin's code. Kept in step with
+    # costed_facts._material_row_key — the two copies of this rule must agree.
+    toks = str(row.get("description") or "").strip().split()
+    if not toks:
+        return ""
+    key = toks[0].upper()
+    if len(toks) > 1 and toks[1].upper() in ("MIR", "MIRROR"):
+        key += " " + toks[1].upper()
+    return key
 
 
 # WHAT THE SHEET ALREADY SAYS ABOUT ITSELF. Four rows on 11650 came back UNEXPLAINED —
