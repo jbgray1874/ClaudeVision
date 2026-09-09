@@ -617,3 +617,29 @@ def test_glued_cells_rejoin_their_known_identities_and_junk_stays_junk():
     assert "MBY433" in parents.get("RM08363", set())
     # nothing known anchors 9XY99999 — it stays glued and visible, never invented
     assert "9XY99999" in nodes
+
+
+def test_the_placeholder_mint_never_fires_on_a_structured_pack():
+    """7332 regression (unit fell £80-class -> £64.30): the placeholder mint, shipped
+    ungated as a 'generic rule', gave the leg's TBA tube-stock row a second spelling —
+    a graph node no record matches, which the missing-bought-in machinery resurrected
+    as a phantom assembly row while £11.72 of leg material and the tube-bend labour row
+    fell out. A record literally named TBA cannot exist in the known pool
+    (clean_part_number refuses placeholders), so no known-set guard can protect the
+    structured path: the gate is the pack mode."""
+    parts = [{"part_number": "7332-01-GA", "quantity": 1, "description": "GA"}]
+    rows = [{"part_number": "TBA", "quantity": 2, "bom_parent": "7332-01-GA",
+             "description": "15.875 x 15.875 x 1.2mm TUBE"}]
+    # structured (no pack_mode): the old behaviour stands, no minted spelling
+    graph = rc.build_part_graph(parts, {}, rows)
+    nodes = {n.part_number for n in graph["nodes"]}
+    assert not any(n.startswith("TBA-15") or n.startswith("BI-") for n in nodes), \
+        "a structured pack's placeholder rows are left exactly as they were"
+    # pdf_primary: the mint fires and two placeholder rows stay distinct purchases
+    graph2 = rc.build_part_graph(parts, {}, [
+        {"part_number": "TBA", "quantity": 4, "bom_parent": "7332-01-GA",
+         "description": "M8 Flat Washer - Form D - Steel"},
+        {"part_number": "TBA", "quantity": 4, "bom_parent": "7332-01-GA",
+         "description": "M6x40 Connecting Bolt"}], pack_mode="pdf_primary")
+    n2 = {n.part_number for n in graph2["nodes"]}
+    assert "BI-WASHER" in n2 and "BI-BOLT" in n2

@@ -935,6 +935,7 @@ def _bom_stated_edges(
     aliases: Mapping[str, str],
     known: Set[str],
     rejected: Optional[List[str]] = None,
+    allow_placeholder_mint: bool = False,
 ) -> List[tuple]:
     """(child, parent, qty) for every BOM row that names an owner we already know.
 
@@ -998,7 +999,19 @@ def _bom_stated_edges(
         # with, so the edge and the record agree on the code) derives the identity
         # from the row's own description; where the words name nothing, a
         # description slug keeps the rows distinct rather than folded.
-        if is_placeholder_identity(child):
+        # GATED TO pdf_primary, AFTER A PROVEN LANE-A REGRESSION. The first cut
+        # minted on every placeholder as a generic rule, and on 7332 the leg's tube
+        # stock row ('TBA · 15.875 x 15.875 x 1.2mm TUBE') already had a resolved
+        # downstream life the tube-costing path was built on — the second spelling
+        # grew a graph node no record matches, the missing-bought-in mint
+        # resurrected it as a phantom assembly row, and £11.72 of leg material plus
+        # the tube-bend labour row fell out of a £64.30 unit that should read
+        # £80-class. A record literally named TBA cannot exist in the known pool
+        # (clean_part_number refuses placeholders), so no known-set guard can
+        # protect the structured path — the gate is the pack mode, and the rule
+        # generalises only when the 7332 run JSON shows the actual join to protect.
+        if allow_placeholder_mint and is_placeholder_identity(child) \
+                and child not in known:
             _syn = clean_part_number(
                 synthesise_bought_in_code(row.get("description"), _child_raw))
             if _syn:
@@ -1051,6 +1064,7 @@ def _pdf_primary_stated_roots(
     aliases: Mapping[str, str],
 ) -> Dict[str, int]:
     """{root code: rows naming it} for parents a pdf_primary pack's own BOM insists on.
+    (See also the placeholder mint in _bom_stated_edges, gated the same way.)
 
     THE EXCEPTION TO "A PARENT WE DO NOT KNOW IS NOT CREATED", and it is as narrow as the
     evidence demands. On 0359342 the customer's BOM stated twelve rows under A61636 — the
@@ -1347,7 +1361,7 @@ def build_part_graph(
     _rejected_parents: List[str] = []
     _bom_edges = _bom_stated_edges(
         bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings,
-        _rejected_parents)
+        _rejected_parents, allow_placeholder_mint=(pack_mode == "pdf_primary"))
     if _rejected_parents:
         _unique = sorted({r for r in _rejected_parents if r})
         print(f"   [bom] {len(_rejected_parents)} row(s) name an owner this job does not "
