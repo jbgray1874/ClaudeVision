@@ -1874,7 +1874,13 @@ def apply_canonical_evidence_to_parts(
 
     Returns the compiled graph so the caller can record what it found.
     """
-    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner)
+    # THE MODE THE COSTING GRAPH RUNS UNDER IS THE MODE THE JOB DETECTED. The 0359342
+    # live run proved the gap: the refresh compile minted A61636 (pack_mode threaded
+    # there) while THIS pre-cost compile — the one costing actually reads — was never
+    # told, refused the stated root, and priced three orphan assemblies with the x2
+    # cascade lost. One classification per job, consulted by every compile.
+    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
+                             pack_mode=_detect_pack_mode(summary or {}))
     # THE EVIDENCE, FILED AT THE FIRST DROP. The refresh recompile may never re-mint the
     # chimera's identity (its record is already gone from the parts), so if this call
     # does not file the quarantine on the summary, the pack-completeness invariant still

@@ -643,3 +643,25 @@ def test_the_placeholder_mint_never_fires_on_a_structured_pack():
          "description": "M6x40 Connecting Bolt"}], pack_mode="pdf_primary")
     n2 = {n.part_number for n in graph2["nodes"]}
     assert "BI-WASHER" in n2 and "BI-BOLT" in n2
+
+
+def test_the_pre_cost_compile_detects_the_pack_mode_itself():
+    """The 0359342 live run: the refresh compile minted A61636 while the PRE-COST
+    compile — the one costing actually reads — was never told the pack mode, refused
+    the stated root, and priced three orphan assemblies with the x2 cascade lost.
+    Every compile consults the one detection."""
+    rows = _frozen_rows()
+    parts = _parts_for(rows)
+    summary = {"document_analysis": {"bom_rows": rows},
+               "parts": [dict(p) for p in parts],
+               "manufacturing_writeup": {"parts": [dict(p) for p in parts]}}
+    graph = rc.apply_canonical_evidence_to_parts(
+        [dict(p) for p in parts], {}, rows, summary=summary)
+    assert any(n.part_number == "A61636" for n in graph["nodes"]), \
+        "the costing graph carries the stated root the detection earns"
+    assert graph["quantities"]["J13094"] == 2.0
+    # a structured pack (any DXF present) still refuses at the same call site
+    s2 = dict(summary, dxf_augmentation={"unmatched_dxf": [{"path": "x.dxf"}]})
+    graph2 = rc.apply_canonical_evidence_to_parts(
+        [dict(p) for p in parts], {}, rows, summary=s2)
+    assert not any(n.part_number == "A61636" for n in graph2["nodes"])
