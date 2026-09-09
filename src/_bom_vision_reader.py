@@ -346,9 +346,21 @@ def material_thickness_mm(material_text: Any) -> Optional[float]:
 
     "MDF, 18mm" -> 18.0; "Corian, 6mm" -> 6.0; "Mild Steel" -> None. Transcription
     parsing only — a cell with no printed millimetre figure yields nothing, because a
-    thickness this function invents becomes a gauge somebody cuts."""
-    m = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(material_text or ""), re.I)
-    return float(m.group(1)) if m else None
+    thickness this function invents becomes a gauge somebody cuts.
+
+    TWO REFUSALS, both from review probes of the first cut:
+    - A DIAMETER IS NOT A THICKNESS. "Mild Steel Wire, diameter 8mm" was returning 8 —
+      a wire's Ø published as a sheet gauge. Any diameter marker in the cell refuses
+      the whole reading; the verbatim material_text still travels on the row.
+    - TWO FIGURES ARE A DECISION, NOT A PICK. "MDF, 6mm and 9mm" was silently
+      returning 6. A cell printing more than one distinct millimetre value is
+      ambiguous evidence, and this function does not resolve ambiguity — it reports
+      none, and the retained text is what a person (or a decision row) rules on."""
+    s = str(material_text or "")
+    if re.search(r"Ø|⌀|\bDIA\b|\bDIAMETER\b", s, re.I):
+        return None
+    vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm\b", s, re.I)}
+    return vals.pop() if len(vals) == 1 else None
 
 
 def weight_kg(weight_text: Any) -> Optional[float]:

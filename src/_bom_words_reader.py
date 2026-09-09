@@ -278,28 +278,55 @@ def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optiona
                 cells[name].append((x, w["text"]))
                 break
 
-    def _nearest_int(name: str, hi_val: int) -> Optional[str]:
+    def _nearest_int(name: str) -> Optional[Tuple[float, str]]:
+        # NO UNIVERSAL CAP. The first cut refused qty 300 (capped at 250) and item 100
+        # (capped at 99) — limits nothing on any drawing supports. A word already sits
+        # in its own numeric column's region; being an integer there IS the evidence.
+        # Implausibility is a validation question for downstream, never a silent drop.
         best = None
         for x, t in cells.get(name) or []:
-            if t.isdigit() and 1 <= int(t) <= hi_val:
+            if t.isdigit() and int(t) >= 1:
                 d = abs(x - anchors[name])
                 if best is None or d < best[0]:
-                    best = (d, t)
-        return best[1] if best else None
+                    best = (d, x, t)
+        return (best[1], best[2]) if best else None
 
-    item = _nearest_int("item", 99)
-    qty = _nearest_int("qty", 250)
-    if item is None or qty is None:
+    item_word = _nearest_int("item")
+    qty_word = _nearest_int("qty")
+    if item_word is None or qty_word is None:
         return None
+
+    # A MIDPOINT IS A GUESS AT A BOUNDARY, NOT A RULING LINE. A long description
+    # drifts past the midpoint into the neighbouring numeric region — the review
+    # probe's "Edition Sunglasses Plinth Top" lost its last two words into ITEM's
+    # region and they vanished without a word. A word that is not a number does not
+    # belong to a numeric column: it is reassigned to the nearest text column, and
+    # the row is flagged so nobody treats the segmentation as certain.
+    _text_cols = [n for n in ("code", "desc", "material", "weight") if n in anchors]
+    _displaced = False
+    for _num_col, _chosen in (("item", item_word), ("qty", qty_word)):
+        for x, t in list(cells.get(_num_col) or []):
+            if (x, t) == _chosen:
+                continue
+            if re.search(r"[A-Za-z]", t) and _text_cols:
+                _tgt = min(_text_cols, key=lambda n: abs(anchors[n] - x))
+                cells[_tgt].append((x, t))
+                _displaced = True
+
+    def _cell_text(name: str) -> str:
+        return " ".join(t for _, t in sorted(cells.get(name) or [])).strip()
+
     out = {
-        "item": item,
-        "code": " ".join(t for _, t in cells.get("code") or []).strip(),
-        "desc": " ".join(t for _, t in cells.get("desc") or []).strip(),
-        "qty": qty,
+        "item": item_word[1],
+        "code": _cell_text("code"),
+        "desc": _cell_text("desc"),
+        "qty": qty_word[1],
     }
     for name in ("material", "weight"):
         if name in anchors:
-            out[name] = " ".join(t for _, t in cells.get(name) or []).strip()
+            out[name] = _cell_text(name)
+    if _displaced:
+        out["segmentation_uncertain"] = True
     return out
 
 
@@ -318,8 +345,11 @@ def _row_material_fields(material_txt: Any, weight_txt: Any) -> Dict[str, Any]:
         from _bom_vision_reader import material_thickness_mm as _mt, weight_kg as _wk
     except Exception:                                            # pragma: no cover
         def _mt(s):
-            m = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(s or ""), re.I)
-            return float(m.group(1)) if m else None
+            s = str(s or "")
+            if re.search(r"Ø|⌀|\bDIA\b|\bDIAMETER\b", s, re.I):
+                return None                    # a diameter is not a thickness
+            vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm\b", s, re.I)}
+            return vals.pop() if len(vals) == 1 else None   # two figures = a decision
 
         def _wk(s):
             m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|g)\b", str(s or ""), re.I)
@@ -560,6 +590,11 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
             # panel while costing ran on a document-default 6mm).
             _out_row.update(_row_material_fields(cols.get("material"),
                                                  cols.get("weight")))
+            if cols.get("segmentation_uncertain"):
+                # Words drifted across a region midpoint and were reassigned rather
+                # than lost — true, but not certain. The flag travels with the row so
+                # a reconciler or reviewer treats the split cells as approximate.
+                _out_row["segmentation_uncertain"] = True
             data_rows.append(_out_row)
 
     if not data_rows:

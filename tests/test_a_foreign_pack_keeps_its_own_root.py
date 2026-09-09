@@ -239,3 +239,55 @@ def test_the_sdi_ordered_header_still_parses_the_old_way():
             _w("LEG", 245, 120), _w("2", 382, 120)]
     cols = wa._parse_row(data, h["anchors"])
     assert cols == {"item": "1", "code": "1448-GA", "desc": "UPPER LEG", "qty": "2"}
+
+
+# ── the review probes of fd49499, pinned ─────────────────────────────────────────────────
+
+def test_a_long_description_is_reassigned_not_lost_across_the_midpoint():
+    """The reviewer's probe: with the customer anchors, 'Edition Sunglasses Plinth Top'
+    lost 'Plinth Top' into the ITEM region — a midpoint is a guess at a boundary, not a
+    ruling line. Displaced words rejoin the nearest text column and the row says its
+    segmentation is uncertain."""
+    import _bom_words_reader as wa
+
+    hdr_row = [_w("WEIGHT", 10), _w("MATERIAL", 60), _w("QTY", 140),
+               _w("PART", 170), _w("DESCRIPTION", 260), _w("ITEM", 420)]
+    h = wa._header_from_row(0, hdr_row)
+    data = [_w("4.28", 8, 120), _w("kg", 30, 120), _w("MDF,", 58, 120),
+            _w("18mm", 82, 120), _w("1", 142, 120), _w("JAE820", 168, 120),
+            _w("Edition", 260, 120), _w("Sunglasses", 300, 120),
+            _w("Plinth", 350, 120), _w("Top", 395, 120),   # past the desc/item midpoint
+            _w("1", 430, 120)]
+    cols = wa._parse_row_by_regions(data, h["anchors"])
+    assert cols is not None
+    assert cols["desc"] == "Edition Sunglasses Plinth Top", "no word silently lost"
+    assert cols["item"] == "1" and cols["qty"] == "1"
+    assert cols.get("segmentation_uncertain") is True
+
+
+def test_the_region_parser_has_no_universal_quantity_cap():
+    import _bom_words_reader as wa
+
+    hdr_row = [_w("QTY", 10), _w("PART", 80), _w("DESCRIPTION", 180),
+               _w("MATERIAL", 320), _w("ITEM", 420)]
+    h = wa._header_from_row(0, hdr_row)
+    assert h is not None and h["layout"] == "by_regions"
+    data = [_w("300", 12, 120), _w("SCREW-01", 80, 120), _w("SCREW", 180, 120),
+            _w("Steel", 320, 120), _w("101", 422, 120)]
+    cols = wa._parse_row_by_regions(data, h["anchors"])
+    assert cols is not None
+    assert cols["qty"] == "300", "qty 300 is a fact on the row, not noise to reject"
+    assert cols["item"] == "101", "item numbers above 99 exist"
+
+
+def test_a_diameter_or_two_figures_is_never_published_as_a_thickness():
+    import _bom_vision_reader as vb
+
+    assert vb.material_thickness_mm("Mild Steel Wire, diameter 8mm") is None, \
+        "a wire's diameter must not become a sheet gauge"
+    assert vb.material_thickness_mm("Rod Ø10mm") is None
+    assert vb.material_thickness_mm("MDF, 6mm and 9mm") is None, \
+        "two printed figures are a decision, not a silent pick of the first"
+    # one unambiguous printed figure still reads
+    assert vb.material_thickness_mm("MDF, 18mm") == 18.0
+    assert vb.material_thickness_mm("Corian, 6mm") == 6.0
