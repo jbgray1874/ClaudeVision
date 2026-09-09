@@ -525,3 +525,39 @@ def test_the_flatten_keeps_the_rows_printed_specification(monkeypatch):
     leg = rows["1448-GA"]
     for k in ("material_text", "thickness_mm", "stated_weight_kg", "code_token"):
         assert k not in leg, "a row without the columns is byte-identical"
+
+
+def test_an_uncertain_words_read_yields_to_a_ruled_grid_read():
+    """The extract check on the real pack: nearly every words row flagged
+    segmentation_uncertain, and the flags were right — '55Kg - RM08362' split
+    R35571 into two identities and halved a dual-owner sum, while extract_tables
+    returned the same rows as clean ruled cells. A majority-uncertain words read
+    yields to a header-mapped grid read of equal or better coverage; an SDI page
+    (no uncertainty flags, no header-mapped grid) never swaps."""
+    import merge_boms as mb
+
+    words = {"rows": [
+        {"item_number": "1", "part_ref": "55Kg - RM08362", "quantity": 4,
+         "segmentation_uncertain": True},
+        {"item_number": "2", "part_ref": "JAE820", "quantity": 1,
+         "segmentation_uncertain": True},
+        {"item_number": "3", "part_ref": "R00500", "quantity": 4},
+    ]}
+    grid = {"rows": [
+        {"item_number": "1", "part_ref": "RM08362", "quantity": 4,
+         "header_mapped": True},
+        {"item_number": "2", "part_ref": "JAE820", "quantity": 1,
+         "header_mapped": True},
+        {"item_number": "3", "part_ref": "R00500", "quantity": 4,
+         "header_mapped": True},
+    ]}
+    assert mb.prefer_grid_read(words, grid) is True
+    # an SDI words read carries no uncertainty flags: never swapped
+    sdi_words = {"rows": [{"item_number": "1", "part_ref": "1448-GA", "quantity": 2}]}
+    assert mb.prefer_grid_read(sdi_words, grid) is False
+    # a grid read with fewer rows, or without a printed header, does not win
+    assert mb.prefer_grid_read(words, {"rows": grid["rows"][:2]}) is False
+    blob = {"rows": [dict(r, header_mapped=False) for r in grid["rows"]]}
+    assert mb.prefer_grid_read(words, blob) is False
+    assert mb.prefer_grid_read(words, None) is False
+    assert mb.prefer_grid_read(None, grid) is False

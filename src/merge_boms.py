@@ -371,6 +371,30 @@ def grid_bom_fallback(page) -> Optional[Dict[str, Any]]:
     return {"parent": parent, "rows": rows, "grid_mapped": True}
 
 
+def prefer_grid_read(words_bom: Optional[Dict[str, Any]],
+                     grid_bom: Optional[Dict[str, Any]]) -> bool:
+    """Should the ruled-cell grid read replace the words read for one page?
+
+    THE WORDS READER SAYS WHEN IT IS GUESSING, AND A GUESS LOSES TO A RULING LINE.
+    On 0359342 the region parser flagged nearly every row segmentation_uncertain and
+    the flags were right: wrapped description tails glued into the part cell
+    ('55Kg - RM08362', 'Outside JAE830') and the SHEET column's tokens into material
+    ('1 MDF, 18mm') — which split R35571 into two identities and silently halved a
+    dual-owner sum. extract_tables() on the same pages returns the ruled cells
+    cleanly. So: a words read that is MAJORITY uncertain yields to a HEADER-MAPPED
+    grid read carrying at least as many rows. An SDI page never swaps — its ordered
+    parser sets no uncertainty flags, and its collapsed-blob grids fail the
+    header-mapped test."""
+    w_rows = (words_bom or {}).get("rows") or []
+    g_rows = (grid_bom or {}).get("rows") or []
+    if not w_rows or not g_rows:
+        return False
+    uncertain = sum(1 for r in w_rows if r.get("segmentation_uncertain"))
+    return (uncertain * 2 > len(w_rows)
+            and len(g_rows) >= len(w_rows)
+            and any(r.get("header_mapped") for r in g_rows))
+
+
 def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = None,
                survey: Optional[Dict[Tuple[str, int], bool]] = None) -> List[Dict[str, Any]]:
     """Read every page deterministically, and — since the page is already open — note
@@ -403,6 +427,18 @@ def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = No
                                   f"words reader parsed no rows; the header-mapped "
                                   f"grid read recovered {len(_grid['rows'])} row(s)",
                                   flush=True)
+                            bom = _grid
+                    else:
+                        _grid = grid_bom_fallback(page)
+                        if prefer_grid_read(bom, _grid):
+                            print(f"  [Path A] {os.path.basename(p)} p{pi + 1}: the "
+                                  f"words read is majority segmentation-uncertain; "
+                                  f"the ruled-cell grid read ({len(_grid['rows'])} "
+                                  f"row(s)) replaces it", flush=True)
+                            # the words reader's title-block parent survives when the
+                            # grid path could not name one — same fact, best reader
+                            if bom.get("parent") and not _grid.get("parent"):
+                                _grid["parent"] = bom["parent"]
                             bom = _grid
                     if bom:
                         bom["page_index"] = pi
