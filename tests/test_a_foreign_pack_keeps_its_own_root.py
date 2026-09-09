@@ -348,3 +348,89 @@ def test_the_bench_compares_and_never_concatenates():
     assert out["only_a"] == [("8", "R00500")]
     assert out["only_c"] == [("5", "RM08362")]
     assert not out["agree"], "a row with cell differences is not agreement"
+
+
+# ── the live Layer 1: the extract that succeeded is no longer thrown away ────────────────
+
+def _ms_grid():
+    """0359342 page 1, in the raw extract_tables() shape the reviewer's probe printed:
+    [None, item, description, part, qty, rev, sheet, material, mass]. The twelve data
+    rows are the frozen top table (tests/replay/0359342/bom_tree.json)."""
+    hdr = [None, "ITEM", "DESCRIPTION", "PART #", "QTY", "REV", "SHEET",
+           "MATERIAL", "MASS"]
+    rows = [
+        [None, "1", "EditionSunglassesPlinthCoverAssembly", "J13092", "1", None,
+         "1", "MDF,SolidSurface", "12.00kg"],
+        [None, "2", "EditionSunglassesShroudAssembly", "J13093", "1", None,
+         "1", "MDF", "8.40kg"],
+        [None, "3", "EditionSunglassesBackPanelAssembly", "J13094", "2", None,
+         "1", "MDF", "16.20kg"],
+        [None, "4", "EditionSunglassesMirror", "A62271", "2", None,
+         "1", "Mirror, 6mm", "4.10kg"],
+        [None, "5", "EditionSunglassesMirrorPlate", "MBY439", "2", None,
+         "1", "Mild Steel", "0.82kg"],
+        [None, "6", "SunglassesPlinth", "J13149", "8", None, "1", "MDF", "0.45kg"],
+        [None, "7", "M8CrossDowelNut", "RM08363", "4", None, None, "Mild Steel",
+         "0.01kg"],
+        [None, "8", "M8x80CapHeadScrew", "RM08167", "4", None, None, "Mild Steel",
+         "0.04kg"],
+        [None, "9", "#4x3/8CskWoodscrew", "RM06236", "16", None, None, "Mild Steel",
+         "0.01kg"],
+        [None, "10", "M8FlatWasher", "TBA", "4", None, None, "Steel", "0.01kg"],
+        [None, "11", "M6x40ConnectingBolt", "TBA", "4", None, None, "Steel",
+         "0.02kg"],
+        [None, "12", "UPCSticker", "A60890", "1", None, None, "Clear Vinyl", None],
+    ]
+    return [hdr] + rows
+
+
+def test_the_ms_page_one_table_survives_layer_one():
+    """The reviewer's gate for the isolated fix: 12 rows, J13092 qty 1, RM06236 qty 16,
+    and the last cell (a mass) never used as a quantity. Before this, every row failed
+    the cells[-1]-is-an-integer test on '12.00kg' and six successfully extracted tables
+    produced zero BOM rows — the LLM was then asked to invent a tree the PDF printed."""
+    import bom_table_extractor as bte
+
+    rows = bte.bom_rows_from_tables([_ms_grid()])
+    assert len(rows) == 12
+    by_ref = {r["part_ref"]: r for r in rows if r["part_ref"] != "TBA"}
+    assert by_ref["J13092"]["quantity"] == 1, "qty from the QTY column, not the mass"
+    assert by_ref["J13094"]["quantity"] == 2
+    assert by_ref["RM06236"]["quantity"] == 16
+    # letter-led codes are references to follow, with their identity kept
+    assert by_ref["J13092"]["kind"] == "drawing_ref"
+    assert by_ref["J13092"]["part_number"] == "J13092"
+    assert by_ref["MBY439"]["kind"] == "drawing_ref"
+    # purchased stems and TBA are bought-in by prefix, not by 'no hyphen'
+    assert by_ref["RM06236"]["kind"] == "bought_in"
+    tba = [r for r in rows if r["part_ref"] == "TBA"]
+    assert len(tba) == 2 and all(r["kind"] == "bought_in" for r in tba)
+    # the row's own printed material and mass travel with it
+    assert by_ref["A62271"]["material_text"] == "Mirror, 6mm"
+    assert by_ref["A62271"]["thickness_mm"] == 6.0
+    assert by_ref["J13092"]["material_text"] == "MDF,SolidSurface"
+    assert "thickness_mm" not in by_ref["J13092"], "no printed mm, no thickness"
+    assert by_ref["J13092"]["stated_weight_kg"] == 12.0
+    # and no universal cap in the mapped path
+    big = [_ms_grid()[0],
+           [None, "13", "BulkScrew", "RM09999", "300", None, None, "Steel", "0.30kg"]]
+    assert bte.bom_rows_from_tables([big])[0]["quantity"] == 300
+
+
+def test_the_sdi_positional_path_is_byte_identical():
+    """An SDI table — header or not — takes the original path: its QTY column IS the
+    rightmost mapped column and it prints no material/mass, so the header-map gate
+    does not fire and the proven [item, code, desc..., qty] parsing stands."""
+    import bom_table_extractor as bte
+
+    sdi = [["ITEM", "DWG NO.", "DESCRIPTION", "QTY."],
+           ["1", "1448-GA", "UPPER LEG ASSEMBLY", "2"],
+           ["2", "THUM620", "M6 THUMBSCREW", "4"]]
+    rows = bte.bom_rows_from_tables([sdi])
+    assert [(r["item_number"], r["part_ref"], r["quantity"]) for r in rows] == \
+        [("1", "1448-GA", 2), ("2", "THUM620", 4)]
+    assert rows[0]["kind"] == "drawing_ref" and rows[0]["part_number"] == "1448-GA"
+    # the catalogue thumbscrew stays a bought-in: the extended letter-led rule is
+    # confined to header-mapped tables and never reclassifies an SDI row
+    assert rows[1]["kind"] == "bought_in"
+    assert "header_mapped" not in rows[0]

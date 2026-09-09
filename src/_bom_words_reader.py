@@ -82,23 +82,25 @@ def _cluster_rows(words: List[dict], y_tol: float = 3.0) -> List[List[dict]]:
 # use another variant. We match each column on a synonym set rather than one exact
 # word, so the deterministic reader covers anticipatable format variation. The FIRST
 # word in a row whose normalised text is in a set anchors that column.
-_HDR_ITEM = {"ITEM", "ITEMNO", "ITEM NO", "NO", "POS", "POSITION", "PART ITEM"}
-_HDR_CODE = {"DWG", "DWG NO", "DWGNO", "PARTNO", "PART NO", "PART", "PART NUMBER",
-             "PARTNUMBER", "DRAWING", "DRAWING NO", "REF", "PART REF"}
-_HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
-# NO OFF / OFF is the standard UK engineering-drawing spelling of quantity and is as
-# common on a customer's sheet as QTY. Its absence here rejected the whole header row,
-# so every BOM on such a drawing was invisible to the deterministic reader — and the
-# page then read as having no parts list at all rather than as one we failed on.
-_HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
-            "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
-# A customer's table can also print the row's own MATERIAL and WEIGHT — 0359342's did
-# ("MDF, 18mm" / "Corian, 6mm" / "4.28 kg" beside every part) and this reader had no
-# name for either column, so the one deterministic source of each component's own
-# specification was structurally unreadable. Located like every other family; absent
-# on SDI templates, so their parsing is unchanged.
-_HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
-_HDR_WEIGHT = {"WEIGHT", "WT", "MASS", "UNIT WEIGHT", "WEIGHT KG"}
+# ONE OWNER: the families live in bom_table_extractor (the lowest module in the reader
+# stack) so this reader, the extract_tables path and the Camelot bench all answer "what
+# does this header word mean" from one set. NO OFF / OFF is the standard UK spelling of
+# quantity; MATERIAL / MASS are the customer columns the 0359342 probe proved. The
+# fallback literals keep this reader standing alone if the import cannot resolve.
+try:
+    from bom_table_extractor import (HDR_CODE as _HDR_CODE, HDR_DESC as _HDR_DESC,
+                                     HDR_ITEM as _HDR_ITEM,
+                                     HDR_MATERIAL as _HDR_MATERIAL,
+                                     HDR_QTY as _HDR_QTY, HDR_WEIGHT as _HDR_WEIGHT)
+except Exception:                                                # pragma: no cover
+    _HDR_ITEM = {"ITEM", "ITEMNO", "ITEM NO", "NO", "POS", "POSITION", "PART ITEM"}
+    _HDR_CODE = {"DWG", "DWG NO", "DWGNO", "PARTNO", "PART NO", "PART", "PART NUMBER",
+                 "PARTNUMBER", "DRAWING", "DRAWING NO", "REF", "PART REF"}
+    _HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
+    _HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
+                "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
+    _HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
+    _HDR_WEIGHT = {"WEIGHT", "WT", "MASS", "UNIT WEIGHT", "WEIGHT KG", "MASS KG"}
 
 
 def _hdr_norm(t: str) -> str:
