@@ -345,6 +345,32 @@ def page_needs_vision(verdict: Dict[str, Any]) -> Tuple[bool, str]:
 # it is simply unknown, and that is the one state this module must never report as clean.
 # Both runners therefore append to `unread`, and reconcile_job carries those out to the
 # caller as findings. Prints alone were how a whole job ran vision-blind in silence.
+def grid_bom_fallback(page) -> Optional[Dict[str, Any]]:
+    """The extract_tables() read of a page the words reader could not parse.
+
+    THE EXTRACT THAT SUCCEEDED MUST REACH THE AUTHORITATIVE BOM. On 0359342,
+    extract_tables() returned every table and the header-mapped grid reader parses
+    them — but this reconciliation's Path A consulted only the words reader, so a
+    successful Layer 1 extraction still left the job to vision recovery (the review
+    probe's third finding). Consulted ONLY where the words reader found no rows on
+    the page, so every page it already reads is untouched; the parent comes from the
+    same title-block rule the words reader uses."""
+    try:
+        import bom_table_extractor as _bte
+        rows = _bte.extract_bom_table_rows(page)
+    except Exception:                                            # noqa: BLE001
+        return None
+    if not rows:
+        return None
+    parent = None
+    try:
+        words = page.extract_words(x_tolerance=1.5, y_tolerance=1.5) or []
+        parent = pathA._title_block_dwg_no(words) if pathA is not None else None
+    except Exception:                                            # noqa: BLE001
+        pass
+    return {"parent": parent, "rows": rows, "grid_mapped": True}
+
+
 def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = None,
                survey: Optional[Dict[Tuple[str, int], bool]] = None) -> List[Dict[str, Any]]:
     """Read every page deterministically, and — since the page is already open — note
@@ -370,6 +396,14 @@ def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = No
                             _v = {"has_text": False}
                         survey[(os.path.basename(p), pi)] = page_needs_vision(_v)
                     bom = pathA.read_bom_from_page(page)
+                    if not bom or not bom.get("rows"):
+                        _grid = grid_bom_fallback(page)
+                        if _grid:
+                            print(f"  [Path A] {os.path.basename(p)} p{pi + 1}: the "
+                                  f"words reader parsed no rows; the header-mapped "
+                                  f"grid read recovered {len(_grid['rows'])} row(s)",
+                                  flush=True)
+                            bom = _grid
                     if bom:
                         bom["page_index"] = pi
                         bom["pdf_name"] = os.path.basename(p)

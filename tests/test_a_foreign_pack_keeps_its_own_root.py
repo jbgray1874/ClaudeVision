@@ -397,11 +397,13 @@ def test_the_ms_page_one_table_survives_layer_one():
     assert by_ref["J13092"]["quantity"] == 1, "qty from the QTY column, not the mass"
     assert by_ref["J13094"]["quantity"] == 2
     assert by_ref["RM06236"]["quantity"] == 16
-    # letter-led codes are references to follow, with their identity kept
-    assert by_ref["J13092"]["kind"] == "drawing_ref"
-    assert by_ref["J13092"]["part_number"] == "J13092"
-    assert by_ref["MBY439"]["kind"] == "drawing_ref"
-    # purchased stems and TBA are bought-in by prefix, not by 'no hyphen'
+    # ONE classifier whatever the layout (review probe 2) — and the code preserved
+    # independently of it, so J13092 never becomes anonymous: the shared identity
+    # policy downstream resolves its role from evidence, not from column count
+    assert by_ref["J13092"]["kind"] == "bought_in", \
+        "the mapped path uses the same classifier as the positional one"
+    assert by_ref["J13092"]["code_token"] == "J13092"
+    assert by_ref["MBY439"]["code_token"] == "MBY439"
     assert by_ref["RM06236"]["kind"] == "bought_in"
     tba = [r for r in rows if r["part_ref"] == "TBA"]
     assert len(tba) == 2 and all(r["kind"] == "bought_in" for r in tba)
@@ -417,20 +419,77 @@ def test_the_ms_page_one_table_survives_layer_one():
     assert bte.bom_rows_from_tables([big])[0]["quantity"] == 300
 
 
-def test_the_sdi_positional_path_is_byte_identical():
-    """An SDI table — header or not — takes the original path: its QTY column IS the
-    rightmost mapped column and it prints no material/mass, so the header-map gate
-    does not fire and the proven [item, code, desc..., qty] parsing stands."""
+def test_an_sdi_table_yields_the_same_rows_through_its_own_header():
+    """Review probe 1's correction: a valid header is USED, whatever the columns —
+    the positional path is only for genuinely headerless tables. An SDI table's
+    header maps to exactly the rows the positional path produced, and THUM620's
+    classification is identical with and without a MATERIAL column (probe 2)."""
     import bom_table_extractor as bte
 
     sdi = [["ITEM", "DWG NO.", "DESCRIPTION", "QTY."],
            ["1", "1448-GA", "UPPER LEG ASSEMBLY", "2"],
            ["2", "THUM620", "M6 THUMBSCREW", "4"]]
     rows = bte.bom_rows_from_tables([sdi])
-    assert [(r["item_number"], r["part_ref"], r["quantity"]) for r in rows] == \
-        [("1", "1448-GA", 2), ("2", "THUM620", 4)]
-    assert rows[0]["kind"] == "drawing_ref" and rows[0]["part_number"] == "1448-GA"
-    # the catalogue thumbscrew stays a bought-in: the extended letter-led rule is
-    # confined to header-mapped tables and never reclassifies an SDI row
-    assert rows[1]["kind"] == "bought_in"
-    assert "header_mapped" not in rows[0]
+    assert [(r["item_number"], r["part_ref"], r["quantity"], r["kind"]) for r in rows] \
+        == [("1", "1448-GA", 2, "drawing_ref"), ("2", "THUM620", 4, "bought_in")]
+    assert rows[0]["part_number"] == "1448-GA"
+
+    # the same rows with a MATERIAL column: layout must not change classification
+    sdi_mat = [["ITEM", "DWG NO.", "DESCRIPTION", "QTY.", "MATERIAL"],
+               ["1", "1448-GA", "UPPER LEG ASSEMBLY", "2", "Mild Steel"],
+               ["2", "THUM620", "M6 THUMBSCREW", "4", ""]]
+    rows_mat = bte.bom_rows_from_tables([sdi_mat])
+    assert [(r["part_ref"], r["kind"]) for r in rows_mat] == \
+        [("1448-GA", "drawing_ref"), ("THUM620", "bought_in")]
+    assert rows_mat[0]["material_text"] == "Mild Steel"
+
+    # a genuinely headerless grid still parses by the proven positional shape
+    headerless = [["1", "1448-GA", "UPPER LEG ASSEMBLY", "2"]]
+    rows_hl = bte.bom_rows_from_tables([headerless])
+    assert [(r["part_ref"], r["quantity"]) for r in rows_hl] == [("1448-GA", 2)]
+    assert "header_mapped" not in rows_hl[0]
+
+
+def test_a_desc_before_code_header_with_qty_last_is_still_mapped():
+    """Review probe 1: [ITEM, DESCRIPTION, PART, QTY] — no material, qty rightmost —
+    was falling to the positional path, which read 'Plinth assembly' as the part and
+    J13092 as its description. A recognised header is used, full stop."""
+    import bom_table_extractor as bte
+
+    grid = [["ITEM", "DESCRIPTION", "PART", "QTY"],
+            ["1", "Plinth assembly", "J13092", "1"]]
+    rows = bte.bom_rows_from_tables([grid])
+    assert len(rows) == 1
+    assert rows[0]["part_ref"] == "J13092"
+    assert rows[0]["description"] == "Plinth assembly"
+    assert rows[0]["quantity"] == 1
+    assert rows[0]["code_token"] == "J13092"
+
+
+def test_the_grid_read_reaches_the_authoritative_path_a():
+    """Review probe 3: reconciliation's Path A called only the words reader, so a
+    successful extract_tables() read never reached the authoritative BOM. The grid
+    fallback is consulted exactly where the words reader parsed nothing."""
+    import merge_boms as mb
+
+    class _StubPage:
+        def extract_tables(self):
+            return [_ms_grid()]
+
+        def extract_words(self, **kw):
+            return []
+
+    bom = mb.grid_bom_fallback(_StubPage())
+    assert bom is not None and bom.get("grid_mapped") is True
+    assert len(bom["rows"]) == 12
+    refs = {r["part_ref"] for r in bom["rows"]}
+    assert {"J13092", "J13094", "RM06236", "A60890"} <= refs
+
+    class _EmptyPage:
+        def extract_tables(self):
+            return []
+
+        def extract_words(self, **kw):
+            return []
+
+    assert mb.grid_bom_fallback(_EmptyPage()) is None

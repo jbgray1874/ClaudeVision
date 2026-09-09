@@ -101,24 +101,21 @@ def _header_column_map(raw_row: List[Any]) -> Optional[Dict[str, int]]:
     return None
 
 
-def _classify_part_ref_mapped(raw: str):
-    """Classification for a HEADER-MAPPED table's part cell — by prefix and shape,
-    never by 'has no hyphen'.
+def _code_token(raw: str) -> str:
+    """The part cell's code, preserved INDEPENDENTLY of classification.
 
-    The SDI rule requires a digit-led hyphenated code, so on 0359342 every part —
-    J13092, JAE820, MBY439 — became a bought-in with an EMPTY part_number, and even a
-    fixed header would have collapsed the product into unnamed hardware. Here: TBA and
-    the purchased stems (RM / R0 / BI-) are bought-in BY PREFIX; any other single
-    letter-led or digit-led code token is a reference to follow. Only header-mapped
-    tables reach this — an SDI table's THUM620 / LOW068 catalogue codes never do."""
+    Review probe: letting the mapped path classify letter-led codes as drawing
+    references meant a table's LAYOUT decided whether THUM620 is purchased — adding a
+    MATERIAL column reclassified a thumbscrew. Classification stays with the ONE
+    shared rule (_classify_part_ref) whatever the table looks like; the code itself is
+    kept here as its own fact, so J13092 / JAE820 / MBY439 never become anonymous and
+    the shared identity policy downstream — purchasing evidence, drawing references —
+    resolves their role from evidence rather than from column count."""
     s = _clean(raw)
     joined = re.sub(r"\s*-\s*", "-", s).strip("-")
-    up = joined.upper()
-    if up == "TBA" or up.startswith(("RM", "R0", "BI-")):
-        return "bought_in", s
-    if " " not in joined and re.match(r"^[A-Z]{1,4}\d{3,}(?:-[A-Z0-9]+)*$", joined, re.I):
-        return "drawing_ref", _normalize_bom_code(s)
-    return _classify_part_ref(s)
+    if joined and " " not in joined and re.match(r"^[A-Z0-9][A-Z0-9-]*$", joined, re.I):
+        return _normalize_bom_code(s)
+    return ""
 
 
 def _rows_from_header_mapped_table(tbl: List[List[Any]], colmap: Dict[str, int],
@@ -142,7 +139,9 @@ def _rows_from_header_mapped_table(tbl: List[List[Any]], colmap: Dict[str, int],
         desc = _cell(raw, "desc")
         if not _has_words(desc) and not _has_words(part_ref):
             continue
-        kind, code_or_spec = _classify_part_ref_mapped(part_ref)
+        # THE SAME CLASSIFIER AS THE POSITIONAL PATH — a table's layout must never
+        # decide whether a part is purchased. The code survives separately below.
+        kind, code_or_spec = _classify_part_ref(part_ref)
         key = (item, _clean(part_ref), qty)
         if key in seen:
             continue
@@ -157,6 +156,9 @@ def _rows_from_header_mapped_table(tbl: List[List[Any]], colmap: Dict[str, int],
             "source": "bom_table",
             "header_mapped": True,
         }
+        _tok = _code_token(part_ref)
+        if _tok:
+            row_out["code_token"] = _tok
         # The row's own printed material and mass, through the same unit rules the
         # words and vision readers use (lazy import: the words reader imports this
         # module, so a top-level import here would be a cycle).
@@ -173,15 +175,15 @@ def _rows_from_header_mapped_table(tbl: List[List[Any]], colmap: Dict[str, int],
 def bom_rows_from_tables(tables: List[List[List[Any]]]) -> List[Dict[str, Any]]:
     """Pull clean BOM rows from raw pdfplumber extract_tables() output.
 
-    TWO SHAPES, ONE SCHEMA. A table that prints its own header with a MATERIAL or
-    MASS column, or whose QTY column is not the rightmost mapped column, is parsed by
-    that header's column map — the positional assumption below is provably wrong for
-    it (0359342: [item, desc, part, qty, rev, material, mass] — the old rule read the
-    mass as a failed quantity and deleted every row of six successfully extracted
-    tables, so the LLM was asked to invent a tree the PDF had printed). Every other
-    table takes the original positional path, byte-identical, which is the proven SDI
-    behaviour: a BOM data row, once empty cells are dropped, is
-    [item, code, desc..., qty] with item and qty small integers."""
+    A RECOGNISED HEADER IS USED — WHOLESALE, WHATEVER THE COLUMN ORDER. The table
+    prints its own column meanings; guessing positions past them is how 0359342's
+    [item, desc, part, qty, rev, material, mass] rows were deleted (the mass read as a
+    failed quantity) and how an [item, desc, part, qty] table put 'Plinth assembly' in
+    the part column — the review probe of the first cut, which gated the mapper on
+    extra columns and so ignored a perfectly valid header. The positional path below
+    is the fallback for GENUINELY HEADERLESS tables — a grid whose header row the
+    extractor did not capture — where the proven SDI shape assumption
+    [item, code, desc..., qty] is all there is to go on."""
     out: List[Dict[str, Any]] = []
     seen = set()
     for tbl in tables or []:
@@ -190,12 +192,9 @@ def bom_rows_from_tables(tables: List[List[List[Any]]]) -> List[Dict[str, Any]]:
             colmap = _header_column_map(_hdr_candidate)
             if not colmap:
                 continue
-            _foreign_shape = ("material" in colmap or "weight" in colmap
-                              or colmap["qty"] < max(colmap.values()))
-            if _foreign_shape:
-                _rows_from_header_mapped_table(tbl, colmap, _hdr_candidate, out, seen)
-                _mapped = True
-            break        # one header per table either way
+            _rows_from_header_mapped_table(tbl, colmap, _hdr_candidate, out, seen)
+            _mapped = True
+            break        # one header per table
         if _mapped:
             continue
         for raw in tbl:
