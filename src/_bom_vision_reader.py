@@ -137,7 +137,10 @@ def count_pages(pdf_path: str) -> int:
 # ----------------------------------------------------------------------------
 # Bump PROMPT_VERSION whenever _VISION_PROMPT changes — it is part of the cache
 # key, so a prompt change correctly invalidates every cached page result.
-PROMPT_VERSION = "v2"  # v2: BOM rows (unchanged rules) + part_details + spec_block enrichment
+PROMPT_VERSION = "v3"  # v3: per-row material + weight columns (0359342: the customer's own
+#                        table printed "MDF, 18mm" / "Corian, 6mm" / "4.28 kg" on every row
+#                        and the v2 schema never asked for them — so the engine invented a
+#                        blanket 6mm instead of reading the 18 printed beside each part)
 
 _VISION_PROMPT = """You are reading a single page of an engineering CAD drawing (SDI Displays).
 Transcribe ONLY what is VISIBLY PRINTED on this page. NEVER infer, guess, invent, or
@@ -150,6 +153,10 @@ and a QUANTITY (QTY). The header words vary between drawings.
 - Do NOT infer, guess, invent, or add rows that are not in a table. If a description is
   only in a note (not the table cell), leave that row's description blank.
 - Read part numbers and quantities EXACTLY as printed (including hyphens/spaces).
+- Some BOM tables also print a MATERIAL column (e.g. "MDF, 18mm", "Corian, 6mm",
+  "Mild Steel") and/or a WEIGHT column (e.g. "4.28 kg") per row. When such a column is
+  visibly present, transcribe each row's cell VERBATIM into "material" / "weight".
+  When the table has no such column, use null — NEVER infer a material or weight.
 - Read the drawing's own DWG NO from the title block (bottom-right) — that is the PARENT
   assembly this table belongs to.
 - If there is NO BOM/parts table on this page, return an empty "rows" list.
@@ -167,7 +174,8 @@ Return ONLY valid JSON, no markdown, in EXACTLY this shape:
 {
   "parent": "<title-block DWG NO, or null>",
   "rows": [
-    {"item": "1", "part_code": "1448-GA", "description": "UPPER LEG ASSEMBLY", "qty": 2}
+    {"item": "1", "part_code": "1448-GA", "description": "UPPER LEG ASSEMBLY", "qty": 2,
+     "material": null, "weight": null}
   ],
   "part_details": {
     "material": null, "thickness_mm": null, "tube_section": null, "cut_length_mm": null,
@@ -333,6 +341,27 @@ def _strip_fences(s: str) -> str:
     return s
 
 
+def material_thickness_mm(material_text: Any) -> Optional[float]:
+    """The thickness a BOM material cell prints beside its material, or None.
+
+    "MDF, 18mm" -> 18.0; "Corian, 6mm" -> 6.0; "Mild Steel" -> None. Transcription
+    parsing only — a cell with no printed millimetre figure yields nothing, because a
+    thickness this function invents becomes a gauge somebody cuts."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(material_text or ""), re.I)
+    return float(m.group(1)) if m else None
+
+
+def weight_kg(weight_text: Any) -> Optional[float]:
+    """The printed per-row weight in kilograms, or None. "4.28 kg" -> 4.28;
+    "270 g" -> 0.27; a bare number is refused — with no unit printed there is no fact."""
+    s = str(weight_text or "").strip()
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|g)\b", s, re.I)
+    if not m:
+        return None
+    v = float(m.group(1))
+    return v if m.group(2).lower() == "kg" else v / 1000.0
+
+
 def parse_vision_response(raw: str) -> Optional[Dict[str, Any]]:
     txt = _strip_fences(raw)
     # find the first {...} block if there's stray prose
@@ -356,13 +385,30 @@ def parse_vision_response(raw: str) -> Optional[Dict[str, Any]]:
             qty = int(qty_raw)
         except Exception:
             continue  # a row without a clean integer qty isn't a usable BOM row
-        rows.append({
+        row: Dict[str, Any] = {
             "item_number": item,
             "part_ref": code,
             "description": desc,
             "quantity": qty,
             "kind": "vision",       # provenance tag; classification happens in merge
-        })
+        }
+        # THE ROW'S OWN MATERIAL AND WEIGHT COLUMNS, where the table prints them.
+        # 0359342's tables carried "MDF, 18mm" / "Corian, 6mm" / "4.28 kg" on every
+        # row and the schema never asked — so parts reached costing with mat null and
+        # a document-default 6mm, and the one population that KNEW each component's
+        # own specification was the table nobody kept. Verbatim text plus the parsed
+        # figures, so downstream evidence rules can rank them; absent columns stay
+        # absent (the model returns null and nothing is stamped).
+        _mat = str(r.get("material") or "").strip()
+        if _mat:
+            row["material_text"] = _mat
+            _thk = material_thickness_mm(_mat)
+            if _thk is not None:
+                row["thickness_mm"] = _thk
+        _wkg = weight_kg(r.get("weight"))
+        if _wkg is not None:
+            row["stated_weight_kg"] = _wkg
+        rows.append(row)
     # Capture the v2 enrichment (part_details + spec_block) if present. Additive: consumers that
     # only read "rows"/"parent" are unaffected. These are the LLM (Layer-3) view; the deterministic
     # drawing_facts (Layer 2) remains authoritative — this is the cross-check / no-DXF backup.

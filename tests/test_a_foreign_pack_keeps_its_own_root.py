@@ -145,3 +145,46 @@ def test_the_family_map_reads_each_parts_own_evidence():
     assert pp.family_for("Mild Steel CR4", "MBY435", "BRACKET") == pp.METAL
     # no evidence returns unknown — never a defaulted route
     assert pp.family_for("", "XYZ99", "") == pp.UNKNOWN
+
+
+# ── the vision reader keeps the whole row, not half of it ────────────────────────────────
+
+def test_the_vision_row_carries_its_printed_material_and_weight():
+    """0359342's tables printed 'MDF, 18mm' / 'Corian, 6mm' / '4.28 kg' on every row and
+    the v2 schema never asked — so parts reached costing with mat null and a document
+    default 6mm while the one population that knew each component's own specification
+    was the table nobody kept."""
+    import json as _json
+
+    import _bom_vision_reader as vb
+
+    assert vb.PROMPT_VERSION not in ("v1", "v2"), \
+        "the schema change must invalidate every cached v2 page read"
+    assert '"material"' in vb._VISION_PROMPT and '"weight"' in vb._VISION_PROMPT
+
+    raw = _json.dumps({"parent": "A61636", "rows": [
+        {"item": "1", "part_code": "JAE820", "description": "Plinth Top", "qty": 1,
+         "material": "MDF, 18mm", "weight": "4.28 kg"},
+        {"item": "8", "part_code": "R00500", "description": "M8 T Nut", "qty": 4,
+         "material": "Mild Steel", "weight": "0.01 kg"},
+        {"item": "5", "part_code": "RM08362", "description": "Castor", "qty": 4,
+         "material": None, "weight": None},
+        {"item": "2", "part_code": "OLD-01", "description": "v2-shaped row", "qty": 2},
+    ]})
+    parsed = vb.parse_vision_response(raw)
+    rows = {r["part_ref"]: r for r in parsed["rows"]}
+    assert rows["JAE820"]["material_text"] == "MDF, 18mm"
+    assert rows["JAE820"]["thickness_mm"] == 18.0
+    assert rows["JAE820"]["stated_weight_kg"] == 4.28
+    assert rows["R00500"]["material_text"] == "Mild Steel"
+    assert "thickness_mm" not in rows["R00500"], "no printed mm means no thickness"
+    # a null cell stamps nothing, and a v2-shaped row still parses
+    for pn in ("RM08362", "OLD-01"):
+        for k in ("material_text", "thickness_mm", "stated_weight_kg"):
+            assert k not in rows[pn]
+
+    # the unit rules stand alone: transcription parsing, never invention
+    assert vb.material_thickness_mm("Corian, 6mm") == 6.0
+    assert vb.material_thickness_mm("MDF") is None
+    assert vb.weight_kg("270 g") == 0.27
+    assert vb.weight_kg("4.28") is None, "a bare number with no printed unit is not a fact"
