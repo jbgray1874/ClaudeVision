@@ -493,3 +493,35 @@ def test_the_grid_read_reaches_the_authoritative_path_a():
             return []
 
     assert mb.grid_bom_fallback(_EmptyPage()) is None
+
+
+def test_the_flatten_keeps_the_rows_printed_specification(monkeypatch):
+    """Review probe of 89b82d4: bom_pipeline's flatten built a new dictionary that
+    copied everything EXCEPT material_text / thickness_mm / stated_weight_kg — so a
+    successful extraction still lost the exact fields needed to retire the blanket
+    6mm assumption. The evidence now survives the flatten, and only where a reader
+    actually stamped it: a row without the columns is byte-identical."""
+    import bom_pipeline
+    import merge_boms
+
+    fake = {"parents": [{"label": "A61636", "parent_known": True, "rows": [
+        {"part_ref": "JAE820", "part_number": "", "description": "Plinth Top",
+         "quantity": 1, "source": "BOTH", "confidence": "HIGH", "flag": "",
+         "material_text": "MDF, 18mm", "thickness_mm": 18.0,
+         "stated_weight_kg": 4.28, "code_token": "JAE820"},
+        {"part_ref": "1448-GA", "part_number": "1448-GA", "description": "LEG ASSY",
+         "quantity": 2, "source": "BOTH", "confidence": "HIGH", "flag": ""},
+    ]}], "unread": [], "vision_calls": {}, "counts": {}, "findings": []}
+    monkeypatch.setattr(merge_boms, "reconcile_job", lambda paths, **kw: fake)
+    monkeypatch.setattr(merge_boms, "find_pdfs", lambda folder: ["x.pdf"])
+    out = bom_pipeline.reconciled_bom_rows_for_job(folder="whatever")
+    rows = {r["part_number"]: r for r in out["rows"]}
+    jae = rows["JAE820"]
+    assert jae["material_text"] == "MDF, 18mm"
+    assert jae["thickness_mm"] == 18.0
+    assert jae["stated_weight_kg"] == 4.28
+    assert jae["code_token"] == "JAE820"
+    assert jae["bom_parent"] == "A61636"
+    leg = rows["1448-GA"]
+    for k in ("material_text", "thickness_mm", "stated_weight_kg", "code_token"):
+        assert k not in leg, "a row without the columns is byte-identical"

@@ -165,7 +165,7 @@ def reconciled_bom_rows_for_job(
                     "page": parent,
                 })
                 continue
-            flat.append({
+            _row_out = {
                 # --- the three keys build_document_writeup reads ---
                 "part_number": code,
                 "description": desc,
@@ -188,7 +188,19 @@ def reconciled_bom_rows_for_job(
                 # Which sheet the row was read off, and any others that restated it.
                 "bom_sheet": r.get("sheet"),
                 "bom_also_on_sheets": list(r.get("also_on_sheets") or []) or None,
-            })
+            }
+            # --- THE ROW'S OWN PRINTED SPECIFICATION SURVIVES THE FLATTEN. The readers
+            #     were taught to keep material / thickness / mass, and this dict is
+            #     where the review probe found them dying: a new dictionary that copied
+            #     everything except the fields needed to retire the blanket-6mm
+            #     assumption. Copied only when a reader actually stamped them, so an
+            #     SDI row without the columns is byte-identical.
+            for _ev in ("material_text", "thickness_mm", "stated_weight_kg",
+                        "segmentation_uncertain", "code_token"):
+                _v = r.get(_ev)
+                if _v not in (None, ""):
+                    _row_out[_ev] = _v
+            flat.append(_row_out)
     # A reader that did not run is the only failure this module cannot see in its output:
     # the rows simply are not there, and a job read by one path looks exactly like a job
     # both paths agreed was small. Promote every unread scope to a finding so the absence
