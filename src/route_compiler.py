@@ -3771,6 +3771,9 @@ def compile_job_route(
             f"assemble here would charge for building it twice.")
         _d.field_provenance["status"] = "specific_joining_covers_this_assembly"
 
+    if pack_mode == "pdf_primary":
+        _family_gate(decisions, raw)
+
     for decision in decisions:
         if (
             decision.status == REQUIRED
@@ -3803,6 +3806,74 @@ def compile_job_route(
             UNVERIFIED: sum(item.status == UNVERIFIED for item in decisions),
         },
     }
+
+
+# The operations only a metal route performs. A joinery-family part is made by CNC,
+# edging and assembly; sending MDF through the weld bay is the 0359342 op explosion —
+# £656 of welding and £511 of powder on panels the drawing finishes with laminate.
+_METAL_ONLY_OPS = frozenset({
+    "laser_cutting", "folding", "welding", "dress_welds", "powder_coating",
+    "linebend", "tubebend",
+})
+
+
+def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]]) -> None:
+    """pdf_primary only: a part's OWN material decides which route family may charge it.
+
+    On 0359342 the whole-document extract transcribed the general finish legend onto
+    every part record, and each part's textual_operations then became a required
+    decision — so 227 pieces of MDF were welded, dressed and powder-coated, and the
+    screws were laser-cut. The evidence the gate reads is the part's own (its material
+    — post row-evidence stamping — its code stem, its description); the shared
+    family map and the shared hardware vocabulary decide, never a customer name:
+
+      hardware (a purchased code stem, or a description the shared bought-in
+      vocabulary recognises — a screw, nut, bolt, washer)   -> no fabrication at all
+      joinery family (MDF, laminate, timber)                -> no metal-only ops
+      bought-in sheet goods (Corian, mirror, vinyl)         -> no metal-only ops
+                                                               (the bond line stays)
+      metal family, or no evidence                          -> untouched
+
+    Refusals are recorded as decisions with their reason, so the report's ruled-out
+    table shows every one; nothing is deleted silently."""
+    try:
+        from pack_profile import BOUGHT_IN, JOINERY, family_for
+        from part_identity import synthesise_bought_in_code
+    except Exception:                                            # pragma: no cover
+        return
+    try:
+        from bought_in_policy import FABRICATION_OPS as _FAB_ALL
+    except Exception:                                            # pragma: no cover
+        _FAB_ALL = _METAL_ONLY_OPS | {"glue", "wet_spray", "countersinking"}
+    for _d in decisions:
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        _rec = raw.get(_d.target_id) or {}
+        _mat = str(_rec.get("normalized_material")
+                   or (_rec.get("material_estimate") or {}).get("material") or "")
+        _desc = str(_rec.get("description") or "")
+        _fam = family_for(_mat, _d.target_id, _desc)
+        _hardware = bool(synthesise_bought_in_code(_desc)) \
+            or family_for("", _d.target_id, "") == BOUGHT_IN
+        if _hardware and _d.operation in _FAB_ALL:
+            _d.status = NOT_APPLICABLE
+            _d.reason = (f"{_d.target_id} is purchased hardware "
+                         f"({_desc[:40] or 'coded stem'}) — fabrication belongs to its "
+                         f"maker; only handling and assembly time apply here")
+            _d.field_provenance["status"] = "family_gate_hardware"
+        elif _fam == JOINERY and _d.operation in _METAL_ONLY_OPS:
+            _d.status = NOT_APPLICABLE
+            _d.reason = (f"{_mat or 'joinery-family material'} is made by CNC, edging "
+                         f"and assembly, not {_d.operation} — this claim came from a "
+                         f"document-level note transcribed onto the part, not from its "
+                         f"own route")
+            _d.field_provenance["status"] = "family_gate_joinery"
+        elif _fam == BOUGHT_IN and _d.operation in _METAL_ONLY_OPS:
+            _d.status = NOT_APPLICABLE
+            _d.reason = (f"{_mat or _d.target_id} is a bought-in sheet good — it is "
+                         f"purchased finished and bonded in; {_d.operation} is not its "
+                         f"route (the bond/handling time stays)")
+            _d.field_provenance["status"] = "family_gate_sheet_good"
 
 
 def project_priced_route(

@@ -700,3 +700,56 @@ def test_a_parts_own_bom_row_retires_the_unsourced_blanket():
         "the refused table reading is evidence on the record, never silence"
     # the material still filled (dxf said nothing about material)
     assert dxf_part["normalized_material"] == "Steel,Mild2mm"
+
+
+# ── bind (b): a part's own family decides which route may charge it ──────────────────────
+
+def test_the_family_gate_refuses_fiction_routes_and_keeps_real_ones():
+    """digest2's op table: welding, folding, laser, dress and powder 'required' on
+    every part uniformly — screws included — because the general legend was
+    transcribed onto each record and mechanically became decisions. The gate reads
+    each part's OWN evidence and refuses only what its family cannot do; every
+    refusal carries its reason into the ruled-out table."""
+    from types import SimpleNamespace as NS
+
+    raw = {"JAE820": {"normalized_material": "MDF,18mm", "description": "Plinth Top"},
+           "84756": {"normalized_material": "MildSteel",
+                     "description": "M6x20ButtonHeadSocketMachineScrew,BZP"},
+           "JAE823": {"normalized_material": "Corian,6mm", "description": "Overlay"},
+           "MBY433": {"normalized_material": "CR4", "description": "Prong Assembly"},
+           "RM05285": {"normalized_material": "Beech", "description": "Dowel - Precut"}}
+
+    def d(t, op, scope="part"):
+        return NS(target_id=t, operation=op, scope=scope, status=rc.REQUIRED,
+                  reason="", field_provenance={})
+
+    mdf_weld, mdf_pc, mdf_glue, mdf_spray = (d("JAE820", "welding"),
+                                             d("JAE820", "powder_coating"),
+                                             d("JAE820", "glue"),
+                                             d("JAE820", "wet_spray"))
+    screw_laser, screw_glue = d("84756", "laser_cutting"), d("84756", "glue")
+    corian_fold, corian_glue = d("JAE823", "folding"), d("JAE823", "glue")
+    steel_weld = d("MBY433", "welding")
+    beech_weld = d("RM05285", "welding")
+    asm_scope = d("JAE820", "welding", scope="assembly")
+    ds = [mdf_weld, mdf_pc, mdf_glue, mdf_spray, screw_laser, screw_glue,
+          corian_fold, corian_glue, steel_weld, beech_weld, asm_scope]
+    rc._family_gate(ds, raw)
+
+    # joinery: metal-only ops refused with the reason recorded; glue and spray stay
+    assert mdf_weld.status == rc.NOT_APPLICABLE and "CNC" in mdf_weld.reason
+    assert mdf_pc.status == rc.NOT_APPLICABLE
+    assert mdf_glue.status == rc.REQUIRED
+    assert mdf_spray.status == rc.REQUIRED, "wet spray is a joinery finish"
+    # hardware: no fabrication at all — the shared vocabulary recognises a screw
+    assert screw_laser.status == rc.NOT_APPLICABLE
+    assert screw_glue.status == rc.NOT_APPLICABLE
+    assert screw_laser.field_provenance["status"] == "family_gate_hardware"
+    # bought-in sheet goods: no metal route, but the bond line stays
+    assert corian_fold.status == rc.NOT_APPLICABLE
+    assert corian_glue.status == rc.REQUIRED
+    # metal keeps its real route; timber-family dowel loses the fiction weld
+    assert steel_weld.status == rc.REQUIRED
+    assert beech_weld.status == rc.NOT_APPLICABLE
+    # assembly-scope decisions are never the gate's business
+    assert asm_scope.status == rc.REQUIRED
