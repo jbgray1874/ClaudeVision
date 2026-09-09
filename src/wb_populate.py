@@ -171,6 +171,19 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
         if best is None:
             best = block
     if best is None:
+        # THE RESCUER'S MARK IS A STAMP TOO. apply_last_resort_prices writes its market
+        # figure into material_estimate with cost_method "last_resort_market_indication"
+        # and does not always leave an affects-total price stamp behind — the record's
+        # price_source can still read "unpriced" from the failed chain that ran first. So
+        # the one question this function exists to answer ("is this figure a guess?")
+        # said "no stamp, no opinion" about exactly the lines that are ALL guess: on
+        # 0359342 every Corian panel carried a £62–£996 market indication and not one
+        # would have worn the INDICATIVE tag. The cost_method IS the rescuer's stamp;
+        # read it before concluding the line has no origin to declare.
+        _lr_mark = (str(((pe.get("material_estimate") or {}).get("cost_method")) or "")
+                    + " " + str(pe.get("costing_basis") or ""))
+        if "last_resort_market_indication" in _lr_mark:
+            return "AI ESTIMATE - INDICATIVE", not _price_is_reproducible(pe)
         return "", False
     cls = price_provenance.stamp_source_class(best)
     if cls == "ai_estimate":
@@ -3147,9 +3160,31 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         elif unit_price is None and ext_total is not None and blank_l is None:
             bom_parts.append(pe)
         else:
-            _flag(f"part {pe.get('part_number')} unclassifiable "
-                  f"(stock_form={stock_form!r}, role={roles}, unit={unit_price}, "
-                  f"ext={ext_total}, blankL={blank_l}) — skipped.", flags)
+            # A PART THE CLASSIFIER CANNOT PLACE IS STILL A PART SOMEBODY MUST PRICE.
+            #
+            # This branch used to flag "unclassifiable — skipped", and skipped meant
+            # SILENT on the sheet: no material row, no unpriced row, nothing for an
+            # estimator to strike. 0359342 dropped 27 fabricated leaves here in one job
+            # — all sixteen Corian panels among them — because a foreign pack's parts
+            # arrived with no material fact, which defeats every branch above (mat null
+            # fails the board/sheet tests; the last-resort market price they DO carry
+            # fails branch 8's unit_price-is-None test). Their indications sat priced
+            # and labelled in the canonical population while the sheet's material total
+            # read as if the Corian were free.
+            #
+            # Route the line to the BOM block instead. The row writer already owns every
+            # honesty question that follows: a priced line prices through
+            # _bom_line_price and wears the INDICATIVE tag when its money is a market
+            # guess (_price_origin reads the rescuer's cost_method mark); an unpriced
+            # one gets the same "MATERIAL UNPRICED: enter a unit rate" row the BI-
+            # placeholders get. Either way the part is ON the sheet, which is the one
+            # thing "skipped" can never be.
+            bom_parts.append(pe)
+            _flag(f"part {pe.get('part_number')} fits no material block "
+                  f"(stock_form={stock_form!r}, role={roles}, material={mat!r}, "
+                  f"blankL={blank_l}) — written to the BOM as a per-each line so it "
+                  f"cannot silently read as free. Add its material/geometry to cost it "
+                  f"as sheet or board.", flags)
 
     # ── BOM block: desc, code, PRICE (engine), qty, scrap ──────────────────
     # Holds true bought-ins (fixings, vinyl, electricals) AND tube sections

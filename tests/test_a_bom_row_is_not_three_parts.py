@@ -1796,3 +1796,50 @@ def test_drill_yields_to_the_runs_own_geometry_rollup_keys():
     holed = dict(live, geometry_rollup={"estimated_hole_count": 4})
     assert rc._unsupported_drill_reason(_T(), holed) is None, \
         "measured holes keep the operation"
+
+
+# ── 0359342 · a part the classifier cannot place still reaches the sheet ─────────────────
+
+def test_a_market_indication_declares_itself_without_a_price_stamp():
+    """0359342's Corian panels: apply_last_resort_prices wrote £62–£996 into
+    material_estimate with cost_method last_resort_market_indication, while the record's
+    price stamps still read 'unpriced' from the chain that failed first. _price_origin
+    read only the stamps, so the one honesty tag the sheet has for a guess never fired on
+    exactly the lines that are all guess."""
+    import wb_populate as wp
+
+    jae = {"part_number": "JAE821", "quantity": 2, "_canonical_kind": "leaf",
+           "material_estimate": {"unit_material_cost_gbp": 105.0,
+                                 "cost_per_part_gbp": 105.0,
+                                 "cost_method": "last_resort_market_indication"}}
+    label, unstable = wp._price_origin(jae)
+    assert "INDICATIVE" in label, "a last-resort indication must name itself on the sheet"
+    assert unstable is False, "no unreproducible ai stamp: the figure prices, tagged"
+    # the leaf price chain reads the indication the rescuer stored
+    assert wp._bom_line_price(jae) == 105.0
+    # and the row decision keeps the reproducible figure ON the line
+    line = wp.bom_line_pricing(dict(jae, _price_is_reproducible=True), True, 105.0)
+    assert line["withheld_gbp"] is None, "a stored indication prices the line, tagged"
+
+    # a record with no last-resort mark gains nothing from the fallback
+    assert wp._price_origin({"part_number": "X", "material_estimate": {}}) == ("", False)
+
+
+def test_the_unclassifiable_branch_writes_a_row_instead_of_skipping():
+    """0359342 dropped 27 fabricated leaves at the classifier's terminal else — all
+    sixteen Corian panels among them — because mat null defeats the board/sheet tests and
+    their market price defeats the unit_price-is-None test. 'Skipped' meant silent on the
+    sheet: no material row, no unpriced row. The branch must route to the BOM block, whose
+    writer already owns the pricing honesty (INDICATIVE tag / MATERIAL UNPRICED note).
+
+    The loop lives inside populate_workbook, which no fixture can call (it needs the
+    network template) — so the branch is pinned structurally, the same way
+    test_what_a_part_is_for_survives_costing pins the page_roles reader."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
+        encoding="utf-8")
+    i = src.index("fits no material block")
+    window = src[i - 1600:i]
+    assert "bom_parts.append(pe)" in window, "the terminal else routes to the BOM block"
+    assert 'skipped.", flags' not in src, "the silent-skip flag itself is gone"
