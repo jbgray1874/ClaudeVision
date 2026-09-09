@@ -1,0 +1,259 @@
+{
+ "job": "0359342",
+ "customer_root": "A61636",
+ "provenance": "frozen from output/json/0359342.json digest, run of 2026-09-08T19:37Z on engine 26ceeea \u2014 the sheet-1 BOM plus the five child tables (plinth J13092 / shroud J13093 / back J13094 / shelf J13095 / prong MBY433), exactly as document_analysis.bom_rows recovered them (src B_RECOVERED)",
+ "bom_rows": [
+  {
+   "part_number": "J13092",
+   "quantity": 1,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "J13093",
+   "quantity": 1,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "J13094",
+   "quantity": 2,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "A62271",
+   "quantity": 2,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "MBY439",
+   "quantity": 2,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "J13149",
+   "quantity": 8,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM08363",
+   "quantity": 4,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM08167",
+   "quantity": 4,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM06236",
+   "quantity": 16,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "TBA",
+   "quantity": 4,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "TBA",
+   "quantity": 4,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "A60890",
+   "quantity": 1,
+   "bom_parent": "A61636",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE820",
+   "quantity": 1,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE821",
+   "quantity": 2,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE822",
+   "quantity": 2,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE823",
+   "quantity": 1,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM08362",
+   "quantity": 4,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM04088",
+   "quantity": 4,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE824",
+   "quantity": 4,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "R00500",
+   "quantity": 4,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE825",
+   "quantity": 4,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "R35571",
+   "quantity": 16,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "84756",
+   "quantity": 16,
+   "bom_parent": "J13092",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE830",
+   "quantity": 2,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE831",
+   "quantity": 2,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE827",
+   "quantity": 2,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE828",
+   "quantity": 2,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE829",
+   "quantity": 2,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE826",
+   "quantity": 1,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "R35571",
+   "quantity": 4,
+   "bom_parent": "J13093",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE832",
+   "quantity": 1,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "MBY433",
+   "quantity": 28,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "R04611",
+   "quantity": 72,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "MBY435",
+   "quantity": 4,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "J13095",
+   "quantity": 4,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM05057",
+   "quantity": 4,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "RM05285",
+   "quantity": 3,
+   "bom_parent": "J13094",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE833",
+   "quantity": 2,
+   "bom_parent": "J13095",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE834",
+   "quantity": 2,
+   "bom_parent": "J13095",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "JAE835",
+   "quantity": 2,
+   "bom_parent": "J13095",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "MBY432",
+   "quantity": 1,
+   "bom_parent": "MBY433",
+   "bom_source": "B_RECOVERED"
+  },
+  {
+   "part_number": "MBY434",
+   "quantity": 1,
+   "bom_parent": "MBY433",
+   "bom_source": "B_RECOVERED"
+  }
+ ]
+}

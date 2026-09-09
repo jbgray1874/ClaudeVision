@@ -999,12 +999,52 @@ def _bom_stated_edges(
     return edges
 
 
+def _pdf_primary_stated_roots(
+    bom_rows: Optional[Sequence[Mapping[str, Any]]],
+    known: Set[str],
+    aliases: Mapping[str, str],
+) -> Dict[str, int]:
+    """{root code: rows naming it} for parents a pdf_primary pack's own BOM insists on.
+
+    THE EXCEPTION TO "A PARENT WE DO NOT KNOW IS NOT CREATED", and it is as narrow as the
+    evidence demands. On 0359342 the customer's BOM stated twelve rows under A61636 — the
+    GA's own drawing number in a convention where files are named by the SDI job instead —
+    and the refusal that protects structured packs from phantom assemblies orphaned the
+    whole product: no root, no x2 back-panel cascade, every top-level part disconnected.
+
+    A code qualifies only when the table's own structure proves it is the product:
+      - at least three rows name it as their owner (a real table, not a stray label),
+      - no spelling of it resolves to anything the job already knows (otherwise the
+        ordinary edge rules apply and nothing needs minting),
+      - it never appears as any row's CHILD (a mid-tree assembly has a part row of its
+        own and joins the ordinary way; only the top of the tree has no row anywhere).
+
+    Callers gate this on pack_mode == "pdf_primary" — a structured pack never enters.
+    """
+    _named: Dict[str, int] = {}
+    _child_codes: Set[str] = set()
+    for row in bom_rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        for _s in _code_spellings(row.get("part_number") or row.get("part_code")
+                                  or row.get("code")):
+            _child_codes.add(aliases.get(_s, _s))
+        _stated = row.get("bom_parent") or row.get("parent") or row.get("parent_code")
+        _spellings = [aliases.get(s, s) for s in _code_spellings(_stated)]
+        if not _spellings or any(s in known for s in _spellings):
+            continue
+        _named[_spellings[0]] = _named.get(_spellings[0], 0) + 1
+    return {code: n for code, n in _named.items()
+            if n >= 3 and code not in _child_codes}
+
+
 def build_part_graph(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
     bom_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     known_assemblies: Optional[Iterable[str]] = None,
     page_owner: Optional[Mapping[int, str]] = None,
+    pack_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build canonical nodes and hierarchy edges from the whole job.
 
@@ -1222,6 +1262,31 @@ def build_part_graph(
     # "12392-04 - GA.pdf" must be recognisable as the assembly the graph calls 12392-04-GA.
     _drawings = {s for d in (known_assemblies or []) for s in _code_spellings(d)}
     _drawings.discard("")
+    # ── THE ROOT A FOREIGN PACK'S OWN TABLE INSISTS ON ───────────────────────────────
+    # Gated on pack_mode: only a job classified pdf_primary (PDF tables, no model, no
+    # DXF anywhere — see pack_profile.detect_pack_mode) may mint a stated root, and only
+    # under _pdf_primary_stated_roots' own three refusals. Structured packs never enter,
+    # so the phantom-assembly protection above stands exactly as it was for lane A.
+    _minted_root_issues: List[Dict[str, Any]] = []
+    if pack_mode == "pdf_primary":
+        _known_now = set(raw) | set(extracted) | set(children) | _drawings
+        for _mr, _nrows in sorted(_pdf_primary_stated_roots(
+                bom_rows, _known_now, aliases).items()):
+            _drawings.add(_mr)
+            records.setdefault(_mr, {})["is_sub_assembly"] = True
+            records[_mr]["hierarchy_source"] = "bom_stated_root_pdf_primary"
+            _minted_root_issues.append({
+                "code": "bom_stated_root_minted_pdf_primary",
+                "identity": _mr,
+                "detail": (f"{_mr} is the owner {_nrows} of this pack's own BOM rows "
+                           f"state and nothing else in the job names — minted as the "
+                           f"product root because the pack is PDF-primary (no model, "
+                           f"no DXF). Its quantities cascade from here; verify the "
+                           f"root against the GA title block."),
+            })
+            print(f"   [bom] '{_mr}' minted as the stated root ({_nrows} rows name it; "
+                  f"pdf_primary pack) — the customer's table is the only structure "
+                  f"this job has, so its stated ownership is honoured", flush=True)
     # A PART OWNED BY ANOTHER SOURCE IS NOT RE-OWNED; A PART THE BOM OWNS TWICE IS OWNED
     # TWICE. Those are different facts and one rule was answering both. Refusing any child
     # that already had a parent also refused the SECOND BOM line for a fastener both general
@@ -1616,7 +1681,7 @@ def build_part_graph(
             },
         ))
 
-    graph_issues = list(_interleave_issues)
+    graph_issues = list(_interleave_issues) + list(_minted_root_issues)
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -2060,11 +2125,16 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
     # occurrences never had — synthesised and catalogue lines. Those state no parent, so
     # they add nothing to the hierarchy and cost nothing to include; where a row appears in
     # both, the edge is identical and adding it twice is a no-op.
+    # One classification per job, from the pack's own contents — pdf_primary lets the
+    # graph honour a stated root the structured rules refuse; every other pack passes
+    # None-equivalent "structured" and nothing changes. See pack_profile.
+    _pack_mode = _detect_pack_mode(summary)
     compiled = compile_job_route(population, summary.get("llm_full_extract") or {},
                                  list(_da.get("bom_rows") or [])
                                  + list(_da.get("bay_bom_rows") or []),
                                  job_drawing_numbers(summary),
-                                 _assembly_page_owners(summary))
+                                 _assembly_page_owners(summary),
+                                 pack_mode=_pack_mode)
     # THE DROP, AFTER THE LAST READER AS WELL AS BEFORE THE FIRST. The pre-cost pass
     # quarantines the zipped-BOM-row chimera, and the dual-path reconciler then re-adds
     # its row from the raw table read — which is how a part the log twice said was
@@ -2098,11 +2168,23 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                      list(_da.get("bom_rows") or [])
                                      + list(_da.get("bay_bom_rows") or []),
                                      job_drawing_numbers(summary),
-                                     _assembly_page_owners(summary))
+                                     _assembly_page_owners(summary),
+                                     pack_mode=_pack_mode)
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
     return payload
+
+
+def _detect_pack_mode(summary: Mapping[str, Any]) -> str:
+    """pack_profile owns this classification; imported lazily so route_compiler stays
+    importable without it, and answers "structured" — the mode every existing job runs
+    in — rather than raising if it cannot be reached."""
+    try:
+        from pack_profile import detect_pack_mode
+        return detect_pack_mode(summary)
+    except Exception:                                       # noqa: BLE001
+        return "structured"
 
 
 def _assembly_page_owners(summary: Mapping[str, Any]) -> Dict[int, str]:
@@ -2587,10 +2669,12 @@ def compile_job_route(
     known_assemblies: Optional[Iterable[str]] = None,
     page_owner: Optional[Mapping[int, str]] = None,
     finish_text_by_pn: Optional[Mapping[str, str]] = None,
+    pack_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
-    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner)
+    graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
+                             pack_mode=pack_mode)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]
