@@ -1,7 +1,7 @@
 {
  "job": "0359342",
  "customer_root": "A61636",
- "provenance": "frozen from output/json/0359342.json digest, run of 2026-09-08T19:37Z on engine 26ceeea \u2014 the sheet-1 BOM plus the five child tables (plinth J13092 / shroud J13093 / back J13094 / shelf J13095 / prong MBY433), exactly as document_analysis.bom_rows recovered them (src B_RECOVERED); CORRECTED 2026-09-09: JAE833/JAE834/JAE835 under J13095 are qty 1, not 2 \u2014 the ruled-cell grid read and the words reader independently agree against the original vision-only transcription this fixture was frozen from (three-reader evidence, 0359342_bom_chain_check)",
+ "provenance": "frozen from output/json/0359342.json digest, run of 2026-09-08T19:37Z on engine 26ceeea \u2014 the sheet-1 BOM plus the five child tables (plinth J13092 / shroud J13093 / back J13094 / shelf J13095 / prong MBY433), exactly as document_analysis.bom_rows recovered them (src B_RECOVERED); CORRECTED 2026-09-09: JAE833/JAE834/JAE835 under J13095 are qty 1, not 2 \u2014 the ruled-cell grid read and the words reader independently agree against the original vision-only transcription this fixture was frozen from (three-reader evidence, 0359342_bom_chain_check); TBA rows carry their printed descriptions (the placeholder is not an identity \u2014 the description is the purchasing requirement)",
  "bom_rows": [
   {
    "part_number": "J13092",
@@ -61,13 +61,15 @@
    "part_number": "TBA",
    "quantity": 4,
    "bom_parent": "A61636",
-   "bom_source": "B_RECOVERED"
+   "bom_source": "B_RECOVERED",
+   "description": "M8 Flat Washer - Form D - Steel"
   },
   {
    "part_number": "TBA",
    "quantity": 4,
    "bom_parent": "A61636",
-   "bom_source": "B_RECOVERED"
+   "bom_source": "B_RECOVERED",
+   "description": "M6x40 Connecting Bolt, Black (Hafele 032.46.406)"
   },
   {
    "part_number": "A60890",

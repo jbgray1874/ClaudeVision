@@ -977,11 +977,57 @@ def _bom_stated_edges(
 
     rejected = rejected if rejected is not None else []
     edges: List[tuple] = []
+    try:
+        from part_identity import is_placeholder_identity, synthesise_bought_in_code
+    except Exception:                                            # pragma: no cover
+        def is_placeholder_identity(_v):
+            return False
+
+        def synthesise_bought_in_code(_d, _f=""):
+            return ""
     for row in bom_rows or []:
         if not isinstance(row, Mapping):
             continue
-        child = _resolve(row.get("part_number") or row.get("part_code")
-                         or row.get("code"), False)
+        _child_raw = row.get("part_number") or row.get("part_code") or row.get("code")
+        child = _resolve(_child_raw, False)
+        # ── THREE IDENTITY REPAIRS, each anchored in evidence ────────────────────
+        # A PLACEHOLDER IS NOT AN IDENTITY. Two 'TBA x4' rows — a washer and a
+        # connecting bolt, distinct purchasing requirements — became ONE graph node
+        # because TBA resolved to TBA both times. The shared synthesis rule
+        # (part_identity — the same one the dual-path reconciler mints BI- records
+        # with, so the edge and the record agree on the code) derives the identity
+        # from the row's own description; where the words name nothing, a
+        # description slug keeps the rows distinct rather than folded.
+        if is_placeholder_identity(child):
+            _syn = clean_part_number(
+                synthesise_bought_in_code(row.get("description"), _child_raw))
+            if _syn:
+                child = aliases.get(_syn, _syn)
+            else:
+                _slug = re.sub(r"[^A-Z0-9]+", "-",
+                               str(row.get("description") or "").upper()).strip("-")[:32]
+                if _slug:
+                    child = f"{child or 'TBA'}-{_slug}"
+        elif child and child not in known:
+            # DESCRIPTION SPILL BEFORE A KNOWN CODE. 'Backplate MBY434' is a wrapped
+            # description tail glued onto a real identity — 56 backplates that cannot
+            # join their own detail drawing. Repaired ONLY when the trailing token
+            # resolves to an identity the job already holds; junk stays visibly junk.
+            _toks = str(_child_raw or "").split()
+            if len(_toks) > 1:
+                _tail = _resolve(_toks[-1], True)
+                if _tail:
+                    child = _tail
+            if child not in known:
+                # A GLUED SHORT PREFIX before a known code ('8RM08363'): stripped only
+                # when the remainder is an identity the job already holds and the
+                # prefix is at most three non-letter characters.
+                _m = re.match(r"^([\d\W]{1,3})([A-Z]{1,4}\d{3,}[A-Z0-9-]*)$",
+                              str(child), re.I)
+                if _m:
+                    _sfx = _resolve(_m.group(2), True)
+                    if _sfx:
+                        child = _sfx
         _stated = row.get("bom_parent") or row.get("parent") or row.get("parent_code")
         # The parent MUST resolve to something we know — that is the refusal above, and it
         # is why trying two spellings here is safe: neither can name a node that is not there.

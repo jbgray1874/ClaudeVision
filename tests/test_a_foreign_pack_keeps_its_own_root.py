@@ -576,3 +576,44 @@ def test_squashed_two_value_material_text_still_refuses_a_thickness():
     # squashed single values still read
     assert vb.material_thickness_mm("Steel,Mild2mm") == 2.0
     assert vb.material_thickness_mm("15mmMDF") == 15.0
+
+
+# ── a placeholder is not an identity, and glued cells rejoin their known codes ───────────
+
+def test_two_tba_rows_stay_two_purchasing_requirements():
+    """Review finding on the chain check: two 'TBA x4' rows — a washer and a
+    connecting bolt — became ONE graph node, because a placeholder resolved to
+    itself both times. The shared part_identity synthesis (the same rule the
+    dual-path reconciler mints BI- records with) derives each row's identity from
+    its own description, so the graph edge and the minted record agree."""
+    rows = _frozen_rows()
+    graph = rc.build_part_graph(_parts_for(rows), {}, rows, pack_mode="pdf_primary")
+    nodes = {n.part_number: n for n in graph["nodes"]}
+    assert "TBA" not in nodes, "the placeholder itself is never a node"
+    assert graph["quantities"]["BI-WASHER"] == 4.0
+    assert graph["quantities"]["BI-BOLT"] == 4.0
+    assert nodes["BI-WASHER"].parents == ["A61636"]
+    assert nodes["BI-BOLT"].parents == ["A61636"]
+
+
+def test_glued_cells_rejoin_their_known_identities_and_junk_stays_junk():
+    """'Backplate MBY434' (description spill) and '8RM08363' (glued prefix) must
+    rejoin the identities the job already holds — 56 backplates that cannot join
+    their detail drawing are not cosmetic. Repairs fire ONLY when they land on a
+    known identity; an unanchored glued token stays visibly glued."""
+    parts = [{"part_number": "MBY433", "quantity": 28, "description": "PRONG ASSY"},
+             {"part_number": "MBY434", "quantity": 1, "description": "BACKPLATE"},
+             {"part_number": "RM08363", "quantity": 4, "description": "NUT"},
+             {"part_number": "A61636X", "quantity": 1, "description": "GA"}]
+    rows = [{"part_number": "Backplate MBY434", "quantity": 1, "bom_parent": "MBY433"},
+            {"part_number": "8RM08363", "quantity": 4, "bom_parent": "MBY433"},
+            {"part_number": "9XY99999", "quantity": 2, "bom_parent": "MBY433"}]
+    graph = rc.build_part_graph(parts, {}, rows)
+    nodes = {n.part_number for n in graph["nodes"]}
+    assert "MBY434" in nodes and "BACKPLATE MBY434" not in nodes
+    assert "RM08363" in nodes and "8RM08363" not in nodes
+    parents = graph["parents"]
+    assert "MBY433" in parents.get("MBY434", set())
+    assert "MBY433" in parents.get("RM08363", set())
+    # nothing known anchors 9XY99999 — it stays glued and visible, never invented
+    assert "9XY99999" in nodes
