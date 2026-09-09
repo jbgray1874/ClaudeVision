@@ -188,3 +188,54 @@ def test_the_vision_row_carries_its_printed_material_and_weight():
     assert vb.material_thickness_mm("MDF") is None
     assert vb.weight_kg("270 g") == 0.27
     assert vb.weight_kg("4.28") is None, "a bare number with no printed unit is not a fact"
+
+
+# ── the deterministic reader accepts a permuted header and keeps every column ────────────
+
+def _w(text, x0, top=100.0):
+    return {"text": text, "x0": x0, "x1": x0 + 8.0 * max(1, len(text)),
+            "top": top, "bottom": top + 8.0}
+
+
+def test_a_permuted_customer_header_is_accepted_and_parsed_by_region():
+    """0359342's table runs weight / material / qty / part / description / item — the
+    SDI left-to-right order check rejected the whole header, so a page with a perfectly
+    printed parts list read as having no parts list at all."""
+    import _bom_words_reader as wa
+
+    hdr_row = [_w("WEIGHT", 10), _w("MATERIAL", 60), _w("QTY", 140),
+               _w("PART", 170), _w("DESCRIPTION", 260), _w("ITEM", 420)]
+    h = wa._header_from_row(0, hdr_row)
+    assert h is not None, "six aligned column families are a table header, whatever the order"
+    assert h["layout"] == "by_regions"
+
+    data = [_w("4.28", 8, 120), _w("kg", 30, 120), _w("MDF,", 58, 120),
+            _w("18mm", 82, 120), _w("1", 142, 120), _w("JAE820", 168, 120),
+            _w("Edition", 260, 120), _w("Plinth", 300, 120), _w("Top", 330, 120),
+            _w("1", 422, 120)]
+    cols = wa._parse_row_by_regions(data, h["anchors"])
+    assert cols is not None
+    assert cols["item"] == "1" and cols["qty"] == "1"
+    assert cols["code"] == "JAE820"
+    assert cols["material"] == "MDF, 18mm"
+    assert cols["weight"] == "4.28 kg"
+    fields = wa._row_material_fields(cols["material"], cols["weight"])
+    assert fields == {"material_text": "MDF, 18mm", "thickness_mm": 18.0,
+                      "stated_weight_kg": 4.28}
+
+    # three permuted families are NOT stronger evidence — a title block scatters that many
+    weak = [_w("QTY", 10), _w("DESCRIPTION", 100), _w("ITEM", 300)]
+    assert wa._header_from_row(0, weak) is None
+
+
+def test_the_sdi_ordered_header_still_parses_the_old_way():
+    import _bom_words_reader as wa
+
+    hdr = [_w("ITEM", 10), _w("DWG", 60), _w("NO.", 95), _w("DESCRIPTION", 200),
+           _w("QTY", 380)]
+    h = wa._header_from_row(0, hdr)
+    assert h is not None and h["layout"] == "ordered"
+    data = [_w("1", 12, 120), _w("1448-GA", 62, 120), _w("UPPER", 200, 120),
+            _w("LEG", 245, 120), _w("2", 382, 120)]
+    cols = wa._parse_row(data, h["anchors"])
+    assert cols == {"item": "1", "code": "1448-GA", "desc": "UPPER LEG", "qty": "2"}

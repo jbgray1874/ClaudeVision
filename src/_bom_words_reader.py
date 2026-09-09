@@ -92,6 +92,13 @@ _HDR_DESC = {"DESCRIPTION", "DESC", "TITLE", "NAME", "PART DESCRIPTION"}
 # page then read as having no parts list at all rather than as one we failed on.
 _HDR_QTY = {"QTY", "QTY.", "QUANTITY", "QUANT", "QTY REQD", "QTY REQ", "REQD",
             "NO OFF", "NOOFF", "OFF", "NO. OFF", "QTY OFF", "REQUIRED"}
+# A customer's table can also print the row's own MATERIAL and WEIGHT — 0359342's did
+# ("MDF, 18mm" / "Corian, 6mm" / "4.28 kg" beside every part) and this reader had no
+# name for either column, so the one deterministic source of each component's own
+# specification was structurally unreadable. Located like every other family; absent
+# on SDI templates, so their parsing is unchanged.
+_HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
+_HDR_WEIGHT = {"WEIGHT", "WT", "MASS", "UNIT WEIGHT", "WEIGHT KG"}
 
 
 def _hdr_norm(t: str) -> str:
@@ -138,17 +145,34 @@ def _header_from_row(ri: int, row: List[dict]) -> Optional[Dict[str, Any]]:
             anchors["desc"] = x
         elif "qty" not in anchors and (norm in _HDR_QTY):
             anchors["qty"] = x
+        elif "material" not in anchors and (norm in _HDR_MATERIAL):
+            anchors["material"] = x
+        elif "weight" not in anchors and (norm in _HDR_WEIGHT):
+            anchors["weight"] = x
 
     # item, desc, qty required; code (DWG/PartNo) may be absent — synthesise midway.
     if not all(k in anchors for k in ("item", "desc", "qty")):
         return None
+    _real_families = len(anchors)          # before any synthesis
     if "code" not in anchors:
         anchors["code"] = (anchors["item"] + anchors["desc"]) / 2.0
-    # anchors must be in sane left-to-right order
-    if not (anchors["item"] <= anchors["code"] <= anchors["desc"] < anchors["qty"]):
+    # THE SDI LAYOUT IS ORDERED, AND THAT ORDER IS STILL THE FIRST ACCEPTANCE — a page
+    # whose header passes it parses exactly as before. But the order is a TEMPLATE fact,
+    # not a table fact: 0359342's customer header runs weight/material/qty/part/desc/
+    # item, and rejecting it here is how a page with a perfectly printed parts list read
+    # as having none. A permuted header is accepted only on STRONGER evidence — at least
+    # four real column families in one clustered row (a title block scatters two or
+    # three of these words; four aligned families is a table header) — and its rows are
+    # parsed by region rather than by the ordered carve.
+    if anchors["item"] <= anchors["code"] <= anchors["desc"] < anchors["qty"]:
+        _layout = "ordered"
+    elif _real_families >= 4:
+        _layout = "by_regions"
+    else:
         return None
 
-    return {"header_row_index": ri, "header_top": row[0]["top"], "anchors": anchors}
+    return {"header_row_index": ri, "header_top": row[0]["top"], "anchors": anchors,
+            "layout": _layout}
 
 
 def _find_header(rows: List[List[dict]]) -> Optional[Dict[str, Any]]:
@@ -224,6 +248,94 @@ def _parse_row(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str,
         "desc": " ".join(desc).strip(),
         "qty": qty_word[1],
     }
+
+
+def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optional[Dict[str, str]]:
+    """Parse one row against a header whose columns sit in ANY order.
+
+    The ordered parser carves the row left-to-right by the SDI template's column
+    sequence; a customer table that prints ITEM on the right and WEIGHT on the left
+    defeats it structurally. Here each anchored column owns the region between the
+    midpoints to its neighbours, a word belongs to the region it starts in, and the
+    two numeric columns take the bare integer NEAREST their own anchor — position,
+    not sequence, is what a header anchor actually asserts.
+    """
+    order = sorted(anchors.items(), key=lambda kv: kv[1])
+    lo_bound = order[0][1] - 25.0
+    hi_bound = order[-1][1] + 60.0
+    regions: Dict[str, Tuple[float, float]] = {}
+    for i, (name, x) in enumerate(order):
+        lo = lo_bound if i == 0 else (x + order[i - 1][1]) / 2.0
+        hi = hi_bound if i == len(order) - 1 else (x + order[i + 1][1]) / 2.0
+        regions[name] = (lo, hi)
+    cells: Dict[str, List[Tuple[float, str]]] = {name: [] for name in anchors}
+    for w in sorted(row, key=lambda w: w["x0"]):
+        x = w["x0"]
+        if not (lo_bound <= x <= hi_bound):
+            continue                      # grid labels / edge notes outside the table
+        for name, (lo, hi) in regions.items():
+            if lo <= x < hi:
+                cells[name].append((x, w["text"]))
+                break
+
+    def _nearest_int(name: str, hi_val: int) -> Optional[str]:
+        best = None
+        for x, t in cells.get(name) or []:
+            if t.isdigit() and 1 <= int(t) <= hi_val:
+                d = abs(x - anchors[name])
+                if best is None or d < best[0]:
+                    best = (d, t)
+        return best[1] if best else None
+
+    item = _nearest_int("item", 99)
+    qty = _nearest_int("qty", 250)
+    if item is None or qty is None:
+        return None
+    out = {
+        "item": item,
+        "code": " ".join(t for _, t in cells.get("code") or []).strip(),
+        "desc": " ".join(t for _, t in cells.get("desc") or []).strip(),
+        "qty": qty,
+    }
+    for name in ("material", "weight"):
+        if name in anchors:
+            out[name] = " ".join(t for _, t in cells.get(name) or []).strip()
+    return out
+
+
+def _row_material_fields(material_txt: Any, weight_txt: Any) -> Dict[str, Any]:
+    """material_text / thickness_mm / stated_weight_kg for one row, from its own cells.
+
+    The unit rules live in _bom_vision_reader (both paths must parse "MDF, 18mm" and
+    "4.28 kg" identically or the reconciler compares apples with pears); the inline
+    fallback keeps Path A standing if that module cannot be imported."""
+    out: Dict[str, Any] = {}
+    _mat = str(material_txt or "").strip()
+    _wtxt = str(weight_txt or "").strip()
+    if not _mat and not _wtxt:
+        return out
+    try:
+        from _bom_vision_reader import material_thickness_mm as _mt, weight_kg as _wk
+    except Exception:                                            # pragma: no cover
+        def _mt(s):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(s or ""), re.I)
+            return float(m.group(1)) if m else None
+
+        def _wk(s):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|g)\b", str(s or ""), re.I)
+            if not m:
+                return None
+            v = float(m.group(1))
+            return v if m.group(2).lower() == "kg" else v / 1000.0
+    if _mat:
+        out["material_text"] = _mat
+        _thk = _mt(_mat)
+        if _thk is not None:
+            out["thickness_mm"] = _thk
+    _kg = _wk(_wtxt)
+    if _kg is not None:
+        out["stated_weight_kg"] = _kg
+    return out
 
 
 def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
@@ -395,7 +507,14 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
             top = row[0]["top"]
             if top <= header_top or top >= next_top:
                 continue  # outside this table's vertical band
-            cols = _parse_row(row, anchors)
+            # A permuted header parses by region; so does an ordered one that anchored a
+            # material or weight column, because the ordered carve would fold those
+            # cells into the description.
+            if header.get("layout") == "by_regions" or "material" in anchors \
+                    or "weight" in anchors:
+                cols = _parse_row_by_regions(row, anchors)
+            else:
+                cols = _parse_row(row, anchors)
             if cols is None:
                 continue  # not a BOM data row (no valid item+qty in the table extent)
             item, code, desc, qty = cols["item"], cols["code"], cols["desc"], cols["qty"]
@@ -427,7 +546,7 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
                 continue
             seen.add(key)
 
-            data_rows.append({
+            _out_row = {
                 "item_number": item,
                 "part_ref": _clean(part_ref),
                 "part_number": code_or_spec if kind == "drawing_ref" else "",
@@ -435,7 +554,13 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
                 "quantity": int(qty),
                 "kind": kind,
                 "thin": thin,
-            })
+            }
+            # The row's own material and weight cells, where the table printed them —
+            # the fields the schema used to discard (0359342: "MDF, 18mm" beside every
+            # panel while costing ran on a document-default 6mm).
+            _out_row.update(_row_material_fields(cols.get("material"),
+                                                 cols.get("weight")))
+            data_rows.append(_out_row)
 
     if not data_rows:
         return None
