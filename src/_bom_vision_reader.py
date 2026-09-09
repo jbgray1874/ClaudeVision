@@ -359,7 +359,11 @@ def material_thickness_mm(material_text: Any) -> Optional[float]:
     s = str(material_text or "")
     if re.search(r"Ø|⌀|\bDIA\b|\bDIAMETER\b", s, re.I):
         return None
-    vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm\b", s, re.I)}
+    # No trailing word boundary: extract_tables squashes spaces, and in
+    # "FlexiMDF6mmand9mm" the \b after "6mm" fails against the glued "and" — so a
+    # two-value cell counted ONE value and published 9.0 as a fact. Both figures
+    # must be seen for the two-figures-refusal to fire.
+    vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm", s, re.I)}
     return vals.pop() if len(vals) == 1 else None
 
 

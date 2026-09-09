@@ -86,7 +86,8 @@ def test_the_stated_root_is_minted_and_the_x2_cascade_returns():
     assert q["MBY432"] == 56.0 and q["MBY434"] == 56.0
     assert q["R04611"] == 144.0
     assert q["J13095"] == 8.0
-    assert q["JAE833"] == 16.0, "2 per shelf × 4 shelves × 2 back panels"
+    assert q["JAE833"] == 8.0, ("1 per shelf × 4 shelves × 2 back panels — the "
+                                "ruled cells corrected the vision-only qty-2 read")
     # single-owner and dual-owner rows are untouched by the mint
     assert q["84756"] == 16.0
     assert q["R35571"] == 20.0, "16 under the plinth + 4 under the shroud"
@@ -561,3 +562,17 @@ def test_an_uncertain_words_read_yields_to_a_ruled_grid_read():
     assert mb.prefer_grid_read(words, blob) is False
     assert mb.prefer_grid_read(words, None) is False
     assert mb.prefer_grid_read(None, grid) is False
+
+
+def test_squashed_two_value_material_text_still_refuses_a_thickness():
+    """Chain check on the real pack: extract_tables squashes spaces, so JAE827's cell
+    arrives as 'FlexiMDF6mmand9mm' — the trailing word boundary failed against the
+    glued 'and', one of two printed figures was counted, and 9.0 was published as a
+    fact. Both figures must be seen for the two-figures refusal to fire."""
+    import _bom_vision_reader as vb
+
+    assert vb.material_thickness_mm("FlexiMDF6mmand9mm") is None
+    assert vb.material_thickness_mm("Flexi MDF 6mm and 9mm") is None
+    # squashed single values still read
+    assert vb.material_thickness_mm("Steel,Mild2mm") == 2.0
+    assert vb.material_thickness_mm("15mmMDF") == 15.0

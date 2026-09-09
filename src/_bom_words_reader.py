@@ -350,7 +350,8 @@ def _row_material_fields(material_txt: Any, weight_txt: Any) -> Dict[str, Any]:
             s = str(s or "")
             if re.search(r"Ø|⌀|\bDIA\b|\bDIAMETER\b", s, re.I):
                 return None                    # a diameter is not a thickness
-            vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm\b", s, re.I)}
+            # no trailing \b: squashed "6mmand9mm" must count as TWO figures
+            vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm", s, re.I)}
             return vals.pop() if len(vals) == 1 else None   # two figures = a decision
 
         def _wk(s):
