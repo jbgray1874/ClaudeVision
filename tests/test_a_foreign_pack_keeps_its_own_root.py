@@ -291,3 +291,60 @@ def test_a_diameter_or_two_figures_is_never_published_as_a_thickness():
     # one unambiguous printed figure still reads
     assert vb.material_thickness_mm("MDF, 18mm") == 18.0
     assert vb.material_thickness_mm("Corian, 6mm") == 6.0
+
+
+# ── camelot in comparison mode: shared vocabulary, shared schema, never merged ───────────
+
+def test_the_camelot_bench_maps_both_header_dialects_through_one_vocabulary():
+    import _bom_camelot_bench as cb
+
+    # the customer's dialect — permuted columns, PART #, weight column
+    grid = [
+        ["WEIGHT", "MATERIAL", "SHEET", "QTY", "PART #", "DESCRIPTION", "ITEM"],
+        ["4.28 kg", "MDF, 18mm", "1", "1", "JAE820",
+         "Edition Sunglasses Plinth Top", "1"],
+        ["0.27 kg", "", "A", "4", "RM08362", "Swivel Castor", "5"],
+        ["", "", "", "", "", "NOTE: SEE SHEET 2", ""],   # a note line, not a row
+    ]
+    out = cb.map_table_to_rows(grid)
+    rows = {r["part_ref"]: r for r in out["rows"]}
+    assert rows["JAE820"] == {
+        "item_number": "1", "part_ref": "JAE820",
+        "description": "Edition Sunglasses Plinth Top", "quantity": 1,
+        "material_text": "MDF, 18mm", "thickness_mm": 18.0,
+        "stated_weight_kg": 4.28}
+    assert rows["RM08362"]["stated_weight_kg"] == 0.27
+    assert any("row rejected" in r for r in out["rejected_rows"]), \
+        "a skipped line is a named finding, not silence"
+
+    # the SDI dialect maps through the same families
+    sdi = [["ITEM", "DWG NO.", "DESCRIPTION", "QTY."],
+           ["1", "1448-GA", "UPPER LEG ASSEMBLY", "2"]]
+    out2 = cb.map_table_to_rows(sdi)
+    assert out2["rows"][0]["part_ref"] == "1448-GA"
+    assert out2["rows"][0]["quantity"] == 2
+
+    # an unrecognisable header is a named rejection, never a guessed mapping
+    junk = [["AAA", "BBB", "CCC"], ["1", "2", "3"]]
+    assert "header unrecognised" in cb.map_table_to_rows(junk)["rejected"]
+
+
+def test_the_bench_compares_and_never_concatenates():
+    import _bom_camelot_bench as cb
+
+    a = [{"item_number": "1", "part_ref": "JAE820", "quantity": 1,
+          "description": "Plinth Top"},
+         {"item_number": "8", "part_ref": "R00500", "quantity": 4,
+          "description": "M8 T Nut"}]
+    c = [{"item_number": "1", "part_ref": "JAE820", "quantity": 1,
+          "description": "Plinth Top", "material_text": "MDF, 18mm",
+          "thickness_mm": 18.0},
+         {"item_number": "5", "part_ref": "RM08362", "quantity": 4,
+          "description": "Castor"}]
+    out = cb.compare_rows(a, c)
+    # the shared screw row corroborates or differs — it never becomes two rows
+    assert [d["key"] for d in out["cell_diffs"]] == [("1", "JAE820")]
+    assert any("material_text" in s for s in out["cell_diffs"][0]["cell_diffs"])
+    assert out["only_a"] == [("8", "R00500")]
+    assert out["only_c"] == [("5", "RM08362")]
+    assert not out["agree"], "a row with cell differences is not agreement"
