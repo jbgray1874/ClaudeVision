@@ -237,3 +237,56 @@ def reconciled_bom_rows_for_job(
         "a_count": result.get("a_count", 0),
         "b_count": result.get("b_count", 0),
     }
+
+
+def apply_bom_row_evidence_to_parts(parts: Any, bom_rows: Any) -> int:
+    """The BOM table's own MATERIAL / thickness / mass cells become part evidence,
+    through source_precedence, before costing.
+
+    0359342 measured the gap exactly: every part record carried an UNSOURCED 6.0 mm
+    (a document figure stamped with no provenance) and normalized_material None,
+    while the authoritative BOM rows held each component's own printed truth —
+    'MDF,18mm' with 4.28 kg on JAE820, 'Steel,Mild2mm' on MBY439, 15 mm on J13149.
+    Three populations, one fact, and the population costing reads was the one that
+    knew nothing.
+
+    A table reading is bom_tree evidence (rank 60): it REPLACES an unsourced or
+    weaker figure and records what it displaced, and it is REFUSED — with the
+    disagreement flagged — by a measured DXF, the model, or a deterministic
+    title-block read. That asymmetry is the whole design: on a structured pack the
+    strong sources stand and gain corroboration; on a PDF-primary pack the printed
+    row retires the blanket. Returns how many parts gained at least one datum."""
+    import source_precedence as sp
+    from part_code_conventions import bare_code
+
+    rows_by: Dict[str, Dict[str, Any]] = {}
+    for r in bom_rows or []:
+        if not isinstance(r, dict):
+            continue
+        if not (r.get("material_text") or r.get("thickness_mm") is not None
+                or r.get("stated_weight_kg") is not None):
+            continue
+        _k = bare_code(str(r.get("part_number") or ""))
+        if _k:
+            rows_by.setdefault(_k, r)
+    if not rows_by:
+        return 0
+    n = 0
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        row = rows_by.get(bare_code(str(p.get("part_number") or "")))
+        if not row:
+            continue
+        changed = False
+        if row.get("thickness_mm") is not None:
+            changed |= sp.apply_field(p, "normalized_thickness_mm",
+                                      float(row["thickness_mm"]), "bom_tree")
+        if row.get("material_text"):
+            changed |= sp.apply_field(p, "normalized_material",
+                                      str(row["material_text"]), "bom_tree")
+        if row.get("stated_weight_kg") is not None:
+            changed |= sp.apply_field(p, "stated_weight_kg",
+                                      float(row["stated_weight_kg"]), "bom_tree")
+        n += 1 if changed else 0
+    return n

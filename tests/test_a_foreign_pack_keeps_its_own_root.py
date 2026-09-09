@@ -665,3 +665,38 @@ def test_the_pre_cost_compile_detects_the_pack_mode_itself():
     graph2 = rc.apply_canonical_evidence_to_parts(
         [dict(p) for p in parts], {}, rows, summary=s2)
     assert not any(n.part_number == "A61636" for n in graph2["nodes"])
+
+
+# ── bind (a): the row's printed specification becomes part evidence, ranked ──────────────
+
+def test_a_parts_own_bom_row_retires_the_unsourced_blanket():
+    """digest2 measured it: every record carried an UNSOURCED 6.0mm and material None
+    while its own BOM row printed the truth. A table reading (bom_tree, rank 60)
+    replaces an unsourced figure and records what it displaced; a measured DXF
+    thickness refuses it and flags the disagreement instead."""
+    import bom_pipeline
+    import source_precedence as sp
+
+    rows = [{"part_number": "JAE820", "material_text": "MDF,18mm",
+             "thickness_mm": 18.0, "stated_weight_kg": 4.28},
+            {"part_number": "MBY439", "material_text": "Steel,Mild2mm",
+             "thickness_mm": 2.0, "stated_weight_kg": 0.82},
+            {"part_number": "NOROW", "material_text": ""}]
+    jae = {"part_number": "JAE820", "normalized_thickness_mm": 6.0}  # unsourced blanket
+    dxf_part = {"part_number": "MBY439", "normalized_thickness_mm": 6.0,
+                "thickness_source": "dxf"}
+    n = bom_pipeline.apply_bom_row_evidence_to_parts([jae, dxf_part], rows)
+    assert n == 2
+    # the blanket is retired and the displacement recorded
+    assert jae["normalized_thickness_mm"] == 18.0
+    assert sp.source_of(jae, "normalized_thickness_mm") == "bom_tree"
+    assert jae["normalized_material"] == "MDF,18mm"
+    assert jae["stated_weight_kg"] == 4.28
+    # a measured source stands; the row's disagreement is recorded, not applied
+    assert dxf_part["normalized_thickness_mm"] == 6.0
+    assert any(e.get("value") == 2.0 and not e.get("applied")
+               for e in (dxf_part.get("_displaced") or {})
+               .get("normalized_thickness_mm", [])), \
+        "the refused table reading is evidence on the record, never silence"
+    # the material still filled (dxf said nothing about material)
+    assert dxf_part["normalized_material"] == "Steel,Mild2mm"

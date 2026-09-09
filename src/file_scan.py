@@ -3096,6 +3096,23 @@ def _finalize_scan_summary(
         print(f"   [mirror] skipped: {type(_mirror_err).__name__}: {_mirror_err}", flush=True)
 
     try:
+        # THE ROW'S OWN PRINTED SPECIFICATION, at the point it still changes the answer.
+        # The readers keep material/thickness/mass per BOM row and the flatten preserves
+        # them; this is where they become PART evidence — through source_precedence, so a
+        # DXF or model still outranks a table cell and a blanket document figure does not.
+        from bom_pipeline import apply_bom_row_evidence_to_parts
+        _rows_ev = (summary.get("document_analysis") or {}).get("bom_rows") or []
+        _n_ev = apply_bom_row_evidence_to_parts(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_ev:
+            print(f"   [bom-evidence] {_n_ev} part(s) took material/thickness/mass from "
+                  f"their own BOM row (bom_tree rank — a measured source still wins)",
+                  flush=True)
+    except Exception as _row_ev_err:
+        print(f"   [bom-evidence] row evidence not applied: "
+              f"{type(_row_ev_err).__name__}: {_row_ev_err}", flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child
