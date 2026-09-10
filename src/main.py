@@ -1204,6 +1204,22 @@ def main() -> None:
                 except Exception as _fb_exc:
                     print(f"   -> Fallback also failed: {_fb_exc}", flush=True)
 
+        # ── The extraction audit: what every file held, and what we did with it ──────
+        # Written every run, beside the estimate, because the question it answers cannot be
+        # answered from the estimate itself: three different failures look identical from
+        # outside — the file did not have it, we did not read it, or we read it and dropped
+        # it on the way to the price. The last is the worst and the most fixable.
+        try:
+            from source_drawing_data import write_source_drawing_data
+            _sdd = write_source_drawing_data(
+                summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""))
+            if _sdd:
+                print(f"   -> Source drawing data: {_sdd.resolve()}")
+                (summary.setdefault("saved_output_paths", {}))["source_drawing_data"] = str(_sdd)
+        except Exception as _sdd_err:
+            print(f"   -> Source drawing data not written: "
+                  f"{type(_sdd_err).__name__}: {_sdd_err}", flush=True)
+
         # ── Price read-back: stamp the REAL Excel-computed totals into the JSON ──
         # wb_populate writes Excel FORMULAS; the true unit cost is computed by Excel on load,
         # not in Python. The JSON's workbook_equivalent_pricing is a reconstruction that can

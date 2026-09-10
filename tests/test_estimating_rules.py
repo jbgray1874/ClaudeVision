@@ -9479,7 +9479,11 @@ def test_every_field_we_ask_the_model_for_has_a_reader():
     # NOT because nobody has looked. Anything that affects a price does not belong here.
     _ACKNOWLEDGED = {
         "drawn_by":          "who drew it — provenance for the report, never a cost input",
-        "item_no":           "the BOM table's own line number; parts join on part_number",
+        # item_no came OFF this list when source_drawing_data started reading it. It is still
+        # not a cost input — parts join on part_number — but the extraction audit reproduces
+        # the parts list as the drawing office typed it, and a table without its own line
+        # numbers cannot be checked against the sheet it came from. Read, so it is no longer
+        # acknowledged-unread; the list means "nobody reads this", not "nothing prices it".
         "tolerance_linear":  "tolerance is not yet a cost driver; would gate inspection time",
         "tolerance_angular": "as above",
         "tolerances":        "spec-level duplicate of the two above",
