@@ -422,16 +422,16 @@ def test_a_dashed_bend_line_is_one_bend_not_ten(tmp_path: Path):
         msp.add_lwpolyline([(-53, 0), (53, 0), (53, 90), (-53, 90)], close=True)
     probe = probe_dxf(_dxf(tmp_path, "dashed.dxf", build))
     assert probe["bend_layer_line_count"] == 10, "the raw segments are still reported"
-    assert probe["bend_lines"] == 2, "but the BENDS are two"
+    assert probe["candidate_fold_axes"] == 2, "but the BENDS are two"
 
 
 def test_folds_drawn_in_opposite_directions_stay_separate(tmp_path: Path):
     """MY OWN BUG, CAUGHT ON REAL GEOMETRY. A line's signed offset flips when it is drawn the
     other way round, so 117620202M's folds at y=+124.12 and y=-124.12 — drawn in opposite
     directions — produced the same offset and collapsed into one. Five bends read as three."""
-    from dxf_probe import _distinct_bend_lines
-    assert _distinct_bend_lines([((-5, 10), (5, 10)), ((5, -10), (-5, -10))]) == 2
-    assert _distinct_bend_lines([((0, 0), (10, 0)), ((10, 0), (0, 0))]) == 1, \
+    from dxf_probe import _candidate_fold_axes
+    assert _candidate_fold_axes([((-5, 10), (5, 10)), ((5, -10), (-5, -10))]) == 2
+    assert _candidate_fold_axes([((0, 0), (10, 0)), ((10, 0), (0, 0))]) == 1, \
         "and one line drawn twice, each way, is still one line"
 
 
@@ -444,7 +444,7 @@ def test_the_corpus_bend_counts_are_exact():
                            ("f421e02c-1097502A01_2mm_ACRY_Rev_B.DXF", 2)):
         path = UPLOADS / name
         if path.exists():
-            assert probe_dxf(path)["bend_lines"] == expected, name
+            assert probe_dxf(path)["candidate_fold_axes"] == expected, name
 
 
 def test_bends_are_compared_because_the_dxf_states_them(tmp_path: Path):
@@ -457,9 +457,9 @@ def test_bends_are_compared_because_the_dxf_states_them(tmp_path: Path):
     summary = {"estimate_summary": {"part_estimates": [
         {"part_number": "117620202M", "manufacturing_features": {"bend_count": 1}}]}}
     rows = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
-    assert rows["bends"]["comparable"] == "yes"
-    assert rows["bends"]["agrees"] == "yes"
-    assert "collapse to 1 distinct fold" in rows["bends"]["note"]
+    assert rows["candidate fold axes"]["comparable"] == "yes"
+    assert rows["candidate fold axes"]["agrees"] == "yes"
+    assert "collapse to 1 fold axis" in rows["candidate fold axes"]["note"]
 
 
 # ── the page carries everything, not a summary ────────────────────────────────────────
@@ -474,7 +474,11 @@ def test_every_page_of_every_pdf_gets_a_row_even_when_it_yielded_nothing():
          "page_analysis": {}}]}
     rows = page_rows(summary)
     assert len(rows) == 2
-    assert "nothing was read from this page" in rows[1]["read_from_it"]
+    # The row says which fields were looked for and came back empty. It does NOT claim
+    # nothing was read: the page inventory checks a fixed list of fields, and a page can
+    # still carry process notes or textual operations that this row does not cover.
+    assert "none of the fields checked were populated" in rows[1]["read_from_it"]
+    assert "nothing was read" not in rows[1]["read_from_it"]
 
 
 def test_the_page_lists_each_dxf_in_full(tmp_path: Path):
@@ -491,8 +495,107 @@ def test_the_page_lists_each_dxf_in_full(tmp_path: Path):
 
     assert "Every DXF in full" in html
     for label in ("read with", "units declared", "extent", "profile length", "circles",
-                  "bends", "layers", "entities", "not measured", "text in the file",
+                  "candidate fold axes", "layers", "entities", "not measured", "text in the file",
                   "attributed to a part by"):
         assert f">{label}<" in html, f"the page must state {label}"
     assert "BENDLINES" in html and "LWPOLYLINE" in html, "layers and entity types verbatim"
     assert "ezdxf" in html
+
+
+# ── what the audit is NOT allowed to claim ────────────────────────────────────────────
+
+def test_two_features_folding_on_one_line_are_not_one_axis():
+    """A fold AXIS is not proven to be one manufacturing bend, and the grouping must not
+    pretend otherwise. Two tabs 500mm apart happen to line up; collapsing them to one was an
+    overclaim that a dashed-line fix had smuggled in."""
+    from dxf_probe import _candidate_fold_axes
+    assert _candidate_fold_axes([((0, 10), (10, 10)), ((500, 10), (510, 10))]) == 2
+    # ...while the dashes of one fold, 19mm apart, still collapse
+    assert _candidate_fold_axes([((-53, 75), (-47, 75)), ((-28, 75), (-22, 75)),
+                                 ((-3, 75), (3, 75)), ((22, 75), (28, 75)),
+                                 ((47, 75), (53, 75))]) == 1
+
+
+def test_the_grouping_tolerance_is_millimetres_not_file_units(tmp_path: Path):
+    """0.25 applied to raw coordinates meant 0.25 INCHES on an inch drawing, so two folds a
+    millimetre apart collapsed into one. Coordinates are converted before any tolerance."""
+    def build(msp):
+        msp.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True)
+        msp.add_line((0, 1.0), (10, 1.0), dxfattribs={"layer": "BENDLINES"})
+        msp.add_line((0, 1.03937), (10, 1.03937), dxfattribs={"layer": "BENDLINES"})
+    probe = probe_dxf(_dxf(tmp_path, "inchbend.dxf", build, insunits=INCH))
+    assert probe["candidate_fold_axes"] == 2, \
+        "1mm apart on an inch drawing is 1mm apart, not the same line"
+
+
+def test_the_detail_section_escapes_every_source_derived_value(tmp_path: Path):
+    """Layer names, entity types, attribution and error text all come out of files, and the
+    detail renderer inserted strings raw. Whether today's files can exploit it is not the
+    test — a table that can render source data as markup is a defect."""
+    from source_drawing_data import write_source_drawing_html
+    def build(msp):
+        msp.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True)
+        msp.add_text("<img src=x onerror=alert(1)> & <b>bold</b>")
+    path = _dxf(tmp_path, "esc.dxf", build)
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "<script>alert(2)</script>"}]}}
+    html = write_source_drawing_html(summary, tmp_path, "j", [path]).read_text(encoding="utf-8")
+    assert "<img src=x onerror" not in html
+    assert "<script>alert(2)</script>" not in html
+    assert "&lt;img" in html and "&amp;" in html
+
+
+def test_a_page_with_only_notes_does_not_claim_nothing_was_read():
+    """A false statement about the pack, made by the document whose only job is to be true
+    about the pack. It now lists what it found, and when it finds none of them it says which
+    fields it looked at."""
+    from source_drawing_data import page_rows
+    rows = page_rows({"pages": [{"page_number": 1, "source_pdf_name": "j.pdf",
+                                 "page_analysis": {"process_notes": ["Puddle weld both sides"],
+                                                   "textual_operations": ["welding"]}}]})
+    said = rows[0]["read_from_it"]
+    assert "nothing was read" not in said
+    assert "process notes: 1" in said and "welding" in said
+
+    empty = page_rows({"pages": [{"page_number": 2, "source_pdf_name": "j.pdf",
+                                  "page_analysis": {}}]})[0]["read_from_it"]
+    assert "none of the fields checked were populated" in empty
+    assert "process notes" in empty, "and names what it looked at"
+
+
+def test_no_text_is_silently_dropped(tmp_path: Path):
+    """The cap was texts[:40] with no note, on a document claiming to elide nothing. The GA
+    export in the corpus carries 118 strings; 78 were disappearing."""
+    def build(msp):
+        msp.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True)
+        for index in range(60):
+            msp.add_text(f"NOTE {index}")
+    probe = probe_dxf(_dxf(tmp_path, "many.dxf", build))
+    assert probe["text_count"] == 60
+    assert len(probe["text_values"]) == 60
+
+
+def test_each_dxf_is_read_once_per_page(tmp_path: Path):
+    """The comparison table and the detail section both want the same inventory. Reading each
+    file twice is slower and lets the two halves of one page disagree."""
+    import source_drawing_data as sdd
+    calls = {"n": 0}
+    real = sdd._probe_once.__wrapped__ if hasattr(sdd._probe_once, "__wrapped__") else None
+    path = _dxf(tmp_path, "once.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True))
+    sdd._PROBE_CACHE.clear()
+    import dxf_probe
+    original = dxf_probe.probe_dxf
+
+    def counting(p):
+        calls["n"] += 1
+        return original(p)
+
+    dxf_probe.probe_dxf = counting
+    try:
+        sdd.write_source_drawing_html({"estimate_summary": {"part_estimates": []}},
+                                      tmp_path, "j", [path])
+    finally:
+        dxf_probe.probe_dxf = original
+        sdd._PROBE_CACHE.clear()
+    assert calls["n"] == 1, f"the file was read {calls['n']} times"

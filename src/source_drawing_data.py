@@ -178,7 +178,7 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
     rows: List[Dict[str, Any]] = []
     for path in paths:
         try:
-            probe = probe_dxf(path)
+            probe = _probe_once(path)
         except Exception as err:                                         # noqa: BLE001
             rows.append({"file": Path(str(path)).name, "part": "", "fact": "could not be read",
                          "in_the_file": "", "engine_has": "", "comparable": "",
@@ -229,10 +229,12 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
             # Segments are collapsed onto the infinite line they lie on, so a dashed fold
             # counts once: 117621702M draws ten dashes and has two bends. The raw entity
             # count is carried beside it as evidence, not as the answer.
-            ("bends", probe.get("bend_lines") or None,
+            ("candidate fold axes", probe.get("candidate_fold_axes") or None,
              _engine("bend_count", "bend_count_dxf", "fold_count"), True,
              (f"{probe.get('bend_layer_line_count')} segment(s) on the bend layer collapse "
-              f"to {probe.get('bend_lines')} distinct fold line(s)")
+              f"to {probe.get('candidate_fold_axes')} fold axis/axes. An AXIS is not proven "
+              f"to be one manufacturing bend: nothing here knows which profile owns which "
+              f"segment, so two tabs folding on one line would read as one")
              if probe.get("bend_layer_line_count") else ""),
         ]
         for label, available, extracted, comparable, note in checks:
@@ -264,6 +266,20 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
     return rows
 
 
+_PROBE_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _probe_once(path: Any) -> Dict[str, Any]:
+    """One read per file per process. The comparison table and the detail section both want
+    the same inventory, and reading each DXF twice is both slower and a way for the two
+    halves of one page to disagree."""
+    from dxf_probe import probe_dxf
+    key = str(path)
+    if key not in _PROBE_CACHE:
+        _PROBE_CACHE[key] = probe_dxf(path)
+    return _PROBE_CACHE[key]
+
+
 def dxf_detail_blocks(summary: Mapping[str, Any],
                       dxf_paths: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
     """The COMPLETE inventory of each DXF — everything read, nothing summarised away.
@@ -274,10 +290,6 @@ def dxf_detail_blocks(summary: Mapping[str, Any],
     could not measure. Nothing is elided: a section that shows the interesting rows and hides
     the rest is how a fact goes missing without anyone deciding to drop it.
     """
-    try:
-        from dxf_probe import probe_dxf
-    except Exception:                                                    # noqa: BLE001
-        return []
     paths: List[Any] = list(dxf_paths or [])
     if not paths:
         seen: set = set()
@@ -290,7 +302,7 @@ def dxf_detail_blocks(summary: Mapping[str, Any],
     out: List[Dict[str, Any]] = []
     for path in paths:
         try:
-            probe = probe_dxf(path)
+            probe = _probe_once(path)
         except Exception:                                                # noqa: BLE001
             continue
         part, how, ambiguous = _match_part(summary, probe.get("file", ""))
@@ -301,11 +313,42 @@ def dxf_detail_blocks(summary: Mapping[str, Any],
 
 
 def page_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Every page of every PDF, and what was read off it. One row per page, always.
+    """Every page of every PDF and everything read off it. One row per page, always.
 
-    A page that yielded nothing is a row saying so — the alternative is a document where the
-    pages that failed are simply absent, which reads as a shorter drawing pack.
+    A page that yielded nothing gets a row saying so — otherwise the pages that failed are
+    simply absent, which reads as a shorter drawing pack.
+
+    THE WORDING IS EXACT ON PURPOSE. An earlier version checked four fields and, when none
+    was populated, printed "nothing was read from this page" — on a page whose process notes
+    HAD been extracted. That is a false statement about the pack, made by a document whose
+    only job is to be true about the pack. It now lists everything it finds and, when it
+    finds none of them, says which fields it looked at.
     """
+    checked = [
+        ("overall dimensions", lambda d, a: (
+            f"{d.get('overall_length_mm')} x {d.get('overall_width_mm')}"
+            if d.get("overall_length_mm") or d.get("overall_width_mm") else None)),
+        ("dimension figures", lambda d, a: (
+            f"{len(d['all_dimensions_mm'])}" if d.get("all_dimensions_mm") else None)),
+        ("hole sizes", lambda d, a: (
+            f"{len(d['hole_sizes_mm'])}" if d.get("hole_sizes_mm") else None)),
+        ("materials", lambda d, a: ", ".join(str(m) for m in a["materials"][:4])
+            if a.get("materials") else None),
+        ("finishes", lambda d, a: ", ".join(str(m) for m in a["surface_finishes"][:4])
+            if a.get("surface_finishes") else None),
+        ("part codes", lambda d, a: f"{len(a['part_numbers'])}"
+            if a.get("part_numbers") else None),
+        ("process notes", lambda d, a: f"{len(a['process_notes'])}"
+            if a.get("process_notes") else None),
+        ("textual operations", lambda d, a: ", ".join(str(o) for o in a["textual_operations"][:6])
+            if a.get("textual_operations") else None),
+        ("drawing numbers", lambda d, a: ", ".join(str(o) for o in a["drawing_numbers"][:4])
+            if a.get("drawing_numbers") else None),
+        ("revision", lambda d, a: str(a.get("revision")) if a.get("revision") else None),
+        ("scales", lambda d, a: ", ".join(str(o) for o in a["scales"][:3])
+            if a.get("scales") else None),
+        ("BOM table", lambda d, a: f"{len(a['bom_rows'])} row(s)" if a.get("bom_rows") else None),
+    ]
     rows: List[Dict[str, Any]] = []
     for page in (summary.get("pages") or []):
         if not isinstance(page, Mapping):
@@ -314,19 +357,20 @@ def page_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         dims = analysis.get("dimensions") or {}
         role = (page.get("page_role") or {}).get("primary_role") or page.get("page_roles") or ""
         found = []
-        if dims.get("overall_length_mm") or dims.get("overall_width_mm"):
-            found.append(f"overall {dims.get('overall_length_mm')} x {dims.get('overall_width_mm')}")
-        if dims.get("all_dimensions_mm"):
-            found.append(f"{len(dims['all_dimensions_mm'])} dimension figure(s)")
-        if analysis.get("materials"):
-            found.append("material: " + ", ".join(str(m) for m in analysis["materials"][:3]))
-        if analysis.get("part_numbers"):
-            found.append(f"{len(analysis['part_numbers'])} part code(s)")
+        for label, reader in checked:
+            try:
+                value = reader(dims, analysis)
+            except Exception:                                            # noqa: BLE001
+                value = None
+            if value:
+                found.append(f"{label}: {value}")
         rows.append({
             "file": _text(page.get("source_pdf_name") or page.get("source_file") or ""),
             "page": page.get("source_page_number") or page.get("page_number"),
             "role": _text(role),
-            "read_from_it": "; ".join(found) if found else "nothing was read from this page",
+            "read_from_it": "; ".join(found) if found else (
+                "none of the fields checked were populated ("
+                + ", ".join(label for label, _ in checked) + ")"),
         })
     return rows
 
@@ -665,35 +709,47 @@ def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str
                 continue
             kind = ("flat pattern export" if probe.get("looks_like_flat_export")
                     else "drawing export")
+            # EVERY VALUE HERE COMES OUT OF A FILE, so every value is escaped and only the
+            # separators are markup. The first version inserted strings raw on the reasoning
+            # that they were "just layer names" — layer names, entity types, attribution text
+            # and error messages are all source-derived, and a table that renders one of them
+            # as markup is a defect whether or not today's files happen to exploit it.
+            _E = _esc
+
+            def _list(values: Sequence[Any], sep: str = ", ", empty: str = "none") -> str:
+                items = [_E(v) for v in (values or [])]
+                return sep.join(items) if items else empty
+
             facts = [
-                ("read with", probe.get("reader")),
-                ("classified as", kind),
-                ("units declared", f"{probe.get('units')}"
-                 + ("" if probe.get("units_known") else " — figures are unitless")),
-                ("extent", f"{probe.get('extent_length')} &times; {probe.get('extent_width')}"),
-                ("blank published", f"{probe.get('blank_length_mm')} &times; "
-                                    f"{probe.get('blank_width_mm')}"
-                 if probe.get("blank_length_mm") else "none — " + (_esc(probe.get("extent_is"))
-                                                                   or "not a flat export")),
-                ("profile length", f"{probe.get('outline_length')}"
+                ("read with", _E(probe.get("reader"))),
+                ("classified as", _E(kind)),
+                ("units declared", _E(probe.get("units"))
+                 + ("" if probe.get("units_known") else " &mdash; figures are unitless")),
+                ("extent", f"{_E(probe.get('extent_length'))} &times; "
+                           f"{_E(probe.get('extent_width'))}"),
+                ("blank published",
+                 (f"{_E(probe.get('blank_length_mm'))} &times; "
+                  f"{_E(probe.get('blank_width_mm'))}") if probe.get("blank_length_mm")
+                 else "none &mdash; " + (_E(probe.get("extent_is")) or "not a flat export")),
+                ("profile length", _E(probe.get("outline_length"))
                  + (" (partial)" if probe.get("outline_length_partial") else "")),
-                ("circles", f"{probe.get('circle_count')}"
-                 + (f" &mdash; &Oslash; " + ", ".join(str(d) for d in probe.get("circle_diameters") or [])
+                ("circles", _E(probe.get("circle_count"))
+                 + ((" &mdash; &Oslash; " + _list(probe.get("circle_diameters")))
                     if probe.get("circle_diameters") else "")),
-                ("bends", f"{probe.get('bend_lines')} from "
-                          f"{probe.get('bend_layer_line_count')} segment(s)"),
-                ("dimension entities", probe.get("dimension_entities")),
-                ("layers", ", ".join(probe.get("layers") or []) or "none"),
-                ("entities", ", ".join(f"{k} &times;{v}" for k, v in
-                                       (probe.get("entity_counts") or {}).items()) or "none"),
-                ("not measured", ", ".join(probe.get("unsupported") or []) or "nothing"),
-                ("text in the file", " &vert; ".join(_esc(x) for x in
-                                                     (probe.get("text_values") or [])) or "none"),
-                ("attributed to a part by", entry.get("attribution")),
+                ("candidate fold axes",
+                 f"{_E(probe.get('candidate_fold_axes'))} from "
+                 f"{_E(probe.get('bend_layer_line_count'))} segment(s) on the bend layer"),
+                ("dimension entities", _E(probe.get("dimension_entities"))),
+                ("layers", _list(probe.get("layers"))),
+                ("entities", _list([f"{k} \u00d7{v}" for k, v in
+                                    (probe.get("entity_counts") or {}).items()])),
+                ("not measured", _list(probe.get("unsupported"), empty="nothing")),
+                ("text in the file", _list(probe.get("text_values"), sep=" &vert; ")),
+                ("attributed to a part by", _E(entry.get("attribution"))),
             ]
             parts.append("<table class='kv'>")
             for label, value in facts:
-                parts.append(f"<tr><th>{_esc(label)}</th><td>{value if isinstance(value, str) else _esc(value)}</td></tr>")
+                parts.append(f"<tr><th>{_E(label)}</th><td>{value}</td></tr>")
             parts.append("</table></div>")
 
     parts.append(
