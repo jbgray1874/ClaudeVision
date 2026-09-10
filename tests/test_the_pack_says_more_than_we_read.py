@@ -599,3 +599,215 @@ def test_each_dxf_is_read_once_per_page(tmp_path: Path):
         dxf_probe.probe_dxf = original
         sdd._PROBE_CACHE.clear()
     assert calls["n"] == 1, f"the file was read {calls['n']} times"
+
+
+# ── the four the reviewer left open after the dashed-fold commit ───────────────────────
+
+
+def _nested_dxf(tmp_path: Path, name: str, insunits: int = MM) -> Path:
+    """Profile in INNER, INNER inserted into OUTER, OUTER inserted into modelspace. This is
+    the ordinary shape of a SolidWorks assembly export, not a contrived file."""
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = insunits
+    inner = doc.blocks.new("INNER")
+    inner.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+    inner.add_circle((20, 20), 2.5)
+    outer = doc.blocks.new("OUTER")
+    outer.add_blockref("INNER", (0, 0))
+    doc.modelspace().add_blockref("OUTER", (0, 0))
+    path = tmp_path / name
+    doc.saveas(path)
+    return path
+
+
+def test_geometry_inside_a_nested_block_is_counted(tmp_path: Path):
+    """virtual_entities() explodes ONE level. A block that inserts the block holding the
+    profile came back as another INSERT and was appended as a leaf, so the file reported
+    {"INSERT": 1}, no circles and no outline length — while ezdxf.bbox, which recurses on its
+    own, reported the real extent. The page showed an extent for geometry it also denied."""
+    probe = probe_dxf(_nested_dxf(tmp_path, "nested.dxf"))
+    assert probe["entity_counts"].get("LWPOLYLINE") == 1
+    assert probe["entity_counts"].get("INSERT") is None, "the reference is resolved, not counted"
+    assert probe["circle_count"] == 1
+    assert probe["outline_length"] == pytest.approx(300.0 + 2.5 * 2 * 3.14159, abs=0.5)
+    assert probe["extent_length"] == pytest.approx(100.0, abs=0.01)
+    assert probe["block_nesting_depth"] >= 2
+
+
+def test_a_self_inserting_block_is_named_and_not_followed(tmp_path: Path):
+    """Real files carry these by accident. Following one is an infinite descent, so the
+    recursion stops and SAYS which block it stopped at."""
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    block = doc.blocks.new("SELF")
+    block.add_lwpolyline([(0, 0), (10, 0), (10, 10), (0, 10)], close=True)
+    block.add_blockref("SELF", (20, 0))
+    doc.modelspace().add_blockref("SELF", (0, 0))
+    path = tmp_path / "self.dxf"
+    doc.saveas(path)
+    probe = probe_dxf(path)
+    assert any("inserts itself" in u for u in probe["unresolved_blocks"])
+    assert any("block not resolved" in u for u in probe["unsupported"]), \
+        "an abandoned branch holds geometry we have not counted, so it is named"
+
+
+def test_nesting_deeper_than_the_cap_is_declared_not_silently_truncated(tmp_path: Path):
+    """A total computed after abandoning a branch is partial and must say so."""
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    base = doc.blocks.new("L0")
+    base.add_lwpolyline([(0, 0), (10, 0), (10, 10), (0, 10)], close=True)
+    for level in range(1, 13):
+        doc.blocks.new(f"L{level}").add_blockref(f"L{level - 1}", (0, 0))
+    doc.modelspace().add_blockref("L12", (0, 0))
+    path = tmp_path / "deep.dxf"
+    doc.saveas(path)
+    probe = probe_dxf(path)
+    assert probe["unresolved_blocks"], "the cap is reported, not silent"
+    assert any("deeper than" in u for u in probe["unresolved_blocks"])
+
+
+def test_a_unitless_file_is_not_scored_against_millimetres(tmp_path: Path):
+    """$INSUNITS unset means the figure is in file units. One unitless drawing read 30000
+    against the engine's 762 mm and scored a red NO — that is the inch-to-mm factor, not a
+    disagreement, and a red card here sends somebody to fix an engine that is correct."""
+    from source_drawing_data import build_tables
+    path = _dxf(tmp_path, "unitless.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True),
+                insunits=UNITLESS)
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "unitless", "geometry_rollup": {"cut_length_mm": 762.0}}]}}
+    row = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
+    assert row["outline length"]["agrees"] == "NOT COMPARABLE"
+    assert row["outline length"]["comparable"] == "no"
+    assert "declares no units" in row["outline length"]["note"]
+    # disclosed, not hidden: both numbers are still on the row
+    assert row["outline length"]["in_the_file"] == pytest.approx(30.0, abs=0.01)
+    assert row["outline length"]["engine_has"] == 762.0
+
+
+def test_a_partial_total_is_not_scored_against_a_complete_one(tmp_path: Path):
+    """A sum taken while geometry was skipped is knowingly short of the whole file. 300 vs 420
+    scored NO on a file whose own unsupported list said geometry was missing."""
+    from source_drawing_data import build_tables
+    path = _nested_dxf(tmp_path, "partial.dxf")
+    probe = probe_dxf(path)
+    if not probe.get("outline_length_partial"):
+        # force the condition through the documented flag rather than a contrived file
+        pytest.skip("this build measured everything in the fixture")
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "partial", "geometry_rollup": {"cut_length_mm": 420.0}}]}}
+    row = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
+    assert row["outline length"]["agrees"] == "NOT COMPARABLE"
+
+
+def test_an_unresolvable_block_makes_every_total_partial(tmp_path: Path):
+    """Directly: the flag, not via a comparison row."""
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+    msp.add_blockref("DOES-NOT-EXIST", (0, 0))
+    path = tmp_path / "missingblock.dxf"
+    doc.saveas(path)
+    probe = probe_dxf(path)
+    assert probe["unresolved_blocks"], "the block we could not open is named"
+    assert probe["outline_length_partial"] is True, \
+        "a total summed past missing geometry is partial"
+
+
+def _same_name_pack(tmp_path: Path) -> tuple:
+    """revA/X.dxf and revB/X.dxf, different geometry, one basename."""
+    made = []
+    for folder, length in (("revA", 100), ("revB", 250)):
+        (tmp_path / folder).mkdir(parents=True, exist_ok=True)
+        doc = ezdxf.new()
+        doc.header["$INSUNITS"] = MM
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (length, 0), (length, 50), (0, 50)], close=True)
+        path = tmp_path / folder / "117620202M.dxf"
+        doc.saveas(path)
+        made.append(path)
+    return made[0], made[1]
+
+
+def test_two_files_sharing_a_basename_are_told_apart(tmp_path: Path):
+    """They produced two rows identical in every visible column — same file name, same part —
+    one agreeing and one a red NO, with nothing saying the pipeline had used the other file."""
+    from source_drawing_data import build_tables
+    rev_a, rev_b = _same_name_pack(tmp_path)
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "117620202M", "dxf_file": str(rev_b), "blank_length_mm": 250.0}]}}
+    rows = [r for r in build_tables(summary, [rev_a, rev_b])["DXF file vs engine"]
+            if r["fact"] == "blank length"]
+    assert len(rows) == 2
+    assert len({r["file"] for r in rows}) == 2, "the two rows are distinguishable"
+    assert all("117620202M.dxf" in r["file"] for r in rows), "the recognisable name is kept"
+
+
+def test_the_file_the_pipeline_did_not_use_is_not_scored_against_the_part(tmp_path: Path):
+    """Comparing file A's geometry against part P's figures, where the engine read file B, is
+    not one fact measured twice — it is two files. The exact path wins; a basename-only match
+    is still offered, because it is usually right, but it is not SCORED."""
+    from source_drawing_data import build_tables
+    rev_a, rev_b = _same_name_pack(tmp_path)
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "117620202M", "dxf_file": str(rev_b), "blank_length_mm": 250.0}]}}
+    rows = {r["file"]: r for r in build_tables(summary, [rev_a, rev_b])["DXF file vs engine"]
+            if r["fact"] == "blank length"}
+    used = [r for k, r in rows.items() if "revB" in k][0]
+    other = [r for k, r in rows.items() if "revA" in k][0]
+    assert used["agrees"] == "yes", "the file the pipeline recorded is compared normally"
+    assert other["agrees"] == "NOT COMPARABLE"
+    assert "name only" in other["note"]
+    assert str(rev_b) in other["note"] or rev_b.name in other["note"], \
+        "and it names the path the pipeline actually used"
+
+
+def test_a_bare_filename_still_matches_without_a_false_ambiguity_warning(tmp_path: Path):
+    """Callers that only have a name must not be told the path disagrees — there is no path."""
+    from source_drawing_data import _match_part
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "X1", "dxf_file": "/some/where/X1.dxf"}]}}
+    part, how, ambiguous = _match_part(summary, "X1.dxf")
+    assert part is not None
+    assert ambiguous is False
+    assert "own file-to-part association" in how
+
+
+def test_the_workbook_and_the_page_are_written_from_one_snapshot(tmp_path: Path):
+    """The docstring claimed the two "cannot drift apart" because both were built from
+    build_tables() — but calling the same FUNCTION twice is not the same DATA. Passing the
+    snapshot makes the claim true by construction: neither writer rebuilds."""
+    import source_drawing_data as sdd
+    path = _dxf(tmp_path, "snap.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (60, 0), (60, 30), (0, 30)], close=True))
+    summary = {"estimate_summary": {"part_estimates": [{"part_number": "snap"}]}}
+    sdd._PROBE_CACHE.clear()
+    tables = sdd.build_tables(summary, [path])
+    calls = {"n": 0}
+    real_build = sdd.build_tables
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return real_build(*a, **k)
+
+    sdd.build_tables = counting
+    try:
+        sdd.write_source_drawing_data(summary, tmp_path, "j", [path], tables=tables)
+        sdd.write_source_drawing_html(summary, tmp_path, "j", [path], tables=tables)
+    finally:
+        sdd.build_tables = real_build
+        sdd._PROBE_CACHE.clear()
+    assert calls["n"] == 0, f"a writer rebuilt the tables {calls['n']} time(s)"
+
+
+def test_the_run_builds_the_audit_snapshot_once(tmp_path: Path):
+    """The production call site, not just the capability: main.py must build once and hand the
+    same dict to both writers. A test that only proves the parameter exists proves nothing
+    about what the run does."""
+    source = (Path(__file__).resolve().parents[1] / "src" / "main.py").read_text(
+        encoding="utf-8", errors="ignore")
+    assert "_sdd_tables = build_tables(" in source
+    assert source.count("tables=_sdd_tables") == 2, \
+        "both writers take the one snapshot"

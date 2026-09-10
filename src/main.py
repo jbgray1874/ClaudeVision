@@ -1222,20 +1222,22 @@ def main() -> None:
                                  if p.suffix.lower() == ".dxf"]
             except Exception:
                 _sdd_dxfs = []
+            # ONE SNAPSHOT, TWO OUTPUTS. The spreadsheet estimating works from and the page
+            # management reads have to describe the same pack. Letting each writer build its
+            # own tables called build_tables() twice, which re-read every DXF and re-walked
+            # the summary: the same function, not the same data, and nothing held the two
+            # answers together. Built once here and handed to both.
+            from source_drawing_data import build_tables, write_source_drawing_html
+            _sdd_tables = build_tables(summary, _sdd_dxfs)
             _sdd = write_source_drawing_data(
                 summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
-                dxf_paths=_sdd_dxfs)
+                dxf_paths=_sdd_dxfs, tables=_sdd_tables)
             if _sdd:
                 print(f"   -> Source drawing data: {_sdd.resolve()}")
                 (summary.setdefault("saved_output_paths", {}))["source_drawing_data"] = str(_sdd)
-            # The same tables as a page. Estimating works from the spreadsheet; management
-            # reads this, and it renders in the portal like any other deliverable. Built from
-            # the SAME build_tables() call, so the two cannot drift apart and disagree about
-            # what the pack contained.
-            from source_drawing_data import write_source_drawing_html
             _sdd_html = write_source_drawing_html(
                 summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
-                dxf_paths=_sdd_dxfs)
+                dxf_paths=_sdd_dxfs, tables=_sdd_tables)
             if _sdd_html:
                 print(f"   -> Source drawing data (HTML): {_sdd_html.resolve()}")
                 (summary.setdefault("saved_output_paths", {}))[

@@ -126,13 +126,38 @@ def _match_part(summary: Mapping[str, Any], dxf_name: str) -> tuple:
     fact nobody credited, because it reads as evidence. So the association the pipeline
     ITSELF recorded is used first, and where that is absent the filename fallback must be
     UNIQUE — two candidates are reported as ambiguous rather than resolved by length.
+
+    THE FULL PATH IS MATCHED BEFORE THE BASENAME, AND A BASENAME-ONLY HIT SAYS SO. A pack
+    holding revA/117620202M.dxf and revB/117620202M.dxf produced two rows that were identical
+    in every visible column — same file name, same part — one agreeing with the engine and one
+    a red NO. The pipeline had recorded revB; revA was a different file that merely shared a
+    name, and nothing on the page said so. Pass the full path here (not probe["file"]) and an
+    exact path match wins outright; a basename match against a DIFFERENT recorded path is
+    still offered, because it is usually right, but it is marked ambiguous and names the path
+    the pipeline actually used.
     """
     target = str(dxf_name).strip().lower()
+    target_name = Path(target).name
+    basename_only: Optional[tuple] = None
     for part in _parts(summary):
         for key in ("dxf_file", "dxf_path", "flat_pattern_file"):
             recorded = str(part.get(key) or "").strip().lower()
-            if recorded and Path(recorded).name == Path(target).name:
+            if not recorded:
+                continue
+            if recorded == target:
                 return part, "the pipeline's own file-to-part association", False
+            if Path(recorded).name == target_name and basename_only is None:
+                # The path is compared case-folded but REPORTED as recorded: a lowercased
+                # path is not the path anyone can go and look at.
+                basename_only = (part, str(part.get(key)).strip())
+    if basename_only is not None:
+        part, recorded = basename_only
+        if Path(target).parent == Path(""):
+            # Only a bare name was supplied, so there is no path to disagree with.
+            return part, "the pipeline's own file-to-part association", False
+        return part, ("file name only: the pipeline recorded a DIFFERENT path for this part "
+                      f"({recorded}), so figures here may come from another file of the same "
+                      "name"), True
     stem = Path(dxf_name).stem.upper().replace("_", "-")
     hits = [p for p in _parts(summary)
             if str(p.get("part_number") or "").strip().upper().replace("_", "-")
@@ -142,6 +167,34 @@ def _match_part(summary: Mapping[str, Any], dxf_name: str) -> tuple:
     if len(hits) > 1:
         return None, "ambiguous: " + ", ".join(str(h.get("part_number")) for h in hits[:4]), True
     return None, "no part matched this file", False
+
+
+def _display_names(paths: Sequence[Any]) -> Dict[str, str]:
+    """str(path) -> the shortest label that still tells these files apart.
+
+    The basename alone is the right label almost always, and is what an estimator recognises.
+    But when two files in one pack share a basename, showing both as "117620202M.dxf" makes
+    the page lie twice over: the rows look like duplicates, and a disagreement on one reads as
+    a disagreement on the other. Where the names collide, enough parent directory is prefixed
+    to separate them.
+    """
+    by_name: Dict[str, List[str]] = {}
+    for path in paths:
+        by_name.setdefault(Path(str(path)).name, []).append(str(path))
+    labels: Dict[str, str] = {}
+    for name, group in by_name.items():
+        if len(group) == 1:
+            labels[group[0]] = name
+            continue
+        for key in group:
+            parent = Path(key).parent.name
+            labels[key] = f"{parent}/{name}" if parent else key
+        # Still colliding (same parent name too) — fall back to the whole path, which is ugly
+        # but never ambiguous. A pretty label that merges two files is the worse trade.
+        if len({labels[k] for k in group}) != len(group):
+            for key in group:
+                labels[key] = key
+    return labels
 
 
 def dxf_comparison_rows(summary: Mapping[str, Any],
@@ -175,29 +228,31 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
     if not paths:
         return []
 
+    labels = _display_names(paths)
     rows: List[Dict[str, Any]] = []
     for path in paths:
+        shown = labels.get(str(path)) or Path(str(path)).name
         try:
             probe = _probe_once(path)
         except Exception as err:                                         # noqa: BLE001
-            rows.append({"file": Path(str(path)).name, "part": "", "fact": "could not be read",
+            rows.append({"file": shown, "part": "", "fact": "could not be read",
                          "in_the_file": "", "engine_has": "", "comparable": "",
                          "agrees": "", "note": f"{type(err).__name__}: {err}"})
             continue
         if not probe.get("readable"):
-            rows.append({"file": probe["file"], "part": "", "fact": "not readable",
+            rows.append({"file": shown, "part": "", "fact": "not readable",
                          "in_the_file": "", "engine_has": "", "comparable": "", "agrees": "",
                          "note": probe.get("error") or "ezdxf could not open this file"})
             continue
         if probe.get("entities_are_raster_only"):
-            rows.append({"file": probe["file"], "part": "", "fact": "content",
+            rows.append({"file": shown, "part": "", "fact": "content",
                          "in_the_file": "a raster image only", "engine_has": "",
                          "comparable": "n/a", "agrees": "n/a",
                          "note": "no geometry in this file to extract — no software reveals "
                                  "what is not there. Ask for a vector export"})
             continue
 
-        part, how, ambiguous = _match_part(summary, probe["file"])
+        part, how, ambiguous = _match_part(summary, path)
         pn = _text(part.get("part_number")) if part else ""
         geometry = (part.get("geometry_rollup") or {}) if part else {}
         features = (part.get("manufacturing_features") or {}) if part else {}
@@ -213,18 +268,50 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
         unit_note = "" if probe.get("units_known") else             f"units {probe.get('units')} — figures are unitless, not millimetres"
         partial = " (partial: " + ", ".join(probe.get("unsupported") or []) + ")"             if probe.get("unsupported") else ""
 
+        # WHAT STOPS A FIGURE BEING SCORED AT ALL. A red "NO" on this page sends somebody to
+        # look for an engine defect, so it must never be produced by the probe's own limits.
+        #
+        #   units unknown  — the file declares no $INSUNITS, so the probe's figure is in file
+        #                    units and the engine's is in millimetres. One unitless drawing
+        #                    read 30000 against the engine's 762 mm and scored NO; that is the
+        #                    inch-to-mm factor, not a disagreement.
+        #   partial total   — a sum taken while something was skipped (an unresolvable block, a
+        #                    curve ezdxf could not flatten) is knowingly short of the whole. It
+        #                    cannot be held against a complete figure: 300 vs 420 scored NO on
+        #                    a file whose own `unsupported` list said geometry was missing.
+        #   attribution only
+        #     by file name   — the engine's figures for this part came from a file at a
+        #                    DIFFERENT path that happens to share this basename. Then the two
+        #                    numbers are not one fact measured twice; they are two files.
+        #
+        # All three are disclosed, not hidden — the row still shows both numbers and says why
+        # they are not scored, so a reader can take it further if they want to.
+        units_block = ("" if probe.get("units_known") else
+                       f"NOT SCORED: the file declares no units ($INSUNITS {probe.get('units')}), "
+                       f"so this figure is in file units and the engine's is in millimetres")
+        partial_block = ("" if not probe.get("outline_length_partial") else
+                         "NOT SCORED: this total was summed while geometry was skipped, so it "
+                         "is knowingly short of the whole file")
+        attribution_block = ("" if not (ambiguous and part) else
+                             "NOT SCORED: this file is matched to the part by name only")
+        units_block = attribution_block or units_block
+        partial_block = attribution_block or partial_block
+
         # comparable facts: same thing measured two ways
         checks = [
-            ("blank length", probe.get("blank_length_mm"), _engine("blank_length_mm"), True, ""),
-            ("blank width", probe.get("blank_width_mm"), _engine("blank_width_mm"), True, ""),
+            ("blank length", probe.get("blank_length_mm"), _engine("blank_length_mm"), True, "",
+             units_block),
+            ("blank width", probe.get("blank_width_mm"), _engine("blank_width_mm"), True, "",
+             units_block),
             ("outline length", probe.get("outline_length"),
              _engine("cut_length_mm", "dxf_measured_cut_length"), True,
-             ("the file's total profile length" + partial)),
+             ("the file's total profile length" + partial),
+             units_block or partial_block),
             # inventory vs interpretation: shown together, never scored
             ("circles in the file", probe.get("circle_count") or None,
              _engine("hole_count", "estimated_hole_count"), False,
              "a circle is not necessarily a hole — a disc's OUTLINE is a circle. Deciding "
-             "which are holes needs the part's role and the drawing's instructions"),
+             "which are holes needs the part's role and the drawing's instructions", ""),
             # THE DXF STATES THE BENDS, SO THIS IS COMPARABLE AND WE MUST BE EXACTLY RIGHT.
             # Segments are collapsed onto the infinite line they lie on, so a dashed fold
             # counts once: 117621702M draws ten dashes and has two bends. The raw entity
@@ -235,13 +322,20 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
               f"to {probe.get('candidate_fold_axes')} fold axis/axes. An AXIS is not proven "
               f"to be one manufacturing bend: nothing here knows which profile owns which "
               f"segment, so two tabs folding on one line would read as one")
-             if probe.get("bend_layer_line_count") else ""),
+             if probe.get("bend_layer_line_count") else "",
+             # A COUNT IS UNIT-FREE, BUT THE COLLAPSE THAT PRODUCED IT IS NOT. Segments are
+             # grouped with a millimetre tolerance and a millimetre gap; with no declared
+             # units there is no conversion to apply them in, so the count itself is not
+             # dependable enough to score against.
+             units_block),
         ]
-        for label, available, extracted, comparable, note in checks:
+        for label, available, extracted, comparable, note, blocked in checks:
             if available is None and extracted in (None, "", []):
                 continue
             verdict = ""
             if not comparable:
+                verdict = "NOT COMPARABLE"
+            elif blocked and available is not None:
                 verdict = "NOT COMPARABLE"
             elif available is not None and extracted not in (None, "", []):
                 a, b = _num(available), _num(extracted)
@@ -252,14 +346,16 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
                 # their absence is not proof the engine never read or used the value.
                 verdict = "not in the fields checked"
             rows.append({
-                "file": probe["file"],
+                "file": shown,
                 "part": pn or ("(ambiguous)" if ambiguous else "(no part matched)"),
                 "fact": label,
                 "in_the_file": available,
                 "engine_has": extracted,
-                "comparable": "yes" if comparable else "no",
+                "comparable": "yes" if (comparable and not (blocked and available is not None))
+                              else "no",
                 "agrees": verdict,
-                "note": "; ".join(x for x in (note, unit_note, probe.get("extent_is") or "",
+                "note": "; ".join(x for x in ((blocked if available is not None else ""),
+                                              note, unit_note, probe.get("extent_is") or "",
                                               "" if not ambiguous else f"attribution {how}")
                                   if x),
             })
@@ -299,14 +395,17 @@ def dxf_detail_blocks(summary: Mapping[str, Any],
                 if value and str(value).lower() not in seen:
                     seen.add(str(value).lower())
                     paths.append(value)
+    labels = _display_names(paths)
     out: List[Dict[str, Any]] = []
     for path in paths:
         try:
             probe = _probe_once(path)
         except Exception:                                                # noqa: BLE001
             continue
-        part, how, ambiguous = _match_part(summary, probe.get("file", ""))
+        # The FULL path, so two files sharing a basename are not credited to one part.
+        part, how, ambiguous = _match_part(summary, path)
         out.append({"probe": probe,
+                    "shown_as": labels.get(str(path)) or Path(str(path)).name,
                     "part": _text((part or {}).get("part_number")),
                     "attribution": how, "ambiguous": ambiguous})
     return out
@@ -489,8 +588,13 @@ def build_tables(summary: Mapping[str, Any],
 
 def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
                               job: str = "",
-                              dxf_paths: Optional[Sequence[Any]] = None) -> Optional[Path]:
+                              dxf_paths: Optional[Sequence[Any]] = None,
+                              tables: Optional[Mapping[str, List[Dict[str, Any]]]] = None,
+                              ) -> Optional[Path]:
     """Write source_drawing_data.xlsx into the estimating folder. Returns the path.
+
+    Pass `tables` to write from a snapshot already built — see the note on the HTML writer for
+    why the caller should build once and hand the same dict to both.
 
     Never raises into the run: an audit that breaks the job it audits is worse than no audit.
     """
@@ -499,7 +603,7 @@ def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
         from openpyxl.styles import Font
     except Exception:                                                    # noqa: BLE001
         return None
-    tables = build_tables(summary, dxf_paths)
+    tables = dict(tables) if tables is not None else build_tables(summary, dxf_paths)
     book = Workbook()
     book.remove(book.active)
     for name in SHEETS:
@@ -635,13 +739,22 @@ _WHY = {
 
 
 def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str = "",
-                              dxf_paths: Optional[Sequence[Any]] = None) -> Optional[Path]:
+                              dxf_paths: Optional[Sequence[Any]] = None,
+                              tables: Optional[Mapping[str, List[Dict[str, Any]]]] = None,
+                              ) -> Optional[Path]:
     """The same tables as a page: estimating works from the spreadsheet, management reads this.
 
-    Built from build_tables() — the identical data the workbook uses — so the two cannot
-    drift apart and disagree about what the pack contained.
+    PASS `tables` AND THE TWO OUTPUTS ARE THE SAME SNAPSHOT. This docstring used to claim the
+    workbook and the page "cannot drift apart" because both were "built from build_tables()" —
+    but calling the same FUNCTION twice is not the same DATA. Two builds read the DXFs again,
+    re-walk the summary, and nothing held them to the same answer: a file rewritten between the
+    two calls, or a summary mutated by anything running in between, and the spreadsheet
+    estimating works from would disagree with the page management reads, with no indication
+    which was right. When the caller builds once and hands the same dict to both writers, the
+    claim is true by construction rather than by coincidence. Built here only if no snapshot is
+    supplied, so a lone call still works.
     """
-    tables = build_tables(summary, dxf_paths)
+    tables = dict(tables) if tables is not None else build_tables(summary, dxf_paths)
     files = tables.get("Files") or []
     comparisons = tables.get("DXF file vs engine") or []
     unread = sum(1 for f in files if str(f.get("read", "")).upper() == "NO")
@@ -700,7 +813,9 @@ def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str
                      "rest is how a fact goes missing without anyone deciding to drop it.</p>")
         for entry in blocks:
             probe = entry["probe"]
-            head = _esc(probe.get("file"))
+            # The disambiguated label, not the bare basename: two files of the same name in
+            # one pack must not head two sections identically.
+            head = _esc(entry.get("shown_as") or probe.get("file"))
             who = f" &middot; {_esc(entry['part'])}" if entry.get("part") else ""
             parts.append(f"<div class='panel' style='padding:16px 18px;margin-bottom:12px'>")
             parts.append(f"<div class='fhead'><b>{head}</b>{who}</div>")
@@ -743,8 +858,19 @@ def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str
                 ("layers", _list(probe.get("layers"))),
                 ("entities", _list([f"{k} \u00d7{v}" for k, v in
                                     (probe.get("entity_counts") or {}).items()])),
+                # HOW DEEP THE BLOCKS WENT, because the counts above depend on it. A block
+                # reference is not geometry, and a block inside a block inside a block is the
+                # ordinary shape of an assembly export; a file whose profile was two levels
+                # down once reported one INSERT and nothing else.
+                ("block nesting resolved",
+                 (f"{_E(probe.get('block_nesting_depth'))} level(s) deep"
+                  if probe.get("block_nesting_depth") else "no block references")
+                 + ((" &mdash; NOT resolved: " + _list(probe.get("unresolved_blocks")))
+                    if probe.get("unresolved_blocks") else "")),
                 ("not measured", _list(probe.get("unsupported"), empty="nothing")),
-                ("text in the file", _list(probe.get("text_values"), sep=" &vert; ")),
+                ("text in the file", _list(probe.get("text_values"), sep=" &vert; ")
+                 + (f" ({_E(probe.get('text_count'))} string(s))"
+                    if probe.get("text_count") else "")),
                 ("attributed to a part by", _E(entry.get("attribution"))),
             ]
             parts.append("<table class='kv'>")

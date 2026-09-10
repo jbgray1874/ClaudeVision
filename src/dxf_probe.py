@@ -70,24 +70,61 @@ def _unit_scale(doc: Any) -> tuple:
     return scale, name, True
 
 
-def _flat_entities(layout: Any) -> List[Any]:
-    """Every entity, with block references resolved so geometry inside a block is counted.
+def _flat_entities(layout: Any, max_depth: int = 8) -> tuple:
+    """(every entity with block references resolved, how deep we went, what we gave up on).
 
     An INSERT is a reference, not geometry — a file whose only visible content is a block
     containing the whole profile would otherwise look empty, and one holding an image next to
     an inserted block looked raster-only. ezdxf explodes them virtually, so nothing is
     modified on disk.
+
+    RESOLUTION IS RECURSIVE, BECAUSE BLOCKS NEST. `virtual_entities()` explodes ONE level:
+    an INSERT of a block that itself inserts the block holding the profile came back as
+    another INSERT, and the old loop appended it as a leaf. A drawing built that way — which
+    is the ordinary shape of a SolidWorks assembly export — reported `{"INSERT": 1}`, no
+    circles and no outline length, while `ezdxf.bbox` (which recurses on its own) reported
+    the real 100 x 50 extent. So the page showed an extent for geometry it also claimed did
+    not exist, and the contradiction was on the audit's own side.
+
+    The depth is capped and the cap is reported, not silent: a self-inserting block would
+    otherwise recurse forever, and a total computed after abandoning a branch is a partial
+    total that must say so.
     """
     out: List[Any] = []
-    for entity in layout:
-        if entity.dxftype() == "INSERT":
-            try:
-                out.extend(entity.virtual_entities())
+    deepest = 0
+    abandoned: List[str] = []
+
+    def walk(entities: Any, depth: int, seen: tuple) -> None:
+        nonlocal deepest
+        deepest = max(deepest, depth)
+        for entity in entities:
+            if entity.dxftype() != "INSERT":
+                out.append(entity)
                 continue
+            try:
+                block_name = str(entity.dxf.name)
             except Exception:                                            # noqa: BLE001
-                pass
-        out.append(entity)
-    return out
+                block_name = ""
+            if depth >= max_depth:
+                abandoned.append(f"{block_name or 'INSERT'} (deeper than {max_depth} levels)")
+                out.append(entity)
+                continue
+            if block_name and block_name in seen:
+                # A block that contains itself. Real files carry these by accident; following
+                # one is an infinite descent, so it is named and left as a reference.
+                abandoned.append(f"{block_name} (inserts itself)")
+                out.append(entity)
+                continue
+            try:
+                children = list(entity.virtual_entities())
+            except Exception as err:                                      # noqa: BLE001
+                abandoned.append(f"{block_name or 'INSERT'} ({type(err).__name__})")
+                out.append(entity)
+                continue
+            walk(children, depth + 1, seen + ((block_name,) if block_name else ()))
+
+    walk(layout, 0, ())
+    return out, deepest, abandoned
 
 
 def _path_length(entity: Any, sagitta: float = 0.01) -> Optional[float]:
@@ -172,6 +209,7 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
         "bend_layer_line_count": 0, "candidate_fold_axes": 0,
         "outline_length": None, "outline_length_partial": False,
         "text_values": [], "text_count": 0, "dimension_entities": 0,
+        "block_nesting_depth": 0, "unresolved_blocks": [],
         "error": "",
     }
     try:
@@ -192,7 +230,9 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     result["units_known"] = unit_known
 
     msp = doc.modelspace()
-    entities = _flat_entities(msp)
+    entities, block_depth, unresolved_blocks = _flat_entities(msp)
+    result["block_nesting_depth"] = block_depth
+    result["unresolved_blocks"] = unresolved_blocks
     counts: collections.Counter = collections.Counter()
     layers: set = set()
     texts: List[str] = []
@@ -271,6 +311,12 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     # count is carried so a reader can see at a glance how much there is.
     result["text_values"] = texts
     result["text_count"] = len(texts)
+    # A block we could not descend into holds geometry we have not counted, so every total
+    # drawn from this file is partial and says so by name.
+    for block in unresolved_blocks:
+        unsupported[f"block not resolved: {block}"] += 1
+    if unresolved_blocks:
+        length_partial = True
     result["unsupported"] = [f"{k} x{v}" for k, v in unsupported.most_common()]
 
     # RASTER-ONLY, DECIDED AFTER BLOCKS ARE RESOLVED. A file holding an image beside an
