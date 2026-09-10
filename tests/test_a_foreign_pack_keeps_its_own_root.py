@@ -904,3 +904,107 @@ def test_the_web_ai_circuit_breaker_stops_paying_for_a_dead_provider(monkeypatch
     monkeypatch.setattr(web_ai_price_lookup, "lookup_web_ai_price", _fast_miss)
     assert svc._get_web_ai_fallback(part) is None    # a miss, but the provider answered
     assert svc._web_ai_consec_timeouts == 0
+
+
+# ── one joint is charged once, and a purchased panel is not drilled ──────────────────────
+
+def test_a_weld_that_joins_two_leaves_is_not_charged_on_all_three_nodes():
+    """0359342's prong assembly: MBY433 is MBY432 (prong) welded to MBY434 (backplate),
+    56 off. The route charged Weld (CO2) AND Dress Welds on the assembly and on each of
+    its two leaves — GBP 285 for two joints that do not exist.
+
+    The test that cannot be argued with is that A LEAF CANNOT BE WELDED TO ITSELF: a part
+    with no children is one piece of material, so a weld claim on it is really the claim
+    that it takes part in its parent's joint, which the parent is already paying for."""
+    from types import SimpleNamespace as NS
+
+    graph = {"children": {"MBY433": {"MBY432": 1, "MBY434": 1},
+                          "A61636": {"MBY433": 56}}}
+
+    def d(t, op):
+        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
+                  reason="", field_provenance={})
+
+    asm_weld, asm_dress = d("MBY433", "welding"), d("MBY433", "dress_welds")
+    prong_weld, prong_dress = d("MBY432", "welding"), d("MBY432", "dress_welds")
+    plate_weld, plate_dress = d("MBY434", "welding"), d("MBY434", "dress_welds")
+    prong_fold = d("MBY432", "folding")
+    ds = [asm_weld, asm_dress, prong_weld, prong_dress, plate_weld, plate_dress, prong_fold]
+    rc._one_joint_charged_once(ds, graph)
+
+    # the assembly keeps the joint it is made by
+    assert asm_weld.status == rc.REQUIRED and asm_dress.status == rc.REQUIRED
+    # the two leaves lose the same joint counted twice, with the reason recorded
+    for _d in (prong_weld, prong_dress, plate_weld, plate_dress):
+        assert _d.status == rc.NOT_APPLICABLE, _d.operation
+        assert "counted twice" in _d.reason
+        assert _d.field_provenance["status"] == "joint_already_charged_on_the_assembly"
+    # a non-joining op on the same leaf is none of this rule's business
+    assert prong_fold.status == rc.REQUIRED
+
+
+def test_a_sub_assembly_keeps_the_welds_that_may_be_its_own():
+    """The rule stops at leaves on purpose. A sub-assembly can hold welds INSIDE it, and
+    nothing in this evidence distinguishes those from the joint above it — so a child that
+    has children of its own is left alone rather than guessed about."""
+    from types import SimpleNamespace as NS
+
+    graph = {"children": {"TOP": {"SUB": 1}, "SUB": {"LEAF-A": 1, "LEAF-B": 1}}}
+
+    def d(t, op):
+        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
+                  reason="", field_provenance={})
+
+    top_weld, sub_weld, leaf_weld = d("TOP", "welding"), d("SUB", "welding"), d("LEAF-A", "welding")
+    rc._one_joint_charged_once([top_weld, sub_weld, leaf_weld], graph)
+    assert top_weld.status == rc.REQUIRED
+    assert sub_weld.status == rc.REQUIRED, "a sub-assembly may have welds of its own"
+    assert leaf_weld.status == rc.NOT_APPLICABLE, "its parent SUB already charges the joint"
+
+
+def test_a_leaf_weld_survives_when_its_parent_is_not_charged_for_one():
+    """No double charge, no refusal. The rule only ever removes a SECOND charge for a joint
+    already on the record — a weldment whose parent holds no weld claim keeps its own."""
+    from types import SimpleNamespace as NS
+
+    graph = {"children": {"7332-01": {"7332-01-101": 1}}}
+
+    def d(t, op):
+        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
+                  reason="", field_provenance={})
+
+    leaf_weld, leaf_dress = d("7332-01-101", "welding"), d("7332-01-101", "dress_welds")
+    rc._one_joint_charged_once([leaf_weld, leaf_dress], graph)
+    assert leaf_weld.status == rc.REQUIRED and leaf_dress.status == rc.REQUIRED, \
+        "7332-01's weldment carries the only weld rows on that job and must keep them"
+
+
+def test_a_purchased_sheet_good_is_not_drilled_either():
+    """'The UPC sticker even carries a drilling charge.' A bought-in panel arrives finished,
+    holes included — if it needs them, its supplier made them and they are in its price.
+    The first cut of this branch refused only the metal-only ops, which left GBP 27.64 of
+    hole-making on a self-adhesive sticker and a bought-in mirror."""
+    from types import SimpleNamespace as NS
+
+    raw = {"A60890": {"normalized_material": "Vinyl,Clear-BlackPrint",
+                      "description": "UPC Sticker - Clear Vinyl"},
+           "A62271": {"normalized_material": "Mirror,6mm",
+                      "description": "Edition Sunglasses Mirror"},
+           "JAE820": {"normalized_material": "MDF,18mm", "description": "Plinth Top"}}
+
+    def d(t, op):
+        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
+                  reason="", field_provenance={})
+
+    sticker_drill = d("A60890", "countersinking")
+    mirror_drill = d("A62271", "drilling")
+    mirror_glue = d("A62271", "glue")
+    mdf_drill = d("JAE820", "countersinking")
+    rc._family_gate([sticker_drill, mirror_drill, mirror_glue, mdf_drill], raw)
+
+    assert sticker_drill.status == rc.NOT_APPLICABLE
+    assert sticker_drill.field_provenance["status"] == "family_gate_sheet_good"
+    assert mirror_drill.status == rc.NOT_APPLICABLE
+    assert mirror_glue.status == rc.REQUIRED, "the bond line stays — it is how it is fitted"
+    # A joinery panel IS drilled in this shop. The gate must not reach past bought-in goods.
+    assert mdf_drill.status == rc.REQUIRED

@@ -3773,6 +3773,12 @@ def compile_job_route(
 
     if pack_mode == "pdf_primary":
         _family_gate(decisions, raw)
+        # Gated with the family gate, and for the same reason: both are integrity rules that
+        # hold on any pack, and both change money, so they enter where the evidence is and
+        # generalise to the structured lane once a replay has priced that move. 7332-01 carries
+        # exactly one weld row (on -101, whose children hold no weld claim), so this rule is
+        # inert there — but inert-by-inspection is not the same as replayed.
+        _one_joint_charged_once(decisions, graph)
 
     for decision in decisions:
         if (
@@ -3815,6 +3821,59 @@ _METAL_ONLY_OPS = frozenset({
     "laser_cutting", "folding", "welding", "dress_welds", "powder_coating",
     "linebend", "tubebend",
 })
+
+# Making a hole. A purchased sheet good arrives finished — with its holes if it has any — so
+# these belong to whoever made it. 0359342 charged a self-adhesive UPC STICKER for drilling.
+_HOLE_MAKING_OPS = frozenset({
+    "countersinking", "drilling", "drill", "hole_machining", "punch", "punching",
+})
+
+# The operations that JOIN one part to another. A joint is one piece of work however many
+# parts meet at it, which is what the leaf rule below is about.
+_JOINING_OPS = frozenset({
+    "welding", "dress_welds", "spot_welding", "spotweld", "resistance_welding", "brazing",
+})
+
+
+def _one_joint_charged_once(decisions: Sequence[Any], graph: Mapping[str, Any]) -> None:
+    """A weld that joins two parts is charged on the assembly, not again on each part.
+
+    0359342's prong assembly MBY433 is two pieces of steel — MBY432 (the prong) and MBY434
+    (the backplate) — welded together, 56 off. The route charged Weld (CO2) and Dress Welds on
+    ALL THREE nodes: GBP 101.55 + GBP 41.11 on the assembly, and the same again on each of its
+    two leaves. GBP 285 for two joints that do not exist.
+
+    The test is the one thing that cannot be argued with: A LEAF CANNOT BE WELDED TO ITSELF.
+    A part with no children of its own is a single piece of material, so a welding claim on it
+    is really the claim that it takes part in its parent's joint — and the parent is already
+    being charged for that joint. A sub-assembly is left alone: it may have welds of its own
+    inside it, and this evidence cannot tell those from the joint above.
+
+    The mirror of the rule already above it (specific_joining_covers_this_assembly), which
+    stops a generic assemble being charged on top of a specific joining op.
+    """
+    _children = graph.get("children") or {}
+    _by_target: Dict[str, List[Any]] = {}
+    for _d in decisions:
+        if _d.status == REQUIRED and _d.operation in _JOINING_OPS:
+            _by_target.setdefault(str(_d.target_id), []).append(_d)
+    for _parent, _kids in _children.items():
+        _parent_ops = {d.operation for d in _by_target.get(str(_parent)) or []}
+        if not _parent_ops:
+            continue
+        for _kid in (_kids or {}):
+            if _children.get(_kid):
+                continue                      # a sub-assembly may hold welds of its own
+            for _d in _by_target.get(str(_kid)) or []:
+                if _d.operation not in _parent_ops:
+                    continue
+                _d.status = NOT_APPLICABLE
+                _d.reason = (
+                    f"{_d.operation} on {_kid} is the joint that makes {_parent}, and "
+                    f"{_parent} is already charged for it. {_kid} is a single piece of "
+                    f"material with no children — it cannot be welded to itself, so this is "
+                    f"the same joint counted twice.")
+                _d.field_provenance["status"] = "joint_already_charged_on_the_assembly"
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]]) -> None:
@@ -3873,7 +3932,12 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
                          f"document-level note transcribed onto the part, not from its "
                          f"own route")
             _d.field_provenance["status"] = "family_gate_joinery"
-        elif _fam == BOUGHT_IN and _d.operation in _METAL_ONLY_OPS:
+        elif _fam == BOUGHT_IN and _d.operation in (_METAL_ONLY_OPS | _HOLE_MAKING_OPS):
+            # A PURCHASED SHEET GOOD ARRIVES FINISHED, HOLES INCLUDED. The first cut of this
+            # branch refused only the metal-only ops, which left 0359342 charging Drill on a
+            # self-adhesive UPC STICKER and on a bought-in mirror — GBP 27.64 of hole-making on
+            # two items nobody in this building puts a drill near. If a bought-in panel needs
+            # holes, its supplier makes them and they are in its price.
             _d.status = NOT_APPLICABLE
             _d.reason = (f"{_mat or _d.target_id} is a bought-in sheet good — it is "
                          f"purchased finished and bonded in; {_d.operation} is not its "
