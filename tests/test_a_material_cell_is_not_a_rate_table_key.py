@@ -421,3 +421,57 @@ def test_a_hardware_name_that_already_had_a_rate_is_not_changed_by_this_gate():
     part = {"part_number": "84756", "description": "M6x20ButtonHeadSocketMachineScrew,BZP"}
     assert _price_per_kg_for_material(part, "MILD STEEL") == \
         config.MATERIAL_PRICE_GBP_PER_KG["MILD STEEL"]
+
+
+# ── an hour must be measured before it can be argued about ───────────────────────────
+
+def test_the_stages_that_swallowed_the_hour_are_bracketed():
+    """0359342 ran 3,775s and reported 3,002s of it OUTSIDE ANY TIMED PHASE.
+
+    file_scan brackets its own steps, but two whole regions were invisible:
+
+      * folder-as-job — which is how every real job now runs — calls extract_pdf_summary
+        directly in scan_folder_job, bypassing the bracket on the single-PDF path. The only
+        evidence of those minutes was the runner printing "no output for 130s" three times.
+      * everything main() does after the scan: the workbook, the checks, the deliverables.
+
+    run_timing says what to do about it in its own docstring — when the unmeasured row is the
+    biggest number in the table, bracket more rather than optimise anything — so this pins
+    that the brackets exist and pair. Timing only: no figure on any estimate moves.
+    """
+    fs = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    mn = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+
+    # the folder-as-job extraction loop, which is the path every real job takes
+    assert 'run_timing.mark("start extract_pdf_summary")' in fs
+    assert 'run_timing.mark("done extract_pdf_summary")' in fs
+    assert 'run_timing.mark("start merge_job_pdf_summaries")' in fs
+
+    # and main()'s own stages, each opened and closed
+    for stage in ("populate_workbook", "invariants", "deliverables"):
+        assert f'_time_stage("{stage}", True)' in mn, stage
+        assert f'_time_stage("{stage}", False)' in mn, stage
+
+
+def test_an_unfinished_stage_is_reported_as_a_hang_not_dropped():
+    """A step that started and never finished is the most interesting row in the table —
+    that is what a hang looks like — so it must be shown, not omitted for being incomplete."""
+    import run_timing
+
+    run_timing.reset()
+    run_timing.mark("start finished_stage")
+    run_timing.mark("done finished_stage")
+    run_timing.mark("start hung_stage")
+    report = run_timing.report()
+    assert "finished_stage" in report
+    assert "hung_stage" in report and "STARTED AND NEVER FINISHED" in report
+    assert "unmeasured" in report
+    run_timing.reset()
+
+
+def test_timing_never_takes_down_a_run_that_otherwise_finished():
+    """Instrumentation that can fail a job is worse than no instrumentation."""
+    import main as _main
+
+    _main._time_stage("a stage nobody registered", True)     # must not raise
+    _main._time_stage("a stage nobody registered", False)

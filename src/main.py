@@ -42,6 +42,23 @@ from rag_transformer import transform_scan_summary_to_historical_job_record
 from sql_export import export_json_files_to_sqlserver_sql, export_single_json_file_to_sqlserver_sql
 
 
+def _time_stage(name: str, opening: bool) -> None:
+    """Bracket one top-level stage for the run-timing table, and never break the run doing it.
+
+    THE HOUR HAD TO BE MEASURED BEFORE IT COULD BE ARGUED ABOUT. 0359342 ran 3,775s and
+    reported 3,002s of it "outside any timed phase" — file_scan brackets its own steps, but
+    everything main() does after the scan (the workbook, the read-back, the checks, the
+    deliverables) was unbracketed, so the only evidence of where fifty minutes went was the
+    runner printing "no output for 126s". run_timing says it plainly: when the unmeasured row
+    is the biggest one, bracket more rather than optimise anything.
+    """
+    try:
+        import run_timing as _rt
+        _rt.mark(("start " if opening else "done ") + name)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan drawings and build manufacturing and estimate inputs.")
     parser.add_argument("--pdf", type=str, help="Process a single drawing file (PDF or DXF).")
@@ -1071,6 +1088,7 @@ def main() -> None:
         # unreachable (e.g. share unavailable), so a network blip doesn't
         # stop the run.
         xlsx_path = None
+        _time_stage("populate_workbook", True)
         try:
             from wb_populate import populate_workbook
             # ONE RUN, ONE NAME. Every deliverable carries this identity so "which engine
@@ -1490,6 +1508,8 @@ def main() -> None:
             print(f"   [pricing] could not determine whether the price source was reached "
                   f"({_pexc}) — treat this job as unverified.", flush=True)
 
+        _time_stage("populate_workbook", False)
+        _time_stage("invariants", True)
         try:
             from invariants import check_job as _check_job, format_report as _fmt_inv
             # CHECK THE DOCUMENT THAT HAS EVERYTHING, ONCE.
@@ -1564,6 +1584,8 @@ def main() -> None:
         # Opt-in via --deliverables. Each generator is failure-isolated: a report error logs and
         # the run continues — it never breaks the estimate. Manual lookup uses the UNC share root
         # (the K: mapping is session-dependent and fails) and skips gracefully when absent.
+        _time_stage("invariants", False)
+        _time_stage("deliverables", True)
         if getattr(args, "deliverables", False) and xlsx_path:
             _canon_json2 = (summary.get("saved_output_paths") or {}).get("json")
             _out_dir = str(Path(str(xlsx_path)).parent)
@@ -1778,6 +1800,8 @@ def main() -> None:
             except Exception as _note_exc:
                 print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
                       f"fall back to its own short note.", flush=True)
+
+        _time_stage("deliverables", False)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:

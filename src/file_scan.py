@@ -748,11 +748,21 @@ def scan_folder_job(
 
     print(f"   -> Folder-as-job: {job_folder.name} ({len(pdfs)} PDF(s))")
     partials: List[Tuple[Path, Dict[str, Any]]] = []
+    # THE SIX MINUTES NOBODY COULD SEE. extract_pdf_summary is bracketed on the single-PDF
+    # path, and folder-as-job — which is how every real job now runs — calls it here instead,
+    # outside the brackets. 0359342 spent 3,002s of a 3,775s run "outside any timed phase",
+    # and this loop is the first piece of it: the runner's only evidence was three "no output
+    # for 130s" notices. run_timing's own advice when the unmeasured row is the biggest one is
+    # to bracket more rather than optimise anything, so that is what these are.
+    run_timing.mark("start extract_pdf_summary")
     for pdf_path in sorted(pdfs, key=lambda p: p.name.lower()):
         print(f"      • Extracting {pdf_path.name}")
         partials.append((pdf_path, extract_pdf_summary(pdf_path)))
+    run_timing.mark("done extract_pdf_summary")
 
+    run_timing.mark("start merge_job_pdf_summaries")
     merged, anchor_pdf = merge_job_pdf_summaries(partials, job_folder)
+    run_timing.mark("done merge_job_pdf_summaries")
     bom_count = len((merged.get("document_analysis") or {}).get("bom_rows") or [])
     print(f"   -> Pooled BOM: {bom_count} line(s); anchor PDF: {anchor_pdf.name}")
 
