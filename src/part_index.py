@@ -83,6 +83,43 @@ class PartIndexDeps:
     interpret_part: Callable[..., Any]
 
 
+def _bom_table_page_numbers(summary: Dict[str, Any]) -> set:
+    """Which pages a parts list was actually read off — the reader's own record, not a guess.
+
+    Every reconciled BOM row carries `bom_sheet`, written by the dual-path reconciler as
+    "<pdf name>#<page index>" (merge_boms builds it from `enumerate(pdf.pages)`, so the index is
+    ZERO-BASED while `page["page_number"]` is one-based — the +1 here is that, and nothing else).
+
+    This is the cheapest true "this page is a parts list" signal in the codebase and nothing had
+    consulted it. Everything else that tries to answer the question — the page-role classifier's
+    ITEM/DWG NO/QTY header test, its part-number counts — is a guess about what a page LOOKS
+    like, and on a pack whose codes and header vocabulary it does not recognise, every guess
+    comes back "detail". The reconciler does not guess: it took rows off these pages.
+
+    An empty set is the honest answer when no reconciled rows carry a sheet, and callers must
+    treat it as "no information" rather than "no BOM pages" — which is why it is used as a
+    tie-break and never as a filter.
+    """
+    pages: set = set()
+    da = summary.get("document_analysis") if isinstance(summary, dict) else None
+    rows = []
+    if isinstance(da, dict):
+        rows = list(da.get("bom_rows") or []) + list(da.get("bay_bom_rows") or [])
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sheet = row.get("bom_sheet") or row.get("sheet")
+        if not sheet or "#" not in str(sheet):
+            continue
+        try:
+            index = int(str(sheet).rsplit("#", 1)[1])
+        except (TypeError, ValueError):
+            continue
+        if index >= 0:
+            pages.add(index + 1)
+    return pages
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -258,6 +295,35 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 part["confidence"].setdefault(key, []).append(value)
             rollup_geometry(part["geometry_rollup"], geometry)
 
+    # THE PAGE THAT LISTS A PART IS NOT THE PAGE THAT DEFINES IT.
+    #
+    # This is the last resort: nothing claimed the part by name, so it is matched by asking
+    # which pages MENTION its code. That is substring containment — a BOM row saying MBY434 and
+    # a title block saying MBY434 are indistinguishable to it — and the tie-break was "prefer a
+    # detail-role page, then the lowest page number".
+    #
+    # On 0359342 both halves of that tie-break are inert. The role classifier needs a part
+    # number to see an assembly, and none of this pack's codes (MBY434, JAE821, J13092, A61636)
+    # matches the digits-then-hyphen shape every recogniser here requires — so EVERY page in the
+    # pack, parts lists included, keeps the "detail" default. The run log shows it: pages 1, 3,
+    # 4, 5, 6 and 25 are BOM tables and every one previews as "Page N (detail)". With the roles
+    # all equal the sort collapses to lowest page number, which is "whichever mentions it first"
+    # — and a part is nearly always listed on its parent's table before its own sheet arrives.
+    #
+    # MBY434 was bound to p25, the MBY433 parts list; its detail sheet, carrying Ø24 x 2, is p26.
+    # JAE821 to p3; its 638 x 75 is on p9. MBY432 came out right at p24 purely because its sheet
+    # happens to precede the table that lists it — the mechanism was never working.
+    #
+    # THE FIX USES A FACT THE ENGINE ALREADY HAS AND HAS NEVER CONSULTED HERE. The dual-path BOM
+    # reconciler records, per reconciled row, the sheet the table was read from (`bom_sheet`,
+    # "<pdf>#<0-based page index>"). That is not a heuristic about what a page looks like; it is
+    # the reader saying which page it took a parts list off. A page that yielded a BOM table is
+    # ranked BELOW one that did not, so the detail sheet wins wherever both mention the code.
+    #
+    # Deliberately a tie-break and not a filter: where a part is mentioned ONLY on parts lists,
+    # it still binds there rather than losing its page altogether. Both references are kept —
+    # the BOM page for identity, parent and quantity; the detail page for geometry.
+    _bom_pages = _bom_table_page_numbers(summary)
     for part in parts.values():
         if part.get("pages"):
             continue
@@ -269,13 +335,24 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             continue
         matching_pages = sorted(
             matching_pages,
-            key=lambda item: (0 if item.get("page_role", {}).get("primary_role") == "detail" else 1, item.get("page_number", 9999)),
+            key=lambda item: (
+                1 if item.get("page_number") in _bom_pages else 0,
+                0 if item.get("page_role", {}).get("primary_role") == "detail" else 1,
+                item.get("page_number", 9999),
+            ),
         )
         chosen_page = matching_pages[0]
         chosen_role = chosen_page.get("page_role", {}).get("primary_role")
         part["pages"].append(chosen_page["page_number"])
         if chosen_role:
             part["page_roles"].append(chosen_role)
+        if chosen_page.get("page_number") in _bom_pages:
+            # Bound to a parts list because there was nothing else. Said on the part, because a
+            # part with no detail sheet has no measured size either and the two go together.
+            part.setdefault("review_flags", []).append(
+                f"{pn} is bound to page {chosen_page.get('page_number')}, which is a parts "
+                f"list — no page in this pack details it, so it has no drawing of its own to "
+                f"take dimensions from")
 
     result: List[Dict[str, Any]] = []
     for part in parts.values():
