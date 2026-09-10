@@ -3143,6 +3143,42 @@ def _finalize_scan_summary(
               f"{type(_dg_err).__name__}: {_dg_err}", flush=True)
 
     try:
+        # WHAT A PERSON READ OFF THE DRAWING, LAST AND HIGHEST. It runs after every reader
+        # so that what it displaces is recorded against a fully-populated record rather than
+        # an empty one, and at rank 100 nothing downstream can overturn it. The usual case is
+        # that no file exists and this is one skipped line; the file is written only for a
+        # pack whose sheets the readers cannot handle.
+        import estimator_confirmed as _ec
+        _ec_path = _ec.find_corrections_file(
+            job_folder, pdf_path,
+            (summary.get("document_analysis") or {}).get("drawing_number")
+            or summary.get("drawing_number"))
+        if _ec_path:
+            _ec_data, _ec_problems = _ec.load_corrections(_ec_path)
+            for _p in _ec_problems:
+                print(f"   [confirmed] NOT APPLIED — {_p}", flush=True)
+            _ec_rep = _ec.apply_estimator_confirmed(
+                summary["manufacturing_writeup"]["parts"], _ec_data)
+            if _ec_rep["stamped"]:
+                print(f"   [confirmed] {_ec_rep['stamped']} part(s), "
+                      f"{_ec_rep['fields']} field(s) taken from {_ec_path.name} — confirmed "
+                      f"by {_ec_data.get('confirmed_by') or 'an estimator'} "
+                      f"(estimator_confirmed rank; nothing outranks it)", flush=True)
+            for _code in _ec_rep["unmatched"]:
+                print(f"   [confirmed] {_code} is in {_ec_path.name} but NO part of this job "
+                      f"carries that number — the line did nothing. Check the code",
+                      flush=True)
+            summary.setdefault("document_analysis", {})["estimator_confirmed"] = {
+                "file": str(_ec_path), "report": _ec_rep,
+                "problems": _ec_problems,
+                "confirmed_by": _ec_data.get("confirmed_by"),
+                "confirmed_on": _ec_data.get("confirmed_on"),
+                "note": _ec_data.get("note"),
+            }
+    except Exception as _ec_err:
+        print(f"   [confirmed] not applied: {type(_ec_err).__name__}: {_ec_err}", flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child
