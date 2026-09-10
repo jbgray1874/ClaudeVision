@@ -3123,6 +3123,26 @@ def _finalize_scan_summary(
               f"{type(_row_ev_err).__name__}: {_row_ev_err}", flush=True)
 
     try:
+        # THE PART'S OWN DETAIL SHEET SIZES IT — beside the BOM-row stamper above and for the
+        # same reason. The row gives material, gauge and mass; the sheet gives the blank. Both
+        # go through source_precedence, so a DXF or a model still outranks either, and a part
+        # with no single defining sheet keeps its fallback envelope and SAYS so rather than
+        # being sized off somebody else's page.
+        from detail_page_geometry import apply_detail_page_geometry, isolate_dimension_text
+        _parts_dg = summary["manufacturing_writeup"]["parts"]
+        _n_iso = isolate_dimension_text(_parts_dg, summary)
+        if _n_iso:
+            print(f"   [detail-geometry] {_n_iso} part(s) had dimension text dropped that was "
+                  f"read off pages they are not bound to", flush=True)
+        _n_dg = apply_detail_page_geometry(_parts_dg, summary)
+        if _n_dg:
+            print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
+                  f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)
+    except Exception as _dg_err:
+        print(f"   [detail-geometry] not applied: "
+              f"{type(_dg_err).__name__}: {_dg_err}", flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child
