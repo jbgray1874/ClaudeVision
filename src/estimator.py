@@ -274,6 +274,24 @@ def _price_per_kg_for_material(part: Optional[Dict[str, Any]], material) -> Opti
     rate = MATERIAL_PRICE_GBP_PER_KG.get(key)
     if rate is None:
         return None
+    # RESOLVING A NAME MUST NOT RE-ROUTE A PART TO A DIFFERENT COSTING BASIS.
+    #
+    # The sheet-priced plastics carry a GBP/kg entry as well as their area rate, and the area
+    # rate is the one this engine costs them on. "2mm ACRYLIC" has no rate under that exact
+    # name, so resolving it to ACRYLIC would hand the per-kg path a rate it never had — and a
+    # 400x300x18mm acrylic panel priced by mass comes out at GBP 57.49 where the area path
+    # says a few pounds. That is not this fix's job and it is not this fix's evidence: the
+    # gauge-prefixed plastics were unpriced before and stay unpriced, visibly, until someone
+    # routes them to the area path deliberately.
+    #
+    # Steel, timber and board are untouched by this gate — they are mass-priced already, which
+    # is exactly why the stated-weight path is the right home for a part that states a weight.
+    try:
+        import config as _cfg2
+        if str(key).strip().upper() in getattr(_cfg2, "PLASTIC_SHEET_PRICED_MATERIALS", frozenset()):
+            return None
+    except Exception:                                        # noqa: BLE001
+        return None
     if isinstance(part, dict):
         part["material_rate_key_resolved"] = {"recorded": material, "priced_under": key}
         _flag = (f"material recorded as '{material}' carries no rate under that name; priced "

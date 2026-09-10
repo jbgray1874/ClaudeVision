@@ -108,6 +108,62 @@ def test_the_resolution_is_recorded_on_the_part_not_slipped_in():
                for f in part.get("review_flags", [])), part.get("review_flags")
 
 
+@pytest.mark.parametrize("sheet_priced", [
+    "2mm ACRYLIC", "6mm PERSPEX", "6mm POLYCARBONATE", "3mm ACRYLIC",
+])
+def test_resolving_a_name_never_re_routes_a_part_to_a_different_costing_basis(sheet_priced):
+    """THE REGRESSION THIS FIX ALMOST SHIPPED.
+
+    The sheet-priced plastics carry a GBP/kg entry AS WELL AS their area rate, and the area
+    rate is the one this engine costs them on. "2mm ACRYLIC" has no rate under that exact
+    name, so resolving it to ACRYLIC handed the per-kg path a rate it never had: a
+    400x300x18mm panel came out at GBP 57.49 by mass where the area path says a few pounds,
+    and 7332-01-007 — the release gate's own lens — is acrylic.
+
+    Resolution exists to find a rate that was already there, not to change how a part is
+    costed. The gauge-prefixed plastics were unpriced before this commit and are unpriced
+    after it, visibly, until someone routes them to the area path deliberately.
+    """
+    part = {"part_number": "7332-01-007"}
+    assert _price_per_kg_for_material(part, sheet_priced) is None
+    assert "material_rate_key_resolved" not in part
+
+
+def test_the_materials_this_change_moves_are_only_the_ones_it_was_built_for(monkeypatch):
+    """THE BLAST RADIUS, MEASURED END TO END RATHER THAN ASSERTED.
+
+    Not "which names gain a rate" — several already reach the mass path because the material
+    is normalised upstream, so the helper answering differently changes nothing they cost.
+    The question that matters is which materials come out of estimate_material at a DIFFERENT
+    method or a different figure than they did before this commit. The answer must be the
+    mild-steel spellings this fix was built for, and nothing else.
+    """
+    def _part(mat):
+        return {"part_number": "X", "description": "D", "normalized_material": mat,
+                "material": mat, "normalized_thickness_mm": 18.0, "quantity": 2,
+                "blank_length_mm": 400.0, "blank_width_mm": 300.0}
+
+    candidates = ("CR4, 2mm", "CR4,2mm", "Steel,Mild2mm", "Steel, Mild Wire", "MildSteel",
+                  "2mm ACRYLIC", "6mm PERSPEX", "6mm POLYCARBONATE", "3mm HIPS", "ACRYLIC",
+                  "18mm MDF", "MDF, 18mm", "25mm TIMBER", "18mm PLYWOOD", "MDF",
+                  "Corian,6mm", "Mirror,6mm", "MILD STEEL", "TIMBER")
+
+    def _outcome(mat):
+        me = estimate_material(_part(mat))
+        return (me.get("cost_method"), me.get("cost_per_part_gbp"))
+
+    after = {m: _outcome(m) for m in candidates}
+    # Put the resolver back to what it did before this commit: answer only names that already
+    # price, which is the same as not resolving at all.
+    monkeypatch.setattr(config, "resolve_material_rate_key",
+                        lambda m: (m if config.material_has_a_rate(m) else None))
+    before = {m: _outcome(m) for m in candidates}
+
+    moved = {m for m in candidates if before[m] != after[m]}
+    assert moved == {"CR4, 2mm", "CR4,2mm", "Steel,Mild2mm", "Steel, Mild Wire", "MildSteel"}, \
+        {m: (before[m], after[m]) for m in moved}
+
+
 def test_a_name_with_its_own_rate_is_answered_without_a_flag():
     part = {"part_number": "7332-01-005"}
     assert _price_per_kg_for_material(part, "MILD STEEL") == \
