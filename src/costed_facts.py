@@ -1762,6 +1762,37 @@ def costed_job(source: Any) -> Dict[str, Any]:
             if _line is not None:
                 _tc["gbp_at_stake"] = _money_of(_line) or None
             decisions.append(_tc)
+        # A LINEAR PART WITH NO LENGTH IS A DECISION, NOT A FLAG.
+        #
+        # On round or section stock the LENGTH IS THE MONEY: it multiplies the rate directly,
+        # so an absent one and a zero look identical in a total. The estimator already assumes
+        # a developed length by form band and marks the line INDICATIVE — which is the right
+        # costing behaviour and the wrong REPORTING behaviour, because a review flag is not a
+        # decision and nothing made an estimator answer it. MBY432 on 0359342 is Ø8 x 219.6
+        # printed on its own detail sheet, against an assumed 900 mm band: four times the mass,
+        # 56 off. The assumption is defensible; leaving it unasked is not.
+        _mat_est = part.get("material_estimate") or {}
+        _cost_method = str(_mat_est.get("cost_method") or "")
+        if "assumed_length" in _cost_method:
+            _line = _by_pn.get(str(part.get("part_number") or "").upper())
+            _gauge = _mat_est.get("wire_gauge_mm") or part.get("wire_gauge_mm")
+            decisions.append({
+                "part": str(part.get("part_number") or ""),
+                "kind": "manufacturing_decision",
+                "issue": (f"Cut length of {part.get('part_number')} is not known — it is "
+                          f"round/section stock priced per metre, so the length is the money"),
+                "assumption": (f"an assumed developed length of "
+                               f"{_mat_est.get('blank_length_mm') or '?'} mm"
+                               + (f" on Ø{_gauge:g}" if isinstance(_gauge, (int, float))
+                                  else "")
+                               + " — a band by form, not a reading. No length is inferred "
+                                 "from a drawing outline"),
+                "action": ("state the cut length from the part's own detail sheet, or "
+                           "confirm the assumed band"),
+                "owner": "estimator",
+                "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None,
+            })
+
         for _bc in (part.get("_bom_numeric_conflicts") or []):
             if not isinstance(_bc, Mapping):
                 continue

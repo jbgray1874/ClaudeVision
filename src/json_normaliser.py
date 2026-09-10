@@ -304,7 +304,22 @@ _DIA_PATTERNS = (
     re.compile(r"(?:Ø|\bDIA\.?\s*)\s*(\d+(?:\.\d+)?)\s*(MM|IN|INCH|INCHES|\")?", re.I),
     re.compile(r"(\d+(?:\.\d+)?)\s*(MM|IN|INCH|INCHES|\")?\s*\bDIA\b", re.I),
 )
-_DIA_FRACTION = re.compile(r"\b\d+\s*/\s*\d+\s*(?:IN|INCH|INCHES|\")", re.I)
+# FRACTIONS ARE READ FIRST, AND THEN REMOVED FROM THE STRING.
+#
+# Refusing them in an `elif` after the decimal pass was worse than not handling them at all,
+# because the decimal patterns match INSIDE a fraction and the refusal never ran:
+#     "Wire Ø3/16in"   -> 3.0 mm    (the numerator)
+#     "Wire 3/16in DIA" -> 406.4 mm (the DENOMINATOR, times 25.4)
+#     "Wire 1/2\" DIA"  -> 50.8 mm
+# all silently, all wrong, and 3/16" is 4.7625 mm. So each fraction is converted where its
+# unit is explicit, and its span is masked out before any decimal pattern is allowed to look
+# — a number that is part of a fraction is never also a number in its own right.
+_DIA_FRACTION_PATTERNS = (
+    re.compile(r"(?:Ø|\bDIA\.?\s*)\s*(\d+)\s*/\s*(\d+)\s*(MM|IN|INCH|INCHES|\")?", re.I),
+    re.compile(r"(\d+)\s*/\s*(\d+)\s*(MM|IN|INCH|INCHES|\")?\s*\bDIA\b", re.I),
+)
+# Any remaining fraction, wherever it sits: masked so it cannot be misread as a decimal.
+_ANY_FRACTION = re.compile(r"\d+\s*/\s*\d+\s*(?:MM|IN|INCH|INCHES|\")?", re.I)
 _INCH_UNITS = {"IN", "INCH", "INCHES", '"'}
 MM_PER_INCH = 25.4
 
@@ -332,10 +347,36 @@ def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
     upper = re.sub(r'[^A-Z0-9Ø."/ ]', " ", raw.upper())
     upper = re.sub(r" {2,}", " ", upper).strip()
 
-    # EVERY callout, with its unit — not the first one that matches.
+    # FRACTIONS FIRST, then their spans are removed. See _DIA_FRACTION_PATTERNS.
     found_values: List[float] = []
-    for pattern in _DIA_PATTERNS:
+    unresolved_fraction = False
+    for pattern in _DIA_FRACTION_PATTERNS:
         for match in pattern.finditer(upper):
+            try:
+                numerator, denominator = float(match.group(1)), float(match.group(2))
+            except (TypeError, ValueError):
+                continue
+            if denominator <= 0 or numerator <= 0:
+                continue
+            unit = (match.group(3) or "").strip().upper()
+            if unit in _INCH_UNITS:
+                value = round(numerator / denominator * MM_PER_INCH, 4)
+            elif unit == "MM":
+                value = round(numerator / denominator, 4)
+            else:
+                # A bare "3/16" states no unit. On Ø that is 4.76 mm or 0.19 mm — a factor
+                # of 25.4 on the diameter and 645 on the mass. Not guessed.
+                unresolved_fraction = True
+                continue
+            if value not in found_values:
+                found_values.append(value)
+
+    _masked_fractions = bool(_ANY_FRACTION.search(upper))
+    masked = _ANY_FRACTION.sub(lambda m: " " * len(m.group(0)), upper)
+
+    # EVERY callout, with its unit — not the first one that matches.
+    for pattern in _DIA_PATTERNS:
+        for match in pattern.finditer(masked):
             try:
                 value = float(match.group(1))
             except (TypeError, ValueError):
@@ -349,7 +390,23 @@ def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
                 found_values.append(value)
 
     diameter = None
-    if len(found_values) == 1:
+    if unresolved_fraction and not found_values:
+        out["diameter_unresolved"] = (
+            "the material cell states the diameter as a fraction with no unit — 3/16 is "
+            "4.76 mm as inches and 0.19 mm as millimetres, a factor of 645 on mass. "
+            "State the unit or confirm the stock size")
+    elif unresolved_fraction and found_values:
+        out["diameter_unresolved"] = (
+            "the material cell states a fraction with no unit alongside another diameter — "
+            "the readings cannot be reconciled without knowing the unit")
+    elif not found_values and _masked_fractions:
+        # A fraction that is not tied to a Ø or DIA is not read as a diameter — but it is
+        # SAID, because on a round part a bare "3/16in" almost certainly is one and a silent
+        # None reads as "the drawing stated no size".
+        out["diameter_unresolved"] = (
+            "the material cell states a fraction that is not marked as a diameter — it is "
+            "not assumed to be one. Confirm the stock size")
+    elif len(found_values) == 1:
         diameter = found_values[0]
     elif len(found_values) > 1:
         # TWO DIFFERENT DIAMETERS IS A DECISION, NOT A DEFAULT. Neither is returned: a wire
@@ -359,11 +416,6 @@ def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
             "the material cell states more than one diameter ("
             + " and ".join(f"{v:g} mm" for v in sorted(found_values))
             + ") — none is used until an estimator says which applies")
-    elif _DIA_FRACTION.search(upper):
-        # Refused BY NAME. A silent None here reads as "the drawing stated no diameter".
-        out["diameter_unresolved"] = (
-            "the material cell states the diameter as an imperial fraction, which is not "
-            "read — state it in millimetres or confirm the stock size")
 
     if _FORM_TUBE.search(upper):
         out["stock_form"] = "tube"

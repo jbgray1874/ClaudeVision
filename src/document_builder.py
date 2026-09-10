@@ -1028,17 +1028,32 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # not know the material: "we do not recognise this" and "there was no material" are
         # different answers and only one of them needs an estimator. 0359342 prints four the
         # book has never heard of — Corian, Mirror, "Lamainate Edging", Flexi MDF.
+        # TWO SPELLINGS OF ONE STOCK ARE NOT A DISAGREEMENT. Comparing the raw cells (even
+        # case-insensitively) made "Steel, Mild Wire Ø8mm" and "Mild Steel Wire Ø8mm" a
+        # conflict, and a spurious conflict is not a harmless one: it refuses to classify a
+        # part the drawing describes perfectly well, twice. Rows are compared on the FACTS
+        # they parse to — material, form, diameter — and every original text is kept.
         _printed_cells = _printed_material_rows.get(
             _bare_code(str(part.get("part_number") or ""))) or []
-        _printed_conflict = len(_printed_cells) > 1
+        _printed_reads = [_read_printed_material(_c) for _c in _printed_cells]
+        _printed_facts = {(_r["material"], _r["stock_form"], _r["diameter_mm"])
+                          for _r in _printed_reads}
+        _printed_conflict = len(_printed_facts) > 1
         _printed = _read_printed_material(
             "" if _printed_conflict
             else (_printed_cells[0] if _printed_cells else (materials[0] if materials else "")))
-        if _printed_conflict:
+        if _printed_cells:
             part["material_text_as_printed_candidates"] = list(_printed_cells)
+        if _printed_conflict:
             part.setdefault("review_flags", []).append(
                 "the bill of materials states this part's material more than once and the "
-                "readings disagree — " + " / ".join(f"'{_c}'" for _c in _printed_cells)
+                "readings disagree — "
+                + " / ".join(
+                    f"'{_c}' (" + ", ".join(
+                        str(_v) for _v in (_r["material"] or "material unresolved",
+                                           _r["stock_form"] or "form unstated",
+                                           _r["diameter_mm"]) if _v is not None) + ")"
+                    for _c, _r in zip(_printed_cells, _printed_reads))
                 + ". Neither is used to classify it, because choosing by table order is not "
                   "a reading. Confirm which row is right")
         elif _printed["text"]:
@@ -1226,33 +1241,47 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # So the per-part evidence (its NAME, or a wire_forming op) still admits the
                 # fallback exactly as before; the material cell alone does not. A
                 # document-level thickness is refused either way.
-                # Either warrant will do, and each stands on its own reasoning: the part's own
-                # NAME says round (so an unstamped figure is still ITS figure), or the figure
-                # was MEASURED off the solid (so the min-bbox argument holds whatever named the
-                # part). A document-level figure is refused under both.
+                # ONE WARRANT ONLY: THE FIGURE WAS MEASURED OFF THE SOLID.
+                #
+                # An earlier version also admitted "the part's own name says WIRE". That was
+                # wrong and it was pointed out: a name establishes the part's FORM, it says
+                # nothing about where an unstamped thickness came from, and keeping an old
+                # fixture green is not evidence that the inference is valid. The min-bounding-
+                # box argument is a claim about GEOMETRY — only a model or a DXF can support
+                # it. Everything else asks the estimator, which on a linear part is the
+                # cheap outcome: the gauge is the mass.
+                #
+                # AND A CONTESTED DIAMETER IS NOT AN ABSENT ONE. Falling through to the
+                # thickness merely because `_dia is None` would let the fallback quietly
+                # settle a conflict the reader deliberately refused to settle — Ø8 against
+                # Ø10 resolved by a gauge field. Arbitration is explicit: where the cell
+                # states a diameter it cannot reconcile, NOTHING substitutes for it.
                 _DIA_FROM_GEOMETRY = {"solidworks_api", "solidworks_flat_pattern",
                                       "dxf", "dxf_flat_pattern"}
-                _own_name_says_round = bool(_name_wire or _name_bar or _has_wire_op)
                 _thickness_measured = (
                     str(part.get("thickness_source") or "") in _DIA_FROM_GEOMETRY)
                 _thickness_inherited = (
                     str(part.get("material_inherited_from") or "") == "document_level"
                     or str(part.get("thickness_source") or "") == "document_repeated")
+                _dia_contested = bool(_printed.get("diameter_unresolved"))
                 _dia = _dia_explicit
                 if _dia is None and part.get("normalized_thickness_mm"):
-                    if (_own_name_says_round or _thickness_measured) \
-                            and not _thickness_inherited:
+                    if _dia_contested:
+                        part.setdefault("review_flags", []).append(
+                            f"{part.get('part_number') or 'this part'}: the "
+                            f"{_safe_float(part.get('normalized_thickness_mm')):g} mm gauge on "
+                            f"record is NOT used to settle the diameter the drawing leaves "
+                            f"open — a contested figure is not an absent one")
+                    elif _thickness_measured and not _thickness_inherited:
                         _dia = _safe_float(part.get("normalized_thickness_mm"))
                     else:
                         part.setdefault("review_flags", []).append(
                             f"{part.get('part_number') or 'this part'} is round stock with no "
                             f"diameter printed on it. The "
                             f"{_safe_float(part.get('normalized_thickness_mm')):g} mm on record "
-                            f"is not this part's own measured bar — "
-                            + ("it is a document-level figure"
-                               if _thickness_inherited else
-                               "only the material cell calls this part round, and a gauge "
-                               "field is not a diameter")
+                            + ("is a document-level figure" if _thickness_inherited else
+                               f"came from {part.get('thickness_source') or 'no stated source'}, "
+                               f"not from measuring the bar")
                             + " — so it is NOT read as a diameter. State the stock size")
                 part["_bar_recognised"] = True
                 # stock_form on manufacturing_interpretation is the SURVIVING channel — the

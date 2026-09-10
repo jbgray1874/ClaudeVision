@@ -115,6 +115,82 @@ def test_an_unknown_wire_length_is_stated_as_a_decision():
     assert "priced per metre" in _flags(part)
 
 
+# ── the actual material calculation, not the credibility gate ─────────────────────────
+
+def test_the_material_cost_is_computed_on_the_bar_not_a_nested_blank():
+    """_part_cost_credibility says the part is ALLOWED the linear path. It does not price it.
+    This drives estimator.estimate_material — the real calculation — and checks the figures
+    an estimator would see on the sheet."""
+    from estimator import estimate_material
+    part, _ = _build(PRINTED)
+    part["wire_length_mm"] = 219.6          # printed on MBY432's own detail sheet, page 24
+    part["quantity"] = 56
+
+    costed = estimate_material(part)
+    assert costed["stock_form"] == "wire"
+    assert costed["cost_method"] == "workbook_bar_formula", \
+        "a wire must not be priced by a sheet nest"
+    assert costed["thickness_mm"] is None, "a diameter is not a thickness"
+    assert costed["blank_length_mm"] == 219.6
+    assert costed["blank_area_m2"] is None, "a bar has no blank area to nest"
+
+
+def test_the_computed_mass_agrees_with_the_mass_the_drawing_prints():
+    """THE INDEPENDENT CHECK. Ø8 x 219.6 of mild steel computes to 0.0867 kg. MBY432's title
+    block prints 'Est. Mass (Kg) 0.09 kg' — a figure this engine never reads, arrived at by
+    SolidWorks from the solid. Two independent routes to the same number is the strongest
+    evidence available that the part is now on the right basis.
+
+    For scale: nested as 350 x 250 x 2 mm plate — the category default it used to get — the
+    same part carries about 1.37 kg, roughly sixteen times its own printed mass, 56 off.
+    """
+    from estimator import estimate_material
+    part, _ = _build(PRINTED)
+    part["wire_length_mm"] = 219.6
+    part["quantity"] = 56
+
+    mass = estimate_material(part)["unit_material_mass_kg"]
+    assert mass == pytest.approx(0.0867, abs=0.002)
+    assert mass == pytest.approx(0.09, abs=0.005), \
+        "must agree with the 0.09 kg the drawing prints"
+
+
+def test_without_a_length_the_line_says_the_length_was_assumed():
+    """The estimator assumes a band and marks it — the costing is right. What was missing is
+    that nothing made anyone ANSWER it; see the decision test below."""
+    from estimator import estimate_material
+    part, _ = _build(PRINTED)
+    part["quantity"] = 56
+    costed = estimate_material(part)
+    assert "assumed_length" in costed["cost_method"]
+    assert costed["blank_length_mm"] != 219.6
+
+
+def test_the_missing_length_becomes_a_decision_in_the_deliverable():
+    """A REVIEW FLAG IS NOT A DECISION. Decisions are built explicitly in costed_facts and are
+    what an estimator is actually asked to answer; a flag sits in a ledger. On 0359342 the
+    assumed 900 mm band against a printed 219.6 is four times the mass, 56 off — defensible
+    as an assumption, indefensible as an unasked question."""
+    from costed_facts import costed_job
+    from estimator import estimate_material
+    part, _ = _build(PRINTED)
+    part["quantity"] = 56
+    part["material_estimate"] = estimate_material(part)
+
+    # job_parts() joins the canonical estimate list to the writeup record for the same part,
+    # so a realistic source carries both — that join is where the provenance lives.
+    facts = costed_job({"manufacturing_writeup": {"parts": [part]},
+                        "estimate_summary": {"part_estimates": [part]}})
+    decisions = [d for d in (facts.get("decisions_required") or [])
+                 if "Cut length" in str(d.get("issue"))]
+    assert decisions, "the unknown length must reach the estimator as a decision"
+    decision = decisions[0]
+    assert decision["kind"] == "manufacturing_decision"
+    assert decision["owner"] == "estimator"
+    assert "length is the money" in decision["issue"]
+    assert "detail sheet" in decision["action"]
+
+
 # ── units and conflicts ───────────────────────────────────────────────────────────────
 
 def test_an_imperial_diameter_is_converted_not_read_as_millimetres():
@@ -132,10 +208,33 @@ def test_two_different_diameters_produce_a_decision_not_the_first_one():
         "both readings must be retained, not just the refusal"
 
 
-def test_an_imperial_fraction_is_refused_by_name():
+@pytest.mark.parametrize("printed,expected", [
+    ('Mild Steel Wire Ø3/16in', 4.7625),
+    ('Mild Steel Wire 3/16in DIA', 4.7625),
+    ('Mild Steel Wire Ø1/4in', 6.35),
+    ('Mild Steel Wire 1/2" DIA', 12.7),
+])
+def test_an_imperial_fraction_is_converted_not_part_matched(printed, expected):
+    """These returned 3.0, 406.4 (the DENOMINATOR times 25.4), 1.0 and 50.8 — silently. The
+    decimal patterns were matching INSIDE the fraction, and the refusal branch sat in an elif
+    that never ran. Fractions are read first now, and their spans masked before any decimal
+    pattern is allowed to look."""
+    part, _ = _build(printed)
+    assert part.get("wire_gauge_mm") == pytest.approx(expected)
+
+
+def test_a_fraction_with_no_unit_is_refused_and_says_why():
+    """3/16 is 4.76 mm as inches and 0.19 mm as millimetres — a factor of 25.4 on diameter
+    and 645 on mass. Not guessed."""
+    part, _ = _build("Mild Steel Wire Ø3/16")
+    assert part.get("wire_gauge_mm") is None
+    assert "fraction with no unit" in _flags(part)
+
+
+def test_a_fraction_not_marked_as_a_diameter_is_not_assumed_to_be_one():
     part, _ = _build("Mild Steel Wire 3/16in")
     assert part.get("wire_gauge_mm") is None
-    assert "imperial fraction" in _flags(part)
+    assert "not marked as a diameter" in _flags(part)
 
 
 def test_conflicting_bom_rows_do_not_resolve_by_table_order():
@@ -168,9 +267,9 @@ def test_an_inherited_thickness_never_becomes_a_diameter():
     part, _ = _build("Mild Steel Wire", thickness=6.0,
                      thickness_source="drawing_deterministic")
     assert part.get("wire_gauge_mm") is None
-    assert "not this part's own measured bar" in _flags(part)
-    assert "only the material cell calls this part round" in _flags(part), \
-        "the refusal must say WHY, or it reads as a lost datum"
+    assert "NOT read as a diameter" in _flags(part)
+    assert "drawing_deterministic" in _flags(part), \
+        "the refused source must be named, or the refusal reads as a lost datum"
 
 
 def test_a_measured_thickness_may_still_be_the_diameter():
@@ -181,9 +280,17 @@ def test_a_measured_thickness_may_still_be_the_diameter():
     assert part.get("wire_gauge_mm") == 6.0
 
 
-def test_a_part_whose_own_name_says_wire_keeps_the_existing_fallback():
-    """11762-17-03M "U WIRE": its own name is per-part evidence, and its 8.0 is the model's
-    bbox misfiled as a thickness. That reviewed behaviour must not change."""
+def test_a_name_establishes_the_form_but_never_the_gauge():
+    """WITHDRAWN IN REVIEW, and worth recording as such.
+
+    An earlier version of this test asserted that 11762-17-03M "U WIRE" keeps its 8.0 as a
+    diameter because its own name says round. That inference was wrong: a name establishes
+    the part's FORM and says nothing about where an unstamped thickness came from. The
+    min-bounding-box argument is a claim about GEOMETRY and only a model or a DXF can support
+    it. I had reached for it to keep an existing fixture green, which is not evidence.
+
+    So the part is still WIRE — that part was always right — but its gauge is now asked for.
+    """
     rows = [{"part_number": "11762-17-03M", "material_text": "MILD STEEL", "quantity": 1}]
     part = {"part_number": "11762-17-03M", "description": "U WIRE", "pages": [24],
             "materials": ["MILD STEEL"], "page_roles": ["detail"],
@@ -192,8 +299,20 @@ def test_a_part_whose_own_name_says_wire_keeps_the_existing_fallback():
     summary = {"pages": [{"page_number": 24, "text": "", "page_analysis": {}}],
                "document_analysis": {"bom_rows": rows}}
     out = _apply_post_build_fixes([part], summary)[0]
-    assert out.get("wire_gauge_mm") == 8.0
-    assert out.get("normalized_thickness_mm") is None
+    assert (out.get("manufacturing_interpretation") or {}).get("stock_form") == "wire", \
+        "the form was never in doubt"
+    assert out.get("wire_gauge_mm") is None, "an unstamped thickness is not a measured diameter"
+    assert "NOT read as a diameter" in " | ".join(out.get("review_flags") or [])
+
+
+def test_a_contested_diameter_is_never_settled_by_the_thickness_field():
+    """Falling through to the thickness because `_dia is None` would let the fallback quietly
+    resolve a conflict the reader deliberately refused to resolve — Ø8 against Ø10 decided by
+    a gauge field. A contested figure is not an absent one."""
+    part, _ = _build("Mild Steel Wire Ø8mm / Ø10mm", thickness=8.0,
+                     thickness_source="solidworks_api")
+    assert part.get("wire_gauge_mm") is None
+    assert "contested figure is not an absent one" in _flags(part)
 
 
 def test_a_document_level_figure_is_refused_even_for_a_named_wire():

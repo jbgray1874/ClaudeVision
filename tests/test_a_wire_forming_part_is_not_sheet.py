@@ -58,9 +58,31 @@ def test_03m_u_wire_becomes_wire_on_the_name_before_any_op_is_inferred():
     part = _wire_part("11762-17-03M", "U WIRE", ops=[], thickness=8.0)   # no op yet, no DIA text
     _apply_post_build_fixes([part], _summary())
     assert part.get("_bar_recognised") is True, "a WIRE name must recognise it with no op present"
-    assert part.get("wire_gauge_mm") == 8.0, "the Ø8 misread into thickness must move to the gauge"
-    assert part.get("normalized_thickness_mm") is None, "a diameter is not a sheet thickness"
     assert (part.get("manufacturing_interpretation") or {}).get("stock_form") == "wire"
+
+    # THE GAUGE IS NO LONGER TAKEN FROM AN UNSTAMPED THICKNESS, and this assertion changed
+    # deliberately in review. It used to read `== 8.0`, on the reasoning that a solid round
+    # bar's min bounding box IS its diameter. That reasoning is about GEOMETRY: it holds only
+    # where the figure demonstrably came from measuring the solid. A part's NAME establishes
+    # its FORM and says nothing about the provenance of a thickness that carries no source —
+    # and this fixture supplies none, which is realistic, because unstamped thicknesses do
+    # occur in production. Keeping the old expectation green was not evidence the inference
+    # was sound. On a linear part the gauge IS the mass, so an unwarranted diameter is a
+    # silent mass error; asking the estimator is the cheap outcome.
+    assert part.get("wire_gauge_mm") is None, \
+        "an unstamped thickness is not a measured diameter"
+    assert any("NOT read as a diameter" in str(f) for f in (part.get("review_flags") or [])), \
+        "the refusal must be stated, or it reads as a lost datum"
+
+
+def test_03m_keeps_its_gauge_when_the_model_measured_it():
+    """The other half of the same rule: with a geometry source the min-bbox argument holds,
+    and the Ø8 misread into the thickness field still moves to the gauge."""
+    part = _wire_part("11762-17-03M", "U WIRE", ops=[], thickness=8.0)
+    part["thickness_source"] = "solidworks_api"
+    _apply_post_build_fixes([part], _summary())
+    assert part.get("wire_gauge_mm") == 8.0
+    assert part.get("normalized_thickness_mm") is None, "a diameter is not a sheet thickness"
 
 
 def test_04m_wire_stand_with_no_diameter_is_still_wire_on_the_name():
@@ -73,8 +95,11 @@ def test_04m_wire_stand_with_no_diameter_is_still_wire_on_the_name():
 
 def test_a_wire_forming_op_still_reinforces_it_if_already_present():
     part = _wire_part("X", "SPRING CLIP", ["wire_forming"], thickness=6.0)
+    part["thickness_source"] = "solidworks_api"
     _apply_post_build_fixes([part], _summary())
     assert part.get("_bar_recognised") is True, "an explicit wire_forming op qualifies on its own"
+    # A wire_forming OP, like a wire NAME, establishes the form — not the provenance of the
+    # gauge. The source is what admits it as a diameter; see the note on 03M above.
     assert part.get("wire_gauge_mm") == 6.0
 
 
