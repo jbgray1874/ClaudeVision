@@ -1000,16 +1000,24 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
     # reading part["materials"], which on a PDF-primary pack is EMPTY at this point, and the
     # printed cell that says "Steel, Mild Wire Ø8mm" in black and white was not consulted.
     # The rows are already on the summary, so the evidence was here the whole time.
+    # AGREEING ROWS CORROBORATE; DISAGREEING ROWS ARE A DECISION. Keyed with setdefault, the
+    # FIRST row silently governed the whole classification pass — so a pack listing a part
+    # twice with different specifications resolved by table order, and the second reading
+    # vanished without ever being seen. Every distinct cell is kept, and where they conflict
+    # the part is NOT classified from either: both are put to an estimator instead.
     from json_normaliser import read_material_as_printed as _read_printed_material
     from part_code_conventions import bare_code as _bare_code
-    _printed_material_by_code: Dict[str, str] = {}
+    _printed_material_rows: Dict[str, List[str]] = {}
     for _row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
         if not isinstance(_row, dict):
             continue
         _text = str(_row.get("material_text") or "").strip()
         _code = _bare_code(str(_row.get("part_number") or ""))
-        if _text and _code:
-            _printed_material_by_code.setdefault(_code, _text)
+        if not _text or not _code:
+            continue
+        _seen = _printed_material_rows.setdefault(_code, [])
+        if not any(_t.upper() == _text.upper() for _t in _seen):
+            _seen.append(_text)
 
     for part in parts:
         page_nums: List[int] = part.get("pages", [])
@@ -1020,16 +1028,30 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # not know the material: "we do not recognise this" and "there was no material" are
         # different answers and only one of them needs an estimator. 0359342 prints four the
         # book has never heard of — Corian, Mirror, "Lamainate Edging", Flexi MDF.
+        _printed_cells = _printed_material_rows.get(
+            _bare_code(str(part.get("part_number") or ""))) or []
+        _printed_conflict = len(_printed_cells) > 1
         _printed = _read_printed_material(
-            _printed_material_by_code.get(_bare_code(str(part.get("part_number") or "")))
-            or (materials[0] if materials else ""))
-        if _printed["text"]:
+            "" if _printed_conflict
+            else (_printed_cells[0] if _printed_cells else (materials[0] if materials else "")))
+        if _printed_conflict:
+            part["material_text_as_printed_candidates"] = list(_printed_cells)
+            part.setdefault("review_flags", []).append(
+                "the bill of materials states this part's material more than once and the "
+                "readings disagree — " + " / ".join(f"'{_c}'" for _c in _printed_cells)
+                + ". Neither is used to classify it, because choosing by table order is not "
+                  "a reading. Confirm which row is right")
+        elif _printed["text"]:
             part.setdefault("material_text_as_printed", _printed["text"])
             if _printed["material"] is None:
                 part.setdefault("review_flags", []).append(
                     f"material '{_printed['text']}' is printed on the drawing but is not in "
                     f"the material lexicon — it is recorded, not resolved, and carries no "
                     f"rate of its own. Name the stock it should be bought as")
+        if _printed.get("diameter_unresolved"):
+            part.setdefault("review_flags", []).append(
+                f"diameter not taken from '{_printed['text']}': "
+                f"{_printed['diameter_unresolved']}")
 
         combined_text = " ".join(
             page_lookup[pn]["text"] for pn in page_nums if pn in page_lookup
@@ -1189,9 +1211,49 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # the thickness field — safe to take as the Ø only now the part is confirmed wire
                 # (a solid round bar's min bounding box IS its diameter). May be absent (04M
                 # WIRE STAND gives none); the estimator then asks for it rather than inventing one.
+                #
+                # BUT NOT WHEN THE ONLY THING CALLING IT ROUND IS THE MATERIAL CELL.
+                #
+                # The reasoning above — a solid round bar's min bounding box IS its diameter —
+                # rests on the figure belonging to THIS PART's geometry. That holds for
+                # 11762-17-03M "U WIRE", whose own name says round and whose 8.0 is its model's
+                # bbox misfiled as a thickness. It does NOT hold when wire-ness was established
+                # only by a printed material cell: 0359342 stamped ONE document-level 6 mm
+                # across two dozen parts, so "Mild Steel Wire" with no Ø would have promoted a
+                # document note to a Ø6 bar — an invented gauge wearing a measurement's
+                # provenance, and on wire the gauge IS the mass.
+                #
+                # So the per-part evidence (its NAME, or a wire_forming op) still admits the
+                # fallback exactly as before; the material cell alone does not. A
+                # document-level thickness is refused either way.
+                # Either warrant will do, and each stands on its own reasoning: the part's own
+                # NAME says round (so an unstamped figure is still ITS figure), or the figure
+                # was MEASURED off the solid (so the min-bbox argument holds whatever named the
+                # part). A document-level figure is refused under both.
+                _DIA_FROM_GEOMETRY = {"solidworks_api", "solidworks_flat_pattern",
+                                      "dxf", "dxf_flat_pattern"}
+                _own_name_says_round = bool(_name_wire or _name_bar or _has_wire_op)
+                _thickness_measured = (
+                    str(part.get("thickness_source") or "") in _DIA_FROM_GEOMETRY)
+                _thickness_inherited = (
+                    str(part.get("material_inherited_from") or "") == "document_level"
+                    or str(part.get("thickness_source") or "") == "document_repeated")
                 _dia = _dia_explicit
                 if _dia is None and part.get("normalized_thickness_mm"):
-                    _dia = _safe_float(part.get("normalized_thickness_mm"))
+                    if (_own_name_says_round or _thickness_measured) \
+                            and not _thickness_inherited:
+                        _dia = _safe_float(part.get("normalized_thickness_mm"))
+                    else:
+                        part.setdefault("review_flags", []).append(
+                            f"{part.get('part_number') or 'this part'} is round stock with no "
+                            f"diameter printed on it. The "
+                            f"{_safe_float(part.get('normalized_thickness_mm')):g} mm on record "
+                            f"is not this part's own measured bar — "
+                            + ("it is a document-level figure"
+                               if _thickness_inherited else
+                               "only the material cell calls this part round, and a gauge "
+                               "field is not a diameter")
+                            + " — so it is NOT read as a diameter. State the stock size")
                 part["_bar_recognised"] = True
                 # stock_form on manufacturing_interpretation is the SURVIVING channel — the
                 # estimator and route both read it, and unlike the top-level _bar_recognised flag
@@ -1211,6 +1273,18 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # kilograms, not pennies. Leave wire_length_mm UNSET unless a bar/wire schedule
                 # already gave one — the estimator then asks for the length rather than pricing
                 # kilos off an outline. (Length order: schedule > SW body length > CL dim > ask.)
+                #
+                # AND SAY SO. Unset was silent, which on a linear part is the one gap that
+                # cannot be allowed to pass quietly: the length IS the money. An absent figure
+                # and a figure of zero look identical in a total, so the omission is stated as
+                # a decision rather than left for someone to notice.
+                if not _safe_float(part.get("wire_length_mm")):
+                    part.setdefault("review_flags", []).append(
+                        f"{part.get('part_number') or 'this part'} is round stock and its "
+                        f"LENGTH is not known — it is priced per metre, so the length is the "
+                        f"money. No length is inferred from a drawing outline (a PDF vector "
+                        f"path is not a developed length). State the cut length from the "
+                        f"detail sheet")
 
         # Sheet mild steel inheritance — wire detection wins over bare MILD STEEL on drawing
         inherited_steel = (

@@ -290,10 +290,23 @@ _FORM_WIRE = re.compile(r"\b(WIRE|ROD)\b")
 _FORM_BAR = re.compile(r"\bBAR\b")
 _FORM_TUBE = re.compile(r"\b(TUBE|TUBULAR|RHS|SHS|CHS|BOX SECTION)\b")
 _FORM_FLAT = re.compile(r"\b(SHEET|PLATE|FLAT BAR)\b")
+# A DIAMETER CARRIES A UNIT, AND A DRAWING MAY PRINT MORE THAN ONE.
+#
+# Both halves were silently wrong. "Wire Ø0.25in" read as 0.25 mm rather than 6.35 mm — a
+# 25x under-read straight into wire mass — because the number was taken and the unit thrown
+# away. And "Wire Ø8mm / Ø10mm" returned 8.0: the FIRST callout won and the disagreement
+# disappeared, which is the one outcome a conflicting drawing must never produce.
+#
+# So every callout is collected with its unit. One value is a diameter; two different values
+# are a decision for an estimator, not a coin toss. A fraction ("3/16in") is refused BY NAME
+# rather than dropped, because a silent None reads as "the drawing said nothing".
 _DIA_PATTERNS = (
-    re.compile(r"(?:Ø|\bDIA\.?\s*)\s*(\d+(?:\.\d+)?)"),
-    re.compile(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*\bDIA\b"),
+    re.compile(r"(?:Ø|\bDIA\.?\s*)\s*(\d+(?:\.\d+)?)\s*(MM|IN|INCH|INCHES|\")?", re.I),
+    re.compile(r"(\d+(?:\.\d+)?)\s*(MM|IN|INCH|INCHES|\")?\s*\bDIA\b", re.I),
 )
+_DIA_FRACTION = re.compile(r"\b\d+\s*/\s*\d+\s*(?:IN|INCH|INCHES|\")", re.I)
+_INCH_UNITS = {"IN", "INCH", "INCHES", '"'}
+MM_PER_INCH = 25.4
 
 
 def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
@@ -312,24 +325,45 @@ def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
     """
     raw = "" if text is None else str(text).strip()
     out: Dict[str, Any] = {"text": raw, "material": None, "stock_form": "",
-                           "diameter_mm": None}
+                           "diameter_mm": None, "diameter_unresolved": ""}
     if not raw:
         return out
     out["material"] = normalise_material(raw)
-    upper = re.sub(r"[^A-Z0-9Ø. ]", " ", raw.upper())
+    upper = re.sub(r'[^A-Z0-9Ø."/ ]', " ", raw.upper())
     upper = re.sub(r" {2,}", " ", upper).strip()
 
-    diameter = None
+    # EVERY callout, with its unit — not the first one that matches.
+    found_values: List[float] = []
     for pattern in _DIA_PATTERNS:
-        found = pattern.search(upper)
-        if found:
+        for match in pattern.finditer(upper):
             try:
-                value = float(found.group(1))
+                value = float(match.group(1))
             except (TypeError, ValueError):
-                value = 0.0
-            if value > 0:
-                diameter = value
-            break
+                continue
+            if value <= 0:
+                continue
+            unit = (match.group(2) or "").strip().upper()
+            if unit in _INCH_UNITS:
+                value = round(value * MM_PER_INCH, 4)
+            if value not in found_values:
+                found_values.append(value)
+
+    diameter = None
+    if len(found_values) == 1:
+        diameter = found_values[0]
+    elif len(found_values) > 1:
+        # TWO DIFFERENT DIAMETERS IS A DECISION, NOT A DEFAULT. Neither is returned: a wire
+        # priced on the wrong one of Ø8 and Ø10 is 56% out on mass, and picking silently is
+        # how that becomes invisible.
+        out["diameter_unresolved"] = (
+            "the material cell states more than one diameter ("
+            + " and ".join(f"{v:g} mm" for v in sorted(found_values))
+            + ") — none is used until an estimator says which applies")
+    elif _DIA_FRACTION.search(upper):
+        # Refused BY NAME. A silent None here reads as "the drawing stated no diameter".
+        out["diameter_unresolved"] = (
+            "the material cell states the diameter as an imperial fraction, which is not "
+            "read — state it in millimetres or confirm the stock size")
 
     if _FORM_TUBE.search(upper):
         out["stock_form"] = "tube"
