@@ -813,3 +813,47 @@ def test_the_row_stamped_weight_reaches_the_stated_weight_costing_path():
     # and the older field keeps its priority
     assert estimator._parse_stated_weight_kg(
         {"stated_weight_g": 820.0, "stated_weight_kg": 0.09}) == 0.82
+
+
+def test_the_three_residues_squashed_family_drill_gate_and_code_spill():
+    """Three binds from the £7,067 run: JAE835's squashed 'LamainateEdging' took the
+    metal route; £156 of Drill rows survived on fasteners through countersinking
+    claims; and page 25's 'Backplate MBY434' — whose small table never grid-maps —
+    priced £3,203 as its own bought-in because a wrapped description word crossed
+    into the code region."""
+    from types import SimpleNamespace as NS
+
+    import _bom_words_reader as wa
+
+    # 1. squashed material text still names its family
+    assert pp.family_for("LamainateEdging", "JAE835", "Shelf") == pp.JOINERY
+    assert pp.family_for("FlexiMDF6mmand9mm", "JAE827", "") == pp.JOINERY
+    assert pp.family_for("SolidSurface", "X", "") == pp.BOUGHT_IN
+    # short tokens never substring-match by coincidence
+    assert pp.family_for("CR4STEEL", "Y", "") in (pp.METAL, pp.UNKNOWN)
+
+    # 2. drilling a purchased screw is the same fiction as laser-cutting it
+    raw = {"84756": {"normalized_material": "MildSteel",
+                     "description": "M6x20ButtonHeadSocketMachineScrew,BZP"}}
+    d = NS(target_id="84756", operation="countersinking", scope="part",
+           status=rc.REQUIRED, reason="", field_provenance={})
+    rc._family_gate([d], raw)
+    assert d.status == rc.NOT_APPLICABLE
+
+    # 3. the code cell's wrapped-description word rejoins the description
+    hdr = wa._header_from_row(0, [_w("WEIGHT", 10), _w("MATERIAL", 60), _w("QTY", 140),
+                                  _w("PART", 170), _w("DESCRIPTION", 260),
+                                  _w("ITEM", 420)])
+    row = [_w("0.01kg", 8, 120), _w("CR4,", 58, 120), _w("2mm", 80, 120),
+           _w("1", 142, 120), _w("Backplate", 165, 120), _w("MBY434", 200, 120),
+           _w("Edition", 260, 120), _w("Prong", 300, 120), _w("2", 422, 120)]
+    cols = wa._parse_row_by_regions(row, hdr["anchors"])
+    assert cols["code"] == "MBY434"
+    assert "Backplate" in cols["desc"]
+    assert cols.get("segmentation_uncertain") is True
+    # a spec prefix with digits is not a description word — never stripped
+    row2 = [_w("0.01kg", 8, 120), _w("Steel", 58, 120), _w("4", 142, 120),
+            _w("M8", 168, 120), _w("BR200", 200, 120), _w("Bracket", 260, 120),
+            _w("3", 422, 120)]
+    cols2 = wa._parse_row_by_regions(row2, hdr["anchors"])
+    assert cols2["code"] == "M8 BR200", "digit-bearing prefixes stay put"

@@ -3845,6 +3845,11 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
         from bought_in_policy import FABRICATION_OPS as _FAB_ALL
     except Exception:                                            # pragma: no cover
         _FAB_ALL = _METAL_ONLY_OPS | {"glue", "wet_spray", "countersinking"}
+    # Drilling a purchased screw is the same fiction as laser-cutting it. The first
+    # cut inherited only bought_in_policy's set, and 0359342's fasteners kept £156 of
+    # Drill rows through countersinking claims the legend transcription minted.
+    _FAB_ALL = set(_FAB_ALL) | {"countersinking", "drilling", "hole_machining",
+                                "drill", "cnc_machining"}
     for _d in decisions:
         if _d.status != REQUIRED or str(_d.scope or "") != "part":
             continue

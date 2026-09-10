@@ -90,7 +90,15 @@ UNKNOWN = ""
 
 def _has_token(text: str, tokens) -> bool:
     up = f" {re.sub(r'[^A-Z0-9]+', ' ', str(text).upper())} "
-    return any(f" {t} " in up or (" " in t and t in up) for t in tokens)
+    if any(f" {t} " in up or (" " in t and t in up) for t in tokens):
+        return True
+    # SQUASHED TEXT STILL NAMES ITS MATERIAL. extract_tables strips spaces, so
+    # JAE835's cell arrives as 'LamainateEdging' and the word-boundary test above
+    # sees no LAMAINATE — which sent a laminate edging strip down the metal route
+    # (weld, fold, dress). Substring matching is confined to squashed comparison
+    # and to tokens long enough (>= 4) not to fire on coincidence.
+    squashed = re.sub(r"[^A-Z0-9]+", "", str(text).upper())
+    return any(len(t) >= 4 and t.replace(" ", "") in squashed for t in tokens)
 
 
 def family_for(material_text: Any = "", part_number: Any = "",

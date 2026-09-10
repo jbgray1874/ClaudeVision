@@ -327,6 +327,20 @@ def _parse_row_by_regions(row: List[dict], anchors: Dict[str, float]) -> Optiona
     for name in ("material", "weight"):
         if name in anchors:
             out[name] = _cell_text(name)
+    # DESCRIPTION SPILL INSIDE THE CODE CELL. Page 25's small table never grid-maps,
+    # so its words read stood — and 'Backplate MBY434' priced £3,203 as its own
+    # bought-in because the wrapped description's last word crossed into the code
+    # region. When the cell's LAST token is code-shaped and everything before it is
+    # plain words (pure alpha, 3+ letters — 'Backplate', 'Outside', 'Top'), the words
+    # are description, the token is the code, and the row says it is uncertain. 'M8'
+    # and friends carry digits, so real spec-prefixed cells never strip.
+    _ctoks = out["code"].split()
+    if len(_ctoks) > 1 \
+            and re.match(r"^[A-Z]{1,4}\d{3,}[A-Z0-9-]*$", _ctoks[-1], re.I) \
+            and all(t.isalpha() and len(t) >= 3 for t in _ctoks[:-1]):
+        out["desc"] = (out["desc"] + " " + " ".join(_ctoks[:-1])).strip()
+        out["code"] = _ctoks[-1]
+        _displaced = True
     if _displaced:
         out["segmentation_uncertain"] = True
     return out
