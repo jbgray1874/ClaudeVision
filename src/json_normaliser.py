@@ -217,7 +217,33 @@ def _hints_mild_steel_blob(blob_upper: str) -> bool:
     return False
 
 
+# Keys worth trying WORD-ORDER-FREE. A one-word key is excluded deliberately: matching it
+# loosely would let a stray token anywhere in a description decide the material, and every
+# one-word key already matches as a substring in the pass above, so it has nothing to gain.
+_MATERIAL_KEYS_MULTIWORD = [k for k in _MATERIAL_KEYS_SORTED if len(k.split()) > 1]
+
+
 def normalise_material(text: Optional[str]) -> Optional[str]:
+    """The material lexicon, matched first as written and then word-order-free.
+
+    A DRAWING OFFICE MAY WRITE THE SURNAME FIRST. M&S packs state materials inverted —
+    "Steel, Mild 2mm", "Steel, Mild Wire Ø8mm", "Steel, Stainless 304" — and this lexicon is
+    an ordered SUBSTRING lookup keyed "MILD STEEL". So the material was in the book all along
+    and still normalised to None, which is not a harmless miss:
+
+        part["materials"] is only populated `if part.get("normalized_material")`, so a None
+        leaves the list EMPTY. document_builder's wire test reads that list for the word
+        "WIRE" — so MBY432, whose material cell literally says "Steel, Mild Wire Ø8mm",
+        could not be recognised as wire and fell to the sheet path: a Ø8 x 219.6 prong
+        nested as plate, 56 off. MBY439 ("Steel, Mild 2mm") lost its material the same way.
+
+    The second pass therefore matches a key when every one of its WORDS appears in the text,
+    in any order. It runs ONLY when the direct pass found nothing, so it is safe by
+    construction: it can turn a None into a code, and can never change an answer the lexicon
+    already gives. Genuine gaps stay gaps — "Corian, 6mm", "Mirror, 6mm" and "Lamainate
+    Edging" are not in the book in any word order and still return None, which is the honest
+    answer rather than a guess at the nearest entry.
+    """
     if not text:
         return None
     cleaned = re.sub(r"[^A-Z0-9 ]", " ", str(text).upper()).strip()
@@ -226,7 +252,99 @@ def normalise_material(text: Optional[str]) -> Optional[str]:
         code = MATERIAL_NORMALISATION[key]
         if key in cleaned:
             return code
+    tokens = set(cleaned.split())
+    if tokens:
+        for key in _MATERIAL_KEYS_MULTIWORD:
+            if set(key.split()) <= tokens:
+                return MATERIAL_NORMALISATION[key]
     return None
+
+
+# ── THE MATERIAL AS PRINTED, READ ONCE, INTO SEPARATE FACTS ─────────────────────────────
+# A printed material cell states more than one thing, and collapsing it to a single
+# normalised code destroys the rest. MBY432 on 0359342 says:
+#
+#     "Steel, Mild Wire Ø8mm"
+#      \_________/ \__/ \___/
+#       material   form   Ø
+#
+# Normalising that to MILD_STEEL is correct FOR THE RATE and silently discards both the
+# stock form and the diameter — and it was the word "Wire" that the wire test was hunting
+# for inside the material NAME. So the fix that only repaired normalisation would have made
+# the rate resolve and left the routing exactly as broken: a Ø8 x 219.6 prong nested as
+# plate, 56 off, carrying a laser and a fold it can never incur.
+#
+# The facts are therefore kept apart, and each consumer takes the one it needs:
+#     material     -> the rate table          (word-order-free, see normalise_material)
+#     stock_form   -> the route               (stock_form_rules already makes laser, fold,
+#                                              punch, linebend and guillotine impossible on
+#                                              "wire" — it only ever needed to be told)
+#     diameter_mm  -> the gauge, NOT a sheet thickness
+#     text         -> preserved always, so an unrecognised material is still evidence
+#
+# Neither routing nor pricing depends on finding a form word inside a material name, which
+# is the coupling that caused this. LENGTH IS NOT HERE ON PURPOSE: a cell states the section,
+# never how much of it, and a length guessed from an outline is kilograms of error on Ø8.
+# It comes from the part's own detail drawing, or an estimator states it.
+_FORM_WIRE = re.compile(r"\b(WIRE|ROD)\b")
+_FORM_BAR = re.compile(r"\bBAR\b")
+_FORM_TUBE = re.compile(r"\b(TUBE|TUBULAR|RHS|SHS|CHS|BOX SECTION)\b")
+_FORM_FLAT = re.compile(r"\b(SHEET|PLATE|FLAT BAR)\b")
+_DIA_PATTERNS = (
+    re.compile(r"(?:Ø|\bDIA\.?\s*)\s*(\d+(?:\.\d+)?)"),
+    re.compile(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*\bDIA\b"),
+)
+
+
+def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
+    """Split a printed material cell into the separate facts it states.
+
+    Returns {"text", "material", "stock_form", "diameter_mm"}. `text` is always the cell as
+    written — an unrecognised material must not be erased to None, because "we do not know
+    this material" and "there was no material" are different facts and only one of them
+    needs an estimator.
+
+    stock_form is "" when the cell does not say. That is deliberate: a cell that names no
+    section is not evidence of sheet, and inventing "sheet" here would re-create the very
+    default this exists to remove. WIRE MESH is excluded (it is a section, not a wire) and a
+    plain BAR needs a diameter to count as round — "flat bar" is sheet-like and a bare BAR
+    is ambiguous with a crossbar.
+    """
+    raw = "" if text is None else str(text).strip()
+    out: Dict[str, Any] = {"text": raw, "material": None, "stock_form": "",
+                           "diameter_mm": None}
+    if not raw:
+        return out
+    out["material"] = normalise_material(raw)
+    upper = re.sub(r"[^A-Z0-9Ø. ]", " ", raw.upper())
+    upper = re.sub(r" {2,}", " ", upper).strip()
+
+    diameter = None
+    for pattern in _DIA_PATTERNS:
+        found = pattern.search(upper)
+        if found:
+            try:
+                value = float(found.group(1))
+            except (TypeError, ValueError):
+                value = 0.0
+            if value > 0:
+                diameter = value
+            break
+
+    if _FORM_TUBE.search(upper):
+        out["stock_form"] = "tube"
+    elif _FORM_WIRE.search(upper) and "WIRE MESH" not in upper:
+        out["stock_form"] = "wire"
+    elif _FORM_BAR.search(upper) and diameter and not _FORM_FLAT.search(upper):
+        out["stock_form"] = "wire"
+    elif _FORM_FLAT.search(upper):
+        out["stock_form"] = "sheet"
+
+    # A DIAMETER BELONGS TO A ROUND SECTION. Reported only for one, so it can never be
+    # handed on as a sheet thickness — the misread that priced a Ø8 prong as 8mm plate.
+    if out["stock_form"] == "wire":
+        out["diameter_mm"] = diameter
+    return out
 
 
 def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:

@@ -994,10 +994,42 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 f"region_text.bom len={len(str(bom))} preview_len={len(str(page.get('text_preview') or ''))}"
             )
 
+    # THE MATERIAL AS PRINTED, AVAILABLE HERE. The BOM row's own material cell reaches the
+    # part record 1,150 lines later (apply_bom_row_evidence_to_parts, in _finalize_scan_summary)
+    # — long after this pass has decided what stock form the part is. So classification was
+    # reading part["materials"], which on a PDF-primary pack is EMPTY at this point, and the
+    # printed cell that says "Steel, Mild Wire Ø8mm" in black and white was not consulted.
+    # The rows are already on the summary, so the evidence was here the whole time.
+    from json_normaliser import read_material_as_printed as _read_printed_material
+    from part_code_conventions import bare_code as _bare_code
+    _printed_material_by_code: Dict[str, str] = {}
+    for _row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+        if not isinstance(_row, dict):
+            continue
+        _text = str(_row.get("material_text") or "").strip()
+        _code = _bare_code(str(_row.get("part_number") or ""))
+        if _text and _code:
+            _printed_material_by_code.setdefault(_code, _text)
+
     for part in parts:
         page_nums: List[int] = part.get("pages", [])
         page_roles: List[str] = part.get("page_roles", [])
         materials: List[str] = part.get("materials", [])
+
+        # Read once, kept as separate facts. The TEXT is preserved even when the lexicon does
+        # not know the material: "we do not recognise this" and "there was no material" are
+        # different answers and only one of them needs an estimator. 0359342 prints four the
+        # book has never heard of — Corian, Mirror, "Lamainate Edging", Flexi MDF.
+        _printed = _read_printed_material(
+            _printed_material_by_code.get(_bare_code(str(part.get("part_number") or "")))
+            or (materials[0] if materials else ""))
+        if _printed["text"]:
+            part.setdefault("material_text_as_printed", _printed["text"])
+            if _printed["material"] is None:
+                part.setdefault("review_flags", []).append(
+                    f"material '{_printed['text']}' is printed on the drawing but is not in "
+                    f"the material lexicon — it is recorded, not resolved, and carries no "
+                    f"rate of its own. Name the stock it should be bought as")
 
         combined_text = " ".join(
             page_lookup[pn]["text"] for pn in page_nums if pn in page_lookup
@@ -1139,9 +1171,20 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                       or re.search(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*DIA\b", _desc_pn))
                 if _m:
                     _dia_explicit = _safe_float(_m.group(1))
-            # QUALIFY on a wire_forming op, a decisive WIRE/ROD name, or a BAR name WITH a
-            # diameter. Not on BAR alone, and not on a bare gauge — that would sweep in sheet.
-            if _has_wire_op or _name_wire or (_name_bar and _dia_explicit):
+            # AND THE PRINTED MATERIAL CELL, WHICH STATES THE SECTION OUTRIGHT. The tests
+            # above read the part's NAME, because a name is what this pass could rely on. But
+            # a drawing office states the stock in the material column — "Steel, Mild Wire
+            # Ø8mm" — and MBY432 is called "Edition Sunglasses Prong", which says nothing.
+            # Read through the shared reader so the form is decided in ONE place; the
+            # diameter comes with it, off the same cell, and is never a sheet thickness.
+            _printed_wire = _printed["stock_form"] == "wire"
+            if _printed_wire and _dia_explicit is None:
+                _dia_explicit = _printed["diameter_mm"]
+
+            # QUALIFY on a wire_forming op, a decisive WIRE/ROD name, a BAR name WITH a
+            # diameter, or the printed material cell naming the section. Not on BAR alone,
+            # and not on a bare gauge — that would sweep in sheet.
+            if _has_wire_op or _name_wire or (_name_bar and _dia_explicit) or _printed_wire:
                 # Diameter: the explicit callout, else the SolidWorks min-bbox value misread into
                 # the thickness field — safe to take as the Ø only now the part is confirmed wire
                 # (a solid round bar's min bounding box IS its diameter). May be absent (04M
