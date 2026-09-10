@@ -289,4 +289,57 @@ def apply_bom_row_evidence_to_parts(parts: Any, bom_rows: Any) -> int:
             changed |= sp.apply_field(p, "stated_weight_kg",
                                       float(row["stated_weight_kg"]), "bom_tree")
         n += 1 if changed else 0
+
+    # ── A FIGURE REPEATED ACROSS THE POPULATION IS A DOCUMENT NOTE, NOT A RANK ──────
+    # 0359342: one deterministic read of '6mm' was stamped onto 24 parts as
+    # drawing_deterministic (rank 70), so every part's OWN printed gauge — 18, 15, 12,
+    # 9, 2 — was correctly refused at rank 60 and the blanket priced the job. The rank
+    # was never earned: drawing_deterministic means THIS PART's title block, and the
+    # same value landing identically on the whole population while their own rows
+    # disagree is the signature of a document-level note. On 7332 this class
+    # self-corrects (each part's DXF gauge outranks the repeated 1.2), and these
+    # thresholds make that shape untriggerable: at least FIVE parts carrying the same
+    # deterministic value, at least THREE of them contradicted by their own row.
+    # Demotion happens only on the contradicted parts; the rest keep the figure, and
+    # the existing repeated-gauge decision row still asks the estimator to rule once.
+    from collections import Counter as _Counter
+    _det = [p for p in parts or []
+            if isinstance(p, dict)
+            and str(p.get("thickness_source") or "") == "drawing_deterministic"
+            and p.get("normalized_thickness_mm") is not None]
+    for _v, _count in _Counter(p["normalized_thickness_mm"] for p in _det).items():
+        if _count < 5:
+            continue
+        _contradicted = []
+        for p in _det:
+            if p["normalized_thickness_mm"] != _v:
+                continue
+            for _e in (p.get("_displaced") or {}).get("normalized_thickness_mm", []):
+                if (str(_e.get("source")) == "bom_tree" and not _e.get("applied")
+                        and _e.get("value") not in (None, _v)):
+                    _contradicted.append((p, float(_e["value"])))
+                    break
+        if len(_contradicted) < 3:
+            continue
+        for p, _row_v in _contradicted:
+            _log = p.setdefault("_displaced", {}).setdefault(
+                "normalized_thickness_mm", [])
+            _log.append({"value": _v, "source": "drawing_deterministic",
+                         "applied": False,
+                         "displaced_by": "bom_tree (document-repeated figure)"})
+            # precedence: direct-write ok — this IS the arbitration correcting itself:
+            # the displaced figure's drawing_deterministic rank was never earned (one
+            # document-level read repeated across the population), so apply_field would
+            # refuse the honest value on a counterfeit rank; the demotion is recorded
+            # in _displaced and flagged on the part above.
+            p["normalized_thickness_mm"] = _row_v  # precedence: direct-write ok — the displaced rank was counterfeit (document figure repeated across the population); apply_field would defend it
+            p["thickness_source"] = "bom_tree"  # precedence: direct-write ok — provenance moves with the value it belongs to
+            p.setdefault("review_flags", []).append(
+                f"thickness {_row_v:g} mm taken from this part's own BOM row: the "
+                f"{_v:g} mm it displaced is one document figure repeated across "
+                f"{_count} parts, not this part's own title block — confirm once "
+                f"with the repeated-gauge decision")
+        print(f"   [bom-evidence] {_v:g} mm is one document figure repeated across "
+              f"{_count} part(s); {len(_contradicted)} of them state their own gauge "
+              f"on their BOM row and are priced on it", flush=True)
     return n

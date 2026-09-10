@@ -753,3 +753,44 @@ def test_the_family_gate_refuses_fiction_routes_and_keeps_real_ones():
     assert beech_weld.status == rc.NOT_APPLICABLE
     # assembly-scope decisions are never the gate's business
     assert asm_scope.status == rc.REQUIRED
+
+
+def test_a_document_repeated_figure_yields_to_each_parts_own_row():
+    """The thickness probe on the live run: 24 parts all at 6.0 / drawing_deterministic,
+    each one's own printed gauge (18, 15, 12, 9, 2) refused at rank 60 with the refusal
+    recorded. drawing_deterministic means THIS PART's title block; the same value
+    landing identically across the population while their own rows disagree is a
+    document note wearing a rank it never earned. Demoted only on the contradicted
+    parts, only at scale (>=5 identical, >=3 contradicted) — 7332's shape, where each
+    part's own DXF gauge already won, cannot trigger."""
+    import bom_pipeline
+
+    def part(pn):
+        return {"part_number": pn, "normalized_thickness_mm": 6.0,
+                "thickness_source": "drawing_deterministic"}
+
+    rows = [{"part_number": "JAE820", "thickness_mm": 18.0, "material_text": "MDF,18mm"},
+            {"part_number": "JAE828", "thickness_mm": 12.0, "material_text": "MDF,12mm"},
+            {"part_number": "MBY439", "thickness_mm": 2.0,
+             "material_text": "Steel,Mild2mm"},
+            {"part_number": "J13149", "thickness_mm": 15.0, "material_text": "15mmMDF"}]
+    parts = [part(p) for p in ("JAE820", "JAE828", "MBY439", "J13149",
+                               "JAE824", "JAE827")]      # two have no row gauge
+    bom_pipeline.apply_bom_row_evidence_to_parts(parts, rows)
+    by = {p["part_number"]: p for p in parts}
+    assert by["JAE820"]["normalized_thickness_mm"] == 18.0
+    assert by["MBY439"]["normalized_thickness_mm"] == 2.0
+    assert by["J13149"]["normalized_thickness_mm"] == 15.0
+    assert by["JAE820"]["thickness_source"] == "bom_tree"
+    # the demoted figure is recorded, not erased
+    assert any(e.get("value") == 6.0 and "document-repeated" in str(e.get("displaced_by"))
+               for e in by["JAE820"]["_displaced"]["normalized_thickness_mm"])
+    assert any("repeated across" in f for f in by["JAE820"]["review_flags"])
+    # a part with no row gauge keeps the figure — the decision row rules on it
+    assert by["JAE824"]["normalized_thickness_mm"] == 6.0
+    # below scale nothing moves: four deterministic parts is not a population
+    small = [part(p) for p in ("A", "B", "C", "D")]
+    bom_pipeline.apply_bom_row_evidence_to_parts(
+        small, [{"part_number": "A", "thickness_mm": 18.0, "material_text": "MDF,18mm"}])
+    assert small[0]["normalized_thickness_mm"] == 6.0, \
+        "four identical values could be four real specs — no demotion below scale"
