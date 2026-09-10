@@ -1,8 +1,19 @@
 {
   "_reviewed": "Approved 14:17 pack (7 Sep) — £80.09 = £40.89 material + £33.59 labour, six to settle. Money deliberately NOT pinned; structure only.",
+  "_money_note": "Rates move and this layer never pins them. The four accepted numbers (£80.09 unit / £40.89 material / £33.59 labour, and the verified £33.83 / £80.34 repeat) are reconciled by the Windows run with Excel and read-back, not here.",
+
+  "quantities": {"7332-01-002": 2},
+
+  "material_charged": ["7332-01-002"],
+
   "required_operations": {"7332-01-002": ["tubebend"]},
   "forbidden_operations": {"7332-01-002": ["folding", "fold"],
                            "7332-01-007": []},
+
+  "forbidden_operations_anywhere": ["powder_coating"],
+
+  "no_minted_children": ["7332-01-002"],
+
   "forbidden_names_everywhere": [],
   "phrase_counts": {}
 }

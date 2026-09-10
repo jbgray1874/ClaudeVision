@@ -1,0 +1,20 @@
+{
+  "_what_this_is": "Copy this to tests/replay/<job>/provenance.json when you freeze a summary.json. Every field is required and the suite fails without it: a frozen record with no provenance is an unlabelled number, and 'the run the estimator signed off' looks identical on disk to 'whichever run last passed'.",
+
+  "job": "7332-01",
+  "accepted_run": "the 14:17 pack, 7 Sep — the run reviewed and signed off",
+  "accepted_by": "name of the estimator who signed it off",
+  "accepted_on": "2026-09-07",
+  "source_path": "C:\\ClaudeVision\\output\\json\\7332-01.json",
+
+  "accepted_numbers": {
+    "_note": "Recorded here for the Windows reconciliation ONLY. The fast replay layer pins structure and never money; these are what the Excel/read-back run checks against.",
+    "unit_gbp": 80.09,
+    "material_gbp": 40.89,
+    "labour_gbp": 33.59,
+    "quantity": 6,
+    "verified_repeat": "£33.83 labour / £80.34 unit — a previously verified repeat of the same pack. A run reproducing £80.34 rather than £80.09 is NOT a failure on that ground alone."
+  },
+
+  "notes": "Anything a reader would otherwise have to ask: which GA was used, what the estimator corrected by hand, what was still open at sign-off."
+}

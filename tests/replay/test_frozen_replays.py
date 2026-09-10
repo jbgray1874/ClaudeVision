@@ -6,8 +6,18 @@ HTML deliverable builders — everything downstream of extraction that runs with
 and the result is diffed against accepted_facts.json: identities, routes, decisions,
 names that must appear nowhere. Structure, never money.
 
-A directory with facts but no frozen summary is reported loudly as a skip, because the
-difference between "this pack is protected" and "nobody froze it" must be visible.
+A MISSING FIXTURE IS A FAILURE, NOT A SKIP. It used to skip with a loud message, and the
+message was not loud: four skips inside a 4,600-test run is indistinguishable from four
+passes, so both frozen packs sat unprotected for weeks while every push reported green. The
+difference between "this pack is protected" and "nobody froze it" has to be a red result.
+
+Set SDI_REPLAY_ALLOW_MISSING=1 to downgrade that to a skip. That is for working locally on a
+checkout without the packs; CI must never set it, which is why it is an explicit opt-out
+rather than a default.
+
+AND A FROZEN RECORD MUST SAY WHERE IT CAME FROM. A summary.json with no provenance is an
+unlabelled number: nobody can tell the accepted run from whichever run last passed, which is
+precisely the substitution the accepted baseline exists to prevent.
 """
 from __future__ import annotations
 
@@ -24,57 +34,142 @@ HERE = Path(__file__).resolve().parent
 JOBS = sorted(p for p in HERE.iterdir()
               if p.is_dir() and (p / "accepted_facts.json").is_file())
 
+ALLOW_MISSING = os.environ.get("SDI_REPLAY_ALLOW_MISSING", "").strip() not in ("", "0")
+
+# What a provenance file has to answer. Not bureaucracy: each of these is a question somebody
+# asked about a baseline this year and nobody could answer from the file.
+PROVENANCE_FIELDS = ("job", "accepted_run", "accepted_by", "accepted_on", "source_path")
+
 
 def _facts(job: Path) -> dict:
     return json.loads((job / "accepted_facts.json").read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("job", JOBS, ids=[j.name for j in JOBS])
-def test_frozen_replay(job: Path):
-    facts = _facts(job)
+def _frozen_summary(job: Path) -> dict:
+    """The frozen record, or a FAILURE saying exactly what to copy where.
+
+    Also enforces provenance, because an unattributed baseline cannot be audited: "the run the
+    estimator signed off" and "whichever run last passed" look identical on disk.
+    """
     frozen = job / "summary.json"
     if not frozen.is_file():
-        pytest.skip(f"{job.name}: accepted facts exist but no frozen summary.json — "
-                    f"copy output/json/{job.name}.json here to protect this pack")
-    summary = json.loads(frozen.read_text(encoding="utf-8"))
+        message = (
+            f"{job.name}: accepted facts exist but NO frozen summary.json — this pack is "
+            f"NOT protected. On the box:\n"
+            f"    copy output\\json\\{job.name}.json  tests\\replay\\{job.name}\\summary.json\n"
+            f"from the run the estimator signed off, write "
+            f"tests/replay/{job.name}/provenance.json, and commit both.")
+        if ALLOW_MISSING:
+            pytest.skip(message + "\n(skipped: SDI_REPLAY_ALLOW_MISSING is set)")
+        pytest.fail(message)
 
-    import costed_facts as cf
-    record = cf.costed_job(summary)
-    lines = [l for l in (record.get("lines") or []) if isinstance(l, dict)]
-    line_ids = sorted({str(l.get("part_number") or "").strip().upper() for l in lines}
-                      - {""})
+    prov_path = job / "provenance.json"
+    assert prov_path.is_file(), (
+        f"{job.name}: summary.json is frozen with no provenance.json beside it. A baseline "
+        f"nobody can attribute is not a baseline. Required fields: "
+        f"{', '.join(PROVENANCE_FIELDS)}")
+    prov = json.loads(prov_path.read_text(encoding="utf-8"))
+    missing = [f for f in PROVENANCE_FIELDS if not str(prov.get(f) or "").strip()]
+    assert not missing, f"{job.name}: provenance.json is missing {missing}"
+    assert str(prov.get("job")).strip().upper() == job.name.upper(), (
+        f"{job.name}: provenance names job {prov.get('job')!r} — a record filed under the "
+        f"wrong job is worse than none")
+    return json.loads(frozen.read_text(encoding="utf-8"))
+
+
+def assert_accepted_structure(job_name: str, facts: dict, lines: list) -> None:
+    """Every structural pin in accepted_facts.json, held against a costed record's lines.
+
+    SEPARATED FROM THE FIXTURE ON PURPOSE. While both packs sat unfrozen these checks could
+    not be executed at all, so a pin could be added and never once run — the same silent-skip
+    problem one level up. Lifted out, each one is provable against a synthetic record (see
+    tests/test_the_replay_gate_is_a_gate.py) independently of whether any pack is frozen.
+    """
+    line_ids = sorted({str(l.get("part_number") or "").strip().upper() for l in lines} - {""})
+
+    def _find(pn):
+        return next((l for l in lines
+                     if str(l.get("part_number") or "").upper() == str(pn).upper()), None)
 
     # ── BOM identity: exactly these lines, no more, no fewer ────────────────────
     want = facts.get("bom_identities")
     if want:
         assert line_ids == sorted(str(w).upper() for w in want), \
-            f"{job.name} BOM drifted: {line_ids}"
+            f"{job_name} BOM drifted: {line_ids}"
 
     # ── quantities: spot-pins ──────────────────────────────────────────────────
     for pn, q in (facts.get("quantities") or {}).items():
-        got = next((l.get("qty_per_unit") for l in lines
-                    if str(l.get("part_number") or "").upper() == pn.upper()), None)
+        line = _find(pn)
+        got = line.get("qty_per_unit") if line else None
         assert got is not None and abs(float(got) - float(q)) < 0.01, \
-            f"{job.name} {pn}: qty {got} != accepted {q}"
+            f"{job_name} {pn}: qty {got} != accepted {q}"
 
     # ── routes: required present, ruled-out absent ─────────────────────────────
     for pn, ops in (facts.get("required_operations") or {}).items():
-        line = next((l for l in lines
-                     if str(l.get("part_number") or "").upper() == pn.upper()), None)
-        assert line is not None, f"{job.name}: {pn} missing from the record"
+        line = _find(pn)
+        assert line is not None, f"{job_name}: {pn} missing from the record"
         got_ops = {str(o).lower() for o in (line.get("operations") or [])}
         for op in ops:
             assert op.lower() in got_ops, \
-                f"{job.name} {pn}: required op '{op}' absent ({sorted(got_ops)})"
+                f"{job_name} {pn}: required op '{op}' absent ({sorted(got_ops)})"
     for pn, ops in (facts.get("forbidden_operations") or {}).items():
-        line = next((l for l in lines
-                     if str(l.get("part_number") or "").upper() == pn.upper()), None)
+        line = _find(pn)
         if line is None:
             continue
         got_ops = {str(o).lower() for o in (line.get("operations") or [])}
         for op in ops:
             assert op.lower() not in got_ops, \
-                f"{job.name} {pn}: ruled-out op '{op}' is charged"
+                f"{job_name} {pn}: ruled-out op '{op}' is charged"
+
+    # ── operations no line anywhere may carry ──────────────────────────────────
+    # Per-part forbids miss the case that actually happened: a finish reappearing on a
+    # DIFFERENT part than the one it was ruled off. On 7332 the plated and Harrods-1 finishes
+    # were read as powder, and pinning powder off part 002 alone would not have caught it
+    # landing on 101 or 008 instead.
+    for op in (facts.get("forbidden_operations_anywhere") or []):
+        guilty = sorted(str(l.get("part_number")) for l in lines
+                        if op.lower() in {str(o).lower() for o in (l.get("operations") or [])})
+        assert not guilty, \
+            f"{job_name}: '{op}' is ruled out for this job but is charged on {guilty}"
+
+    # ── material has to actually reach the line ────────────────────────────────
+    # NOT a rate pin: rates move and this layer never pins money. It pins PRESENCE — a leg
+    # costed with no material contribution at all is the failure that produced GBP 0 lines,
+    # and it is invisible to an identity or route check because the line is present and
+    # routed.
+    for pn in (facts.get("material_charged") or []):
+        line = _find(pn)
+        assert line is not None, f"{job_name}: {pn} is missing, so nothing is charged for it"
+        charged = line.get("charged_unit_gbp")
+        money = charged if charged is not None else line.get("engine_unit_gbp")
+        assert money is not None and float(money) > 0.0, (
+            f"{job_name} {pn}: material contribution is {money!r} — the line exists and is "
+            f"routed, but no material money reaches it")
+
+    # ── no child minted under a part to stand in for its stock ─────────────────
+    # The failure shape: rather than charging the leg's own tube, the engine mints a child
+    # node beneath it to carry the stock, and the money lands twice or on a node no estimator
+    # has ever seen. Expressed generically as "this parent gains no descendants", so it holds
+    # whatever the minted child would have been called.
+    for parent in (facts.get("no_minted_children") or []):
+        stem = _squash(parent)
+        children = sorted(str(l.get("part_number")) for l in lines
+                          if _squash(l.get("part_number")) != stem
+                          and _squash(l.get("part_number")).startswith(stem))
+        assert not children, \
+            f"{job_name}: {parent} gained minted child line(s) {children}"
+
+
+@pytest.mark.parametrize("job", JOBS, ids=[j.name for j in JOBS])
+def test_frozen_replay(job: Path):
+    facts = _facts(job)
+    summary = _frozen_summary(job)
+
+    import costed_facts as cf
+    record = cf.costed_job(summary)
+    lines = [l for l in (record.get("lines") or []) if isinstance(l, dict)]
+
+    assert_accepted_structure(job.name, facts, lines)
 
     # ── the shared tally ───────────────────────────────────────────────────────
     tally = cf.outstanding_summary(summary) or {}
@@ -105,12 +200,8 @@ def test_frozen_stage_contracts(job: Path):
     accepted run recorded. Assembly-scope and extraction failures still need staged
     input packs — this closes the mint-and-gate stage only, honestly."""
     facts = _facts(job)
-    frozen = job / "summary.json"
-    if not frozen.is_file():
-        pytest.skip(f"{job.name}: accepted facts exist but no frozen summary.json — "
-                    f"copy output/json/{job.name}.json here to protect this pack")
+    summary = _frozen_summary(job)
     import copy
-    summary = json.loads(frozen.read_text(encoding="utf-8"))
     s = copy.deepcopy(summary)
     raw = [p for p in ((s.get("estimate_summary") or {}).get("part_estimates") or [])
            if isinstance(p, dict)]
@@ -164,3 +255,81 @@ def _forbidden_names_check(job: Path, facts: dict, summary: dict, lines: list) -
                                             if k != "review_flags"} for l in lines]), \
                 f"{job.name}: '{name}' is a record line"
             assert name not in quote, f"{job.name}: '{name}' reached the customer quote"
+
+
+@pytest.mark.parametrize("job", JOBS, ids=[j.name for j in JOBS])
+def test_frozen_routing_and_costing_re_execute(job: Path):
+    """Tier 3: the ROUTING and MATERIAL COSTING code runs again on the frozen inputs.
+
+    Tiers 1 and 2 between them render an already-costed record and re-run the workbook
+    canonicalisation. Neither re-derives a route or a material price, so a change inside
+    route_compiler or estimator could alter what a leg costs and both tiers would still pass on
+    the frozen numbers — exactly the criticism that "rendering previously calculated results"
+    is not a replay.
+
+    This tier calls compile_job_route on the frozen part population and estimate_material on
+    each part, and holds what those two stages are responsible for:
+
+      · a route the accepted facts REQUIRE is still compiled from the inputs, and one they
+        rule out is still refused — re-derived, not read back
+      · a part the accepted facts say carries material still prices above zero when costed
+        from scratch
+      · no operation the job rules out anywhere is minted by the compiler
+
+    It does NOT pin a rate. Prices move; the contract is that the stage still produces one.
+    """
+    facts = _facts(job)
+    summary = _frozen_summary(job)
+    parts = [p for p in ((summary.get("estimate_summary") or {}).get("part_estimates") or [])
+             if isinstance(p, dict)]
+    if not parts:
+        pytest.fail(f"{job.name}: frozen summary carries no raw part_estimates to re-route")
+
+    import copy
+    import route_compiler
+
+    doc = summary.get("document_analysis") or {}
+    compiled = route_compiler.compile_job_route(
+        copy.deepcopy(parts),
+        llm_extract=summary.get("llm_extract") or {},
+        bom_rows=doc.get("bom_rows") or [],
+    )
+    decisions = [d for d in (compiled.get("decisions") or []) if isinstance(d, dict)]
+
+    def _ops_for(pn: str) -> set:
+        want = str(pn).strip().upper()
+        return {str(d.get("operation") or "").lower() for d in decisions
+                if str(d.get("part_number") or d.get("target_id") or "").strip().upper() == want
+                and str(d.get("status") or "").lower() not in
+                ("not_applicable", "refused", "excluded")}
+
+    for pn, ops in (facts.get("required_operations") or {}).items():
+        got = _ops_for(pn)
+        for op in ops:
+            assert op.lower() in got, (
+                f"{job.name} {pn}: the compiler no longer DERIVES required op '{op}' from the "
+                f"frozen inputs (got {sorted(got)}) — the record may still carry it")
+    for pn, ops in (facts.get("forbidden_operations") or {}).items():
+        got = _ops_for(pn)
+        for op in ops:
+            assert op.lower() not in got, \
+                f"{job.name} {pn}: the compiler now derives ruled-out op '{op}'"
+    for op in (facts.get("forbidden_operations_anywhere") or []):
+        guilty = sorted({str(d.get("part_number") or d.get("target_id") or "")
+                         for d in decisions
+                         if str(d.get("operation") or "").lower() == op.lower()
+                         and str(d.get("status") or "").lower() not in
+                         ("not_applicable", "refused", "excluded")})
+        assert not guilty, f"{job.name}: the compiler mints ruled-out '{op}' on {guilty}"
+
+    # ── material re-costed from scratch, not read back ─────────────────────────
+    import estimator
+    for pn in (facts.get("material_charged") or []):
+        part = next((p for p in parts
+                     if str(p.get("part_number") or "").upper() == str(pn).upper()), None)
+        assert part is not None, f"{job.name}: {pn} absent from the frozen part population"
+        fresh = estimator.estimate_material(copy.deepcopy(part)) or {}
+        unit = fresh.get("unit_material_cost_gbp")
+        assert unit is not None and float(unit) > 0.0, (
+            f"{job.name} {pn}: re-costing the frozen part yields {unit!r} — the stored record "
+            f"carries material money that the costing stage no longer produces")
