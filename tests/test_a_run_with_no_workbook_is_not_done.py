@@ -82,3 +82,59 @@ def test_the_zero_file_case_is_still_covered_separately():
     src = (_ROOT / "tools" / "runner" / "sdi_estimate_runner.py").read_text(encoding="utf-8")
     assert "NOTHING was copied" in src
     assert "NO WORKBOOK" in src
+
+
+# ── every artefact goes to the estimate folder, not two of nine ───────────────────────
+
+def test_the_collector_watches_every_folder_the_engine_writes_to():
+    """JAMES'S RULE, AND THE RUN THAT BROKE IT: "the s/sheet and all reports and logs, etc.
+    always need to be written to the estimate output folder".
+
+    0359342 produced nine artefacts and filed TWO. The engine prints all four of its output
+    folders under "Output files:" on every run — json, text, logs, csv — and writes the
+    workbook, quote, report and covering note into estimates. The collector watched estimates
+    and json only, so the run log and the write-up were never copied and the estimator's
+    folder held nothing to read.
+    """
+    r = runner
+
+    for folder in ("estimates", "json", "text", "logs", "csv"):
+        assert folder in r.WATCHED_DIRS, folder
+
+
+def test_the_artefact_suffixes_cover_what_the_engine_actually_emits():
+    """A watched folder with an unwatched suffix files nothing. The run log is .log, the
+    write-up .txt, the SQL export .sql — all named in the engine's own console output."""
+    r = runner
+
+    for suffix in (".xlsx", ".html", ".json", ".log", ".csv", ".txt", ".sql"):
+        assert suffix in r.DELIVERABLE_SUFFIXES, suffix
+
+
+def test_a_report_and_a_log_are_filed_alongside_the_workbook(tmp_path):
+    """End to end over a fake output tree: one artefact in each watched folder, all filed."""
+    r = runner
+
+    engine_root = tmp_path / "engine"
+    written = {
+        "estimates/0359342_20260910_123656.xlsx": "wb",
+        "estimates/0359342_report.html": "report",
+        "estimates/0359342_quote.html": "quote",
+        "json/0359342.json": "{}",
+        "text/0359342.txt": "write-up",
+        "logs/0359342.log": "log",
+        "csv/part_estimate_inputs.csv": "a,b",
+    }
+    before = r.snapshot(engine_root)            # nothing exists yet
+    for rel, body in written.items():
+        target = engine_root / "output" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+
+    log: list = []
+    filed = r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342")
+    names = {f["name"] for f in filed}
+    # collect() also writes its own console transcript last, so it contains the filing result.
+    assert names == {Path(k).name for k in written} | {"0359342_run.log"}, names
+    assert not any("NO WORKBOOK" in line for line in log), log
+    assert all((tmp_path / "dest" / n).is_file() for n in names)

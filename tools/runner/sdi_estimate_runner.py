@@ -82,7 +82,8 @@ from typing import Any, Dict, List, Optional
 # DECIDES something — what counts as a deliverable, what this run produced — can
 # be imported and tested on a machine that has neither requests nor a server.
 
-DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv")
+DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv", ".txt", ".md",
+                        ".sql", ".xlsm")
 
 # THE WORKBOOK TEMPLATE, RESOLVED THE SAME WAY THE ENGINE RESOLVES IT.
 #
@@ -115,7 +116,14 @@ _SAY_QUIET_AFTER = 120
 
 # The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
 # quote/report, which share a folder); the auditable summary lands in json/.
-WATCHED_DIRS = ("estimates", "json")
+#
+# AND IN FOUR FOLDERS, NOT TWO. The engine also writes output\text (the write-up), output\logs
+# (the run log) and output\csv (part_estimate_inputs) — it prints all four paths under "Output
+# files:" on every run — and this watched neither, so they were never filed. 0359342 filed two
+# JSONs out of nine artefacts and the estimator's folder held no log to read and no write-up.
+# James's rule is the plain one and it is right: the spreadsheet, the reports and the logs all
+# belong in the estimate output folder, every run.
+WATCHED_DIRS = ("estimates", "json", "text", "logs", "csv")
 
 
 def snapshot(engine_root: Path) -> Dict[str, float]:
