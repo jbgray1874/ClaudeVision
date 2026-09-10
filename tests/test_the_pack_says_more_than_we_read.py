@@ -319,3 +319,80 @@ def test_the_pipelines_own_association_is_preferred_over_the_filename(tmp_path: 
     part, how, ambiguous = _match_part(summary, "117620202M_0.9mm_MS_revA.DXF")
     assert part["part_number"] == "OTHER"
     assert "pipeline's own" in how and ambiguous is False
+
+
+# ── the same tables, as a page ────────────────────────────────────────────────────────
+
+def test_the_html_is_built_from_the_same_tables_as_the_workbook(tmp_path: Path):
+    """Estimating works from the spreadsheet, management reads the page. If they were built
+    from separate passes they could disagree about what the pack contained, which is exactly
+    the class of problem this whole deliverable exists to expose."""
+    from source_drawing_data import (SHEETS, build_tables, write_source_drawing_html)
+    summary = _summary()
+    page = write_source_drawing_html(summary, tmp_path, job="0359342")
+    assert page is not None and page.name == "0359342_source_drawing_data.html"
+    html = page.read_text(encoding="utf-8")
+
+    for name in SHEETS:
+        assert f"<h2>{name}" in html, f"{name} must appear as a section"
+    # every BOM row in the tables reaches the page
+    for row in build_tables(summary)["BOM rows"]:
+        assert str(row["part_number"]) in html
+        assert row["material_as_printed"] in html
+
+
+def test_the_page_is_self_contained_and_well_formed(tmp_path: Path):
+    """It has to render in the portal and survive being e-mailed. No external CSS, no fonts
+    to fetch, no scripts."""
+    import html.parser
+    from source_drawing_data import write_source_drawing_html
+    text = write_source_drawing_html(_summary(), tmp_path, job="j").read_text(encoding="utf-8")
+    assert "<script" not in text.lower()
+    assert "http://" not in text and "https://" not in text
+    assert "<style>" in text
+
+    class Check(html.parser.HTMLParser):
+        VOID = {"meta", "br", "img", "input", "link", "hr"}
+
+        def __init__(self):
+            super().__init__()
+            self.stack, self.bad = [], []
+
+        def handle_starttag(self, tag, attrs):
+            if tag not in self.VOID:
+                self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            if self.stack and self.stack[-1] == tag:
+                self.stack.pop()
+            else:
+                self.bad.append(tag)
+
+    check = Check()
+    check.feed(text)
+    assert not check.bad and not check.stack, f"unbalanced: {check.bad or check.stack}"
+
+
+def test_a_file_nothing_read_is_visible_on_the_page(tmp_path: Path):
+    """The row management should see first."""
+    from source_drawing_data import write_source_drawing_html
+    text = write_source_drawing_html(_summary(), tmp_path, job="j").read_text(encoding="utf-8")
+    assert "not read" in text
+    assert "Not read</div>" in text, "and it is counted in the summary cards"
+
+
+def test_content_is_escaped_not_injected(tmp_path: Path):
+    """Drawing text is arbitrary — a note containing angle brackets must not become markup."""
+    from source_drawing_data import write_source_drawing_html
+    summary = {"document_analysis": {"bom_rows": [
+        {"part_number": "<script>alert(1)</script>", "description": "A & B <b>bold</b>",
+         "quantity": 1}]}}
+    text = write_source_drawing_html(summary, tmp_path, job="x").read_text(encoding="utf-8")
+    assert "<script>alert(1)</script>" not in text
+    assert "&lt;script&gt;" in text and "A &amp; B" in text
+
+
+def test_the_run_writes_the_page_beside_the_workbook():
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert "write_source_drawing_html(" in source
+    assert "source_drawing_data_html" in source

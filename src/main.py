@@ -1228,6 +1228,18 @@ def main() -> None:
             if _sdd:
                 print(f"   -> Source drawing data: {_sdd.resolve()}")
                 (summary.setdefault("saved_output_paths", {}))["source_drawing_data"] = str(_sdd)
+            # The same tables as a page. Estimating works from the spreadsheet; management
+            # reads this, and it renders in the portal like any other deliverable. Built from
+            # the SAME build_tables() call, so the two cannot drift apart and disagree about
+            # what the pack contained.
+            from source_drawing_data import write_source_drawing_html
+            _sdd_html = write_source_drawing_html(
+                summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
+                dxf_paths=_sdd_dxfs)
+            if _sdd_html:
+                print(f"   -> Source drawing data (HTML): {_sdd_html.resolve()}")
+                (summary.setdefault("saved_output_paths", {}))[
+                    "source_drawing_data_html"] = str(_sdd_html)
         except Exception as _sdd_err:
             print(f"   -> Source drawing data not written: "
                   f"{type(_sdd_err).__name__}: {_sdd_err}", flush=True)

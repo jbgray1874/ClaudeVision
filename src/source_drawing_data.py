@@ -408,3 +408,167 @@ def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
     path = target / (f"{job}_source_drawing_data.xlsx" if job else "source_drawing_data.xlsx")
     book.save(path)
     return path
+
+
+# ── The same tables, as a page ────────────────────────────────────────────────────────
+
+_CSS = """
+:root{--bg:#fbfbfa;--surface:#fff;--surface-2:#f6f6f4;--ink:#17181a;--dim:#5c6066;
+--faint:#8b9096;--line:#e4e4e1;--ok:#1a7f52;--bad:#b4342a;--warn:#a8641a;--info:#2b5fa8;
+--disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#131416;--surface:#1a1c1f;--surface-2:#212429;
+--ink:#e8e9ea;--dim:#a4a9b0;--faint:#767b83;--line:#2c3037;--ok:#4ec08a;--bad:#e8776c;
+--warn:#dda257;--info:#7aa8e8}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 var(--disp);
+-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:40px 20px 72px}
+header{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:30px}
+.kicker{font-size:10px;letter-spacing:2.4px;text-transform:uppercase;color:var(--faint);
+font-weight:700;margin-bottom:8px}
+h1{font-size:27px;line-height:1.2;margin:0 0 8px;font-weight:750;letter-spacing:-.4px}
+.sub{color:var(--dim);margin:0;max-width:68ch;font-size:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;
+margin:26px 0 34px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.card .n{font-size:25px;font-weight:750;letter-spacing:-.5px;line-height:1.1}
+.card .l{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:1.1px;
+margin-top:5px;font-weight:600}
+.card.alert .n{color:var(--bad)}
+h2{font-size:17px;margin:34px 0 4px;font-weight:700;letter-spacing:-.2px}
+h2 .cnt{color:var(--faint);font-weight:500;font-size:13px;letter-spacing:0}
+.why{color:var(--dim);margin:0 0 14px;font-size:13px;max-width:78ch}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+overflow:auto;max-height:none}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{position:sticky;top:0;background:var(--surface-2);text-align:left;padding:9px 12px;
+font-size:10px;letter-spacing:1.1px;text-transform:uppercase;color:var(--faint);
+font-weight:700;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num{font-family:var(--mono);white-space:nowrap;text-align:right}
+td.k{font-family:var(--mono);font-size:11.5px;color:var(--dim);white-space:nowrap}
+.pill{display:inline-block;padding:1.5px 8px;border-radius:99px;font-size:10.5px;
+font-weight:700;letter-spacing:.3px;white-space:nowrap}
+.pill.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.pill.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
+.pill.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.pill.mute{background:var(--surface-2);color:var(--faint)}
+.note{color:var(--faint);font-size:11.5px;max-width:52ch}
+.empty{padding:22px;color:var(--faint);font-size:13px}
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
+color:var(--faint);font-size:11.5px;max-width:76ch}
+@media(max-width:640px){.wrap{padding:24px 14px 48px}h1{font-size:22px}table{font-size:12px}}
+@media print{body{background:#fff}.panel{break-inside:avoid}th{position:static}}
+"""
+
+_PILL = {
+    "yes": "ok", "NO": "bad", "NOT COMPARABLE": "mute",
+    "not in the fields checked": "warn", "n/a": "mute", "NO ": "bad",
+}
+
+
+def _esc(value: Any) -> str:
+    import html
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def _cell(header: str, value: Any) -> str:
+    """A verdict becomes a pill, a number right-aligns, a code gets the mono face."""
+    if header == "agrees" and value:
+        return f'<td><span class="pill {_PILL.get(str(value), "mute")}">{_esc(value)}</span></td>'
+    if header == "read" and str(value).upper() == "NO":
+        return '<td><span class="pill bad">not read</span></td>'
+    if header in ("note", "detail", "yielded", "reason", "assumption"):
+        return f'<td class="note">{_esc(value)}</td>'
+    if header in ("file", "part", "part_number", "field", "fact", "operation", "target"):
+        return f'<td class="k">{_esc(value)}</td>'
+    if isinstance(value, (int, float)):
+        return f'<td class="num">{_esc(value)}</td>'
+    return f"<td>{_esc(value)}</td>"
+
+
+_WHY = {
+    "Files": "Every file the job saw and whether anything read it. A CAD file nobody opened "
+             "appears nowhere else — the estimate simply prices what it has.",
+    "DXF file vs engine": "The DXFs opened independently with ezdxf, their own measurements "
+                          "beside the engine's. A reader cannot be checked against its own "
+                          "output. Facts that are not the same thing — a circle is not a "
+                          "hole — are shown together and marked NOT COMPARABLE, never scored.",
+    "Facts": "One row per datum: where it came from, and whether it is the figure the price "
+             "rests on or was read and then beaten by something stronger.",
+    "BOM rows": "The parts list as the drawing office typed it — material cell verbatim.",
+    "Operations": "Every route decision, its target and why it stands or does not.",
+    "Not extracted": "What the pack held that nothing read. The shortest section, and usually "
+                     "the one worth the most.",
+}
+
+
+def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str = "",
+                              dxf_paths: Optional[Sequence[Any]] = None) -> Optional[Path]:
+    """The same tables as a page: estimating works from the spreadsheet, management reads this.
+
+    Built from build_tables() — the identical data the workbook uses — so the two cannot
+    drift apart and disagree about what the pack contained.
+    """
+    tables = build_tables(summary, dxf_paths)
+    files = tables.get("Files") or []
+    comparisons = tables.get("DXF file vs engine") or []
+    unread = sum(1 for f in files if str(f.get("read", "")).upper() == "NO")
+    disagree = sum(1 for r in comparisons if r.get("agrees") == "NO")
+    unchecked = sum(1 for r in comparisons
+                    if r.get("agrees") == "not in the fields checked")
+
+    parts: List[str] = [
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>",
+        f"<title>Source drawing data{(' · ' + _esc(job)) if job else ''}</title>",
+        f"<style>{_CSS}</style></head><body><div class='wrap'>",
+        "<header><div class='kicker'>SDI Estimating Intelligence</div>",
+        f"<h1>Source drawing data{(' — ' + _esc(job)) if job else ''}</h1>",
+        "<p class='sub'>Everything the drawing pack gave us, file by file, and what the "
+        "engine did with it. This page prices nothing and decides nothing — it exists so "
+        "that <em>the file did not have it</em>, <em>we did not read it</em> and <em>we read "
+        "it and dropped it before the price</em> can be told apart.</p></header>",
+        "<div class='cards'>",
+        f"<div class='card'><div class='n'>{len(files)}</div><div class='l'>Files seen</div></div>",
+        f"<div class='card{' alert' if unread else ''}'><div class='n'>{unread}</div>"
+        "<div class='l'>Not read</div></div>",
+        f"<div class='card'><div class='n'>{len(tables.get('BOM rows') or [])}</div>"
+        "<div class='l'>BOM rows</div></div>",
+        f"<div class='card{' alert' if disagree else ''}'><div class='n'>{disagree}</div>"
+        "<div class='l'>File vs engine differ</div></div>",
+        f"<div class='card'><div class='n'>{unchecked}</div>"
+        "<div class='l'>Not in fields checked</div></div>",
+        "</div>",
+    ]
+
+    for name in SHEETS:
+        rows = tables.get(name) or []
+        parts.append(f"<h2>{_esc(name)} <span class='cnt'>{len(rows)}</span></h2>")
+        parts.append(f"<p class='why'>{_esc(_WHY.get(name, ''))}</p>")
+        if not rows:
+            parts.append(f"<div class='panel'><div class='empty'>Nothing recorded for this "
+                         f"job.</div></div>")
+            continue
+        headers = list(rows[0].keys())
+        parts.append("<div class='panel'><table><thead><tr>"
+                     + "".join(f"<th>{_esc(h.replace('_', ' '))}</th>" for h in headers)
+                     + "</tr></thead><tbody>")
+        for row in rows:
+            parts.append("<tr>" + "".join(_cell(h, row.get(h)) for h in headers) + "</tr>")
+        parts.append("</tbody></table></div>")
+
+    parts.append(
+        "<footer>Geometry proves shape, not method: a modelled hole does not prove drilling, "
+        "and a line on a bend layer is not a bend. Measurements are read with ezdxf and "
+        "converted from the units the file declares; a file declaring none publishes no "
+        "blank. Anything the reader could not measure is named rather than folded into a "
+        "total.</footer></div></body></html>")
+
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / (f"{job}_source_drawing_data.html" if job else "source_drawing_data.html")
+    path.write_text("\n".join(parts), encoding="utf-8")
+    return path
