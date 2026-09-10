@@ -135,9 +135,18 @@ def _match_part(summary: Mapping[str, Any], dxf_name: str) -> tuple:
     exact path match wins outright; a basename match against a DIFFERENT recorded path is
     still offered, because it is usually right, but it is marked ambiguous and names the path
     the pipeline actually used.
+
+    AND AN EXACT PATH MATCH HAS TO BE UNIQUE TOO. Returning on the first hit made uniqueness an
+    assumption rather than a check: where two part records named the same DXF the first won
+    silently and the row was reported as unambiguous. That is not a contrived case at SDI — a
+    handed pair is routinely cut from one flat export, so both hands reference the same file.
+    Every claimant is collected before the decision, and more than one is reported as ambiguous
+    with all of them named. It may well be that the fact is the same for both; that is a
+    judgement for whoever reads the row, and the audit's job is to say that the choice exists.
     """
     target = str(dxf_name).strip().lower()
     target_name = Path(target).name
+    exact: List[Mapping[str, Any]] = []
     basename_only: Optional[tuple] = None
     for part in _parts(summary):
         for key in ("dxf_file", "dxf_path", "flat_pattern_file"):
@@ -145,11 +154,20 @@ def _match_part(summary: Mapping[str, Any], dxf_name: str) -> tuple:
             if not recorded:
                 continue
             if recorded == target:
-                return part, "the pipeline's own file-to-part association", False
+                if part not in exact:
+                    exact.append(part)
+                continue
             if Path(recorded).name == target_name and basename_only is None:
                 # The path is compared case-folded but REPORTED as recorded: a lowercased
                 # path is not the path anyone can go and look at.
                 basename_only = (part, str(part.get(key)).strip())
+    if len(exact) == 1:
+        return exact[0], "the pipeline's own file-to-part association", False
+    if len(exact) > 1:
+        named = ", ".join(_text(p.get("part_number") or "(unnamed)") for p in exact[:4])
+        more = f" and {len(exact) - 4} more" if len(exact) > 4 else ""
+        return None, (f"ambiguous: {len(exact)} part records name this exact file "
+                      f"({named}{more}), so no single part owns these figures"), True
     if basename_only is not None:
         part, recorded = basename_only
         if Path(target).parent == Path(""):
@@ -251,6 +269,18 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
                          "note": "no geometry in this file to extract — no software reveals "
                                  "what is not there. Ask for a vector export"})
             continue
+        if probe.get("raster_only_undetermined"):
+            # DO NOT SEND ANYONE TO ASK FOR A VECTOR EXPORT OF A FILE THAT MAY ALREADY BE ONE.
+            # An image with no reachable geometry beside it looks raster-only, but a block we
+            # could not open may hold the entire profile. The row says what we know and what
+            # we do not, and then carries on to the comparisons rather than stopping here.
+            rows.append({"file": shown, "part": "", "fact": "content",
+                         "in_the_file": "an image, and geometry we could not reach",
+                         "engine_has": "", "comparable": "n/a", "agrees": "n/a",
+                         "note": "this file MAY hold nothing but a raster image, but a block "
+                                 "reference could not be resolved ("
+                                 + "; ".join(probe.get("unresolved_blocks") or [])
+                                 + ") and may contain the profile. Not called image-only"})
 
         part, how, ambiguous = _match_part(summary, path)
         pn = _text(part.get("part_number")) if part else ""
@@ -294,15 +324,26 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
                          "is knowingly short of the whole file")
         attribution_block = ("" if not (ambiguous and part) else
                              "NOT SCORED: this file is matched to the part by name only")
+        # COMPLETENESS IS PER MEASUREMENT. Marking only the outline partial left a blank of
+        # 100 x 50 scored as definitive on a file with a block we could not open — geometry we
+        # never reached may lie outside that extent — and let a fold-axis count be scored when
+        # the bend layer inside that block was never seen.
+        unreached = ("" if probe.get("geometry_is_complete", True) else
+                     "NOT SCORED: geometry in this file could not be reached ("
+                     + "; ".join(probe.get("unresolved_blocks") or []) + ")")
+        blank_block = attribution_block or units_block or (
+            unreached if probe.get("blank_is_partial") else "")
+        axes_block = attribution_block or units_block or (
+            unreached if probe.get("candidate_fold_axes_partial") else "")
         units_block = attribution_block or units_block
-        partial_block = attribution_block or partial_block
+        partial_block = attribution_block or partial_block or unreached
 
         # comparable facts: same thing measured two ways
         checks = [
             ("blank length", probe.get("blank_length_mm"), _engine("blank_length_mm"), True, "",
-             units_block),
+             blank_block),
             ("blank width", probe.get("blank_width_mm"), _engine("blank_width_mm"), True, "",
-             units_block),
+             blank_block),
             ("outline length", probe.get("outline_length"),
              _engine("cut_length_mm", "dxf_measured_cut_length"), True,
              ("the file's total profile length" + partial),
@@ -312,22 +353,26 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
              _engine("hole_count", "estimated_hole_count"), False,
              "a circle is not necessarily a hole — a disc's OUTLINE is a circle. Deciding "
              "which are holes needs the part's role and the drawing's instructions", ""),
-            # THE DXF STATES THE BENDS, SO THIS IS COMPARABLE AND WE MUST BE EXACTLY RIGHT.
-            # Segments are collapsed onto the infinite line they lie on, so a dashed fold
-            # counts once: 117621702M draws ten dashes and has two bends. The raw entity
-            # count is carried beside it as evidence, not as the answer.
+            # AN AXIS IS NOT A BEND, SO THE VERDICT MUST SAY SO TOO. This was scored against
+            # bend_count while the note beside it admitted that nothing here knows which
+            # profile owns which segment — the row therefore graded a comparison its own
+            # explanation said could not be made. It is the same category error as circles
+            # versus holes, which this table has always refused to score: the geometry states
+            # fold LINES, and how many manufacturing bends those represent needs the part's
+            # role. Two tabs folding on one line read as one axis; a nested pair of parts read
+            # as shared axes. Both figures are shown side by side — a difference is worth
+            # looking at, and the note says what would explain one — but neither is graded
+            # right or wrong against the other.
             ("candidate fold axes", probe.get("candidate_fold_axes") or None,
-             _engine("bend_count", "bend_count_dxf", "fold_count"), True,
+             _engine("bend_count", "bend_count_dxf", "fold_count"), False,
              (f"{probe.get('bend_layer_line_count')} segment(s) on the bend layer collapse "
               f"to {probe.get('candidate_fold_axes')} fold axis/axes. An AXIS is not proven "
               f"to be one manufacturing bend: nothing here knows which profile owns which "
-              f"segment, so two tabs folding on one line would read as one")
+              f"segment, so two tabs folding on one line would read as one"
+              + ("; and geometry in this file could not be reached, so the bend layer may be "
+                 "incomplete" if probe.get("candidate_fold_axes_partial") else ""))
              if probe.get("bend_layer_line_count") else "",
-             # A COUNT IS UNIT-FREE, BUT THE COLLAPSE THAT PRODUCED IT IS NOT. Segments are
-             # grouped with a millimetre tolerance and a millimetre gap; with no declared
-             # units there is no conversion to apply them in, so the count itself is not
-             # dependable enough to score against.
-             units_block),
+             axes_block),
         ]
         for label, available, extracted, comparable, note, blocked in checks:
             if available is None and extracted in (None, "", []):
@@ -366,11 +411,24 @@ _PROBE_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _probe_once(path: Any) -> Dict[str, Any]:
-    """One read per file per process. The comparison table and the detail section both want
-    the same inventory, and reading each DXF twice is both slower and a way for the two
-    halves of one page to disagree."""
+    """One read per VERSION of a file. The comparison table and the detail section both want
+    the same inventory, and reading each DXF twice is both slower and a way for the two halves
+    of one page to disagree.
+
+    THE KEY IS THE FILE'S IDENTITY PLUS ITS STATE, NOT JUST ITS PATH. Keyed on the path alone,
+    this cache is a correctness hazard in any process that outlives one job: a DXF rewritten
+    between two audits — a revision dropped into the same folder under the same name, which is
+    exactly how a drawing office issues one — would be reported from the old read, and the page
+    would describe geometry the file no longer has while naming it as current. Adding the
+    modification time and size makes a rewritten file a different key, so it is read again. A
+    file whose stat cannot be taken is not cached at all: better a second read than a stale
+    answer."""
     from dxf_probe import probe_dxf
-    key = str(path)
+    try:
+        stat = Path(str(path)).stat()
+        key = f"{path}|{stat.st_mtime_ns}|{stat.st_size}"
+    except Exception:                                                    # noqa: BLE001
+        return probe_dxf(path)
     if key not in _PROBE_CACHE:
         _PROBE_CACHE[key] = probe_dxf(path)
     return _PROBE_CACHE[key]
@@ -843,8 +901,11 @@ def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str
                 ("extent", f"{_E(probe.get('extent_length'))} &times; "
                            f"{_E(probe.get('extent_width'))}"),
                 ("blank published",
-                 (f"{_E(probe.get('blank_length_mm'))} &times; "
-                  f"{_E(probe.get('blank_width_mm'))}") if probe.get("blank_length_mm")
+                 ((f"{_E(probe.get('blank_length_mm'))} &times; "
+                   f"{_E(probe.get('blank_width_mm'))}")
+                  + (" (partial &mdash; geometry in this file could not be reached, so the "
+                     "real blank may be larger)" if probe.get("blank_is_partial") else ""))
+                 if probe.get("blank_length_mm")
                  else "none &mdash; " + (_E(probe.get("extent_is")) or "not a flat export")),
                 ("profile length", _E(probe.get("outline_length"))
                  + (" (partial)" if probe.get("outline_length_partial") else "")),
@@ -853,7 +914,9 @@ def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str
                     if probe.get("circle_diameters") else "")),
                 ("candidate fold axes",
                  f"{_E(probe.get('candidate_fold_axes'))} from "
-                 f"{_E(probe.get('bend_layer_line_count'))} segment(s) on the bend layer"),
+                 f"{_E(probe.get('bend_layer_line_count'))} segment(s) on the bend layer"
+                 + (" (partial &mdash; the bend layer may continue inside geometry we could "
+                    "not reach)" if probe.get("candidate_fold_axes_partial") else "")),
                 ("dimension entities", _E(probe.get("dimension_entities"))),
                 ("layers", _list(probe.get("layers"))),
                 ("entities", _list([f"{k} \u00d7{v}" for k, v in

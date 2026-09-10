@@ -161,9 +161,19 @@ def _candidate_fold_axes(segments: List[tuple], gap_mm: float = 30.0,
     millimetres. Applied to raw file coordinates they were whatever the file's units happened
     to be: on an inch drawing 0.25 meant 0.25 INCHES, and two folds a millimetre apart
     collapsed into one.
+
+    THE ANSWER DOES NOT DEPEND ON THE ORDER THE ENTITIES CAME OUT OF THE FILE. The first
+    version walked the segments once and extended the first group each one touched. Given three
+    collinear runs — [0,10], a bridge at [20,90], and [100,110] — it returned 1 axis for four
+    of the six orderings and 2 for the other two: when [0,10] and [100,110] were seen first
+    they opened separate groups, and the bridge that should have joined them extended only the
+    first. Entity order in a DXF is an artefact of how the file was written, so it must not
+    change the count. Grouping is therefore done in two deterministic passes: segments are
+    sorted and bucketed onto infinite lines, then each bucket's intervals are sorted along the
+    axis and merged, so a bridging run joins what it bridges however it was encountered.
     """
     import math as _m
-    axes: List[Dict[str, Any]] = []
+    placed: List[Dict[str, Any]] = []
     for (x1, y1), (x2, y2) in segments:
         dx, dy = x2 - x1, y2 - y1
         length = _m.hypot(dx, dy)
@@ -174,24 +184,47 @@ def _candidate_fold_axes(segments: List[tuple], gap_mm: float = 30.0,
             x1, y1, x2, y2 = x2, y2, x1, y1
         angle = _m.degrees(_m.atan2(dy, dx)) % 180.0
         offset = (x1 * dy - y1 * dx) / length
+        # A line a hair under 180 deg and one a hair over 0 are the same direction measured
+        # from opposite ends, and their offsets carry opposite signs. Fold the first onto the
+        # second so the two land in one bucket instead of at opposite ends of the sort.
+        if angle > 180.0 - 0.5:
+            angle -= 180.0
+            offset = -offset
         # position along the axis, so separated runs on one line stay separate
         ux, uy = dx / length, dy / length
-        span = sorted((x1 * ux + y1 * uy, x2 * ux + y2 * uy))
+        lo, hi = sorted((x1 * ux + y1 * uy, x2 * ux + y2 * uy))
+        placed.append({"angle": angle, "offset": offset, "lo": lo, "hi": hi})
 
-        for axis in axes:
-            if not ((abs(axis["angle"] - angle) <= 0.5
-                     or abs(abs(axis["angle"] - angle) - 180.0) <= 0.5)
-                    and abs(axis["offset"] - offset) <= tol_mm):
+    if not placed:
+        return 0
+
+    # PASS 1 — bucket onto infinite lines. Sorted first, and each segment compared against its
+    # bucket's ANCHOR rather than the last one added, so neither the file's order nor a chain
+    # of near-misses can drift a bucket away from the line it was opened on.
+    placed.sort(key=lambda s: (s["angle"], s["offset"], s["lo"], s["hi"]))
+    lines: List[List[Dict[str, Any]]] = []
+    for segment in placed:
+        if lines:
+            anchor = lines[-1][0]
+            if (abs(anchor["angle"] - segment["angle"]) <= 0.5
+                    and abs(anchor["offset"] - segment["offset"]) <= tol_mm):
+                lines[-1].append(segment)
                 continue
-            # same infinite line — but only the same AXIS if the runs are close enough to be
-            # dashes of one fold rather than two features that happen to line up
-            if span[0] - axis["hi"] <= gap_mm and axis["lo"] - span[1] <= gap_mm:
-                axis["lo"] = min(axis["lo"], span[0])
-                axis["hi"] = max(axis["hi"], span[1])
-                break
-        else:
-            axes.append({"angle": angle, "offset": offset, "lo": span[0], "hi": span[1]})
-    return len(axes)
+        lines.append([segment])
+
+    # PASS 2 — merge each line's intervals along the axis. Sorted by start, so a run that
+    # bridges two others closes both gaps whatever order it arrived in.
+    axes = 0
+    for bucket in lines:
+        bucket.sort(key=lambda s: (s["lo"], s["hi"]))
+        reach = None
+        for segment in bucket:
+            if reach is None or segment["lo"] - reach > gap_mm:
+                axes += 1                        # a gap too wide to be dashes of one fold
+                reach = segment["hi"]
+            else:
+                reach = max(reach, segment["hi"])
+    return axes
 
 
 def probe_dxf(path_like: Any) -> Dict[str, Any]:
@@ -210,6 +243,15 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
         "outline_length": None, "outline_length_partial": False,
         "text_values": [], "text_count": 0, "dimension_entities": 0,
         "block_nesting_depth": 0, "unresolved_blocks": [],
+        # COMPLETENESS TRAVELS WITH EACH MEASUREMENT, NOT WITH THE FILE. Geometry we could not
+        # reach does not damage every figure equally, and one shared flag either overstates the
+        # harm or hides it. Marking only the outline partial let a blank of 100 x 50 be
+        # published as definitive from a file with a block we could not open — the missing
+        # geometry may well lie outside that extent — and let a fold-axis count be scored when
+        # the bend layer inside that block was never seen.
+        "geometry_is_complete": True,
+        "blank_is_partial": False, "candidate_fold_axes_partial": False,
+        "raster_only_undetermined": False,
         "error": "",
     }
     try:
@@ -311,19 +353,35 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     # count is carried so a reader can see at a glance how much there is.
     result["text_values"] = texts
     result["text_count"] = len(texts)
-    # A block we could not descend into holds geometry we have not counted, so every total
-    # drawn from this file is partial and says so by name.
+    # A block we could not descend into holds geometry we have not counted. That is a
+    # DIFFERENT kind of incompleteness from a curve ezdxf declined to flatten: the curve is
+    # still in the extents and still in the entity counts, and only its length is missing,
+    # whereas unreached geometry is absent from every figure on this file. So it is propagated
+    # to each measurement separately rather than to one shared flag.
     for block in unresolved_blocks:
         unsupported[f"block not resolved: {block}"] += 1
     if unresolved_blocks:
         length_partial = True
+        result["geometry_is_complete"] = False
+        result["blank_is_partial"] = True
+        result["candidate_fold_axes_partial"] = True
     result["unsupported"] = [f"{k} x{v}" for k, v in unsupported.most_common()]
 
-    # RASTER-ONLY, DECIDED AFTER BLOCKS ARE RESOLVED. A file holding an image beside an
-    # inserted block full of geometry is not an image-only file, and saying so sent the fix
-    # in the wrong direction entirely.
+    # RASTER-ONLY, DECIDED AFTER BLOCKS ARE RESOLVED — AND ONLY WHEN THEY ALL WERE. A file
+    # holding an image beside an inserted block full of geometry is not an image-only file, and
+    # saying so sent the fix in the wrong direction entirely: "ask for a vector export" about a
+    # file that already had one. That was fixed by resolving blocks, then reintroduced by the
+    # case where a block CANNOT be resolved — an image plus a block we could not open was
+    # declared raster-only, when the block may hold the whole profile. Unreached geometry
+    # cannot support a claim about what the file does NOT contain, so the conclusion is
+    # withheld and marked undetermined instead.
     has_image = bool(counts.get("IMAGE") or counts.get("IMAGEDEF"))
-    result["entities_are_raster_only"] = bool(has_image and not profile and not bend_lines)
+    looks_raster_only = bool(has_image and not profile and not bend_lines)
+    if looks_raster_only and unresolved_blocks:
+        result["entities_are_raster_only"] = False
+        result["raster_only_undetermined"] = True
+    else:
+        result["entities_are_raster_only"] = looks_raster_only
 
     if length_total > 0:
         result["outline_length"] = round(length_total, 2)

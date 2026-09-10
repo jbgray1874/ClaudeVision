@@ -447,8 +447,20 @@ def test_the_corpus_bend_counts_are_exact():
             assert probe_dxf(path)["candidate_fold_axes"] == expected, name
 
 
-def test_bends_are_compared_because_the_dxf_states_them(tmp_path: Path):
-    """Unlike circles-vs-holes, this IS the same fact measured two ways, so it is scored."""
+def test_fold_axes_are_shown_beside_the_bend_count_but_never_graded_against_it(tmp_path: Path):
+    """THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE, AND THE ASSERTION WAS THE DEFECT.
+
+    It was called test_bends_are_compared_because_the_dxf_states_them and its docstring read
+    "unlike circles-vs-holes, this IS the same fact measured two ways, so it is scored". It is
+    not. The DXF states fold LINES; how many manufacturing bends those represent needs the
+    part's role, exactly as deciding which circles are holes does — and this table has always
+    refused to score circles against holes for that reason. The row was therefore grading a
+    comparison that the note printed beside it openly said could not be made: two tabs folding
+    on one line read as one axis, and a nested pair of parts read as shared axes.
+
+    So the verdict now honours the stated limitation. Both figures stay on the row — a
+    difference is worth looking at and the note says what would explain one — but neither is
+    marked right or wrong against the other."""
     from source_drawing_data import build_tables
     def build(msp):
         msp.add_line((0, 10), (100, 10), dxfattribs={"layer": "BENDLINES"})
@@ -456,10 +468,15 @@ def test_bends_are_compared_because_the_dxf_states_them(tmp_path: Path):
     path = _dxf(tmp_path, "117620202M.dxf", build)
     summary = {"estimate_summary": {"part_estimates": [
         {"part_number": "117620202M", "manufacturing_features": {"bend_count": 1}}]}}
-    rows = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
-    assert rows["candidate fold axes"]["comparable"] == "yes"
-    assert rows["candidate fold axes"]["agrees"] == "yes"
-    assert "collapse to 1 fold axis" in rows["candidate fold axes"]["note"]
+    row = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}[
+        "candidate fold axes"]
+    assert row["comparable"] == "no"
+    assert row["agrees"] == "NOT COMPARABLE"
+    # both numbers are still published side by side — withholding the GRADE is not hiding
+    assert row["in_the_file"] == 1
+    assert row["engine_has"] == 1
+    assert "collapse to 1 fold axis" in row["note"]
+    assert "not proven to be one manufacturing bend" in row["note"]
 
 
 # ── the page carries everything, not a summary ────────────────────────────────────────
@@ -811,3 +828,205 @@ def test_the_run_builds_the_audit_snapshot_once(tmp_path: Path):
     assert "_sdd_tables = build_tables(" in source
     assert source.count("tables=_sdd_tables") == 2, \
         "both writers take the one snapshot"
+
+
+# ── the four left after the nesting/attribution commit ────────────────────────────────
+
+
+def test_fold_axis_grouping_does_not_depend_on_entity_order(tmp_path: Path):
+    """THE REVIEWER'S CASE, REPRODUCED. Three collinear runs — [0,10], a bridge at [20,90] and
+    [100,110] — returned 1 axis for four of the six orderings and 2 for the other two: when the
+    outer pair was seen first they opened separate groups, and the bridge that should have
+    joined them extended only the first. Entity order in a DXF is an artefact of how the file
+    was written, so it must not change the count."""
+    from itertools import permutations
+    from dxf_probe import _candidate_fold_axes
+    segments = [((0, 0), (10, 0)), ((20, 0), (90, 0)), ((100, 0), (110, 0))]
+    answers = {_candidate_fold_axes(list(order)) for order in permutations(segments)}
+    assert answers == {1}, f"order changed the answer: {sorted(answers)}"
+
+
+@pytest.mark.parametrize("segments,expected,why", [
+    ([((0, 0), (10, 0)), ((200, 0), (210, 0))], 2, "two tabs 190 mm apart are two axes"),
+    ([((0, 0), (6, 0)), ((25, 0), (31, 0)), ((50, 0), (56, 0))], 1, "dashes of one fold"),
+    ([((0, 124.12), (100, 124.12)), ((100, -124.12), (0, -124.12))], 2,
+     "drawn in opposite directions, still two distinct folds"),
+    ([((0, 0), (50, 0)), ((0, 40), (50, 40)), ((0, 80), (50, 80))], 3, "three parallel folds"),
+])
+def test_every_grouping_case_is_order_independent(segments, expected, why):
+    """Not just the bridging case: each behaviour the collapse claims, under every ordering."""
+    from itertools import permutations
+    from dxf_probe import _candidate_fold_axes
+    answers = {_candidate_fold_axes(list(order)) for order in permutations(segments)}
+    assert answers == {expected}, f"{why}: got {sorted(answers)}"
+
+
+def _with_unreachable_block(tmp_path: Path, name: str):
+    """A flat-looking export whose INSERT points at a block that is not in the file."""
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+    msp.add_line((0, 10), (100, 10), dxfattribs={"layer": "BENDLINES"})
+    msp.add_blockref("NOT-IN-THIS-FILE", (0, 0))
+    path = tmp_path / name
+    doc.saveas(path)
+    return path
+
+
+def test_unreached_geometry_marks_the_blank_and_the_axes_partial_too(tmp_path: Path):
+    """One shared flag was not enough. Only the outline was marked partial, so a blank of
+    100 x 50 was published as definitive from a file with a block we could not open — geometry
+    we never reached may lie outside that extent — and a fold-axis count was treated as whole
+    when the bend layer inside that block was never seen."""
+    probe = probe_dxf(_with_unreachable_block(tmp_path, "unreached.dxf"))
+    assert probe["unresolved_blocks"]
+    assert probe["geometry_is_complete"] is False
+    assert probe["blank_is_partial"] is True
+    assert probe["candidate_fold_axes_partial"] is True
+    assert probe["outline_length_partial"] is True
+
+
+def test_a_partial_blank_and_a_partial_axis_count_are_not_scored(tmp_path: Path):
+    """Completeness has to reach the verdict, not just the probe dictionary."""
+    from source_drawing_data import build_tables
+    path = _with_unreachable_block(tmp_path, "unreached2.dxf")
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "unreached2", "blank_length_mm": 100.0, "blank_width_mm": 50.0,
+         "manufacturing_features": {"bend_count": 1}}]}}
+    rows = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
+    for fact in ("blank length", "blank width", "candidate fold axes"):
+        assert rows[fact]["agrees"] == "NOT COMPARABLE", fact
+    assert "could not be reached" in rows["blank length"]["note"]
+    # and the figures are still there to be read
+    assert rows["blank length"]["in_the_file"] == 100.0
+
+
+def test_an_image_beside_unreachable_geometry_is_not_called_image_only(tmp_path: Path):
+    """The original defect was calling a file raster-only without looking inside its blocks.
+    That was fixed by resolving blocks, then came back through the case where a block CANNOT be
+    resolved: the block may hold the whole profile, and "ask for a vector export" about a file
+    that already has one sends the fix in the wrong direction — the exact failure this module's
+    docstring was written about."""
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    msp = doc.modelspace()
+    msp.add_blockref("NOT-IN-THIS-FILE", (0, 0))
+    image_def = doc.add_image_def(filename="scan.png", size_in_pixel=(100, 100))
+    msp.add_image(image_def=image_def, insert=(0, 0), size_in_units=(10, 10))
+    path = tmp_path / "image_plus_unreachable.dxf"
+    doc.saveas(path)
+    probe = probe_dxf(path)
+    assert probe["entities_are_raster_only"] is False, \
+        "unreached geometry cannot support a claim about what the file does NOT contain"
+    assert probe["raster_only_undetermined"] is True
+
+
+def test_the_undetermined_raster_case_gets_its_own_row(tmp_path: Path):
+    """It must not fall silently through to the comparisons, and it must not print the
+    'ask for a vector export' advice that belongs to a file we are sure about."""
+    from source_drawing_data import build_tables
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    msp = doc.modelspace()
+    msp.add_blockref("NOT-IN-THIS-FILE", (0, 0))
+    image_def = doc.add_image_def(filename="scan.png", size_in_pixel=(10, 10))
+    msp.add_image(image_def=image_def, insert=(0, 0), size_in_units=(10, 10))
+    path = tmp_path / "undetermined.dxf"
+    doc.saveas(path)
+    rows = build_tables({"estimate_summary": {"part_estimates": []}},
+                        [path])["DXF file vs engine"]
+    content = [r for r in rows if r["fact"] == "content"]
+    assert content, "the file gets a row saying what we do and do not know"
+    assert "could not reach" in content[0]["in_the_file"]
+    assert "Not called image-only" in content[0]["note"]
+    assert "Ask for a vector export" not in content[0]["note"]
+
+
+def test_two_part_records_naming_the_same_exact_file_is_ambiguous():
+    """Returning on the first hit made uniqueness an assumption rather than a check. A handed
+    pair is routinely cut from one flat export, so both hands reference the same file; the first
+    won silently and the row was reported as unambiguous."""
+    from source_drawing_data import _match_part
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "01-03M-LH", "dxf_file": "/p/01-03M.dxf", "blank_length_mm": 100.0},
+        {"part_number": "01-03M-RH", "dxf_file": "/p/01-03M.dxf", "blank_length_mm": 250.0}]}}
+    part, how, ambiguous = _match_part(summary, "/p/01-03M.dxf")
+    assert ambiguous is True
+    assert part is None, "no single part owns these figures"
+    assert "01-03M-LH" in how and "01-03M-RH" in how, "and every claimant is named"
+
+
+def test_one_part_record_naming_a_file_is_still_a_clean_match():
+    """The uniqueness check must not turn the ordinary case into a warning."""
+    from source_drawing_data import _match_part
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "ONLY", "dxf_file": "/p/only.dxf"},
+        {"part_number": "OTHER", "dxf_file": "/p/other.dxf"}]}}
+    part, how, ambiguous = _match_part(summary, "/p/only.dxf")
+    assert ambiguous is False
+    assert part is not None and part["part_number"] == "ONLY"
+    assert "own file-to-part association" in how
+
+
+def test_one_part_naming_the_same_file_under_two_keys_is_not_ambiguous():
+    """dxf_file and flat_pattern_file pointing at one file is ONE claimant, not two."""
+    from source_drawing_data import _match_part
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "SAME", "dxf_file": "/p/x.dxf", "flat_pattern_file": "/p/x.dxf"}]}}
+    part, how, ambiguous = _match_part(summary, "/p/x.dxf")
+    assert ambiguous is False
+    assert part is not None and part["part_number"] == "SAME"
+
+
+def test_a_rewritten_dxf_is_read_again_not_served_from_the_cache(tmp_path: Path):
+    """Keyed on the path alone the cache was a correctness hazard in any process that outlives
+    one job: a revision dropped into the same folder under the same name — which is exactly how
+    a drawing office issues one — was reported from the old read, so the page described geometry
+    the file no longer had while naming it as current."""
+    import source_drawing_data as sdd
+    path = tmp_path / "revised.dxf"
+
+    def write(length):
+        doc = ezdxf.new()
+        doc.header["$INSUNITS"] = MM
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (length, 0), (length, 50), (0, 50)], close=True)
+        doc.saveas(path)
+
+    sdd._PROBE_CACHE.clear()
+    try:
+        write(100)
+        assert sdd._probe_once(path)["extent_length"] == pytest.approx(100.0, abs=0.01)
+        import os
+        write(250)
+        os.utime(path, (0, 0))          # force a distinct mtime, not a same-second rewrite
+        assert sdd._probe_once(path)["extent_length"] == pytest.approx(250.0, abs=0.01), \
+            "the cache served the superseded read"
+    finally:
+        sdd._PROBE_CACHE.clear()
+
+
+def test_the_same_file_unchanged_is_still_read_only_once(tmp_path: Path):
+    """The stat key must not defeat the caching it is guarding."""
+    import source_drawing_data as sdd
+    import dxf_probe
+    path = _dxf(tmp_path, "stable.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True))
+    sdd._PROBE_CACHE.clear()
+    calls = {"n": 0}
+    original = dxf_probe.probe_dxf
+
+    def counting(p):
+        calls["n"] += 1
+        return original(p)
+
+    dxf_probe.probe_dxf = counting
+    try:
+        sdd._probe_once(path)
+        sdd._probe_once(path)
+        sdd._probe_once(path)
+    finally:
+        dxf_probe.probe_dxf = original
+        sdd._PROBE_CACHE.clear()
+    assert calls["n"] == 1, f"read {calls['n']} times"
