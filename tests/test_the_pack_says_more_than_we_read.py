@@ -143,3 +143,149 @@ def test_the_run_writes_it_beside_the_estimate():
     assert "write_source_drawing_data(" in source
     assert 'OUTPUT_DIR / "estimates"' in source
     assert "source_drawing_data" in source
+
+
+# ── the file itself, opened independently of the reader ───────────────────────────────
+
+UPLOADS = Path("/root/.claude/uploads/09b98f42-bd9e-534a-8993-f8eb3975326c")
+FLAT = UPLOADS / "f124e9e8-117620202M_0.9mm_MS_revA.DXF"
+GA = UPLOADS / "77e80e31-0355255__A4_Table_Top_Graphic_Holder__10975_REV_B.DXF"
+real_dxf = pytest.mark.skipif(not FLAT.exists(), reason="corpus DXF not present here")
+
+
+@real_dxf
+def test_a_flat_export_measures_its_own_blank_holes_and_bends():
+    """SDI's own 117620202M, measured from its entities. None of these is a printed
+    dimension: a circle carries its centre and radius, so the circle IS its diameter."""
+    from dxf_probe import probe_dxf
+    probe = probe_dxf(FLAT)
+    assert probe["readable"] and probe["looks_like_flat_export"]
+    assert probe["blank_length_mm"] == pytest.approx(1009.49, abs=0.05)
+    assert probe["blank_width_mm"] == pytest.approx(363.91, abs=0.05)
+    assert probe["hole_diameters_mm"] == [5.0]
+    assert probe["hole_count"] == 2
+    assert probe["bend_line_count"] == 5
+    assert "BENDLINES" in probe["layers"]
+    assert probe["entities_are_raster_only"] is False
+
+
+@real_dxf
+def test_a_drawing_export_reports_a_sheet_extent_not_a_blank():
+    """THE TRAP THAT BEAT AN EARLIER ATTEMPT OF MINE. Measuring vector extents on a GA
+    returns the drawing BORDER — 10975_REV_B comes out 1680.00 x 1074.49, which is no part
+    at all. A previous prototype of mine failed exactly here: it measured the frame on every
+    page and returned one identical aspect ratio for six different parts.
+
+    The tell is what a flat does NOT have: no dimension entities, no title-block text, no
+    leaders or block inserts.
+    """
+    from dxf_probe import probe_dxf
+    probe = probe_dxf(GA)
+    assert probe["looks_like_flat_export"] is False
+    assert probe["blank_length_mm"] is None, "a drawing must not offer a blank"
+    assert probe["extent_length_mm"] == pytest.approx(1680.0, abs=0.05)
+    assert "drawing export" in probe["extent_is"]
+    assert probe["dimension_entities"] == 20
+
+
+@real_dxf
+def test_the_audit_puts_the_file_beside_the_engine_and_names_what_is_missing():
+    """available in the file -> extracted -> assigned to a part -> used in costing.
+
+    The other sheets can only report what the pipeline recorded, which blinds them to the
+    failure that matters most: a fact that was in the file and reached nothing.
+    """
+    from source_drawing_data import build_tables
+    summary = {"estimate_summary": {"part_estimates": [{
+        "part_number": "117620202M",
+        "blank_length_mm": 1009.49, "blank_width_mm": 363.91,
+        "geometry_rollup": {"hole_count": 2},
+    }]}}
+    rows = build_tables(summary, [FLAT])["DXF file vs engine"]
+    by_fact = {r["fact"]: r for r in rows}
+
+    assert by_fact["blank length mm"]["agrees"] == "yes"
+    assert by_fact["hole count"]["agrees"] == "yes"
+    assert by_fact["blank length mm"]["part"] == "117620202M", "matched to its own part"
+
+    # measurable in the file, nothing on the record — the row the audit exists to produce
+    assert by_fact["cut length mm"]["agrees"] == "NOT EXTRACTED"
+    assert by_fact["cut length mm"]["in_the_file"] > 0
+
+
+@real_dxf
+def test_a_disagreement_is_shown_rather_than_judged():
+    """A mismatch is not automatically an engine defect — a part legitimately sized from a
+    model can differ from its flat. The audit guarantees the difference is VISIBLE; it does
+    not decide who is right."""
+    from source_drawing_data import build_tables
+    summary = {"estimate_summary": {"part_estimates": [{
+        "part_number": "117620202M",
+        "manufacturing_features": {"bend_count": 4},      # file says 5 bend lines
+    }]}}
+    rows = {r["fact"]: r for r in build_tables(summary, [FLAT])["DXF file vs engine"]}
+    assert rows["bend lines"]["in_the_file"] == 5
+    assert rows["bend lines"]["engine_has"] == 4
+    assert rows["bend lines"]["agrees"] == "NO"
+
+
+def test_a_raster_only_dxf_is_not_reported_as_a_reader_failure(tmp_path: Path):
+    """A DXF can legitimately hold nothing but an image, and no API will reveal geometry
+    that is not there. "We could not read it" and "there is nothing to read" must not look
+    the same, or the fix gets aimed at the wrong thing."""
+    from dxf_probe import probe_dxf
+    path = tmp_path / "scan.dxf"
+    path.write_text("0\nSECTION\n2\nENTITIES\n0\nIMAGE\n8\n0\n0\nENDSEC\n0\nEOF\n",
+                    encoding="latin-1")
+    probe = probe_dxf(path)
+    assert probe["readable"] is True
+    assert probe["entities_are_raster_only"] is True
+    assert probe["blank_length_mm"] is None
+
+    from source_drawing_data import build_tables
+    rows = build_tables({}, [path])["DXF file vs engine"]
+    assert rows and "raster image only" in rows[0]["in_the_file"]
+    assert "no geometry in this file" in rows[0]["note"]
+
+
+def test_the_probe_never_raises_on_rubbish(tmp_path: Path):
+    from dxf_probe import probe_dxf, probe_many
+    bad = tmp_path / "not.dxf"
+    bad.write_bytes(b"\x00\x01\x02 not a dxf at all")
+    assert probe_dxf(bad)["blank_length_mm"] is None
+    assert probe_dxf(tmp_path / "missing.dxf")["readable"] is False
+    assert len(probe_many([bad, tmp_path / "missing.dxf"])) == 2
+
+
+def test_the_run_opens_the_job_folders_dxfs_itself():
+    """Independence is the point: a reader cannot be checked against its own output."""
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert "dxf_paths=_sdd_dxfs" in source
+    assert '.dxf' in source
+
+
+def test_a_synthetic_flat_is_measured_the_same_way(tmp_path: Path):
+    """The corpus DXFs are not in the repo, so the assertions above skip on a fresh checkout.
+    This one builds a flat from scratch — a 100 x 50 rectangle, one Ø10 hole, one bend line —
+    so the measuring itself is covered wherever the suite runs."""
+    from dxf_probe import probe_dxf
+    parts = ["0", "SECTION", "2", "ENTITIES"]
+    for x1, y1, x2, y2 in ((0, 0, 100, 0), (100, 0, 100, 50),
+                           (100, 50, 0, 50), (0, 50, 0, 0)):
+        parts += ["0", "LINE", "8", "SLD-0",
+                  "10", str(x1), "20", str(y1), "11", str(x2), "21", str(y2)]
+    parts += ["0", "LINE", "8", "BENDLINES",
+              "10", "50", "20", "0", "11", "50", "21", "50"]
+    parts += ["0", "CIRCLE", "8", "SLD-0", "10", "25", "20", "25", "40", "5"]
+    parts += ["0", "ENDSEC", "0", "EOF"]
+    path = tmp_path / "synthetic_flat.dxf"
+    path.write_text("\n".join(parts) + "\n", encoding="latin-1")
+
+    probe = probe_dxf(path)
+    assert probe["looks_like_flat_export"] is True
+    assert probe["blank_length_mm"] == 100.0
+    assert probe["blank_width_mm"] == 50.0
+    assert probe["hole_diameters_mm"] == [10.0]
+    assert probe["bend_line_count"] == 1, "the bend line must not be counted as profile"
+    # perimeter 300 + the Ø10 circle
+    assert probe["cut_length_mm"] == pytest.approx(300 + 3.14159 * 10, abs=0.1)

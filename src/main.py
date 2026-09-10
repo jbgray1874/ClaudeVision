@@ -1211,8 +1211,20 @@ def main() -> None:
         # it on the way to the price. The last is the worst and the most fixable.
         try:
             from source_drawing_data import write_source_drawing_data
+            # The job's own DXFs, opened by the audit ITSELF rather than taken from the
+            # pipeline — that independence is the whole point: a reader cannot be checked
+            # against its own output. Every SDI pack tends to carry them, because the CNC
+            # machines need them; a pack without any simply produces no comparison rows.
+            _sdd_dxfs = []
+            try:
+                if job_folder is not None:
+                    _sdd_dxfs = [p for p in Path(job_folder).rglob("*")
+                                 if p.suffix.lower() == ".dxf"]
+            except Exception:
+                _sdd_dxfs = []
             _sdd = write_source_drawing_data(
-                summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""))
+                summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
+                dxf_paths=_sdd_dxfs)
             if _sdd:
                 print(f"   -> Source drawing data: {_sdd.resolve()}")
                 (summary.setdefault("saved_output_paths", {}))["source_drawing_data"] = str(_sdd)

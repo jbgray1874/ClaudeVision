@@ -29,7 +29,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-SHEETS = ("Files", "Facts", "BOM rows", "Operations", "Not extracted")
+SHEETS = ("Files", "DXF file vs engine", "Facts", "BOM rows", "Operations", "Not extracted")
 
 
 def _text(value: Any, limit: int = 300) -> str:
@@ -114,6 +114,117 @@ def files_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             rows.append({"file": base, "kind": Path(base).suffix.upper().lstrip(".") or "?",
                          "read": "NO", "pages_or_entities": "",
                          "yielded": _text(issue.get("message") or "not read")})
+    return rows
+
+
+def _match_part(summary: Mapping[str, Any], dxf_name: str) -> Optional[Mapping[str, Any]]:
+    """The part record this DXF belongs to, matched on the code in its filename."""
+    stem = Path(dxf_name).stem.upper().replace("_", "-")
+    best = None
+    for part in _parts(summary):
+        code = str(part.get("part_number") or "").strip().upper().replace("_", "-")
+        if code and code in stem:
+            if best is None or len(code) > len(str(best.get("part_number") or "")):
+                best = part
+    return best
+
+
+def dxf_comparison_rows(summary: Mapping[str, Any],
+                        dxf_paths: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
+    """AVAILABLE IN THE FILE -> EXTRACTED -> ASSIGNED TO A PART -> USED IN COSTING.
+
+    The other sheets can only report what the pipeline recorded, which makes them blind to
+    the failure that matters most: a fact that was in the file and never reached anything.
+    This one opens the DXFs itself and puts the file's own measurements beside the engine's,
+    so "the reader gets the blank" is something you check rather than believe.
+
+    A mismatch is NOT automatically an engine defect and the sheet does not call it one — a
+    drawing export's extent is its sheet border, and a part legitimately sized from a model
+    may differ from its flat. What the sheet guarantees is that the difference is visible.
+    """
+    try:
+        from dxf_probe import probe_dxf
+    except Exception:                                                    # noqa: BLE001
+        return []
+
+    paths: List[Any] = list(dxf_paths or [])
+    if not paths:
+        seen: set = set()
+        for part in _parts(summary):
+            for key in ("dxf_file", "dxf_path", "flat_pattern_file"):
+                value = part.get(key)
+                if value and str(value).lower() not in seen:
+                    seen.add(str(value).lower())
+                    paths.append(value)
+    if not paths:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for path in paths:
+        try:
+            probe = probe_dxf(path)
+        except Exception as err:                                         # noqa: BLE001
+            rows.append({"file": Path(str(path)).name, "in_the_file": "could not be read",
+                         "engine_has": "", "agrees": "",
+                         "note": f"{type(err).__name__}: {err}"})
+            continue
+        if not probe.get("readable"):
+            rows.append({"file": probe["file"], "in_the_file": "no entities found",
+                         "engine_has": "", "agrees": "",
+                         "note": "the file could not be parsed as a DXF"})
+            continue
+        if probe.get("entities_are_raster_only"):
+            rows.append({"file": probe["file"], "in_the_file": "a raster image only",
+                         "engine_has": "", "agrees": "n/a",
+                         "note": "there is no geometry in this file to extract — no API will "
+                                 "reveal what is not there. Ask for a vector export"})
+            continue
+
+        part = _match_part(summary, probe["file"])
+        pn = _text(part.get("part_number")) if part else ""
+        geometry = (part.get("geometry_rollup") or {}) if part else {}
+        features = (part.get("manufacturing_features") or {}) if part else {}
+
+        def _engine(*keys: str) -> Any:
+            for source in (part or {}, geometry, features):
+                for key in keys:
+                    value = (source or {}).get(key)
+                    if value not in (None, "", []):
+                        return value
+            return None
+
+        comparisons = [
+            ("blank length mm", probe.get("blank_length_mm"), _engine("blank_length_mm")),
+            ("blank width mm", probe.get("blank_width_mm"), _engine("blank_width_mm")),
+            ("hole count", probe.get("hole_count") or None,
+             _engine("hole_count", "estimated_hole_count")),
+            ("bend lines", probe.get("bend_line_count") or None,
+             _engine("bend_count", "bend_count_dxf", "estimated_bend_line_count",
+                     "fold_count")),
+            ("cut length mm", probe.get("cut_length_mm"),
+             _engine("cut_length_mm", "dxf_measured_cut_length", "estimated_cut_length_mm")),
+        ]
+        for label, available, extracted in comparisons:
+            if available is None and extracted in (None, "", []):
+                continue
+            agrees = ""
+            if available is not None and extracted not in (None, "", []):
+                a, b = _num(available), _num(extracted)
+                if a is not None and b is not None:
+                    agrees = "yes" if abs(a - b) <= max(0.5, abs(a) * 0.02) else "NO"
+            elif available is not None:
+                agrees = "NOT EXTRACTED"
+            rows.append({
+                "file": probe["file"],
+                "part": pn or "(no part matched to this file)",
+                "fact": label,
+                "in_the_file": available,
+                "engine_has": extracted,
+                "agrees": agrees,
+                "note": (probe.get("extent_is") if label.startswith("blank") else "")
+                        or ("" if probe.get("looks_like_flat_export")
+                            else "drawing export, not a flat"),
+            })
     return rows
 
 
@@ -216,9 +327,11 @@ def not_extracted_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def build_tables(summary: Mapping[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+def build_tables(summary: Mapping[str, Any],
+                 dxf_paths: Optional[Sequence[Any]] = None) -> Dict[str, List[Dict[str, Any]]]:
     return {
         "Files": files_rows(summary),
+        "DXF file vs engine": dxf_comparison_rows(summary, dxf_paths),
         "Facts": fact_rows(summary),
         "BOM rows": bom_rows(summary),
         "Operations": operation_rows(summary),
@@ -227,7 +340,8 @@ def build_tables(summary: Mapping[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
-                              job: str = "") -> Optional[Path]:
+                              job: str = "",
+                              dxf_paths: Optional[Sequence[Any]] = None) -> Optional[Path]:
     """Write source_drawing_data.xlsx into the estimating folder. Returns the path.
 
     Never raises into the run: an audit that breaks the job it audits is worse than no audit.
@@ -237,7 +351,7 @@ def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
         from openpyxl.styles import Font
     except Exception:                                                    # noqa: BLE001
         return None
-    tables = build_tables(summary)
+    tables = build_tables(summary, dxf_paths)
     book = Workbook()
     book.remove(book.active)
     for name in SHEETS:
