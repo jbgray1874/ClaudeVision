@@ -1,24 +1,36 @@
-"""What a DXF actually holds, read from the file itself, independently of any reader.
+"""What a DXF holds, read with ezdxf, reported as an inventory rather than an interpretation.
 
-THE AUDIT NEEDS A SOURCE OF TRUTH THAT IS NOT THE PIPELINE. source_drawing_data reports what
-the summary holds, so it can only ever show what we already extract — and the question worth
-answering is the opposite one: what is in the file that never reached a part?
+WHY THIS IS NOT A HANDWRITTEN PARSER ANY MORE. The first version of this module counted
+group codes by hand, and review found four generic cases where it was simply wrong:
 
-    available in the file  ->  extracted  ->  assigned to the right part  ->  used in costing
+    a closed 10x10 polyline          perimeter 30 mm, not 40 — the closing segment was missed
+    an arc, radius 10, 0 to 90 deg   extents 20 x 20, not 10 x 10 — it used the whole circle
+    a Ø24 disc                       reported as "1 hole" — it is an outline, not a hole
+    an image plus an inserted block  reported raster-only without looking inside the block
 
-Only the first of those can be established from outside, by opening the file and counting.
-That is all this module does. It measures nothing the engine measures and prices nothing; it
-exists so a claim like "the reader gets the blank" can be checked rather than believed.
+None of those is an unusual drawing; they are ordinary geometry. An audit that reports an
+engine defect when the probe itself is wrong is worse than no audit, because it sends people
+to fix things that are not broken. ezdxf is already a dependency of this codebase
+(drawing_job_merge, dxf_reader) and handles all four correctly, so independence from the
+production pipeline is achieved by not sharing its CODE — not by writing a second, worse
+parser. Curve maths (bulges, splines, ellipses, arcs) is ezdxf's; this module only sums
+straight segments between the vertices it returns.
 
-Deliberately dependency-free, and deliberately not ezdxf: a DXF is a flat sequence of
-group-code/value pairs and the handful of entities that matter here — LINE, CIRCLE, ARC,
-LWPOLYLINE, MTEXT, DIMENSION, IMAGE — need no library to count. A probe that cannot run
-because an import is missing tells you nothing on the machine where it matters.
+AND IT NOW REPORTS AN INVENTORY, NOT A ROUTE. "circles: 2" is a fact about the file. "holes:
+2" is a manufacturing interpretation, and a Ø24 disc proves it wrong — its outline is a
+circle and it has no hole at all. Deciding which circles are holes needs the part's role,
+its material and the drawing's instructions, which is the estimator's job and not this
+module's. The same restraint applies to bend LINES on a bend layer: a count of lines is not
+a count of bends.
 
-AND IT DISTINGUISHES THE CASE THAT LOOKS THE SAME FROM OUTSIDE. A DXF can legitimately hold
-nothing but a raster image; loading that through any API will not reveal geometry that is not
-there. `entities_are_raster_only` says which of those two you have, so "the reader found no
-geometry" can be separated from "there is no geometry to find".
+UNITS ARE READ, NOT ASSUMED. $INSUNITS is decoded from the header; where it says inches the
+measurements are converted and the conversion is stated, and where the file declares nothing
+the numbers are published as unitless with `units_known` False. Labelling an inch drawing
+"mm" produced comparisons that looked like defects and were arithmetic.
+
+Anything ezdxf cannot measure is NAMED in `unsupported`, and any total computed while
+something was skipped is marked `partial`. A partial sum published as a whole is how a
+diagnostic becomes a liability.
 """
 from __future__ import annotations
 
@@ -27,195 +39,219 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# The layer SolidWorks writes fold lines to on an SDI flat export. Named, not guessed: all
-# three flats in the corpus carry exactly SLD-0 (profile) and BENDLINES (folds).
+# Layers SolidWorks writes fold lines to on an SDI flat export. Named, not guessed: every
+# flat in the corpus carries exactly SLD-0 (profile) and BENDLINES (folds).
 BEND_LAYERS = ("BENDLINES", "BEND", "BEND LINES", "BEND_LINES")
 
-_PROFILE_ENTITIES = ("LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE")
+# Entities whose length and extents ezdxf can give us through a Path.
+_MEASURABLE = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE"}
+
+_MM_PER_INCH = 25.4
 
 
-def _entities(path: Any) -> List[Dict[str, List[str]]]:
-    """Every entity in the ENTITIES section as {group_code: [values]}, plus its type."""
+def _unit_scale(doc: Any) -> tuple:
+    """(scale to mm, unit name, is it known). Read from $INSUNITS, never assumed."""
     try:
-        text = Path(path).read_bytes().decode("latin-1", errors="replace")
-    except OSError:
-        return []
-    lines = text.splitlines()
-    out: List[Dict[str, Any]] = []
-    current: Optional[Dict[str, Any]] = None
-    inside = False
-    index = 0
-    while index < len(lines) - 1:
-        code, value = lines[index].strip(), lines[index + 1].strip()
-        if code == "2" and value == "ENTITIES":
-            inside = True
-        elif code == "2" and value in ("OBJECTS", "BLOCKS"):
-            inside = False
-        elif inside and code == "0":
-            if current:
-                out.append(current)
-            current = {"type": value}
-        elif inside and current is not None:
-            current.setdefault(code, []).append(value)
-        index += 2
-    if current:
-        out.append(current)
+        from ezdxf import units as _u
+        code = doc.header.get("$INSUNITS", 0)
+    except Exception:                                                    # noqa: BLE001
+        return 1.0, "unstated", False
+    if not code:
+        # 0 means "unitless". A drawing that declares nothing is not thereby millimetres.
+        return 1.0, "unstated", False
+    try:
+        name = str(_u.decode(code))
+    except Exception:                                                    # noqa: BLE001
+        name = f"code {code}"
+    scale = {"mm": 1.0, "cm": 10.0, "m": 1000.0,
+             "in": _MM_PER_INCH, "ft": _MM_PER_INCH * 12.0}.get(name)
+    if scale is None:
+        return 1.0, name, False
+    return scale, name, True
+
+
+def _flat_entities(layout: Any) -> List[Any]:
+    """Every entity, with block references resolved so geometry inside a block is counted.
+
+    An INSERT is a reference, not geometry — a file whose only visible content is a block
+    containing the whole profile would otherwise look empty, and one holding an image next to
+    an inserted block looked raster-only. ezdxf explodes them virtually, so nothing is
+    modified on disk.
+    """
+    out: List[Any] = []
+    for entity in layout:
+        if entity.dxftype() == "INSERT":
+            try:
+                out.extend(entity.virtual_entities())
+                continue
+            except Exception:                                            # noqa: BLE001
+                pass
+        out.append(entity)
     return out
 
 
-def _f(entity: Dict[str, Any], code: str, index: int = 0) -> Optional[float]:
+def _path_length(entity: Any, sagitta: float = 0.01) -> Optional[float]:
+    """Length via ezdxf's own flattening, so bulges and curves are ITS arithmetic not ours."""
     try:
-        return float(entity[code][index])
-    except (KeyError, IndexError, TypeError, ValueError):
+        from ezdxf import path as _path
+        points = list(_path.make_path(entity).flattening(distance=sagitta))
+    except Exception:                                                    # noqa: BLE001
         return None
+    if len(points) < 2:
+        return None
+    return sum(math.dist(points[i], points[i + 1]) for i in range(len(points) - 1))
 
 
-def probe_dxf(path: Any) -> Dict[str, Any]:
-    """Measure a DXF from its own entities. Returns facts, never opinions.
-
-    Lengths are in the file's own units, which for every SDI export in the corpus is
-    millimetres — the probe does not convert, because a unit it had to guess would be worse
-    than one it reports plainly.
-    """
-    name = Path(str(path)).name
+def probe_dxf(path_like: Any) -> Dict[str, Any]:
+    """An inventory of what the file contains. Facts, with their limits stated."""
+    name = Path(str(path_like)).name
     result: Dict[str, Any] = {
-        "file": name, "readable": False, "entity_counts": {}, "layers": [],
+        "file": name, "readable": False, "reader": "ezdxf",
+        "entity_counts": {}, "layers": [], "unsupported": [],
+        "units": "unstated", "units_known": False,
         "entities_are_raster_only": False,
+        "extent_length": None, "extent_width": None,
+        "extent_is": "", "looks_like_flat_export": False,
         "blank_length_mm": None, "blank_width_mm": None,
-        "extent_length_mm": None, "extent_width_mm": None,
-        "looks_like_flat_export": False, "extent_is": "",
-        "hole_diameters_mm": [], "hole_count": 0,
-        "bend_line_count": 0, "text_values": [], "dimension_entities": 0,
-        "cut_length_mm": None,
+        "circle_diameters": [], "circle_count": 0,
+        "bend_layer_line_count": 0,
+        "outline_length": None, "outline_length_partial": False,
+        "text_values": [], "dimension_entities": 0,
+        "error": "",
     }
-    entities = _entities(path)
-    if not entities:
+    try:
+        import ezdxf
+        import ezdxf.bbox
+    except Exception as err:                                             # noqa: BLE001
+        result["error"] = f"ezdxf unavailable: {err}"
         return result
-    result["readable"] = True
+    try:
+        doc = ezdxf.readfile(str(path_like))
+    except Exception as err:                                             # noqa: BLE001
+        result["error"] = f"{type(err).__name__}: {err}"
+        return result
 
+    result["readable"] = True
+    scale, unit_name, unit_known = _unit_scale(doc)
+    result["units"] = unit_name
+    result["units_known"] = unit_known
+
+    msp = doc.modelspace()
+    entities = _flat_entities(msp)
     counts: collections.Counter = collections.Counter()
     layers: set = set()
-    xs: List[float] = []
-    ys: List[float] = []
-    holes: List[float] = []
-    bends = 0
     texts: List[str] = []
-    cut = 0.0
+    circles: List[float] = []
+    bend_lines = 0
+    profile: List[Any] = []
+    unsupported: collections.Counter = collections.Counter()
+    length_total = 0.0
+    length_partial = False
 
     for entity in entities:
-        kind = str(entity.get("type") or "")
-        if kind in ("SECTION", "ENDSEC", "ENDBLK", "SEQEND"):
-            continue
+        kind = entity.dxftype()
         counts[kind] += 1
-        layer = (entity.get("8") or [""])[0]
+        try:
+            layer = str(entity.dxf.layer)
+        except Exception:                                                # noqa: BLE001
+            layer = ""
         if layer:
             layers.add(layer)
         on_bend_layer = layer.strip().upper().replace("-", " ") in BEND_LAYERS
 
-        if kind == "LINE":
-            x1, y1, x2, y2 = (_f(entity, "10"), _f(entity, "20"),
-                              _f(entity, "11"), _f(entity, "21"))
-            if None not in (x1, y1, x2, y2):
-                if on_bend_layer:
-                    bends += 1
-                else:
-                    xs.extend([x1, x2])
-                    ys.extend([y1, y2])
-                    cut += math.dist((x1, y1), (x2, y2))
-        elif kind == "CIRCLE":
-            x, y, r = _f(entity, "10"), _f(entity, "20"), _f(entity, "40")
-            if None not in (x, y, r) and r > 0:
-                holes.append(round(2 * r, 3))
-                xs.extend([x - r, x + r])
-                ys.extend([y - r, y + r])
-                cut += 2 * math.pi * r
-        elif kind == "ARC":
-            x, y, r = _f(entity, "10"), _f(entity, "20"), _f(entity, "40")
-            start, end = _f(entity, "50"), _f(entity, "51")
-            if None not in (x, y, r) and r > 0:
-                xs.extend([x - r, x + r])
-                ys.extend([y - r, y + r])
-                if None not in (start, end):
-                    sweep = (end - start) % 360.0
-                    cut += 2 * math.pi * r * (sweep / 360.0)
-        elif kind in ("LWPOLYLINE", "POLYLINE"):
-            px = [v for v in (entity.get("10") or [])]
-            py = [v for v in (entity.get("20") or [])]
-            pts = []
-            for a, b in zip(px, py):
-                try:
-                    pts.append((float(a), float(b)))
-                except (TypeError, ValueError):
-                    continue
-            if pts:
-                if on_bend_layer:
-                    bends += 1
-                else:
-                    xs.extend(p[0] for p in pts)
-                    ys.extend(p[1] for p in pts)
-                    cut += sum(math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
-        elif kind in ("TEXT", "MTEXT"):
-            for value in (entity.get("1") or []):
-                cleaned = str(value).strip()
-                if cleaned and not cleaned.startswith("{"):
-                    texts.append(cleaned)
+        if kind in ("TEXT", "MTEXT", "ATTRIB"):
+            try:
+                value = entity.plain_text() if hasattr(entity, "plain_text") \
+                    else str(entity.dxf.text)
+            except Exception:                                            # noqa: BLE001
+                value = ""
+            value = str(value).strip()
+            if value:
+                texts.append(value)
+            continue
+        if kind == "DIMENSION":
+            continue
+        if kind not in _MEASURABLE:
+            if kind not in ("VIEWPORT", "ATTDEF"):
+                unsupported[kind] += 1
+            continue
+
+        if on_bend_layer:
+            bend_lines += 1
+            continue
+
+        if kind == "CIRCLE":
+            try:
+                circles.append(round(float(entity.dxf.radius) * 2 * scale, 3))
+            except Exception:                                            # noqa: BLE001
+                pass
+        profile.append(entity)
+        segment = _path_length(entity)
+        if segment is None:
+            length_partial = True
+            unsupported[f"{kind} (length)"] += 1
+        else:
+            length_total += segment * scale
 
     result["entity_counts"] = dict(counts.most_common())
     result["layers"] = sorted(layers)
     result["dimension_entities"] = counts.get("DIMENSION", 0)
-    result["bend_line_count"] = bends
-    result["hole_diameters_mm"] = sorted(set(holes))
-    result["hole_count"] = len(holes)
+    result["bend_layer_line_count"] = bend_lines
+    result["circle_diameters"] = sorted(set(circles))
+    result["circle_count"] = len(circles)
     result["text_values"] = texts[:40]
-    # RASTER-ONLY IS A REAL CASE AND MUST NOT READ AS "the reader failed". No profile
-    # geometry plus an image entity means there is nothing to extract, and no API will
-    # reveal geometry a file does not contain.
-    profile = sum(counts.get(k, 0) for k in _PROFILE_ENTITIES)
-    result["entities_are_raster_only"] = bool(
-        (counts.get("IMAGE") or counts.get("IMAGEDEF")) and profile == 0)
-    # A FLAT EXPORT AND A DRAWING ARE DIFFERENT FILES WEARING THE SAME EXTENSION, AND THE
-    # BOUNDING BOX MEANS DIFFERENT THINGS IN EACH.
-    #
-    # On a flat, the extent of the profile IS the blank: SDI's 117620202M measures
-    # 1009.49 x 363.91 and that is what gets nested. On a GA export the same calculation
-    # returns the SHEET — 10975_REV_B comes out 1680.00 x 1074.49, which is the drawing
-    # border and no part at all. An earlier attempt of mine to recover part sizes from vector
-    # geometry failed for exactly this reason: it measured the frame on every page and
-    # returned one identical aspect ratio for six different parts.
-    #
-    # The tell is what a flat DOES NOT have. A SolidWorks flat export carries geometry and a
-    # BENDLINES layer and nothing else — no dimension entities, no title-block text, no
-    # leaders. So the blank is only reported where the file looks like a flat, and a drawing
-    # reports its extent as a sheet size under its own name.
-    looks_like_flat = (
-        result["dimension_entities"] == 0
-        and not texts
-        and counts.get("LEADER", 0) == 0
-        and counts.get("INSERT", 0) == 0
-        and profile > 0)
-    result["looks_like_flat_export"] = looks_like_flat
-    if xs and ys:
-        extent_l = round(max(xs) - min(xs), 2)
-        extent_w = round(max(ys) - min(ys), 2)
-        result["extent_length_mm"] = extent_l
-        result["extent_width_mm"] = extent_w
-        if looks_like_flat:
-            result["blank_length_mm"] = extent_l
-            result["blank_width_mm"] = extent_w
+    result["unsupported"] = [f"{k} x{v}" for k, v in unsupported.most_common()]
+
+    # RASTER-ONLY, DECIDED AFTER BLOCKS ARE RESOLVED. A file holding an image beside an
+    # inserted block full of geometry is not an image-only file, and saying so sent the fix
+    # in the wrong direction entirely.
+    has_image = bool(counts.get("IMAGE") or counts.get("IMAGEDEF"))
+    result["entities_are_raster_only"] = bool(has_image and not profile and not bend_lines)
+
+    if length_total > 0:
+        result["outline_length"] = round(length_total, 2)
+        result["outline_length_partial"] = length_partial
+
+    # EXTENTS FROM ezdxf, which knows an arc covers only its own sweep. The handwritten
+    # version used the full circle's bounds and made a quarter-arc 20 x 20 instead of 10 x 10.
+    try:
+        box = ezdxf.bbox.extents(profile or entities, fast=False)
+        if box.has_data:
+            result["extent_length"] = round(box.size.x * scale, 2)
+            result["extent_width"] = round(box.size.y * scale, 2)
+    except Exception:                                                    # noqa: BLE001
+        pass
+
+    # A FLAT AND A DRAWING WEAR THE SAME EXTENSION AND THEIR EXTENTS MEAN DIFFERENT THINGS.
+    # On a flat the profile extent IS the blank; on a GA it is the sheet border (10975's is
+    # 1680 x 1074, which is no part). The test is deliberately weak-but-stated: no dimension
+    # entities, no leaders, no title-block text. Absence of text does not PROVE a flat and a
+    # real flat may carry an identification mark, so this is reported as a judgement, and the
+    # blank is only offered where it holds.
+    looks_flat = (result["dimension_entities"] == 0
+                  and not texts
+                  and counts.get("LEADER", 0) == 0
+                  and bool(profile))
+    result["looks_like_flat_export"] = looks_flat
+    if result["extent_length"] is not None:
+        if looks_flat and unit_known:
+            result["blank_length_mm"] = result["extent_length"]
+            result["blank_width_mm"] = result["extent_width"]
+        elif looks_flat and not unit_known:
+            result["extent_is"] = ("the file declares no units ($INSUNITS unset), so this "
+                                   "extent is unitless and is NOT published as a blank")
         else:
             result["extent_is"] = ("the drawing sheet or border, NOT a part — this file has "
-                                   "dimensions/text/leaders, so it is a drawing export")
-    if cut > 0:
-        result["cut_length_mm"] = round(cut, 2)
+                                   "dimensions, leaders or title-block text")
     return result
 
 
 def probe_many(paths: Any) -> List[Dict[str, Any]]:
     out = []
-    for path in (paths or []):
+    for item in (paths or []):
         try:
-            out.append(probe_dxf(path))
+            out.append(probe_dxf(item))
         except Exception as err:                                         # noqa: BLE001
-            out.append({"file": Path(str(path)).name, "readable": False,
+            out.append({"file": Path(str(item)).name, "readable": False,
                         "error": f"{type(err).__name__}: {err}"})
     return out

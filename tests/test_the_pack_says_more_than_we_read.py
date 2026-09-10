@@ -145,147 +145,177 @@ def test_the_run_writes_it_beside_the_estimate():
     assert "source_drawing_data" in source
 
 
-# ── the file itself, opened independently of the reader ───────────────────────────────
+# ── the file itself, read with ezdxf, independently of the production readers ──────────
+#
+# The first version of the probe counted group codes by hand and review found four generic
+# cases where it was simply wrong. An audit that reports an engine defect when the PROBE is
+# wrong is worse than no audit: it sends people to fix things that are not broken. Each of
+# those four is a test here, with the wrong answer recorded beside the right one.
 
-UPLOADS = Path("/root/.claude/uploads/09b98f42-bd9e-534a-8993-f8eb3975326c")
-FLAT = UPLOADS / "f124e9e8-117620202M_0.9mm_MS_revA.DXF"
-GA = UPLOADS / "77e80e31-0355255__A4_Table_Top_Graphic_Holder__10975_REV_B.DXF"
-real_dxf = pytest.mark.skipif(not FLAT.exists(), reason="corpus DXF not present here")
+import ezdxf                                                             # noqa: E402
+from dxf_probe import probe_dxf                                          # noqa: E402
 
-
-@real_dxf
-def test_a_flat_export_measures_its_own_blank_holes_and_bends():
-    """SDI's own 117620202M, measured from its entities. None of these is a printed
-    dimension: a circle carries its centre and radius, so the circle IS its diameter."""
-    from dxf_probe import probe_dxf
-    probe = probe_dxf(FLAT)
-    assert probe["readable"] and probe["looks_like_flat_export"]
-    assert probe["blank_length_mm"] == pytest.approx(1009.49, abs=0.05)
-    assert probe["blank_width_mm"] == pytest.approx(363.91, abs=0.05)
-    assert probe["hole_diameters_mm"] == [5.0]
-    assert probe["hole_count"] == 2
-    assert probe["bend_line_count"] == 5
-    assert "BENDLINES" in probe["layers"]
-    assert probe["entities_are_raster_only"] is False
+MM, INCH, UNITLESS = 4, 1, 0
 
 
-@real_dxf
-def test_a_drawing_export_reports_a_sheet_extent_not_a_blank():
-    """THE TRAP THAT BEAT AN EARLIER ATTEMPT OF MINE. Measuring vector extents on a GA
-    returns the drawing BORDER — 10975_REV_B comes out 1680.00 x 1074.49, which is no part
-    at all. A previous prototype of mine failed exactly here: it measured the frame on every
-    page and returned one identical aspect ratio for six different parts.
-
-    The tell is what a flat does NOT have: no dimension entities, no title-block text, no
-    leaders or block inserts.
-    """
-    from dxf_probe import probe_dxf
-    probe = probe_dxf(GA)
-    assert probe["looks_like_flat_export"] is False
-    assert probe["blank_length_mm"] is None, "a drawing must not offer a blank"
-    assert probe["extent_length_mm"] == pytest.approx(1680.0, abs=0.05)
-    assert "drawing export" in probe["extent_is"]
-    assert probe["dimension_entities"] == 20
+def _dxf(tmp_path: Path, name: str, build, insunits: int = MM) -> Path:
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = insunits
+    build(doc.modelspace())
+    path = tmp_path / name
+    doc.saveas(path)
+    return path
 
 
-@real_dxf
-def test_the_audit_puts_the_file_beside_the_engine_and_names_what_is_missing():
-    """available in the file -> extracted -> assigned to a part -> used in costing.
-
-    The other sheets can only report what the pipeline recorded, which blinds them to the
-    failure that matters most: a fact that was in the file and reached nothing.
-    """
-    from source_drawing_data import build_tables
-    summary = {"estimate_summary": {"part_estimates": [{
-        "part_number": "117620202M",
-        "blank_length_mm": 1009.49, "blank_width_mm": 363.91,
-        "geometry_rollup": {"hole_count": 2},
-    }]}}
-    rows = build_tables(summary, [FLAT])["DXF file vs engine"]
-    by_fact = {r["fact"]: r for r in rows}
-
-    assert by_fact["blank length mm"]["agrees"] == "yes"
-    assert by_fact["hole count"]["agrees"] == "yes"
-    assert by_fact["blank length mm"]["part"] == "117620202M", "matched to its own part"
-
-    # measurable in the file, nothing on the record — the row the audit exists to produce
-    assert by_fact["cut length mm"]["agrees"] == "NOT EXTRACTED"
-    assert by_fact["cut length mm"]["in_the_file"] > 0
+def test_a_closed_polyline_includes_its_closing_segment(tmp_path: Path):
+    """A 10 x 10 closed square is 40 mm round, not 30. The handwritten version walked the
+    vertices and never joined the last back to the first."""
+    path = _dxf(tmp_path, "square.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (10, 0), (10, 10), (0, 10)], close=True))
+    assert probe_dxf(path)["outline_length"] == pytest.approx(40.0, abs=0.01)
 
 
-@real_dxf
-def test_a_disagreement_is_shown_rather_than_judged():
-    """A mismatch is not automatically an engine defect — a part legitimately sized from a
-    model can differ from its flat. The audit guarantees the difference is VISIBLE; it does
-    not decide who is right."""
-    from source_drawing_data import build_tables
-    summary = {"estimate_summary": {"part_estimates": [{
-        "part_number": "117620202M",
-        "manufacturing_features": {"bend_count": 4},      # file says 5 bend lines
-    }]}}
-    rows = {r["fact"]: r for r in build_tables(summary, [FLAT])["DXF file vs engine"]}
-    assert rows["bend lines"]["in_the_file"] == 5
-    assert rows["bend lines"]["engine_has"] == 4
-    assert rows["bend lines"]["agrees"] == "NO"
-
-
-def test_a_raster_only_dxf_is_not_reported_as_a_reader_failure(tmp_path: Path):
-    """A DXF can legitimately hold nothing but an image, and no API will reveal geometry
-    that is not there. "We could not read it" and "there is nothing to read" must not look
-    the same, or the fix gets aimed at the wrong thing."""
-    from dxf_probe import probe_dxf
-    path = tmp_path / "scan.dxf"
-    path.write_text("0\nSECTION\n2\nENTITIES\n0\nIMAGE\n8\n0\n0\nENDSEC\n0\nEOF\n",
-                    encoding="latin-1")
+def test_an_arc_covers_its_own_sweep_not_the_whole_circle(tmp_path: Path):
+    """A radius-10 arc from 0 to 90 degrees spans 10 x 10. The handwritten version used the
+    full circle's bounds and made it 20 x 20 — doubling a blank in both directions."""
+    path = _dxf(tmp_path, "arc.dxf", lambda m: m.add_arc((0, 0), 10, 0, 90))
     probe = probe_dxf(path)
-    assert probe["readable"] is True
-    assert probe["entities_are_raster_only"] is True
+    assert probe["extent_length"] == pytest.approx(10.0, abs=0.01)
+    assert probe["extent_width"] == pytest.approx(10.0, abs=0.01)
+
+
+def test_a_circle_is_reported_as_a_circle_and_never_as_a_hole(tmp_path: Path):
+    """A Ø24 disc has ONE circular outline and NO hole. Calling every circle a hole is a
+    manufacturing interpretation, and on a disc it is simply false. Which circles are holes
+    needs the part's role and the drawing's instructions — the estimator's job, not this."""
+    path = _dxf(tmp_path, "disc.dxf", lambda m: m.add_circle((0, 0), 12))
+    probe = probe_dxf(path)
+    assert probe["circle_count"] == 1
+    assert probe["circle_diameters"] == [24.0]
+    assert "hole_count" not in probe, "the probe must not publish an interpretation"
+
+
+def test_geometry_inside_an_inserted_block_is_seen(tmp_path: Path):
+    """A file whose profile lives in a block looked EMPTY, and one holding an image beside
+    such a block was called raster-only — sending the fix in exactly the wrong direction."""
+    def build(msp):
+        block = msp.doc.blocks.new("PROFILE")
+        block.add_lwpolyline([(0, 0), (50, 0), (50, 30), (0, 30)], close=True)
+        msp.add_blockref("PROFILE", (0, 0))
+    probe = probe_dxf(_dxf(tmp_path, "block.dxf", build))
+    assert probe["entities_are_raster_only"] is False
+    assert probe["extent_length"] == pytest.approx(50.0, abs=0.01)
+    assert probe["extent_width"] == pytest.approx(30.0, abs=0.01)
+
+
+def test_an_inch_drawing_is_converted_and_says_so(tmp_path: Path):
+    """The probe labelled everything mm without reading $INSUNITS, so an inch drawing
+    produced comparisons that looked like defects and were arithmetic. 10 in is 254 mm."""
+    path = _dxf(tmp_path, "inch.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True),
+                insunits=INCH)
+    probe = probe_dxf(path)
+    assert probe["units"] == "in" and probe["units_known"] is True
+    assert probe["blank_length_mm"] == pytest.approx(254.0, abs=0.01)
+    assert probe["blank_width_mm"] == pytest.approx(127.0, abs=0.01)
+
+
+def test_a_file_that_declares_no_units_publishes_no_blank(tmp_path: Path):
+    """A drawing that states nothing is not thereby millimetres."""
+    path = _dxf(tmp_path, "unitless.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (10, 0), (10, 5), (0, 5)], close=True),
+                insunits=UNITLESS)
+    probe = probe_dxf(path)
+    assert probe["units_known"] is False
+    assert probe["blank_length_mm"] is None
+    assert "declares no units" in probe["extent_is"]
+
+
+def test_a_bulged_polyline_is_measured_along_its_curve(tmp_path: Path):
+    """The curve maths is ezdxf's. A bulge between two points 10 apart is longer than 10, and
+    a straight-line sum would quietly under-report every rolled edge in the corpus."""
+    path = _dxf(tmp_path, "bulge.dxf",
+                lambda m: m.add_lwpolyline([(0, 0, 0.5), (10, 0, 0)], format="xyb"))
+    probe = probe_dxf(path)
+    assert probe["outline_length"] > 10.0
+    assert probe["outline_length_partial"] is False
+
+
+def test_duplicate_geometry_is_counted_twice_and_not_silently_merged(tmp_path: Path):
+    """Two identical circles are two entities. The probe reports what is there; deciding that
+    a duplicate is a drafting error is not its call."""
+    def build(msp):
+        msp.add_circle((0, 0), 5)
+        msp.add_circle((0, 0), 5)
+    assert probe_dxf(_dxf(tmp_path, "dupe.dxf", build))["circle_count"] == 2
+
+
+def test_a_genuinely_raster_only_file_is_still_identified(tmp_path: Path):
+    """The case that must survive the block fix: no geometry anywhere, only an image."""
+    from dxf_probe import probe_dxf as probe
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = MM
+    msp = doc.modelspace()
+    image_def = doc.add_image_def(filename="scan.png", size_in_pixel=(100, 100))
+    msp.add_image(image_def=image_def, insert=(0, 0), size_in_units=(10, 10))
+    path = tmp_path / "raster.dxf"
+    doc.saveas(path)
+    result = probe(path)
+    assert result["entities_are_raster_only"] is True
+    assert result["blank_length_mm"] is None
+
+
+def test_an_unreadable_file_reports_its_error_rather_than_a_measurement(tmp_path: Path):
+    bad = tmp_path / "not.dxf"
+    bad.write_bytes(b"\x00\x01\x02 not a dxf")
+    probe = probe_dxf(bad)
+    assert probe["readable"] is False and probe["error"]
     assert probe["blank_length_mm"] is None
 
+
+# ── what the audit is allowed to claim ────────────────────────────────────────────────
+
+def test_a_circle_count_is_never_scored_against_a_hole_count(tmp_path: Path):
+    """An audit that manufactures disagreements is noise. A circle is not a hole and a line
+    on a bend layer is not a bend, so both are shown side by side and marked NOT COMPARABLE
+    rather than being called a mismatch."""
     from source_drawing_data import build_tables
-    rows = build_tables({}, [path])["DXF file vs engine"]
-    assert rows and "raster image only" in rows[0]["in_the_file"]
-    assert "no geometry in this file" in rows[0]["note"]
+    path = _dxf(tmp_path, "117620202M.dxf", lambda m: (
+        m.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True),
+        m.add_circle((20, 20), 2.5)))
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "117620202M", "geometry_rollup": {"hole_count": 1},
+         "manufacturing_features": {"bend_count": 3}}]}}
+    rows = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
+    assert rows["circles in the file"]["agrees"] == "NOT COMPARABLE"
+    assert "not necessarily a hole" in rows["circles in the file"]["note"]
 
 
-def test_the_probe_never_raises_on_rubbish(tmp_path: Path):
-    from dxf_probe import probe_dxf, probe_many
-    bad = tmp_path / "not.dxf"
-    bad.write_bytes(b"\x00\x01\x02 not a dxf at all")
-    assert probe_dxf(bad)["blank_length_mm"] is None
-    assert probe_dxf(tmp_path / "missing.dxf")["readable"] is False
-    assert len(probe_many([bad, tmp_path / "missing.dxf"])) == 2
+def test_a_missing_field_is_not_claimed_as_never_extracted(tmp_path: Path):
+    """This audit inspects a handful of fields. Their absence is NOT proof the engine never
+    read or used the value, and the earlier wording said exactly that."""
+    from source_drawing_data import build_tables
+    path = _dxf(tmp_path, "117620202M.dxf",
+                lambda m: m.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True))
+    summary = {"estimate_summary": {"part_estimates": [{"part_number": "117620202M"}]}}
+    rows = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
+    assert rows["outline length"]["agrees"] == "not in the fields checked"
 
 
-def test_the_run_opens_the_job_folders_dxfs_itself():
-    """Independence is the point: a reader cannot be checked against its own output."""
-    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
-    assert "dxf_paths=_sdd_dxfs" in source
-    assert '.dxf' in source
+def test_an_ambiguous_file_to_part_match_is_reported_not_resolved(tmp_path: Path):
+    """Attribution IS the audit. A fact credited to the wrong part is worse than one nobody
+    credited, because it reads as evidence — so two candidates are declared, not ranked."""
+    from source_drawing_data import _match_part
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "1176202"}, {"part_number": "117620202M"}]}}
+    part, how, ambiguous = _match_part(summary, "117620202M_0.9mm_MS_revA.DXF")
+    assert ambiguous is True and part is None and "ambiguous" in how
 
 
-def test_a_synthetic_flat_is_measured_the_same_way(tmp_path: Path):
-    """The corpus DXFs are not in the repo, so the assertions above skip on a fresh checkout.
-    This one builds a flat from scratch — a 100 x 50 rectangle, one Ø10 hole, one bend line —
-    so the measuring itself is covered wherever the suite runs."""
-    from dxf_probe import probe_dxf
-    parts = ["0", "SECTION", "2", "ENTITIES"]
-    for x1, y1, x2, y2 in ((0, 0, 100, 0), (100, 0, 100, 50),
-                           (100, 50, 0, 50), (0, 50, 0, 0)):
-        parts += ["0", "LINE", "8", "SLD-0",
-                  "10", str(x1), "20", str(y1), "11", str(x2), "21", str(y2)]
-    parts += ["0", "LINE", "8", "BENDLINES",
-              "10", "50", "20", "0", "11", "50", "21", "50"]
-    parts += ["0", "CIRCLE", "8", "SLD-0", "10", "25", "20", "25", "40", "5"]
-    parts += ["0", "ENDSEC", "0", "EOF"]
-    path = tmp_path / "synthetic_flat.dxf"
-    path.write_text("\n".join(parts) + "\n", encoding="latin-1")
-
-    probe = probe_dxf(path)
-    assert probe["looks_like_flat_export"] is True
-    assert probe["blank_length_mm"] == 100.0
-    assert probe["blank_width_mm"] == 50.0
-    assert probe["hole_diameters_mm"] == [10.0]
-    assert probe["bend_line_count"] == 1, "the bend line must not be counted as profile"
-    # perimeter 300 + the Ø10 circle
-    assert probe["cut_length_mm"] == pytest.approx(300 + 3.14159 * 10, abs=0.1)
+def test_the_pipelines_own_association_is_preferred_over_the_filename(tmp_path: Path):
+    from source_drawing_data import _match_part
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "OTHER", "dxf_file": "C:/jobs/117620202M_0.9mm_MS_revA.DXF"}]}}
+    part, how, ambiguous = _match_part(summary, "117620202M_0.9mm_MS_revA.DXF")
+    assert part["part_number"] == "OTHER"
+    assert "pipeline's own" in how and ambiguous is False
