@@ -227,6 +227,52 @@ def test_a_blank_the_weight_disproves_is_rescaled_to_what_the_weight_implies():
     assert any("rescaled" in str(f) for f in part.get("review_flags", []))
 
 
+def test_a_blank_that_was_read_off_the_drawing_is_never_rescaled_by_a_weight():
+    """MBY439, AND THE REASON THIS RULE HAS A FENCE AROUND IT.
+
+    A weight is a proxy for AREA only if the part is solid, and a real blank often is not.
+    0359342's MBY439 mirror plate is printed on its detail sheet as 1578 x 188 x 2 with an
+    Est. Mass of 0.82 kg — against the 4.66 kg that rectangle would weigh solid, because 82%
+    of it is aperture. Rescaling by that ratio would shrink a frame somebody actually read
+    off the drawing to roughly 660 x 79 and buy the wrong stock.
+
+    So the rescale is confined to a FALLBACK ENVELOPE, where there is no reading to damage.
+    A blank without geometry_inferred_provisional is costed by its weight and LEFT AS READ,
+    with the disagreement named so the estimator rules on what the weight describes.
+    """
+    part = {
+        "part_number": "MBY439", "description": "Edition Sunglasses Mirror Plate",
+        "normalized_material": "Steel,Mild2mm", "material": "Steel,Mild2mm",
+        "normalized_thickness_mm": 2.0, "stated_weight_kg": 0.82, "quantity": 2,
+        "blank_length_mm": 1578.0, "blank_width_mm": 188.0,
+        "review_flags": [],                      # READ, not inferred — no fallback flag
+    }
+    me = estimate_material(part)
+    assert part.get("blank_corrected_from_stated_weight") is None, \
+        "a read blank must never be shrunk to its own cut-outs"
+    assert me.get("blank_length_mm") == 1578.0 and me.get("blank_width_mm") == 188.0
+    assert any("left as read" in str(f) for f in part.get("review_flags", [])), \
+        part.get("review_flags")
+
+
+def test_a_zero_printed_weight_never_becomes_a_size():
+    """Fourteen of the sixteen board parts in this pack print Est. Mass 0.00 kg — including a
+    1680 x 560 x 18 panel that really weighs about 12.7 kg, because the mass property was
+    never evaluated before the pack was published. A weight-driven path handed a hard zero
+    must decline it, not rescale a panel to nothing."""
+    part = {
+        "part_number": "JAE826", "description": "Shroud Back Panel",
+        "normalized_material": "MDF", "material": "MDF",
+        "normalized_thickness_mm": 18.0, "stated_weight_kg": 0.0, "quantity": 1,
+        "blank_length_mm": 400.0, "blank_width_mm": 300.0,
+        "review_flags": ["geometry_inferred_provisional"],
+    }
+    me = estimate_material(part)
+    assert part.get("blank_corrected_from_stated_weight") is None
+    assert me.get("blank_length_mm") == 400.0
+    assert me.get("stock_form") != "stated_weight"
+
+
 def test_a_measured_blank_still_beats_a_stated_weight_that_disagrees():
     """The reverse case, unchanged: where a DXF measured the blank, the blank is truth and an
     odd stated weight is the bad unit conversion. Nothing here rescales a measured part."""

@@ -99,6 +99,35 @@ C_RULE        = "D9EAD3"   # light green — override rule fired
 C_BOUGHT      = "EDEDED"   # grey   — bought-in / catalogue component
 C_SECTION     = "2F5496"   # section header blue
 C_ALT_ROW     = "F5F5F5"   # alternating row
+def _powder_labour_gbp(summary: Dict[str, Any]) -> float:
+    """What the sheet charges for the coating OPERATION, which is not the consumable.
+
+    A CONSUMABLE AND AN OPERATION ARE NOT THE SAME CHARGE, AND ONE SENTENCE CANNOT SPEAK FOR
+    BOTH. The material reconciliation asks whether powder is in the MATERIAL total, and when
+    the answer was no it declared the job carried none at all — on 0359342, whose Labour block
+    charges GBP 224.79 of P.Coat across 122 components. The claim was true of the column and
+    false of the job, and the reader had no way to tell which was meant.
+
+    So the sentence asks this too, and names the labour figure when there is one. Matched on
+    the operation/department text rather than a single rate code, because the coating row
+    reaches the read-back as powder_coating, "P.Coat" and "P/C" depending on which witness
+    filled it.
+    """
+    total = 0.0
+    try:
+        from costed_facts import _final_estimate_of as _fe_of
+        for row in (_fe_of(summary).get("labour_rows") or []):
+            if not isinstance(row, dict):
+                continue
+            text = " ".join(str(row.get(k) or "") for k in
+                            ("operation", "description", "department", "dept")).upper()
+            if "POWDER" in text or "P.COAT" in text or "P/C" in text:
+                total += float(row.get("total_value_gbp") or 0)
+    except Exception:                                            # noqa: BLE001
+        return 0.0
+    return round(total, 2)
+
+
 def confidence_colour(confidence: float) -> str:
     if confidence >= 0.85:
         return C_HIGH
@@ -990,10 +1019,16 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                                 break
                     except Exception:                            # noqa: BLE001
                         pass
+                # A CONSUMABLE AND AN OPERATION ARE NOT THE SAME CHARGE — see
+                # _powder_labour_gbp. When the coating is priced as LABOUR, say so rather than
+                # telling the reader no powder is charged on the job.
+                _powder_labour = _powder_labour_gbp(summary)
                 _resid = ("POWDER / SCRAP / OTHER WORKBOOK MATERIAL — the powder consumable and "
                           "the per-line scrap uplift" if _has_powder else
                           "NEST-vs-NET-PART BASIS, SCRAP AND OTHER WORKBOOK MATERIAL — no powder "
-                          "is charged on this job")
+                          + (f"CONSUMABLE is in the material total; the coating IS charged, as "
+                             f"labour: £{_powder_labour:,.2f}" if _powder_labour > 0
+                             else "is charged on this job"))
                 _gap_txt = (f"The £{abs(_gap):,.2f} difference is the sheet's "
                             f"{_resid}. The sheet charges a nested part its share of a WHOLE "
                             f"SHEET, so it carries the drop and the skeleton; this column is the "

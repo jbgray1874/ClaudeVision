@@ -51,6 +51,23 @@ CODE = re.sub(r"#[^\n]*", " ", re.sub(r'"""(?:.|\n)*?"""', " ", SRC))
 # the only way to assert on what is actually written.
 PROSE = re.sub(r'"\s*\n\s*f?"', "", CODE)
 
+# THE WINDOW IS A PROXIMITY GUARD, NOT A LENGTH BUDGET. It was a flat 2,200 characters from the
+# gap computation, which is an arbitrary number that happened to fit the sentence on the day it
+# was written — so adding one more TRUE clause to that sentence (naming the powder LABOUR when
+# the consumable is absent, because "no powder is charged on this job" was being printed beside
+# a £224.79 P.Coat row) failed a guard that has no opinion about clause count. What the guard
+# actually means is "these phrases are in the gap explanation, not somewhere else in a file this
+# size", so it now reads exactly that region: from the gap computation to where the labour
+# sentence begins. Precise instead of approximate, and it cannot drift as the prose is edited.
+_GAP_START = "_gap = float(_mat) - _col_mat"
+_GAP_END = "_lab_txt = "
+
+
+def _gap_prose() -> str:
+    a = PROSE.index(_GAP_START)
+    return PROSE[a:PROSE.index(_GAP_END, a)]
+
+
 
 def test_the_gap_is_computed_and_not_left_to_the_reader():
     assert "_gap = float(_mat) - _col_mat" in CODE, (
@@ -69,7 +86,7 @@ def test_the_gap_is_named_in_the_words_the_other_tab_uses():
 
     The Decision Report has computed this residual all along and labels it. Same arithmetic,
     same words, so the two tabs agree instead of offering two explanations."""
-    window = PROSE[PROSE.index("_gap = float(_mat) - _col_mat"):][:2200]
+    window = _gap_prose()
     assert "POWDER / SCRAP / OTHER WORKBOOK MATERIAL" in window, (
         "the difference is not named as the residual the Decision Report already breaks out")
     for wrong in ("Bill of Materials", "packaging and delivery"):
@@ -83,7 +100,7 @@ def test_the_label_matches_the_decision_reports_row_exactly():
     different hat. The reader must be able to match the sentence to the row."""
     row_label = "Powder / scrap / other workbook material"
     assert row_label in DEC, "the Decision Report no longer has that row"
-    window = PROSE[PROSE.index("_gap = float(_mat) - _col_mat"):][:2200].upper()
+    window = _gap_prose().upper()
     assert row_label.upper() in window
 
 
@@ -110,7 +127,7 @@ def test_it_says_neither_figure_is_wrong():
     """The failure mode is not confusion, it is DISTRUST: two totals with no account reads as
     a tab that disagrees with the workbook."""
     at = CODE.index("_gap = float(_mat) - _col_mat")
-    window = PROSE[PROSE.index("_gap = float(_mat) - _col_mat"):][:2200]
+    window = _gap_prose()
     assert "Neither figure is wrong" in window
     assert "the sheet is the money" in window
 

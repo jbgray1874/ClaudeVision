@@ -3745,23 +3745,44 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 # inferred rectangle's one useful datum is its SHAPE, so the correction keeps
                 # the aspect ratio the drawing implied and scales it to the area the weight
                 # proves — both dimensions by sqrt(mass ratio).
+                # ONLY A GUESSED BLANK MAY BE RESCALED. A weight is a proxy for AREA only if
+                # the part is solid, and a real blank often is not: 0359342's MBY439 is a
+                # 1578 x 188 picture frame whose printed mass is 0.82 kg against the 4.66 kg
+                # that rectangle would weigh solid — 82% of it is aperture. Rescaling a blank
+                # somebody actually read off the drawing would shrink that frame to 660 x 79
+                # and buy the wrong stock. So the rescale is confined to a FALLBACK ENVELOPE
+                # (geometry_inference's own flag), where there is no reading to damage and
+                # the weight is the only size evidence in the job.
+                _inferred_blank = any("geometry_inferred_provisional" in str(_f)
+                                      for _f in (part.get("review_flags") or []))
                 _ratio = stated_weight_kg / _area_mass
-                _scale = _ratio ** 0.5
-                _was_l, _was_w = blank_length, blank_width
-                blank_length = round(blank_length * _scale, 1)
-                blank_width = round(blank_width * _scale, 1)
-                part["blank_corrected_from_stated_weight"] = {
-                    "was_length_mm": _was_l, "was_width_mm": _was_w,
-                    "length_mm": blank_length, "width_mm": blank_width,
-                    "stated_weight_kg": stated_weight_kg, "blank_implied_kg": round(_area_mass, 4),
-                }
-                part.setdefault("review_flags", []).append(
-                    f"blank {_was_l:g}x{_was_w:g}mm disagrees with stated weight "
-                    f"{round(stated_weight_kg * 1000)}g by {(1.0 / _ratio) if _ratio < 1 else _ratio:.0f}x — "
-                    f"no DXF or model to measure, so the printed weight is the stronger source: "
-                    f"costed by weight and the blank rescaled to {blank_length:g}x{blank_width:g}mm, "
-                    f"the size that weight and gauge imply. Laser time and coated area follow the "
-                    f"corrected blank. Confirm the real blank if the shape matters.")
+                if not _inferred_blank:
+                    part.setdefault("review_flags", []).append(
+                        f"blank {blank_length:g}x{blank_width:g}mm implies "
+                        f"{_area_mass:.2f}kg against a stated {round(stated_weight_kg * 1000)}g "
+                        f"— costed by the printed weight, but the blank is left as read: a "
+                        f"cut-out part weighs less than its rectangle and the stock still has "
+                        f"to be bought at full size. Confirm which the weight describes.")
+                elif _area_mass > 0:
+                    _scale = _ratio ** 0.5
+                    _was_l, _was_w = blank_length, blank_width
+                    blank_length = round(blank_length * _scale, 1)
+                    blank_width = round(blank_width * _scale, 1)
+                    part["blank_corrected_from_stated_weight"] = {
+                        "was_length_mm": _was_l, "was_width_mm": _was_w,
+                        "length_mm": blank_length, "width_mm": blank_width,
+                        "stated_weight_kg": stated_weight_kg,
+                        "blank_implied_kg": round(_area_mass, 4),
+                    }
+                    part.setdefault("review_flags", []).append(
+                        f"blank {_was_l:g}x{_was_w:g}mm disagrees with stated weight "
+                        f"{round(stated_weight_kg * 1000)}g by "
+                        f"{(1.0 / _ratio) if _ratio < 1 else _ratio:.0f}x — that blank is an "
+                        f"INFERRED fallback envelope, not a reading, so the printed weight is "
+                        f"the stronger source: costed by weight and the envelope rescaled to "
+                        f"{blank_length:g}x{blank_width:g}mm, the size that weight and gauge "
+                        f"imply. Laser time and coated area follow it. Supply the real blank "
+                        f"from the part's detail page to replace both.")
     if stated_weight_kg is not None and stated_weight_kg > 0:
         applied_price_per_kg = external_price.get("applied_price_per_kg")
         fallback_price_per_kg = _price_per_kg_for_material(part, material)
