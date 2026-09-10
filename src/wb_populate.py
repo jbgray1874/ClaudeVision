@@ -3389,6 +3389,47 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # line. The price is deliberately ZERO: Total Material Cost (M92) sums BOM + Wire +
     # Sheet Steel + Other Sheet, so a priced duplicate here would double that part's
     # material and the sheet would be wrong in a way nobody would spot.
+    # ── A BLOCK THAT IS FULL MUST SPILL, NOT SWALLOW ───────────────────────────────
+    #
+    # Each costing block is a fixed run of template rows — Other Sheet Material is eight.
+    # 0359342 has nine board panels, so the ninth (JAE834, a real 9mm MDF shelf bottom at
+    # GBP 6.72, eight per unit) was written nowhere. The engine had its price; the block had
+    # no row for it; the writer flagged "extras DROPPED" and moved on. What reached the
+    # estimator was worse than the loss: the BOM still carried JAE834's cross-reference line
+    # saying "costed in Other Sheet Material below" — pointing at a row that does not exist —
+    # and the report explained the GBP 0.00 as "no catalogue, price file or quote holds this
+    # item", which is not what happened and sends someone hunting for a supplier price that
+    # was never the problem.
+    #
+    # So the overflow goes where the BOM's own overflow already goes: the part becomes a
+    # normal bill-of-materials line carrying its OWN per-part cost (the block would have
+    # charged the same money), and if the BOM is full too, the existing spill machinery
+    # below itemises it on the 'BOM Overflow' sheet. Nothing is dropped and nothing points
+    # at a row that isn't there.
+    _spilled_from_blocks: List[Dict[str, Any]] = []
+    for _blk_name, _blk_list, _blk_key in (("Sheet Steel", steel_parts, "steel"),
+                                           ("Other Sheet Material", board_parts, "other_sheet"),
+                                           ("Wire", wire_parts, "tube")):
+        _cap_map = cm.get(_blk_key) or {}
+        _cap = int(_cap_map.get("last_row", 0)) - int(_cap_map.get("first_row", 0)) + 1
+        if _cap > 0 and len(_blk_list) > _cap:
+            for _sp in list(_blk_list[_cap:]):
+                _sme = _sp.get("material_estimate") or {}
+                _scost = _safe(_sme.get("cost_per_part_gbp") or _sme.get("unit_material_cost_gbp"))
+                _spilled_from_blocks.append(dict(_sp) | {
+                    "description": f"{_sp.get('description') or ''} — {_blk_name} block full; "
+                                   f"costed here at the engine's own per-part figure",
+                    "unit_cost_gbp": _scost,
+                    "_block_overflow_from": _blk_name,
+                })
+            _flag(f"{_blk_name}: {len(_blk_list)} part(s) for {_cap} template row(s) — "
+                  f"{len(_blk_list) - _cap} moved to the Bill of Materials at their own "
+                  f"per-part cost so no line is dropped: "
+                  + ", ".join(str(p.get('part_number')) for p in _blk_list[_cap:]), flags)
+            del _blk_list[_cap:]
+    if _spilled_from_blocks:
+        bom_parts = list(bom_parts) + _spilled_from_blocks
+
     _xref_rows: List[Dict[str, Any]] = []
     for _blk_name, _blk in (("Sheet Steel", steel_parts), ("Other Sheet Material", board_parts),
                             ("Wire", wire_parts)):

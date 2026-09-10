@@ -245,6 +245,45 @@ def _stated_weight_kg_for_part(part: Dict[str, Any]) -> Optional[float]:
     return _parse_stated_weight_kg(part)
 
 
+def _price_per_kg_for_material(part: Optional[Dict[str, Any]], material) -> Optional[float]:
+    """The GBP/kg for this material, including when the rate table is not keyed by its name.
+
+    0359342's BOM writes its materials as the drawing office types them — "CR4, 2mm",
+    "Steel, Mild Wire", "MildSteel", "Steel,Mild2mm". All four are mild steel and this engine
+    holds a mild-steel rate, but a plain dict lookup on those strings returns None, and a None
+    here does not read as "no rate for mild steel" — it silently skips the whole stated-weight
+    costing path. A 10 g prong backplate that its own BOM row weighed then fell through to a
+    generated market figure of GBP 55 each: GBP 3,203 for 56 of them.
+
+    A name that the table already holds is answered directly and never resolved, so nothing
+    that prices today can move through this function. Only a name with no rate of its own is
+    reduced to its material words (config.resolve_material_rate_key), and when that lands on a
+    real rate the substitution is RECORDED on the part — a line costed as MILD STEEL when the
+    drawing said "Steel, Mild Wire" has been read, not quoted, and the estimator is told so.
+    """
+    direct = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
+    if direct is not None:
+        return direct
+    try:
+        import config as _cfg
+        key = _cfg.resolve_material_rate_key(material)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if not key or key == material:
+        return None
+    rate = MATERIAL_PRICE_GBP_PER_KG.get(key)
+    if rate is None:
+        return None
+    if isinstance(part, dict):
+        part["material_rate_key_resolved"] = {"recorded": material, "priced_under": key}
+        _flag = (f"material recorded as '{material}' carries no rate under that name; priced "
+                 f"under '{key}', which is the same material with the gauge and stock form "
+                 f"taken out of the cell. Confirm the grade if it matters to the rate.")
+        if _flag not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(_flag)
+    return rate
+
+
 def _weight_source_label(part: Dict[str, Any]) -> str:
     if part.get("dxf_weight_g") or part.get("dxf_weight_kg"):
         return "dxf_flat_pattern"
@@ -3674,13 +3713,40 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             if _dxf_backed or not _trust_wt:
                 stated_weight_kg = None  # measured blank wins -> use area formula
             else:
+                # A BLANK THIS WEIGHT HAS DISPROVED MUST STOP SPENDING MONEY, NOT JUST STOP
+                # PRICING THE MATERIAL. Costing by the printed weight fixed the material cost
+                # and left the disproved rectangle in place — and the rectangle is what laser
+                # time and powder area are computed from. 0359342's MBY434 is a 10 g backplate
+                # whose blank was INFERRED (no DXF, no model) at 350x250x2mm: 1.37 kg of steel,
+                # 137x its own stated weight. The material was corrected to 10 g and the sheet
+                # still bought 9.8 m2 of powder and 56 parts' worth of laser time for a plate
+                # the size of a postage stamp — GBP 225 of powder alone.
+                #
+                # The weight and the gauge are both PRINTED, and together they give an area:
+                # area = mass / (density x thickness). That is evidence, not a guess. The
+                # inferred rectangle's one useful datum is its SHAPE, so the correction keeps
+                # the aspect ratio the drawing implied and scales it to the area the weight
+                # proves — both dimensions by sqrt(mass ratio).
+                _ratio = stated_weight_kg / _area_mass
+                _scale = _ratio ** 0.5
+                _was_l, _was_w = blank_length, blank_width
+                blank_length = round(blank_length * _scale, 1)
+                blank_width = round(blank_width * _scale, 1)
+                part["blank_corrected_from_stated_weight"] = {
+                    "was_length_mm": _was_l, "was_width_mm": _was_w,
+                    "length_mm": blank_length, "width_mm": blank_width,
+                    "stated_weight_kg": stated_weight_kg, "blank_implied_kg": round(_area_mass, 4),
+                }
                 part.setdefault("review_flags", []).append(
-                    f"blank {blank_length:g}x{blank_width:g}mm disagrees with stated weight "
-                    f"{round(stated_weight_kg * 1000)}g by {stated_weight_kg / _area_mass:.0f}x — "
-                    f"no DXF, costing by the printed weight (blank geometry unreliable)")
+                    f"blank {_was_l:g}x{_was_w:g}mm disagrees with stated weight "
+                    f"{round(stated_weight_kg * 1000)}g by {(1.0 / _ratio) if _ratio < 1 else _ratio:.0f}x — "
+                    f"no DXF or model to measure, so the printed weight is the stronger source: "
+                    f"costed by weight and the blank rescaled to {blank_length:g}x{blank_width:g}mm, "
+                    f"the size that weight and gauge imply. Laser time and coated area follow the "
+                    f"corrected blank. Confirm the real blank if the shape matters.")
     if stated_weight_kg is not None and stated_weight_kg > 0:
         applied_price_per_kg = external_price.get("applied_price_per_kg")
-        fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
+        fallback_price_per_kg = _price_per_kg_for_material(part, material)
         price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
         if price_per_kg is not None:
             waste_factor = 1.0 + (NESTING_RULES["waste_factor_pct"] / 100.0)
@@ -3809,7 +3875,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 f"that would be a 10x error. Set a sheet rate or a density for this board.")
         else:
             density = 7850.0
-    fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material)
+    fallback_price_per_kg = _price_per_kg_for_material(part, material)
     applied_price_per_kg = external_price.get("applied_price_per_kg")
     price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
 

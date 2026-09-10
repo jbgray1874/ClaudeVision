@@ -737,6 +737,110 @@ PLASTIC_SHEET_PRICED_MATERIALS = frozenset({
 })
 
 
+# ── READING A MATERIAL CELL THAT CARRIES MORE THAN THE MATERIAL ──────────────────────
+#
+# 0359342's BOM states its materials the way a drawing office types them, not the way a rate
+# table is keyed: "CR4, 2mm", "CR4,2mm", "Steel,Mild2mm", "Steel, Mild Wire", "MildSteel".
+# Every one of those is mild steel and this engine holds a mild-steel rate, yet
+# MATERIAL_PRICE_GBP_PER_KG.get("CR4, 2mm") is None — so the stated-weight costing path (the
+# one that prices a part from its own printed weight) was skipped for want of a rate, and a
+# 10 g backplate fell through to a generated market figure of GBP 55 each, GBP 3,203 the line.
+# The price was never the problem. The KEY was.
+#
+# THE RULE THAT KEEPS THIS SAFE: resolution is only ever attempted for a name this engine
+# CANNOT ALREADY PRICE. A name that resolves as written is returned untouched, so no job that
+# prices today can move by a penny through this function — the structured lane cannot enter it.
+#
+# What it does is remove what is not the material and recognise what is:
+#   - a gauge stated in the same cell ("2mm", and the glued "Mild2mm") is a thickness, and the
+#     part already carries its thickness in its own field;
+#   - a FORM ("wire", "sheet", "plate") is how the stock comes, not what it is made of;
+#   - a GRADE is the material under another name, and CR4 is cold-reduced mild steel.
+# Anything that still does not resolve returns None, exactly as before — an unknown material
+# stays unknown and unpriced rather than being guessed into the nearest rate.
+_MATERIAL_FORM_TOKENS = frozenset({
+    "WIRE", "SHEET", "PLATE", "BAR", "ROD", "SECTION", "STRIP", "FLAT",
+    "GRADE", "THK", "THICK", "GAUGE", "MM",
+})
+
+# Token sets, so word order and punctuation stop mattering: "Steel, Mild Wire", "MildSteel"
+# and "Mild Steel CR4" all reduce to the same question. Values must be keys the tables above
+# actually hold — this table renames, it never prices.
+_MATERIAL_TOKEN_SYNONYMS = {
+    frozenset({"CR4"}): "MILD STEEL",
+    frozenset({"MS"}): "MILD STEEL",
+    frozenset({"MILD", "STEEL"}): "MILD STEEL",
+    frozenset({"CR4", "STEEL"}): "MILD STEEL",
+    frozenset({"CR4", "MILD"}): "MILD STEEL",
+    frozenset({"CR4", "MILD", "STEEL"}): "MILD STEEL",
+    frozenset({"CR1", "STEEL"}): "MILD STEEL",
+    frozenset({"HR4", "STEEL"}): "MILD STEEL",
+    frozenset({"S275"}): "MILD STEEL",
+    frozenset({"DC01"}): "MILD STEEL",
+    frozenset({"FLEXI", "MDF"}): "MDF",
+    frozenset({"MOISTURE", "RESISTANT", "MDF"}): "MDF",
+    frozenset({"MR", "MDF"}): "MDF",
+    frozenset({"BIRCH", "PLY"}): "BIRCH_PLYWOOD",
+    frozenset({"BIRCH", "PLYWOOD"}): "BIRCH_PLYWOOD",
+    frozenset({"PLY"}): "PLYWOOD",
+    frozenset({"STAINLESS"}): "STAINLESS STEEL",
+    frozenset({"SS", "STEEL"}): "STAINLESS STEEL",
+    frozenset({"ALUMINIUM"}): "ALUMINIUM",
+    frozenset({"ALUMINUM"}): "ALUMINIUM",
+}
+
+
+def _material_name_tokens(material) -> frozenset:
+    """The material words in a cell, with gauges, forms and punctuation taken out."""
+    import re as _re
+    # Squashed table text arrives as one CamelCase word: extract_tables strips the spaces, so
+    # "Mild Steel" reaches us as "MildSteel". Split on the case change FIRST, while the case is
+    # still there to read, then upper-case.
+    text = _re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(material or "").replace("_", " ")).upper()
+    # Take the GAUGE out by name, not by splitting every letter/digit boundary — "Mild2mm" must
+    # lose its 2mm while CR4 keeps its 4. A gauge is digits carrying a unit, so that is what is
+    # matched; a grade is digits carrying nothing, and survives.
+    text = _re.sub(r"\d+(?:\.\d+)?\s*MM\b", " ", text)
+    words = _re.split(r"[^A-Z0-9]+", text)
+    out = set()
+    for w in words:
+        if not w or w.isdigit():
+            continue                           # a bare number is a gauge or a size, never a material
+        if w in _MATERIAL_FORM_TOKENS:
+            continue
+        out.add(w)
+    return frozenset(out)
+
+
+def resolve_material_rate_key(material):
+    """The rate-table key this material text prices under, or None if this engine holds none.
+
+    Returns the name UNCHANGED whenever it already prices — see the rule above. Only a name
+    with no rate of its own is reduced to its material words and looked up as a grade synonym.
+    """
+    name = str(material or "").strip()
+    if not name:
+        return None
+    if material_has_a_rate(name):
+        return name                            # already priceable: never rewritten
+    tokens = _material_name_tokens(name)
+    if not tokens:
+        return None
+    synonym = _MATERIAL_TOKEN_SYNONYMS.get(tokens)
+    if synonym and material_has_a_rate(synonym):
+        return synonym
+    # No synonym entry, but the cell may simply have carried a gauge alongside a material this
+    # engine already knows ("MDF, 18mm" -> MDF). Try the material words as written.
+    for candidate in (" ".join(sorted(tokens)), " ".join(tokens)):
+        if material_has_a_rate(candidate):
+            return candidate
+    if len(tokens) == 1:
+        only = next(iter(tokens))
+        if material_has_a_rate(only):
+            return only
+    return None
+
+
 def material_has_a_rate(material) -> bool:
     """Can this engine put a price on this material by any route it has?
 
