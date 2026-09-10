@@ -857,3 +857,50 @@ def test_the_three_residues_squashed_family_drill_gate_and_code_spill():
             _w("3", 422, 120)]
     cols2 = wa._parse_row_by_regions(row2, hdr["anchors"])
     assert cols2["code"] == "M8 BR200", "digit-bearing prefixes stay put"
+
+
+def test_the_web_ai_circuit_breaker_stops_paying_for_a_dead_provider(monkeypatch):
+    """0359342 with fresh material keys: ~30 parts each paid a serial 25-second
+    timeout against a provider answering nothing — ten minutes to learn one fact
+    thirty times. After three consecutive timeouts the remaining lookups are skipped
+    with the same estimator-to-confirm outcome and one honest console line; a
+    completed live call — hit or miss — resets the count."""
+    import time
+
+    import config
+    import generated_price_cache
+    import pricing_service
+    import web_ai_price_lookup
+
+    svc = pricing_service.PricingService.__new__(pricing_service.PricingService)
+    monkeypatch.setattr(config, "FALLBACK_PRICING_POLICY",
+                        {"web_ai_call_timeout_s": 0.05,
+                         "web_ai_consecutive_timeout_limit": 3}, raising=False)
+    monkeypatch.setattr(generated_price_cache, "cached_estimate",
+                        lambda spec, ns, model, fn: fn())
+    calls = {"n": 0}
+
+    def _hang(spec, **kw):
+        calls["n"] += 1
+        time.sleep(0.5)
+        return {}
+
+    monkeypatch.setattr(web_ai_price_lookup, "lookup_web_ai_price", _hang)
+    part = {"part_number": "JAE831", "description": "SHROUD PANEL", "quantity": 2}
+    for _ in range(3):
+        assert svc._get_web_ai_fallback(part) is None
+    assert calls["n"] == 3
+    # the breaker is open: no further live calls, same outcome, instantly
+    assert svc._get_web_ai_fallback(part) is None
+    assert svc._get_web_ai_fallback(part) is None
+    assert calls["n"] == 3, "a dead provider is asked three times, not thirty"
+    # a completed live call resets the count
+    svc._web_ai_consec_timeouts = 2
+
+    def _fast_miss(spec, **kw):
+        calls["n"] += 1
+        return {}
+
+    monkeypatch.setattr(web_ai_price_lookup, "lookup_web_ai_price", _fast_miss)
+    assert svc._get_web_ai_fallback(part) is None    # a miss, but the provider answered
+    assert svc._web_ai_consec_timeouts == 0

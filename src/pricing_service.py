@@ -1101,6 +1101,28 @@ class PricingService:
         except ImportError:
             return None
         fallback_policy = getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}
+        # ── CIRCUIT BREAKER: a provider that is down is down for the whole run ──────
+        # Each miss costs a full wall-clock timeout, SERIALLY. On 0359342 the fresh
+        # material keys made ~30 parts pay 25 seconds each against a provider that was
+        # answering nothing — ten minutes of waiting to learn the same fact thirty
+        # times. After N consecutive timeouts the remaining lookups are skipped, each
+        # line falls through to the same 'estimator to confirm' flag it would have
+        # carried anyway, and one console line says what was skipped and why. Any
+        # lookup that completes — hit or miss — resets the count, so a blip never
+        # writes the provider off.
+        try:
+            _breaker_limit = int(fallback_policy.get(
+                "web_ai_consecutive_timeout_limit", 3) or 3)
+        except (TypeError, ValueError):
+            _breaker_limit = 3
+        if getattr(self, "_web_ai_consec_timeouts", 0) >= _breaker_limit:
+            if not getattr(self, "_web_ai_breaker_announced", False):
+                self._web_ai_breaker_announced = True
+                print(f"   [pricing] web/AI provider unresponsive — {_breaker_limit} "
+                      f"consecutive timeouts; the remaining web/AI lookups this run "
+                      f"are skipped, their lines flagged 'estimator to confirm' as "
+                      f"they would have been after the wait", flush=True)
+            return None
         conf_cap = float(fallback_policy.get("fallback_confidence_cap", 0.68))
         geom = part.get("normalized_geometry") or {}
         ops = list(dict.fromkeys(
@@ -1128,16 +1150,20 @@ class PricingService:
             _timeout_s = 25.0
         import concurrent.futures as _futures
 
+        _live = {"ran": False, "timed_out": False}
+
         def _compute() -> Dict[str, Any]:
             # The lookup is multi-call (network + LLM) and can hang; run it on a worker thread
             # and abandon it past the budget so the run never blocks. A miss returns {} — never
             # stored, so tomorrow asks again rather than inheriting today's network problem.
+            _live["ran"] = True
             try:
                 with _futures.ThreadPoolExecutor(max_workers=1) as _ex:
                     _fut = _ex.submit(lookup_web_ai_price, _spec,
                                       enable_web_search=True, enable_llm_estimate=True)
                     return _fut.result(timeout=_timeout_s) or {}
             except _futures.TimeoutError:
+                _live["timed_out"] = True
                 print(f"   [pricing] web/AI fallback timed out ({_timeout_s:.0f}s) on "
                       f"{part.get('part_number') or _spec.get('description')} — flagged "
                       f"'estimator to confirm', run continues", flush=True)
@@ -1157,6 +1183,14 @@ class PricingService:
             result = _gpc.cached_estimate(_spec, "web_ai_price_lookup", _model, _compute)
         except Exception:                                        # noqa: BLE001
             result = _compute()          # the cache is a bonus, never a dependency
+        # The breaker counts only LIVE calls: a cache hit says nothing about the
+        # provider's health, a completed live call — hit or miss — proves it answers.
+        if _live["ran"]:
+            if _live["timed_out"]:
+                self._web_ai_consec_timeouts = \
+                    getattr(self, "_web_ai_consec_timeouts", 0) + 1
+            else:
+                self._web_ai_consec_timeouts = 0
         if not result or not result.get("found") or not result.get("price_gbp"):
             return None
         capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
