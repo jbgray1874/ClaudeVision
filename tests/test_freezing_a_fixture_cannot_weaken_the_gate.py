@@ -51,13 +51,72 @@ def test_the_fingerprint_is_stable_for_one_record():
     assert frz._digest(frz._fingerprint(record)) == frz._digest(frz._fingerprint(record))
 
 
-def test_dropping_page_text_does_not_change_the_fingerprint():
-    """The reduction the tool is for. Proved, not assumed."""
+def test_the_heaviest_paths_are_measured_not_guessed():
+    """THE FIRST VERSION CARRIED A HARDCODED KEY LIST and on the real 7332-01 record not one key
+    matched: it attempted no reduction at all and reported "dropped: nothing" on a 7.8 MB file.
+    A guess about where another team's data keeps its weight is not a reduction strategy."""
+    record = _record(page_text="X" * 200_000)
+    paths = dict(frz._heavy_paths(record))
+    assert paths, "a 200 KB string must be found"
+    # both the leaf and the subtree containing it are offered; the caller drops largest-first
+    assert "pages[].text" in paths, sorted(paths)
+    assert paths["pages[].text"] >= 200_000
+    assert paths.get("pages", 0) >= paths["pages[].text"], "the parent subtree is also offered"
+
+
+def test_a_path_a_renderer_reads_is_refused_by_name_not_quietly_taken():
+    """MY OWN TEST CAUGHT THIS ONE. Before the rendered deliverables joined the fingerprint, the
+    reducer dropped every part's review_flags and the whole pages list, because no costed-line
+    field changed. Tier 1 RENDERS both deliverables and the forbidden-names check reads the
+    rendered HTML — the flags are the audit trail it reads. A fingerprint drawn only from the
+    costed record is blind to everything a renderer reads and nothing else does."""
     record = _record()
-    reduced, dropped = frz._drop_page_text(record)
-    assert dropped == ["pages[].text"], dropped
-    assert frz._digest(frz._fingerprint(reduced)) == frz._digest(frz._fingerprint(record))
-    assert len(json.dumps(reduced)) < len(json.dumps(record)), "and it is actually smaller"
+    record["estimate_summary"]["part_estimates"][0]["review_flags"] = ["Y" * 80_000]
+    base = frz._digest(frz._fingerprint(record))
+    _reduced, dropped, refused = frz.reduce_record(record, base, log=lambda *a: None)
+    flags = "estimate_summary.part_estimates[].review_flags"
+    assert flags not in dropped, "the audit trail the renderer prints must not be dropped"
+    assert flags in refused or not any(
+        d.startswith("estimate_summary") for d in dropped), (
+        f"dropped={dropped} refused={refused}")
+
+
+def test_a_reduction_still_preserves_the_fingerprint_exactly():
+    """Whatever the reducer does take, the contract is unchanged: byte-identical."""
+    record = _record(page_text="X" * 200_000)
+    base = frz._digest(frz._fingerprint(record))
+    reduced, dropped, _refused = frz.reduce_record(record, base, log=lambda *a: None)
+    assert frz._digest(frz._fingerprint(reduced)) == base
+    if dropped:
+        assert frz._size(reduced) < frz._size(record), "a drop must actually save bytes"
+
+
+def test_the_fingerprint_covers_the_rendered_deliverables():
+    keys = set(frz._fingerprint(_record()))
+    assert {"report_html", "quote_html"} <= keys
+    for key in ("report_html", "quote_html"):
+        value = frz._fingerprint(_record())[key]
+        assert not str(value).startswith("ERROR"), f"{key}: {value}"
+
+
+def test_both_builders_are_deterministic_so_a_reduction_can_be_judged():
+    """If either embedded a clock, every reduction would be refused — which is the right way
+    round to fail, but it would mean no fixture ever shrank, and that should be visible here
+    rather than discovered as a mysteriously large fixture."""
+    record = _record()
+    first = frz._fingerprint(record)
+    second = frz._fingerprint(record)
+    assert first["report_html"] == second["report_html"]
+    assert first["quote_html"] == second["quote_html"]
+
+
+def test_the_fixture_is_written_compact_and_never_larger_than_the_record():
+    """The defect this fixes: the first version wrote indent=1 and turned the real 7.8 MB
+    7332-01 record into an 11.5 MB fixture — a tool for keeping files small that made one 47%
+    bigger, which is the single number it exists to move."""
+    record = _record(page_text="X" * 50_000)
+    assert b"\n" not in frz._encode(record), "compact: no newlines"
+    assert frz._size(record) < len(json.dumps(record, indent=1).encode("utf-8"))
 
 
 def test_a_reduction_that_changes_an_answer_is_detected():
