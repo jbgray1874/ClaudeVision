@@ -58,7 +58,22 @@ _FIELD_MAP = {
     "thickness_mm": "normalized_thickness_mm",
     "material": "normalized_material",
     "quantity": "quantity",
+    # LINEAR STOCK IS SIZED BY A LENGTH AND A DIAMETER, NOT BY A BLANK.
+    #
+    # A bar or wire has no rectangle to nest, so the sheet fields above cannot describe it,
+    # and the engine will not infer its length: wire_length_mm is written only by a bar/wire
+    # schedule, because a PDF vector outline is not a developed length. MBY432 on 0359342 is
+    # Ø8 x 219.6 printed on its own detail sheet with no schedule anywhere in the pack, so it
+    # costed on an assumed 900 mm form band — four times the mass, 56 off. The figure was on
+    # the drawing; there was simply no audited way for a person to enter it.
+    "wire_length_mm": "wire_length_mm",
+    "wire_gauge_mm": "wire_gauge_mm",
 }
+
+# Fields that describe a FLAT BLANK, and fields that describe LINEAR STOCK. A part is one or
+# the other, and a file stating both is describing two different parts.
+_SHEET_FIELDS = ("blank_length_mm", "blank_width_mm")
+_LINEAR_FIELDS = ("wire_length_mm", "wire_gauge_mm")
 
 # Descriptive keys: recorded on the part for the report, never costed from.
 _NOTE_KEYS = ("read_from", "note", "description")
@@ -184,6 +199,17 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
                             f"missing, so neither is used. Give both or neither")
             entry.pop("blank_length_mm", None)
             entry.pop("blank_width_mm", None)
+        # A PART IS SHEET OR LINEAR, NEVER BOTH. Both sets present means the file is
+        # describing two different parts under one code, and stamping either at rank 100
+        # would settle by field order which stock the part is bought as.
+        if any(k in entry for k in _SHEET_FIELDS) and any(k in entry for k in _LINEAR_FIELDS):
+            problems.append(
+                f"{code_s}: a flat blank ({', '.join(k for k in _SHEET_FIELDS if k in entry)}) "
+                f"and linear stock ({', '.join(k for k in _LINEAR_FIELDS if k in entry)}) are "
+                f"both stated. A part is one or the other — neither set is used. Give the "
+                f"blank for a sheet part, or the length and diameter for a bar")
+            for _k in _SHEET_FIELDS + _LINEAR_FIELDS:
+                entry.pop(_k, None)
         if any(k in entry for k in list(_FIELD_MAP) ):
             clean[code_s] = entry
         elif not any(p.startswith(f"{code_s}:") for p in problems):

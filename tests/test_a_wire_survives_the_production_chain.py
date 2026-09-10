@@ -155,25 +155,73 @@ def test_the_computed_mass_agrees_with_the_mass_the_drawing_prints():
         "must agree with the 0.09 kg the drawing prints"
 
 
-def test_nothing_in_the_pack_pipeline_yet_supplies_mby432_its_printed_length():
-    """THE ACCEPTANCE BOUNDARY, WRITTEN DOWN SO IT CANNOT BE MISREAD.
+def test_the_pack_alone_still_does_not_supply_mby432_a_length():
+    """THE ACCEPTANCE BOUNDARY, HALF OF IT UNCHANGED.
 
-    The 0.0867-vs-0.09 kg agreement above is an arithmetic check on a length HANDED TO THE
-    TEST. It does not show the production reader obtains 219.6 from the pack, and it does
-    not: wire_length_mm is written only by a bar/wire schedule, MBY432's sheet has no such
-    schedule, and the estimator-confirmed file cannot carry a wire length yet. So a real
-    0359342 run reaches costing on the assumed form band, not the printed figure.
-
-    This test exists to FAIL when that changes, at which point it should be replaced by one
-    asserting the real extracted length. Until then the gap is recorded, not implied.
+    Nothing the engine READS off this pack yields 219.6: wire_length_mm is written only by a
+    bar/wire schedule, MBY432's sheet has none, and no length is inferred from a drawing
+    outline. That remains true and is asserted here so it cannot be assumed away — an
+    extractor that starts finding the figure should replace this test, not silently pass it.
     """
     part, _ = _build(PRINTED)
-    assert part.get("wire_length_mm") is None, \
-        "if a length now arrives from the pack, replace this test with the real assertion"
+    assert part.get("wire_length_mm") is None
 
-    from estimator_confirmed import _FIELD_MAP
-    assert "wire_length_mm" not in _FIELD_MAP, \
-        "the confirmations file can now carry a wire length — wire it in and re-point this"
+
+def test_a_confirmed_length_reaches_costing_and_the_mass_the_drawing_prints(tmp_path):
+    """THE OTHER HALF, NOW CLOSED — and closed by an AUDITED route, not a better guess.
+
+    Handing 219.6 straight to estimate_material proved arithmetic, not plumbing. This drives
+    the whole path a real run takes: a confirmations file beside the job, discovered, parsed,
+    stamped at estimator_confirmed rank, through to the material calculation.
+
+    The figure is a person's reading of the printed sheet and is recorded as one. What makes
+    it safe is not that it is right — it is that it is attributable, outranked by nothing,
+    and visible on the part.
+    """
+    import json
+    import estimator_confirmed as ec
+    from estimator import estimate_material
+
+    (tmp_path / "0359342_estimator_dimensions.json").write_text(json.dumps({
+        "confirmed_by": "J Gray", "confirmed_on": "2026-09-10",
+        "parts": {"MBY432": {"wire_length_mm": 219.6,
+                             "read_from": "page 24, printed overall 219.6"}}}),
+        encoding="utf-8")
+
+    found = ec.find_corrections_file(tmp_path, None, "0359342")
+    assert found is not None
+    data, problems = ec.load_corrections(found)
+    assert not problems
+
+    part, _ = _build(PRINTED)
+    part["quantity"] = 56
+    assert part.get("wire_length_mm") is None, "the pack supplies none — that is the premise"
+
+    report = ec.apply_estimator_confirmed([part], data)
+    assert report["stamped"] == 1 and not report["unmatched"]
+    assert part["wire_length_mm"] == 219.6
+
+    costed = estimate_material(part)
+    assert costed["cost_method"] == "workbook_bar_formula", \
+        "with a length it must leave the assumed-band path"
+    assert costed["blank_length_mm"] == 219.6
+    assert costed["unit_material_mass_kg"] == pytest.approx(0.09, abs=0.005), \
+        "and land on the mass the title block prints"
+
+
+def test_a_part_cannot_be_both_a_blank_and_a_bar(tmp_path):
+    """Stating both sets means the file describes two different parts under one code, and at
+    rank 100 the field order would decide which stock it is bought as."""
+    import json
+    import estimator_confirmed as ec
+    path = tmp_path / "estimator_dimensions.json"
+    path.write_text(json.dumps({"parts": {"A": {
+        "blank_length_mm": 10, "blank_width_mm": 5, "wire_length_mm": 100}}}),
+        encoding="utf-8")
+    data, problems = ec.load_corrections(path)
+    assert any("one or the other" in p for p in problems)
+    assert not data["parts"].get("A", {}).get("wire_length_mm")
+    assert not data["parts"].get("A", {}).get("blank_length_mm")
 
 
 def test_without_a_length_the_line_says_the_length_was_assumed():

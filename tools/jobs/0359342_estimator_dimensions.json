@@ -63,6 +63,11 @@
       "material": "MDF",
       "read_from": "page 22, printed overall 494.0 x 199.0 x 9.0, title block 'MDF, 9mm'. 2.5mm rebate 421.0 x 125.0"
     },
+    "MBY432": {
+      "wire_length_mm": 219.6,
+      "material": "Mild Steel",
+      "read_from": "page 24, printed overall 219.6 on Ø8 mild steel wire (title block 'Steel, Mild Wire Ø8mm'), est mass 0.09 kg. Linear stock: no blank, no laser, no fold. The Ø8 comes from the material cell itself and is not restated here"
+    },
     "MBY434": {
       "blank_length_mm": 24, "blank_width_mm": 24, "thickness_mm": 2,
       "material": "CR4",
