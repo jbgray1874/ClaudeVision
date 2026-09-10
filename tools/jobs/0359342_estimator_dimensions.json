@@ -1,0 +1,92 @@
+{
+  "confirmed_by": "James Gray (SDI)",
+  "confirmed_on": "2026-09-10",
+  "note": "Sizes read off the detail sheets of 0359342_PDF_Edition_Sunglasses_Stand_REV_4.pdf. Pages 8-28 are one part per sheet and the title block names the part, so each figure below is the overall printed on that part's own drawing. Six parts are deliberately ABSENT from this file because a rectangular blank is not the right answer for them - see 0359342_estimator_dimensions.NOTES.md. Quantities are deliberately not stated here.",
+  "parts": {
+    "JAE820": {
+      "blank_length_mm": 638, "blank_width_mm": 538, "thickness_mm": 18,
+      "material": "MDF",
+      "read_from": "page 8, printed overall 638.0 x 538.0, title block 'MDF, 18mm', est mass 4.28 kg"
+    },
+    "JAE821": {
+      "blank_length_mm": 638, "blank_width_mm": 75, "thickness_mm": 18,
+      "material": "MDF",
+      "read_from": "page 9, printed overall 638.0 x 75.0, title block 'MDF, 18mm', est mass 0.64 kg"
+    },
+    "JAE822": {
+      "blank_length_mm": 502, "blank_width_mm": 75, "thickness_mm": 18,
+      "material": "MDF",
+      "read_from": "page 10, printed overall 502.0 x 75.0, title block 'MDF, 18mm', est mass 0.50 kg"
+    },
+    "JAE825": {
+      "blank_length_mm": 190, "blank_width_mm": 110, "thickness_mm": 9,
+      "material": "MDF",
+      "read_from": "page 13, printed overall 190.0 x 110.0 x 9.0, title block 'MDF, 9mm'"
+    },
+    "JAE826": {
+      "blank_length_mm": 1680, "blank_width_mm": 560, "thickness_mm": 18,
+      "material": "MDF",
+      "read_from": "page 14, printed overall 1680.0 x 560.0 x 18.0, title block 'MDF, 18mm'"
+    },
+    "JAE828": {
+      "blank_length_mm": 500, "blank_width_mm": 250, "thickness_mm": 12,
+      "material": "MDF",
+      "read_from": "page 16, printed overall 500.0 x 250.0, title block 'MDF, 12mm'. Rebated 3.0 deep x 100.0 along one edge"
+    },
+    "JAE829": {
+      "blank_length_mm": 500, "blank_width_mm": 250, "thickness_mm": 12,
+      "material": "MDF",
+      "read_from": "page 17, printed overall 500.0 x 250.0, title block 'MDF, 12mm'. Rebated both ends"
+    },
+    "JAE830": {
+      "blank_length_mm": 1649, "blank_width_mm": 250, "thickness_mm": 12,
+      "material": "MDF",
+      "read_from": "page 18, printed overall 1649.0 x 250.0, title block 'MDF, 12mm'"
+    },
+    "JAE831": {
+      "blank_length_mm": 1649, "blank_width_mm": 250, "thickness_mm": 12,
+      "material": "MDF",
+      "read_from": "page 19, printed overall 1649.0 x 250.0, title block 'MDF, 12mm'"
+    },
+    "JAE832": {
+      "blank_length_mm": 1670, "blank_width_mm": 546, "thickness_mm": 18,
+      "material": "MDF",
+      "read_from": "page 20, printed overall 1670.0 x 546.0 x 18.0, title block 'MDF, 18mm'. Laminated to match RAL9010"
+    },
+    "JAE833": {
+      "blank_length_mm": 494, "blank_width_mm": 199, "thickness_mm": 9,
+      "material": "MDF",
+      "read_from": "page 21, printed overall 494.0 x 199.0 x 9.0, title block 'MDF, 9mm'. Rev 2, width increased by 293mm"
+    },
+    "JAE834": {
+      "blank_length_mm": 494, "blank_width_mm": 199, "thickness_mm": 9,
+      "material": "MDF",
+      "read_from": "page 22, printed overall 494.0 x 199.0 x 9.0, title block 'MDF, 9mm'. 2.5mm rebate 421.0 x 125.0"
+    },
+    "MBY434": {
+      "blank_length_mm": 24, "blank_width_mm": 24, "thickness_mm": 2,
+      "material": "CR4",
+      "read_from": "page 26, Dia 24.0 x 2.0 disc, title block 'CR4, 2mm', est mass 0.01 kg. 24 x 24 is the square nesting envelope for a Dia 24 blank, not a printed rectangle"
+    },
+    "MBY435": {
+      "blank_length_mm": 418, "blank_width_mm": 212.5, "thickness_mm": 2,
+      "material": "CR4",
+      "read_from": "page 27, the FLAT PATTERN view printed on the sheet: 418.0 x 212.5. The formed part is 418.0 x 142.0 x 74.0 high - do not use the formed size as the blank"
+    },
+    "MBY439": {
+      "blank_length_mm": 1578, "blank_width_mm": 188, "thickness_mm": 2,
+      "material": "Mild Steel",
+      "read_from": "page 28, printed overall 1578.0 x 188.0 x 2.0, title block 'Steel, Mild 2mm', est mass 0.82 kg (it is a frame, so the net area is well under the blank)"
+    },
+    "A62271": {
+      "blank_length_mm": 1556, "blank_width_mm": 166, "thickness_mm": 6,
+      "material": "Mirror",
+      "read_from": "page 2, printed overall 1556.0 x 166.0 x 6.0, title block 'Mirror, 6mm'. Safety film to rear, light chamfer all edges"
+    },
+    "J13149": {
+      "blank_length_mm": 155, "blank_width_mm": 155, "thickness_mm": 15,
+      "material": "MDF",
+      "read_from": "page 7, printed overall 155.0 x 155.0 x 15.0, title block '15mm MDF'. Laminated, 1mm edging to all sides"
+    }
+  }
+}

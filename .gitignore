@@ -23,6 +23,14 @@ output/
 *.log
 *.txt
 
+# A confirmations file is an INPUT, not an output: what a person read off the drawing,
+# entered once and ranked above everything the engine derived (src/estimator_confirmed.py).
+# The *.json rule above exists to keep run outputs and job data out of the repo, and these
+# are neither — they are small, hand-written, carry no customer geometry beyond overall
+# sizes, and are worthless if they cannot be reviewed in a diff like any other statement
+# of fact. Named narrowly so the blanket rule still holds everywhere else.
+!tools/jobs/*.json
+
 # ── Input data (drawings, spreadsheets) ──────────────────────────────────
 input/
 
