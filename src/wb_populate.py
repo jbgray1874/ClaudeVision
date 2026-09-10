@@ -24,6 +24,7 @@ LAYOUT CHANGES: every cell address lives in CELL_MAP below. If the estimators ha
 Requires openpyxl.
 """
 from __future__ import annotations
+import math as _math
 import os, json, re, shutil, sys
 from datetime import datetime
 
@@ -3414,13 +3415,47 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _cap = int(_cap_map.get("last_row", 0)) - int(_cap_map.get("first_row", 0)) + 1
         if _cap > 0 and len(_blk_list) > _cap:
             for _sp in list(_blk_list[_cap:]):
+                # THE SAME PART MUST COST THE SAME MONEY IN ROW NINE AS IN ROW EIGHT.
+                #
+                # The first cut wrote the engine's NET-PART figure here, which is a different
+                # basis from the one the block uses and reliably a smaller number: the block
+                # charges a nested part its share of a WHOLE SHEET, carrying the drop and the
+                # skeleton — JAE833 is GBP 8.97 nested against GBP 6.72 net. A part's cost
+                # cannot change because it happened to be the ninth panel rather than the
+                # eighth, so the block's own arithmetic is reproduced here:
+                #     ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap)
+                # which is the formula the template puts in the block's Cost Per Part cell.
+                # Only where the record carries neither a sheet price nor a nest count is the
+                # net figure used, and then it is SAID, because a basis change that nobody
+                # announces is how a sheet comes to disagree with itself.
                 _sme = _sp.get("material_estimate") or {}
-                _scost = _safe(_sme.get("cost_per_part_gbp") or _sme.get("unit_material_cost_gbp"))
+                _net = _safe(_sme.get("cost_per_part_gbp") or _sme.get("unit_material_cost_gbp"))
+                _sheet_p = _safe(_sme.get("sheet_price_gbp"))
+                _pps = _safe(_sme.get("parts_per_sheet") or _sp.get("parts_per_sheet"))
+                _scrap = _safe(_sme.get("scrap_pct"))
+                if _scrap is None:
+                    try:
+                        import config as _cfg_spill
+                        _scrap = float((_cfg_spill.NESTING_RULES or {}).get(
+                            "waste_factor_pct", 4.0)) / 100.0
+                    except Exception:                            # noqa: BLE001
+                        _scrap = 0.04
+                if _sheet_p and _pps and _pps > 0:
+                    _scost = round(_math.ceil((_sheet_p / _pps) * 100.0) / 100.0
+                                   * (1.0 + _scrap), 2)
+                    _sbasis = "nested"
+                    _basis = f"{_blk_name} block full; costed here on the same nested basis"
+                else:
+                    _scost = _net
+                    _sbasis = "net_part"
+                    _basis = (f"{_blk_name} block full; costed here at the engine's NET-PART "
+                              f"figure — no sheet price or nest count to nest it with, so this "
+                              f"line is NOT on the block's basis")
                 _spilled_from_blocks.append(dict(_sp) | {
-                    "description": f"{_sp.get('description') or ''} — {_blk_name} block full; "
-                                   f"costed here at the engine's own per-part figure",
+                    "description": f"{_sp.get('description') or ''} — {_basis}",
                     "unit_cost_gbp": _scost,
                     "_block_overflow_from": _blk_name,
+                    "_block_overflow_basis": _sbasis,
                 })
             _flag(f"{_blk_name}: {len(_blk_list)} part(s) for {_cap} template row(s) — "
                   f"{len(_blk_list) - _cap} moved to the Bill of Materials at their own "

@@ -3836,18 +3836,26 @@ _JOINING_OPS = frozenset({
 
 
 def _one_joint_charged_once(decisions: Sequence[Any], graph: Mapping[str, Any]) -> None:
-    """A weld that joins two parts is charged on the assembly, not again on each part.
+    """A joint named on the assembly is not charged again on the parts that joint names.
 
-    0359342's prong assembly MBY433 is two pieces of steel — MBY432 (the prong) and MBY434
-    (the backplate) — welded together, 56 off. The route charged Weld (CO2) and Dress Welds on
-    ALL THREE nodes: GBP 101.55 + GBP 41.11 on the assembly, and the same again on each of its
-    two leaves. GBP 285 for two joints that do not exist.
+    0359342's prong assembly MBY433 is MBY432 (the prong) welded to MBY434 (the backplate),
+    56 off. The route charged Weld (CO2) and Dress Welds on ALL THREE nodes — GBP 101.55 +
+    GBP 41.11 on the assembly and the same again on each leaf — GBP 285 for two joints that
+    do not exist.
 
-    The test is the one thing that cannot be argued with: A LEAF CANNOT BE WELDED TO ITSELF.
-    A part with no children of its own is a single piece of material, so a welding claim on it
-    is really the claim that it takes part in its parent's joint — and the parent is already
-    being charged for that joint. A sub-assembly is left alone: it may have welds of its own
-    inside it, and this evidence cannot tell those from the joint above.
+    THE FIRST CUT OF THIS RULE RESTED ON "A LEAF CANNOT BE WELDED TO ITSELF", AND THAT IS
+    FALSE. A folded single-piece enclosure has a seam weld along the edges that meet, and a
+    leaf in this graph may simply be a fabrication nobody expanded — a weldment whose own
+    members were never read. Either way the part is a leaf and welds in its own right, and
+    a rule keyed on the parent/child shape alone would delete real money. A structural
+    relationship is not evidence about a joint.
+
+    So the evidence has to name the joint. A joining decision carries PARTICIPANTS: the parts
+    the joint is between. Where the assembly's joining decision names this child among them,
+    the child's own claim for that operation IS that joint, identified, and charging it twice
+    is double counting. Where participants are absent or do not name the child, nothing is
+    removed — the overlap is merely POSSIBLE, so it is flagged for a person instead, because
+    a seam weld and a second charge for the same joint look identical from here.
 
     The mirror of the rule already above it (specific_joining_covers_this_assembly), which
     stops a generic assemble being charged on top of a specific joining op.
@@ -3858,22 +3866,69 @@ def _one_joint_charged_once(decisions: Sequence[Any], graph: Mapping[str, Any]) 
         if _d.status == REQUIRED and _d.operation in _JOINING_OPS:
             _by_target.setdefault(str(_d.target_id), []).append(_d)
     for _parent, _kids in _children.items():
-        _parent_ops = {d.operation for d in _by_target.get(str(_parent)) or []}
-        if not _parent_ops:
+        _parent_joints = _by_target.get(str(_parent)) or []
+        if not _parent_joints:
             continue
         for _kid in (_kids or {}):
-            if _children.get(_kid):
-                continue                      # a sub-assembly may hold welds of its own
             for _d in _by_target.get(str(_kid)) or []:
-                if _d.operation not in _parent_ops:
+                # The parent's claim for the SAME operation is the only one that can be the
+                # same joint. Read its participants; a joint that names this child is this
+                # child's joint.
+                _same_op = [p for p in _parent_joints if p.operation == _d.operation]
+                if not _same_op:
                     continue
-                _d.status = NOT_APPLICABLE
-                _d.reason = (
-                    f"{_d.operation} on {_kid} is the joint that makes {_parent}, and "
-                    f"{_parent} is already charged for it. {_kid} is a single piece of "
-                    f"material with no children — it cannot be welded to itself, so this is "
-                    f"the same joint counted twice.")
-                _d.field_provenance["status"] = "joint_already_charged_on_the_assembly"
+                _named = any(str(_kid) in {str(x) for x in (p.participants or [])}
+                             for p in _same_op)
+                if _named:
+                    _d.status = NOT_APPLICABLE
+                    _d.reason = (
+                        f"{_d.operation} on {_kid} is the joint that makes {_parent}: "
+                        f"{_parent}'s own {_d.operation} decision names {_kid} as one of the "
+                        f"parts it joins, and that joint is already charged there. Charging it "
+                        f"here as well is the same joint counted twice.")
+                    _d.field_provenance["status"] = "joint_already_charged_on_the_assembly"
+                else:
+                    # NOT REMOVED, AND NOT LEFT SILENT EITHER. Without participants this could
+                    # be a second charge for the parent's joint or a seam weld of the child's
+                    # own, and guessing either way costs real money in one direction or the
+                    # other. The money stays on the estimate and the question goes on the
+                    # record, which is the house rule for an uncertainty.
+                    _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                        f"{_parent} is also charged {_d.operation} and does not record which "
+                        f"parts its joint is between, so this may be the same joint charged "
+                        f"twice or {_kid}'s own seam. Both are charged; confirm which.")
+                    _d.field_provenance.setdefault(
+                        "review", "joining_overlap_unresolved_with_parent")
+
+
+def _holes_of_its_own(rec: Mapping[str, Any]) -> bool:
+    """Does this part's OWN drawing record holes — a count, a table, or a callout?
+
+    The question that separates purchased STOCK WE PROCESS from a FINISHED PURCHASED
+    COMPONENT. Corian arrives as a sheet and is machined here; a bought-in back panel gets
+    its fixing holes here; a printed self-adhesive label does not get drilled by anybody.
+    Nothing in the part's family answers that — only whether its own sheet shows holes.
+
+    Counts come from the vector reader, tables and callouts from the part's own text. A
+    document-level finish note transcribed onto every record mentions no hole, which is
+    exactly why 0359342's UPC sticker fails this and a real drilled panel passes it.
+    """
+    if not isinstance(rec, Mapping):
+        return False
+    for key in ("hole_count", "holes", "hole_qty", "num_holes", "pierce_count"):
+        try:
+            if float(rec.get(key) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    if rec.get("hole_table") or rec.get("hole_schedule"):
+        return True
+    _text = " ".join(str(rec.get(k) or "") for k in
+                     ("drawing_text", "text", "notes", "title_block_text",
+                      "raw_text", "page_text")).upper()
+    return any(_cue in _text for _cue in
+               ("THRU", "COUNTERSUNK", "COUNTERSINK", " CSK", "COUNTERBORE", "C'BORE",
+                "TAPPED", "DRILL", "REAM", "PILOT HOLE"))
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]]) -> None:
@@ -3932,17 +3987,34 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
                          f"document-level note transcribed onto the part, not from its "
                          f"own route")
             _d.field_provenance["status"] = "family_gate_joinery"
-        elif _fam == BOUGHT_IN and _d.operation in (_METAL_ONLY_OPS | _HOLE_MAKING_OPS):
-            # A PURCHASED SHEET GOOD ARRIVES FINISHED, HOLES INCLUDED. The first cut of this
-            # branch refused only the metal-only ops, which left 0359342 charging Drill on a
-            # self-adhesive UPC STICKER and on a bought-in mirror — GBP 27.64 of hole-making on
-            # two items nobody in this building puts a drill near. If a bought-in panel needs
-            # holes, its supplier makes them and they are in its price.
+        elif _fam == BOUGHT_IN and _d.operation in _METAL_ONLY_OPS:
             _d.status = NOT_APPLICABLE
             _d.reason = (f"{_mat or _d.target_id} is a bought-in sheet good — it is "
                          f"purchased finished and bonded in; {_d.operation} is not its "
                          f"route (the bond/handling time stays)")
             _d.field_provenance["status"] = "family_gate_sheet_good"
+        elif _fam == BOUGHT_IN and _d.operation in _HOLE_MAKING_OPS \
+                and not _holes_of_its_own(_rec):
+            # PURCHASED IS NOT THE SAME AS FINISHED, AND THE FIRST CUT OF THIS CONFLATED THEM.
+            # It refused hole-making on anything bought in, which is wrong twice over: a
+            # purchased PANEL or BLANK is stock we process, and plenty of them are drilled
+            # here. Corian arrives as a sheet and gets machined; a bought-in back panel gets
+            # fixing holes. Suppressing that would swap one bad number for a quieter one.
+            #
+            # What is actually unsupported is hole-making claimed on a purchased item with NO
+            # hole evidence of its own — 0359342's self-adhesive UPC STICKER, whose drill row
+            # came from the general note transcribed onto every record, not from anything on
+            # its own sheet. So the refusal asks for the part's own evidence: a hole count, a
+            # hole table, a drilled/countersunk callout in its own text. Where that exists the
+            # machining stays and the question becomes who supplies it, which is a person's
+            # call, not ours.
+            _d.status = NOT_APPLICABLE
+            _d.reason = (f"{_mat or _d.target_id} is bought in and its own drawing records no "
+                         f"holes — no hole count, no hole table, no drill or countersink "
+                         f"callout — so {_d.operation} here rests on a document-level note "
+                         f"rather than this item's own route. A purchased panel that DOES show "
+                         f"holes keeps its machining; this one shows none")
+            _d.field_provenance["status"] = "family_gate_no_hole_evidence"
 
 
 def project_priced_route(

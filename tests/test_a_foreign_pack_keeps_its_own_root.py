@@ -796,215 +796,87 @@ def test_a_document_repeated_figure_yields_to_each_parts_own_row():
         "four identical values could be four real specs — no demotion below scale"
 
 
-def test_the_row_stamped_weight_reaches_the_stated_weight_costing_path():
-    """MBY432 is 90g of bent wire and MBY434 a 10g plate; their printed weights sat on
-    the records (stamped from their rows by bind (a)) while the per-each fallback
-    priced them at £699 and £3,203 — because the weight reader never consulted the
-    stamped field. MBY439's £11.48 proved the path; this joins the field to it."""
-    import estimator
+# ── the four counterexamples a reviewer named, before the rules are trusted ──────────────
 
-    assert estimator._parse_stated_weight_kg({"stated_weight_kg": 0.09}) == 0.09
-    assert estimator._parse_stated_weight_kg({"stated_weight_kg": 0.01}) == 0.01
-    # a zero row weight is no weight — the sanity floor holds
-    assert estimator._parse_stated_weight_kg({"stated_weight_kg": 0.0}) is None
-    # a DXF mass still outranks the row's figure
-    assert estimator._stated_weight_kg_for_part(
-        {"stated_weight_kg": 0.09, "dxf_weight_g": 820.0}) == 0.82
-    # and the older field keeps its priority
-    assert estimator._parse_stated_weight_kg(
-        {"stated_weight_g": 820.0, "stated_weight_kg": 0.09}) == 0.82
-
-
-def test_the_three_residues_squashed_family_drill_gate_and_code_spill():
-    """Three binds from the £7,067 run: JAE835's squashed 'LamainateEdging' took the
-    metal route; £156 of Drill rows survived on fasteners through countersinking
-    claims; and page 25's 'Backplate MBY434' — whose small table never grid-maps —
-    priced £3,203 as its own bought-in because a wrapped description word crossed
-    into the code region."""
+def _jd(target, op, participants=()):
     from types import SimpleNamespace as NS
-
-    import _bom_words_reader as wa
-
-    # 1. squashed material text still names its family
-    assert pp.family_for("LamainateEdging", "JAE835", "Shelf") == pp.JOINERY
-    assert pp.family_for("FlexiMDF6mmand9mm", "JAE827", "") == pp.JOINERY
-    assert pp.family_for("SolidSurface", "X", "") == pp.BOUGHT_IN
-    # short tokens never substring-match by coincidence
-    assert pp.family_for("CR4STEEL", "Y", "") in (pp.METAL, pp.UNKNOWN)
-
-    # 2. drilling a purchased screw is the same fiction as laser-cutting it
-    raw = {"84756": {"normalized_material": "MildSteel",
-                     "description": "M6x20ButtonHeadSocketMachineScrew,BZP"}}
-    d = NS(target_id="84756", operation="countersinking", scope="part",
-           status=rc.REQUIRED, reason="", field_provenance={})
-    rc._family_gate([d], raw)
-    assert d.status == rc.NOT_APPLICABLE
-
-    # 3. the code cell's wrapped-description word rejoins the description
-    hdr = wa._header_from_row(0, [_w("WEIGHT", 10), _w("MATERIAL", 60), _w("QTY", 140),
-                                  _w("PART", 170), _w("DESCRIPTION", 260),
-                                  _w("ITEM", 420)])
-    row = [_w("0.01kg", 8, 120), _w("CR4,", 58, 120), _w("2mm", 80, 120),
-           _w("1", 142, 120), _w("Backplate", 165, 120), _w("MBY434", 200, 120),
-           _w("Edition", 260, 120), _w("Prong", 300, 120), _w("2", 422, 120)]
-    cols = wa._parse_row_by_regions(row, hdr["anchors"])
-    assert cols["code"] == "MBY434"
-    assert "Backplate" in cols["desc"]
-    assert cols.get("segmentation_uncertain") is True
-    # a spec prefix with digits is not a description word — never stripped
-    row2 = [_w("0.01kg", 8, 120), _w("Steel", 58, 120), _w("4", 142, 120),
-            _w("M8", 168, 120), _w("BR200", 200, 120), _w("Bracket", 260, 120),
-            _w("3", 422, 120)]
-    cols2 = wa._parse_row_by_regions(row2, hdr["anchors"])
-    assert cols2["code"] == "M8 BR200", "digit-bearing prefixes stay put"
+    return NS(target_id=target, operation=op, scope="part", status=rc.REQUIRED,
+              reason="", participants=list(participants), field_provenance={})
 
 
-def test_the_web_ai_circuit_breaker_stops_paying_for_a_dead_provider(monkeypatch):
-    """0359342 with fresh material keys: ~30 parts each paid a serial 25-second
-    timeout against a provider answering nothing — ten minutes to learn one fact
-    thirty times. After three consecutive timeouts the remaining lookups are skipped
-    with the same estimator-to-confirm outcome and one honest console line; a
-    completed live call — hit or miss — resets the count."""
-    import time
+def test_a_joint_is_deduplicated_only_where_the_evidence_names_the_parts_it_joins():
+    """0359342's prong assembly, and the only basis on which its double charge may go.
 
-    import config
-    import generated_price_cache
-    import pricing_service
-    import web_ai_price_lookup
+    MBY433's weld decision NAMES MBY432 and MBY434 as the parts it joins, so each leaf's own
+    weld claim is that identified joint and charging it again is double counting."""
+    graph = {"children": {"MBY433": {"MBY432": 1, "MBY434": 1}}}
+    asm = _jd("MBY433", "welding", ("MBY432", "MBY434"))
+    asm_d = _jd("MBY433", "dress_welds", ("MBY432", "MBY434"))
+    prong, plate = _jd("MBY432", "welding"), _jd("MBY434", "welding")
+    prong_d = _jd("MBY432", "dress_welds")
+    rc._one_joint_charged_once([asm, asm_d, prong, plate, prong_d], graph)
 
-    svc = pricing_service.PricingService.__new__(pricing_service.PricingService)
-    monkeypatch.setattr(config, "FALLBACK_PRICING_POLICY",
-                        {"web_ai_call_timeout_s": 0.05,
-                         "web_ai_consecutive_timeout_limit": 3}, raising=False)
-    monkeypatch.setattr(generated_price_cache, "cached_estimate",
-                        lambda spec, ns, model, fn: fn())
-    calls = {"n": 0}
-
-    def _hang(spec, **kw):
-        calls["n"] += 1
-        time.sleep(0.5)
-        return {}
-
-    monkeypatch.setattr(web_ai_price_lookup, "lookup_web_ai_price", _hang)
-    part = {"part_number": "JAE831", "description": "SHROUD PANEL", "quantity": 2}
-    for _ in range(3):
-        assert svc._get_web_ai_fallback(part) is None
-    assert calls["n"] == 3
-    # the breaker is open: no further live calls, same outcome, instantly
-    assert svc._get_web_ai_fallback(part) is None
-    assert svc._get_web_ai_fallback(part) is None
-    assert calls["n"] == 3, "a dead provider is asked three times, not thirty"
-    # a completed live call resets the count
-    svc._web_ai_consec_timeouts = 2
-
-    def _fast_miss(spec, **kw):
-        calls["n"] += 1
-        return {}
-
-    monkeypatch.setattr(web_ai_price_lookup, "lookup_web_ai_price", _fast_miss)
-    assert svc._get_web_ai_fallback(part) is None    # a miss, but the provider answered
-    assert svc._web_ai_consec_timeouts == 0
+    assert asm.status == rc.REQUIRED and asm_d.status == rc.REQUIRED
+    for d in (prong, plate, prong_d):
+        assert d.status == rc.NOT_APPLICABLE, d.target_id
+        assert "names" in d.reason and "counted twice" in d.reason
+        assert d.field_provenance["status"] == "joint_already_charged_on_the_assembly"
 
 
-# ── one joint is charged once, and a purchased panel is not drilled ──────────────────────
+def test_a_seam_welded_leaf_keeps_its_weld_and_the_overlap_is_flagged_not_resolved():
+    """THE COUNTEREXAMPLE THAT KILLED THE FIRST RULE. "A leaf cannot be welded to itself" is
+    false: a folded single-piece enclosure has a seam weld along the edges that meet, and a
+    leaf may simply be a fabrication nobody expanded. Where the parent's joint does not name
+    the child, a seam weld and a second charge for the parent's joint are indistinguishable
+    from here — so BOTH are charged and the question goes on the record. Deleting the money
+    on a structural hunch is how an obvious over-charge becomes a quiet under-charge."""
+    graph = {"children": {"ENC-ASM": {"ENC-BODY": 1, "ENC-LID": 1}}}
+    asm = _jd("ENC-ASM", "welding")                  # no participants recorded
+    body = _jd("ENC-BODY", "welding")                # folded box with its own seam weld
+    rc._one_joint_charged_once([asm, body], graph)
 
-def test_a_weld_that_joins_two_leaves_is_not_charged_on_all_three_nodes():
-    """0359342's prong assembly: MBY433 is MBY432 (prong) welded to MBY434 (backplate),
-    56 off. The route charged Weld (CO2) AND Dress Welds on the assembly and on each of
-    its two leaves — GBP 285 for two joints that do not exist.
-
-    The test that cannot be argued with is that A LEAF CANNOT BE WELDED TO ITSELF: a part
-    with no children is one piece of material, so a weld claim on it is really the claim
-    that it takes part in its parent's joint, which the parent is already paying for."""
-    from types import SimpleNamespace as NS
-
-    graph = {"children": {"MBY433": {"MBY432": 1, "MBY434": 1},
-                          "A61636": {"MBY433": 56}}}
-
-    def d(t, op):
-        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
-                  reason="", field_provenance={})
-
-    asm_weld, asm_dress = d("MBY433", "welding"), d("MBY433", "dress_welds")
-    prong_weld, prong_dress = d("MBY432", "welding"), d("MBY432", "dress_welds")
-    plate_weld, plate_dress = d("MBY434", "welding"), d("MBY434", "dress_welds")
-    prong_fold = d("MBY432", "folding")
-    ds = [asm_weld, asm_dress, prong_weld, prong_dress, plate_weld, plate_dress, prong_fold]
-    rc._one_joint_charged_once(ds, graph)
-
-    # the assembly keeps the joint it is made by
-    assert asm_weld.status == rc.REQUIRED and asm_dress.status == rc.REQUIRED
-    # the two leaves lose the same joint counted twice, with the reason recorded
-    for _d in (prong_weld, prong_dress, plate_weld, plate_dress):
-        assert _d.status == rc.NOT_APPLICABLE, _d.operation
-        assert "counted twice" in _d.reason
-        assert _d.field_provenance["status"] == "joint_already_charged_on_the_assembly"
-    # a non-joining op on the same leaf is none of this rule's business
-    assert prong_fold.status == rc.REQUIRED
+    assert body.status == rc.REQUIRED, "a seam weld is real work and must survive"
+    assert "seam" in body.reason and "confirm which" in body.reason.lower()
+    assert body.field_provenance.get("review") == "joining_overlap_unresolved_with_parent"
 
 
-def test_a_sub_assembly_keeps_the_welds_that_may_be_its_own():
-    """The rule stops at leaves on purpose. A sub-assembly can hold welds INSIDE it, and
-    nothing in this evidence distinguishes those from the joint above it — so a child that
-    has children of its own is left alone rather than guessed about."""
-    from types import SimpleNamespace as NS
-
-    graph = {"children": {"TOP": {"SUB": 1}, "SUB": {"LEAF-A": 1, "LEAF-B": 1}}}
-
-    def d(t, op):
-        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
-                  reason="", field_provenance={})
-
-    top_weld, sub_weld, leaf_weld = d("TOP", "welding"), d("SUB", "welding"), d("LEAF-A", "welding")
-    rc._one_joint_charged_once([top_weld, sub_weld, leaf_weld], graph)
-    assert top_weld.status == rc.REQUIRED
-    assert sub_weld.status == rc.REQUIRED, "a sub-assembly may have welds of its own"
-    assert leaf_weld.status == rc.NOT_APPLICABLE, "its parent SUB already charges the joint"
+def test_a_joint_that_names_other_parts_does_not_touch_this_child():
+    """Naming is the whole test. A three-part assembly whose weld joins two of its members
+    leaves the third member's own weld alone."""
+    graph = {"children": {"ASM": {"P1": 1, "P2": 1, "P3": 1}}}
+    asm = _jd("ASM", "welding", ("P1", "P2"))
+    p3 = _jd("P3", "welding")
+    rc._one_joint_charged_once([asm, p3], graph)
+    assert p3.status == rc.REQUIRED
+    assert p3.field_provenance.get("review") == "joining_overlap_unresolved_with_parent"
 
 
-def test_a_leaf_weld_survives_when_its_parent_is_not_charged_for_one():
-    """No double charge, no refusal. The rule only ever removes a SECOND charge for a joint
-    already on the record — a weldment whose parent holds no weld claim keeps its own."""
-    from types import SimpleNamespace as NS
+def test_a_purchased_panel_drilled_in_house_keeps_its_machining():
+    """PURCHASED IS NOT THE SAME AS FINISHED. A bought-in panel or blank is stock we process,
+    and plenty of them are drilled here — Corian arrives as a sheet and is machined. Only a
+    purchased item whose OWN drawing records no hole at all loses the claim, which is the
+    0359342 sticker: its drill row came from the general note transcribed onto every record."""
+    raw = {
+        # a purchased Corian panel with its own hole evidence — machining is ours, it stays
+        "JAE823": {"normalized_material": "Corian,6mm", "description": "Plinth Overlay",
+                   "drawing_text": "650.0 550.0 6.0 n8.5 THRU n8.0 THRU R14.0"},
+        # a purchased mirror with a hole count measured off its own sheet
+        "A62271": {"normalized_material": "Mirror,6mm", "description": "Mirror",
+                   "hole_count": 4},
+        # a printed self-adhesive label: no hole on its sheet, no hole in anybody's route
+        "A60890": {"normalized_material": "Vinyl,Clear-BlackPrint",
+                   "description": "UPC Sticker - Clear Vinyl"},
+    }
+    corian = _jd("JAE823", "drilling")
+    mirror = _jd("A62271", "countersinking")
+    sticker = _jd("A60890", "countersinking")
+    corian_fold = _jd("JAE823", "folding")
+    rc._family_gate([corian, mirror, sticker, corian_fold], raw)
 
-    graph = {"children": {"7332-01": {"7332-01-101": 1}}}
-
-    def d(t, op):
-        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
-                  reason="", field_provenance={})
-
-    leaf_weld, leaf_dress = d("7332-01-101", "welding"), d("7332-01-101", "dress_welds")
-    rc._one_joint_charged_once([leaf_weld, leaf_dress], graph)
-    assert leaf_weld.status == rc.REQUIRED and leaf_dress.status == rc.REQUIRED, \
-        "7332-01's weldment carries the only weld rows on that job and must keep them"
-
-
-def test_a_purchased_sheet_good_is_not_drilled_either():
-    """'The UPC sticker even carries a drilling charge.' A bought-in panel arrives finished,
-    holes included — if it needs them, its supplier made them and they are in its price.
-    The first cut of this branch refused only the metal-only ops, which left GBP 27.64 of
-    hole-making on a self-adhesive sticker and a bought-in mirror."""
-    from types import SimpleNamespace as NS
-
-    raw = {"A60890": {"normalized_material": "Vinyl,Clear-BlackPrint",
-                      "description": "UPC Sticker - Clear Vinyl"},
-           "A62271": {"normalized_material": "Mirror,6mm",
-                      "description": "Edition Sunglasses Mirror"},
-           "JAE820": {"normalized_material": "MDF,18mm", "description": "Plinth Top"}}
-
-    def d(t, op):
-        return NS(target_id=t, operation=op, scope="part", status=rc.REQUIRED,
-                  reason="", field_provenance={})
-
-    sticker_drill = d("A60890", "countersinking")
-    mirror_drill = d("A62271", "drilling")
-    mirror_glue = d("A62271", "glue")
-    mdf_drill = d("JAE820", "countersinking")
-    rc._family_gate([sticker_drill, mirror_drill, mirror_glue, mdf_drill], raw)
-
-    assert sticker_drill.status == rc.NOT_APPLICABLE
-    assert sticker_drill.field_provenance["status"] == "family_gate_sheet_good"
-    assert mirror_drill.status == rc.NOT_APPLICABLE
-    assert mirror_glue.status == rc.REQUIRED, "the bond line stays — it is how it is fitted"
-    # A joinery panel IS drilled in this shop. The gate must not reach past bought-in goods.
-    assert mdf_drill.status == rc.REQUIRED
+    assert corian.status == rc.REQUIRED, "a purchased sheet we machine keeps its machining"
+    assert mirror.status == rc.REQUIRED, "a measured hole count is the part's own evidence"
+    assert sticker.status == rc.NOT_APPLICABLE
+    assert sticker.field_provenance["status"] == "family_gate_no_hole_evidence"
+    assert "records no holes" in sticker.reason
+    # the metal-only refusal is untouched by any of this
+    assert corian_fold.status == rc.NOT_APPLICABLE

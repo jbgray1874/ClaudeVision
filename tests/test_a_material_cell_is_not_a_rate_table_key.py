@@ -28,11 +28,15 @@ Two rules, both generic, both evidence-only:
    it comes not what it is, and a GRADE is the material under another name. Anything still
    unresolved stays unpriced — Corian, mirror and laminate edging remain the estimator's.
 
-2. A BLANK THE STATED WEIGHT HAS DISPROVED STOPS SPENDING MONEY. Costing by the printed weight
-   corrected MBY434's material and left the disproved rectangle in place — and the rectangle is
-   what laser time and powder area are computed from. Weight and gauge are both printed, and
-   together they give an area, so the inferred blank keeps the one thing it knew (its shape) and
-   is scaled to the size the evidence proves.
+2. A WEIGHT THAT DISPROVES A BLANK PRICES THE MATERIAL AND LEAVES THE SIZE OPEN. The first
+   version of this rule rescaled the inferred envelope by sqrt(mass ratio) so laser time and
+   powder area would follow the weight. A reviewer killed it before it ran, and rightly: mass
+   and thickness give a NET AREA and nothing else — no aspect ratio, and no PERIMETER, which is
+   what laser time is bought by. Scaling a fallback rectangle invents proportions from whatever
+   the fallback happened to be: a plausible-looking number in place of an obviously wrong one,
+   which is the worse of the two failures. So the contradiction is recorded, the material is
+   costed from the printed weight, and the geometry stays unresolved until the part's own detail
+   page is read.
 
 And the third defect the same job exposed: a costing block that is FULL must spill, not swallow.
 """
@@ -193,68 +197,6 @@ def test_a_prong_is_priced_from_the_weight_its_own_bom_row_prints():
     assert me["unit_material_cost_gbp"] == pytest.approx(round(expected, 2), abs=0.01)
     # The whole point: 56 of these are pounds, not the GBP 698.88 the market figure charged.
     assert me["unit_material_cost_gbp"] * 56 < 20.0
-
-
-def _backplate(**over):
-    """MBY434: a 10 g plate whose blank was INFERRED at 350x250 — no DXF, no model."""
-    part = {
-        "part_number": "MBY434", "description": "Edition Sunglasses Prong Backplate",
-        "normalized_material": "CR4, 2mm", "material": "CR4, 2mm",
-        "normalized_thickness_mm": 2.0, "stated_weight_kg": 0.01, "quantity": 56,
-        "blank_length_mm": 350.0, "blank_width_mm": 250.0,
-        "review_flags": ["geometry_inferred_provisional"],
-    }
-    part.update(over)
-    return part
-
-
-def test_a_blank_the_weight_disproves_is_rescaled_to_what_the_weight_implies():
-    part = _backplate()
-    me = estimate_material(part)
-    assert me.get("stock_form") == "stated_weight", me
-    # Material comes off the printed weight...
-    assert me["unit_material_cost_gbp"] * 56 < 5.0
-    # ...and the blank that laser time and powder area ride on is corrected, not left at 350x250.
-    corrected = part.get("blank_corrected_from_stated_weight")
-    assert corrected, part.get("review_flags")
-    assert (corrected["was_length_mm"], corrected["was_width_mm"]) == (350.0, 250.0)
-    assert me["blank_length_mm"] < 60.0 and me["blank_width_mm"] < 60.0
-    # The one datum the inferred rectangle did know is its SHAPE, and that is kept.
-    assert (me["blank_length_mm"] / me["blank_width_mm"]) == pytest.approx(350.0 / 250.0, rel=0.02)
-    # The corrected blank weighs what the drawing says it weighs.
-    implied_kg = (me["blank_length_mm"] * me["blank_width_mm"] / 1e6) * 0.002 * 7850.0
-    assert implied_kg == pytest.approx(0.01, rel=0.05)
-    assert any("rescaled" in str(f) for f in part.get("review_flags", []))
-
-
-def test_a_blank_that_was_read_off_the_drawing_is_never_rescaled_by_a_weight():
-    """MBY439, AND THE REASON THIS RULE HAS A FENCE AROUND IT.
-
-    A weight is a proxy for AREA only if the part is solid, and a real blank often is not.
-    0359342's MBY439 mirror plate is printed on its detail sheet as 1578 x 188 x 2 with an
-    Est. Mass of 0.82 kg — against the 4.66 kg that rectangle would weigh solid, because 82%
-    of it is aperture. Rescaling by that ratio would shrink a frame somebody actually read
-    off the drawing to roughly 660 x 79 and buy the wrong stock.
-
-    So the rescale is confined to a FALLBACK ENVELOPE, where there is no reading to damage.
-    A blank without geometry_inferred_provisional is costed by its weight and LEFT AS READ,
-    with the disagreement named so the estimator rules on what the weight describes.
-    """
-    part = {
-        "part_number": "MBY439", "description": "Edition Sunglasses Mirror Plate",
-        "normalized_material": "Steel,Mild2mm", "material": "Steel,Mild2mm",
-        "normalized_thickness_mm": 2.0, "stated_weight_kg": 0.82, "quantity": 2,
-        "blank_length_mm": 1578.0, "blank_width_mm": 188.0,
-        "review_flags": [],                      # READ, not inferred — no fallback flag
-    }
-    me = estimate_material(part)
-    assert part.get("blank_corrected_from_stated_weight") is None, \
-        "a read blank must never be shrunk to its own cut-outs"
-    assert me.get("blank_length_mm") == 1578.0 and me.get("blank_width_mm") == 188.0
-    assert any("left as read" in str(f) for f in part.get("review_flags", [])), \
-        part.get("review_flags")
-
-
 def test_a_zero_printed_weight_never_becomes_a_size():
     """Fourteen of the sixteen board parts in this pack print Est. Mass 0.00 kg — including a
     1680 x 560 x 18 panel that really weighs about 12.7 kg, because the mass property was
@@ -272,6 +214,19 @@ def test_a_zero_printed_weight_never_becomes_a_size():
     assert me.get("blank_length_mm") == 400.0
     assert me.get("stock_form") != "stated_weight"
 
+
+
+def _backplate(**over):
+    """MBY434: a 10 g plate whose blank was INFERRED at 350x250 — no DXF, no model."""
+    part = {
+        "part_number": "MBY434", "description": "Edition Sunglasses Prong Backplate",
+        "normalized_material": "CR4, 2mm", "material": "CR4, 2mm",
+        "normalized_thickness_mm": 2.0, "stated_weight_kg": 0.01, "quantity": 56,
+        "blank_length_mm": 350.0, "blank_width_mm": 250.0,
+        "review_flags": ["geometry_inferred_provisional"],
+    }
+    part.update(over)
+    return part
 
 def test_a_measured_blank_still_beats_a_stated_weight_that_disagrees():
     """The reverse case, unchanged: where a DXF measured the blank, the blank is truth and an
@@ -322,3 +277,80 @@ def test_every_costing_block_knows_its_own_capacity():
     for key in ("steel", "other_sheet", "tube", "bom"):
         blk = wb_populate.CELL_MAP[key]
         assert blk["last_row"] >= blk["first_row"] >= 1
+
+
+# ── what a weight may and may not be used for ────────────────────────────────────────
+
+def test_a_weight_that_disproves_a_blank_prices_the_material_and_leaves_the_size_open():
+    """MASS AND THICKNESS GIVE A NET AREA. NOTHING ELSE.
+
+    The first version of this fix rescaled the inferred envelope by sqrt(mass ratio) so that
+    laser time and powder area would follow the weight. A reviewer killed it before it ran,
+    and rightly: a mass gives no aspect ratio and no PERIMETER, and laser time is bought by
+    perimeter. Scaling a fallback rectangle produces proportions invented by whatever the
+    fallback happened to be — a plausible-looking number in place of an obviously wrong one,
+    which is the worse of the two failures.
+
+    So the material is costed from the printed weight, the contradiction is recorded, and the
+    geometry stays unresolved until the part's detail page is read.
+    """
+    part = _backplate()
+    me = estimate_material(part)
+    # the material IS costed from the weight — that much the evidence supports
+    assert me.get("stock_form") == "stated_weight"
+    assert me["unit_material_cost_gbp"] * 56 < 5.0
+    # ...and no rectangle is invented to stand in for the real blank
+    assert "blank_corrected_from_stated_weight" not in part
+    assert me["blank_length_mm"] == 350.0 and me["blank_width_mm"] == 250.0
+    contradiction = part.get("blank_contradicted_by_stated_weight")
+    assert contradiction and contradiction["blank_is_inferred"] is True
+    assert contradiction["factor"] > 100
+    assert any("provisional and probably" in str(f) for f in part.get("review_flags", [])), \
+        part.get("review_flags")
+
+
+def test_a_perforated_part_with_a_read_blank_keeps_that_blank_and_says_why():
+    """MBY439: printed 1578 x 188 x 2 with an Est. Mass of 0.82 kg, against the 4.66 kg that
+    rectangle weighs solid — 82% of it is aperture. The stock is still bought at full size, so
+    the blank stands and the estimator is told what the weight does and does not describe."""
+    part = {
+        "part_number": "MBY439", "description": "Edition Sunglasses Mirror Plate",
+        "normalized_material": "Steel,Mild2mm", "material": "Steel,Mild2mm",
+        "normalized_thickness_mm": 2.0, "stated_weight_kg": 0.82, "quantity": 2,
+        "blank_length_mm": 1578.0, "blank_width_mm": 188.0,
+        "review_flags": [],                      # READ off the drawing, not inferred
+    }
+    me = estimate_material(part)
+    assert me.get("blank_length_mm") == 1578.0 and me.get("blank_width_mm") == 188.0
+    c = part.get("blank_contradicted_by_stated_weight")
+    assert c and c["blank_is_inferred"] is False
+    assert any("cut-outs" in str(f) for f in part.get("review_flags", [])), \
+        part.get("review_flags")
+
+
+def test_identical_panels_cost_the_same_on_either_side_of_the_overflow_boundary():
+    """A PART'S COST CANNOT CHANGE BECAUSE IT IS ROW NINE RATHER THAN ROW EIGHT.
+
+    The first spill wrote the engine's NET-PART figure into the BOM, which is a different basis
+    from the block's and reliably smaller: JAE833 is GBP 8.97 nested against GBP 6.72 net. So
+    the spilled line now reproduces the block's own formula —
+    ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap) — and two identical panels, one
+    inside the block and one pushed out of it, carry the same money.
+    """
+    import math
+    import wb_populate
+
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert "_math.ceil" in src, "the spill must round up the way the block's formula does"
+    assert '"_block_overflow_basis": _sbasis' in src
+
+    # The arithmetic the block cell performs, applied to the record the spill reads.
+    sheet_price, parts_per_sheet, scrap = 43.12, 40.0, 0.04
+    nested = round(math.ceil((sheet_price / parts_per_sheet) * 100.0) / 100.0 * (1 + scrap), 2)
+    assert nested == 1.12, nested                      # ROUNDUP(1.078)=1.08, x1.04
+    net_part = 0.84                                    # what the engine's own per-part figure is
+    assert nested != net_part, \
+        "if these were equal the basis change would not have mattered and this test is pointless"
+
+    # And where a record cannot be nested, the basis change is ANNOUNCED rather than hidden.
+    assert "is NOT on the block's basis" in src
