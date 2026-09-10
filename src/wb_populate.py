@@ -3415,55 +3415,39 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _cap = int(_cap_map.get("last_row", 0)) - int(_cap_map.get("first_row", 0)) + 1
         if _cap > 0 and len(_blk_list) > _cap:
             for _sp in list(_blk_list[_cap:]):
-                # THE SAME PART MUST COST THE SAME MONEY IN ROW NINE AS IN ROW EIGHT.
+                # THE SAME PART MUST COST THE SAME MONEY IN ROW NINE AS IN ROW EIGHT — AND
+                # FROM OUT HERE, IT CANNOT BE MADE TO.
                 #
-                # The first cut wrote the engine's NET-PART figure here, which is a different
-                # basis from the one the block uses and reliably a smaller number: the block
-                # charges a nested part its share of a WHOLE SHEET, carrying the drop and the
-                # skeleton — JAE833 is GBP 8.97 nested against GBP 6.72 net. A part's cost
-                # cannot change because it happened to be the ninth panel rather than the
-                # eighth, so the block's own arithmetic is reproduced here:
-                #     ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap)
-                # which is the formula the template puts in the block's Cost Per Part cell.
-                # Only where the record carries neither a sheet price nor a nest count is the
-                # net figure used, and then it is SAID, because a basis change that nobody
-                # announces is how a sheet comes to disagree with itself.
+                # The first spill wrote the engine's NET-PART figure, a different basis from the
+                # block's and reliably smaller. The second reproduced the block's FORMULA,
+                # ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap) — and the run proved
+                # that wrong too, in the way that matters most: it used the ENGINE's inputs, and
+                # the engine's parts-per-sheet is not the workbook's. 0359342's JAE834 came out
+                # at GBP 0.84 against its identical twin JAE833, in the block, at GBP 1.12. A
+                # confident label on a number that still moved with the row.
+                #
+                # Parts-per-sheet is computed by the TEMPLATE's own cell, from inputs the block
+                # row supplies, and nothing out here can reproduce it without reimplementing a
+                # nest we would then have to keep in step. So this stops pretending: the spilled
+                # line carries the engine's net-part figure, which EXCLUDES the sheet drop the
+                # block would have charged, and it is labelled as what it is — an under-charge
+                # of unknown size that a person has to settle. Visible and wrong beats invisible
+                # and wrong, and an estimator can act on it.
+                #
+                # The real fix is a wider block in the template, which is a change to the
+                # workbook and not to this writer.
                 _sme = _sp.get("material_estimate") or {}
-                _net = _safe(_sme.get("cost_per_part_gbp") or _sme.get("unit_material_cost_gbp"))
-                _sheet_p = _safe(_sme.get("sheet_price_gbp"))
-                _pps = _safe(_sme.get("parts_per_sheet") or _sp.get("parts_per_sheet"))
-                _scrap = _safe(_sme.get("scrap_pct"))
-                if _scrap is None:
-                    try:
-                        import config as _cfg_spill
-                        _scrap = float((_cfg_spill.NESTING_RULES or {}).get(
-                            "waste_factor_pct", 4.0)) / 100.0
-                    except Exception:                            # noqa: BLE001
-                        _scrap = 0.04
-                if _sheet_p and _pps and _pps > 0:
-                    _scost = round(_math.ceil((_sheet_p / _pps) * 100.0) / 100.0
-                                   * (1.0 + _scrap), 2)
-                    _sbasis = "nested"
-                    _basis = f"{_blk_name} block full; costed here on the same nested basis"
-                else:
-                    # A BASIS CHANGE IS A PROVISIONAL FIGURE, NOT AN EQUIVALENT ONE. Without a
-                    # sheet price or a nest count there is nothing to nest with, so this line
-                    # is the engine's NET-PART cost — which excludes the drop and the skeleton
-                    # the block would have charged, and is therefore an UNDER-charge of unknown
-                    # size. It must not read like any other row: the line says so in the
-                    # description, the flag says so on the run, and it is marked PROVISIONAL so
-                    # the report counts it among the things a person still has to settle.
-                    _scost = _net
-                    _sbasis = "net_part"
-                    _basis = (f"{_blk_name} block full — PROVISIONAL: costed here at the "
-                              f"engine's NET-PART figure because the record carries no sheet "
-                              f"price or nest count. That excludes the sheet drop the block "
-                              f"would have charged, so this line is UNDER-stated; nest it by "
-                              f"hand before issue")
-                    _flag(f"{_blk_name} overflow {_sp.get('part_number')}: no sheet price or "
-                          f"nest count, so the spilled line uses the NET-PART basis and is "
-                          f"under-stated against the block's nested basis — estimator input.",
-                          flags)
+                _scost = _safe(_sme.get("cost_per_part_gbp")
+                               or _sme.get("unit_material_cost_gbp"))
+                _sbasis = "net_part_provisional"
+                _basis = (f"{_blk_name} block full — PROVISIONAL: this line carries the engine's "
+                          f"NET-PART cost because parts-per-sheet is computed by the block's own "
+                          f"cell and cannot be reproduced out here. It EXCLUDES the sheet drop "
+                          f"the block charges its rows, so it is UNDER-stated against an "
+                          f"identical part inside the block — nest it by hand before issue")
+                _flag(f"{_blk_name} overflow {_sp.get('part_number')}: costed on the NET-PART "
+                      f"basis, not the block's nested basis, so it is under-stated against an "
+                      f"identical part that fitted in the block — estimator input.", flags)
                 _spilled_from_blocks.append(dict(_sp) | {
                     "description": f"{_sp.get('description') or ''} — {_basis}",
                     "unit_cost_gbp": _scost,

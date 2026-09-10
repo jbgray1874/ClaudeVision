@@ -264,6 +264,30 @@ def _price_per_kg_for_material(part: Optional[Dict[str, Any]], material) -> Opti
     direct = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
     if direct is not None:
         return direct
+    # A PURCHASED SCREW IS NOT PRICED BY ITS SCRAP WEIGHT, AND THIS IS WHERE I BROKE THAT.
+    #
+    # Resolving "MildSteel" to MILD STEEL gave the fasteners a GBP/kg rate they never had, and
+    # the stated-weight path then costed them by mass: 0359342's M6 button-head screw and M8
+    # T-nut both came out at GBP 0.01 EACH. That is as wrong as the GBP 7.50 it replaced, in the
+    # direction nobody notices — the exact trade this work is supposed to avoid. A fastener's
+    # price is its CATALOGUE price; the steel in it is a rounding error against the thread, the
+    # plating and the box.
+    #
+    # So a part the shared bought-in vocabulary recognises as purchased hardware is refused a
+    # resolved per-kg rate, and falls back to the indicative/unpriced treatment it had before —
+    # an honest gap that the bought-in price book (backlog #11) is the real answer to. Only the
+    # RESOLVED path is gated: a name that already carried a rate behaves exactly as it did, so
+    # this neither widens nor narrows anything outside the change that caused it.
+    if isinstance(part, dict):
+        try:
+            from pack_profile import BOUGHT_IN, family_for
+            from part_identity import synthesise_bought_in_code
+            _pn = str(part.get("part_number") or "")
+            _desc = str(part.get("description") or "")
+            if synthesise_bought_in_code(_desc) or family_for("", _pn, "") == BOUGHT_IN:
+                return None
+        except Exception:                                    # noqa: BLE001
+            pass
     try:
         import config as _cfg
         key = _cfg.resolve_material_rate_key(material)

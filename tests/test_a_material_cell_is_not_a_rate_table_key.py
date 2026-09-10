@@ -38,9 +38,11 @@ Two rules, both generic, both evidence-only:
    costed from the printed weight, and the geometry stays unresolved until the part's own detail
    page is read.
 
-3. A COSTING BLOCK THAT IS FULL MUST SPILL, NOT SWALLOW — and the spilled line must carry
-   the block's OWN nesting arithmetic, because a part's cost cannot depend on whether it
-   landed on row eight or row nine.
+3. A COSTING BLOCK THAT IS FULL MUST SPILL, NOT SWALLOW — and where the spilled line cannot
+   be put on the block's basis, it says so. Two attempts to equalise it failed: the net figure
+   silently under-charged, and reproducing the block's formula used the ENGINE's parts-per-sheet
+   where the WORKBOOK's cell computes its own, so JAE834 spilled at GBP 0.84 against its
+   identical twin inside the block at GBP 1.12. The claim is withdrawn and the gap declared.
 """
 from __future__ import annotations
 
@@ -246,32 +248,6 @@ def test_a_weight_that_agrees_with_its_blank_leaves_the_blank_alone():
     me = estimate_material(part)
     assert part.get("blank_corrected_from_stated_weight") is None
     assert me.get("blank_length_mm") == 350.0
-
-
-# ── 3. a block that is full spills, it does not swallow ──────────────────────────────
-
-def test_a_costing_block_that_is_full_moves_the_rest_to_the_bom_with_their_money():
-    """0359342 has nine board panels for an eight-row Other Sheet Material block. The ninth
-    (JAE834, a real 9mm MDF shelf at GBP 6.72) was written nowhere, while the BOM still carried
-    its cross-reference line pointing at a row that does not exist — and the report explained
-    the GBP 0.00 as a missing catalogue price, which is not what happened."""
-    import wb_populate
-
-    cap = (wb_populate.CELL_MAP["other_sheet"]["last_row"]
-           - wb_populate.CELL_MAP["other_sheet"]["first_row"] + 1)
-    board = [{"part_number": f"JAE{820 + i}", "description": f"panel {i}", "quantity": 2,
-              "material_estimate": {"cost_per_part_gbp": 6.72}} for i in range(cap + 1)]
-
-    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    # The spill happens before the cross-reference rows are built, so the overflowed part never
-    # gets a line claiming it is costed in a block it is not in.
-    assert src.index("_spilled_from_blocks") < src.index("_xref_rows: List[Dict[str, Any]] = []")
-    assert "block full; " in src
-    # And the money travels with it: the spilled line carries the engine's own per-part cost.
-    assert '"unit_cost_gbp": _scost' in src
-    assert "del _blk_list[_cap:]" in src
-
-
 def test_every_costing_block_knows_its_own_capacity():
     """The spill reads each block's capacity from CELL_MAP rather than a second copy of the
     row numbers — the drift that produced the silent drop in the first place."""
@@ -309,89 +285,6 @@ def test_a_weight_that_disproves_a_blank_prices_the_material_and_leaves_the_size
     assert contradiction["factor"] > 100
     assert any("provisional and probably" in str(f) for f in part.get("review_flags", [])), \
         part.get("review_flags")
-
-
-def test_a_perforated_part_with_a_read_blank_keeps_that_blank_and_says_why():
-    """MBY439: printed 1578 x 188 x 2 with an Est. Mass of 0.82 kg, against the 4.66 kg that
-    rectangle weighs solid — 82% of it is aperture. The stock is still bought at full size, so
-    the blank stands and the estimator is told what the weight does and does not describe."""
-    part = {
-        "part_number": "MBY439", "description": "Edition Sunglasses Mirror Plate",
-        "normalized_material": "Steel,Mild2mm", "material": "Steel,Mild2mm",
-        "normalized_thickness_mm": 2.0, "stated_weight_kg": 0.82, "quantity": 2,
-        "blank_length_mm": 1578.0, "blank_width_mm": 188.0,
-        "review_flags": [],                      # READ off the drawing, not inferred
-    }
-    me = estimate_material(part)
-    assert me.get("blank_length_mm") == 1578.0 and me.get("blank_width_mm") == 188.0
-    c = part.get("blank_contradicted_by_stated_weight")
-    assert c and c["blank_is_inferred"] is False
-    assert any("cut-outs" in str(f) for f in part.get("review_flags", [])), \
-        part.get("review_flags")
-
-
-# ── the overflow boundary must be invisible to the money ─────────────────────────────
-
-def _spill_cost(sheet_price, parts_per_sheet, scrap, net):
-    """The arithmetic wb_populate's spill performs, isolated so it can be asserted directly."""
-    import math
-    if sheet_price and parts_per_sheet and parts_per_sheet > 0:
-        return round(math.ceil((sheet_price / parts_per_sheet) * 100.0) / 100.0
-                     * (1.0 + scrap), 2), "nested"
-    return net, "net_part"
-
-
-def test_swapping_two_identical_panels_across_the_overflow_boundary_moves_no_money():
-    """A PART'S COST CANNOT DEPEND ON ITS ROW NUMBER, and a reviewer asked for exactly this
-    case: take two panels, put each on the inside and then the outside of the eight-row
-    boundary, and the total must not move.
-
-    The first spill wrote the engine's NET-PART figure, a different basis from the block's and
-    reliably smaller — JAE833 is GBP 8.97 nested against GBP 6.72 net — so the ninth panel was
-    cheaper than the eighth purely by position. The spill now reproduces the block's own cell
-    formula, ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap).
-    """
-    # Two real 9mm MDF shelves off the same sheet: identical inputs, so identical money.
-    a = dict(sheet_price=43.12, parts_per_sheet=40.0, scrap=0.04, net=0.84)
-    b = dict(sheet_price=43.12, parts_per_sheet=40.0, scrap=0.04, net=0.84)
-
-    in_block = _spill_cost(**a)[0]          # what the block's cell computes
-    spilled = _spill_cost(**b)[0]           # what the spilled row now writes
-    assert in_block == spilled, "the boundary changed the money"
-
-    # And with the pair swapped, the ORDER TOTAL is unchanged — which is the claim that matters.
-    assert _spill_cost(**a)[0] + _spill_cost(**b)[0] == in_block + spilled
-
-    # The basis is the block's, not the net one, and it is not the net figure by accident.
-    assert _spill_cost(**a)[1] == "nested"
-    assert in_block != a["net"], \
-        "if nested and net agreed this test would prove nothing — pick inputs where they differ"
-
-
-def test_a_spilled_line_that_cannot_be_nested_is_marked_provisional_not_equivalent():
-    """Where the record carries no sheet price and no nest count there is nothing to nest with,
-    so the line falls back to the NET-PART figure — which excludes the sheet drop the block
-    would have charged and is therefore an under-charge of unknown size. That is a provisional
-    figure, not an equivalent one, and it must not read like any other row."""
-    cost, basis = _spill_cost(None, None, 0.04, 6.72)
-    assert (cost, basis) == (6.72, "net_part")
-
-    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    assert "PROVISIONAL: costed here at the" in src, \
-        "the spilled line must say on its own face that its basis changed"
-    assert "UNDER-stated" in src
-    assert "_flag(f\"{_blk_name} overflow" in src, \
-        "and the run must carry the same warning, not only the cell"
-
-
-def test_the_spill_reproduces_the_blocks_formula_and_not_an_approximation_of_it():
-    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    assert "_math.ceil" in src, "the block's cell rounds the per-part share UP; so must the spill"
-    assert '"_block_overflow_basis": _sbasis' in src
-
-
-# ── removing a wrong correction is not the same as making the number honest ───────────
-
 def test_a_guessed_blank_its_own_weight_disproves_blocks_the_estimate():
     """THE VERIFICATION A REVIEWER ASKED FOR, not the assumption that the revert was enough.
 
@@ -437,3 +330,94 @@ def test_a_blank_that_was_read_is_not_reported_as_a_guess():
     estimate_material(part)
     assert part["blank_contradicted_by_stated_weight"]["blank_is_inferred"] is False
     assert invariants.check_a_guessed_blank_its_own_weight_disproves({"parts": [part]}) == []
+
+
+# ── the overflow boundary: what can and cannot be promised from outside a block ───────
+
+def test_nothing_is_dropped_when_a_costing_block_is_full():
+    """The defect that started this: nine board panels for an eight-row block left JAE834 — a
+    real 9mm MDF shelf, eight per unit — written nowhere, while the BOM still carried its
+    cross-reference line saying "costed in Other Sheet Material below" and the report explained
+    the GBP 0.00 as a missing catalogue price. The spill happens BEFORE the cross-reference rows
+    are built, so an overflowed part never claims to be costed in a block it is not in."""
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert src.index("_spilled_from_blocks") < src.index("_xref_rows: List[Dict[str, Any]] = []")
+    assert "del _blk_list[_cap:]" in src
+    assert "block full" in src
+
+
+def test_the_overflow_basis_is_declared_provisional_rather_than_claimed_equivalent():
+    """WHAT THE RUN TAUGHT, AND WHY THIS TEST CHANGED.
+
+    An earlier version of this file asserted that identical panels cost the same on either side
+    of the boundary, and the code reproduced the block's formula to make that true:
+    ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap). The live run disproved it. The
+    formula was right and the INPUTS were not — the engine's parts-per-sheet is not the
+    workbook's, so JAE834 spilled at GBP 0.84 against its identical twin JAE833, inside the
+    block, at GBP 1.12. A confident label on a number that still moved with the row.
+
+    Parts-per-sheet is computed by the template's own cell. Nothing outside the block can
+    reproduce it without reimplementing a nest we would then have to keep in step, so the claim
+    is withdrawn: the spilled line carries the engine's NET-PART cost, says so, says it is
+    under-stated, and raises it for a person. Visible and wrong beats invisible and wrong.
+
+    The honest fix is a wider block in the template — a change to the workbook, not to this
+    writer — and until then this is a declared gap rather than a silent one.
+    """
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert "PROVISIONAL: this line carries the engine's" in src
+    assert "UNDER-stated" in src
+    assert "cannot be reproduced out here" in src
+    assert '_sbasis = "net_part_provisional"' in src
+    # and the run carries the same warning, not only the cell
+    assert '_flag(f"{_blk_name} overflow' in src
+    # the withdrawn claim must not survive anywhere in the writer
+    assert "on the same nested basis" not in src, \
+        "the spill must not claim the block's basis it cannot reproduce"
+    assert "_math.ceil" not in src, \
+        "reproducing the block formula from outside the block was the thing that failed"
+
+
+# ── a purchased part is not priced by the steel in it ─────────────────────────────────
+
+@pytest.mark.parametrize("pn,desc", [
+    ("84756", "M6x20ButtonHeadSocketMachineScrew,BZP"),
+    ("R00500", "M8TNut031.00.285"),
+    ("RM05057", "M4x10GrubSocketScrew,BZP"),
+    ("RM08167", "M8x80CapHeadSocketMachineScrew,BZP"),
+])
+def test_purchased_hardware_is_never_priced_from_its_scrap_weight(pn, desc):
+    """THE DEFECT THIS FIX INTRODUCED, CAUGHT IN THE RUN THAT CONTAINED IT.
+
+    Resolving "MildSteel" to MILD STEEL gave the fasteners a GBP/kg rate they had never had, and
+    the stated-weight path then costed them by mass: 0359342's M6 button-head screw and M8 T-nut
+    both came out at GBP 0.01 EACH. That is as wrong as the GBP 7.50 it replaced, in the
+    direction nobody notices — an obvious over-charge traded for a quiet under-charge, which is
+    the one outcome this whole line of work is supposed to avoid.
+
+    A fastener's price is its CATALOGUE price. The steel in it is a rounding error against the
+    thread, the plating and the box, so a part the shared bought-in vocabulary recognises as
+    purchased hardware is refused a RESOLVED per-kg rate and falls back to the indicative or
+    unpriced treatment it had before. The bought-in price book is the real answer; an honest gap
+    is the right placeholder for it.
+    """
+    part = {"part_number": pn, "description": desc}
+    assert _price_per_kg_for_material(part, "MildSteel") is None
+    assert "material_rate_key_resolved" not in part
+
+
+def test_a_fabricated_part_still_reaches_the_rate_the_resolver_found():
+    """The gate is for PURCHASED hardware only. MBY432 is a made part — a bent wire prong — and
+    must keep the mild-steel rate that took it from GBP 698.88 to about GBP 4."""
+    part = {"part_number": "MBY432", "description": "Edition Sunglasses Prong"}
+    assert _price_per_kg_for_material(part, "Steel, Mild Wire") == \
+        config.MATERIAL_PRICE_GBP_PER_KG["MILD STEEL"]
+
+
+def test_a_hardware_name_that_already_had_a_rate_is_not_changed_by_this_gate():
+    """Only the RESOLVED path is gated. A hardware part whose material already carried a rate
+    behaves exactly as it did before any of this work — the gate fixes what I broke and does not
+    quietly widen into behaviour nobody asked about."""
+    part = {"part_number": "84756", "description": "M6x20ButtonHeadSocketMachineScrew,BZP"}
+    assert _price_per_kg_for_material(part, "MILD STEEL") == \
+        config.MATERIAL_PRICE_GBP_PER_KG["MILD STEEL"]
