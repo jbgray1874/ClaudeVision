@@ -210,6 +210,14 @@ def _parse_stated_weight_kg(part: Dict[str, Any]) -> Optional[float]:
         _kg = _swg / 1000.0
         if 0.001 <= _kg <= 500.0:
             return round(_kg, 4)
+    # The part's own BOM-row weight, stamped by apply_bom_row_evidence_to_parts at
+    # bom_tree rank. 0359342: MBY432 is 90g of bent wire and MBY434 a 10g plate — the
+    # printed weights sat on the records while the per-each fallback priced them at
+    # £699 and £3,203 for about £4 of steel between them. MBY439, whose weight arrived
+    # through the older field, priced sanely on this same path all along.
+    _swkg = _safe_float(part.get("stated_weight_kg"))
+    if _swkg is not None and 0.001 <= _swkg <= 500.0:
+        return round(_swkg, 4)
     weights = part.get("weights") or part.get("title_block", {}).get("weights") or []
     if isinstance(weights, str):
         weights = [weights]

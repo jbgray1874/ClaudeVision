@@ -794,3 +794,22 @@ def test_a_document_repeated_figure_yields_to_each_parts_own_row():
         small, [{"part_number": "A", "thickness_mm": 18.0, "material_text": "MDF,18mm"}])
     assert small[0]["normalized_thickness_mm"] == 6.0, \
         "four identical values could be four real specs — no demotion below scale"
+
+
+def test_the_row_stamped_weight_reaches_the_stated_weight_costing_path():
+    """MBY432 is 90g of bent wire and MBY434 a 10g plate; their printed weights sat on
+    the records (stamped from their rows by bind (a)) while the per-each fallback
+    priced them at £699 and £3,203 — because the weight reader never consulted the
+    stamped field. MBY439's £11.48 proved the path; this joins the field to it."""
+    import estimator
+
+    assert estimator._parse_stated_weight_kg({"stated_weight_kg": 0.09}) == 0.09
+    assert estimator._parse_stated_weight_kg({"stated_weight_kg": 0.01}) == 0.01
+    # a zero row weight is no weight — the sanity floor holds
+    assert estimator._parse_stated_weight_kg({"stated_weight_kg": 0.0}) is None
+    # a DXF mass still outranks the row's figure
+    assert estimator._stated_weight_kg_for_part(
+        {"stated_weight_kg": 0.09, "dxf_weight_g": 820.0}) == 0.82
+    # and the older field keeps its priority
+    assert estimator._parse_stated_weight_kg(
+        {"stated_weight_g": 820.0, "stated_weight_kg": 0.09}) == 0.82
