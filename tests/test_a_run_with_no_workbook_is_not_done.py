@@ -16,6 +16,7 @@ already warned when NOTHING was copied; the case that actually happened was file
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -138,3 +139,58 @@ def test_a_report_and_a_log_are_filed_alongside_the_workbook(tmp_path):
     assert names == {Path(k).name for k in written} | {"0359342_run.log"}, names
     assert not any("NO WORKBOOK" in line for line in log), log
     assert all((tmp_path / "dest" / n).is_file() for n in names)
+
+
+def test_a_workbook_the_engine_declares_is_filed_even_if_the_diff_misses_it(tmp_path):
+    """THE 0359342 FAILURE, AS A TEST.
+
+    The engine's console said "Populated template saved: 0359342_20260910_123656.xlsx" and the
+    collector said NO WORKBOOK and filed two JSONs. The snapshot diff is an INFERENCE about
+    what this run produced — it depends on the `before` snapshot matching the same tree, on
+    mtimes moving, and on one execution per tree. Here the diff is deliberately blinded (the
+    `before` snapshot is taken AFTER the files exist, so nothing looks new) and the workbook
+    must still be filed, because the engine DECLARED it in saved_output_paths.
+
+    A declaration and an observation cannot both miss the same file.
+    """
+    r = runner
+
+    engine_root = tmp_path / "engine"
+    est = engine_root / "output" / "estimates"
+    jsn = engine_root / "output" / "json"
+    est.mkdir(parents=True)
+    jsn.mkdir(parents=True)
+    wb = est / "0359342_20260910_123656.xlsx"
+    wb.write_text("workbook", encoding="utf-8")
+    report = est / "0359342_report.html"
+    report.write_text("report", encoding="utf-8")
+    summary = jsn / "0359342.json"
+    summary.write_text(json.dumps({"saved_output_paths": {
+        "json": str(summary), "workbook": str(wb), "report": str(report)}}), encoding="utf-8")
+
+    before = r.snapshot(engine_root)          # taken AFTER: the diff sees nothing new at all
+    log: list = []
+    filed = r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342")
+
+    names = {f["name"] for f in filed}
+    assert wb.name in names, f"the declared workbook was not filed: {names}"
+    assert report.name in names
+    assert not any("NO WORKBOOK" in line for line in log), log
+    assert (tmp_path / "dest" / wb.name).is_file()
+
+
+def test_the_collector_says_where_it_looked(tmp_path):
+    """When a file an estimator expects does not arrive, the next question is always "did it
+    look in the right place", and until now the run log could not answer it."""
+    r = runner
+
+    engine_root = tmp_path / "engine"
+    (engine_root / "output" / "estimates").mkdir(parents=True)
+    before = r.snapshot(engine_root)
+    log: list = []
+    r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342")
+
+    looked = [line for line in log if "looked in" in line]
+    assert looked, log
+    assert "declared by the engine" in looked[0]
+    assert "skipped on suffix" in looked[0]

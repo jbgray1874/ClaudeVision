@@ -28,6 +28,7 @@ about costing, that is a bug.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -142,6 +143,62 @@ def snapshot(engine_root: Path) -> Dict[str, float]:
     return seen
 
 
+def declared_outputs(engine_root: Path, drawing_number: str = "") -> List[Path]:
+    """The files the ENGINE SAYS it wrote, read from its own summary JSON.
+
+    A DECLARATION BEATS AN INFERENCE, AND THE SNAPSHOT DIFF IS AN INFERENCE. collect() decided
+    what this run produced by comparing the output tree before and after, which is sound
+    reasoning and fragile in practice: it depends on the `before` snapshot having been taken
+    against the same tree, on mtimes moving, and on one execution per tree. 0359342 reported
+    "NO WORKBOOK" and filed two files while its own console said
+    "Populated template saved: 0359342_20260910_123656.xlsx" — a workbook that existed, on
+    disk, in a watched folder, and was not copied.
+
+    The engine already publishes `saved_output_paths` into its summary JSON (json, text, log,
+    csv, sql, the workbook, quote, report and covering note as each is written). Reading that
+    turns "what appeared" into "what the engine says it made", and the two together cannot
+    both miss the same file. Anything named but absent is returned by neither and reported by
+    the caller — a declared file that is not on disk is a finding, not a silence.
+    """
+    out: List[Path] = []
+    seen: set = set()
+    folder = Path(engine_root) / "output" / "json"
+    if not folder.is_dir():
+        return out
+    stem = (drawing_number or "").replace("/", "-").replace("\\", "-").strip()
+    candidates = []
+    if stem:
+        exact = folder / f"{stem}.json"
+        if exact.is_file():
+            candidates.append(exact)
+    if not candidates:
+        try:                                  # newest summary, when the name is not known
+            candidates = sorted((f for f in folder.iterdir() if f.suffix.lower() == ".json"),
+                                key=lambda f: f.stat().st_mtime, reverse=True)[:1]
+        except OSError:
+            return out
+    for doc_path in candidates:
+        try:
+            doc = json.loads(doc_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        for holder in (doc, doc.get("estimate_summary") or {}):
+            if not isinstance(holder, dict):
+                continue
+            for value in (holder.get("saved_output_paths") or {}).values():
+                for one in (value if isinstance(value, list) else [value]):
+                    if not one or not isinstance(one, str):
+                        continue
+                    item = Path(one)
+                    key = str(item)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if item.is_file():
+                        out.append(item)
+    return out
+
+
 def collect(engine_root: Path, dest: Path, before: Dict[str, float],
             log: List[str], drawing_number: str = "") -> List[Dict[str, str]]:
     """Copy this run's finished artefacts to the share.
@@ -167,8 +224,21 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
     fresh = [Path(p) for p, mtime in sorted(after.items())
              if before.get(p) is None or mtime > before[p]]
 
-    for item in fresh:
+    # WHAT APPEARED, PLUS WHAT THE ENGINE SAYS IT MADE. Either alone has missed a workbook
+    # that was on disk the whole time; together they cannot both miss the same file.
+    _declared = declared_outputs(engine_root, drawing_number)
+    _seen: set = set()
+    _wanted: List[Path] = []
+    for item in list(fresh) + _declared:
+        key = str(item).lower()
+        if key not in _seen:
+            _seen.add(key)
+            _wanted.append(item)
+
+    _skipped_suffix = 0
+    for item in _wanted:
         if item.suffix.lower() not in DELIVERABLE_SUFFIXES:
+            _skipped_suffix += 1
             continue
         try:
             shutil.copy2(item, dest / item.name)
@@ -176,6 +246,16 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
         except OSError as exc:
             log.append(f"[collect] could not copy {item.name} — {exc}")
 
+    # SAY WHAT WAS LOOKED AT, NOT ONLY WHAT WAS TAKEN. When a file an estimator expects does
+    # not arrive, the next question is always "did it look in the right place" — and until now
+    # the log could not answer it. Each watched folder, its file count, and how the two
+    # discovery routes contributed, so a miss is diagnosable from the run log alone.
+    _counts = ", ".join(
+        f"{name}={sum(1 for k in after if str(Path(k).parent).lower().endswith(name))}"
+        for name in WATCHED_DIRS)
+    log.append(f"[collect] looked in {Path(engine_root) / 'output'} ({_counts}); "
+               f"{len(fresh)} new/changed, {len(_declared)} declared by the engine, "
+               f"{len(_wanted)} distinct, {_skipped_suffix} skipped on suffix")
     log.append(f"[collect] {len(filed)} file(s) written to {dest}")
     if not filed:
         log.append("[collect] NOTHING was copied. The engine exited cleanly but wrote "
