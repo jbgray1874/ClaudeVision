@@ -38,7 +38,9 @@ Two rules, both generic, both evidence-only:
    costed from the printed weight, and the geometry stays unresolved until the part's own detail
    page is read.
 
-And the third defect the same job exposed: a costing block that is FULL must spill, not swallow.
+3. A COSTING BLOCK THAT IS FULL MUST SPILL, NOT SWALLOW — and the spilled line must carry
+   the block's OWN nesting arithmetic, because a part's cost cannot depend on whether it
+   landed on row eight or row nine.
 """
 from __future__ import annotations
 
@@ -328,29 +330,110 @@ def test_a_perforated_part_with_a_read_blank_keeps_that_blank_and_says_why():
         part.get("review_flags")
 
 
-def test_identical_panels_cost_the_same_on_either_side_of_the_overflow_boundary():
-    """A PART'S COST CANNOT CHANGE BECAUSE IT IS ROW NINE RATHER THAN ROW EIGHT.
+# ── the overflow boundary must be invisible to the money ─────────────────────────────
 
-    The first spill wrote the engine's NET-PART figure into the BOM, which is a different basis
-    from the block's and reliably smaller: JAE833 is GBP 8.97 nested against GBP 6.72 net. So
-    the spilled line now reproduces the block's own formula —
-    ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap) — and two identical panels, one
-    inside the block and one pushed out of it, carry the same money.
-    """
+def _spill_cost(sheet_price, parts_per_sheet, scrap, net):
+    """The arithmetic wb_populate's spill performs, isolated so it can be asserted directly."""
     import math
-    import wb_populate
+    if sheet_price and parts_per_sheet and parts_per_sheet > 0:
+        return round(math.ceil((sheet_price / parts_per_sheet) * 100.0) / 100.0
+                     * (1.0 + scrap), 2), "nested"
+    return net, "net_part"
+
+
+def test_swapping_two_identical_panels_across_the_overflow_boundary_moves_no_money():
+    """A PART'S COST CANNOT DEPEND ON ITS ROW NUMBER, and a reviewer asked for exactly this
+    case: take two panels, put each on the inside and then the outside of the eight-row
+    boundary, and the total must not move.
+
+    The first spill wrote the engine's NET-PART figure, a different basis from the block's and
+    reliably smaller — JAE833 is GBP 8.97 nested against GBP 6.72 net — so the ninth panel was
+    cheaper than the eighth purely by position. The spill now reproduces the block's own cell
+    formula, ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap).
+    """
+    # Two real 9mm MDF shelves off the same sheet: identical inputs, so identical money.
+    a = dict(sheet_price=43.12, parts_per_sheet=40.0, scrap=0.04, net=0.84)
+    b = dict(sheet_price=43.12, parts_per_sheet=40.0, scrap=0.04, net=0.84)
+
+    in_block = _spill_cost(**a)[0]          # what the block's cell computes
+    spilled = _spill_cost(**b)[0]           # what the spilled row now writes
+    assert in_block == spilled, "the boundary changed the money"
+
+    # And with the pair swapped, the ORDER TOTAL is unchanged — which is the claim that matters.
+    assert _spill_cost(**a)[0] + _spill_cost(**b)[0] == in_block + spilled
+
+    # The basis is the block's, not the net one, and it is not the net figure by accident.
+    assert _spill_cost(**a)[1] == "nested"
+    assert in_block != a["net"], \
+        "if nested and net agreed this test would prove nothing — pick inputs where they differ"
+
+
+def test_a_spilled_line_that_cannot_be_nested_is_marked_provisional_not_equivalent():
+    """Where the record carries no sheet price and no nest count there is nothing to nest with,
+    so the line falls back to the NET-PART figure — which excludes the sheet drop the block
+    would have charged and is therefore an under-charge of unknown size. That is a provisional
+    figure, not an equivalent one, and it must not read like any other row."""
+    cost, basis = _spill_cost(None, None, 0.04, 6.72)
+    assert (cost, basis) == (6.72, "net_part")
 
     src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    assert "_math.ceil" in src, "the spill must round up the way the block's formula does"
+    assert "PROVISIONAL: costed here at the" in src, \
+        "the spilled line must say on its own face that its basis changed"
+    assert "UNDER-stated" in src
+    assert "_flag(f\"{_blk_name} overflow" in src, \
+        "and the run must carry the same warning, not only the cell"
+
+
+def test_the_spill_reproduces_the_blocks_formula_and_not_an_approximation_of_it():
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert "_math.ceil" in src, "the block's cell rounds the per-part share UP; so must the spill"
     assert '"_block_overflow_basis": _sbasis' in src
 
-    # The arithmetic the block cell performs, applied to the record the spill reads.
-    sheet_price, parts_per_sheet, scrap = 43.12, 40.0, 0.04
-    nested = round(math.ceil((sheet_price / parts_per_sheet) * 100.0) / 100.0 * (1 + scrap), 2)
-    assert nested == 1.12, nested                      # ROUNDUP(1.078)=1.08, x1.04
-    net_part = 0.84                                    # what the engine's own per-part figure is
-    assert nested != net_part, \
-        "if these were equal the basis change would not have mattered and this test is pointless"
 
-    # And where a record cannot be nested, the basis change is ANNOUNCED rather than hidden.
-    assert "is NOT on the block's basis" in src
+# ── removing a wrong correction is not the same as making the number honest ───────────
+
+def test_a_guessed_blank_its_own_weight_disproves_blocks_the_estimate():
+    """THE VERIFICATION A REVIEWER ASKED FOR, not the assumption that the revert was enough.
+
+    The rescale is gone and the material is costed from the printed weight. Neither of those
+    stops the fallback rectangle driving the nest, the cut time and the coated area exactly as
+    if somebody had measured it — and a review flag does not stop it either, because those are
+    gathered under a heading that opens "none of the following change the arithmetic", which is
+    the one thing this does do.
+
+    So it is a BLOCKING consistency check: it reaches the consistency table, the decisions list
+    and the banner that says this estimate is not for release. And the action it asks for is the
+    right one — read the dimension off the part's detail sheet; there is no rate that fixes it.
+    """
+    import invariants
+
+    assert invariants.check_a_guessed_blank_its_own_weight_disproves in invariants.CHECKS, \
+        "a check nothing runs has verified nothing"
+
+    part = _backplate()
+    me = estimate_material(part)
+    part["material_estimate"] = me
+    found = invariants.check_a_guessed_blank_its_own_weight_disproves({"parts": [part]})
+    assert len(found) == 1, found
+    assert found[0]["severity"] == invariants.BLOCKING
+    assert found[0]["code"] == "guessed_blank_disproved_by_its_own_weight"
+    assert "READ THE DIMENSION" in found[0]["message"]
+    assert "no rate to enter that fixes this" in found[0]["message"]
+    assert found[0]["detail"]["parts"][0]["part_number"] == "MBY434"
+
+
+def test_a_blank_that_was_read_is_not_reported_as_a_guess():
+    """MBY439's 1578 x 188 is a reading, and its lower mass is its apertures. The check is about
+    FALLBACK envelopes; reporting a measured part here would be the cry-wolf that gets the whole
+    table ignored on the day it is right."""
+    import invariants
+
+    part = {
+        "part_number": "MBY439", "normalized_material": "Steel,Mild2mm",
+        "material": "Steel,Mild2mm", "normalized_thickness_mm": 2.0,
+        "stated_weight_kg": 0.82, "quantity": 2,
+        "blank_length_mm": 1578.0, "blank_width_mm": 188.0, "review_flags": [],
+    }
+    estimate_material(part)
+    assert part["blank_contradicted_by_stated_weight"]["blank_is_inferred"] is False
+    assert invariants.check_a_guessed_blank_its_own_weight_disproves({"parts": [part]}) == []

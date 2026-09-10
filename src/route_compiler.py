@@ -3773,12 +3773,10 @@ def compile_job_route(
 
     if pack_mode == "pdf_primary":
         _family_gate(decisions, raw)
-        # Gated with the family gate, and for the same reason: both are integrity rules that
-        # hold on any pack, and both change money, so they enter where the evidence is and
-        # generalise to the structured lane once a replay has priced that move. 7332-01 carries
-        # exactly one weld row (on -101, whose children hold no weld claim), so this rule is
-        # inert there — but inert-by-inspection is not the same as replayed.
-        _one_joint_charged_once(decisions, graph)
+    # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
+    # so enters only where its evidence is; this one only ever adds a question to the record, and
+    # a job that is double-charging a joint deserves the question whichever lane it came down.
+    issues.extend(_flag_possible_joint_double_charge(decisions, graph))
 
     for decision in decisions:
         if (
@@ -3835,83 +3833,99 @@ _JOINING_OPS = frozenset({
 })
 
 
-def _one_joint_charged_once(decisions: Sequence[Any], graph: Mapping[str, Any]) -> None:
-    """A joint named on the assembly is not charged again on the parts that joint names.
+def _flag_possible_joint_double_charge(decisions: Sequence[Any],
+                                       graph: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Name a joint that may be charged twice. Do not delete it — nothing here can identify it.
 
-    0359342's prong assembly MBY433 is MBY432 (the prong) welded to MBY434 (the backplate),
-    56 off. The route charged Weld (CO2) and Dress Welds on ALL THREE nodes — GBP 101.55 +
-    GBP 41.11 on the assembly and the same again on each leaf — GBP 285 for two joints that
-    do not exist.
+    0359342's prong assembly MBY433 is MBY432 welded to MBY434, 56 off, and Weld (CO2) plus
+    Dress Welds are charged on ALL THREE nodes: GBP 285 that looks like two joints nobody makes.
+    Two attempts to remove it automatically were both wrong, and the second was worse than the
+    first because it looked like evidence:
 
-    THE FIRST CUT OF THIS RULE RESTED ON "A LEAF CANNOT BE WELDED TO ITSELF", AND THAT IS
-    FALSE. A folded single-piece enclosure has a seam weld along the edges that meet, and a
-    leaf in this graph may simply be a fabrication nobody expanded — a weldment whose own
-    members were never read. Either way the part is a leaf and welds in its own right, and
-    a rule keyed on the parent/child shape alone would delete real money. A structural
-    relationship is not evidence about a joint.
+      1. "A LEAF CANNOT BE WELDED TO ITSELF" is false. A folded single-piece enclosure has a
+         seam weld along the edges that meet, and a leaf here may be a fabrication nobody
+         expanded. Graph shape says nothing about joints.
 
-    So the evidence has to name the joint. A joining decision carries PARTICIPANTS: the parts
-    the joint is between. Where the assembly's joining decision names this child among them,
-    the child's own claim for that operation IS that joint, identified, and charging it twice
-    is double counting. Where participants are absent or do not name the child, nothing is
-    removed — the overlap is merely POSSIBLE, so it is flagged for a person instead, because
-    a seam weld and a second charge for the same joint look identical from here.
+      2. "THE PARENT'S JOINT NAMES THIS CHILD" is not an identifier either. A decision's
+         participants are the UNION across every claim that built it (see _decide), so naming
+         proves the child is involved in welding at that assembly — not that its own welding
+         claim is that same joint. A child can take part in its parent's joint AND carry a seam
+         weld of its own, and both are real money.
 
-    The mirror of the rule already above it (specific_joining_covers_this_assembly), which
-    stops a generic assemble being charged on top of a specific joining op.
+    route_id cannot close the gap either: it is stable_id(operation, sequence, participants), so
+    decisions sharing one carry the SAME route line deliberately split across targets, each
+    already given its own quantity from the canonical BOM. Same route id means split on purpose,
+    not duplicated.
+
+    So the honest answer is that this engine cannot tell a double charge from a seam weld, and
+    the rule that follows from that is: CHARGE BOTH AND ASK. An over-charge an estimator can see
+    and strike out is recoverable; a deletion made on a plausible-looking assumption is money
+    gone quietly, which is the failure this whole review exists to prevent. Returns the overlaps
+    as issues so they reach the decisions-required list rather than dying in a review flag.
     """
     _children = graph.get("children") or {}
     _by_target: Dict[str, List[Any]] = {}
     for _d in decisions:
         if _d.status == REQUIRED and _d.operation in _JOINING_OPS:
             _by_target.setdefault(str(_d.target_id), []).append(_d)
+    _issues: List[Dict[str, Any]] = []
     for _parent, _kids in _children.items():
         _parent_joints = _by_target.get(str(_parent)) or []
         if not _parent_joints:
             continue
+        _parent_ops = {p.operation for p in _parent_joints}
         for _kid in (_kids or {}):
             for _d in _by_target.get(str(_kid)) or []:
-                # The parent's claim for the SAME operation is the only one that can be the
-                # same joint. Read its participants; a joint that names this child is this
-                # child's joint.
-                _same_op = [p for p in _parent_joints if p.operation == _d.operation]
-                if not _same_op:
+                if _d.operation not in _parent_ops:
                     continue
-                _named = any(str(_kid) in {str(x) for x in (p.participants or [])}
-                             for p in _same_op)
-                if _named:
-                    _d.status = NOT_APPLICABLE
-                    _d.reason = (
-                        f"{_d.operation} on {_kid} is the joint that makes {_parent}: "
-                        f"{_parent}'s own {_d.operation} decision names {_kid} as one of the "
-                        f"parts it joins, and that joint is already charged there. Charging it "
-                        f"here as well is the same joint counted twice.")
-                    _d.field_provenance["status"] = "joint_already_charged_on_the_assembly"
-                else:
-                    # NOT REMOVED, AND NOT LEFT SILENT EITHER. Without participants this could
-                    # be a second charge for the parent's joint or a seam weld of the child's
-                    # own, and guessing either way costs real money in one direction or the
-                    # other. The money stays on the estimate and the question goes on the
-                    # record, which is the house rule for an uncertainty.
-                    _d.reason = ((_d.reason + " ") if _d.reason else "") + (
-                        f"{_parent} is also charged {_d.operation} and does not record which "
-                        f"parts its joint is between, so this may be the same joint charged "
-                        f"twice or {_kid}'s own seam. Both are charged; confirm which.")
-                    _d.field_provenance.setdefault(
-                        "review", "joining_overlap_unresolved_with_parent")
+                _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                    f"{_parent} is charged {_d.operation} too. If that is the joint that "
+                    f"joins {_kid} to its siblings, this line charges it a second time; if "
+                    f"{_kid} has a seam or sub-weld of its own, both are right. Nothing in "
+                    f"the pack distinguishes them, so BOTH ARE CHARGED — strike whichever "
+                    f"is not real.")
+                _d.field_provenance.setdefault(
+                    "review", "joining_overlap_unresolved_with_parent")
+                _issues.append({
+                    "code": "joining_charged_on_assembly_and_member",
+                    "operation": _d.operation,
+                    "assembly": str(_parent),
+                    "member": str(_kid),
+                    "note": (f"{_d.operation} is charged on {_parent} and again on its member "
+                             f"{_kid}. Both stand until someone rules: one joint charged twice, "
+                             f"or an assembly joint plus the member's own seam."),
+                })
+    return _issues
+
+
+_MACHINING_INSTRUCTION_CUES = (
+    "DRILL", "TAPPED", "TAP ", "REAM", "COUNTERSINK", "COUNTERSUNK", " CSK",
+    "COUNTERBORE", "C'BORE", "CBORE", "MACHINE", "ROUT", "PILOT HOLE",
+)
+_HOLE_PRESENCE_CUES = ("THRU", "HOLE", "Ø", "DIA ", "SLOT")
+
+
+def _local_machining_instruction(rec: Mapping[str, Any]) -> bool:
+    """Does this part's own sheet INSTRUCT machining — an operation, not just a feature?
+
+    "Ø3.0 THRU" says a hole exists. "DRILL Ø3.0" and "CSK ON OPP. FACE" say somebody here
+    makes it. That difference is the whole question for a purchased item: a hole count proves
+    holes, not who puts them in, and the two answers are a real cost apart.
+    """
+    if not isinstance(rec, Mapping):
+        return False
+    _text = " ".join(str(rec.get(k) or "") for k in
+                     ("drawing_text", "text", "notes", "title_block_text",
+                      "raw_text", "page_text", "manufacturing_notes")).upper()
+    return any(cue in _text for cue in _MACHINING_INSTRUCTION_CUES)
 
 
 def _holes_of_its_own(rec: Mapping[str, Any]) -> bool:
-    """Does this part's OWN drawing record holes — a count, a table, or a callout?
+    """Does this part's OWN drawing record holes at all — a count, a table, or a callout?
 
-    The question that separates purchased STOCK WE PROCESS from a FINISHED PURCHASED
-    COMPONENT. Corian arrives as a sheet and is machined here; a bought-in back panel gets
-    its fixing holes here; a printed self-adhesive label does not get drilled by anybody.
-    Nothing in the part's family answers that — only whether its own sheet shows holes.
-
-    Counts come from the vector reader, tables and callouts from the part's own text. A
-    document-level finish note transcribed onto every record mentions no hole, which is
-    exactly why 0359342's UPC sticker fails this and a real drilled panel passes it.
+    Separates a purchased item with features from one with none. It does NOT answer who makes
+    them; _local_machining_instruction is the question that does, and where neither is
+    conclusive the ownership stays an open decision rather than a silent choice either way.
     """
     if not isinstance(rec, Mapping):
         return False
@@ -3926,9 +3940,7 @@ def _holes_of_its_own(rec: Mapping[str, Any]) -> bool:
     _text = " ".join(str(rec.get(k) or "") for k in
                      ("drawing_text", "text", "notes", "title_block_text",
                       "raw_text", "page_text")).upper()
-    return any(_cue in _text for _cue in
-               ("THRU", "COUNTERSUNK", "COUNTERSINK", " CSK", "COUNTERBORE", "C'BORE",
-                "TAPPED", "DRILL", "REAM", "PILOT HOLE"))
+    return any(cue in _text for cue in _HOLE_PRESENCE_CUES + _MACHINING_INSTRUCTION_CUES)
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]]) -> None:
@@ -3993,28 +4005,38 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
                          f"purchased finished and bonded in; {_d.operation} is not its "
                          f"route (the bond/handling time stays)")
             _d.field_provenance["status"] = "family_gate_sheet_good"
-        elif _fam == BOUGHT_IN and _d.operation in _HOLE_MAKING_OPS \
-                and not _holes_of_its_own(_rec):
-            # PURCHASED IS NOT THE SAME AS FINISHED, AND THE FIRST CUT OF THIS CONFLATED THEM.
-            # It refused hole-making on anything bought in, which is wrong twice over: a
-            # purchased PANEL or BLANK is stock we process, and plenty of them are drilled
-            # here. Corian arrives as a sheet and gets machined; a bought-in back panel gets
-            # fixing holes. Suppressing that would swap one bad number for a quieter one.
+        elif _fam == BOUGHT_IN and _d.operation in _HOLE_MAKING_OPS:
+            # PURCHASED IS NOT THE SAME AS FINISHED, and there are THREE answers here, not two.
+            # The first cut refused hole-making on anything bought in, which is wrong: a
+            # purchased PANEL or BLANK is stock we process — Corian arrives as a sheet and is
+            # machined, a bought-in back panel gets its fixing holes here. The second cut kept
+            # the work wherever holes existed, which overshoots the other way: a hole COUNT
+            # proves holes, not who puts them in, and supplier-drilled holes are in the price.
             #
-            # What is actually unsupported is hole-making claimed on a purchased item with NO
-            # hole evidence of its own — 0359342's self-adhesive UPC STICKER, whose drill row
-            # came from the general note transcribed onto every record, not from anything on
-            # its own sheet. So the refusal asks for the part's own evidence: a hole count, a
-            # hole table, a drilled/countersunk callout in its own text. Where that exists the
-            # machining stays and the question becomes who supplies it, which is a person's
-            # call, not ours.
-            _d.status = NOT_APPLICABLE
-            _d.reason = (f"{_mat or _d.target_id} is bought in and its own drawing records no "
-                         f"holes — no hole count, no hole table, no drill or countersink "
-                         f"callout — so {_d.operation} here rests on a document-level note "
-                         f"rather than this item's own route. A purchased panel that DOES show "
-                         f"holes keeps its machining; this one shows none")
-            _d.field_provenance["status"] = "family_gate_no_hole_evidence"
+            #   an INSTRUCTION on its own sheet ("DRILL", "CSK ON OPP. FACE")  -> ours, keep it
+            #   holes but no instruction                       -> keep it AND ask who supplies
+            #   no hole evidence at all                        -> refuse: the claim came from a
+            #                                                     document note, not this item
+            #
+            # The middle case is the one that must not be decided silently in either direction,
+            # so the money stands and the question goes on the record.
+            if _local_machining_instruction(_rec):
+                pass                      # its own sheet instructs the machining: it is ours
+            elif _holes_of_its_own(_rec):
+                _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                    f"{_d.target_id} is bought in and its own drawing shows holes but does not "
+                    f"say who makes them. {_d.operation} IS CHARGED on the assumption we do; if "
+                    f"the supplier drills them they are in its price and this line comes off.")
+                _d.field_provenance.setdefault(
+                    "review", "bought_in_hole_ownership_unresolved")
+            else:
+                _d.status = NOT_APPLICABLE
+                _d.reason = (f"{_mat or _d.target_id} is bought in and its own drawing records "
+                             f"no holes at all — no count, no table, no callout — so "
+                             f"{_d.operation} here rests on a document-level note rather than "
+                             f"this item's own route. A purchased panel that DOES show holes "
+                             f"keeps its machining; this one shows none")
+                _d.field_provenance["status"] = "family_gate_no_hole_evidence"
 
 
 def project_priced_route(

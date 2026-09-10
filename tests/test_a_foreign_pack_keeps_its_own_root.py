@@ -796,7 +796,7 @@ def test_a_document_repeated_figure_yields_to_each_parts_own_row():
         "four identical values could be four real specs — no demotion below scale"
 
 
-# ── the four counterexamples a reviewer named, before the rules are trusted ──────────────
+# ── joints and purchased machining: charge both and ask, never guess ─────────────────────
 
 def _jd(target, op, participants=()):
     from types import SimpleNamespace as NS
@@ -804,79 +804,85 @@ def _jd(target, op, participants=()):
               reason="", participants=list(participants), field_provenance={})
 
 
-def test_a_joint_is_deduplicated_only_where_the_evidence_names_the_parts_it_joins():
-    """0359342's prong assembly, and the only basis on which its double charge may go.
+def test_a_leaf_seam_weld_survives_a_parent_joint_that_names_it():
+    """THE CASE BOTH EARLIER VERSIONS OF THIS RULE WOULD HAVE GOT WRONG, and the one a reviewer
+    asked for by name.
 
-    MBY433's weld decision NAMES MBY432 and MBY434 as the parts it joins, so each leaf's own
-    weld claim is that identified joint and charging it again is double counting."""
-    graph = {"children": {"MBY433": {"MBY432": 1, "MBY434": 1}}}
-    asm = _jd("MBY433", "welding", ("MBY432", "MBY434"))
-    asm_d = _jd("MBY433", "dress_welds", ("MBY432", "MBY434"))
-    prong, plate = _jd("MBY432", "welding"), _jd("MBY434", "welding")
-    prong_d = _jd("MBY432", "dress_welds")
-    rc._one_joint_charged_once([asm, asm_d, prong, plate, prong_d], graph)
-
-    assert asm.status == rc.REQUIRED and asm_d.status == rc.REQUIRED
-    for d in (prong, plate, prong_d):
-        assert d.status == rc.NOT_APPLICABLE, d.target_id
-        assert "names" in d.reason and "counted twice" in d.reason
-        assert d.field_provenance["status"] == "joint_already_charged_on_the_assembly"
-
-
-def test_a_seam_welded_leaf_keeps_its_weld_and_the_overlap_is_flagged_not_resolved():
-    """THE COUNTEREXAMPLE THAT KILLED THE FIRST RULE. "A leaf cannot be welded to itself" is
-    false: a folded single-piece enclosure has a seam weld along the edges that meet, and a
-    leaf may simply be a fabrication nobody expanded. Where the parent's joint does not name
-    the child, a seam weld and a second charge for the parent's joint are indistinguishable
-    from here — so BOTH are charged and the question goes on the record. Deleting the money
-    on a structural hunch is how an obvious over-charge becomes a quiet under-charge."""
+    A leaf has its OWN evidenced seam weld. Its parent also has an evidenced assembly weld that
+    NAMES that leaf as a participant. Both are real: the part takes part in the assembly joint
+    and has a seam of its own. Naming is not identity — a decision's participants are the union
+    across every claim that built it — so both operations must survive.
+    """
     graph = {"children": {"ENC-ASM": {"ENC-BODY": 1, "ENC-LID": 1}}}
-    asm = _jd("ENC-ASM", "welding")                  # no participants recorded
-    body = _jd("ENC-BODY", "welding")                # folded box with its own seam weld
-    rc._one_joint_charged_once([asm, body], graph)
+    asm = _jd("ENC-ASM", "welding", ("ENC-BODY", "ENC-LID"))
+    body_seam = _jd("ENC-BODY", "welding")          # folded box, its own seam weld
+    issues = rc._flag_possible_joint_double_charge([asm, body_seam], graph)
 
-    assert body.status == rc.REQUIRED, "a seam weld is real work and must survive"
-    assert "seam" in body.reason and "confirm which" in body.reason.lower()
-    assert body.field_provenance.get("review") == "joining_overlap_unresolved_with_parent"
-
-
-def test_a_joint_that_names_other_parts_does_not_touch_this_child():
-    """Naming is the whole test. A three-part assembly whose weld joins two of its members
-    leaves the third member's own weld alone."""
-    graph = {"children": {"ASM": {"P1": 1, "P2": 1, "P3": 1}}}
-    asm = _jd("ASM", "welding", ("P1", "P2"))
-    p3 = _jd("P3", "welding")
-    rc._one_joint_charged_once([asm, p3], graph)
-    assert p3.status == rc.REQUIRED
-    assert p3.field_provenance.get("review") == "joining_overlap_unresolved_with_parent"
+    assert asm.status == rc.REQUIRED
+    assert body_seam.status == rc.REQUIRED, \
+        "a seam weld on a part its parent's joint also names is still real work"
+    assert "BOTH ARE CHARGED" in body_seam.reason
+    assert body_seam.field_provenance.get("review") == \
+        "joining_overlap_unresolved_with_parent"
+    assert any(i["code"] == "joining_charged_on_assembly_and_member" for i in issues), issues
 
 
-def test_a_purchased_panel_drilled_in_house_keeps_its_machining():
-    """PURCHASED IS NOT THE SAME AS FINISHED. A bought-in panel or blank is stock we process,
-    and plenty of them are drilled here — Corian arrives as a sheet and is machined. Only a
-    purchased item whose OWN drawing records no hole at all loses the claim, which is the
-    0359342 sticker: its drill row came from the general note transcribed onto every record."""
+def test_the_prong_double_charge_is_named_and_still_charged():
+    """0359342's MBY433/MBY432/MBY434. The GBP 285 stays on the estimate — nothing in the pack
+    distinguishes one joint charged three times from an assembly joint plus member welds — but
+    it stops being invisible: every overlap becomes an issue a person has to rule on."""
+    graph = {"children": {"MBY433": {"MBY432": 1, "MBY434": 1}}}
+    asm_w = _jd("MBY433", "welding", ("MBY432", "MBY434"))
+    asm_d = _jd("MBY433", "dress_welds", ("MBY432", "MBY434"))
+    leaves = [_jd("MBY432", "welding"), _jd("MBY434", "welding"),
+              _jd("MBY432", "dress_welds"), _jd("MBY434", "dress_welds")]
+    issues = rc._flag_possible_joint_double_charge([asm_w, asm_d] + leaves, graph)
+
+    for d in leaves:
+        assert d.status == rc.REQUIRED, "no money moves on an assumption"
+        assert "strike whichever" in d.reason
+    assert len(issues) == 4, issues
+    assert {i["member"] for i in issues} == {"MBY432", "MBY434"}
+
+
+def test_an_operation_the_parent_does_not_share_is_not_questioned():
+    """The flag is about overlap, not about welding in general. A fold on a member, or a weld on
+    a member whose parent welds nothing, raises no question."""
+    graph = {"children": {"ASM": {"P1": 1}}}
+    asm_fold = _jd("ASM", "folding")
+    p1_weld = _jd("P1", "welding")
+    issues = rc._flag_possible_joint_double_charge([asm_fold, p1_weld], graph)
+    assert p1_weld.status == rc.REQUIRED and not p1_weld.reason
+    assert issues == []
+
+
+def test_purchased_machining_has_three_answers_not_two():
+    """A hole COUNT proves holes, not who makes them, and the two answers are a real cost apart.
+
+      an instruction on its own sheet      -> ours, keep it, no question
+      holes but no instruction             -> keep it AND ask who supplies them
+      no hole evidence at all              -> refuse: a document note, not this item's route
+    """
     raw = {
-        # a purchased Corian panel with its own hole evidence — machining is ours, it stays
-        "JAE823": {"normalized_material": "Corian,6mm", "description": "Plinth Overlay",
-                   "drawing_text": "650.0 550.0 6.0 n8.5 THRU n8.0 THRU R14.0"},
-        # a purchased mirror with a hole count measured off its own sheet
+        # its own sheet INSTRUCTS the machining
+        "MBY435": {"normalized_material": "Corian,6mm", "description": "Bracket",
+                   "drawing_text": "n3.5 THRU  w n7.0 X 90 CSK On OPP. Face"},
+        # holes exist, nobody says who drills them
         "A62271": {"normalized_material": "Mirror,6mm", "description": "Mirror",
                    "hole_count": 4},
-        # a printed self-adhesive label: no hole on its sheet, no hole in anybody's route
+        # a printed self-adhesive label: no hole anywhere on its sheet
         "A60890": {"normalized_material": "Vinyl,Clear-BlackPrint",
                    "description": "UPC Sticker - Clear Vinyl"},
     }
-    corian = _jd("JAE823", "drilling")
-    mirror = _jd("A62271", "countersinking")
+    instructed = _jd("MBY435", "drilling")
+    unowned = _jd("A62271", "countersinking")
     sticker = _jd("A60890", "countersinking")
-    corian_fold = _jd("JAE823", "folding")
-    rc._family_gate([corian, mirror, sticker, corian_fold], raw)
+    rc._family_gate([instructed, unowned, sticker], raw)
 
-    assert corian.status == rc.REQUIRED, "a purchased sheet we machine keeps its machining"
-    assert mirror.status == rc.REQUIRED, "a measured hole count is the part's own evidence"
+    assert instructed.status == rc.REQUIRED and not instructed.reason, \
+        "its own drawing says DRILL/CSK — that is ours and needs no question"
+    assert unowned.status == rc.REQUIRED, "charged, because we may well be the ones drilling"
+    assert unowned.field_provenance.get("review") == "bought_in_hole_ownership_unresolved"
+    assert "who makes them" in unowned.reason
     assert sticker.status == rc.NOT_APPLICABLE
     assert sticker.field_provenance["status"] == "family_gate_no_hole_evidence"
-    assert "records no holes" in sticker.reason
-    # the metal-only refusal is untouched by any of this
-    assert corian_fold.status == rc.NOT_APPLICABLE

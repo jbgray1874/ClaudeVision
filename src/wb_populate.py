@@ -3446,11 +3446,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     _sbasis = "nested"
                     _basis = f"{_blk_name} block full; costed here on the same nested basis"
                 else:
+                    # A BASIS CHANGE IS A PROVISIONAL FIGURE, NOT AN EQUIVALENT ONE. Without a
+                    # sheet price or a nest count there is nothing to nest with, so this line
+                    # is the engine's NET-PART cost — which excludes the drop and the skeleton
+                    # the block would have charged, and is therefore an UNDER-charge of unknown
+                    # size. It must not read like any other row: the line says so in the
+                    # description, the flag says so on the run, and it is marked PROVISIONAL so
+                    # the report counts it among the things a person still has to settle.
                     _scost = _net
                     _sbasis = "net_part"
-                    _basis = (f"{_blk_name} block full; costed here at the engine's NET-PART "
-                              f"figure — no sheet price or nest count to nest it with, so this "
-                              f"line is NOT on the block's basis")
+                    _basis = (f"{_blk_name} block full — PROVISIONAL: costed here at the "
+                              f"engine's NET-PART figure because the record carries no sheet "
+                              f"price or nest count. That excludes the sheet drop the block "
+                              f"would have charged, so this line is UNDER-stated; nest it by "
+                              f"hand before issue")
+                    _flag(f"{_blk_name} overflow {_sp.get('part_number')}: no sheet price or "
+                          f"nest count, so the spilled line uses the NET-PART basis and is "
+                          f"under-stated against the block's nested basis — estimator input.",
+                          flags)
                 _spilled_from_blocks.append(dict(_sp) | {
                     "description": f"{_sp.get('description') or ''} — {_basis}",
                     "unit_cost_gbp": _scost,

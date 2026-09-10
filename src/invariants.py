@@ -3166,6 +3166,73 @@ def check_two_sources_disagree_about_the_material(summary: Any) -> List[Dict[str
         parts=disputed)]
 
 
+def check_a_guessed_blank_its_own_weight_disproves(summary: Any) -> List[Dict[str, Any]]:
+    """A fallback envelope the part's own printed weight contradicts, still spending money.
+
+    REMOVING A WRONG CORRECTION IS NOT THE SAME AS MAKING THE NUMBER HONEST. 0359342's MBY434
+    is a 10 g backplate whose blank was INFERRED at 350x250x2mm — 1.37 kg of steel, 137x its
+    own printed weight — and the sheet bought 9.8 m2 of powder and 56 parts of laser time for
+    it. The material is now costed from the weight, and an earlier attempt to rescale the
+    rectangle was removed because mass gives an area and not a shape. Both right, and neither
+    stops that rectangle driving the nest, the cut time and the coated area exactly as if
+    somebody had measured it.
+
+    A review flag does not stop it either: those are gathered under a heading that opens "none
+    of the following change the arithmetic", which is the one thing this does do. So it is a
+    check, where it reaches the consistency table, the decisions-required list and the banner
+    that says this estimate is not for release.
+
+    BLOCKING, because the part's OWN drawing settles it: there is a detail sheet with a real
+    size on it, and the gap between that and a fallback envelope is money in whichever
+    direction nobody has measured. The fix is to read the dimension, not to enter a rate.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("guessed_blank_disproved_by_weight",
+                            "the summary could not be read.")
+    parts = _parts(summary)
+    if not parts:
+        return []
+    hits = []
+    for part in parts:
+        c = part.get("blank_contradicted_by_stated_weight")
+        if not isinstance(c, dict) or not c.get("blank_is_inferred"):
+            continue
+        # Only where that blank is actually charging something. A contradicted envelope on a
+        # part costed some other way is a curiosity, not an under- or over-charge.
+        _me = part.get("material_estimate") if isinstance(
+            part.get("material_estimate"), dict) else {}
+        _charged = _me.get("cost_per_part_gbp") or _me.get("unit_material_cost_gbp") \
+            or part.get("unit_material_cost_gbp")
+        try:
+            _charged = float(_charged or 0)
+        except (TypeError, ValueError):
+            _charged = 0.0
+        hits.append({
+            "part_number": part.get("part_number"),
+            "blank_mm": f"{c.get('blank_length_mm')}x{c.get('blank_width_mm')}",
+            "blank_implies_kg": c.get("blank_implied_kg"),
+            "stated_weight_kg": c.get("stated_weight_kg"),
+            "factor": c.get("factor"),
+            "charged_gbp": round(_charged, 2),
+            "quantity": part.get("quantity"),
+        })
+    if not hits:
+        return []
+    return [_violation(
+        "guessed_blank_disproved_by_its_own_weight", BLOCKING,
+        f"{len(hits)} part(s) are nested, cut-timed and coated from a FALLBACK blank that the "
+        f"part's own printed weight disproves: "
+        + "; ".join(f"{h['part_number']} {h['blank_mm']}mm implies "
+                    f"{h['blank_implies_kg']}kg against a stated {h['stated_weight_kg']}kg "
+                    f"({h['factor']}x)" for h in hits[:6])
+        + ". The material is costed from the weight, but a weight gives an AREA and not a "
+          "shape, so nothing here can supply the blank — and the nest, the laser time and the "
+          "coated area are all computed from that rectangle as though it had been measured. "
+          "Each of these parts has a detail drawing with its real size on it. READ THE "
+          "DIMENSION; there is no rate to enter that fixes this.",
+        count=len(hits), parts=hits[:20])]
+
+
 def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, Any]]:
     """A part whose thickness two sources read differently, by enough to move the money.
 
@@ -3506,6 +3573,7 @@ CHECKS = (
     check_a_handed_pair_priced_on_the_cut_file,
     check_two_sources_disagree_about_the_material,
     check_two_sources_disagree_about_the_gauge,
+    check_a_guessed_blank_its_own_weight_disproves,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,
