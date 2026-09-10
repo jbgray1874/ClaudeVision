@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from bought_in_policy import is_bought_in as _is_bought_in
 from source_precedence import apply_field
@@ -83,41 +83,72 @@ class PartIndexDeps:
     interpret_part: Callable[..., Any]
 
 
-def _bom_table_page_numbers(summary: Dict[str, Any]) -> set:
-    """Which pages a parts list was actually read off — the reader's own record, not a guess.
+def _bom_table_pages(summary: Dict[str, Any]) -> Tuple[set, Dict[str, set]]:
+    """Which pages a parts list was read off, and whose parts list each one is.
 
-    Every reconciled BOM row carries `bom_sheet`, written by the dual-path reconciler as
-    "<pdf name>#<page index>" (merge_boms builds it from `enumerate(pdf.pages)`, so the index is
-    ZERO-BASED while `page["page_number"]` is one-based — the +1 here is that, and nothing else).
+    Returns (job page numbers carrying a BOM table, {part number -> job pages whose table is
+    ITS table}). Both come from the reader's own record rather than from any guess about what
+    a page looks like: every reconciled row carries `bom_sheet`, written by merge_boms as
+    "<pdf name>#<page index>" from `enumerate(pdf.pages)`, and `bom_parent`, the part the table
+    belongs to.
 
-    This is the cheapest true "this page is a parts list" signal in the codebase and nothing had
-    consulted it. Everything else that tries to answer the question — the page-role classifier's
-    ITEM/DWG NO/QTY header test, its part-number counts — is a guess about what a page LOOKS
-    like, and on a pack whose codes and header vocabulary it does not recognise, every guess
-    comes back "detail". The reconciler does not guess: it took rows off these pages.
+    KEYED ON (PDF, PAGE), NOT ON A PAGE NUMBER. The first cut of this returned bare page
+    numbers, which is only correct while a job has one PDF. In a folder-as-job merge each source
+    PDF numbers its own pages from 1 and file_scan renumbers them job-wide, keeping the original
+    as `source_page_number` beside `source_pdf_name` — so a BOM on page 3 of one PDF would have
+    demoted a genuine detail sheet on page 3 of another. The packs coming next are multi-PDF and
+    that would have been silent.
 
-    An empty set is the honest answer when no reconciled rows carry a sheet, and callers must
-    treat it as "no information" rather than "no BOM pages" — which is why it is used as a
-    tie-break and never as a filter.
+    AND AN ASSEMBLY'S OWN PARTS LIST IS ITS DEFINING PAGE. Page 25 of 0359342 carries MBY433's
+    table AND its welding instruction ("Puddle weld on either side of Prong, Dress front and
+    back faces flush"). Demoting that page for the COMPONENTS it lists is right — MBY434's
+    dimensions are on p26 — but for MBY433 itself it is the page that defines it, so the second
+    return value names those pairings and the caller exempts them.
     """
-    pages: set = set()
     da = summary.get("document_analysis") if isinstance(summary, dict) else None
     rows = []
     if isinstance(da, dict):
         rows = list(da.get("bom_rows") or []) + list(da.get("bay_bom_rows") or [])
+
+    # (pdf name, per-PDF page number) -> job page number. A job whose pages carry no source_pdf
+    # name is single-PDF, and there the job number IS the per-PDF number.
+    lookup: Dict[Tuple[str, int], int] = {}
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, dict):
+            continue
+        job_no = page.get("page_number")
+        if not isinstance(job_no, int):
+            continue
+        per_pdf = page.get("source_page_number")
+        pdf_name = str(page.get("source_pdf_name") or "").strip().lower()
+        lookup[(pdf_name, int(per_pdf if isinstance(per_pdf, int) else job_no))] = job_no
+
+    pages: set = set()
+    owned: Dict[str, set] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
         sheet = row.get("bom_sheet") or row.get("sheet")
         if not sheet or "#" not in str(sheet):
             continue
+        name, _, index_text = str(sheet).rpartition("#")
         try:
-            index = int(str(sheet).rsplit("#", 1)[1])
+            index = int(index_text)
         except (TypeError, ValueError):
             continue
-        if index >= 0:
-            pages.add(index + 1)
-    return pages
+        if index < 0:
+            continue
+        key = (name.strip().lower(), index + 1)
+        job_no = lookup.get(key)
+        if job_no is None and not any(k[0] for k in lookup):
+            job_no = lookup.get(("", index + 1))     # single-PDF job, no source name recorded
+        if job_no is None:
+            continue
+        pages.add(job_no)
+        parent = str(row.get("bom_parent") or row.get("parent") or "").strip()
+        if parent:
+            owned.setdefault(parent, set()).add(job_no)
+    return pages, owned
 
 
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
@@ -323,7 +354,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
     # Deliberately a tie-break and not a filter: where a part is mentioned ONLY on parts lists,
     # it still binds there rather than losing its page altogether. Both references are kept —
     # the BOM page for identity, parent and quantity; the detail page for geometry.
-    _bom_pages = _bom_table_page_numbers(summary)
+    _bom_pages, _owned_tables = _bom_table_pages(summary)
     for part in parts.values():
         if part.get("pages"):
             continue
@@ -333,10 +364,14 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         matching_pages = [page for page in summary["pages"] if pn in (page.get("normalized_text") or "")]
         if not matching_pages:
             continue
+        # An assembly's OWN parts list is the page that defines it, so it is not demoted for
+        # the part that table belongs to — only for the components it lists.
+        _mine = _owned_tables.get(pn) or set()
         matching_pages = sorted(
             matching_pages,
             key=lambda item: (
-                1 if item.get("page_number") in _bom_pages else 0,
+                1 if (item.get("page_number") in _bom_pages
+                      and item.get("page_number") not in _mine) else 0,
                 0 if item.get("page_role", {}).get("primary_role") == "detail" else 1,
                 item.get("page_number", 9999),
             ),
@@ -346,7 +381,8 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         part["pages"].append(chosen_page["page_number"])
         if chosen_role:
             part["page_roles"].append(chosen_role)
-        if chosen_page.get("page_number") in _bom_pages:
+        if chosen_page.get("page_number") in _bom_pages and \
+                chosen_page.get("page_number") not in (_owned_tables.get(pn) or set()):
             # Bound to a parts list because there was nothing else. Said on the part, because a
             # part with no detail sheet has no measured size either and the two go together.
             part.setdefault("review_flags", []).append(

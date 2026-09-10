@@ -264,7 +264,8 @@ def test_another_jobs_summary_is_never_substituted(tmp_path):
     # asked for 0359342; only 7332-01's summary exists
     declared, absent = r.declared_outputs(engine_root, "0359342", started_at=0.0)
     assert declared == [], declared
-    assert any("0359342.json" in m and "never written" in m for m in absent), absent
+    assert any("0359342.json" in m and "no summary for this job was found" in m
+               for m in absent), absent
 
     filed = r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342",
                       started_at=time.time())

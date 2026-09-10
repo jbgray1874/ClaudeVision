@@ -178,7 +178,7 @@ def declared_outputs(engine_root: Path, drawing_number: str = "",
         if exact.is_file():
             candidates.append(exact)
         else:
-            missing.append(f"{exact} (this job's summary was never written)")
+            missing.append(f"{exact} (no summary for this job was found — the engine records\n                            no generation outcome, so absence is all that is known)")
     else:
         try:                                  # no job name given: newest is the only honest pick
             candidates = sorted((f for f in folder.iterdir() if f.suffix.lower() == ".json"),
