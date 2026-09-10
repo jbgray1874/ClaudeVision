@@ -879,8 +879,15 @@ def test_purchased_machining_has_three_answers_not_two():
     sticker = _jd("A60890", "countersinking")
     rc._family_gate([instructed, unowned, sticker], raw)
 
-    assert instructed.status == rc.REQUIRED and not instructed.reason, \
-        "its own drawing says DRILL/CSK — that is ours and needs no question"
+    assert instructed.status == rc.REQUIRED, \
+        "its own drawing says DRILL/CSK — that machining is charged as ours"
+    # AND THE ASSUMPTION IS ON THE RECORD. An instruction says the holes are MADE, not who
+    # makes them: a supplier working to the same drawing makes them before it ships. This was
+    # the one branch of the three that passed silently, so the firmest outcome was the only one
+    # a reader could see the charge for and not the reasoning behind it.
+    assert "not who makes them" in instructed.reason
+    assert instructed.field_provenance.get("review") == \
+        "bought_in_machining_instructed_on_its_own_drawing"
     assert unowned.status == rc.REQUIRED, "charged, because we may well be the ones drilling"
     assert unowned.field_provenance.get("review") == "bought_in_hole_ownership_unresolved"
     assert "who makes them" in unowned.reason

@@ -76,7 +76,7 @@ import uuid
 from pathlib import Path
 
 _load_engine_env()          # before anything reads os.getenv for a default
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ── things a test can reach without the network ──────────────────────────────
 # requests is imported lazily inside the polling loop so that everything which
@@ -143,7 +143,8 @@ def snapshot(engine_root: Path) -> Dict[str, float]:
     return seen
 
 
-def declared_outputs(engine_root: Path, drawing_number: str = "") -> List[Path]:
+def declared_outputs(engine_root: Path, drawing_number: str = "",
+                     started_at: float = 0.0) -> Tuple[List[Path], List[str]]:
     """The files the ENGINE SAYS it wrote, read from its own summary JSON.
 
     A DECLARATION BEATS AN INFERENCE, AND THE SNAPSHOT DIFF IS AN INFERENCE. collect() decided
@@ -161,22 +162,43 @@ def declared_outputs(engine_root: Path, drawing_number: str = "") -> List[Path]:
     the caller — a declared file that is not on disk is a finding, not a silence.
     """
     out: List[Path] = []
+    missing: List[str] = []
     seen: set = set()
     folder = Path(engine_root) / "output" / "json"
     if not folder.is_dir():
-        return out
+        return out, missing
     stem = (drawing_number or "").replace("/", "-").replace("\\", "-").strip()
-    candidates = []
+    candidates: List[Path] = []
     if stem:
+        # THIS JOB'S SUMMARY OR NONE. An earlier cut fell back to the NEWEST json in the folder
+        # when the named one was absent, which is the worst possible default on a shared output
+        # tree: a failed run would file the previous job's workbook as its own result. A missing
+        # summary for the job we were asked to run is a finding, not a cue to substitute.
         exact = folder / f"{stem}.json"
         if exact.is_file():
             candidates.append(exact)
-    if not candidates:
-        try:                                  # newest summary, when the name is not known
+        else:
+            missing.append(f"{exact} (this job's summary was never written)")
+    else:
+        try:                                  # no job name given: newest is the only honest pick
             candidates = sorted((f for f in folder.iterdir() if f.suffix.lower() == ".json"),
                                 key=lambda f: f.stat().st_mtime, reverse=True)[:1]
         except OSError:
-            return out
+            return out, missing
+    # AND IT MUST BELONG TO THIS EXECUTION. A summary written before this run started cannot be
+    # this run's, however well it is named — so a failed rerun cannot file yesterday's estimate
+    # and have it read as today's.
+    if started_at:
+        _fresh_candidates = []
+        for doc_path in candidates:
+            try:
+                if doc_path.stat().st_mtime + 1.0 >= started_at:
+                    _fresh_candidates.append(doc_path)
+                else:
+                    missing.append(f"{doc_path} (left over from an earlier run, not this one)")
+            except OSError:
+                continue
+        candidates = _fresh_candidates
     for doc_path in candidates:
         try:
             doc = json.loads(doc_path.read_text(encoding="utf-8", errors="replace"))
@@ -194,13 +216,26 @@ def declared_outputs(engine_root: Path, drawing_number: str = "") -> List[Path]:
                     if key in seen:
                         continue
                     seen.add(key)
-                    if item.is_file():
-                        out.append(item)
-    return out
+                    if not item.is_file():
+                        # DECLARED AND ABSENT IS THE INTERESTING CASE. The engine said it wrote
+                        # this; the disk disagrees. Reported, never dropped — that is the whole
+                        # point of reading a manifest rather than a directory listing.
+                        missing.append(f"{item} (declared by the engine, not on disk)")
+                        continue
+                    if started_at:
+                        try:
+                            if item.stat().st_mtime + 1.0 < started_at:
+                                missing.append(f"{item} (declared, but older than this run)")
+                                continue
+                        except OSError:
+                            pass
+                    out.append(item)
+    return out, missing
 
 
 def collect(engine_root: Path, dest: Path, before: Dict[str, float],
-            log: List[str], drawing_number: str = "") -> List[Dict[str, str]]:
+            log: List[str], drawing_number: str = "",
+            started_at: float = 0.0) -> List[Dict[str, str]]:
     """Copy this run's finished artefacts to the share.
 
     IDENTIFIED BY WHAT APPEARED, NOT BY WHAT IT IS CALLED. Matching filenames
@@ -221,12 +256,20 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
         raise
 
     after = snapshot(engine_root)
-    fresh = [Path(p) for p, mtime in sorted(after.items())
-             if before.get(p) is None or mtime > before[p]]
+    # NEW OR CHANGED, AND NOT BEFORE THIS RUN BEGAN. The `before` snapshot already excludes
+    # untouched files; started_at also excludes anything whose mtime predates the launch, which
+    # is what makes a stale tree safe to collect from.
+    fresh = []
+    for p, mtime in sorted(after.items()):
+        if before.get(p) is not None and mtime <= before[p]:
+            continue
+        if started_at and mtime + 1.0 < started_at:
+            continue
+        fresh.append(Path(p))
 
     # WHAT APPEARED, PLUS WHAT THE ENGINE SAYS IT MADE. Either alone has missed a workbook
     # that was on disk the whole time; together they cannot both miss the same file.
-    _declared = declared_outputs(engine_root, drawing_number)
+    _declared, _absent = declared_outputs(engine_root, drawing_number, started_at)
     _seen: set = set()
     _wanted: List[Path] = []
     for item in list(fresh) + _declared:
@@ -236,6 +279,7 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
             _wanted.append(item)
 
     _skipped_suffix = 0
+    _copy_failures: List[str] = []
     for item in _wanted:
         if item.suffix.lower() not in DELIVERABLE_SUFFIXES:
             _skipped_suffix += 1
@@ -244,6 +288,7 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
             shutil.copy2(item, dest / item.name)
             filed.append({"name": item.name, "path": str(dest / item.name)})
         except OSError as exc:
+            _copy_failures.append(item.name)
             log.append(f"[collect] could not copy {item.name} — {exc}")
 
     # SAY WHAT WAS LOOKED AT, NOT ONLY WHAT WAS TAKEN. When a file an estimator expects does
@@ -256,11 +301,31 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
     log.append(f"[collect] looked in {Path(engine_root) / 'output'} ({_counts}); "
                f"{len(fresh)} new/changed, {len(_declared)} declared by the engine, "
                f"{len(_wanted)} distinct, {_skipped_suffix} skipped on suffix")
+    # THREE OUTCOMES, NAMED APART. "It did not arrive" is not one fault: the engine may never
+    # have written it, it may have written it and something removed it, or the copy itself may
+    # have failed. Each has a different answer and they were indistinguishable in the log.
+    for _m in _absent:
+        log.append(f"[collect] DECLARED BUT NOT FILED — {_m}")
     log.append(f"[collect] {len(filed)} file(s) written to {dest}")
     if not filed:
-        log.append("[collect] NOTHING was copied. The engine exited cleanly but wrote "
-                   "nothing new into output\\estimates or output\\json — check the log "
-                   "above for what it did instead.")
+        # NOTHING ARRIVED IS NOT ONE FAULT. This blamed the engine unconditionally — "exited
+        # cleanly but wrote nothing new" — which is only one of three ways an empty folder
+        # happens, and the least likely when a copy has just failed or a stale tree has just
+        # been excluded. Each has a different answer, so each says its own thing.
+        if _copy_failures:
+            log.append("[collect] NOTHING was copied, and it was NOT the engine: "
+                       + ", ".join(_copy_failures[:6]) + " exist on the runner and could not "
+                       "be copied to the share. Check the destination is reachable and "
+                       "writable — the estimate itself was produced.")
+        elif _absent:
+            log.append("[collect] NOTHING was copied. Every artefact this run should have "
+                       "produced is accounted for above as declared-but-not-filed or left "
+                       "over from an earlier run — so this run produced no new outputs of "
+                       "its own, whatever is sitting in the output folder.")
+        else:
+            log.append("[collect] NOTHING was copied. The engine exited cleanly but wrote "
+                       "nothing new into the watched output folders — check the log "
+                       "above for what it did instead.")
     elif not any(f["name"].lower().endswith(".xlsx") for f in filed):
         # FILES ARE NOT AN ESTIMATE. The zero-file case was covered; this one was not, and it
         # is the one that actually happened: 10575-02 ran for sixteen minutes, exited 0, filed
@@ -897,6 +962,9 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         return
 
     before = snapshot(engine_root)
+    # WHEN THIS EXECUTION BEGAN. Everything collect() accepts must be at least this new, so a
+    # failed run cannot file an earlier run's outputs and have them read as its own.
+    _run_started_at = time.time()
     cmd = engine_command(engine_root, engine_python, folder, int(job["units"]),
                          job["client"], pdf=pdf, manual_workbook=manual_wb,
                          quantity_breaks=[int(q) for q in (job.get("quantity_breaks") or [])],
@@ -927,7 +995,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         return
 
     try:
-        filed = collect(engine_root, dest, before, log, job.get("drawing_number", ""))
+        filed = collect(engine_root, dest, before, log, job.get("drawing_number", ""),
+                        started_at=_run_started_at)
     except Exception as exc:                           # noqa: BLE001 — surface it
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The estimate ran but could not be filed: {exc}", log)

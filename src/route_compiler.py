@@ -4021,7 +4021,20 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
             # The middle case is the one that must not be decided silently in either direction,
             # so the money stands and the question goes on the record.
             if _local_machining_instruction(_rec):
-                pass                      # its own sheet instructs the machining: it is ours
+                # AN INSTRUCTION IS THE STRONGEST EVIDENCE HERE AND IT IS STILL NOT PROOF.
+                # "DRILL Ø3.5 THRU" and "CSK ON OPP. FACE" on a component drawing say the holes
+                # are made; they do not say by whom, and a supplier working to the same drawing
+                # makes them before it ships. This branch used to pass silently, which left the
+                # firmest of the three outcomes as the only one with no reasoning on the record
+                # — so a reader could see the charge and not the assumption behind it. Charged,
+                # and said, like the other two.
+                _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                    f"{_d.target_id} is bought in and its own drawing INSTRUCTS this machining, "
+                    f"so {_d.operation} is charged as ours. The instruction says the holes are "
+                    f"made, not who makes them — if this item arrives machined, the work is in "
+                    f"its price and this line comes off.")
+                _d.field_provenance.setdefault(
+                    "review", "bought_in_machining_instructed_on_its_own_drawing")
             elif _holes_of_its_own(_rec):
                 _d.reason = ((_d.reason + " ") if _d.reason else "") + (
                     f"{_d.target_id} is bought in and its own drawing shows holes but does not "

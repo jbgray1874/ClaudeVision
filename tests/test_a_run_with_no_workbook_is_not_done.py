@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -194,3 +196,130 @@ def test_the_collector_says_where_it_looked(tmp_path):
     assert looked, log
     assert "declared by the engine" in looked[0]
     assert "skipped on suffix" in looked[0]
+
+
+# ── the collection contract: this run's outputs, this job's outputs, or a named failure ───
+
+def _tree(root: Path, files: dict) -> None:
+    for rel, body in files.items():
+        target = root / "output" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+
+
+def _manifest(paths: dict) -> str:
+    return json.dumps({"saved_output_paths": {k: str(v) for k, v in paths.items()}})
+
+
+def test_a_failed_rerun_does_not_file_yesterdays_estimate_as_todays(tmp_path):
+    """P1, AND THE WORST DEFAULT THE EARLIER CUT HAD.
+
+    Yesterday's run succeeded and left its workbook, report and summary on disk. Today's run
+    fails and writes nothing. Reading the manifest without asking WHEN it was written would file
+    yesterday's estimate into today's folder, where it reads as today's result — an old number
+    presented as a new one, which is worse than an empty folder because nobody checks it.
+
+    Everything collected must be at least as new as this execution's launch.
+    """
+    r = runner
+    engine_root = tmp_path / "engine"
+    old_wb = engine_root / "output" / "estimates" / "0359342_20260909_101010.xlsx"
+    old_json = engine_root / "output" / "json" / "0359342.json"
+    _tree(engine_root, {
+        "estimates/0359342_20260909_101010.xlsx": "yesterday",
+        "json/0359342.json": _manifest({"workbook": old_wb, "json": old_json}),
+    })
+    # age everything well before the run we are about to claim to have made
+    yesterday = time.time() - 86_400
+    for f in (old_wb, old_json):
+        os.utime(f, (yesterday, yesterday))
+
+    before = r.snapshot(engine_root)
+    log: list = []
+    filed = r.collect(engine_root, tmp_path / "dest", before, log,
+                      drawing_number="0359342", started_at=time.time())
+
+    assert not any(f["name"].lower().endswith(".xlsx") for f in filed), \
+        "yesterday's workbook was filed as this run's result"
+    assert any("earlier run, not this one" in line for line in log), log
+    # and the empty folder is explained as THIS RUN producing nothing, not as a mystery
+    assert any("no new outputs of" in line for line in log), log
+
+
+def test_another_jobs_summary_is_never_substituted(tmp_path):
+    """P1. When the summary for the job we were asked to run is absent, the earlier cut took the
+    NEWEST json in the folder — so job A's failure filed job B's outputs. A missing summary for
+    this job is a finding; it is never a cue to substitute somebody else's."""
+    r = runner
+    engine_root = tmp_path / "engine"
+    other_wb = engine_root / "output" / "estimates" / "7332-01_20260910_120000.xlsx"
+    other_json = engine_root / "output" / "json" / "7332-01.json"
+    _tree(engine_root, {
+        "estimates/7332-01_20260910_120000.xlsx": "another job",
+        "json/7332-01.json": _manifest({"workbook": other_wb, "json": other_json}),
+    })
+
+    before = r.snapshot(engine_root)
+    log: list = []
+    # asked for 0359342; only 7332-01's summary exists
+    declared, absent = r.declared_outputs(engine_root, "0359342", started_at=0.0)
+    assert declared == [], declared
+    assert any("0359342.json" in m and "never written" in m for m in absent), absent
+
+    filed = r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342",
+                      started_at=time.time())
+    assert not any("7332-01" in f["name"] for f in filed), \
+        f"another job's outputs were collected: {[f['name'] for f in filed]}"
+
+
+def test_a_declared_file_that_is_not_on_disk_is_named(tmp_path):
+    """P2. declared_outputs() returned only the files that existed, so the caller never learned
+    which declared artefacts were absent — the manifest's whole advantage, discarded. Three
+    outcomes must read differently: never generated, gone, and failed to copy."""
+    r = runner
+    engine_root = tmp_path / "engine"
+    real = engine_root / "output" / "estimates" / "0359342_20260910_123656.xlsx"
+    ghost = engine_root / "output" / "estimates" / "0359342_report.html"
+    summary = engine_root / "output" / "json" / "0359342.json"
+    _tree(engine_root, {
+        "estimates/0359342_20260910_123656.xlsx": "workbook",
+        "json/0359342.json": _manifest({"workbook": real, "report": ghost, "json": summary}),
+    })                                           # the report is declared and never written
+
+    before = {}
+    log: list = []
+    filed = r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342")
+
+    assert any(f["name"] == real.name for f in filed)
+    assert any("DECLARED BUT NOT FILED" in line and "0359342_report.html" in line
+               for line in log), log
+    assert any("not on disk" in line for line in log), log
+
+
+def test_a_copy_that_fails_is_reported_and_not_counted(tmp_path):
+    """The third outcome. A file that exists and cannot be copied — share down, lock, permission
+    — must not be silently absent from the folder and silently present in the count."""
+    r = runner
+    engine_root = tmp_path / "engine"
+    _tree(engine_root, {"estimates/0359342_20260910_123656.xlsx": "workbook"})
+
+    before = {}
+    log: list = []
+    real_copy = runner.shutil.copy2
+
+    def _explode(src, dst):
+        if str(src).lower().endswith(".xlsx"):
+            raise OSError("share unavailable")
+        return real_copy(src, dst)
+
+    runner.shutil.copy2 = _explode
+    try:
+        filed = r.collect(engine_root, tmp_path / "dest", before, log, drawing_number="0359342")
+    finally:
+        runner.shutil.copy2 = real_copy
+
+    assert not any(f["name"].lower().endswith(".xlsx") for f in filed)
+    assert any("could not copy" in line for line in log), log
+    # NOT blamed on the engine: the estimate was produced and the share refused it.
+    assert any("it was NOT the engine" in line for line in log), log
+    assert not any("exited cleanly but wrote" in line for line in log), log
