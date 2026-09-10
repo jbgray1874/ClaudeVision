@@ -2095,7 +2095,7 @@
           <text x="337" y="268" text-anchor="middle" font-size="9" fill="var(--ink-faint)">StatusReporting · reports</text>
           <rect x="266" y="282" width="143" height="34" rx="3" fill="var(--surface-2)" stroke="var(--line)"/>
           <text x="337" y="297" text-anchor="middle" font-size="10" fill="var(--ink)">C:\ClaudeVision\output\</text>
-          <text x="337" y="310" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Estimate workbooks · JSON · logs</text>
+          <text x="337" y="310" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Estimate workbooks · source_drawing_data.xlsx · JSON · logs</text>
           <rect x="266" y="324" width="143" height="20" rx="3" fill="var(--bg-2)" stroke="var(--line)"/>
           <text x="337" y="338" text-anchor="middle" font-size="9" fill="var(--ink-faint)">Served via /api/files — read-only</text>
 
@@ -2207,6 +2207,67 @@
       </div>
 
       <!-- ── THE SOURCE WATERFALL ───────────────────────────────────────────────────────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">What each file is asked for — and what it cannot answer</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+      <table>
+        <tr><th>File</th><th>What it is authoritative for</th><th>What it cannot settle</th></tr>
+        <tr><td><b>DXF flat export</b></td>
+          <td>Cutting geometry and the flat pattern. Profile on <code>SLD-0</code>, folds on
+            <code>BENDLINES</code>. Blank extent, hole diameters, arc radii, cut length — all
+            measured from the entities, none of them needing a printed dimension, because a
+            circle stores its centre and radius.</td>
+          <td>The route. A flat with two bend lines is evidence of forming; it does not name
+            the machine, the setup, the bend sequence or the finish.</td></tr>
+        <tr><td><b>SolidWorks part</b> (.SLDPRT)</td>
+          <td>3D geometry, stock form, and native sheet-metal features where present —
+            thickness, bend radius, bend allowance — plus assigned material and properties.</td>
+          <td>Manufacturing method, machine choice, setup, handling and labour time. An
+            imported solid may carry no feature history at all.</td></tr>
+        <tr><td><b>SolidWorks assembly</b> (.SLDASM)</td>
+          <td>Hierarchy, component occurrences, configurations and positions — which is where
+            quantity multiplication through sub-assemblies comes from.</td>
+          <td>Which joints are welded, glued or bolted; who owns an operation and in what
+            order. Two components touching is not a weld.</td></tr>
+        <tr><td><b>SolidWorks drawing</b> (.SLDDRW) / <b>PDF</b></td>
+          <td>Specification: material as written, tolerances, finish, revision, and the
+            manufacturing instructions in the notes. Where the PDF holds something the CAD does
+            not, it is kept.</td>
+          <td>Which note applies to which view, whether a note is boilerplate, and how an
+            instruction becomes priced work.</td></tr>
+        <tr><td><b>The estimating engine</b></td>
+          <td>Reconciling all of the above, inferring the work nobody stated, and pricing it
+            with the basis shown.</td>
+          <td>Nothing is hidden: what it could not settle is a decision on the sheet.</td></tr>
+      </table>
+      <p class="note" style="margin-top:10px"><b>Where they disagree, the CAD wins.</b> The DXF
+      is the file the CNC machines cut from and the model is what the shop builds, so a
+      measured flat or a model displaces a figure read off a PDF, and the estimate says which
+      it used. The one thing that outranks them is an estimator deliberately overruling the
+      files and stating why — which is a different act from reading a drawing, and is ranked
+      differently.</p>
+      <p class="note"><b>Geometry proves shape, not method.</b> A modelled hole does not prove
+      drilling — it may be lasered, punched, or arrive in a bought-in part. Two bend lines do
+      not prove two setups. An assigned material is not automatically the issued specification.
+      The route is always a reasoned decision, and the reasoning is written down.</p>
+      </div>
+
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">The extraction audit — source_drawing_data.xlsx</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+      <p>Written into the estimating folder on every run, beside the estimate. It prices
+      nothing and decides nothing. It exists because three different problems look identical
+      once an estimate is finished — <b>the file did not have it</b>, <b>we did not read
+      it</b>, and <b>we read it and dropped it before the price</b> — and only the middle two
+      are ours to fix.</p>
+      <p>The <b>DXF file vs engine</b> sheet opens the job's DXFs independently of the pipeline
+      and puts the file's own measurements beside the engine's, fact by fact: a reader cannot be
+      checked against its own output. A figure that is measurable in the file and reached
+      nothing is marked <code>NOT EXTRACTED</code>; a disagreement is marked <code>NO</code> and
+      is shown, not judged — a part sized from the model can legitimately differ from its flat.</p>
+      <p>It also separates two cases that need opposite responses: a DXF that genuinely holds
+      only a raster image (nothing to extract, ask for a vector export) from a drawing export
+      whose extent is the sheet border rather than a part.</p>
+      </div>
+
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">How a datum is decided — the source waterfall</h3>
       <p class="sub" style="margin-bottom:12px">Every source that can say something about a part is read, and none is trusted blindly. Each carries a rank. <b>The rule is absolute, and it is the reason the engine can be audited: a weaker source may FILL a datum, it may never REPLACE a stronger one</b> — and where two disagree, the disagreement is written onto the part and the stronger value kept. Nothing is decided by whichever pass happens to run last.</p>
       <div class="panel reveal" style="overflow-x:auto">

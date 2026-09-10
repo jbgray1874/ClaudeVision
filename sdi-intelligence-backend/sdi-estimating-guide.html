@@ -288,6 +288,7 @@
     <a href="#email"><b>Covering e-mail</b><span>The note the engine wrote</span></a>
     <a href="#regen"><b>Amended sheet</b><span>Re-issuing after your edits</span></a>
     <a href="#parity"><b>Parity report</b><span>Your estimate against the engine's</span></a>
+    <a href="#sourcedata"><b>Source drawing data</b><span>Everything the pack gave us</span></a>
   </div>
 
   <h2 id="start">Start here — the one rule</h2>
@@ -763,3 +764,81 @@
 </script>
 </body>
 </html>
+
+  <h2 id="sourcedata">10 · Source drawing data — everything the pack gave us, and what we did with it</h2>
+  <p class="lead">A separate workbook, <b>source_drawing_data.xlsx</b>, written into the
+  estimating folder on <b>every</b> run beside the estimate. It prices nothing and decides
+  nothing. It exists because three completely different problems look identical from the
+  outside once an estimate is finished:</p>
+  <table>
+    <tr><th>What happened</th><th>What it means</th><th>Who fixes it</th></tr>
+    <tr><td class="k">The file did not have it</td><td>The drawing office did not supply the
+      fact. Nothing was missed.</td><td>Nobody — ask for a better pack, or estimate around it</td></tr>
+    <tr><td class="k">We did not read it</td><td>It was in the file and no reader looked.</td>
+      <td>A reader to fix — and this is a real missed opportunity</td></tr>
+    <tr><td class="k">We read it and dropped it</td><td>It was extracted, then lost on the way
+      to the price.</td><td>A pipeline join — the worst of the three, because the evidence was
+      in the building all along</td></tr>
+  </table>
+  <p>Without this sheet all three produce the same symptom: a number that looks reasonable and
+  is built on less than it should have been. With it you can tell them apart in a minute.</p>
+
+  <h3>The sheets</h3>
+  <table>
+    <tr><th>Sheet</th><th>The question it answers</th></tr>
+    <tr><td class="k">Files</td><td>Every file the job saw, what kind it was, whether anything
+      read it, and what came out. <b>A CAD file nobody opened shows as NO</b> — which appears
+      nowhere else, because the estimate simply prices what it has.</td></tr>
+    <tr><td class="k">DXF file vs engine</td><td>The audit opens the job's DXFs <b>itself</b> and
+      puts the file's own measurements beside the engine's, fact by fact. A reader cannot be
+      checked against its own output.</td></tr>
+    <tr><td class="k">Facts</td><td>One row per datum: part, field, value, source, and whether
+      it is the figure the price rests on or was read and then beaten by something stronger.</td></tr>
+    <tr><td class="k">BOM rows</td><td>The parts list as the drawing office typed it — material
+      cell verbatim, not the normalised code.</td></tr>
+    <tr><td class="k">Operations</td><td>Every route decision, its target part, and why it
+      stands or does not.</td></tr>
+    <tr><td class="k">Not extracted</td><td>What the pack held that nothing read. The shortest
+      sheet, and usually the one worth the most.</td></tr>
+  </table>
+
+  <h3>Reading the "DXF file vs engine" sheet</h3>
+  <p>This is the one to open first on any job with CAD, which for SDI is most of them — the CNC
+  machines need the DXFs, so they are nearly always there. The <span class="k">agrees</span>
+  column has three answers:</p>
+  <table>
+    <tr><th>agrees</th><th>What to do</th></tr>
+    <tr><td class="k">yes</td><td>Nothing. The engine read what the file says.</td></tr>
+    <tr><td class="k">NOT EXTRACTED</td><td>The figure is measurable in the file and reached
+      nothing. <b>This is the missed-opportunity row.</b></td></tr>
+    <tr><td class="k">NO</td><td>The file and the engine disagree. <b>Not automatically a
+      defect</b> — a part sized from the model can legitimately differ from its flat, and a bend
+      <i>line</i> count is not a bend count. The sheet makes the difference visible; it does not
+      decide who is right.</td></tr>
+  </table>
+
+  <h3>What a DXF actually contains</h3>
+  <p>Opened in a viewer a DXF looks like a picture. It is not. SDI's own
+  <span class="k">117620202M_0.9mm_MS_revA.DXF</span> is 55 lines, 2 circles and 2 arcs across
+  two layers — <span class="k">SLD-0</span> carrying the cutting profile and
+  <span class="k">BENDLINES</span> carrying the folds. Measured from those entities it is
+  <b>1009.49 &times; 363.91 mm with two &Oslash;5.0 holes and five bend lines</b>, and not one of
+  those figures is a printed dimension: a circle stores its centre and radius, so the circle
+  <i>is</i> its diameter. That is why a &Oslash;24 with no label is still measurable.</p>
+  <p>Two cases the sheet is careful to separate, because they look the same and need opposite
+  responses:</p>
+  <ul>
+    <li><b>A DXF that genuinely holds only a raster image.</b> There is no geometry to find and
+      no software will reveal any. The sheet says so rather than reporting a reader failure —
+      the fix is to ask for a vector export.</li>
+    <li><b>A drawing export rather than a flat.</b> Same file extension, but its extent is the
+      <i>sheet border</i>, not a part: the 10975 GA measures 1680 &times; 1074, which is no
+      component at all. A blank is only offered where the file looks like a flat — no dimension
+      entities, no title-block text, no leaders.</li>
+  </ul>
+  <p class="panel">And a caution that matters for routes: <b>geometry proves shape, not method.</b>
+  A modelled hole does not prove drilling — it may be lasered, punched or bought in. Two bend
+  lines prove forming, not two setups. Components touching in an assembly do not prove a weld.
+  The DXF gives cutting geometry and flat-pattern evidence; the route is still a reasoned
+  decision made from that plus the drawing's own instructions and how SDI actually builds.</p>
+
