@@ -393,7 +393,7 @@ def test_a_declared_layer_that_never_reached_the_price_is_blocking():
     }]}}
     hits = check_every_declared_material_layer_is_priced(summary)
     assert hits and hits[0]["severity"] == BLOCKING
-    assert "declares 2" in hits[0]["message"]
+    assert "only 1 of 2 layers were costed at all" in hits[0]["message"]
 
 
 def test_a_lamination_that_is_fully_priced_does_not_fire():
@@ -403,7 +403,9 @@ def test_a_lamination_that_is_fully_priced_does_not_fire():
         "material_layers": [{"material": "MDF", "thickness_mm": 9},
                             {"material": "MDF", "thickness_mm": 6}],
         "material_estimate": {"unit_material_cost_gbp": 1.27,
-                              "material_layers_priced": [{"layer": 2}]},
+                              "material_layers_priced": [{"layer": 2, "priced": True}],
+                              "material_layers_primary_matches": True,
+                              "material_layers_reach_workbook": True},
     }]}}
     assert check_every_declared_material_layer_is_priced(summary) == []
 
@@ -433,3 +435,74 @@ def test_the_layer_declaration_crosses_the_costing_boundary():
     source = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
     assert '"material_layers": part.get("material_layers")' in source, \
         "the layer declaration must travel with the money it explains"
+
+
+def test_a_layer_that_returned_no_price_is_not_counted_as_priced():
+    """COUNTING RECORDS IS NOT COUNTING PRICES. The first version appended an entry whichever
+    way the pricing went and substituted £0 for a miss, so a layer that cost NOTHING still
+    counted as one of N — and the check answered "yes" by tallying its own failures."""
+    from invariants import BLOCKING, check_every_declared_material_layer_is_priced
+    summary = {"estimate_summary": {"part_estimates": [{
+        "part_number": "X",
+        "material_layers": [{"material": "MDF", "thickness_mm": 9},
+                            {"material": "Corian", "thickness_mm": 6}],
+        "material_estimate": {
+            "material_layers_priced": [{"layer": 2, "priced": False,
+                                        "unit_material_cost_gbp": 0.0}],
+            "material_layers_primary_matches": True,
+            "material_layers_reach_workbook": True},
+    }]}}
+    hits = check_every_declared_material_layer_is_priced(summary)
+    assert hits and hits[0]["severity"] == BLOCKING
+    assert "costs nothing was not bought" in hits[0]["message"]
+
+
+def test_the_primary_layer_is_checked_against_what_was_actually_priced():
+    """CAD precedence can move the part's material or gauge after the layers were declared.
+    Then the board counted as layer 1 is not the board that was declared: one priced twice,
+    another not at all, and every count still balancing."""
+    from estimator import estimate_material, _price_declared_material_layers
+    part = {"part_number": "X", "quantity": 1, "normalized_material": "MDF",
+            "normalized_thickness_mm": 12.0,          # a DXF displaced the confirmed 9mm
+            "blank_length_mm": 250.0, "blank_width_mm": 320.0, "review_flags": [],
+            "material_layers": [{"material": "MDF", "thickness_mm": 9},
+                                {"material": "MDF", "thickness_mm": 6}]}
+    costed = _price_declared_material_layers(part, estimate_material(part))
+    assert costed["material_layers_primary_matches"] is False
+
+    from invariants import check_every_declared_material_layer_is_priced
+    hits = check_every_declared_material_layer_is_priced(
+        {"estimate_summary": {"part_estimates": [dict(part, material_estimate=costed)]}})
+    assert hits and any("no longer matches the first declared layer" in r
+                        for r in hits[0]["detail"]["parts"][0]["reasons"])
+
+
+def test_the_workbook_gap_is_blocking_until_the_writer_carries_the_layers():
+    """THE ONE THAT MATTERS TO THE CUSTOMER'S NUMBER.
+
+    _price_declared_material_layers raises unit_material_cost_gbp; the Other Sheet and Sheet
+    Steel writers do not read it. They take material_estimate.sheet_price_gbp and let the
+    WORKBOOK recompute cost-per-part from sheet price over parts-per-sheet, using
+    unit_material_cost_gbp only as a fallback when no sheet price exists. So on the ordinary
+    board path the extra layer's money is computed and then dropped on the way to the sheet
+    the customer is quoted from.
+
+    A second board is a second sheet consumption and needs its own workbook ROW. Until that
+    writer exists this is BLOCKING, because the one thing worse than a missing layer is a
+    missing layer that reports CLEAR.
+    """
+    from estimator import estimate_material, _price_declared_material_layers
+    from invariants import BLOCKING, check_every_declared_material_layer_is_priced
+    part = {"part_number": "JAE827", "quantity": 2, "normalized_material": "MDF",
+            "normalized_thickness_mm": 9.0, "blank_length_mm": 250.0,
+            "blank_width_mm": 320.0, "review_flags": [],
+            "material_layers": [{"material": "MDF", "thickness_mm": 9},
+                                {"material": "MDF", "thickness_mm": 6}]}
+    costed = _price_declared_material_layers(part, estimate_material(part))
+    assert costed["material_layers_reach_workbook"] is False, \
+        "flip this to True only when the sheet writers emit a row per layer"
+
+    hits = check_every_declared_material_layer_is_priced(
+        {"estimate_summary": {"part_estimates": [dict(part, material_estimate=costed)]}})
+    assert hits and hits[0]["severity"] == BLOCKING
+    assert "does not reach the workbook" in hits[0]["message"]

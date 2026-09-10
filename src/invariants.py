@@ -3191,30 +3191,61 @@ def check_every_declared_material_layer_is_priced(summary: Any) -> List[Dict[str
             continue
         _me = part.get("material_estimate") if isinstance(
             part.get("material_estimate"), dict) else {}
-        priced = _me.get("material_layers_priced") or []
-        # The primary layer is priced by the ordinary path, so N layers need N-1 extras.
-        if len(priced) >= len(layers) - 1:
+        priced = [p for p in (_me.get("material_layers_priced") or [])
+                  if isinstance(p, dict)]
+        reasons = []
+
+        # COUNTING RECORDS IS NOT COUNTING PRICES. An entry was appended whichever way the
+        # pricing went, so a layer that returned nothing still counted as one of N and this
+        # check answered "yes" by tallying the failures.
+        missing = [p for p in priced if not p.get("priced")]
+        if len(priced) < len(layers) - 1:
+            reasons.append(f"only {len(priced) + 1} of {len(layers)} layers were costed at all")
+        if missing:
+            reasons.append(
+                "layer(s) " + ", ".join(str(p.get("layer")) for p in missing)
+                + " returned no price — a board that costs nothing was not bought")
+
+        # THE PRIMARY IS THE ONE NOBODY CHECKS. It is priced by the ordinary path and simply
+        # assumed to be layers[0]; CAD precedence can move the part's material or gauge after
+        # the layers were declared, and then one board is priced twice and another not at all
+        # while every count still balances.
+        if _me.get("material_layers_primary_matches") is False:
+            reasons.append(
+                "the primary material/gauge no longer matches the first declared layer, so "
+                "the layer counted as priced is not the board that was declared")
+
+        # AND THE WORKBOOK IS WHERE THE CUSTOMER'S NUMBER COMES FROM.
+        if _me.get("material_layers_reach_workbook") is False:
+            reasons.append(
+                "the extra layers' cost does not reach the workbook: the sheet writers price "
+                "from sheet_price_gbp and let the sheet recompute, so the added money is "
+                "dropped between the estimate and the spreadsheet")
+
+        if not reasons:
             continue
         hits.append({
             "part_number": part.get("part_number"),
             "layers_declared": len(layers),
-            "layers_priced": len(priced) + 1,
+            "layers_priced_ok": 1 + sum(1 for p in priced if p.get("priced")),
             "materials": "; ".join(
                 f"{_l.get('material')} {_l.get('thickness_mm')}mm"
                 for _l in layers if isinstance(_l, dict)),
             "quantity": part.get("quantity"),
+            "reasons": reasons,
         })
     if not hits:
         return []
     return [_violation(
         "declared_material_layer_unpriced", BLOCKING,
-        f"{len(hits)} part(s) declare more material layers than the price accounts for: "
-        + "; ".join(f"{h['part_number']} declares {h['layers_declared']} ({h['materials']}) "
-                    f"but only {h['layers_priced']} reached the price" for h in hits[:6])
+        f"{len(hits)} part(s) declare material layers that do not all reach the charged "
+        f"price: "
+        + "; ".join(f"{h['part_number']} ({h['materials']}) — " + "; ".join(h["reasons"])
+                    for h in hits[:6])
         + ". A laminated part is ONE component made of several materials, and every layer is "
           "bought. A note explaining that a layer was left out does not make the figure "
-          "complete — it only records that money is missing. Price the layer, or remove the "
-          "claim that it exists.",
+          "complete — it only records that money is missing. Price every layer and carry it "
+          "through to the sheet, or remove the claim that the layer exists.",
         count=len(hits), parts=hits[:20])]
 
 

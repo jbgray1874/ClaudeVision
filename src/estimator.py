@@ -2896,6 +2896,19 @@ def _price_declared_material_layers(part: Dict[str, Any],
     if not isinstance(layers, list) or len(layers) < 2 or not isinstance(material, dict):
         return material
 
+    # THE PRIMARY LAYER IS CHECKED, NOT ASSUMED. The ordinary material calculation prices
+    # the part's own material and gauge, and layers[0] is only the same thing while nothing
+    # has moved them. CAD precedence can: a DXF arriving with its own gauge displaces the
+    # confirmed figure by design, and then the "primary" being counted as layer 1 is a
+    # different board from the one declared — one layer priced twice, another not at all,
+    # and every count still adding up.
+    primary_declared = layers[0] if isinstance(layers[0], dict) else {}
+    primary_matches = (
+        str(primary_declared.get("material") or "").strip().upper()
+        == str(part.get("normalized_material") or "").strip().upper()
+        and _safe_float(primary_declared.get("thickness_mm"))
+        == _safe_float(part.get("normalized_thickness_mm")))
+
     priced: List[Dict[str, Any]] = []
     added = 0.0
     for index, layer in enumerate(layers[1:], start=2):
@@ -2912,18 +2925,30 @@ def _price_declared_material_layers(part: Dict[str, Any],
             "review_flags": [],
         }
         layer_cost = estimate_material(shadow)
-        unit = _safe_float((layer_cost or {}).get("unit_material_cost_gbp")) or 0.0
-        added += unit
+        unit = _safe_float((layer_cost or {}).get("unit_material_cost_gbp"))
+        # AN OUTCOME, NOT A RECORD. The first version appended an entry whichever way the
+        # pricing went and substituted 0.0 for a miss, so a layer that priced NOTHING still
+        # counted as one of N — and the check that asks "did every layer reach the price?"
+        # answered yes by counting the failures. A board that cost nothing was not bought.
+        ok = bool(unit and unit > 0)
+        added += unit or 0.0
         priced.append({
             "layer": index,
             "material": shadow["normalized_material"],
             "thickness_mm": shadow["normalized_thickness_mm"],
             "blank_length_mm": shadow["blank_length_mm"],
             "blank_width_mm": shadow["blank_width_mm"],
-            "unit_material_cost_gbp": round(unit, 4),
+            "unit_material_cost_gbp": round(unit or 0.0, 4),
+            "priced": ok,
             "cost_method": (layer_cost or {}).get("cost_method"),
             "note": layer.get("note"),
         })
+        if not ok:
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} layer {index} "
+                f"({shadow['normalized_material']} {shadow['normalized_thickness_mm']}mm) "
+                f"returned NO price — it is a board this part is built from and it is "
+                f"currently costing nothing. Name a rate for that material")
 
     if not priced:
         return material
@@ -2933,6 +2958,20 @@ def _price_declared_material_layers(part: Dict[str, Any],
     material["unit_material_cost_gbp"] = round(base + added, 4)
     material["material_layers_priced"] = priced
     material["material_layers_added_gbp"] = round(added, 4)
+    material["material_layers_primary_matches"] = primary_matches
+    # AND THE HONEST LIMIT OF THIS CHANGE, RECORDED AS DATA RATHER THAN LEFT TO BE DISCOVERED.
+    #
+    # This helper raises unit_material_cost_gbp, and the Other Sheet / Sheet Steel writers do
+    # not read it: they take material_estimate.sheet_price_gbp and let the WORKBOOK recompute
+    # cost-per-part from sheet price over parts-per-sheet. unit_material_cost_gbp is only
+    # their FALLBACK when no sheet price exists. So on the ordinary board path the extra
+    # layer's money is computed here and then dropped on the way to the sheet the customer is
+    # quoted from — the arithmetic is right and the workbook is unchanged.
+    #
+    # A second board is a second sheet consumption and needs its own workbook ROW. Until that
+    # writer exists this stays False and the BLOCKING invariant refuses the job, because the
+    # one thing worse than a missing layer is a missing layer that reports CLEAR.
+    material["material_layers_reach_workbook"] = False
     _qty = _safe_float(part.get("quantity")) or 1.0
     if material.get("extended_material_cost_gbp") is not None:
         material["extended_material_cost_gbp"] = round(

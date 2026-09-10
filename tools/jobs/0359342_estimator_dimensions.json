@@ -35,10 +35,33 @@
     "JAE824": {
       "blank_length_mm": 40,
       "blank_width_mm": 40,
-      "thickness_mm": 50,
+      "thickness_mm": 18,
       "material": "MDF",
       "basis": "inferred",
-      "read_from": "page 12 prints a solid block 40 x 40 x 50 high, material 'MDF' with no gauge. 50mm exceeds any board on this job, so it is laminated up or cut from thick stock. Priced as a 40 x 40 x 50 solid so the line is not empty; the make method drives the real cost and needs confirming. Provisional method assumed for pricing: laminate three 18mm MDF boards to 54mm and machine back to 50, rather than buy 50mm stock — 40 x 40 is small enough that bonding offcuts is cheaper than a thick-stock purchase. BONDING and the machining to size are NOT in the material figure. If SDI would rather buy thick stock, the purchasing basis changes and so does the price"
+      "read_from": "page 12 prints a solid block 40 x 40 x 50 high, material 'MDF' with no gauge. 50mm exceeds any board on this job, so it is laminated up or cut from thick stock. METHOD CHOSEN for pricing: three 18mm MDF boards bonded to 54mm and machined back to 50, rather than buying 50mm stock — at 40 x 40 the offcut route is cheaper than a thick-stock purchase. All three boards are declared as layers so all three are bought. The BONDING and the machining to size are NOT in the material figure. If SDI would rather buy thick stock, the purchasing basis changes and so does the price.",
+      "layers": [
+        {
+          "material": "MDF",
+          "thickness_mm": 18,
+          "blank_length_mm": 40,
+          "blank_width_mm": 40,
+          "note": "board 1 of 3, laminated"
+        },
+        {
+          "material": "MDF",
+          "thickness_mm": 18,
+          "blank_length_mm": 40,
+          "blank_width_mm": 40,
+          "note": "board 2 of 3, laminated"
+        },
+        {
+          "material": "MDF",
+          "thickness_mm": 18,
+          "blank_length_mm": 40,
+          "blank_width_mm": 40,
+          "note": "board 3 of 3, laminated then machined back to 50 overall"
+        }
+      ]
     },
     "JAE827": {
       "blank_length_mm": 250,
