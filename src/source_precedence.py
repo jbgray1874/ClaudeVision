@@ -126,6 +126,20 @@ SOURCE_RANK: Dict[str, int] = {
     # default), below bom_tree (a table someone actually typed) and everything measured. So
     # a real reading always displaces it, and it always displaces a guess.
     "estimator_inferred": 45,
+    # A PERSON READING THE DRAWING IS STILL READING THE DRAWING.
+    #
+    # estimator_confirmed at 100 is for an estimator OVERRULING what the files say — the one
+    # signal that carries knowledge the drawing does not. Reading a figure off a PDF is a
+    # different act, and it must not borrow that rank: the DXF is the file the laser actually
+    # cuts from and the model is what the shop builds, so where either disagrees with a sheet,
+    # they win. A person transcribing "1680 x 560" off a page has not overturned a flat
+    # pattern; they have read the same drawing the engine read, more reliably.
+    #
+    # Ranked 72: the best PDF-derived source there is — above the deterministic title-block
+    # read (70) and the machine's own overall-dimension read (65), because a person looking at
+    # the sheet beats a parser looking at the sheet — and below every measurement. An
+    # estimator who knows a DXF is stale says so explicitly and gets rank 100 for it.
+    "estimator_read_drawing": 72,
     "solidworks_api": 90,
     "solidworks_flat_pattern": 90,
     "dxf": 80,
@@ -256,7 +270,8 @@ def tiebreak_priority(source: Any) -> int:
 # falls back to the raw key rather than to silence — an unfamiliar source is still a source,
 # and printing nothing is the failure this exists to prevent.
 SOURCE_DISPLAY_NAME: Dict[str, str] = {
-    "estimator_confirmed":    "an estimator",
+    "estimator_confirmed":    "an estimator, overruling the files",
+    "estimator_read_drawing": "an estimator reading the drawing",
     "estimator_inferred":     "an estimator's stated inference from the drawing",
     "knowledge_base":         "SDI's knowledge base",
     "solidworks_api":         "the SolidWorks model",

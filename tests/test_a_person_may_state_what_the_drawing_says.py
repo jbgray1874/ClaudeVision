@@ -81,11 +81,16 @@ def test_a_confirmed_size_displaces_the_category_default():
     assert "J Gray" in flags and "page 14" in flags
 
 
-def test_a_confirmed_size_outranks_even_a_measured_dxf():
-    """Rank 100 beats rank 80 — deliberately, and the displacement is still recorded.
+def test_a_dxf_beats_a_figure_read_off_the_drawing():
+    """WITHDRAWN AND REVERSED, on the business rule: the DXF and the model are authoritative.
 
-    This asymmetry is the point of the rank: a DXF can be of the wrong revision, and a person
-    holding the drawing is the only source that can say so.
+    This test used to assert the opposite — that a figure typed into the confirmations file
+    outranked a measured DXF, on the reasoning that a person holding the drawing can see a
+    stale export. The reasoning was fine; the rank was applied to the wrong ACT. Reading an
+    overall off a PDF is not overturning a flat pattern, it is reading the same drawing the
+    engine read. The DXF is the file the laser cuts from, so where they disagree it wins.
+
+    Overruling the CAD is a different, deliberate claim — see the 'corrected' basis below.
     """
     part = {"part_number": "MBY439"}
     sp.apply_field(part, "blank_length_mm", 900.0, "dxf")
@@ -93,10 +98,45 @@ def test_a_confirmed_size_outranks_even_a_measured_dxf():
     apply_estimator_confirmed(
         [part], _confirmed(MBY439={"blank_length_mm": 1578, "blank_width_mm": 188}))
 
-    assert part["blank_length_mm"] == 1578
+    assert part["blank_length_mm"] == 900.0, "the measured flat stands"
     displaced = (part.get("_displaced") or {}).get("blank_length_mm") or []
-    assert any(d.get("value") == 900.0 for d in displaced), \
-        "the DXF figure must be recorded as displaced, not vanish"
+    assert any(d.get("value") == 1578 and not d.get("applied") for d in displaced), \
+        "and the reading that lost is recorded, not discarded"
+
+
+def test_a_deliberate_correction_does_overrule_the_cad():
+    """The escape hatch, claimed on purpose and argued for. An estimator who knows the DXF is
+    a superseded revision says so, and rank 100 is theirs."""
+    part = {"part_number": "MBY439"}
+    sp.apply_field(part, "blank_length_mm", 900.0, "dxf")
+
+    apply_estimator_confirmed([part], {"confirmed_by": "J Gray", "parts": {"MBY439": {
+        "blank_length_mm": 1578, "blank_width_mm": 188, "basis": "corrected",
+        "read_from": "the DXF in the folder is Rev J; the pack issued is Rev 4"}}})
+
+    assert part["blank_length_mm"] == 1578
+    assert sp.source_of(part, "blank_length_mm") == "estimator_confirmed"
+    assert "OVERRULING the CAD files" in " ".join(part["review_flags"])
+
+
+def test_a_correction_without_a_reason_is_refused(tmp_path: Path):
+    """This is the one basis that beats a measurement, so it must say why the files are wrong."""
+    path = _write(tmp_path, {"parts": {"A": {"blank_length_mm": 10, "blank_width_mm": 5,
+                                             "basis": "corrected"}}})
+    data, problems = load_corrections(path)
+    assert any("OUTRANKS the DXF" in p for p in problems)
+    assert not data["parts"].get("A", {}).get("blank_length_mm")
+
+
+def test_a_read_figure_still_beats_every_machine_reading_of_the_same_sheet():
+    """72 sits above the deterministic title-block read (70) and the machine's own overall
+    read (65): a person looking at the sheet beats a parser looking at the sheet."""
+    part = {"part_number": "JAE826"}
+    sp.apply_field(part, "blank_length_mm", 9.9, "drawing_deterministic")
+    apply_estimator_confirmed(
+        [part], _confirmed(JAE826={"blank_length_mm": 1680, "blank_width_mm": 560}))
+    assert part["blank_length_mm"] == 1680
+    assert sp.source_of(part, "blank_length_mm") == "estimator_read_drawing"
 
 
 def test_nothing_weaker_can_take_it_back():
@@ -138,7 +178,7 @@ def test_an_inference_is_priced_but_does_not_wear_a_readings_rank():
     assert "650 + 2x95" in flags, "the working must travel with the figure"
 
 
-def test_a_measurement_displaces_an_inference_but_not_a_reading():
+def test_a_measurement_displaces_an_inference_and_a_reading_alike():
     """The whole point of two ranks. 45 loses to a DXF; 100 does not."""
     inferred = {"part_number": "A"}
     sp.apply_field(inferred, "blank_length_mm", 999.0, "dxf")
@@ -147,11 +187,16 @@ def test_a_measurement_displaces_an_inference_but_not_a_reading():
         "read_from": "worked out from the section"}}})
     assert inferred["blank_length_mm"] == 999.0, "a measurement beats an inference"
 
+    # ...and so does a reading, since the DXF is what the laser cuts from. The three bases
+    # are ordered corrected (100) > read (72) > inferred (45), with every measurement
+    # sitting between the first and the second.
     read = {"part_number": "A"}
     sp.apply_field(read, "blank_length_mm", 999.0, "dxf")
     apply_estimator_confirmed([read], {"parts": {"A": {
         "blank_length_mm": 1680, "blank_width_mm": 560}}})
-    assert read["blank_length_mm"] == 1680, "a reading off the sheet still outranks it"
+    assert read["blank_length_mm"] == 999.0, "a DXF beats a sheet reading too"
+    assert sp.rank("estimator_confirmed") > sp.rank("dxf") > sp.rank("estimator_read_drawing") \
+        > sp.rank("estimator_inferred")
 
 
 def test_an_inference_without_its_working_is_refused(tmp_path: Path):
@@ -170,7 +215,7 @@ def test_a_reading_needs_no_working():
     apply_estimator_confirmed([part], {"parts": {"JAE826": {
         "blank_length_mm": 1680, "blank_width_mm": 560}}})
     assert part["blank_length_mm"] == 1680
-    assert sp.source_of(part, "blank_length_mm") == "estimator_confirmed"
+    assert sp.source_of(part, "blank_length_mm") == "estimator_read_drawing"
 
 
 def test_an_unknown_basis_is_refused_rather_than_silently_treated_as_read(tmp_path: Path):

@@ -86,14 +86,29 @@ _NOTE_KEYS = ("read_from", "note", "description")
 # an estimate with holes cannot be quoted from, and a hole is not more honest than a stated
 # assumption, only less useful. An estimator can overturn an assumption they can see.
 #
-# So a figure may be entered as either, and the two are never confused:
-#   "read"     — printed on the sheet. estimator_confirmed, rank 100, outranks everything.
-#   "inferred" — worked out from what the sheet shows. estimator_inferred, rank 45: beats a
-#                category default and a machine transcription, loses to every measurement
-#                and to the BOM table, so a real reading arriving later simply displaces it.
-# An inference MUST carry its working. A number with no stated reasoning is a guess wearing
-# a person's authority, which is the one thing this file must never launder.
-_BASIS_SOURCE = {"read": SOURCE, "inferred": "estimator_inferred"}
+# So a figure is entered on one of three bases, and they are never confused:
+#
+#   "read"      printed on the sheet          estimator_read_drawing  rank 72
+#   "inferred"  worked out from what it shows estimator_inferred      rank 45
+#   "corrected" the files are WRONG, and why  estimator_confirmed     rank 100
+#
+# THE DXF AND THE MODEL ARE AUTHORITATIVE, AND "read" DELIBERATELY DOES NOT OUTRANK THEM.
+# The DXF is the file the laser cuts from and the model is what the shop builds; where either
+# disagrees with a sheet, they win, and the estimate says so. A person transcribing an
+# overall off a PDF has not overturned a flat pattern — they have read the same drawing the
+# engine read, more reliably, so they rank as the best PDF-derived source and no higher.
+# Rank 100 is reserved for the different act of KNOWING the files are wrong, which has to be
+# claimed on purpose and argued for.
+#
+# Both "inferred" and "corrected" MUST carry their working. A number with no stated reasoning
+# is a guess wearing a person's authority, which is the one thing this file must never
+# launder — and that goes double for the basis that outranks a measurement.
+_BASIS_SOURCE = {
+    "read": "estimator_read_drawing",
+    "inferred": "estimator_inferred",
+    "corrected": SOURCE,
+}
+_BASIS_NEEDS_REASON = ("inferred", "corrected")
 
 # Refused by name rather than ignored. See the module docstring: a price entered here would be
 # indistinguishable in the output from one the engine sourced.
@@ -237,13 +252,17 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
                 f"blank for a sheet part, or the length and diameter for a bar")
             for _k in _SHEET_FIELDS + _LINEAR_FIELDS:
                 entry.pop(_k, None)
-        # AN INFERENCE WITHOUT ITS WORKING IS A GUESS WEARING A PERSON'S AUTHORITY.
-        if entry.get("basis") == "inferred" and not (
+        # A CLAIM WITHOUT ITS WORKING IS A GUESS WEARING A PERSON'S AUTHORITY.
+        if entry.get("basis") in _BASIS_NEEDS_REASON and not (
                 entry.get("read_from") or entry.get("note")):
+            _b = entry["basis"]
             problems.append(
-                f"{code_s}: basis is 'inferred' but no reasoning is given. State how the "
-                f"figure was arrived at in 'read_from' or 'note' — an estimator has to be "
-                f"able to overturn it, and they cannot overturn what they cannot see")
+                f"{code_s}: basis is {_b!r} but no reasoning is given. State it in "
+                f"'read_from' or 'note' — "
+                + ("an inference has to be overturnable, and nobody can overturn what they "
+                   "cannot see" if _b == "inferred" else
+                   "this basis OUTRANKS the DXF and the model, so it must say why they are "
+                   "wrong. Use 'read' for a figure you have simply read off the sheet"))
             for _k in list(_FIELD_MAP):
                 entry.pop(_k, None)
 
@@ -322,19 +341,23 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
                 "fields": dict(spec),
                 "file": corrections.get("path"),
             }
+            _stamp = f" on {when}" if when else ""
             if basis == "inferred":
                 # Worded as an ASSUMPTION, because that is what it is, and priced anyway.
                 part.setdefault("review_flags", []).append(
-                    f"{code}: {', '.join(changed)} — INFERRED by {who}"
-                    + (f" on {when}" if when else "")
-                    + f". Basis: {source_note}. The drawing does not print this figure; it "
-                      f"is priced on the stated assumption so the line is not left empty. "
-                      f"Any measurement displaces it — overturn it if you disagree")
+                    f"{code}: {', '.join(changed)} — INFERRED by {who}{_stamp}. "
+                    f"Basis: {source_note}. The drawing does not print this figure; it is "
+                    f"priced on the stated assumption so the line is not left empty. Any "
+                    f"measurement displaces it — overturn it if you disagree")
+            elif basis == "corrected":
+                part.setdefault("review_flags", []).append(
+                    f"{code}: {', '.join(changed)} — CORRECTED by {who}{_stamp}, OVERRULING "
+                    f"the CAD files. Reason: {source_note}. This is the one source that "
+                    f"outranks a DXF and the model, claimed deliberately")
             else:
                 part.setdefault("review_flags", []).append(
-                    f"{code}: {', '.join(changed)} — confirmed by {who}"
-                    + (f" on {when}" if when else "")
-                    + (f", read from {source_note}" if source_note else "")
-                    + ". This is a person's reading of the drawing and outranks every figure "
-                      "the engine derived; it is only as good as that reading")
+                    f"{code}: {', '.join(changed)} — read off the drawing by {who}{_stamp}"
+                    + (f" ({source_note})" if source_note else "")
+                    + ". Better than any machine reading of the same sheet, and a DXF flat "
+                      "or the model still displaces it — those are what the shop cuts to")
     return report

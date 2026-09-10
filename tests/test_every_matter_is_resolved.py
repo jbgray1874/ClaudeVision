@@ -162,7 +162,11 @@ def test_the_reason_an_estimator_reads_names_the_disagreement():
     ("solidworks_flat_pattern", "the SolidWorks flat pattern"),
     ("dxf_flat_pattern", "the DXF flat pattern"),
     ("llm_full_extract", "Grok (xAI)"),
-    ("estimator_confirmed", "an estimator"),
+    # The three things a person can do, named apart, because they carry different authority:
+    # overruling the CAD, reading the drawing, and reasoning from it.
+    ("estimator_confirmed", "an estimator, overruling the files"),
+    ("estimator_read_drawing", "an estimator reading the drawing"),
+    ("estimator_inferred", "an estimator's stated inference from the drawing"),
     ("mirror_of_measured", "the measured opposite hand"),
 ])
 def test_a_decision_names_where_it_was_taken(source, expected):
