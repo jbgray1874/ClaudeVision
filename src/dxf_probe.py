@@ -102,6 +102,47 @@ def _path_length(entity: Any, sagitta: float = 0.01) -> Optional[float]:
     return sum(math.dist(points[i], points[i + 1]) for i in range(len(points) - 1))
 
 
+
+def _distinct_bend_lines(segments: List[tuple], tol: float = 0.25) -> int:
+    """How many BENDS the segments represent — not how many entities were drawn.
+
+    A bend line is routinely drawn DASHED, and SDI's own 117621702M proves how badly a raw
+    entity count misleads: ten LINEs on BENDLINES, five 6mm dashes at y=75.31 and five at
+    y=84.31, describing exactly TWO bends. Counting entities reported ten, a five-fold
+    over-count on a fact the file states perfectly clearly.
+
+    Segments are grouped by the INFINITE LINE they lie on — direction modulo 180 degrees plus
+    perpendicular offset from the origin — so every dash of one fold collapses to one bend,
+    while genuinely separate folds on parallel lines stay separate because their offsets
+    differ. 117620202M's five segments sit on five different lines and stay five.
+    """
+    import math as _m
+    lines: List[tuple] = []
+    for (x1, y1), (x2, y2) in segments:
+        dx, dy = x2 - x1, y2 - y1
+        length = _m.hypot(dx, dy)
+        if length <= 0:
+            continue
+        # THE DIRECTION IS CANONICALISED FIRST, and getting this wrong merged two real bends.
+        # The signed offset of a line flips when the same line is drawn the other way round,
+        # so 117620202M's folds at y=+124.12 and y=-124.12 — drawn in opposite directions —
+        # produced the SAME offset and collapsed into one. Five bends were reported as three.
+        # Point every direction into one half-plane before measuring anything from it.
+        if dx < 0 or (abs(dx) <= 1e-9 and dy < 0):
+            dx, dy = -dx, -dy
+            x1, y1 = x2, y2
+        angle = _m.degrees(_m.atan2(dy, dx)) % 180.0
+        # perpendicular distance from origin to the infinite line through the segment
+        offset = (x1 * dy - y1 * dx) / length
+        for a, o in lines:
+            if (abs(a - angle) <= 0.5 or abs(abs(a - angle) - 180.0) <= 0.5) \
+                    and abs(o - offset) <= tol:
+                break
+        else:
+            lines.append((angle, offset))
+    return len(lines)
+
+
 def probe_dxf(path_like: Any) -> Dict[str, Any]:
     """An inventory of what the file contains. Facts, with their limits stated."""
     name = Path(str(path_like)).name
@@ -114,7 +155,7 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
         "extent_is": "", "looks_like_flat_export": False,
         "blank_length_mm": None, "blank_width_mm": None,
         "circle_diameters": [], "circle_count": 0,
-        "bend_layer_line_count": 0,
+        "bend_layer_line_count": 0, "bend_lines": 0,
         "outline_length": None, "outline_length_partial": False,
         "text_values": [], "dimension_entities": 0,
         "error": "",
@@ -143,6 +184,7 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     texts: List[str] = []
     circles: List[float] = []
     bend_lines = 0
+    bend_segments: List[tuple] = []
     profile: List[Any] = []
     unsupported: collections.Counter = collections.Counter()
     length_total = 0.0
@@ -178,6 +220,12 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
 
         if on_bend_layer:
             bend_lines += 1
+            if kind == "LINE":
+                try:
+                    bend_segments.append(((entity.dxf.start.x, entity.dxf.start.y),
+                                          (entity.dxf.end.x, entity.dxf.end.y)))
+                except Exception:                                        # noqa: BLE001
+                    pass
             continue
 
         if kind == "CIRCLE":
@@ -197,6 +245,8 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     result["layers"] = sorted(layers)
     result["dimension_entities"] = counts.get("DIMENSION", 0)
     result["bend_layer_line_count"] = bend_lines
+    result["bend_lines"] = _distinct_bend_lines(bend_segments) if bend_segments else (
+        bend_lines if bend_lines else 0)
     result["circle_diameters"] = sorted(set(circles))
     result["circle_count"] = len(circles)
     result["text_values"] = texts[:40]

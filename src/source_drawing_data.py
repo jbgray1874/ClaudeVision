@@ -29,7 +29,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-SHEETS = ("Files", "DXF file vs engine", "Facts", "BOM rows", "Operations", "Not extracted")
+SHEETS = ("Files", "Pages", "DXF file vs engine", "Facts", "BOM rows",
+          "Operations", "Not extracted")
 
 
 def _text(value: Any, limit: int = 300) -> str:
@@ -224,9 +225,15 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
              _engine("hole_count", "estimated_hole_count"), False,
              "a circle is not necessarily a hole — a disc's OUTLINE is a circle. Deciding "
              "which are holes needs the part's role and the drawing's instructions"),
-            ("lines on a bend layer", probe.get("bend_layer_line_count") or None,
-             _engine("bend_count", "bend_count_dxf", "fold_count"), False,
-             "a bend can be drawn as several segments, so a line count is not a bend count"),
+            # THE DXF STATES THE BENDS, SO THIS IS COMPARABLE AND WE MUST BE EXACTLY RIGHT.
+            # Segments are collapsed onto the infinite line they lie on, so a dashed fold
+            # counts once: 117621702M draws ten dashes and has two bends. The raw entity
+            # count is carried beside it as evidence, not as the answer.
+            ("bends", probe.get("bend_lines") or None,
+             _engine("bend_count", "bend_count_dxf", "fold_count"), True,
+             (f"{probe.get('bend_layer_line_count')} segment(s) on the bend layer collapse "
+              f"to {probe.get('bend_lines')} distinct fold line(s)")
+             if probe.get("bend_layer_line_count") else ""),
         ]
         for label, available, extracted, comparable, note in checks:
             if available is None and extracted in (None, "", []):
@@ -254,6 +261,73 @@ def dxf_comparison_rows(summary: Mapping[str, Any],
                                               "" if not ambiguous else f"attribution {how}")
                                   if x),
             })
+    return rows
+
+
+def dxf_detail_blocks(summary: Mapping[str, Any],
+                      dxf_paths: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
+    """The COMPLETE inventory of each DXF — everything read, nothing summarised away.
+
+    The comparison sheet answers "does the engine agree?". This answers the prior question:
+    what is actually IN this file? Every entity type and its count, every layer, every text
+    string, every distinct circle diameter, the units as declared, and anything the reader
+    could not measure. Nothing is elided: a section that shows the interesting rows and hides
+    the rest is how a fact goes missing without anyone deciding to drop it.
+    """
+    try:
+        from dxf_probe import probe_dxf
+    except Exception:                                                    # noqa: BLE001
+        return []
+    paths: List[Any] = list(dxf_paths or [])
+    if not paths:
+        seen: set = set()
+        for part in _parts(summary):
+            for key in ("dxf_file", "dxf_path", "flat_pattern_file"):
+                value = part.get(key)
+                if value and str(value).lower() not in seen:
+                    seen.add(str(value).lower())
+                    paths.append(value)
+    out: List[Dict[str, Any]] = []
+    for path in paths:
+        try:
+            probe = probe_dxf(path)
+        except Exception:                                                # noqa: BLE001
+            continue
+        part, how, ambiguous = _match_part(summary, probe.get("file", ""))
+        out.append({"probe": probe,
+                    "part": _text((part or {}).get("part_number")),
+                    "attribution": how, "ambiguous": ambiguous})
+    return out
+
+
+def page_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Every page of every PDF, and what was read off it. One row per page, always.
+
+    A page that yielded nothing is a row saying so — the alternative is a document where the
+    pages that failed are simply absent, which reads as a shorter drawing pack.
+    """
+    rows: List[Dict[str, Any]] = []
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, Mapping):
+            continue
+        analysis = page.get("page_analysis") or {}
+        dims = analysis.get("dimensions") or {}
+        role = (page.get("page_role") or {}).get("primary_role") or page.get("page_roles") or ""
+        found = []
+        if dims.get("overall_length_mm") or dims.get("overall_width_mm"):
+            found.append(f"overall {dims.get('overall_length_mm')} x {dims.get('overall_width_mm')}")
+        if dims.get("all_dimensions_mm"):
+            found.append(f"{len(dims['all_dimensions_mm'])} dimension figure(s)")
+        if analysis.get("materials"):
+            found.append("material: " + ", ".join(str(m) for m in analysis["materials"][:3]))
+        if analysis.get("part_numbers"):
+            found.append(f"{len(analysis['part_numbers'])} part code(s)")
+        rows.append({
+            "file": _text(page.get("source_pdf_name") or page.get("source_file") or ""),
+            "page": page.get("source_page_number") or page.get("page_number"),
+            "role": _text(role),
+            "read_from_it": "; ".join(found) if found else "nothing was read from this page",
+        })
     return rows
 
 
@@ -360,6 +434,7 @@ def build_tables(summary: Mapping[str, Any],
                  dxf_paths: Optional[Sequence[Any]] = None) -> Dict[str, List[Dict[str, Any]]]:
     return {
         "Files": files_rows(summary),
+        "Pages": page_rows(summary),
         "DXF file vs engine": dxf_comparison_rows(summary, dxf_paths),
         "Facts": fact_rows(summary),
         "BOM rows": bom_rows(summary),
@@ -457,6 +532,13 @@ font-weight:700;letter-spacing:.3px;white-space:nowrap}
 .pill.mute{background:var(--surface-2);color:var(--faint)}
 .note{color:var(--faint);font-size:11.5px;max-width:52ch}
 .empty{padding:22px;color:var(--faint);font-size:13px}
+.fhead{font-family:var(--mono);font-size:13px;margin-bottom:10px;padding-bottom:8px;
+border-bottom:1px solid var(--line);color:var(--ink)}
+table.kv{font-size:12.5px}
+table.kv th{position:static;background:none;width:190px;text-transform:none;letter-spacing:0;
+font-size:11.5px;color:var(--faint);font-weight:600;border-bottom:1px solid var(--line);
+vertical-align:top;padding:6px 12px 6px 0;white-space:nowrap}
+table.kv td{padding:6px 0;font-family:var(--mono);font-size:11.5px;word-break:break-word}
 footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
 color:var(--faint);font-size:11.5px;max-width:76ch}
 @media(max-width:640px){.wrap{padding:24px 14px 48px}h1{font-size:22px}table{font-size:12px}}
@@ -490,6 +572,9 @@ def _cell(header: str, value: Any) -> str:
 
 
 _WHY = {
+    "Pages": "Every page of every PDF and what was read off it. A page that yielded "\
+             "nothing gets a row saying so — otherwise the pages that failed are simply "\
+             "absent, which reads as a shorter drawing pack.",
     "Files": "Every file the job saw and whether anything read it. A CAD file nobody opened "
              "appears nowhere else — the estimate simply prices what it has.",
     "DXF file vs engine": "The DXFs opened independently with ezdxf, their own measurements "
@@ -559,6 +644,57 @@ def write_source_drawing_html(summary: Mapping[str, Any], out_dir: Any, job: str
         for row in rows:
             parts.append("<tr>" + "".join(_cell(h, row.get(h)) for h in headers) + "</tr>")
         parts.append("</tbody></table></div>")
+
+    # ── The complete inventory of every DXF, nothing elided ──────────────────────────
+    blocks = dxf_detail_blocks(summary, dxf_paths)
+    if blocks:
+        parts.append("<h2>Every DXF in full <span class='cnt'>"
+                     f"{len(blocks)}</span></h2>")
+        parts.append("<p class='why'>The complete inventory of each file — every entity type, "
+                     "every layer, every text string, every distinct circle. Nothing is "
+                     "summarised away: a section that shows the interesting rows and hides the "
+                     "rest is how a fact goes missing without anyone deciding to drop it.</p>")
+        for entry in blocks:
+            probe = entry["probe"]
+            head = _esc(probe.get("file"))
+            who = f" &middot; {_esc(entry['part'])}" if entry.get("part") else ""
+            parts.append(f"<div class='panel' style='padding:16px 18px;margin-bottom:12px'>")
+            parts.append(f"<div class='fhead'><b>{head}</b>{who}</div>")
+            if not probe.get("readable"):
+                parts.append(f"<p class='note'>Not readable — {_esc(probe.get('error'))}</p></div>")
+                continue
+            kind = ("flat pattern export" if probe.get("looks_like_flat_export")
+                    else "drawing export")
+            facts = [
+                ("read with", probe.get("reader")),
+                ("classified as", kind),
+                ("units declared", f"{probe.get('units')}"
+                 + ("" if probe.get("units_known") else " — figures are unitless")),
+                ("extent", f"{probe.get('extent_length')} &times; {probe.get('extent_width')}"),
+                ("blank published", f"{probe.get('blank_length_mm')} &times; "
+                                    f"{probe.get('blank_width_mm')}"
+                 if probe.get("blank_length_mm") else "none — " + (_esc(probe.get("extent_is"))
+                                                                   or "not a flat export")),
+                ("profile length", f"{probe.get('outline_length')}"
+                 + (" (partial)" if probe.get("outline_length_partial") else "")),
+                ("circles", f"{probe.get('circle_count')}"
+                 + (f" &mdash; &Oslash; " + ", ".join(str(d) for d in probe.get("circle_diameters") or [])
+                    if probe.get("circle_diameters") else "")),
+                ("bends", f"{probe.get('bend_lines')} from "
+                          f"{probe.get('bend_layer_line_count')} segment(s)"),
+                ("dimension entities", probe.get("dimension_entities")),
+                ("layers", ", ".join(probe.get("layers") or []) or "none"),
+                ("entities", ", ".join(f"{k} &times;{v}" for k, v in
+                                       (probe.get("entity_counts") or {}).items()) or "none"),
+                ("not measured", ", ".join(probe.get("unsupported") or []) or "nothing"),
+                ("text in the file", " &vert; ".join(_esc(x) for x in
+                                                     (probe.get("text_values") or [])) or "none"),
+                ("attributed to a part by", entry.get("attribution")),
+            ]
+            parts.append("<table class='kv'>")
+            for label, value in facts:
+                parts.append(f"<tr><th>{_esc(label)}</th><td>{value if isinstance(value, str) else _esc(value)}</td></tr>")
+            parts.append("</table></div>")
 
     parts.append(
         "<footer>Geometry proves shape, not method: a modelled hole does not prove drilling, "

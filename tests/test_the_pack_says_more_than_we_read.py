@@ -157,6 +157,13 @@ from dxf_probe import probe_dxf                                          # noqa:
 
 MM, INCH, UNITLESS = 4, 1, 0
 
+# The corpus DXFs are not in the repo, so anything asserting against them skips on a fresh
+# checkout. Every behaviour they cover is also proved on a synthetic file built in-test.
+UPLOADS = Path("/root/.claude/uploads/09b98f42-bd9e-534a-8993-f8eb3975326c")
+real_dxf = pytest.mark.skipif(
+    not (UPLOADS / "f124e9e8-117620202M_0.9mm_MS_revA.DXF").exists(),
+    reason="corpus DXFs not present in this checkout")
+
 
 def _dxf(tmp_path: Path, name: str, build, insunits: int = MM) -> Path:
     doc = ezdxf.new()
@@ -396,3 +403,96 @@ def test_the_run_writes_the_page_beside_the_workbook():
     source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     assert "write_source_drawing_html(" in source
     assert "source_drawing_data_html" in source
+
+
+# ── where the DXF states a fact, we must be exactly right ─────────────────────────────
+
+def test_a_dashed_bend_line_is_one_bend_not_ten(tmp_path: Path):
+    """SDI's 117621702M draws its folds DASHED: ten LINE entities on BENDLINES, five 6mm
+    dashes at y=75.31 and five at y=84.31, describing exactly TWO bends. Counting entities
+    reported ten — a five-fold over-count on a fact the file states perfectly clearly.
+
+    The DXF is what the CNC machines fold to. Where it represents something, we should never
+    get it wrong."""
+    from dxf_probe import probe_dxf
+    def build(msp):
+        for y in (75.31, 84.31):
+            for x0 in (-53, -28, -3, 22, 47):
+                msp.add_line((x0, y), (x0 + 6, y), dxfattribs={"layer": "BENDLINES"})
+        msp.add_lwpolyline([(-53, 0), (53, 0), (53, 90), (-53, 90)], close=True)
+    probe = probe_dxf(_dxf(tmp_path, "dashed.dxf", build))
+    assert probe["bend_layer_line_count"] == 10, "the raw segments are still reported"
+    assert probe["bend_lines"] == 2, "but the BENDS are two"
+
+
+def test_folds_drawn_in_opposite_directions_stay_separate(tmp_path: Path):
+    """MY OWN BUG, CAUGHT ON REAL GEOMETRY. A line's signed offset flips when it is drawn the
+    other way round, so 117620202M's folds at y=+124.12 and y=-124.12 — drawn in opposite
+    directions — produced the same offset and collapsed into one. Five bends read as three."""
+    from dxf_probe import _distinct_bend_lines
+    assert _distinct_bend_lines([((-5, 10), (5, 10)), ((5, -10), (-5, -10))]) == 2
+    assert _distinct_bend_lines([((0, 0), (10, 0)), ((10, 0), (0, 0))]) == 1, \
+        "and one line drawn twice, each way, is still one line"
+
+
+@real_dxf
+def test_the_corpus_bend_counts_are_exact():
+    """Against the three real flats, with the count each file actually describes."""
+    from dxf_probe import probe_dxf
+    for name, expected in (("f124e9e8-117620202M_0.9mm_MS_revA.DXF", 5),
+                           ("3c321a99-117621702M_2MM_MS_RevA.DXF", 2),
+                           ("f421e02c-1097502A01_2mm_ACRY_Rev_B.DXF", 2)):
+        path = UPLOADS / name
+        if path.exists():
+            assert probe_dxf(path)["bend_lines"] == expected, name
+
+
+def test_bends_are_compared_because_the_dxf_states_them(tmp_path: Path):
+    """Unlike circles-vs-holes, this IS the same fact measured two ways, so it is scored."""
+    from source_drawing_data import build_tables
+    def build(msp):
+        msp.add_line((0, 10), (100, 10), dxfattribs={"layer": "BENDLINES"})
+        msp.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+    path = _dxf(tmp_path, "117620202M.dxf", build)
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "117620202M", "manufacturing_features": {"bend_count": 1}}]}}
+    rows = {r["fact"]: r for r in build_tables(summary, [path])["DXF file vs engine"]}
+    assert rows["bends"]["comparable"] == "yes"
+    assert rows["bends"]["agrees"] == "yes"
+    assert "collapse to 1 distinct fold" in rows["bends"]["note"]
+
+
+# ── the page carries everything, not a summary ────────────────────────────────────────
+
+def test_every_page_of_every_pdf_gets_a_row_even_when_it_yielded_nothing():
+    """A document where the pages that failed are simply absent reads as a shorter pack."""
+    from source_drawing_data import page_rows
+    summary = {"pages": [
+        {"page_number": 1, "source_pdf_name": "j.pdf", "source_page_number": 1,
+         "page_analysis": {"dimensions": {"all_dimensions_mm": [10, 20]}}},
+        {"page_number": 2, "source_pdf_name": "j.pdf", "source_page_number": 2,
+         "page_analysis": {}}]}
+    rows = page_rows(summary)
+    assert len(rows) == 2
+    assert "nothing was read from this page" in rows[1]["read_from_it"]
+
+
+def test_the_page_lists_each_dxf_in_full(tmp_path: Path):
+    """100% of what was extracted, per file — entities, layers, text, circles, units — with
+    nothing elided. Hiding the dull rows is how a fact goes missing without a decision."""
+    from source_drawing_data import write_source_drawing_html
+    def build(msp):
+        msp.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+        msp.add_circle((20, 20), 2.5)
+        msp.add_line((0, 10), (100, 10), dxfattribs={"layer": "BENDLINES"})
+    path = _dxf(tmp_path, "117620202M.dxf", build)
+    summary = {"estimate_summary": {"part_estimates": [{"part_number": "117620202M"}]}}
+    html = write_source_drawing_html(summary, tmp_path, "j", [path]).read_text(encoding="utf-8")
+
+    assert "Every DXF in full" in html
+    for label in ("read with", "units declared", "extent", "profile length", "circles",
+                  "bends", "layers", "entities", "not measured", "text in the file",
+                  "attributed to a part by"):
+        assert f">{label}<" in html, f"the page must state {label}"
+    assert "BENDLINES" in html and "LWPOLYLINE" in html, "layers and entity types verbatim"
+    assert "ezdxf" in html
