@@ -2867,6 +2867,87 @@ def market_indication_for(part: Dict[str, Any], material: Any) -> Optional[Dict[
     return found
 
 
+def _price_declared_material_layers(part: Dict[str, Any],
+                                    material: Dict[str, Any]) -> Dict[str, Any]:
+    """A laminated part is MORE THAN ONE MATERIAL, and every layer has to reach the price.
+
+    JAE827 on 0359342 is "Flexi MDF 6mm and 9mm" — a curved corner laminated from two
+    boards over R49. The part record holds ONE material and ONE thickness, so the engine
+    could only ever price one of them, and when I wrote that part's assumption into the
+    confirmations file I priced the 9mm and said in the note that the 6mm was excluded.
+    Writing the omission down does not make it a decision; it only makes it explicit that
+    money was left out. An explanation must never legitimise an exclusion.
+
+    So a part may declare its layers, and each is priced THROUGH THIS SAME FUNCTION — the
+    layer becomes a shadow part carrying its own material, gauge and blank, and goes down
+    the identical route. No new rate, no new price model, nothing invented: whatever the
+    engine would charge for that board as a part in its own right is what the layer costs.
+
+    NO NEW IDENTITY IS MINTED. The layers stay ON the part, because a lamination is one
+    component with several materials, not several components — turning each into a part
+    would double the fasteners, the handling and the assembly around it, which is the exact
+    failure the canonical population exists to prevent.
+
+    The bonding, pressing and forming labour is NOT added here — the engine has no model
+    for it — and the part says so rather than letting a material-only figure read as
+    complete.
+    """
+    layers = part.get("material_layers") or []
+    if not isinstance(layers, list) or len(layers) < 2 or not isinstance(material, dict):
+        return material
+
+    priced: List[Dict[str, Any]] = []
+    added = 0.0
+    for index, layer in enumerate(layers[1:], start=2):
+        if not isinstance(layer, dict):
+            continue
+        shadow = {
+            "part_number": f"{part.get('part_number')} layer {index}",
+            "description": str(layer.get("note") or part.get("description") or ""),
+            "quantity": part.get("quantity"),
+            "normalized_material": layer.get("material") or part.get("normalized_material"),
+            "normalized_thickness_mm": layer.get("thickness_mm"),
+            "blank_length_mm": layer.get("blank_length_mm") or part.get("blank_length_mm"),
+            "blank_width_mm": layer.get("blank_width_mm") or part.get("blank_width_mm"),
+            "review_flags": [],
+        }
+        layer_cost = estimate_material(shadow)
+        unit = _safe_float((layer_cost or {}).get("unit_material_cost_gbp")) or 0.0
+        added += unit
+        priced.append({
+            "layer": index,
+            "material": shadow["normalized_material"],
+            "thickness_mm": shadow["normalized_thickness_mm"],
+            "blank_length_mm": shadow["blank_length_mm"],
+            "blank_width_mm": shadow["blank_width_mm"],
+            "unit_material_cost_gbp": round(unit, 4),
+            "cost_method": (layer_cost or {}).get("cost_method"),
+            "note": layer.get("note"),
+        })
+
+    if not priced:
+        return material
+
+    base = _safe_float(material.get("unit_material_cost_gbp")) or 0.0
+    material = dict(material)
+    material["unit_material_cost_gbp"] = round(base + added, 4)
+    material["material_layers_priced"] = priced
+    material["material_layers_added_gbp"] = round(added, 4)
+    _qty = _safe_float(part.get("quantity")) or 1.0
+    if material.get("extended_material_cost_gbp") is not None:
+        material["extended_material_cost_gbp"] = round(
+            (base + added) * _qty, 4)
+
+    part.setdefault("review_flags", []).append(
+        f"{part.get('part_number')} is laminated from {len(priced) + 1} layers: "
+        + "; ".join(f"layer {p['layer']} {p['material']} {p['thickness_mm']}mm "
+                    f"£{p['unit_material_cost_gbp']:.2f}" for p in priced)
+        + f" added to the primary layer's £{base:.2f}. The BONDING / PRESSING / FORMING "
+          f"labour for laminating them is NOT in this figure — the engine has no model for "
+          f"it — so add it before issue")
+    return material
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     material = part.get("normalized_material") or _first(part.get("materials", []))
 
@@ -5072,6 +5153,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             "top-level unit/GA line (…-00-…) treated as assembly parent — material carried "
             "by children, fabrication route suppressed; estimator to verify")
     material = estimate_material(part)
+    material = _price_declared_material_layers(part, material)
     if debug:
         print(f"[DEBUG] estimate_part material done {part_number}")
     # FIX 1: feed powder LABOUR area from the SAME reliable blank the powder MATERIAL
@@ -5518,6 +5600,17 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # -- the door's ABS-over-polycarbonate, the side panel's ABS-over-PETG. Left behind
         # here, that question can only be asked before costing and never explained after.
         **({"_displaced": part.get("_displaced")} if part.get("_displaced") else {}),
+        # THE LAYERS A LAMINATION IS MADE OF, ALONGSIDE WHAT THEY COST.
+        #
+        # The same boundary defect as the two above, caught before it shipped rather than
+        # after: material_estimate crosses here carrying material_layers_priced, and the
+        # DECLARATION of what layers exist did not. The check that asks "did every declared
+        # layer reach the price?" reads the costed record, so without this it would find the
+        # answer and never the question — len(layers) < 2, short-circuit, silent pass. A
+        # check that cannot see what it is checking is worse than no check, because it
+        # reports CLEAR.
+        **({"material_layers": part.get("material_layers")}
+           if part.get("material_layers") else {}),
         "material_estimate": material,
         "process_estimate": process,
         "labour_estimate": labour,

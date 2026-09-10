@@ -1,88 +1,135 @@
 {
   "confirmed_by": "James Gray (SDI)",
   "confirmed_on": "2026-09-10",
-  "note": "Sizes read off the detail sheets of 0359342_PDF_Edition_Sunglasses_Stand_REV_4.pdf. Pages 8-28 are one part per sheet and the title block names the part, so each figure below is the overall printed on that part's own drawing. Six parts are deliberately ABSENT from this file because a rectangular blank is not the right answer for them - see 0359342_estimator_dimensions.NOTES.md. Quantities are deliberately not stated here.",
+  "note": "Read off the detail sheets of 0359342_PDF_Edition_Sunglasses_Stand_REV_4.pdf. Pages 8-28 are one part per sheet and the title block names the part. Each entry carries a basis: absent means 'read' (printed on the sheet, rank 72 — a DXF or a model still beats it); 'inferred' means worked out from what the sheet shows, with the working stated, and ranks below every measurement. Every fabricated part in the pack is priced. MBY433 is the only one absent and that is not a gap: it is the Prong Assembly of MBY432 + MBY434, so it has no blank of its own — its money is the puddle weld and dress, x56. Quantities are not stated here; the roll-up is in the NOTES file. Where a provisional MAKE METHOD is assumed, it is written into read_from, and the labour it implies is called out as NOT included in the material figure.",
   "parts": {
     "JAE820": {
-      "blank_length_mm": 638, "blank_width_mm": 538, "thickness_mm": 18,
+      "blank_length_mm": 638,
+      "blank_width_mm": 538,
+      "thickness_mm": 18,
       "material": "MDF",
       "read_from": "page 8, printed overall 638.0 x 538.0, title block 'MDF, 18mm', est mass 4.28 kg"
     },
     "JAE821": {
-      "blank_length_mm": 638, "blank_width_mm": 75, "thickness_mm": 18,
+      "blank_length_mm": 638,
+      "blank_width_mm": 75,
+      "thickness_mm": 18,
       "material": "MDF",
       "read_from": "page 9, printed overall 638.0 x 75.0, title block 'MDF, 18mm', est mass 0.64 kg"
     },
     "JAE822": {
-      "blank_length_mm": 502, "blank_width_mm": 75, "thickness_mm": 18,
+      "blank_length_mm": 502,
+      "blank_width_mm": 75,
+      "thickness_mm": 18,
       "material": "MDF",
       "read_from": "page 10, printed overall 502.0 x 75.0, title block 'MDF, 18mm', est mass 0.50 kg"
     },
     "JAE823": {
-      "blank_length_mm": 888, "blank_width_mm": 788, "thickness_mm": 6,
+      "blank_length_mm": 888,
+      "blank_width_mm": 788,
+      "thickness_mm": 6,
       "material": "Corian",
       "basis": "inferred",
-      "read_from": "page 11 prints the FINISHED tray, not a flat pattern: plan 650 x 550, sides 95 high, returns 24, R14 typ, 6mm Corian. Developed blank inferred as 650 + 2x95 + 2x24 = 888 by 550 + 2x95 + 2x24 = 788. This is thermoformed solid surface, so the sheet is bought at the developed size and formed. Confirm against the former. Note the sheet is stamped DETAIL FOR REFERENCE ONLY, and the finish is 800-grit all faces, no visible swirl"
+      "read_from": "page 11 prints the FINISHED tray, not a flat pattern: plan 650 x 550, sides 95 high, returns 24, R14 typ, 6mm Corian. Developed blank inferred as 650 + 2x95 + 2x24 = 888 by 550 + 2x95 + 2x24 = 788. This is thermoformed solid surface, so the sheet is bought at the developed size and formed. Confirm against the former. Note the sheet is stamped DETAIL FOR REFERENCE ONLY, and the finish is 800-grit all faces, no visible swirl. Provisional method: buy one 888 x 788 sheet of 6mm Corian per part (no nesting assumed — solid surface is bought to size), heat and vacuum-form over a former, trim the 24 returns, then 800-grit all faces with no visible swirl. FORMING, TRIMMING and the 800-grit finishing are NOT in the material figure; nor is the former. Waste: the developed rectangle already includes the returns, so allow normal solid-surface offcut on top"
     },
     "JAE824": {
-      "blank_length_mm": 40, "blank_width_mm": 40, "thickness_mm": 50,
+      "blank_length_mm": 40,
+      "blank_width_mm": 40,
+      "thickness_mm": 50,
       "material": "MDF",
       "basis": "inferred",
-      "read_from": "page 12 prints a solid block 40 x 40 x 50 high, material 'MDF' with no gauge. 50mm exceeds any board on this job, so it is laminated up or cut from thick stock. Priced as a 40 x 40 x 50 solid so the line is not empty; the make method drives the real cost and needs confirming"
+      "read_from": "page 12 prints a solid block 40 x 40 x 50 high, material 'MDF' with no gauge. 50mm exceeds any board on this job, so it is laminated up or cut from thick stock. Priced as a 40 x 40 x 50 solid so the line is not empty; the make method drives the real cost and needs confirming. Provisional method assumed for pricing: laminate three 18mm MDF boards to 54mm and machine back to 50, rather than buy 50mm stock — 40 x 40 is small enough that bonding offcuts is cheaper than a thick-stock purchase. BONDING and the machining to size are NOT in the material figure. If SDI would rather buy thick stock, the purchasing basis changes and so does the price"
     },
     "JAE827": {
-      "blank_length_mm": 250, "blank_width_mm": 320, "thickness_mm": 9,
+      "blank_length_mm": 250,
+      "blank_width_mm": 320,
+      "thickness_mm": 9,
       "material": "MDF",
       "basis": "inferred",
-      "read_from": "page 15, Shroud Corner: Flexi MDF in BOTH 6mm and 9mm, laminated over R49/R25 with 100 x 100 legs, envelope 250 x 170 x 149 high. Developed width inferred as 100 + 100 + a quarter-arc at R49 (about 77) = 277, taken as 320 to allow trim. Priced on the 9mm as the thicker of the two laminations. This is TWO materials on one part and the engine has no representation for that — the second lamination is NOT in this figure and must be added"
+      "layers": [
+        {
+          "material": "MDF",
+          "thickness_mm": 9,
+          "blank_length_mm": 250,
+          "blank_width_mm": 320,
+          "note": "9mm Flexi MDF outer skin, kerfed/laminated round R49"
+        },
+        {
+          "material": "MDF",
+          "thickness_mm": 6,
+          "blank_length_mm": 250,
+          "blank_width_mm": 320,
+          "note": "6mm Flexi MDF inner skin — the second lamination the title block states"
+        }
+      ],
+      "read_from": "page 15, Shroud Corner: title block states Flexi MDF in BOTH 6mm and 9mm, laminated over R49/R25 with 100 x 100 legs, envelope 250 x 170 x 149 high. Developed width inferred as 100 + 100 + a quarter-arc at R49 (about 77) = 277, taken as 320 to allow trim. BOTH laminations are now priced as layers. Provisional method: cut both skins to the developed blank, kerf or use Flexi board for the R49, bond and clamp/press over a former, trim to 250. The BONDING/PRESSING and the former are NOT in the material figure and must be added as labour"
     },
     "JAE835": {
-      "wire_length_mm": 896, "thickness_mm": 1,
+      "wire_length_mm": 896,
+      "thickness_mm": 1,
       "basis": "inferred",
-      "read_from": "page 23, Shelf Edging: a 1.0mm U-shaped laminate edging round three sides of the shelf, printed 496 long with 200 legs. Developed length inferred as 496 + 2 x 200 = 896mm. It is a LINEAR per-metre item, not a sheet blank. Title block material reads 'Lamainate Edging' — that typo is on the drawing and is why the material never resolved to a rate; price it as laminate edging strip"
+      "read_from": "page 23, Shelf Edging: a 1.0mm U-shaped laminate edging round three sides of the shelf, printed 496 long with 200 legs. Developed length inferred as 496 + 2 x 200 = 896mm. It is a LINEAR per-metre item, not a sheet blank. Title block material reads 'Lamainate Edging' — that typo is on the drawing and is why the material never resolved to a rate; price it as laminate edging strip. Provisional method: 0.9m of laminate edging strip per shelf at the edging rate, applied to the three exposed edges once the shelf panels are glued and pinned (the drawing says the edging is fitted AFTER the panels are joined). The APPLICATION labour and the trimming are NOT in the material figure"
     },
     "JAE825": {
-      "blank_length_mm": 190, "blank_width_mm": 110, "thickness_mm": 9,
+      "blank_length_mm": 190,
+      "blank_width_mm": 110,
+      "thickness_mm": 9,
       "material": "MDF",
       "read_from": "page 13, printed overall 190.0 x 110.0 x 9.0, title block 'MDF, 9mm'"
     },
     "JAE826": {
-      "blank_length_mm": 1680, "blank_width_mm": 560, "thickness_mm": 18,
+      "blank_length_mm": 1680,
+      "blank_width_mm": 560,
+      "thickness_mm": 18,
       "material": "MDF",
       "read_from": "page 14, printed overall 1680.0 x 560.0 x 18.0, title block 'MDF, 18mm'"
     },
     "JAE828": {
-      "blank_length_mm": 500, "blank_width_mm": 250, "thickness_mm": 12,
+      "blank_length_mm": 500,
+      "blank_width_mm": 250,
+      "thickness_mm": 12,
       "material": "MDF",
       "read_from": "page 16, printed overall 500.0 x 250.0, title block 'MDF, 12mm'. Rebated 3.0 deep x 100.0 along one edge"
     },
     "JAE829": {
-      "blank_length_mm": 500, "blank_width_mm": 250, "thickness_mm": 12,
+      "blank_length_mm": 500,
+      "blank_width_mm": 250,
+      "thickness_mm": 12,
       "material": "MDF",
       "read_from": "page 17, printed overall 500.0 x 250.0, title block 'MDF, 12mm'. Rebated both ends"
     },
     "JAE830": {
-      "blank_length_mm": 1649, "blank_width_mm": 250, "thickness_mm": 12,
+      "blank_length_mm": 1649,
+      "blank_width_mm": 250,
+      "thickness_mm": 12,
       "material": "MDF",
       "read_from": "page 18, printed overall 1649.0 x 250.0, title block 'MDF, 12mm'"
     },
     "JAE831": {
-      "blank_length_mm": 1649, "blank_width_mm": 250, "thickness_mm": 12,
+      "blank_length_mm": 1649,
+      "blank_width_mm": 250,
+      "thickness_mm": 12,
       "material": "MDF",
       "read_from": "page 19, printed overall 1649.0 x 250.0, title block 'MDF, 12mm'"
     },
     "JAE832": {
-      "blank_length_mm": 1670, "blank_width_mm": 546, "thickness_mm": 18,
+      "blank_length_mm": 1670,
+      "blank_width_mm": 546,
+      "thickness_mm": 18,
       "material": "MDF",
       "read_from": "page 20, printed overall 1670.0 x 546.0 x 18.0, title block 'MDF, 18mm'. Laminated to match RAL9010"
     },
     "JAE833": {
-      "blank_length_mm": 494, "blank_width_mm": 199, "thickness_mm": 9,
+      "blank_length_mm": 494,
+      "blank_width_mm": 199,
+      "thickness_mm": 9,
       "material": "MDF",
       "read_from": "page 21, printed overall 494.0 x 199.0 x 9.0, title block 'MDF, 9mm'. Rev 2, width increased by 293mm"
     },
     "JAE834": {
-      "blank_length_mm": 494, "blank_width_mm": 199, "thickness_mm": 9,
+      "blank_length_mm": 494,
+      "blank_width_mm": 199,
+      "thickness_mm": 9,
       "material": "MDF",
       "read_from": "page 22, printed overall 494.0 x 199.0 x 9.0, title block 'MDF, 9mm'. 2.5mm rebate 421.0 x 125.0"
     },
@@ -92,27 +139,37 @@
       "read_from": "page 24, printed overall 219.6 on Ø8 mild steel wire (title block 'Steel, Mild Wire Ø8mm'), est mass 0.09 kg. Linear stock: no blank, no laser, no fold. The Ø8 comes from the material cell itself and is not restated here"
     },
     "MBY434": {
-      "blank_length_mm": 24, "blank_width_mm": 24, "thickness_mm": 2,
+      "blank_length_mm": 24,
+      "blank_width_mm": 24,
+      "thickness_mm": 2,
       "material": "CR4",
       "read_from": "page 26, Dia 24.0 x 2.0 disc, title block 'CR4, 2mm', est mass 0.01 kg. 24 x 24 is the square nesting envelope for a Dia 24 blank, not a printed rectangle"
     },
     "MBY435": {
-      "blank_length_mm": 418, "blank_width_mm": 212.5, "thickness_mm": 2,
+      "blank_length_mm": 418,
+      "blank_width_mm": 212.5,
+      "thickness_mm": 2,
       "material": "CR4",
       "read_from": "page 27, the FLAT PATTERN view printed on the sheet: 418.0 x 212.5. The formed part is 418.0 x 142.0 x 74.0 high - do not use the formed size as the blank"
     },
     "MBY439": {
-      "blank_length_mm": 1578, "blank_width_mm": 188, "thickness_mm": 2,
+      "blank_length_mm": 1578,
+      "blank_width_mm": 188,
+      "thickness_mm": 2,
       "material": "Mild Steel",
       "read_from": "page 28, printed overall 1578.0 x 188.0 x 2.0, title block 'Steel, Mild 2mm', est mass 0.82 kg (it is a frame, so the net area is well under the blank)"
     },
     "A62271": {
-      "blank_length_mm": 1556, "blank_width_mm": 166, "thickness_mm": 6,
+      "blank_length_mm": 1556,
+      "blank_width_mm": 166,
+      "thickness_mm": 6,
       "material": "Mirror",
       "read_from": "page 2, printed overall 1556.0 x 166.0 x 6.0, title block 'Mirror, 6mm'. Safety film to rear, light chamfer all edges"
     },
     "J13149": {
-      "blank_length_mm": 155, "blank_width_mm": 155, "thickness_mm": 15,
+      "blank_length_mm": 155,
+      "blank_width_mm": 155,
+      "thickness_mm": 15,
       "material": "MDF",
       "read_from": "page 7, printed overall 155.0 x 155.0 x 15.0, title block '15mm MDF'. Laminated, 1mm edging to all sides"
     }

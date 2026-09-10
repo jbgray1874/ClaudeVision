@@ -196,6 +196,41 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
             if key_l in _NOTE_KEYS:
                 entry[key_l] = str(value)
                 continue
+            if key_l == "layers":
+                # A LAMINATION IS ONE COMPONENT MADE OF SEVERAL MATERIALS. Declared here so
+                # every layer reaches the price; kept ON the part so no second identity is
+                # minted, because a layer turned into a part would double the fasteners, the
+                # handling and the assembly around it.
+                if not isinstance(value, Sequence) or isinstance(value, str):
+                    problems.append(f"{code_s}: 'layers' must be a list of layers — skipped")
+                    continue
+                layers: List[Dict[str, Any]] = []
+                for position, layer in enumerate(value, start=1):
+                    if not isinstance(layer, Mapping):
+                        problems.append(f"{code_s} layer {position}: expected an object "
+                                        f"— skipped")
+                        continue
+                    built: Dict[str, Any] = {}
+                    for lk in ("material", "note"):
+                        if layer.get(lk):
+                            built[lk] = str(layer[lk])
+                    for lk in ("thickness_mm", "blank_length_mm", "blank_width_mm"):
+                        ln = _num(layer.get(lk))
+                        if ln is not None:
+                            built[lk] = ln
+                    if not built.get("material") or built.get("thickness_mm") is None:
+                        problems.append(
+                            f"{code_s} layer {position}: a layer needs at least a material "
+                            f"and a thickness_mm, or it cannot be priced — skipped")
+                        continue
+                    layers.append(built)
+                if len(layers) < 2:
+                    problems.append(
+                        f"{code_s}: 'layers' describes fewer than two usable layers, so it "
+                        f"says nothing the single material fields do not — skipped")
+                    continue
+                entry["layers"] = layers
+                continue
             if key_l == "basis":
                 basis = str(value).strip().lower()
                 if basis not in _BASIS_SOURCE:
@@ -327,6 +362,12 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
                 if sp.apply_field(part, part_field, spec[file_key], rank_source):
                     changed.append(f"{file_key} {spec[file_key]}"
                                    + (f" (was {before})" if before not in (None, "") else ""))
+            if spec.get("layers"):
+                # Direct-write, not through apply_field: this is not a competing reading of
+                # a datum some other source also supplies — nothing else in the engine
+                # describes a lamination at all, so there is nothing to arbitrate against.
+                part["material_layers"] = [dict(_l) for _l in spec["layers"]]
+                changed.append(f"{len(spec['layers'])} material layers")
             if not changed:
                 continue
             report["stamped"] += 1

@@ -3166,6 +3166,58 @@ def check_two_sources_disagree_about_the_material(summary: Any) -> List[Dict[str
         parts=disputed)]
 
 
+def check_every_declared_material_layer_is_priced(summary: Any) -> List[Dict[str, Any]]:
+    """A part that says it is laminated from N materials must carry N of them in its price.
+
+    JAE827 on 0359342 is "Flexi MDF 6mm and 9mm" — a curved corner laminated from two boards.
+    The part record holds one material and one thickness, so only one could ever be priced,
+    and when the assumption was written down it priced the 9mm and NOTED that the 6mm was
+    excluded. A note is not a decision. Writing an omission down makes it explicit that money
+    is missing; it does not make the number complete, and the estimate still went out light
+    by a whole board.
+
+    So a declared layer that reached no price is a violation, not a flag. BLOCKING, because
+    it is silent in every other view: the line has a material, a size and a plausible cost,
+    and nothing about it reads as incomplete. The estimate's own record is what proves the
+    shortfall, which means the engine can and must catch it itself.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("declared_material_layer_unpriced",
+                            "the summary could not be read.")
+    hits = []
+    for part in _parts(summary) or []:
+        layers = part.get("material_layers")
+        if not isinstance(layers, list) or len(layers) < 2:
+            continue
+        _me = part.get("material_estimate") if isinstance(
+            part.get("material_estimate"), dict) else {}
+        priced = _me.get("material_layers_priced") or []
+        # The primary layer is priced by the ordinary path, so N layers need N-1 extras.
+        if len(priced) >= len(layers) - 1:
+            continue
+        hits.append({
+            "part_number": part.get("part_number"),
+            "layers_declared": len(layers),
+            "layers_priced": len(priced) + 1,
+            "materials": "; ".join(
+                f"{_l.get('material')} {_l.get('thickness_mm')}mm"
+                for _l in layers if isinstance(_l, dict)),
+            "quantity": part.get("quantity"),
+        })
+    if not hits:
+        return []
+    return [_violation(
+        "declared_material_layer_unpriced", BLOCKING,
+        f"{len(hits)} part(s) declare more material layers than the price accounts for: "
+        + "; ".join(f"{h['part_number']} declares {h['layers_declared']} ({h['materials']}) "
+                    f"but only {h['layers_priced']} reached the price" for h in hits[:6])
+        + ". A laminated part is ONE component made of several materials, and every layer is "
+          "bought. A note explaining that a layer was left out does not make the figure "
+          "complete — it only records that money is missing. Price the layer, or remove the "
+          "claim that it exists.",
+        count=len(hits), parts=hits[:20])]
+
+
 def check_a_guessed_blank_its_own_weight_disproves(summary: Any) -> List[Dict[str, Any]]:
     """A fallback envelope the part's own printed weight contradicts, still spending money.
 
@@ -3574,6 +3626,7 @@ CHECKS = (
     check_two_sources_disagree_about_the_material,
     check_two_sources_disagree_about_the_gauge,
     check_a_guessed_blank_its_own_weight_disproves,
+    check_every_declared_material_layer_is_priced,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,

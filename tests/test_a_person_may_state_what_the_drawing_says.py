@@ -336,3 +336,100 @@ def test_a_confirmed_quantity_lands_on_the_part():
     part = {"part_number": "MBY433", "quantity": 28}
     apply_estimator_confirmed([part], _confirmed(MBY433={"quantity": 56}))
     assert part["quantity"] == 56
+
+
+# ── a lamination is one component made of several materials ───────────────────────────
+
+def test_every_declared_layer_reaches_the_price():
+    """JAE827 IS THE CASE, and my own note on it was the defect.
+
+    "Flexi MDF 6mm and 9mm" is a curved corner laminated from two boards. The part record
+    holds one material and one thickness, so only one could ever be priced — and when I wrote
+    the assumption I priced the 9mm and NOTED that the 6mm was excluded. Writing an omission
+    down does not make it a decision; it records that money is missing. An explanation must
+    never legitimise an exclusion.
+    """
+    from estimator import estimate_material, _price_declared_material_layers
+
+    part = {"part_number": "JAE827", "quantity": 2, "review_flags": []}
+    apply_estimator_confirmed([part], {"confirmed_by": "J Gray", "parts": {"JAE827": {
+        "blank_length_mm": 250, "blank_width_mm": 320, "thickness_mm": 9, "material": "MDF",
+        "basis": "inferred", "read_from": "100 + 100 legs plus a quarter-arc at R49",
+        "layers": [
+            {"material": "MDF", "thickness_mm": 9, "blank_length_mm": 250,
+             "blank_width_mm": 320, "note": "outer skin"},
+            {"material": "MDF", "thickness_mm": 6, "blank_length_mm": 250,
+             "blank_width_mm": 320, "note": "inner skin"}]}}})
+
+    assert len(part["material_layers"]) == 2
+
+    primary = estimate_material(part)
+    both = _price_declared_material_layers(part, primary)
+    assert both["unit_material_cost_gbp"] > primary["unit_material_cost_gbp"], \
+        "the second lamination is bought and must be charged"
+    assert len(both["material_layers_priced"]) == 1, "one extra layer beyond the primary"
+    assert both["material_layers_priced"][0]["thickness_mm"] == 6
+
+    flags = " ".join(part["review_flags"])
+    assert "BONDING" in flags, \
+        "the labour the engine cannot model must be named, not left to read as included"
+
+
+def test_a_declared_layer_that_never_reached_the_price_is_blocking():
+    """Silent in every other view: the line has a material, a size and a plausible cost, and
+    nothing about it reads as incomplete. The estimate's own record is what proves it."""
+    from invariants import BLOCKING, check_every_declared_material_layer_is_priced, CHECKS
+
+    assert check_every_declared_material_layer_is_priced in CHECKS, \
+        "an unregistered check runs nowhere"
+
+    # The COSTED record, which is what invariants._parts walks — material_layers has to
+    # cross the costing boundary or the check finds the answer and never the question.
+    summary = {"estimate_summary": {"part_estimates": [{
+        "part_number": "JAE827", "quantity": 2,
+        "material_layers": [{"material": "MDF", "thickness_mm": 9},
+                            {"material": "MDF", "thickness_mm": 6}],
+        "material_estimate": {"unit_material_cost_gbp": 0.76},   # only the primary
+    }]}}
+    hits = check_every_declared_material_layer_is_priced(summary)
+    assert hits and hits[0]["severity"] == BLOCKING
+    assert "declares 2" in hits[0]["message"]
+
+
+def test_a_lamination_that_is_fully_priced_does_not_fire():
+    from invariants import check_every_declared_material_layer_is_priced
+    summary = {"estimate_summary": {"part_estimates": [{
+        "part_number": "JAE827",
+        "material_layers": [{"material": "MDF", "thickness_mm": 9},
+                            {"material": "MDF", "thickness_mm": 6}],
+        "material_estimate": {"unit_material_cost_gbp": 1.27,
+                              "material_layers_priced": [{"layer": 2}]},
+    }]}}
+    assert check_every_declared_material_layer_is_priced(summary) == []
+
+
+def test_a_layer_without_a_material_or_gauge_cannot_be_priced_so_is_refused(tmp_path: Path):
+    path = _write(tmp_path, {"parts": {"A": {"layers": [
+        {"material": "MDF", "thickness_mm": 9}, {"note": "the other one"}]}}})
+    _data, problems = load_corrections(path)
+    assert any("needs at least a material and a thickness_mm" in p for p in problems)
+
+
+def test_one_layer_is_not_a_lamination(tmp_path: Path):
+    path = _write(tmp_path, {"parts": {"A": {
+        "layers": [{"material": "MDF", "thickness_mm": 9}]}}})
+    _data, problems = load_corrections(path)
+    assert any("fewer than two usable layers" in p for p in problems)
+
+
+def test_the_layer_declaration_crosses_the_costing_boundary():
+    """A check that cannot see what it is checking is worse than no check — it reports CLEAR.
+
+    material_estimate crossed into the costed record carrying material_layers_priced, and the
+    DECLARATION of what layers exist did not, so the invariant would have found the answer and
+    never the question: len(layers) < 2, short-circuit, silent pass. Asserted against the
+    estimator's own record-builder so the two cannot drift apart.
+    """
+    source = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert '"material_layers": part.get("material_layers")' in source, \
+        "the layer declaration must travel with the money it explains"
