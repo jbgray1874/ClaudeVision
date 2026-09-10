@@ -109,6 +109,23 @@ def _walk(part: Dict[str, Any], path, create: bool = False) -> Optional[Dict[str
 SOURCE_RANK: Dict[str, int] = {
     "estimator_confirmed": 100,
     "knowledge_base": 100,
+    # A PERSON'S REASONED INFERENCE, WHICH IS NOT THE SAME AS A PERSON'S READING.
+    #
+    # estimator_confirmed at 100 means "I read this off the sheet". Plenty of real facts are
+    # not printed anywhere: JAE823 on 0359342 is a thermoformed Corian tray whose drawing
+    # gives the FINISHED size and no flat pattern, so its blank has to be worked out from the
+    # section — 650 x 550 plan, 95 sides, 24 returns. That is a defensible figure and it is
+    # NOT a reading, so it must not wear a reading's rank.
+    #
+    # The alternative was to leave it out, and leaving it out is worse. A drawing pack is
+    # never perfect; an estimate with holes in it cannot be quoted from, and a hole is not
+    # more honest than a stated assumption — it is just less useful. An estimator can
+    # overturn an assumption they can see. They can do nothing with a blank.
+    #
+    # Ranked 45: above llm_extract (a machine transcription) and above inference (a category
+    # default), below bom_tree (a table someone actually typed) and everything measured. So
+    # a real reading always displaces it, and it always displaces a guess.
+    "estimator_inferred": 45,
     "solidworks_api": 90,
     "solidworks_flat_pattern": 90,
     "dxf": 80,
@@ -240,6 +257,7 @@ def tiebreak_priority(source: Any) -> int:
 # and printing nothing is the failure this exists to prevent.
 SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "estimator_confirmed":    "an estimator",
+    "estimator_inferred":     "an estimator's stated inference from the drawing",
     "knowledge_base":         "SDI's knowledge base",
     "solidworks_api":         "the SolidWorks model",
     "solidworks_flat_pattern": "the SolidWorks flat pattern",

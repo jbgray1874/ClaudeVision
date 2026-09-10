@@ -78,6 +78,23 @@ _LINEAR_FIELDS = ("wire_length_mm", "wire_gauge_mm")
 # Descriptive keys: recorded on the part for the report, never costed from.
 _NOTE_KEYS = ("read_from", "note", "description")
 
+# PRICE IT, AND SAY WHAT YOU ASSUMED. Two bases, two ranks, one file.
+#
+# The first version of this file took readings only, so anything the drawing did not print
+# had to be left out — and six parts of 0359342 were, including a thermoformed Corian tray
+# and a laminated curved corner. That was the wrong call. A drawing pack is never perfect;
+# an estimate with holes cannot be quoted from, and a hole is not more honest than a stated
+# assumption, only less useful. An estimator can overturn an assumption they can see.
+#
+# So a figure may be entered as either, and the two are never confused:
+#   "read"     — printed on the sheet. estimator_confirmed, rank 100, outranks everything.
+#   "inferred" — worked out from what the sheet shows. estimator_inferred, rank 45: beats a
+#                category default and a machine transcription, loses to every measurement
+#                and to the BOM table, so a real reading arriving later simply displaces it.
+# An inference MUST carry its working. A number with no stated reasoning is a guess wearing
+# a person's authority, which is the one thing this file must never launder.
+_BASIS_SOURCE = {"read": SOURCE, "inferred": "estimator_inferred"}
+
 # Refused by name rather than ignored. See the module docstring: a price entered here would be
 # indistinguishable in the output from one the engine sourced.
 _REFUSED_KEYS = ("price", "cost", "rate", "gbp", "price_gbp", "cost_gbp",
@@ -164,6 +181,16 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
             if key_l in _NOTE_KEYS:
                 entry[key_l] = str(value)
                 continue
+            if key_l == "basis":
+                basis = str(value).strip().lower()
+                if basis not in _BASIS_SOURCE:
+                    problems.append(
+                        f"{code_s}: basis {value!r} is not understood — use 'read' for a "
+                        f"figure printed on the sheet, or 'inferred' for one worked out "
+                        f"from it")
+                    continue
+                entry["basis"] = basis
+                continue
             if key_l not in _FIELD_MAP:
                 problems.append(f"{code_s}: '{key}' is not a field this understands "
                                 f"(accepted: {', '.join(sorted(_FIELD_MAP))}) — skipped")
@@ -210,6 +237,16 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
                 f"blank for a sheet part, or the length and diameter for a bar")
             for _k in _SHEET_FIELDS + _LINEAR_FIELDS:
                 entry.pop(_k, None)
+        # AN INFERENCE WITHOUT ITS WORKING IS A GUESS WEARING A PERSON'S AUTHORITY.
+        if entry.get("basis") == "inferred" and not (
+                entry.get("read_from") or entry.get("note")):
+            problems.append(
+                f"{code_s}: basis is 'inferred' but no reasoning is given. State how the "
+                f"figure was arrived at in 'read_from' or 'note' — an estimator has to be "
+                f"able to overturn it, and they cannot overturn what they cannot see")
+            for _k in list(_FIELD_MAP):
+                entry.pop(_k, None)
+
         if any(k in entry for k in list(_FIELD_MAP) ):
             clean[code_s] = entry
         elif not any(p.startswith(f"{code_s}:") for p in problems):
@@ -260,13 +297,15 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
             report["unmatched"].append(code)
             continue
         source_note = spec.get("read_from") or spec.get("note") or ""
+        basis = str(spec.get("basis") or "read").lower()
+        rank_source = _BASIS_SOURCE.get(basis, SOURCE)
         for part in targets:
             changed: List[str] = []
             for file_key, part_field in _FIELD_MAP.items():
                 if file_key not in spec:
                     continue
                 before = part.get(part_field)
-                if sp.apply_field(part, part_field, spec[file_key], SOURCE):
+                if sp.apply_field(part, part_field, spec[file_key], rank_source):
                     changed.append(f"{file_key} {spec[file_key]}"
                                    + (f" (was {before})" if before not in (None, "") else ""))
             if not changed:
@@ -277,14 +316,25 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
             part["estimator_confirmed"] = {
                 "by": who,
                 "on": when,
+                "basis": basis,
+                "source": rank_source,
                 "read_from": source_note,
                 "fields": dict(spec),
                 "file": corrections.get("path"),
             }
-            part.setdefault("review_flags", []).append(
-                f"{code}: {', '.join(changed)} — confirmed by {who}"
-                + (f" on {when}" if when else "")
-                + (f", read from {source_note}" if source_note else "")
-                + ". This is a person's reading of the drawing and outranks every figure the "
-                  "engine derived; it is only as good as that reading")
+            if basis == "inferred":
+                # Worded as an ASSUMPTION, because that is what it is, and priced anyway.
+                part.setdefault("review_flags", []).append(
+                    f"{code}: {', '.join(changed)} — INFERRED by {who}"
+                    + (f" on {when}" if when else "")
+                    + f". Basis: {source_note}. The drawing does not print this figure; it "
+                      f"is priced on the stated assumption so the line is not left empty. "
+                      f"Any measurement displaces it — overturn it if you disagree")
+            else:
+                part.setdefault("review_flags", []).append(
+                    f"{code}: {', '.join(changed)} — confirmed by {who}"
+                    + (f" on {when}" if when else "")
+                    + (f", read from {source_note}" if source_note else "")
+                    + ". This is a person's reading of the drawing and outranks every figure "
+                      "the engine derived; it is only as good as that reading")
     return report

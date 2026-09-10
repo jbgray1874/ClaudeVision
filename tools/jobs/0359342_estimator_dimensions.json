@@ -18,6 +18,29 @@
       "material": "MDF",
       "read_from": "page 10, printed overall 502.0 x 75.0, title block 'MDF, 18mm', est mass 0.50 kg"
     },
+    "JAE823": {
+      "blank_length_mm": 888, "blank_width_mm": 788, "thickness_mm": 6,
+      "material": "Corian",
+      "basis": "inferred",
+      "read_from": "page 11 prints the FINISHED tray, not a flat pattern: plan 650 x 550, sides 95 high, returns 24, R14 typ, 6mm Corian. Developed blank inferred as 650 + 2x95 + 2x24 = 888 by 550 + 2x95 + 2x24 = 788. This is thermoformed solid surface, so the sheet is bought at the developed size and formed. Confirm against the former. Note the sheet is stamped DETAIL FOR REFERENCE ONLY, and the finish is 800-grit all faces, no visible swirl"
+    },
+    "JAE824": {
+      "blank_length_mm": 40, "blank_width_mm": 40, "thickness_mm": 50,
+      "material": "MDF",
+      "basis": "inferred",
+      "read_from": "page 12 prints a solid block 40 x 40 x 50 high, material 'MDF' with no gauge. 50mm exceeds any board on this job, so it is laminated up or cut from thick stock. Priced as a 40 x 40 x 50 solid so the line is not empty; the make method drives the real cost and needs confirming"
+    },
+    "JAE827": {
+      "blank_length_mm": 250, "blank_width_mm": 320, "thickness_mm": 9,
+      "material": "MDF",
+      "basis": "inferred",
+      "read_from": "page 15, Shroud Corner: Flexi MDF in BOTH 6mm and 9mm, laminated over R49/R25 with 100 x 100 legs, envelope 250 x 170 x 149 high. Developed width inferred as 100 + 100 + a quarter-arc at R49 (about 77) = 277, taken as 320 to allow trim. Priced on the 9mm as the thicker of the two laminations. This is TWO materials on one part and the engine has no representation for that — the second lamination is NOT in this figure and must be added"
+    },
+    "JAE835": {
+      "wire_length_mm": 896, "thickness_mm": 1,
+      "basis": "inferred",
+      "read_from": "page 23, Shelf Edging: a 1.0mm U-shaped laminate edging round three sides of the shelf, printed 496 long with 200 legs. Developed length inferred as 496 + 2 x 200 = 896mm. It is a LINEAR per-metre item, not a sheet blank. Title block material reads 'Lamainate Edging' — that typo is on the drawing and is why the material never resolved to a rate; price it as laminate edging strip"
+    },
     "JAE825": {
       "blank_length_mm": 190, "blank_width_mm": 110, "thickness_mm": 9,
       "material": "MDF",

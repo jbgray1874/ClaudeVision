@@ -109,6 +109,77 @@ def test_nothing_weaker_can_take_it_back():
     assert part["blank_length_mm"] == 1670
 
 
+# ── price it, and say what you assumed ────────────────────────────────────────────────
+
+def test_an_inference_is_priced_but_does_not_wear_a_readings_rank():
+    """THE CORRECTION THAT MATTERS MOST HERE.
+
+    The first version of this file took readings only, so anything a drawing did not print
+    had to be left out — and six parts of 0359342 were, including a thermoformed Corian tray
+    whose sheet gives the FINISHED size and no flat pattern. That was wrong. A drawing pack
+    is never perfect; an estimate with holes cannot be quoted from, and a hole is not more
+    honest than a stated assumption, only less useful. An estimator can overturn an
+    assumption they can see; they can do nothing with a blank.
+
+    So an inference IS priced — and at rank 45, not 100, so any measurement displaces it.
+    """
+    part = {"part_number": "JAE823"}
+    sp.apply_field(part, "blank_length_mm", 400.0, "inference")   # a category default
+
+    apply_estimator_confirmed([part], {
+        "confirmed_by": "J Gray", "parts": {"JAE823": {
+            "blank_length_mm": 888, "blank_width_mm": 788, "basis": "inferred",
+            "read_from": "650 + 2x95 sides + 2x24 returns, off the section on page 11"}}})
+
+    assert part["blank_length_mm"] == 888, "it must beat the category default it replaces"
+    assert sp.source_of(part, "blank_length_mm") == "estimator_inferred"
+    flags = " ".join(part["review_flags"])
+    assert "INFERRED" in flags and "does not print this figure" in flags
+    assert "650 + 2x95" in flags, "the working must travel with the figure"
+
+
+def test_a_measurement_displaces_an_inference_but_not_a_reading():
+    """The whole point of two ranks. 45 loses to a DXF; 100 does not."""
+    inferred = {"part_number": "A"}
+    sp.apply_field(inferred, "blank_length_mm", 999.0, "dxf")
+    apply_estimator_confirmed([inferred], {"parts": {"A": {
+        "blank_length_mm": 888, "blank_width_mm": 788, "basis": "inferred",
+        "read_from": "worked out from the section"}}})
+    assert inferred["blank_length_mm"] == 999.0, "a measurement beats an inference"
+
+    read = {"part_number": "A"}
+    sp.apply_field(read, "blank_length_mm", 999.0, "dxf")
+    apply_estimator_confirmed([read], {"parts": {"A": {
+        "blank_length_mm": 1680, "blank_width_mm": 560}}})
+    assert read["blank_length_mm"] == 1680, "a reading off the sheet still outranks it"
+
+
+def test_an_inference_without_its_working_is_refused(tmp_path: Path):
+    """A number with no stated reasoning is a guess wearing a person's authority, which is
+    the one thing this file must never launder."""
+    path = _write(tmp_path, {"parts": {"JAE823": {
+        "blank_length_mm": 888, "blank_width_mm": 788, "basis": "inferred"}}})
+    data, problems = load_corrections(path)
+    assert any("no reasoning is given" in p for p in problems)
+    assert not data["parts"].get("JAE823", {}).get("blank_length_mm")
+
+
+def test_a_reading_needs_no_working():
+    """Only an inference has to argue for itself; a printed figure speaks for itself."""
+    part = {"part_number": "JAE826"}
+    apply_estimator_confirmed([part], {"parts": {"JAE826": {
+        "blank_length_mm": 1680, "blank_width_mm": 560}}})
+    assert part["blank_length_mm"] == 1680
+    assert sp.source_of(part, "blank_length_mm") == "estimator_confirmed"
+
+
+def test_an_unknown_basis_is_refused_rather_than_silently_treated_as_read(tmp_path: Path):
+    path = _write(tmp_path, {"parts": {"A": {"blank_length_mm": 10, "blank_width_mm": 5,
+                                             "basis": "probably"}}})
+    _data, problems = load_corrections(path)
+    assert any("basis" in p and "not understood" in p for p in problems)
+
+
 # ── it must refuse a price ────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("key", ["price", "cost", "rate", "unit_price", "material_cost"])
