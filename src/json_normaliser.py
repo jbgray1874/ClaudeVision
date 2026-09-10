@@ -314,12 +314,22 @@ _DIA_PATTERNS = (
 # all silently, all wrong, and 3/16" is 4.7625 mm. So each fraction is converted where its
 # unit is explicit, and its span is masked out before any decimal pattern is allowed to look
 # — a number that is part of a fraction is never also a number in its own right.
+# A MIXED NUMBER IS ONE VALUE, AND ITS WHOLE PART IS NOT A SEPARATE DIAMETER.
+#
+# Masking only the fractional half left the whole number sitting there for the decimal
+# parser: "Wire Ø1 1/2in" returned 1.0 mm instead of 38.1, "Ø2 3/4in" returned 2.0, and
+# "1 1/2in DIA" reported "more than one diameter" — a wrong diagnosis on a drawing that
+# states exactly one. The whole part is captured with the fraction, and the mask covers the
+# entire span. Both "1 1/2" and "1-1/2" are written by drawing offices.
+_MIXED = r"(?:(\d+)\s*[-\s]\s*)?(\d+)\s*/\s*(\d+)"
 _DIA_FRACTION_PATTERNS = (
-    re.compile(r"(?:Ø|\bDIA\.?\s*)\s*(\d+)\s*/\s*(\d+)\s*(MM|IN|INCH|INCHES|\")?", re.I),
-    re.compile(r"(\d+)\s*/\s*(\d+)\s*(MM|IN|INCH|INCHES|\")?\s*\bDIA\b", re.I),
+    re.compile(r"(?:Ø|\bDIA\.?\s*)\s*" + _MIXED + r"\s*(MM|IN|INCH|INCHES|\")?", re.I),
+    re.compile(_MIXED + r"\s*(MM|IN|INCH|INCHES|\")?\s*\bDIA\b", re.I),
 )
-# Any remaining fraction, wherever it sits: masked so it cannot be misread as a decimal.
-_ANY_FRACTION = re.compile(r"\d+\s*/\s*\d+\s*(?:MM|IN|INCH|INCHES|\")?", re.I)
+# Any remaining fraction, wherever it sits — including its whole part — masked so no piece
+# of it can be misread as a decimal in its own right.
+_ANY_FRACTION = re.compile(
+    r"(?:\d+\s*[-\s]\s*)?\d+\s*/\s*\d+\s*(?:MM|IN|INCH|INCHES|\")?", re.I)
 _INCH_UNITS = {"IN", "INCH", "INCHES", '"'}
 MM_PER_INCH = 25.4
 
@@ -340,10 +350,18 @@ def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
     """
     raw = "" if text is None else str(text).strip()
     out: Dict[str, Any] = {"text": raw, "material": None, "stock_form": "",
-                           "diameter_mm": None, "diameter_unresolved": ""}
+                           "diameter_mm": None, "diameter_unresolved": "",
+                           "material_key": ""}
     if not raw:
         return out
     out["material"] = normalise_material(raw)
+    # AN UNRESOLVED MATERIAL IS STILL A DISTINCT MATERIAL. Two cells the lexicon cannot
+    # place are not thereby the same stock: "Corian, 6mm" and "Mirror, 6mm" both normalise
+    # to None, and comparing rows on that None made a solid-surface tray and a mirror look
+    # like corroborating readings of one thing. Where the book has no answer, the cell's own
+    # words are the identity — squashed only for spacing and punctuation, never interpreted.
+    out["material_key"] = out["material"] or (
+        "?" + re.sub(r"[^A-Z0-9]+", " ", raw.upper()).strip())
     upper = re.sub(r'[^A-Z0-9Ø."/ ]', " ", raw.upper())
     upper = re.sub(r" {2,}", " ", upper).strip()
 
@@ -353,16 +371,18 @@ def read_material_as_printed(text: Optional[str]) -> Dict[str, Any]:
     for pattern in _DIA_FRACTION_PATTERNS:
         for match in pattern.finditer(upper):
             try:
-                numerator, denominator = float(match.group(1)), float(match.group(2))
+                whole = float(match.group(1)) if match.group(1) else 0.0
+                numerator, denominator = float(match.group(2)), float(match.group(3))
             except (TypeError, ValueError):
                 continue
             if denominator <= 0 or numerator <= 0:
                 continue
-            unit = (match.group(3) or "").strip().upper()
+            quantity = whole + numerator / denominator
+            unit = (match.group(4) or "").strip().upper()
             if unit in _INCH_UNITS:
-                value = round(numerator / denominator * MM_PER_INCH, 4)
+                value = round(quantity * MM_PER_INCH, 4)
             elif unit == "MM":
-                value = round(numerator / denominator, 4)
+                value = round(quantity, 4)
             else:
                 # A bare "3/16" states no unit. On Ø that is 4.76 mm or 0.19 mm — a factor
                 # of 25.4 on the diameter and 645 on the mass. Not guessed.

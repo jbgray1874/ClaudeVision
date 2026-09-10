@@ -155,6 +155,27 @@ def test_the_computed_mass_agrees_with_the_mass_the_drawing_prints():
         "must agree with the 0.09 kg the drawing prints"
 
 
+def test_nothing_in_the_pack_pipeline_yet_supplies_mby432_its_printed_length():
+    """THE ACCEPTANCE BOUNDARY, WRITTEN DOWN SO IT CANNOT BE MISREAD.
+
+    The 0.0867-vs-0.09 kg agreement above is an arithmetic check on a length HANDED TO THE
+    TEST. It does not show the production reader obtains 219.6 from the pack, and it does
+    not: wire_length_mm is written only by a bar/wire schedule, MBY432's sheet has no such
+    schedule, and the estimator-confirmed file cannot carry a wire length yet. So a real
+    0359342 run reaches costing on the assumed form band, not the printed figure.
+
+    This test exists to FAIL when that changes, at which point it should be replaced by one
+    asserting the real extracted length. Until then the gap is recorded, not implied.
+    """
+    part, _ = _build(PRINTED)
+    assert part.get("wire_length_mm") is None, \
+        "if a length now arrives from the pack, replace this test with the real assertion"
+
+    from estimator_confirmed import _FIELD_MAP
+    assert "wire_length_mm" not in _FIELD_MAP, \
+        "the confirmations file can now carry a wire length — wire it in and re-point this"
+
+
 def test_without_a_length_the_line_says_the_length_was_assumed():
     """The estimator assumes a band and marks it — the costing is right. What was missing is
     that nothing made anyone ANSWER it; see the decision test below."""
@@ -223,6 +244,23 @@ def test_an_imperial_fraction_is_converted_not_part_matched(printed, expected):
     assert part.get("wire_gauge_mm") == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("printed,expected", [
+    ('Mild Steel Wire Ø1 1/2in', 38.1),
+    ('Mild Steel Wire Ø2 3/4in', 69.85),
+    ('Mild Steel Wire 1 1/2in DIA', 38.1),
+    ('Mild Steel Wire Ø1-1/2in', 38.1),
+])
+def test_a_mixed_number_is_one_diameter_not_two(printed, expected):
+    """Masking only the fractional half left the whole number for the decimal parser:
+    "Ø1 1/2in" returned 1.0 mm instead of 38.1, "Ø2 3/4in" returned 2.0, and "1 1/2in DIA"
+    reported "more than one diameter" — a wrong diagnosis on a drawing stating exactly one.
+    Both "1 1/2" and "1-1/2" are written by drawing offices."""
+    part, _ = _build(printed)
+    assert part.get("wire_gauge_mm") == pytest.approx(expected)
+    assert "more than one diameter" not in _flags(part), \
+        "a mixed number must not be diagnosed as a conflict"
+
+
 def test_a_fraction_with_no_unit_is_refused_and_says_why():
     """3/16 is 4.76 mm as inches and 0.19 mm as millimetres — a factor of 25.4 on diameter
     and 645 on mass. Not guessed."""
@@ -247,6 +285,68 @@ def test_conflicting_bom_rows_do_not_resolve_by_table_order():
     assert "readings disagree" in _flags(part)
     assert (part.get("manufacturing_interpretation") or {}).get("stock_form") != "wire", \
         "a conflicting cell must not classify the part at all"
+
+
+def test_a_description_cannot_settle_a_diameter_the_material_cell_leaves_open():
+    """The conflict guard protected the thickness fallback and nothing else, so a diameter
+    read off the DESCRIPTION walked past it: "WIRE Ø6" against a cell reading "Ø8mm / Ø10mm"
+    produced a gauge of 6 on a record that simultaneously said none was used. Two answers on
+    one line, and the wrong one was costed."""
+    rows = [{"part_number": "P1", "material_text": "Mild Steel Wire Ø8mm / Ø10mm",
+             "quantity": 1}]
+    part = {"part_number": "P1", "description": "WIRE Ø6", "pages": [24], "materials": [],
+            "page_roles": ["detail"], "textual_operations": [], "operations": [],
+            "review_flags": []}
+    summary = {"pages": [{"page_number": 24, "text": "", "page_analysis": {}}],
+               "document_analysis": {"bom_rows": rows}}
+    out = _apply_post_build_fixes([part], summary)[0]
+    assert out.get("wire_gauge_mm") is None
+    assert "not resolved by a third reading" in " | ".join(out.get("review_flags") or [])
+
+
+def test_two_sources_stating_different_diameters_cancel():
+    """A diameter is one physical fact. Agreeing sources corroborate; disagreeing ones
+    cancel — whichever field supplied them."""
+    rows = [{"part_number": "P1", "material_text": "Mild Steel Wire Ø8mm", "quantity": 1}]
+    part = {"part_number": "P1", "description": "WIRE Ø6", "pages": [24], "materials": [],
+            "page_roles": ["detail"], "textual_operations": [], "operations": [],
+            "review_flags": []}
+    summary = {"pages": [{"page_number": 24, "text": "", "page_analysis": {}}],
+               "document_analysis": {"bom_rows": rows}}
+    out = _apply_post_build_fixes([part], summary)[0]
+    assert out.get("wire_gauge_mm") is None
+    assert "different diameters" in " | ".join(out.get("review_flags") or [])
+
+
+def test_two_sources_stating_the_same_diameter_corroborate():
+    rows = [{"part_number": "P1", "material_text": "Mild Steel Wire Ø8mm", "quantity": 1}]
+    part = {"part_number": "P1", "description": "WIRE Ø8", "pages": [24], "materials": [],
+            "page_roles": ["detail"], "textual_operations": [], "operations": [],
+            "review_flags": []}
+    summary = {"pages": [{"page_number": 24, "text": "", "page_analysis": {}}],
+               "document_analysis": {"bom_rows": rows}}
+    out = _apply_post_build_fixes([part], summary)[0]
+    assert out.get("wire_gauge_mm") == 8.0
+
+
+def test_two_materials_the_lexicon_cannot_place_are_not_thereby_the_same():
+    """Both normalise to None, and comparing rows on that None made a solid-surface tray and
+    a mirror read as corroborating readings of one stock. Where the book has no answer, the
+    cell's own words are the identity."""
+    part, _ = _build("Corian, 6mm",
+                     extra_rows=({"part_number": "MBY432", "material_text": "Mirror, 6mm",
+                                  "quantity": 1},))
+    assert "readings disagree" in _flags(part)
+
+
+def test_a_stated_diameter_and_an_absent_one_are_not_equivalent():
+    """Absent and conflicting both surfaced as None, so a row stating no diameter matched a
+    row stating two irreconcilable ones."""
+    part, _ = _build("Mild Steel Wire",
+                     extra_rows=({"part_number": "MBY432",
+                                  "material_text": "Mild Steel Wire Ø8mm / Ø10mm",
+                                  "quantity": 1},))
+    assert "readings disagree" in _flags(part)
 
 
 def test_rows_that_agree_still_classify():

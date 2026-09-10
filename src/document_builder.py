@@ -1036,8 +1036,17 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         _printed_cells = _printed_material_rows.get(
             _bare_code(str(part.get("part_number") or ""))) or []
         _printed_reads = [_read_printed_material(_c) for _c in _printed_cells]
-        _printed_facts = {(_r["material"], _r["stock_form"], _r["diameter_mm"])
-                          for _r in _printed_reads}
+        # UNKNOWN, ABSENT AND CONFLICTING ARE THREE ANSWERS, NOT ONE.
+        # Comparing on (material, form, diameter) collapsed all three into None, so two rows
+        # naming DIFFERENT materials the lexicon cannot place read as agreeing — "Corian, 6mm"
+        # and "Mirror, 6mm" corroborating each other — and a row stating no diameter matched a
+        # row stating two irreconcilable ones. material_key keeps an unresolved material
+        # distinct by its own words; the diameter is compared as a labelled outcome.
+        _printed_facts = {
+            (_r["material_key"], _r["stock_form"],
+             ("conflict", _r["diameter_unresolved"]) if _r["diameter_unresolved"]
+             else ("value", _r["diameter_mm"]))
+            for _r in _printed_reads}
         _printed_conflict = len(_printed_facts) > 1
         _printed = _read_printed_material(
             "" if _printed_conflict
@@ -1215,8 +1224,40 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             # Read through the shared reader so the form is decided in ONE place; the
             # diameter comes with it, off the same cell, and is never a sheet thickness.
             _printed_wire = _printed["stock_form"] == "wire"
-            if _printed_wire and _dia_explicit is None:
-                _dia_explicit = _printed["diameter_mm"]
+
+            # ARBITRATE EVERY CANDIDATE BEFORE WRITING ANY, WHATEVER FIELD SUPPLIED IT.
+            #
+            # The conflict guard protected the thickness fallback and nothing else, so a
+            # diameter read off the DESCRIPTION walked straight past it: description
+            # "WIRE Ø6" against a material cell reading "Ø8mm / Ø10mm" produced a gauge of 6
+            # on a record that simultaneously said "none is used until an estimator says
+            # which applies". Two answers on one line, and the wrong one was the one costed.
+            #
+            # A diameter is a single physical fact. Every reading of it is pooled here and
+            # settled once: agreeing sources corroborate, disagreeing sources cancel, and a
+            # cell that already states an irreconcilable pair poisons the whole callout —
+            # a drawing contradicting itself is not resolved by finding a third opinion.
+            _dia_candidates: List[float] = []
+            for _cand in (_dia_explicit, _printed["diameter_mm"] if _printed_wire else None):
+                _cv = _safe_float(_cand)
+                if _cv and _cv not in _dia_candidates:
+                    _dia_candidates.append(_cv)
+            if _printed.get("diameter_unresolved") and _dia_candidates:
+                part.setdefault("review_flags", []).append(
+                    f"{part.get('part_number') or 'this part'}: the "
+                    f"{', '.join(f'{_v:g} mm' for _v in _dia_candidates)} read elsewhere on "
+                    f"this part does NOT settle the diameter its material cell leaves open. "
+                    f"A drawing that contradicts itself is not resolved by a third reading")
+                _dia_explicit = None
+            elif len(_dia_candidates) > 1:
+                part.setdefault("review_flags", []).append(
+                    f"{part.get('part_number') or 'this part'}: its description and its "
+                    f"material cell state different diameters ("
+                    + " and ".join(f"{_v:g} mm" for _v in sorted(_dia_candidates))
+                    + ") — neither is used. Confirm the stock size")
+                _dia_explicit = None
+            elif _dia_candidates:
+                _dia_explicit = _dia_candidates[0]
 
             # QUALIFY on a wire_forming op, a decisive WIRE/ROD name, a BAR name WITH a
             # diameter, or the printed material cell naming the section. Not on BAR alone,
