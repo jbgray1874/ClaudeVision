@@ -24,7 +24,12 @@ import bom_and_route_extract as bre                                      # noqa:
 import source_drawing_data as sdd                                        # noqa: E402
 
 
-def _record(route_key: str = "canonical_route_shadow", nested: bool = True) -> dict:
+def _record(route_key: str = "canonical_route_shadow", nested: bool = True,
+            costed: bool = True) -> dict:
+    """A 7332-01-shaped record. COSTED BY DEFAULT, because the real one was: a full estimate
+    ran, the workbook was read back, and the route was projected onto priced rows. The tests
+    below that talk about a `charged` column are testing that case, and it only exists when a
+    price does. Pass costed=False for the pack-read case the new buttons produce."""
     decisions = [
         {"decision_id": "d1", "target_id": "7332-01-002", "operation": "tubebend",
          "status": "required", "scope": "part", "participants": ["7332-01-002"],
@@ -52,6 +57,10 @@ def _record(route_key: str = "canonical_route_shadow", nested: bool = True) -> d
         record["estimate_summary"] = dict(route)
     else:
         record.update(route)
+    if costed:
+        _es = record.setdefault("estimate_summary", {})
+        _es["final_estimate"] = {"totals": {"unit_gbp": 80.34, "material_gbp": 40.89,
+                                            "labour_gbp": 33.83}}
     return record
 
 
@@ -261,3 +270,81 @@ def test_the_page_states_that_it_prices_nothing(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "prices nothing" in text
     assert "no figure on this page is a cost" in text
+
+
+# ── which read produced this, and the column that must not lie about it ───────────────
+#
+# THE ASK THAT MADE THIS NECESSARY. The estimating team want BOMs and routes out of a pack
+# WITHOUT a costed run, so the same extract now has three possible sources: a costed run's
+# saved record, a full read of the drawings with no pricing, and a vision-model-only first
+# look. They produce the same shaped tables and they are not interchangeable, and the trap is
+# one column: "charged". On a pack nobody priced, a column of "charged: no" against every row
+# reads as "this pack needs no work" — the opposite of what the route actually decided.
+
+
+def test_a_costed_record_says_so_and_its_charged_column_means_money():
+    d = bre.source_declaration(_record())
+    assert d["source"] == "costed_run"
+    assert d["charged_is_meaningful"] is True
+    assert d["operation_column"] == "charged"
+    row = [r for r in bre.route_sheet(_record()) if r["operation"] == "tubebend"][0]
+    assert row["charged"] == "yes"
+
+
+def test_an_uncosted_pack_read_never_offers_a_charged_column():
+    """The column is RENAMED, not blanked. A blank would be a missing fact; the fact is real
+    and is about the route, not about money."""
+    record = _record(costed=False)
+    d = bre.source_declaration(record)
+    assert d["source"] == "pack_read"
+    assert d["charged_is_meaningful"] is False
+    assert d["operation_column"] == "required by the route"
+    row = [r for r in bre.route_sheet(record) if r["operation"] == "tubebend"][0]
+    assert "charged" not in row, "the word must not appear as a column on an uncosted read"
+    assert row["required by the route"] == "yes"
+    assert "Nothing here is charged" in row["what_that_status_means"]
+    assert "was not costed" in row["what_that_status_means"]
+
+
+def test_a_vision_only_read_is_its_own_source_and_says_it_is_uncorroborated():
+    record = _record(costed=False)
+    record["llm_only"] = True
+    d = bre.source_declaration(record)
+    assert d["source"] == "fast_read"
+    assert d["charged_is_meaningful"] is False
+    assert "VISION MODEL ALONE" in d["meaning"]
+    assert "not a basis for quoting" in d["meaning"]
+
+
+def test_llm_only_beats_costed_because_the_weaker_read_is_the_honest_one():
+    """A record can carry both marks — an --llm-only run still writes totals. The reader has
+    to be told the BOM came from one source, which is the fact that limits everything else."""
+    record = _record(costed=True)
+    record["llm_only"] = True
+    assert bre.source_declaration(record)["source"] == "fast_read"
+
+
+def test_the_source_is_derived_from_the_record_not_passed_in():
+    """A caller that labels its own output can label it wrongly, and 'this was costed' is the
+    mislabel a hurried caller reaches for."""
+    import inspect
+    sig = inspect.signature(bre.source_declaration)
+    assert list(sig.parameters) == ["summary"], "no source parameter to get wrong"
+
+
+def test_an_archived_record_with_totals_but_no_money_provenance_is_still_costed():
+    """money_provenance is newer than the archive. Absence of the block is not evidence the
+    run was never costed, and downgrading those records would misreport twenty-three of them."""
+    record = _record(costed=True)
+    record.pop("money_provenance", None)
+    assert bre.source_declaration(record)["source"] == "costed_run"
+
+
+def test_the_yes_no_column_keeps_its_colour_under_either_name(tmp_path):
+    """Styling was keyed on the literal string "charged", so the colour vanished on exactly
+    the outputs the new buttons produce — where telling a required operation from a ruled-out
+    one at a glance is the point of the sheet."""
+    path = bre.write_html(_record(costed=False), tmp_path, "7332-01", "routes")
+    text = path.read_text(encoding="utf-8")
+    assert "class='yes'>yes" in text
+    assert "class='no'>no" in text

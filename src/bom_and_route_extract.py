@@ -45,6 +45,33 @@ READER_MEANING: Dict[str, str] = {
     "dxf_filename": "the DXF filename, which at SDI encodes part, gauge and material",
 }
 
+# ── WHAT READ PRODUCED THESE TABLES ───────────────────────────────────────────────────
+#
+# Three ways to get a BOM and a route out of a pack, and they are NOT interchangeable:
+#
+#   costed_run   a full estimate ran. The route was projected onto priced rows, so "charged"
+#                means money actually passed through the sheet.
+#   pack_read    every reader ran and nothing was costed. The route says what it REQUIRES.
+#                Nothing is charged, because nothing was priced.
+#   fast_read    the vision model alone. No BOM line is corroborated by a second reader.
+#
+# This exists for the same reason money_provenance does, and it is the same failure it guards
+# against: an output that cannot say how it was produced gets quoted as though it were the
+# strongest kind. The specific trap here is the "charged" column — on a pack that was never
+# costed, "charged: no" against every row would read as "this pack needs no work", which is the
+# opposite of the truth. So the column changes its NAME with the source rather than its values.
+SOURCE_MEANING: Dict[str, str] = {
+    "costed_run": "a full estimate ran on this pack and these tables come from its saved "
+                  "record. The route was projected onto the priced rows, so an operation "
+                  "marked charged is one the estimate actually charged for",
+    "pack_read": "the drawings were read by every reader and NOTHING WAS COSTED. The route "
+                 "states what each part REQUIRES; no operation here is charged, because no "
+                 "price was calculated at all",
+    "fast_read": "the drawings were read by the VISION MODEL ALONE. No parts-list row is "
+                 "corroborated by a second reader, and nothing was costed. Useful as a first "
+                 "look at what is in a pack; not a basis for quoting",
+}
+
 STATUS_MEANING: Dict[str, str] = {
     "required": "the route REQUIRES this operation: it is charged and the part cannot be made "
                 "without it",
@@ -62,6 +89,60 @@ def _text(value: Any, limit: int = 400) -> str:
         return ""
     out = str(value)
     return out if len(out) <= limit else out[: limit - 1] + "…"
+
+
+def source_declaration(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    """Which of the three reads produced this record — DERIVED, never passed in.
+
+    A caller that labels its own output is a caller that can label it wrongly, and the one
+    mislabelling that matters here ("this was costed") is the one a hurried caller is most
+    likely to reach for. So the record is asked instead, from the marks the pipeline already
+    leaves on it: llm_only is stamped by main.py, and money_provenance says whether a workbook
+    was ever read back.
+    """
+    llm_only = bool(summary.get("llm_only")) if isinstance(summary, Mapping) else False
+    if not llm_only:
+        try:
+            from run_readers import run_was_llm_only
+            llm_only = bool(run_was_llm_only(dict(summary) if isinstance(summary, Mapping)
+                                             else {}))
+        except Exception:                                                # noqa: BLE001
+            pass
+
+    costed = False
+    if isinstance(summary, Mapping):
+        try:
+            import money_provenance as _mp
+            costed = bool(_mp.can_evidence_a_price(summary))
+        except Exception:                                                # noqa: BLE001
+            costed = False
+        if not costed:
+            # A RECORD CAN PREDATE money_provenance AND STILL BE COSTED. The totals themselves
+            # are the older evidence, and reading them keeps an archived record from being
+            # downgraded to "never costed" by the absence of a block that did not exist when it
+            # was written.
+            _es = summary.get("estimate_summary")
+            _fe = (_es or {}).get("final_estimate") if isinstance(_es, Mapping) else None
+            if isinstance(_fe, Mapping) and (_fe.get("totals") or _fe.get("labour_rows")):
+                costed = True
+
+    if llm_only:
+        source = "fast_read"
+    elif costed:
+        source = "costed_run"
+    else:
+        source = "pack_read"
+    return {
+        "schema": "extract_source.v1",
+        "source": source,
+        "meaning": SOURCE_MEANING[source],
+        # THE ONE BOOLEAN EVERY CONSUMER READS, exactly as money_provenance publishes
+        # can_evidence_a_price rather than making each caller re-derive it from three fields.
+        "charged_is_meaningful": source == "costed_run",
+        # What the operation column is actually reporting, so a sheet, a page and an email
+        # cannot each pick their own word for it.
+        "operation_column": "charged" if source == "costed_run" else "required by the route",
+    }
 
 
 def route_payloads(summary: Mapping[str, Any]) -> List[Mapping[str, Any]]:
@@ -127,9 +208,18 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
 
 def route_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Every route decision, its target, whether it is charged, and why it stands or does not."""
+    """Every route decision, its target, whether the route requires it, and why it stands.
+
+    THE COLUMN CHANGES ITS NAME WITH THE SOURCE, not its values. On a costed run "charged" is
+    true of an operation the estimate actually charged for. On a pack that was never priced the
+    same column of yeses and nos would read as a statement about money — and a wall of
+    "charged: no" would read as "this pack needs no work", which is the opposite of what the
+    route says. So an uncosted read labels it "required by the route", which is precisely what
+    the compiler decided and all it decided.
+    """
     rows: List[Dict[str, Any]] = []
     seen: set = set()
+    _column = source_declaration(summary)["operation_column"]
     for payload in route_payloads(summary):
         for decision in (payload.get("decisions") or []):
             if not isinstance(decision, Mapping):
@@ -147,10 +237,19 @@ def route_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
                                           or decision.get("part_number")
                                           or decision.get("target")),
                 "operation": _text(decision.get("operation")),
-                "charged": "yes" if status == "required" else "no",
+                _column: "yes" if status == "required" else "no",
                 "status": status or "(none recorded)",
-                "what_that_status_means": STATUS_MEANING.get(
-                    status, "status not recognised — treat as unconfirmed"),
+                # AND THE WORDS BESIDE IT, for the same reason. STATUS_MEANING's "required"
+                # reads "it is charged and the part cannot be made without it" — true of a
+                # costed run and false of a pack nobody priced. The half that is true either
+                # way is the half about the part; the money half is dropped rather than
+                # rewritten into something vaguer, because the vaguer version would still be
+                # read as being about money.
+                "what_that_status_means": (
+                    STATUS_MEANING.get(status, "status not recognised — treat as unconfirmed")
+                    if _column == "charged" or status != "required" else
+                    "the route REQUIRES this operation: the part cannot be made without it. "
+                    "Nothing here is charged — this pack was not costed"),
                 "scope": _text(decision.get("scope")),
                 "covers_parts": ", ".join(participants),
                 "why": _text(decision.get("reason")),
@@ -389,7 +488,12 @@ def write_html(summary: Mapping[str, Any], out_dir: Any, job: str = "", want: st
             for header in headers:
                 value = row.get(header)
                 klass = ""
-                if header == "charged":
+                # THE YES/NO COLUMN BY ROLE, NOT BY NAME. It is called "charged" on a costed
+                # run and "required by the route" on a pack that was never priced, and keying
+                # the styling on the literal name lost the colour on exactly the outputs the
+                # new buttons produce — where telling a required operation from a ruled-out one
+                # at a glance is the whole point of the sheet.
+                if header in ("charged", "required by the route"):
                     klass = " class='yes'" if str(value) == "yes" else " class='no'"
                 elif header == "duplicate_note" and value:
                     klass = " class='dup'"

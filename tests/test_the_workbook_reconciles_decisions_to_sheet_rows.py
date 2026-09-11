@@ -28,7 +28,14 @@ import wb_populate as wbp                                                # noqa:
 
 
 def _summary(*, with_rows: bool = True) -> dict:
-    """Two laser decisions that share one nest row, plus a tubebend that has its own."""
+    """Two laser decisions that share one nest row, plus a tubebend that has its own.
+
+    COSTED, because this whole tab is a costed run's artefact: it reconciles route decisions to
+    the WORKBOOK ROWS THAT CHARGED THEM, and those rows only exist once Excel has calculated.
+    An uncosted fixture here was testing a state the tab is never written in — and it was the
+    reason the yes/no column read as absent when bom_and_route_extract began naming that column
+    after the source that produced it.
+    """
     labour = {"rows": [
         {"workbook_row": 98, "part_numbers": ["7332-01-003", "7332-01-004"],
          "wb_operation": "Laser (Metal)", "decision_ids": ["dA", "dB"]},
@@ -52,7 +59,9 @@ def _summary(*, with_rows: bool = True) -> dict:
              "reason": "2.5mm MS flat"},
             {"decision_id": "dC", "target_id": "7332-01-002", "operation": "tubebend",
              "status": "required", "scope": "part", "participants": ["7332-01-002"],
-             "reason": "bent from tube"}]}},
+             "reason": "bent from tube"}]},
+            "final_estimate": {"totals": {"unit_gbp": 80.34, "material_gbp": 40.89,
+                                          "labour_gbp": 33.83}}},
     }
 
 
@@ -195,3 +204,24 @@ def test_an_empty_record_adds_no_empty_tabs():
     names = _book({"job_number": "empty"}).sheetnames
     assert "BOMs" not in names
     assert "Routes" not in names
+
+
+def test_the_reconciler_finds_the_yes_no_column_by_role_not_by_name():
+    """bom_and_route_extract names that column after the source that produced it: "charged" on
+    a costed run, "required by the route" on a pack nobody priced. This reconciler looked it up
+    by the literal string, so on an uncosted record every decision came back None and was
+    reported as "not charged, so no sheet row is expected" — a statement about money, made by a
+    sheet with no money in it, about a route that had genuinely required the work.
+
+    Unreachable today, because this tab is only written by a costed run. Pinned because "it
+    cannot happen yet" is not a property anybody maintains.
+    """
+    import bom_and_route_extract as bre
+    summary = _summary()
+    summary["estimate_summary"].pop("final_estimate")            # now an uncosted record
+    assert bre.source_declaration(summary)["operation_column"] == "required by the route"
+    rows = _routes(summary)
+    folding = [r for r in rows if r["operation"] == "tubebend"][0]
+    # the decision IS required, and the reconciler must not report it as uncharged noise
+    assert folding["required by the route"] == "yes"
+    assert "no sheet row is expected" not in (folding["why the counts differ"] or "")

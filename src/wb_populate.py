@@ -5457,6 +5457,21 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         _routes = _ex_tables.get("Routes") or []
         if _routes:
             _keys = list(_routes[0].keys())
+            # THE YES/NO COLUMN BY ROLE, NOT BY NAME. bom_and_route_extract calls it "charged"
+            # on a costed run and "required by the route" on a pack that was never priced, so
+            # a hardcoded "charged" lookup returned None for every row on an uncosted record —
+            # and every decision then read "not charged, so no sheet row is expected", which is
+            # a statement about money made by a sheet that had no money in it. This workbook is
+            # only written by a costed run today, so the wrong branch was unreachable in
+            # practice; it would not have stayed that way.
+            try:
+                from bom_and_route_extract import source_declaration as _src_decl
+                _yes_no = _src_decl(summary)["operation_column"]
+            except Exception:                                            # noqa: BLE001
+                _yes_no = "charged"
+            if _yes_no not in _keys:                 # trust the rows over any declaration
+                _yes_no = next((k for k in _keys if k in ("charged",
+                                                          "required by the route")), _yes_no)
             _header = [h.replace("_", " ") for h in _keys] + [
                 "sheet row", "shares that row with", "why the counts differ"]
             _out_rows = []
@@ -5471,7 +5486,7 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
                         _note = ("one sheet row, several parts — a row is a tooling SETUP, so "
                                  "this decision and the ones for the parts beside it are "
                                  "charged once between them")
-                elif str(_r.get("charged")) == "yes":
+                elif str(_r.get(_yes_no)) == "yes":
                     _note = ("charged, but no sheet row carries this decision id — the join "
                              "from the route to the sheet is missing for this line")
                 else:
