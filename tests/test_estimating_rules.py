@@ -5474,6 +5474,31 @@ def test_the_batch_a_price_was_computed_for_is_the_batch_it_is_labelled_with():
                     "not even its drive", "mapped network drive"):
         ok(_needed in _mn, f"--job explains an unreadable path: {_needed}")
 
+    # AND THE SAME SILENCE ON THE BARE RUN, WHICH --job DID NOT CLOSE. `python src/main.py`
+    # with no flags takes the same un-pooled branch whenever config leaves folder_as_job off,
+    # and it said nothing: a pack of sixteen drawings produced sixteen partial estimates and
+    # sixteen [SCAN] lines that look like progress. It happened on a run meant to be a re-run
+    # of one job, and was only caught because the first filename carried a different job
+    # number. The scan mode is now stated whenever it could have been either.
+    _else = _mn[_mn.index("scan_jobs = [(None, [path]) for path in files]"):
+                _mn.index("for job_folder, job_files in scan_jobs:")]
+    ok("if len(files) > 1:" in _else,
+       "one file is unambiguous and says nothing; more than one states the mode")
+    ok("Each drawing as its own job:" in _else, "the mode is named, not inferred")
+    ok("pooled into a pack" in _else,
+       "and it says what did NOT happen, which is the part nobody can see")
+    ok("No GA is assembled" in _else, "naming the consequence, not just the setting")
+    ok("--job" in _else, "and how to pool them instead")
+    ok("sys.executable" in _else,
+       "naming the interpreter actually running, as the dependency preflight does — a "
+       "suggested command spelled `python` is a different Python from the venv")
+    # IT MUST READ CORRECTLY BOTH WAYS. A hundred-drawing enquiry genuinely wants one
+    # estimate each, so this confirms the mode rather than warning against it — no WARNING,
+    # no wrong-looking banner on a run that is doing exactly the right thing.
+    for _alarm in ("WARNING", "ERROR", "!!"):
+        ok(_alarm not in _else,
+           f"a correct hundred-drawing enquiry must not be told {_alarm}")
+
 
 def test_what_a_part_is_for_survives_costing():
     """TWO ADJUSTABLE FEET, CORRECTLY IDENTIFIED AND CORRECTLY CODED, DROPPED OFF THE SHEET.

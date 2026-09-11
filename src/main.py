@@ -704,6 +704,32 @@ def main() -> None:
         print(f"Folder-as-job: {len(scan_jobs)} job folder(s) from {len(files)} file(s).\n")
     else:
         scan_jobs = [(None, [path]) for path in files]
+        # SAID, BECAUSE THE SHAPE OF THE ANSWER DEPENDS ON IT. --job exists because
+        # --search-root without --folder-as-job scans each PDF as its own job and says
+        # nothing about it (see the comment on --job above). A bare `python src\main.py`
+        # does exactly the same thing whenever config leaves folder_as_job off, and that
+        # path was still silent: a pack of sixteen drawings produced sixteen partial
+        # estimates, no GA, no pooled BOM, and sixteen [SCAN] lines that look like progress.
+        # It happened on a run that was meant to be a re-run of one job.
+        #
+        # One file is not ambiguous and says nothing. More than one is the question this
+        # has to ask out loud, and it reads correctly BOTH ways: an enquiry of a hundred
+        # unrelated drawings genuinely wants one estimate each, and this confirms that is
+        # what it is doing rather than warning against it.
+        if len(files) > 1:
+            print(f"Each drawing as its own job: {len(files)} separate estimate(s), nothing "
+                  f"pooled into a pack.")
+            print(f"   No GA is assembled and no BOM is shared between them. If these "
+                  f"drawings are ONE job, stop now and pass the folder instead:")
+            # THE INTERPRETER THAT IS ACTUALLY RUNNING, for the same reason the dependency
+            # preflight names it: a suggested command line spelled `python` is a different
+            # Python from the venv this was launched with, and handing somebody a command
+            # that fails the preflight is worse than handing them none.
+            print(f"       \"{sys.executable}\" src/main.py "
+                  f"--job \"{Path(args.search_root)}\"")
+            print(f"   (--job sets the search root and folder pooling together, so it "
+                  f"cannot be half-specified.)")
+            print("")
 
     for job_folder, job_files in scan_jobs:
         reset_connectors()
