@@ -245,3 +245,69 @@ def test_the_pyodbc_failure_names_the_fix_and_the_driver():
     source = (ROOT / "src" / "pricing_service.py").read_text(encoding="utf-8", errors="ignore")
     assert "pip install pyodbc" in source
     assert "ODBC Driver 18" in source
+
+
+# ── two Pythons ───────────────────────────────────────────────────────────────────────
+
+
+def test_the_report_names_the_interpreter_that_is_short_of_the_packages(capsys):
+    """THE ACTUAL FAILURE ON THE BOX. `.venv\\Scripts\\python.exe -c "import pdfplumber, pyodbc,
+    win32com.client"` printed ok while `python src\\main.py` raised "pdfplumber is not
+    installed". Two Pythons, and nothing on screen said which one was running — so "the packages
+    are installed" and "the packages are installed where this run can see them" were
+    indistinguishable. A bare `pip install` repeats the mistake."""
+    result = {"ok": False, "can_run": False,
+              "fatal": [{"distribution": "pdfplumber", "module": "pdfplumber",
+                         "consequence": "no PDF text"}],
+              "degrading": [], "missing": [], "unmapped": [],
+              "checked": [], "requirements": "requirements.txt"}
+    dp.report(result)
+    text = capsys.readouterr().out
+    assert sys.executable in text, "the interpreter actually running must be named"
+    assert "-m pip install pdfplumber" in text, "installed INTO that interpreter"
+    assert "wrong Python" in text
+
+
+# ── the accepted rows survive a failed workbook stage ─────────────────────────────────
+
+
+def test_the_accepted_labour_rows_are_stamped_even_when_excel_never_ran():
+    """build_workbook_labour emits each accepted row with its part_numbers and decision_ids and
+    needs no Excel — wb_populate writes formulas, Excel only computes them. But the stamp that
+    carried those rows to the JSON sat inside `if xlsx_path:`, and populate_workbook returning
+    None raises straight past it, so on every run where the workbook stage failed late the rows
+    were built and thrown away.
+
+    That is the difference between a record nobody can attribute anything to and one where parts
+    and operations ARE attributable and only money is missing."""
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8", errors="ignore")
+    assert "_wl_rescue = summary.get(\"workbook_labour\")" in source
+    assert "rescued" in source
+    # and it must sit OUTSIDE the xlsx_path branch, before the provenance stamp
+    rescue_at = source.index("_wl_rescue = summary.get")
+    provenance_at = source.index("THE RECORD DECLARES WHETHER IT CARRIES THE MONEY")
+    assert rescue_at < provenance_at, \
+        "the rescue must run before the state is judged, or it judges the wrong state"
+
+
+def test_the_rescue_does_not_overwrite_rows_that_already_arrived():
+    """On a successful run the earlier stamp has already written them, joined to the xlsx path
+    and the canonical part list. Re-writing a bare copy over that would lose the rest."""
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8", errors="ignore")
+    assert 'if not (_wl_doc.get("workbook_labour") or {}).get("rows"):' in source
+
+
+def test_build_workbook_labour_emits_part_numbers_and_decision_ids():
+    """The half of the read-back contract that needs no spreadsheet. Asserted on the builder, so
+    a change that drops either field fails here rather than at the next freeze."""
+    sys.path.insert(0, str(ROOT / "src"))
+    import wb_populate
+    groups = [{"workbook_row": 10, "wb_op": "Tube Bend", "engine_ops": ["tubebend"],
+               "decision_ids": ["decision:9e3d96e71416"], "decision_id": "decision:9e3d96e71416",
+               "material": "MILD_STEEL", "thickness": 2.0, "qty": 2,
+               "parts": ["7332-01-002"], "rate_basis": "template_calculated"}]
+    built = wb_populate.build_workbook_labour(groups)
+    row = built["rows"][0]
+    assert row["part_numbers"] == ["7332-01-002"]
+    assert row["decision_ids"] == ["decision:9e3d96e71416"]
+    assert row["workbook_row"] == 10, "the join key to final_estimate"

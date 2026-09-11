@@ -1309,6 +1309,39 @@ def main() -> None:
                 _mp_skip = f"the read-back raised {type(_wep_exc).__name__}: {_wep_exc}"
                 print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
 
+        # ── THE ACCEPTED ROWS REACH THE FILE EVEN WHEN EXCEL NEVER RAN ─────────────
+        # build_workbook_labour already emits each accepted row with its part_numbers and its
+        # decision_ids, and it needs no Excel: wb_populate writes formulas, Excel only computes
+        # them. But the stamp that carried those rows to the JSON sat inside `if xlsx_path:`,
+        # and populate_workbook returning None raises straight past it — so on every run where
+        # the workbook stage failed late, the rows were built and thrown away.
+        #
+        # That is the difference between a record nobody can attribute anything to and one where
+        # parts and operations ARE attributable and only money is missing — money_provenance's
+        # `accepted_rows_only`, a state nothing could previously produce. It is also the half of
+        # the read-back that can be fixed without a spreadsheet, so it is fixed here rather than
+        # waiting on one.
+        try:
+            _wl_rescue = summary.get("workbook_labour")
+            _wl_json = (summary.get("saved_output_paths") or {}).get("json")
+            if _wl_rescue and _wl_json and Path(_wl_json).exists():
+                with open(_wl_json, encoding="utf-8") as _fh_wlr:
+                    _wl_doc = json.load(_fh_wlr)
+                if not (_wl_doc.get("workbook_labour") or {}).get("rows"):
+                    _wl_doc["workbook_labour"] = _wl_rescue
+                    with open(_wl_json, "w", encoding="utf-8") as _fh_wlw:
+                        json.dump(_wl_doc, _fh_wlw, indent=2, ensure_ascii=False, default=str)
+                    _wl_rows = _wl_rescue.get("rows") or []
+                    _wl_with_ids = sum(1 for _r in _wl_rows if _r.get("decision_ids"))
+                    print(f"   [workbook-route] rescued {len(_wl_rows)} accepted labour row(s) "
+                          f"onto the JSON ({_wl_with_ids} carrying decision ids) — the workbook "
+                          f"stage did not complete, so money is still missing, but parts and "
+                          f"operations are now attributable", flush=True)
+        except Exception as _wlr_exc:
+            print(f"   [workbook-route] accepted rows not rescued "
+                  f"({type(_wlr_exc).__name__}: {_wlr_exc}) — this record will read as "
+                  f"pre-workbook", flush=True)
+
         # ── THE RECORD DECLARES WHETHER IT CARRIES THE MONEY ───────────────────────
         # UNCONDITIONAL, and that is the whole point: the case worth stamping is the one where
         # the workbook stage did NOT complete. A record that cannot evidence a price has to say

@@ -213,9 +213,20 @@ def report(result: Optional[Dict[str, Any]] = None, log=print) -> bool:
 
     def _install_line(items):
         names = " ".join(i["distribution"] for i in items)
-        log(f"     Fix it with:   pip install {names}")
-        log(f"     Or install everything declared:   "
-            f"pip install -r {result['requirements']}")
+        # THE INTERPRETER, NAMED. On the box this module was written for, the packages were
+        # installed and the run still failed: `.venv\Scripts\python.exe -c "import pdfplumber,
+        # pyodbc, win32com.client"` printed ok while `python src\main.py` raised "pdfplumber is
+        # not installed". Two Pythons, and nothing on screen said which one was running — so
+        # "the packages are installed" and "the packages are installed where this run can see
+        # them" were indistinguishable. `pip install` alone repeats the mistake; the executable
+        # that is actually short of them is the one to install into.
+        log(f"     This run is using:   {sys.executable}")
+        log(f"     Install into THAT interpreter:")
+        log(f"         \"{sys.executable}\" -m pip install {names}")
+        log(f"     Or everything declared:")
+        log(f"         \"{sys.executable}\" -m pip install -r {result['requirements']}")
+        log(f"     If that path is not the venv you expected, the run was launched with the "
+            f"wrong Python.")
 
     if result["fatal"]:
         log("")
