@@ -125,6 +125,23 @@ def source_declaration(summary: Mapping[str, Any]) -> Dict[str, Any]:
             _fe = (_es or {}).get("final_estimate") if isinstance(_es, Mapping) else None
             if isinstance(_fe, Mapping) and (_fe.get("totals") or _fe.get("labour_rows")):
                 costed = True
+        if not costed:
+            # AND THE EVIDENCE THAT EXISTS EARLIER THAN EITHER. This shipped wrong on 7332-01's
+            # 14:17 run: the BOMs & Routes tab said "Nothing here is charged — this pack was not
+            # costed" on a pack costed at GBP 80.34 per unit.
+            #
+            # A TIMING BOUNDARY, not a logic error. wb_populate writes that tab WHILE building
+            # the estimate workbook; final_estimate.totals is written back afterwards, once
+            # Excel has calculated. So at the moment the tab is written the totals genuinely do
+            # not exist yet, and asking for them can only ever answer "no".
+            #
+            # workbook_labour.rows DOES exist at that moment — the same tab reads it to print
+            # the "sheet row" column, and on that run it resolved decisions to rows 96 to 107.
+            # A workbook labour row is not a hint that costing may happen: it is a line the
+            # workbook charges, carrying its own row number. Its presence is proof.
+            _wl = summary.get("workbook_labour")
+            if isinstance(_wl, Mapping) and (_wl.get("rows") or []):
+                costed = True
 
     if llm_only:
         source = "fast_read"

@@ -348,3 +348,47 @@ def test_the_yes_no_column_keeps_its_colour_under_either_name(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "class='yes'>yes" in text
     assert "class='no'>no" in text
+
+
+def test_a_workbook_labour_row_is_proof_the_pack_was_costed():
+    """SHIPPED WRONG, AND CAUGHT ON THE OUTPUT. 7332-01's 14:17 run priced at GBP 80.34 a unit,
+    and its BOMs & Routes tab said of every operation: "Nothing here is charged — this pack was
+    not costed."
+
+    A TIMING BOUNDARY, not a logic error. wb_populate writes that tab WHILE it builds the
+    estimate workbook. final_estimate.totals is written back afterwards, once Excel has
+    calculated — so at the moment the tab is written the totals do not exist yet, and asking for
+    them can only ever answer no.
+
+    workbook_labour.rows DOES exist at that moment: the same tab reads it to fill the "sheet
+    row" column, and on that run it resolved decisions to rows 96 to 107. A workbook labour row
+    is not a hint that costing might happen — it is a line the workbook charges, carrying its
+    own row number.
+    """
+    mid_run = {
+        "job_number": "7332-01",
+        "workbook_labour": {"rows": [{"workbook_row": 103, "part_numbers": ["7332-01-002"],
+                                      "decision_ids": ["dC"], "wb_operation": "Tubebend"}]},
+        "estimate_summary": {"canonical_route_shadow": {"decisions": [
+            {"decision_id": "dC", "target_id": "7332-01-002", "operation": "tubebend",
+             "status": "required", "scope": "part", "participants": ["7332-01-002"]}]}},
+    }
+    assert "final_estimate" not in mid_run["estimate_summary"], \
+        "the point of this fixture is that the read-back has NOT happened yet"
+    declared = bre.source_declaration(mid_run)
+    assert declared["source"] == "costed_run"
+    assert declared["operation_column"] == "charged"
+    row = bre.route_sheet(mid_run)[0]
+    assert row["charged"] == "yes"
+    assert "not costed" not in row["what_that_status_means"], \
+        "the sentence that shipped on a costed pack"
+
+
+def test_a_pack_with_no_workbook_rows_is_still_a_pack_read():
+    """The guard on the guard. If any record at all counted as costed, the distinction the
+    whole source declaration exists for would be gone."""
+    pack = {"estimate_summary": {"canonical_route_shadow": {"decisions": [
+        {"decision_id": "d1", "target_id": "X", "operation": "folding", "status": "required"}]}}}
+    assert bre.source_declaration(pack)["source"] == "pack_read"
+    for empty in ({}, {"rows": []}, {"rows": None}):
+        assert bre.source_declaration(dict(pack, workbook_labour=empty))["source"] == "pack_read"

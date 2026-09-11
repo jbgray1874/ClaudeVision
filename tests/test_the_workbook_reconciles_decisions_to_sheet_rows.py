@@ -217,8 +217,13 @@ def test_the_reconciler_finds_the_yes_no_column_by_role_not_by_name():
     cannot happen yet" is not a property anybody maintains.
     """
     import bom_and_route_extract as bre
-    summary = _summary()
-    summary["estimate_summary"].pop("final_estimate")            # now an uncosted record
+    # A GENUINELY UNCOSTED RECORD NEEDS BOTH GONE, and that is the point rather than an
+    # inconvenience: a workbook labour row carries the sheet row that CHARGED the decision, so
+    # its presence is itself proof the pack was costed. Removing only final_estimate leaves a
+    # record that is still, correctly, a costed one.
+    summary = _summary(with_rows=False)
+    summary["estimate_summary"].pop("final_estimate")
+    summary.pop("workbook_labour", None)
     assert bre.source_declaration(summary)["operation_column"] == "required by the route"
     rows = _routes(summary)
     folding = [r for r in rows if r["operation"] == "tubebend"][0]
