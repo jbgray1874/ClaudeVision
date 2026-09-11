@@ -207,6 +207,16 @@ def _title_block_material_by_page(summary: Mapping[str, Any]) -> Dict[Any, str]:
         text = ", ".join(str(m).strip() for m in (materials or []) if str(m).strip())
         if text:
             out[number] = text
+            # AND BY DRAWING NUMBER, because a BOM row does not always know its page. The
+            # dual-path reader records where a line was read as a SHEET LABEL — merge_boms sets
+            # it to `pg.get("sheet") or label`, and label is a title-block drawing number — so
+            # an index keyed only on page numbers can never be joined to those rows. Keying on
+            # both means the same title block is reachable by whichever identifier the row
+            # happens to carry.
+            for drawing in (block.get("drawing_numbers") or []):
+                key = str(drawing).strip()
+                if key:
+                    out.setdefault(key, text)
     return out
 
 
@@ -225,10 +235,15 @@ def _title_block_thickness_by_page(summary: Mapping[str, Any]) -> Dict[Any, Any]
         values = block.get("thicknesses_mm") if isinstance(block, Mapping) else None
         for value in (values or []):
             try:
-                out[number] = float(str(value).strip())
-                break
+                gauge = float(str(value).strip())
             except (TypeError, ValueError):
                 continue
+            out[number] = gauge
+            for drawing in (block.get("drawing_numbers") or []):
+                key = str(drawing).strip()
+                if key:
+                    out.setdefault(key, gauge)
+            break
     return out
 
 
@@ -401,13 +416,22 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         # the same mistake as reading canonical_route while every run writes
         # canonical_route_shadow — and it showed as five blank columns on a real workbook.
         reader = _text(row.get("source") or row.get("bom_source") or row.get("reader") or "")
-        page = next((v for v in (row.get("source_page"), row.get("bom_sheet"), row.get("page"))
-                     if v is not None), None)
+        # A PAGE NUMBER AND A SHEET LABEL ARE NOT THE SAME THING, and printing "7332-01-101"
+        # under a heading that says `page` would be a quiet lie about what was checked. The
+        # table parser records a page number; the dual-path reader records the drawing it read
+        # the line off. Both are kept, each under its own name, and either can join the title
+        # block because that index is keyed on both.
+        page_number = next((v for v in (row.get("source_page"), row.get("page"))
+                            if v is not None), None)
+        sheet_label = row.get("bom_sheet")
+        page = page_number if page_number is not None else sheet_label
         also_read = (row.get("also_read_by")
                      # bom_also_on_sheets is other SHEETS, not other readers. It belongs beside
                      # the page, not beside the reader, and calling it corroboration by a second
                      # READER would overstate what it proves.
                      or [])
+        # Named `also_on_sheets` on the way out too: these are sheet labels on a dual-path row,
+        # and calling them pages would be the same quiet lie one column to the left.
         also_pages = list(row.get("also_on_pages") or row.get("bom_also_on_sheets") or [])
         # THE PARTS TABLE FIRST, THE PAGE'S TITLE BLOCK SECOND, AND THE SHEET SAYS WHICH. Both
         # are printed on the drawing; they are not the same claim. A material on the row is that
@@ -418,7 +442,9 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         material_from = "the parts table row" if material else ""
         if not material and page is not None and by_page.get(page):
             material = _text(by_page[page])
-            material_from = f"title block of page {page} — the parts table has no material column"
+            _where = (f"page {page}" if page_number is not None else f"sheet {page}")
+            material_from = (f"title block of {_where} — the parts table has no material "
+                             f"column")
         rows.append({
             "part_number": code,
             "description": _text(row.get("description")),
@@ -437,7 +463,8 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             # while the value sat on the row under its real name.
             "item_no": _text(row.get("item_number") or row.get("item")
                              or row.get("item_no") or ""),
-            "read_from_page": _text(page if page is not None else ""),
+            "read_from_page": _text(page_number if page_number is not None else ""),
+            "read_from_sheet": _text(sheet_label or ""),
             # WHICH DRAWING, and WHICH UNIT it belongs to. A page number alone cannot be
             # checked against the pack, and a line whose parent is unknown cannot have its
             # quantity rolled: a 2-off inside a 6-off stand is twelve.
@@ -448,7 +475,7 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             # parser and the vision model both saw is stronger than either alone, and until the
             # merge started keeping this, a row read twice came out looking read once.
             "also_read_by": ", ".join(str(r) for r in also_read),
-            "also_on_pages": ", ".join(str(p) for p in also_pages),
+            "also_on_sheets": ", ".join(str(p) for p in also_pages),
             "times_read": len(row.get("readings") or []) or 1,
             # WHERE THE READERS DISAGREE, named reader by reader. Empty where they agree.
             "readers_disagree_on": _disagreements(row),
@@ -512,10 +539,16 @@ def bom_columns_not_recorded(summary: Mapping[str, Any]) -> Dict[str, str]:
         "quantity": "no quantity was read on any row",
     }
     out: Dict[str, str] = {}
-    for column in ("material_as_printed", "thickness_mm", "item_no", "read_from_page",
+    # read_from_page is EXCLUDED from this check: a dual-path row records a sheet LABEL and
+    # legitimately has no page number, so reporting it as a column the pack could not fill would
+    # fire on every normal job and train people to ignore the notice.
+    for column in ("material_as_printed", "thickness_mm", "item_no",
                    "read_by", "description", "quantity"):
         if all(str(r.get(column) or "").strip() == "" for r in rows):
             out[column] = why.get(column, "not recorded on the BOM row")
+    if all(not str(r.get("read_from_page") or "").strip()
+           and not str(r.get("read_from_sheet") or "").strip() for r in rows):
+        out["read_from_page"] = why["read_from_page"]
     return out
 
 

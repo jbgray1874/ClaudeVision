@@ -654,16 +654,22 @@ def test_the_extract_reads_the_names_the_winning_producer_actually_uses():
     The dual-path rows carry the same facts under a `bom_` prefix. Reading those names is the
     fix; a second stamping pass would have been the wrong one.
     """
+    # bom_sheet is a DRAWING LABEL, not a page number: merge_boms sets it to
+    # `pg.get("sheet") or label`, and label is a title-block drawing number. The 15:49 workbook
+    # showed exactly that — 7332-01-GA and 7332-01-101 in the drawing column.
     row = {"part_number": "7332-01-003", "description": "STRAP", "quantity": 2,
            "source_pdf": "7332-01-101", "bom_parent": "7332-01-101",
-           "bom_source": "deterministic", "bom_sheet": 5, "bom_also_on_sheets": [7]}
+           "bom_source": "deterministic", "bom_sheet": "7332-01-101",
+           "bom_also_on_sheets": ["7332-01-GA"]}
     summary = {"document_analysis": {"bom_rows": [row]},
                "pages": [{"page_number": 5, "page_analysis": {"title_block":
-                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"]}}}]}
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"],
+                           "drawing_numbers": ["7332-01-101"]}}}]}
     said = bre.bom_sheet(summary)[0]
     assert said["read_by"] == "deterministic"
-    assert said["read_from_page"] == "5"
-    assert said["also_on_pages"] == "7"
+    assert said["read_from_sheet"] == "7332-01-101"
+    assert said["read_from_page"] == "", "a label is not a page number and must not print as one"
+    assert said["also_on_sheets"] == "7332-01-GA"
     assert said["drawing_file"] == "7332-01-101"
     assert said["belongs_to"] == "7332-01-101"
     # and the page stamp is what lets the title block join, so these fill too
@@ -675,7 +681,35 @@ def test_other_sheets_are_not_reported_as_a_second_reader():
     """bom_also_on_sheets is other SHEETS that restated the line, not other readers. Calling it
     corroboration by a second reader would overstate exactly what it proves."""
     row = {"part_number": "X", "quantity": 1, "bom_source": "deterministic",
-           "bom_sheet": 3, "bom_also_on_sheets": [7, 9]}
+           "bom_sheet": "7332-01-101", "bom_also_on_sheets": ["7332-01-GA", "7332-01-002"]}
     said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
-    assert said["also_on_pages"] == "7, 9"
+    assert said["also_on_sheets"] == "7332-01-GA, 7332-01-002"
     assert said["also_read_by"] == "", "one reader read it, on three sheets"
+
+
+def test_the_title_block_is_reachable_by_drawing_number_as_well_as_page():
+    """THE JOIN THAT WOULD HAVE FAILED SILENTLY. A dual-path row records where it was read as a
+    SHEET LABEL, so a title-block index keyed only on page numbers can never be joined to it —
+    material and gauge would have stayed blank for a second run while the code looked correct.
+    Keyed on both, the same title block is reachable by whichever identifier the row carries."""
+    row = {"part_number": "X", "quantity": 1, "bom_source": "deterministic",
+           "bom_sheet": "7332-01-101"}
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 5, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"],
+                           "drawing_numbers": ["7332-01-101"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["material_as_printed"] == "MILD STEEL"
+    assert said["thickness_mm"] == 2.5
+    assert "sheet 7332-01-101" in said["material_read_from"], \
+        "and it says SHEET, not page — the two are different claims"
+
+
+def test_a_sheet_label_is_not_reported_as_a_missing_page():
+    """The blank-column notice must not fire on a normal dual-path job. A row that knows its
+    sheet but not its page number has recorded where it was read."""
+    row = {"part_number": "X", "quantity": 1, "description": "STRAP",
+           "bom_source": "deterministic", "bom_sheet": "7332-01-101"}
+    missing = bre.bom_columns_not_recorded({"document_analysis": {"bom_rows": [row]}})
+    assert "read_from_page" not in missing
+    assert "read_by" not in missing
