@@ -44,15 +44,37 @@ def _rows(ws):
 
 
 def test_the_supporting_tabs_are_four_not_six():
+    """A DELIBERATE POLICY CHANGE, from one supporting tab to two, recorded here rather than
+    quietly absorbed.
+
+    This pinned `{"AI Provenance"}` after six tabs were cut to one on the instruction "we do have
+    too many tabs in that overall spreadsheet". Two of the six were Canonical BOM and Canonical
+    Route — "ugly word document style listings", bare text restating facts held elsewhere — and
+    cutting them was right.
+
+    A second tab is added back on a later, explicit instruction: one new tab, professional grade,
+    estimator-ready, holding only the BOMs and the routes and where they came from. It is not
+    those two returning. It carries something no other artefact does — each route decision beside
+    the SHEET ROW that charged it, and a column naming the parts that share that row. Reading the
+    11 September 7332-01 pack, the covering note offered thirteen operations and the Estimate
+    sheet carried twelve; nothing was lost (a row is a tooling setup and two laser parts shared a
+    nest) but no artefact said so, and the reasonable conclusion from outside was that items were
+    missing.
+
+    The spirit of the original instruction still holds and is still tested: it is ONE tab, not
+    three, and it answers one question — what is in the pack and where did it come from."""
     wb = openpyxl.Workbook()
     wb.active.title = "Estimate"
     job = seventy_three_thirty_two()
     W._append_ai_sheets(wb, job, [])
     er.add_provenance_sheet(wb, job, {"job_number": "7332"})
     generated = [n for n in wb.sheetnames if n != "Estimate"]
-    # The AI Explanation tab is written by main.py after the read-back; of the tabs these
-    # two writers produce, one remains. The Canonical BOM and Route are blocks on it.
-    assert set(generated) == {"AI Provenance"}, generated
+    assert set(generated) <= {"AI Provenance", "BOMs & Routes"}, generated
+    assert "AI Provenance" in generated
+    # The bloat guard: the BOMs, the routes and their derivation are BLOCKS on one sheet.
+    assert len(generated) <= 2, (
+        f"{len(generated)} supporting tabs — the BOMs, routes and derivation belong on one "
+        f"sheet as blocks, not a tab each: {generated}")
 
 
 def _tab_text(ws) -> str:

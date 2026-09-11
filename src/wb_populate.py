@@ -83,7 +83,7 @@ try:
     from config import MATERIAL_TOTAL_ERROR_TOLERANT as _MATERIAL_TOTAL_ERROR_TOLERANT
 except Exception:
     _MATERIAL_TOTAL_ERROR_TOLERANT = True
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 # The one module that answers "do we make this or buy it". Identity-only and
 # dependency-free, so it is safe to ask anywhere — including inside the finish gate,
@@ -5273,6 +5273,99 @@ def _price_provenance_rows(summary: Dict[str, Any]) -> List[List[Any]]:
     return prov_rows
 
 
+def _write_boms_and_routes_sheet(wb, blocks: List[Dict[str, Any]]) -> Optional[str]:
+    """ONE tab. Three blocks: the BOMs, the routes, and where every column came from.
+
+    NOT THE TABS THAT WERE REMOVED, and the distinction is the point. Two sheets called Canonical
+    BOM and Canonical Route were deleted from this workbook on the instruction "we do have too
+    many tabs in that overall spreadsheet" — they were "ugly word document style listings": bare
+    text appended row after row, no header styling, no widths, no wrapping, restating facts held
+    elsewhere.
+
+    So this is ONE sheet, not three, because the ask was for a tab and three would be the same
+    bloat with better fonts. And presentation is not decoration here — it is the whole difference
+    between a sheet an estimator can work from and the one that was deleted: a block title, a
+    short note on what the block does and does not claim, a filled and frozen header, banded
+    rows, widths from the content with prose columns capped so one long reason cannot push the
+    columns somebody actually reads off the screen, and numbers right-aligned so a quantity reads
+    as a quantity.
+    """
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    title = "BOMs & Routes"
+    if title in CELL_MAP["structural_sheets"] or title in wb.sheetnames:
+        title = "AI " + title
+    ws = wb.create_sheet(title=title[:31])
+
+    NAVY = "1F3864"
+    head_fill = PatternFill("solid", fgColor=NAVY)
+    band_fill = PatternFill("solid", fgColor="FAFBFD")
+    wrap_top = Alignment(vertical="top", wrap_text=True)
+    widest: Dict[int, int] = {}
+    capped: Dict[int, int] = {}
+
+    cell = ws.cell(row=1, column=1, value="BOMs and Routes — what is in the pack, and where it "
+                                         "came from")
+    cell.font = Font(bold=True, size=15, color=NAVY)
+    note = ws.cell(row=2, column=1,
+                   value="Reads off the drawing pack and the compiled route. NO FIGURE ON THIS "
+                         "SHEET IS A COST.")
+    note.font = Font(size=9, italic=True, color="54607A")
+    row = 4
+
+    for block in blocks:
+        rows = block["rows"]
+        if not rows:
+            continue
+        header = block["header"]
+        wide = set(block.get("wide") or ())
+
+        cell = ws.cell(row=row, column=1, value=block["title"])
+        cell.font = Font(bold=True, size=12, color=NAVY)
+        row += 1
+        for line in block.get("intro") or []:
+            cell = ws.cell(row=row, column=1, value=line)
+            cell.font = Font(size=9, italic=True, color="54607A")
+            cell.alignment = wrap_top
+            ws.merge_cells(start_row=row, start_column=1,
+                           end_row=row, end_column=max(2, len(header)))
+            ws.row_dimensions[row].height = 26
+            row += 1
+
+        head_row = row
+        for column, name in enumerate(header, start=1):
+            cell = ws.cell(row=head_row, column=column, value=name)
+            cell.fill = head_fill
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            cell.alignment = Alignment(vertical="bottom", wrap_text=True)
+            widest[column] = max(widest.get(column, 0), len(str(name)))
+            if name in wide:
+                capped[column] = 64
+        ws.row_dimensions[head_row].height = 30
+        row += 1
+
+        for index, values in enumerate(rows):
+            for column, value in enumerate(values, start=1):
+                cell = ws.cell(row=row, column=column, value=value)
+                cell.alignment = (Alignment(vertical="top", horizontal="right")
+                                  if isinstance(value, (int, float)) else wrap_top)
+                cell.font = Font(size=10)
+                if index % 2:
+                    cell.fill = band_fill
+                widest[column] = max(widest.get(column, 0),
+                                     len(str(value)) if value is not None else 0)
+            row += 1
+        row += 2       # air between blocks, so three tables do not read as one
+
+    for column, longest in widest.items():
+        ws.column_dimensions[get_column_letter(column)].width = min(
+            capped.get(column, 34), max(11, longest + 2))
+    # Frozen at the top so the sheet's own title stays visible while scrolling three blocks.
+    ws.freeze_panes = "A3"
+    return title
+
+
 def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     """Append the engine's own detail/provenance sheets under NON-colliding names,
     so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
@@ -5300,6 +5393,128 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     # presentation — the hierarchy indented under its assemblies, the route grouped by part
     # with the ruled-out decisions beside the kept ones. The row builders below are kept:
     # the covering note reads the route rows from the run JSON.
+
+    # ── BOMs AND ROUTES, BACK AS TWO TABS, AND THIS TIME THEY RECONCILE ────────────────
+    #
+    # THE HISTORY, BECAUSE IT MATTERS. Two tabs with these names were removed from this
+    # workbook on the instruction "we do have too many tabs in that overall spreadsheet", and
+    # that was right: they were bare text with no presentation, restating facts held elsewhere.
+    # They are back because the reason for them turned out to be different from the reason they
+    # were written the first time.
+    #
+    # WHAT WENT WRONG WITHOUT THEM. Reading the 11 September 7332-01 pack, the covering note
+    # promised "13 lines" of operations and the Estimate sheet showed 12. Nothing was lost and
+    # nothing disagreed: a workbook row is a tooling SETUP and can hold several parts, so the
+    # 2.5 mm laser decisions for -003 and -004 share one nest row. But no artefact said that,
+    # so the only way to reconcile 13 with 12 was to know it already — and the reasonable
+    # conclusion from outside was that items were missing.
+    #
+    # The same reading problem has three more faces on that one job:
+    #
+    #   the BOM charges 7332-01-101-PLATE   the routes weld 7332-01-101. One is the service
+    #                                       line that carries the plating money, the other the
+    #                                       assembly that gets welded — related, differently
+    #                                       named, and never reconciled on a page
+    #   the sheet's Assemble/pack row
+    #   lists four members                  the route's assembly decision targets 7332-01-GA
+    #   P/P is charged                      and no reader is named for it
+    #
+    # So the Routes tab carries the DECISION and the sheet row it landed on, side by side, and
+    # names the grouping where several decisions share a row. That is the column that makes the
+    # two counts legible; without it this would be a third place to read the same numbers.
+    try:
+        import bom_and_route_extract as _bre
+        _ex_tables = _bre.build_tables(summary, "both")
+        _wl_rows = ((summary.get("workbook_labour") or {}).get("rows") or [])
+
+        # decision id -> the sheet row that charged it, and who else shares that row.
+        _row_for: Dict[str, Dict[str, Any]] = {}
+        for _r in _wl_rows:
+            for _did in (list(_r.get("decision_ids") or [])
+                         + ([_r["decision_id"]] if _r.get("decision_id") else [])):
+                _row_for[str(_did)] = _r
+
+        _blocks: List[Dict[str, Any]] = []
+
+        _bom = _ex_tables.get("BOMs") or []
+        if _bom:
+            _kb = list(_bom[0].keys())
+            _blocks.append({
+                "title": "1 · BOMs — every parts-list row the pack gave us",
+                "intro": [
+                    "With the page it was read from and the reader that read it. NOTHING IS "
+                    "MERGED: a part number on several sheets stays several rows, flagged — most "
+                    "SDI parts are drawn more than once, and whether that is one part or three "
+                    "is an estimator's call.",
+                    "The quantity is THE ROW'S OWN. It is not rolled through the assembly: a "
+                    "2-off inside a 6-off stand is twelve parts, and that multiplication belongs "
+                    "to the route, not to a parts list."],
+                "header": [h.replace("_", " ") for h in _kb],
+                "rows": [[r.get(k) for k in _kb] for r in _bom],
+                "wide": ("description", "material as printed", "what that reader is",
+                         "duplicate note")})
+
+        _routes = _ex_tables.get("Routes") or []
+        if _routes:
+            _keys = list(_routes[0].keys())
+            _header = [h.replace("_", " ") for h in _keys] + [
+                "sheet row", "shares that row with", "why the counts differ"]
+            _out_rows = []
+            for _r in _routes:
+                _wr = _row_for.get(str(_r.get("decision_id") or ""))
+                _shares, _note = "", ""
+                if _wr:
+                    _others = [p for p in (_wr.get("part_numbers") or [])
+                               if str(p).upper() != str(_r.get("part_or_assembly") or "").upper()]
+                    _shares = ", ".join(str(p) for p in _others)
+                    if _others:
+                        _note = ("one sheet row, several parts — a row is a tooling SETUP, so "
+                                 "this decision and the ones for the parts beside it are "
+                                 "charged once between them")
+                elif str(_r.get("charged")) == "yes":
+                    _note = ("charged, but no sheet row carries this decision id — the join "
+                             "from the route to the sheet is missing for this line")
+                else:
+                    _note = "not charged, so no sheet row is expected"
+                _out_rows.append([_r.get(k) for k in _keys]
+                                 + [(_wr or {}).get("workbook_row"), _shares, _note])
+            _blocks.append({
+                "title": "2 · Routes — every decision, and which sheet row charged it",
+                "intro": [
+                    "An operation listed is not necessarily charged: `required` is charged, "
+                    "`unverified` means the compiler found evidence it could not confirm and is "
+                    "waiting for a person.",
+                    "THE LAST THREE COLUMNS ARE WHY THIS SHEET EXISTS. A workbook row is a "
+                    "tooling SETUP and can hold several parts, so a job can have more decisions "
+                    "than labour rows — on 7332-01 thirteen decisions became twelve rows because "
+                    "two laser parts share one 2.5 mm nest. Nothing was lost; it was never said."],
+                "header": _header, "rows": _out_rows,
+                "wide": ("why", "what that status means", "covers parts",
+                         "shares that row with", "why the counts differ")})
+
+        _deriv = _ex_tables.get("How these were derived") or []
+        if _deriv:
+            _kd = list(_deriv[0].keys())
+            _blocks.append({
+                "title": "3 · Where every column came from",
+                "intro": [
+                    "Column by column: the field it was derived from, how, and — the column that "
+                    "earns its place — WHAT IT DOES NOT MEAN. Every figure on a sheet like this "
+                    "gets quoted eventually, and the quickest way to be misquoted is to publish "
+                    "a number with no statement of its limits."],
+                "header": [h.replace("_", " ") for h in _kd],
+                "rows": [[r.get(k) for k in _kd] for r in _deriv],
+                "wide": ("how", "what it does not mean", "derived from")})
+
+        if _blocks:
+            _written = _write_boms_and_routes_sheet(wb, _blocks)
+            print(f"   [wb_populate] '{_written}' tab written: "
+                  f"{len(_ex_tables.get('BOMs') or [])} BOM row(s), "
+                  f"{len(_ex_tables.get('Routes') or [])} route decision(s)", flush=True)
+    except Exception as _bre_exc:                                        # noqa: BLE001
+        # A diagnostic tab must never be the reason a workbook fails to save.
+        print(f"   [wb_populate] BOMs/Routes tabs not added "
+              f"({type(_bre_exc).__name__}: {_bre_exc})", flush=True)
     return
 
 
