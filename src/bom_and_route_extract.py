@@ -392,8 +392,23 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             continue
         code = _text(row.get("part_number"))
         seen_codes[code.upper()] = seen_codes.get(code.upper(), 0) + 1
-        reader = _text(row.get("source") or row.get("reader") or "")
-        page = row.get("source_page") if row.get("source_page") is not None else row.get("page")
+        # THE NAMES THE ROW ACTUALLY ARRIVES UNDER. file_scan runs the DUAL-PATH BOM reader
+        # (bom_pipeline) and replaces document_analysis.bom_rows wholesale — it is "the
+        # authoritative source of the bom_rows that build_document_writeup consumes". Its rows
+        # carry the same provenance under a `bom_` prefix: bom_source is the reader, bom_sheet
+        # is the sheet it was read off, bom_also_on_sheets is every other sheet that restated
+        # it. Stamping extract_bom_rows was stamping the producer that does not win, which is
+        # the same mistake as reading canonical_route while every run writes
+        # canonical_route_shadow — and it showed as five blank columns on a real workbook.
+        reader = _text(row.get("source") or row.get("bom_source") or row.get("reader") or "")
+        page = next((v for v in (row.get("source_page"), row.get("bom_sheet"), row.get("page"))
+                     if v is not None), None)
+        also_read = (row.get("also_read_by")
+                     # bom_also_on_sheets is other SHEETS, not other readers. It belongs beside
+                     # the page, not beside the reader, and calling it corroboration by a second
+                     # READER would overstate what it proves.
+                     or [])
+        also_pages = list(row.get("also_on_pages") or row.get("bom_also_on_sheets") or [])
         # THE PARTS TABLE FIRST, THE PAGE'S TITLE BLOCK SECOND, AND THE SHEET SAYS WHICH. Both
         # are printed on the drawing; they are not the same claim. A material on the row is that
         # line's own; a material from the title block is the SHEET's, and on a detail sheet
@@ -422,7 +437,7 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             # while the value sat on the row under its real name.
             "item_no": _text(row.get("item_number") or row.get("item")
                              or row.get("item_no") or ""),
-            "read_from_page": _text(row.get("source_page") or row.get("page") or ""),
+            "read_from_page": _text(page if page is not None else ""),
             # WHICH DRAWING, and WHICH UNIT it belongs to. A page number alone cannot be
             # checked against the pack, and a line whose parent is unknown cannot have its
             # quantity rolled: a 2-off inside a 6-off stand is twelve.
@@ -432,7 +447,8 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             # CORROBORATION, WHICH IS THE WHOLE POINT OF HAVING SIX READERS. A line the table
             # parser and the vision model both saw is stronger than either alone, and until the
             # merge started keeping this, a row read twice came out looking read once.
-            "also_read_by": ", ".join(str(r) for r in (row.get("also_read_by") or [])),
+            "also_read_by": ", ".join(str(r) for r in also_read),
+            "also_on_pages": ", ".join(str(p) for p in also_pages),
             "times_read": len(row.get("readings") or []) or 1,
             # WHERE THE READERS DISAGREE, named reader by reader. Empty where they agree.
             "readers_disagree_on": _disagreements(row),

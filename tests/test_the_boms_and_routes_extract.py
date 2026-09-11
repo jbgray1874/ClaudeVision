@@ -640,3 +640,42 @@ def test_gauge_is_settled_separately_and_does_not_depend_on_that_question():
     from source_precedence import tiebreak_priority
     assert tiebreak_priority("dxf_filename", "thickness_mm") > \
         tiebreak_priority("title_block", "thickness_mm")
+
+
+def test_the_extract_reads_the_names_the_winning_producer_actually_uses():
+    """FOUND ON THE 15:49 WORKBOOK, and it is the canonical_route mistake again.
+
+    I stamped source/source_page onto extract_bom_rows. file_scan then runs the DUAL-PATH BOM
+    reader (bom_pipeline) and REPLACES document_analysis.bom_rows wholesale — it is, in that
+    module's own words, "the authoritative source of the bom_rows that build_document_writeup
+    consumes". So the stamped rows never reached the sheet and five columns came back blank on a
+    real pack while the synthetic tests passed.
+
+    The dual-path rows carry the same facts under a `bom_` prefix. Reading those names is the
+    fix; a second stamping pass would have been the wrong one.
+    """
+    row = {"part_number": "7332-01-003", "description": "STRAP", "quantity": 2,
+           "source_pdf": "7332-01-101", "bom_parent": "7332-01-101",
+           "bom_source": "deterministic", "bom_sheet": 5, "bom_also_on_sheets": [7]}
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 5, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["read_by"] == "deterministic"
+    assert said["read_from_page"] == "5"
+    assert said["also_on_pages"] == "7"
+    assert said["drawing_file"] == "7332-01-101"
+    assert said["belongs_to"] == "7332-01-101"
+    # and the page stamp is what lets the title block join, so these fill too
+    assert said["material_as_printed"] == "MILD STEEL"
+    assert said["thickness_mm"] == 2.5
+
+
+def test_other_sheets_are_not_reported_as_a_second_reader():
+    """bom_also_on_sheets is other SHEETS that restated the line, not other readers. Calling it
+    corroboration by a second reader would overstate exactly what it proves."""
+    row = {"part_number": "X", "quantity": 1, "bom_source": "deterministic",
+           "bom_sheet": 3, "bom_also_on_sheets": [7, 9]}
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["also_on_pages"] == "7, 9"
+    assert said["also_read_by"] == "", "one reader read it, on three sheets"
