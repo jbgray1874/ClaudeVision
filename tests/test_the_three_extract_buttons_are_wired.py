@@ -193,3 +193,59 @@ def test_a_record_found_is_named_in_the_answer():
     routes = _routes()
     assert 'lines.append(f"Read from {found_at}.")' in routes
     assert '"record": found_at' in routes, "and it is in the payload, not only the console"
+
+
+# ── laid out, not stacked ─────────────────────────────────────────────────────────────
+#
+# "the page has all that space on the right and it's stretching out too long down the way."
+# Three separate causes, all of them invisible from the markup alone.
+
+
+def test_the_buttons_are_a_grid_and_not_a_column():
+    """.btn-run is width:100% — correct for the one big estimator button that is the point of
+    its panel, and the reason a flex row of extract buttons rendered as a column: each one took
+    the whole line, so flex-wrap never wrapped. Three were a tall stack; six would double it."""
+    page = _page()
+    block = page[page.index('id="extractCard"'):page.index('id="exOut"')]
+    assert 'class="exgrid"' in block
+    assert "display:flex" not in block, "a flex row of width:100% buttons is a column"
+    rule = page[page.index(".exgrid{"):]
+    rule = rule[:rule.index("}")]
+    assert "grid-template-columns:1fr 1fr" in rule, "two across, so six fit in three rows"
+    override = page[page.index(".exgrid .btn-run{"):]
+    override = override[:override.index("}")]
+    assert "width:auto" in override, "the full-width rule has to be released inside the grid"
+
+
+def test_the_class_has_a_rule_behind_it():
+    """A class with no rule renders as nothing and errors nowhere. This page has been bitten by
+    exactly that once already, with a bare `row`."""
+    page = _page()
+    for used in ("exgrid",):
+        assert f'class="{used}"' in page
+        assert f".{used}{{" in page, f"{used} is used but has no rule"
+
+
+def test_the_card_sits_in_the_second_column_under_drawings():
+    """Source order already put it after Drawings, but a two-column grid fills left-then-right,
+    so the third child landed under JOB — beneath the estimator button, nowhere near the list it
+    reads, pushing everything below it further down."""
+    page = _page()
+    assert "#extractCard{grid-column:2}" in page
+    assert "#extractCard{grid-column:auto}" in page, \
+        "released when the grid collapses, or it asks for a column that does not exist"
+    # and the release is inside a narrow-screen media query, not unconditional
+    narrow = page[page.index("@media(max-width:900px){#extractCard"):][:80]
+    assert "grid-column:auto" in narrow
+
+
+def test_the_measure_is_kept_per_column_not_per_page():
+    """Widening the wrap is only safe because the content inside it is two columns. A single
+    column at 1460 would be an unreadable line length, and that is the argument the original
+    1180 was making."""
+    page = _page()
+    wrap = page[page.index(".wrap{max-width:"):]
+    wrap = wrap[:wrap.index("}")]
+    assert "1460px" in wrap
+    assert ".grid{display:grid;grid-template-columns:1fr 1fr" in page, \
+        "the wrap may only be this wide while the cards inside it are two columns"

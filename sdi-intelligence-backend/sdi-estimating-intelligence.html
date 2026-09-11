@@ -65,7 +65,12 @@
 
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px}
+  /* 1180 WAS A MEASURE FOR PROSE, APPLIED TO A TWO-COLUMN CONSOLE. With a 250px nav rail pinned
+     to the left, a 1920 screen left roughly 500px of dead space down the right while the page
+     ran on for several screens downward. The measure argument still holds — long lines are hard
+     to read — but it is the COLUMN that has to stay readable, and each column here is half the
+     wrap: 1460 gives about 710 per column, which is comfortably inside it. */
+  .wrap{max-width:1460px;margin:0 auto;padding:28px 22px 80px}
 
   header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px;display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
   h1{font-family:var(--disp);font-size:clamp(24px,3.4vw,34px);font-weight:700;letter-spacing:-.02em;margin:0}
@@ -76,6 +81,15 @@
 
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
   @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  /* UNDER DRAWINGS, WHICH IS THE PANEL IT READS. In source order this card follows Drawings,
+     but a two-column grid fills left-then-right, so the third child lands under JOB on the left
+     — beneath the estimator button, nowhere near the list it works from, and pushing everything
+     below it further down a page that was already too long. Pinning it to column 2 puts it
+     directly under the Drawings panel and fills a column that was empty.
+     Released when the grid collapses to one column, or it would be asking for a column 2 that
+     no longer exists. */
+  #extractCard{grid-column:2}
+  @media(max-width:900px){#extractCard{grid-column:auto}}
 
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px}
   .card h2{font-family:var(--disp);font-size:15px;font-weight:600;margin:0 0 2px;letter-spacing:-.01em}
@@ -97,6 +111,16 @@
   .btn-run{width:100%;background:var(--brand);color:#191900;border-color:var(--brand);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
   .btn-run:hover:not(:disabled){filter:brightness(1.08)}
   .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
+  /* THE EXTRACTS, LAID OUT RATHER THAN STACKED. .btn-run is width:100% — right for the one big
+     estimator button that is the point of its panel, wrong for a SET of them: inside a flex row
+     each still takes the full line, so flex-wrap produced a column and the page grew by a whole
+     button every time one was added. Three were already a tall stack; six would have doubled it.
+     A grid of two columns puts six buttons in three rows, in the space beside Drawings that was
+     empty. Smaller type and padding too, because these are not the primary action on the page —
+     the estimator is, and six buttons shouting as loudly as it says otherwise. */
+  .exgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+  .exgrid .btn-run{width:auto;margin-top:0;padding:11px 12px;font-size:13.5px;line-height:1.25}
+  @media(max-width:640px){.exgrid{grid-template-columns:1fr}}
   /* The second book, sitting under the first rather than beside it — same size, so it reads
      as the same kind of thing, but it never lights up because nothing is behind it. */
   .btn-soon{margin-top:0;cursor:not-allowed}
@@ -615,10 +639,12 @@
       <p class="sub" style="margin:0 0 12px">Reads the drawings listed in <b>Drawings</b> above
         and writes a spreadsheet and a page to the same output folder. <b>Prices nothing.</b>
         Every column says where it came from and what it does not mean.</p>
-      <!-- No class here on purpose: `row` is not a component this page defines, and a class
-           with no rule behind it renders as nothing without erroring. Caught by the page's own
-           component test rather than by somebody noticing three buttons in a column. -->
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <!-- .exgrid, and it has a rule behind it — see the stylesheet. The first version of this
+           used a bare `row` class that this page does not define, which renders as nothing
+           without erroring; caught by the page's own component test. The flex row that replaced
+           it was no better in practice, because .btn-run is width:100% and each button took a
+           whole line anyway. -->
+      <div class="exgrid">
         <button class="btn-run" id="exBoms" disabled
                 title="Every parts-list row, with the page it was read from and the reader that read it.">
           SDI Estimating Intel BOMs Extract</button>
