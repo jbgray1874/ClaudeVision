@@ -586,6 +586,42 @@
       </div>
 
     </section>
+
+    <!-- ══ EXTRACTS ══════════════════════════════════════════════════
+         THE TWO QUESTIONS THAT COME BEFORE A PRICE. The estimator above answers "what does it
+         cost". Before anybody can trust that, two earlier questions have to be answerable on
+         their own: what parts did you find, and what work did you decide each one needs.
+
+         Those were only reachable by opening a costed workbook, which is the wrong artefact for
+         the question — and for months the route half was not reachable at all: the extraction
+         audit read the route from `canonical_route` while every real run writes
+         `canonical_route_shadow`, so its Operations sheet was empty on every job and read as
+         "this pack states no operations".
+
+         Same Drawings panel as the estimator, same output folder, no Excel and no pricing — so
+         these finish in a fraction of the time an estimate takes and can be run on a pack before
+         anybody commits to costing it. -->
+    <section class="card" id="extractCard">
+      <h2>Extracts — what is in the pack</h2>
+      <p class="sub" style="margin:0 0 12px">Reads the drawings listed in <b>Drawings</b> above
+        and writes a spreadsheet and a page to the same output folder. <b>Prices nothing.</b>
+        Every column says where it came from and what it does not mean.</p>
+      <!-- No class here on purpose: `row` is not a component this page defines, and a class
+           with no rule behind it renders as nothing without erroring. Caught by the page's own
+           component test rather than by somebody noticing three buttons in a column. -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn-run" id="exBoms" disabled
+                title="Every parts-list row, with the page it was read from and the reader that read it.">
+          SDI Estimating Intel BOMs Extract</button>
+        <button class="btn-run" id="exRoutes" disabled
+                title="Every route decision, what it covers, and whether it is charged.">
+          SDI Estimating Intel Routes Extract</button>
+        <button class="btn-run" id="exBoth" disabled
+                title="Both, in one workbook with a sheet each plus how every column was derived.">
+          SDI Intel BOMs and Routes</button>
+      </div>
+      <div class="files" id="exOut" style="margin-top:10px"></div>
+    </section>
   </div>
 
   <!-- ══ RUN ════════════════════════════════════════════════════════ -->
@@ -1060,6 +1096,22 @@ function refresh(){
   bRunLLM.disabled = running || missing.length > 0;
   bRunLLM.title = missing.length ? "Still needed: " + missing.join(", ")
                 : "Reads this pack with Grok alone — a measurement, not an estimate";
+  /* THE EXTRACTS NEED LESS THAN AN ESTIMATE, AND GATING THEM AS THOUGH THEY NEEDED THE SAME
+     would be a lie about what they do. They read the drawings and write two files: no pricing,
+     no Excel, no client, no quantity, no drawing number. So they want drawings and a runner
+     (the drawings are on the runner's side of the wire) and nothing else — asking for a client
+     before somebody can see what is IN a pack is the wrong way round. */
+  const exMissing = [];
+  if(!drawings.length)  exMissing.push("at least one drawing");
+  if(!runnersOnline)    exMissing.push("an estimating runner (none connected)");
+  [["exBoms","parts-list rows"],["exRoutes","route decisions"],
+   ["exBoth","both, in one workbook"]].forEach(([id, what]) => {
+    const b = document.getElementById(id);
+    if(!b) return;
+    b.disabled = running || exMissing.length > 0;
+    b.title = exMissing.length ? "Still needed: " + exMissing.join(", ")
+            : "Reads the drawings above and writes " + what + " — prices nothing";
+  });
   runBtn.textContent = running ? "Estimating…" : "SDI (UK) Intelligence Estimator";
   // Offered only while there is something to stop, so it cannot be pressed against a run
   // that has already finished and read as having done something.
@@ -1916,6 +1968,80 @@ function line(t){
   s.textContent = u + "\n"; log.appendChild(s); log.scrollTop = log.scrollHeight;
 }
 function setStatus(cls, text){ dot.className = "dot " + cls; statusText.textContent = text; }
+
+/* ══ THE EXTRACTS ═══════════════════════════════════════════════════════════════════════
+   Same Drawings panel, same output folder, same log on screen as an estimate — because the
+   person pressing this is standing in the same place and wants the answer in the same place.
+
+   A SEPARATE ENDPOINT, NOT A FLAG ON /api/estimate. An extract reads drawings and writes two
+   files; it opens no workbook, prices nothing and needs no Excel or SOLIDWORKS seat. Folding it
+   into the estimate endpoint would make every extract inherit an estimate's gates, its queue
+   lease and its failure modes, and the first time Excel hung the pack nobody could look at what
+   was IN the pack either. */
+async function runExtract(kind, label){
+  const out = document.getElementById("exOut");
+  const folder = drawings.find(d => d.is_dir);
+  line("");
+  line("── " + label + " ──");
+  line("Reading " + drawings.length + " drawing file(s). No pricing, no workbook.");
+  line("Output → " + (destination() || OUTPUT_ROOT));
+  if(out) out.textContent = label + ": working…";
+  const body = {
+    kind: kind,
+    job_folder: folder ? folder.path : null,
+    files: drawings.filter(d => !d.is_dir).map(d => d.path),
+    output_root: OUTPUT_ROOT,
+    // Carried when they happen to be filled, because they name the output folder — but never
+    // REQUIRED, because needing a client before you can see what is in a pack is the wrong way
+    // round. The service falls back to the pack's own name.
+    client: safe(client.value) || null,
+    drawing_number: safe(drawing.value) || null
+  };
+  try{
+    const r = await api("/api/estimate/extract", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      /* SAID, NOT SWALLOWED. A button that goes quiet on a 404 teaches people it is broken and
+         they stop pressing it; one that says the service has not been updated yet sends them to
+         the right person. */
+      const why = j.detail || j.error || (r.status === 404
+        ? "this service does not have the /api/extract endpoint yet — it needs the deploy that "
+        + "added it" : "HTTP " + r.status);
+      line("EXTRACT REFUSED — " + why);
+      if(out) out.textContent = label + " refused: " + why;
+      return;
+    }
+    (j.lines || []).forEach(line);
+    const wrote = [j.xlsx, j.html].filter(Boolean);
+    if(wrote.length){
+      line("saved " + wrote.length + " file(s):");
+      wrote.forEach(f => line("   " + f));
+    }
+    if(typeof j.boms === "number")   line(j.boms + " BOM row(s)");
+    if(typeof j.routes === "number") line(j.routes + " route decision(s)");
+    if(out){
+      out.innerHTML = "";
+      wrote.forEach(f => {
+        const a = document.createElement("a");
+        a.href = "file:///" + String(f).replace(/\\/g, "/");
+        a.textContent = String(f).split(/[\\/]/).pop();
+        a.style.marginRight = "12px";
+        out.appendChild(a);
+      });
+      if(!wrote.length) out.textContent = label + ": nothing was written — see the log";
+    }
+  }catch(err){
+    line("EXTRACT FAILED — " + (err && err.message ? err.message : String(err)));
+    if(out) out.textContent = label + " failed: " + (err && err.message ? err.message : err);
+  }
+}
+[["exBoms","boms","SDI Estimating Intel BOMs Extract"],
+ ["exRoutes","routes","SDI Estimating Intel Routes Extract"],
+ ["exBoth","both","SDI Intel BOMs and Routes"]].forEach(([id, kind, label]) => {
+  const b = document.getElementById(id);
+  if(b) b.addEventListener("click", () => runExtract(kind, label));
+});
 
 /* STOP MEANS BOTH HALVES. Abandoning frees the queue; the ENGINE is a separate process on
    another machine and would keep driving SOLIDWORKS and Excel until its runner is told. The

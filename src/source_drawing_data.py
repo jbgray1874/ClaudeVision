@@ -598,10 +598,23 @@ def bom_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
 
 def operation_rows(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Every route decision, its target and why it stands or does not."""
+    """Every route decision, its target and why it stands or does not.
+
+    READS BOTH SPELLINGS, because reading one was a silent hole. This looked only at
+    `estimate_summary.canonical_route`, and every real run writes the route to
+    `canonical_route_shadow` — v0013 of 7332-01 carries 27 decisions there. So this sheet came
+    back EMPTY on every real job and read as "this pack states no operations", which is the
+    worst possible way for a route to be missing: indistinguishable from a pack that genuinely
+    has none.
+    """
     out: List[Dict[str, Any]] = []
-    route = (summary.get("estimate_summary") or {}).get("canonical_route") or {}
-    for decision in (route.get("decisions") or []):
+    from bom_and_route_extract import route_payloads as _payloads
+    decisions: List[Any] = []
+    for payload in _payloads(summary):
+        for decision in (payload.get("decisions") or []):
+            if decision not in decisions:
+                decisions.append(decision)
+    for decision in decisions:
         if not isinstance(decision, Mapping):
             continue
         out.append({

@@ -44,8 +44,10 @@ Endpoints (all require header  X-SDI-Key: <SDI_API_KEY> when a key is set):
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -1866,3 +1868,121 @@ def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
         runs = sorted(_RUNS.values(), key=lambda r: r.queued_at, reverse=True)[:limit]
         out = [{k: v for k, v in r.as_json().items() if k != "log"} for r in runs]
     return {"runs": out}
+
+
+# ══ EXTRACTS ════════════════════════════════════════════════════════════════════════════
+#
+# THE TWO QUESTIONS THAT COME BEFORE A PRICE: what parts are in this pack, and what work did
+# the engine decide each one needs. Both were only reachable by opening a costed workbook,
+# which is the wrong artefact for the question — and the route half was not reachable at all:
+# the extraction audit read `canonical_route` while every real run writes
+# `canonical_route_shadow`, so its Operations sheet was empty on every job.
+#
+# NO RUNNER, NO QUEUE, NO EXCEL. The answer is already in the saved record of the job's last
+# run: BOM rows from the readers, decisions from the compiled route. Rebuilding two files from
+# a record takes a moment and needs no SOLIDWORKS seat, so this endpoint answers directly
+# rather than queueing work on a machine that might be busy costing something. An extract that
+# cannot be taken because the estimating runner is mid-job would be useless precisely when
+# somebody wants to look at a pack before committing to costing it.
+#
+# WHAT IT WILL NOT DO is read drawings. If the job has never been run there is nothing to
+# extract, and this says so and names the button that produces it, rather than silently
+# returning empty sheets that read as "this pack contains nothing".
+
+class ExtractRequest(BaseModel):
+    """`kind` is which of the three buttons was pressed. The rest mirrors an estimate request
+    so the page can send what it already has, and nothing here is required except the files or
+    folder that identify the job."""
+    kind: str = "both"
+    job_folder: Optional[str] = None
+    files: List[str] = []
+    output_root: Optional[str] = None
+    client: Optional[str] = None
+    drawing_number: Optional[str] = None
+
+
+def _extract_job_label(req: "ExtractRequest") -> str:
+    """The job's own name, from whatever the page sent. A pack is identified by its folder
+    before it is identified by anything a person typed — the folder is what the drawings came
+    out of, and it is right even when the client box is empty."""
+    if req.job_folder:
+        name = Path(str(req.job_folder)).name.strip()
+        if name:
+            return name
+    for raw in (req.files or []):
+        parent = Path(str(raw)).parent.name.strip()
+        if parent:
+            return parent
+    return (req.drawing_number or "").strip() or "job"
+
+
+@router.post("/extract")
+def estimate_extract(req: ExtractRequest,
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    kind = str(req.kind or "both").strip().lower()
+    if kind not in ("boms", "routes", "both"):
+        raise HTTPException(400, f"kind must be boms, routes or both — not {req.kind!r}")
+    if not (req.files or req.job_folder):
+        raise HTTPException(400, "No drawings were given. Add the pack in the Drawings panel "
+                                 "first — the extract is taken from that job's saved record.")
+
+    label = _extract_job_label(req)
+    lines: List[str] = [f"Job read as {label}."]
+
+    # THE RECORD OF THAT JOB'S LAST RUN. Searched under the roots this service is already
+    # allowed to read, so this cannot become a way to open any file on the box.
+    record: Optional[dict] = None
+    found_at = ""
+    candidates: List[Path] = []
+    for root in (config.OUTPUT_ROOT, getattr(config, "ENGINE_ROOT", None)):
+        if not root:
+            continue
+        base = Path(str(root))
+        for rel in (Path("json") / f"{label}.json", Path("output") / "json" / f"{label}.json",
+                    Path(f"{label}.json")):
+            candidates.append(base / rel)
+    for path in candidates:
+        try:
+            if path.is_file():
+                record = json.loads(path.read_text(encoding="utf-8"))
+                found_at = str(path)
+                break
+        except Exception as err:                                         # noqa: BLE001
+            lines.append(f"{path} could not be read: {type(err).__name__}: {err}")
+    if record is None:
+        # NAMED, NOT EMPTY SHEETS. Returning blank tables here would read as "this pack
+        # contains nothing", which is the one answer this feature must never give by accident.
+        raise HTTPException(
+            404,
+            f"No saved record found for {label}, so there is nothing to extract yet. The BOMs "
+            f"and the routes are produced by a run: press SDI (UK) Intelligence Estimator "
+            f"once for this pack and the extracts are written with it — then this button "
+            f"rebuilds them instantly, as often as you like.")
+    lines.append(f"Read from {found_at}.")
+
+    out_dir = Path(str(req.output_root or config.OUTPUT_ROOT)) / "estimates"
+    try:
+        sys.path.insert(0, str(Path(getattr(config, "ENGINE_ROOT", ".")) / "src"))
+        import bom_and_route_extract as _bre
+        result = _bre.write_both(record, out_dir, job=label, want=kind)
+    except Exception as err:                                             # noqa: BLE001
+        raise HTTPException(500, f"The extract could not be built: "
+                                 f"{type(err).__name__}: {err}")
+
+    # WHAT THE RECORD CAN AND CANNOT SUPPORT, said here rather than left to be inferred from
+    # an empty sheet. A record that never reached the workbook stage has no route rows, and
+    # that is a fact about the record — not about the pack.
+    if kind in ("routes", "both") and not result.get("routes"):
+        lines.append(
+            "This record carries NO route decisions. That is a "
+            "fact about the record, not about the pack"
+            " — a run whose workbook stage did not complete has none. See money_provenance "
+            "on the estimate, which says why.")
+    if kind in ("boms", "both") and not result.get("boms"):
+        lines.append("This record carries NO BOM rows.")
+    lines.append("Prices nothing: no figure in either file is a cost.")
+    return {"ok": True, "kind": kind, "job": label, "record": found_at,
+            "xlsx": result.get("xlsx"), "html": result.get("html"),
+            "boms": result.get("boms"), "routes": result.get("routes"),
+            "lines": lines}

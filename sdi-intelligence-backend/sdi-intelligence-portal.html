@@ -2268,6 +2268,78 @@
       whose extent is the sheet border rather than a part.</p>
       </div>
 
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">The BOMs and Routes extracts — the two questions before a price</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+      <p>The estimate answers <i>what does it cost</i>. Two earlier questions have to be
+      answerable on their own first — <b>what parts are in this pack</b>, and <b>what work did the
+      engine decide each one needs</b> — and they were only reachable by opening a costed
+      workbook. Three buttons on the estimating page produce them: BOMs, Routes, or both. Each
+      writes a spreadsheet and a page to the estimating folder, <b>prices nothing</b>, and needs
+      no Excel and no SOLIDWORKS seat, so it answers in moments rather than queueing behind a
+      costing run.</p>
+      <p>The workbook carries a sheet per subject plus <b>How these were derived</b>: per column,
+      where the value came from and <b>what it does not mean</b>. Three refusals are the point of
+      it — a part number on several sheets is <b>never merged</b> (that is an estimator's call, and
+      summing the quantities would be worse than either answer); a quantity is <b>the row's own</b>
+      and not rolled through the assembly; and an operation is charged <b>only</b> where its status
+      is <code>required</code>, because <code>unverified</code> means the compiler found evidence
+      it could not confirm and is waiting for a person.</p>
+      <p><b>A silent hole this closed.</b> The audit's Operations sheet had been <b>empty on every
+      job</b>: it read the route from <code>canonical_route</code> while every run writes
+      <code>canonical_route_shadow</code>. An empty sheet is the worst way for a route to be
+      missing — indistinguishable from a pack that genuinely states none.</p>
+      </div>
+
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Can this record price? — money provenance</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+      <p>The engine's own line sums and the Estimate sheet's arithmetic are <b>different
+      calculators</b>. The sheet's figures only reach the saved record if the Excel read-back
+      runs, and that needs a licensed seat and a COM session. So every record now declares which
+      of three states it is in, and the declaration is stamped <b>whether or not</b> the workbook
+      stage completed — the case worth stamping being precisely the one where it did not.</p>
+      <table style="min-width:760px">
+        <tr><th>State</th><th>Can it evidence a price?</th><th>What it holds</th></tr>
+        <tr><td><code>excel_calculated</code></td><td><b style="color:var(--ok)">yes</b></td>
+            <td>The workbook's own totals, read back off the calculated sheet.</td></tr>
+        <tr><td><code>accepted_rows_only</code></td><td>no</td>
+            <td>The accepted row grouping, with part numbers and decision ids. Parts and
+            operations attributable; money absent.</td></tr>
+        <tr><td><code>pre_workbook</code></td><td>no</td>
+            <td>What the engine handed <b>to</b> Excel. A legitimate reading of the pack, and not
+            a price.</td></tr>
+      </table>
+      <p style="margin-top:12px">Twenty-three archived records of one job were searched for the run
+      behind an accepted figure. Every one looked like a candidate — right job, right quantity,
+      right part count — and not one could evidence it, because none carried the workbook's
+      totals. Nothing in any of them said so; the absence was discoverable only by running the
+      costing code and noticing the totals came back empty. A partial read-back is also not a
+      price: Excel returns an error cell as <b>null, never zero</b>, and two totals out of three
+      is missing data.</p>
+      <p><b>A pre-workbook record is not a failure.</b> It is counted as an <i>environment</i>
+      finding, not an engine defect — counting the engine's honesty about its own machine as a
+      confession would make the defect count rise every time it told the truth, and push whoever
+      is driving that number toward suppressing the declaration rather than fixing the read-back.
+      And it is never filed against the drawing office: nobody there can install Excel.</p>
+      </div>
+
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Before any of it runs — the dependency preflight</h3>
+      <div class="panel reveal" style="overflow-x:auto">
+      <p>The engine's requirements file had always declared which packages are core-required, and
+      nothing enforced it. A machine that had lost two of them produced a warning about missing
+      prices, a timing table saying the first phase <i>started and never finished</i>, and a
+      traceback from inside page extraction — three symptoms of one fact, after sixteen files had
+      been found and one had started, none of them naming the command that fixes it.</p>
+      <p>The preflight now reads that file and checks it before anything is scanned. It is
+      <b>derived from the requirements file, not a second copy of it</b>, and a required package
+      it cannot import-check is reported as UNCHECKED rather than passing silently. A <b>fatal</b>
+      absence stops the run with the install command; a <b>degrading</b> one lets it continue and
+      is recorded on the estimate, because a run without catalogue prices is still a useful
+      diagnostic and must never be mistaken for one priced from the catalogue. It also prints the
+      interpreter actually running — on the box the packages were installed in a virtual
+      environment and the run was launched with a different Python, and nothing on screen
+      distinguished <i>installed</i> from <i>installed where this run can see them</i>.</p>
+      </div>
+
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">How a datum is decided — the source waterfall</h3>
       <p class="sub" style="margin-bottom:12px">Every source that can say something about a part is read, and none is trusted blindly. Each carries a rank. <b>The rule is absolute, and it is the reason the engine can be audited: a weaker source may FILL a datum, it may never REPLACE a stronger one</b> — and where two disagree, the disagreement is written onto the part and the stronger value kept. Nothing is decided by whichever pass happens to run last.</p>
       <div class="panel reveal" style="overflow-x:auto">

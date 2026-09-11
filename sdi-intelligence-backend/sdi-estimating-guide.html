@@ -289,6 +289,8 @@
     <a href="#regen"><b>Amended sheet</b><span>Re-issuing after your edits</span></a>
     <a href="#parity"><b>Parity report</b><span>Your estimate against the engine's</span></a>
     <a href="#sourcedata"><b>Source drawing data</b><span>Everything the pack gave us</span></a>
+    <a href="#extracts"><b>BOMs &amp; Routes extracts</b><span>Three buttons, no pricing</span></a>
+    <a href="#moneyprov"><b>Can this record price?</b><span>Why a figure is or is not evidence</span></a>
   </div>
 
   <h2 id="start">Start here — the one rule</h2>
@@ -718,6 +720,85 @@
     <p style="margin:0">If the manual estimate was priced at 45 off and the engine ran at 10, the
     comparison still works and normalises to 45 — but the engine's figure carries 10-off setup
     spread across it. The difference you are looking at is then partly quantity, not accuracy.</p>
+  </div>
+
+  <h2 id="extracts">11 · BOMs and Routes — the two questions that come before a price</h2>
+  <div class="panel">
+    <p>The estimate answers <i>what does it cost</i>. Before anybody can trust that, two earlier
+      questions have to be answerable on their own: <b>what parts did you find</b>, and <b>what
+      work did you decide each one needs</b>. Those were only reachable by opening a costed
+      workbook, which is the wrong artefact for the question.</p>
+    <p>Three buttons sit below the <b>Drawings</b> panel on the estimating page. They read the
+      same pack, write to the same output folder, and <b>price nothing</b>:</p>
+    <ul>
+      <li><b>SDI Estimating Intel BOMs Extract</b> — every parts-list row, with the page it was
+        read from and which reader read it.</li>
+      <li><b>SDI Estimating Intel Routes Extract</b> — every route decision, what it covers, and
+        whether it is charged.</li>
+      <li><b>SDI Intel BOMs and Routes</b> — both, in one workbook.</li>
+    </ul>
+    <p>Each writes a spreadsheet and a page. The workbook carries one sheet per subject plus
+      <b>How these were derived</b>: column by column, where the value came from and — the column
+      that earns its place — <b>what it does not mean</b>. Every figure on a sheet like this gets
+      quoted eventually, and the quickest way to be misquoted is to publish a number with no
+      statement of its limits.</p>
+    <p>They are also written automatically by every run, beside the estimate, so a job you have
+      already estimated has them on the share without pressing anything.</p>
+
+    <h3>Three things the sheets refuse to do</h3>
+    <table>
+      <thead><tr><th>What you might expect</th><th>What it does instead, and why</th></tr></thead>
+      <tbody>
+      <tr><td>Merge a part number that appears on several sheets</td>
+          <td><b>Nothing is merged.</b> Most SDI parts are drawn on several sheets of one pack.
+            The rows stay, flagged with how many there are, because deciding whether that is one
+            part or three is an estimator's call — and adding the quantities up would be worse
+            than either answer.</td></tr>
+      <tr><td>Roll the quantity through the assembly</td>
+          <td>The quantity is <b>the row's own</b>. A sub-assembly's 2-off inside a 6-off stand is
+            twelve parts, and that multiplication belongs to the route compiler, not to a
+            parts-list row.</td></tr>
+      <tr><td>Treat every listed operation as charged</td>
+          <td>Only <code>required</code> is charged. <code>unverified</code> means the compiler
+            found evidence it could not confirm: it is <b>neither charged nor ruled out</b>, and
+            it is waiting for a person.</td></tr>
+      </tbody>
+    </table>
+    <p class="panel" style="margin-top:14px"><b>A defect this closed.</b> The Operations sheet of
+      the source-drawing-data workbook was <b>empty on every job</b> — it read the route from one
+      field name while every run writes another. An empty sheet is the worst way for a route to be
+      missing: it is indistinguishable from a pack that genuinely states no operations. Both names
+      are now read.</p>
+  </div>
+
+  <h2 id="moneyprov">12 · Can this record price? — why a figure is or is not evidence</h2>
+  <div class="panel">
+    <p>A saved record now says, on its own face, whether it can evidence the price it reports.
+      Three states:</p>
+    <table>
+      <thead><tr><th>State</th><th>What it means for you</th></tr></thead>
+      <tbody>
+      <tr><td><code>excel_calculated</code></td>
+          <td>The workbook's own totals were read back into the record. This record
+            <b>evidences what the job was priced at</b>.</td></tr>
+      <tr><td><code>accepted_rows_only</code></td>
+          <td>The accepted row grouping arrived; the calculated totals did not. Parts and
+            operations are attributable; <b>money is not</b>.</td></tr>
+      <tr><td><code>pre_workbook</code></td>
+          <td>The record holds what the engine handed <b>to</b> Excel, not what Excel produced.
+            Its own line sums are a <b>different calculator</b> from the sheet's, so a difference
+            between them is not a defect in either figure — and the accepted price is simply not
+            in there.</td></tr>
+      </tbody>
+    </table>
+    <p>Why it matters: twenty-three archived records of one job were searched for the run behind
+      an accepted price. Every one looked like a candidate — right job, right quantity, right part
+      count — and <b>not one could evidence it</b>, because none carried the workbook's totals.
+      Nothing in any of them said so. A record that cannot evidence a price now says it cannot,
+      and says why.</p>
+    <p>A <code>pre_workbook</code> record is <b>not a failure</b>. On a machine without Excel it is
+      the only kind there is, and it is still a useful reading of the pack. What it must never be
+      is mistaken for a priced one.</p>
   </div>
 
   <div class="foot">
