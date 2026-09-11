@@ -362,11 +362,25 @@ _ESTIMATOR = Path(__file__).with_name("sdi-estimating-intelligence.html")
 _GUIDE = Path(__file__).with_name("sdi-estimating-guide.html")
 
 
+# NEVER CACHED, AND THIS COST A SESSION. These two documents are the user interface of a system
+# that changes several times a day. FileResponse re-reads the file from disk on every request, so
+# a deploy reaches the service the moment the pull lands and no restart is needed — but neither
+# route set any cache header, so a browser applied its own heuristic and kept serving the copy it
+# already had. Three new buttons were pulled, present in the file the service was reading, and
+# invisible on the page in front of the person who had just deployed them. "It is not deployed"
+# and "your browser is showing you yesterday" are indistinguishable from the page, and the second
+# one wastes the time of everybody who has the page open rather than just the deployer.
+#
+# no-store rather than a short max-age, because there is no version in these URLs to bust and the
+# documents are small. The logo beside them keeps its max-age: that genuinely does not change.
+_PAGE_HEADERS = {"Cache-Control": "no-store, must-revalidate"}
+
+
 @app.get("/estimating")
 def estimating_page():
     """The estimator's page, same-origin with the API it calls."""
     if _ESTIMATOR.exists():
-        return FileResponse(str(_ESTIMATOR))
+        return FileResponse(str(_ESTIMATOR), headers=_PAGE_HEADERS)
     return JSONResponse(status_code=404,
                         content={"detail": "sdi-estimating-intelligence.html "
                                            "is not next to app.py"})
@@ -379,7 +393,7 @@ def estimating_guide():
     Served from the same origin as the page it explains, so it is one click from the run
     button rather than a document somebody has to be sent and then find again."""
     if _GUIDE.exists():
-        return FileResponse(str(_GUIDE))
+        return FileResponse(str(_GUIDE), headers=_PAGE_HEADERS)
     return JSONResponse(status_code=404,
                         content={"detail": "sdi-estimating-guide.html is not next to app.py"})
 
@@ -428,7 +442,9 @@ def brand_logo():
 @app.get("/")
 def home():
     if _PORTAL.exists():
-        return FileResponse(str(_PORTAL))
+        # Same as /estimating and /guide: the portal is a document that changes with every
+        # deploy, and a browser left to its own heuristic will serve the one it already has.
+        return FileResponse(str(_PORTAL), headers=_PAGE_HEADERS)
     return JSONResponse({"status": "backend up",
                          "note": "place sdi-intelligence-portal.html next to app.py to serve it here"})
 
