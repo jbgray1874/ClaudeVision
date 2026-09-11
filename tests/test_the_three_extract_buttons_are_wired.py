@@ -157,3 +157,39 @@ def test_the_run_writes_the_extracts_beside_the_audit():
     source = (ROOT / "src" / "main.py").read_text(encoding="utf-8", errors="ignore")
     assert "from bom_and_route_extract import write_both as _write_extracts" in source
     assert "boms_and_routes_" in source, "and the paths are recorded on the record"
+
+
+# ── the record it reads is the job's, never a test fixture ────────────────────────────
+
+
+def test_the_endpoint_cannot_reach_a_replay_fixture():
+    """A REVIEW CONDITION, PINNED. The extract must be taken from the job's own saved record
+    under the output share — never from tests/replay, whose fixtures are deliberately older,
+    reduced, and in at least one case pre-workbook. A button that silently answered from a
+    frozen fixture would show an estimator last week's BOM and look entirely healthy doing it.
+
+    Proven by reading the search roots rather than by running it, because the failure would be a
+    path this code never builds: the roots are the output share and the engine root, and a
+    relative path list that contains no test directory.
+    """
+    routes = _routes()
+    block = routes[routes.index("@router.post(\"/extract\")"):]
+    block = block[:block.index("return {\"ok\": True")]
+    assert "for root in (config.OUTPUT_ROOT, getattr(config, \"ENGINE_ROOT\", None)):" in block, \
+        "the search roots are the output share and the engine root, and nothing else"
+    for never in ("tests", "replay", "fixture"):
+        assert never not in block, (
+            f"the extract endpoint mentions {never!r} — the record it reads must be the job's "
+            f"own, produced by a run on this box")
+    # and the relative paths under those roots are the three the engine actually writes
+    for rel in ("Path(\"json\")", "Path(\"output\") / \"json\"", "Path(f\"{label}.json\")"):
+        assert rel in block
+
+
+def test_a_record_found_is_named_in_the_answer():
+    """So "which record did this come from" never needs asking. The reviewer's own correction
+    turned on exactly this: a probe was run against tests/replay/7332-01 and read as a failed
+    freeze of the live job, because nothing on the output said which file had been opened."""
+    routes = _routes()
+    assert 'lines.append(f"Read from {found_at}.")' in routes
+    assert '"record": found_at' in routes, "and it is in the payload, not only the console"

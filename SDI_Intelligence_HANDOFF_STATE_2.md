@@ -12,6 +12,91 @@ bought-in recogniser and the cross-layer reconciliation pass.
 
 ---
 
+## 0. WHAT HAS CHANGED SINCE §1–§12 WERE WRITTEN (2026-09-11)
+
+Everything below §0 was written on 2026-06-30 and has not been revised since. Parts of it are now
+WRONG rather than merely old, which is worse — a stale instruction reads exactly like a current
+one. This section is the correction. Read it before §2, and treat it as superseding §2 wherever
+the two disagree.
+
+**Where the live specification actually lives.** Not in this file. The two pages under
+`sdi-intelligence-backend/` are maintained against the working build and are the documents to
+trust:
+
+  * `sdi-estimating-guide.html` — the estimating user guide. Carries the money-provenance states,
+    the three extract buttons, and what a degraded run means.
+  * `sdi-intelligence-portal.html` — the architecture / delivery page, including the dependency
+    preflight and the provenance table.
+
+Both are current as of the commit that last touched them; `git log -1 -- <that file>` is the only
+honest answer to "is the guide up to date". **They are only live for a reader once they are
+deployed** — a pull that has not happened leaves the served copy behind the repo, and "the guide
+is updated" and "the guide the estimators can see is updated" are different claims.
+
+**§2 is out of date on the working method.** "Claude CANNOT edit JG's machine" and "the
+`/mnt/project/` snapshot is STALE" describe a superseded arrangement in which complete files were
+staged for manual deployment. Work now lands as commits on a branch (`main-2026`) which JG pulls.
+The consequence worth keeping is unchanged and still bites: **what is deployed on
+`C:\ClaudeVision` is whatever was last pulled, not what is on the branch.** Verify against run
+output before reasoning about behaviour.
+
+**§2 is still right that the venv is the only interpreter** — and this is now enforced rather than
+remembered. `src/dependency_preflight.py` parses the "Core pipeline (required)" block of
+`requirements.txt`, imports each module, and refuses to start the scan when a fatal package is
+absent. It prints `sys.executable`, because the failure that prompted it was a box where
+`.venv\Scripts\python.exe -c "import pdfplumber, pyodbc"` printed ok while `python src\main.py`
+raised "pdfplumber is not installed". Two Pythons, and nothing on screen said which one was
+running.
+
+**Every saved record now declares whether it carries money.** `src/money_provenance.py` stamps one
+of three states onto the record, unconditionally:
+
+  * `excel_calculated` — Excel ran, the workbook was read back, the totals are the workbook's own.
+  * `accepted_rows_only` — the accepted labour rows reached the JSON but no calculated totals did.
+  * `pre_workbook` — the record predates the workbook stage. **Not a failure**, and not a price.
+
+Plus `can_evidence_a_price`, one boolean for every consumer to read instead of inferring. This
+exists because twenty-three archived 7332-01 records were searched for the one that could evidence
+an accepted £80.09 and none could: they were all pre-workbook artefacts, with no
+`final_estimate.totals` and no `workbook_labour.rows`. One cause, three symptoms — nothing to
+check the figures against, an empty `operations` list on every part, and no link between the JSON
+and the workbook. The read-back now writes both structures, which is the prerequisite for any
+money-bearing baseline on any job.
+
+**BOMs and routes are extractable without a costed run.** `src/bom_and_route_extract.py` builds
+the BOM table, the route table and a derivation table (source file, page, reader, rank,
+charged/ruled-out) from a saved record. It feeds an HTML file, a workbook tab named
+`BOMs & Routes`, and `POST /api/estimate/extract` behind the three page buttons. Three refusals
+are its substance: nothing is merged, a quantity is the row's own, and only a `required` operation
+is charged.
+
+Two bugs found building it, both worth remembering:
+
+  * `source_drawing_data.operation_rows` read only `canonical_route`, while every real run writes
+    `canonical_route_shadow`. The Operations sheet was therefore **empty on every job**, and an
+    empty sheet read as "this pack states no operations". Both spellings and both nestings are now
+    read.
+  * A sheet row is a tooling **SETUP**, not a part. Thirteen route decisions legitimately reach
+    twelve sheet rows when two parts share one nest. Nothing said so; the Routes block now carries
+    a "shares that row with" column and says why the counts differ.
+
+**The replay gate had never run.** All four replay tests were skipping silently for want of a
+frozen `summary.json`. A missing fixture now FAILS (`SDI_REPLAY_ALLOW_MISSING=1` for local work),
+provenance is required, and the reviewed 7332 expectations are pinned. `tools/freeze_replay_fixture.py`
+freezes a baseline and refuses to in four specific ways: exit 3 when the record's own `processed_at`
+contradicts the asserted date, 4 when a baseline is replaced without a stated review, 5 when the
+record's numbers contradict the asserted ones, and 6 when they cannot be checked at all and no
+companion artefact was hashed as evidence.
+
+**The 7332-01 baseline to freeze** is the 2026-09-11 10:28 record at
+`output\json\7332-01.json`: `money_provenance` is `excel_calculated`, unit £80.34, and the tube
+bend appears on a priced row. Note that the record path is canonical per job and rewritten in
+place, so **re-running 7332 overwrites it** — copy or freeze it before any re-run. The derived
+fixture under `tests\replay\7332-01\` is a different, earlier, pre-workbook record and must not be
+mistaken for it.
+
+---
+
 ## 1. WHAT THE PROJECT IS
 
 SDI Intelligence is a Python engine at `C:\ClaudeVision\src\` that reads PDF + DXF engineering
