@@ -152,6 +152,41 @@ def unit_assembly_from_the_tree(bom_rows: List[Dict[str, Any]],
     it was. Bought-in rows are ignored — a GA carrying one assembly and a bag of screws is
     still a GA carrying one assembly.
     """
+    found = install_context_codes(bom_rows, main_ga)
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def install_context_codes(bom_rows: List[Dict[str, Any]],
+                          main_ga: str) -> "set":
+    """Every code on the main GA whose quantity is WHERE THEY GO rather than what is made.
+
+    "exactly one structural code" was too narrow, and 12349-02 is the proof. Its GA lists
+    12349-02-69-100, -101 and -08J, ALL AT THREE. Three codes, so the old guard returned
+    nothing, no unit assembly was found, and every part on the job came out at three times its
+    quantity — the Lid at 3, the Front Cover at 3 where the estimator has 1, powder coating
+    booked six times for two parts. The comment above resolve_effective_quantities predicted the
+    numbers exactly: "the screws at 12 where Tim has 4, the bumpons at 18 where Tim has 6".
+
+    THE DISCRIMINATOR IS ALREADY IN THIS FILE, and it is the family:
+
+      A BAY is MULTI-FAMILY by construction — 2 x 1448-GA, 2 x 3886-GA, 1 x 1455-GA. Those are
+      different articles bolted into one composite thing, and multiplying is exactly right.
+
+      AN INSTALL ARRANGEMENT is ONE family shown several times — 3 x 12349-02-69-100 and
+      3 x -101 are two variants of one module, three of each on a wall. The drawing is a picture
+      of where the articles go; the article is the unit.
+
+    So: one family, every structural code on it showing the SAME quantity, and that quantity
+    greater than one. All three conditions, because each one rules out a real case that must not
+    be touched —
+
+      more than one family  a genuine bay, left exactly as it was
+      mixed quantities      2 x A and 1 x B is a bill for a composite, not an arrangement
+      quantity of one       nothing to reinterpret
+
+    Deliberately conservative: where this says nothing the old behaviour stands, and the
+    ambiguity is reported rather than guessed at.
+    """
     codes: Dict[str, int] = {}
     for r in bom_rows:
         if str(r.get("source_pdf") or "") != main_ga:
@@ -159,10 +194,16 @@ def unit_assembly_from_the_tree(bom_rows: List[Dict[str, Any]],
         code = _norm(r.get("part_number"))
         if code and _family(code):          # structural rows only; a fixing is not an assembly
             codes[code] = max(codes.get(code, 0), _qty(r))
-    if len(codes) != 1:
-        return None
-    only, qty = next(iter(codes.items()))
-    return only if qty > 1 else None
+    if not codes:
+        return set()
+    if len({_family(c) for c in codes}) != 1:
+        return set()                        # a bay: several articles, and the unit is all of them
+    quantities = set(codes.values())
+    if len(quantities) != 1:
+        return set()                        # a bill for a composite, not an arrangement
+    if next(iter(quantities)) <= 1:
+        return set()
+    return set(codes)
 
 
 def resolve_effective_quantities(
@@ -217,18 +258,24 @@ def resolve_effective_quantities(
     # The folder name if it gave one, otherwise the GA's own shape. Named first because a
     # folder that spells the assembly out is a person saying which article this is, and that
     # beats reading it off a drawing.
-    _unit = _norm(unit_assembly) or _norm(unit_assembly_from_the_tree(bom_rows, main_ga))
+    # A NAMED ASSEMBLY IS ONE CODE; A READ ARRANGEMENT CAN BE SEVERAL. When somebody says which
+    # article this estimate is for, that is the one. When it is read off the GA's shape, an
+    # install arrangement may show several variants of one module — 12349-02-69-100 AND -101,
+    # three of each — and all of them are install context, not a bill.
+    _named = _norm(unit_assembly)
+    _units = {_named} if _named else install_context_codes(bom_rows, main_ga)
     multipliers: Dict[str, int] = {}
     install_context: Dict[str, int] = {}
     for r in groups.get(main_ga, []):
         fam = _family(r.get("part_number"))
         if not fam:
             continue
-        if _unit and _norm(r.get("part_number")) == _unit and _qty(r) != 1:
-            install_context[_unit] = _qty(r)
+        _code = _norm(r.get("part_number"))
+        if _code in _units and _qty(r) != 1:
+            install_context[_code] = _qty(r)
             multipliers[fam] = 1
             continue
-        multipliers[fam] = _qty(r)
+        multipliers.setdefault(fam, _qty(r))
 
     # per-source-drawing multiplier that bought-in (non-numeric) rows inherit
     boughtin_inherit = _dominant_family_multiplier_by_source(groups, multipliers, main_ga)

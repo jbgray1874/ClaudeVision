@@ -217,7 +217,101 @@ def test_a_bag_of_screws_does_not_make_a_ga_composite():
 
 def test_the_folder_wins_when_it_has_something_to_say():
     """A folder that spells the assembly out is a person saying which article this is, and
-    that beats reading it off a drawing."""
-    src = (ROOT / "src" / "bom_tree.py").read_text(encoding="utf-8")
-    i = src.index("_unit = _norm(unit_assembly)")
-    assert "or _norm(unit_assembly_from_the_tree(" in src[i:i + 200]
+    that beats reading it off a drawing.
+
+    ASSERTED ON BEHAVIOUR, not on the spelling of one line. This used to search bom_tree.py for
+    the literal "_unit = _norm(unit_assembly)" and broke the moment that line was renamed — while
+    the rule it cares about was intact. A test that fails on a rename and passes on a behaviour
+    change is pointed the wrong way round.
+    """
+    GA = "GA.pdf"
+    rows = [
+        # the GA's own shape would say -100 and -101 are both install context
+        {"part_number": "12349-02-69-100", "quantity": 3, "source_pdf": GA},
+        {"part_number": "12349-02-69-101", "quantity": 3, "source_pdf": GA},
+        {"part_number": "12349-02-69-04M", "quantity": 1, "source_pdf": "sub.pdf"},
+    ]
+    # a person naming -101 must override that, and ONLY -101 becomes the unit
+    out = resolve(rows, main_ga=GA, unit_assembly="12349-02-69-101")
+    assert set(out.get("install_context") or {}) == {"12349-02-69-101"}, \
+        "the named assembly wins; the tree's own reading does not get a say as well"
+
+
+# ── several variants of one module, all at the same quantity ──────────────────────────
+
+
+def test_an_install_arrangement_of_several_variants_is_still_an_arrangement():
+    """TIM WILKES ON 12349-02, 4 SEPTEMBER: "Why is it picking up x 3 of part 12349-02-69-04M",
+    "12349-02-69-06A Front Cover - Only 1 per unit (AI picking up 3)", "Why is it showing 6 x
+    powder coat operation when only 2 x parts to powder coat", "Where did 3 per unit come from
+    for 6mm MDF(Packer)". Four complaints, one cause.
+
+    That pack's GA lists 12349-02-69-100, -101 AND -08J, all at three. "Exactly one structural
+    code" returned nothing, no unit assembly was found, and every part came out at three times
+    its quantity. The comment above resolve_effective_quantities had already predicted the
+    numbers: "the screws at 12 where Tim has 4, the bumpons at 18 where Tim has 6".
+    """
+    GA = "12349-02-69-GA_Gravity Feeders_RevA.PDF"
+    rows = [
+        {"part_number": "12349-02-69-100", "quantity": 3, "source_pdf": GA},
+        {"part_number": "12349-02-69-101", "quantity": 3, "source_pdf": GA},
+        {"part_number": "12349-02-69-08J", "quantity": 3, "source_pdf": GA},
+        {"part_number": "12349-02-69-04M", "quantity": 1, "source_pdf": "sub100.PDF"},
+        {"part_number": "12349-02-69-06A", "quantity": 1, "source_pdf": "sub100.PDF"},
+        {"part_number": "12349-02-69-08J", "quantity": 1, "source_pdf": "sub08J.PDF"},
+        {"part_number": "P/P", "description": "BUMPON", "quantity": 6,
+         "source_pdf": "sub100.PDF"},
+    ]
+    out = resolve(rows, main_ga=GA)
+    effective = out["effective"]
+    assert effective["12349-02-69-04M"] == 1, "the Lid"
+    assert effective["12349-02-69-06A"] == 1, "Tim: only 1 per unit"
+    assert effective["12349-02-69-08J"] == 1, "the MDF packer"
+    assert effective["P/P"] == 6, "Tim has 6 bumpons, not 18"
+    assert set(out["install_context"]) == {"12349-02-69-100", "12349-02-69-101",
+                                           "12349-02-69-08J"}
+
+
+def test_a_bay_of_different_articles_still_multiplies():
+    """THE CASE THIS MUST NOT TOUCH, and the discriminator is the family. A bay is several
+    DIFFERENT articles bolted into one composite thing — 2 x 1448-GA, 2 x 3886-GA, 1 x 1455-GA —
+    and the unit is all of them together. Dividing that by two would understate a real job."""
+    BAY = "bay.PDF"
+    rows = [
+        {"part_number": "1448-GA", "quantity": 2, "source_pdf": BAY},
+        {"part_number": "3886-GA", "quantity": 2, "source_pdf": BAY},
+        {"part_number": "1455-GA", "quantity": 1, "source_pdf": BAY},
+        {"part_number": "1448-01", "quantity": 1, "source_pdf": "s1.PDF"},
+    ]
+    out = resolve(rows, main_ga=BAY)
+    assert out["effective"]["1448-01"] == 2, "still multiplied by its parent"
+    assert not out.get("install_context"), "nothing here is install context"
+
+
+def test_mixed_quantities_on_one_family_are_a_bill_not_an_arrangement():
+    """All three conditions are required. 2 x A and 1 x B of the same family is a bill for a
+    composite article, not a picture of where one article goes."""
+    from bom_tree import install_context_codes
+    GA = "ga.PDF"
+    rows = [{"part_number": "1234-01-100", "quantity": 2, "source_pdf": GA},
+            {"part_number": "1234-01-101", "quantity": 1, "source_pdf": GA}]
+    assert install_context_codes(rows, GA) == set()
+
+
+def test_a_single_article_shown_once_is_not_reinterpreted():
+    from bom_tree import install_context_codes
+    GA = "ga.PDF"
+    rows = [{"part_number": "1234-01-100", "quantity": 1, "source_pdf": GA}]
+    assert install_context_codes(rows, GA) == set()
+
+
+def test_the_reinterpretation_is_flagged_rather_than_silent():
+    """"a quantity that silently became a third of what it was is exactly as hard to trust as
+    one that silently tripled" — this file's own words."""
+    GA = "ga.PDF"
+    rows = [{"part_number": "1234-01-100", "quantity": 3, "source_pdf": GA},
+            {"part_number": "1234-01-101", "quantity": 3, "source_pdf": GA},
+            {"part_number": "1234-01-04M", "quantity": 1, "source_pdf": "sub.PDF"}]
+    flags = resolve(rows, main_ga=GA).get("flags") or []
+    said = " ".join(str(f.get("detail") or "") for f in flags)
+    assert "where they go, not what is being made" in said
