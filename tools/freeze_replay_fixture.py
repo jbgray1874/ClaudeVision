@@ -103,6 +103,17 @@ REPLAY = ROOT / "tests" / "replay"
 MIN_CANDIDATE_BYTES = 50_000      # below this a path is not worth a fingerprint run
 MAX_CANDIDATES = 20               # bounded: each candidate costs one full re-fingerprint
 
+# Stage artefacts that carry the job number but are not a saved RUN. 7332-01_llm_extract.json
+# was appearing as a candidate with no timestamp and no parts: a file nobody could freeze,
+# offered as though somebody might.
+import re as _re
+_NOT_A_RECORD = _re.compile(
+    r"_(llm_extract|llm_full_extract|variance|provenance|fingerprint|source_drawing_data"
+    r"|estimator_dimensions|confirmed)\b", _re.I)
+
+# Where a version like v0013 lives: in the archive FILENAME, not in the record.
+_VERSION_IN_NAME = _re.compile(r"_(v\d{3,5})_", _re.I)
+
 
 def _encode(obj: Any) -> bytes:
     """Compact and key-sorted. Compact because the FIXTURE IS THE POINT: the first version
@@ -198,6 +209,33 @@ def _record_totals(record: Dict[str, Any]) -> Dict[str, Any]:
              "code_version") if run.get(k) is not None}
 
 
+_ID_KEY_HINTS = ("run_uuid", "runuuid", "run_id", "scan_id", "job_uuid", "uuid", "commit",
+                 "engine_build", "engine_version", "build")
+
+
+def _run_identifiers(record: Any, depth: int = 0, path: str = "") -> Dict[str, Any]:
+    """Any key anywhere in the record that identifies the RUN, found by searching rather than
+    by knowing where it lives.
+
+    The run UUID was not appearing in --find because the first version looked only at the top
+    level and under run/meta/metadata. Guessing a field's location is how the reduction pass
+    came to attempt nothing at all; a bounded search finds it wherever this pipeline keeps it.
+    """
+    out: Dict[str, Any] = {}
+    if depth > 3 or not isinstance(record, dict):
+        return out
+    for key, value in record.items():
+        here = f"{path}.{key}" if path else str(key)
+        low = str(key).lower()
+        if isinstance(value, (str, int, float)) and any(h in low for h in _ID_KEY_HINTS):
+            text = str(value).strip()
+            if text and len(text) <= 120:
+                out[here] = value
+        elif isinstance(value, dict):
+            out.update(_run_identifiers(value, depth + 1, here))
+    return out
+
+
 def _record_identity(record: Dict[str, Any]) -> Dict[str, Any]:
     """What the RECORD says about itself: when it ran, what version, and what it costs.
 
@@ -221,6 +259,7 @@ def _record_identity(record: Dict[str, Any]) -> Dict[str, Any]:
                         or str(key).lower() in ("run_id", "run_uuid", "uuid", "commit",
                                                 "started_at", "finished_at")):
                     out[f"{holder}.{key}"] = value
+    out.update(_run_identifiers(record))
     for key, value in _record_totals(record).items():
         out[f"computed.{key}"] = value
     return out
@@ -697,6 +736,8 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
                     in_job_dir and path.name in ("summary.json", "accepted_facts.json")):
                 if path.name == "accepted_facts.json":
                     continue                       # the reviewed structure, not a record
+                if _NOT_A_RECORD.search(path.name):
+                    continue                       # a stage artefact, not a saved run
                 found.setdefault(path.resolve(), None)
 
     if not found:
@@ -740,8 +781,10 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
             derived = REPLAY in path.parents
         except Exception:                                                # noqa: BLE001
             derived = False
+        version = _VERSION_IN_NAME.search(path.name)
         rows.append({
             "stamp": str(record.get("processed_at") or "NO processed_at"),
+            "version": version.group(1) if version else "",
             "path": path, "bytes": len(raw), "sha": sha, "derived": derived,
             "parts": len(parts) if isinstance(parts, list) else 0,
             "totals": _record_totals(record),
@@ -753,9 +796,23 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
     rows.sort(key=lambda r: (r.get("derived", False), r["stamp"]), reverse=True)
     print(f"   saved records for {job} — newest first by what each one says about itself")
     print()
+    # SAME RUN, DIFFERENT BYTES. output/json/<job>.json and its archive copy carry the same
+    # processed_at but differ by a byte or two of serialisation, so a content hash cannot tell
+    # they are one run. Grouping by the stamp does, and saying so stops twenty-three listings
+    # reading as twenty-three independent runs.
+    same_stamp: Dict[str, int] = {}
+    for row in rows:
+        if row["stamp"] not in ("NO processed_at",) and not str(row["stamp"]).startswith(
+                ("unreadable", "not a record")):
+            same_stamp[row["stamp"]] = same_stamp.get(row["stamp"], 0) + 1
+
+    no_workbook_totals = []
     for row in rows:
         tag = "  [DERIVED FIXTURE, not independent evidence]" if row.get("derived") else ""
-        print(f"   {row['stamp']}{tag}")
+        if same_stamp.get(row["stamp"], 0) > 1:
+            tag += "  [same processed_at as another file below — one run, not two]"
+        version = f"  {row['version']}" if row.get("version") else ""
+        print(f"   {row['stamp']}{version}{tag}")
         print(f"       path     {row['path']}")
         print(f"       sha256   {row['sha'] or '(unreadable)'}")
         print(f"       size     {row['bytes'] / 1_048_576:.2f} MB, {row['parts']} parts")
@@ -771,7 +828,17 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
             if totals.get("totals_source"):
                 print(f"       source   {totals['totals_source']}")
             if totals.get("code_version"):
-                print(f"       version  {totals['code_version']}")
+                print(f"       build    {totals['code_version']}")
+            # THE THING WORTH SAYING OUT LOUD. No unit/material/labour means the record has no
+            # final_estimate.totals: the Excel read-back never wrote the workbook figures into
+            # it. Such a record cannot evidence an accepted price at all, and showing a bare
+            # "qty=6" invites reading its absence as agreement.
+            if totals.get("unit_gbp") is None:
+                no_workbook_totals.append(path)
+                print(f"       !! no unit/material/labour — this record carries no "
+                      f"final_estimate.totals,")
+                print(f"          so the accepted workbook figures are NOT in it and it cannot "
+                      f"evidence them")
         else:
             print(f"       totals   none computed")
         for key, value in sorted((row.get("identity") or {}).items()):
@@ -780,6 +847,13 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
             print(f"       ALSO AT  {other}   (identical bytes — the same run, not another)")
         print()
 
+    if no_workbook_totals and len(no_workbook_totals) == len([r for r in rows if r.get("sha")]):
+        print("   NONE of these records carries final_estimate.totals. The Excel read-back never")
+        print("   wrote the workbook figures into any of them, so no saved record here can")
+        print("   evidence the accepted unit/material/labour — whichever one you pick. That is a")
+        print("   pipeline gap to close before this job has a trustworthy baseline, not")
+        print("   something to work around by asserting the figures anyway.")
+        print()
     print("   Pick the one that was ACCEPTED and pass it with --source. The freeze checks the")
     print("   record's own date AND its own totals against what you assert, so a record that is")
     print("   not that run will be refused rather than relabelled.")

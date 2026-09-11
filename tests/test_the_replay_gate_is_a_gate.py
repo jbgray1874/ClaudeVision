@@ -127,7 +127,7 @@ def test_the_parent_itself_is_not_mistaken_for_its_own_minted_child():
 def test_a_required_operation_that_disappeared_fails():
     facts = {"required_operations": {"X-002": ["tubebend"]}}
     assert_accepted_structure("synthetic", facts, [_line("X-002", operations=["tubebend"])])
-    with pytest.raises(AssertionError, match="required op 'tubebend' absent"):
+    with pytest.raises(AssertionError, match="neither routed nor charged"):
         assert_accepted_structure("synthetic", facts, [_line("X-002", operations=["folding"])])
 
 
@@ -224,3 +224,100 @@ def test_money_is_still_not_pinned_in_the_fast_layer():
                 continue                      # commentary may quote the accepted numbers
             assert "gbp" not in key.lower() and "price" not in key.lower(), \
                 f"{job}: '{key}' looks like a money pin in the structure layer"
+
+
+# ── a required operation is asserted against the ROUTE, not a derived line list ────────
+
+from test_frozen_replays import (                                        # noqa: E402
+    canonical_decisions,
+    required_ops_for,
+)
+
+
+def _routed(part: str, operation: str, status: str = "required", key: str = "canonical_route",
+            nested: bool = False) -> dict:
+    decision = {"part_number": part, "operation": operation, "status": status}
+    payload = {"decisions": [decision]}
+    return {"estimate_summary": {key: payload}} if nested else {key: payload}
+
+
+def test_a_required_op_the_route_records_satisfies_the_pin_even_with_an_empty_line():
+    """THE DEFECT THE REVIEWER FOUND ON THE REAL RECORD. costed_job() derives a line's
+    operations from the workbook rows that carry decision ids, so on a record whose rows carry
+    none the list comes back EMPTY — even though the canonical route records tubebend on
+    7332-01-002. The gate would reject a structurally correct record, because the pin was
+    testing whether decision ids reached the sheet rather than whether the route was compiled."""
+    facts = {"required_operations": {"7332-01-002": ["tubebend"]}}
+    lines = [_line("7332-01-002", operations=[])]          # exactly what the real record gives
+    with pytest.raises(AssertionError):
+        assert_accepted_structure("7332-01", facts, lines)            # no summary: still fails
+    summary = _routed("7332-01-002", "tubebend")
+    assert_accepted_structure("7332-01", facts, lines, summary=summary)
+
+
+@pytest.mark.parametrize("key,nested", [
+    ("canonical_route", False), ("canonical_route_shadow", False),
+    ("canonical_route", True), ("canonical_route_shadow", True)])
+def test_both_spellings_and_both_nestings_are_read(key, nested):
+    """costed_facts reads canonical_route_shadow, the compiler writes it into estimate_summary,
+    and a record may carry canonical_route. Picking one and missing the other is how a route
+    that IS recorded reads as absent."""
+    summary = _routed("X-002", "tubebend", key=key, nested=nested)
+    assert required_ops_for(summary, "X-002") == {"tubebend"}
+
+
+@pytest.mark.parametrize("status", ["unverified", "not_applicable", "refused", "excluded", ""])
+def test_only_a_required_decision_satisfies_a_required_pin(status):
+    """"The compiler considered tubebend" is not "the route bends the tube". A decision with no
+    status at all does not qualify either: absence is not a claim."""
+    summary = _routed("X-002", "tubebend", status=status)
+    assert required_ops_for(summary, "X-002") == set()
+    with pytest.raises(AssertionError, match="neither routed nor charged"):
+        assert_accepted_structure("syn", {"required_operations": {"X-002": ["tubebend"]}},
+                                  [_line("X-002", operations=[])], summary=summary)
+
+
+def test_a_decision_naming_the_part_as_a_participant_counts():
+    """An assembly-scoped weld event is one event across three parts, and legitimately belongs
+    to each participant."""
+    summary = {"canonical_route": {"decisions": [
+        {"target_id": "ASSY-1", "operation": "welding", "status": "required",
+         "participants": ["X-002", "X-003"]}]}}
+    assert required_ops_for(summary, "X-002") == {"welding"}
+    assert required_ops_for(summary, "X-009") == set()
+
+
+def test_the_failure_message_says_which_source_was_empty():
+    """So the next person can tell "the route never required it" from "it never reached the
+    sheet" — two different repairs."""
+    summary = _routed("X-002", "laser_cutting")
+    with pytest.raises(AssertionError) as err:
+        assert_accepted_structure("syn", {"required_operations": {"X-002": ["tubebend"]}},
+                                  [_line("X-002", operations=["folding"])], summary=summary)
+    text = str(err.value)
+    assert "route requires ['laser_cutting']" in text
+    assert "line carries ['folding']" in text
+
+
+def test_a_forbidden_op_is_still_judged_on_what_is_CHARGED():
+    """The two pins assert different things against different authorities: required against the
+    route, forbidden against the money. A route that merely CONSIDERED folding has not charged
+    for it, and the forbidden pin must not fire on consideration alone."""
+    summary = _routed("X-002", "folding", status="not_applicable")
+    assert_accepted_structure("syn", {"forbidden_operations": {"X-002": ["folding"]}},
+                              [_line("X-002", operations=["tubebend"])], summary=summary)
+    with pytest.raises(AssertionError, match="ruled-out op 'folding' is charged"):
+        assert_accepted_structure("syn", {"forbidden_operations": {"X-002": ["folding"]}},
+                                  [_line("X-002", operations=["folding"])], summary=summary)
+
+
+def test_canonical_decisions_does_not_duplicate_one_decision_found_twice():
+    decision = {"part_number": "X-002", "operation": "tubebend", "status": "required"}
+    summary = {"canonical_route": {"decisions": [decision]},
+               "estimate_summary": {"canonical_route_shadow": {"decisions": [decision]}}}
+    assert len(canonical_decisions(summary)) == 1
+
+
+def test_an_absent_route_is_not_an_error_just_an_empty_set():
+    assert required_ops_for({}, "X-002") == set()
+    assert canonical_decisions({}) == []

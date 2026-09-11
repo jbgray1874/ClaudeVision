@@ -77,7 +77,62 @@ def _frozen_summary(job: Path) -> dict:
     return json.loads(frozen.read_text(encoding="utf-8"))
 
 
-def assert_accepted_structure(job_name: str, facts: dict, lines: list) -> None:
+def canonical_decisions(summary: dict) -> list:
+    """Every OperationDecision the canonical route recorded, wherever this pipeline keeps it.
+
+    Both spellings and both nestings are read because the record has used both: costed_facts
+    reads `canonical_route_shadow`, the compiler writes it into estimate_summary, and a record
+    may carry `canonical_route` instead. Picking one and missing the other is how a route that
+    IS recorded reads as absent.
+    """
+    out: list = []
+    for holder in (summary or {}), ((summary or {}).get("estimate_summary") or {}):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("canonical_route_shadow", "canonical_route"):
+            payload = holder.get(key)
+            if isinstance(payload, dict):
+                for decision in (payload.get("decisions") or []):
+                    if isinstance(decision, dict) and decision not in out:
+                        out.append(decision)
+    return out
+
+
+def required_ops_for(summary: dict, part_number: str) -> set:
+    """Operations the canonical route REQUIRES of this part.
+
+    WHY THE ROUTE AND NOT THE COSTED LINE. costed_job() derives a line's `operations` from the
+    workbook rows that carry decision ids, so on a record whose rows carry none the list comes
+    back EMPTY even though the route recorded tubebend on 7332-01-002. The gate would then
+    reject a structurally correct record — the pin would be testing whether decision ids
+    reached the sheet, not whether the route was compiled.
+
+    Those are two different assertions and the gate now makes them separately: a REQUIRED
+    operation is asserted against the route, which is the authority on routing, and a FORBIDDEN
+    one against what is actually charged, which is the authority on money.
+
+    AND ONLY `required` COUNTS. An unverified or refused decision must never satisfy a
+    required-operation pin: "the compiler considered tubebend" is not "the route bends the
+    tube". Status is read strictly — a decision with no status at all does not qualify either,
+    because absence is not a claim.
+    """
+    want = str(part_number).strip().upper()
+    ops: set = set()
+    for decision in canonical_decisions(summary):
+        if str(decision.get("status") or "").strip().lower() != "required":
+            continue
+        targets = {str(decision.get("part_number") or "").strip().upper(),
+                   str(decision.get("target_id") or "").strip().upper()}
+        targets |= {str(p).strip().upper() for p in (decision.get("participants") or [])}
+        if want in targets - {""}:
+            op = str(decision.get("operation") or "").strip().lower()
+            if op:
+                ops.add(op)
+    return ops
+
+
+def assert_accepted_structure(job_name: str, facts: dict, lines: list,
+                              summary: dict = None) -> None:
     """Every structural pin in accepted_facts.json, held against a costed record's lines.
 
     SEPARATED FROM THE FIXTURE ON PURPOSE. While both packs sat unfrozen these checks could
@@ -104,14 +159,17 @@ def assert_accepted_structure(job_name: str, facts: dict, lines: list) -> None:
         assert got is not None and abs(float(got) - float(q)) < 0.01, \
             f"{job_name} {pn}: qty {got} != accepted {q}"
 
-    # ── routes: required present, ruled-out absent ─────────────────────────────
+    # ── routes: required DERIVED by the route, ruled-out not CHARGED ────────────
     for pn, ops in (facts.get("required_operations") or {}).items():
         line = _find(pn)
         assert line is not None, f"{job_name}: {pn} missing from the record"
-        got_ops = {str(o).lower() for o in (line.get("operations") or [])}
+        charged = {str(o).lower() for o in (line.get("operations") or [])}
+        routed = required_ops_for(summary or {}, pn) if summary is not None else set()
+        got_ops = charged | routed
         for op in ops:
-            assert op.lower() in got_ops, \
-                f"{job_name} {pn}: required op '{op}' absent ({sorted(got_ops)})"
+            assert op.lower() in got_ops, (
+                f"{job_name} {pn}: required op '{op}' is neither routed nor charged — "
+                f"route requires {sorted(routed)}, line carries {sorted(charged)}")
     for pn, ops in (facts.get("forbidden_operations") or {}).items():
         line = _find(pn)
         if line is None:
@@ -169,7 +227,7 @@ def test_frozen_replay(job: Path):
     record = cf.costed_job(summary)
     lines = [l for l in (record.get("lines") or []) if isinstance(l, dict)]
 
-    assert_accepted_structure(job.name, facts, lines)
+    assert_accepted_structure(job.name, facts, lines, summary=summary)
 
     # ── the shared tally ───────────────────────────────────────────────────────
     tally = cf.outstanding_summary(summary) or {}
