@@ -2998,6 +2998,69 @@ def _finalize_scan_summary(
                         print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
                               f"(GA tree said {_eff}) — stronger source, disagreement flagged",
                               flush=True)
+        # ── AND THE SAME CORRECTION ON THE ROWS, BECAUSE THERE ARE TWO CASCADES ────────
+        #
+        # THE 12349-02 FAILURE, AND THE LOG THAT FOUND IT. bom_tree resolved every quantity
+        # correctly, said so on the console — "the GA shows 3 x 12349-02-69-100, install
+        # context, not the unit" — and the Estimate sheet still carried 3. The reason is that
+        # bom_tree is not the only cascade. route_compiler.build_part_graph walks the same
+        # tree independently:
+        #
+        #     for _root in top_ids: add_descendants(_root, 1.0, set())
+        #     ... add_descendants(child, factor * child_qty, ...)
+        #
+        # and wb_populate takes the workbook quantity from THAT graph's node, not from the
+        # part record. The graph has never heard of install context, so it multiplied the
+        # GA's 3 into everything below it. Two implementations of one rule, one of which
+        # knows about arrangements and one of which does not.
+        #
+        # Correcting the part records could not have fixed it, and the older logs prove the
+        # part records were already right: "12349-02-69-04M qty 1 KEPT (GA tree said 3) —
+        # stronger source". The record held 1 the whole time.
+        #
+        # So the EDGE is corrected rather than the node. A main-GA row IS the child edge the
+        # graph reads, so dividing it there means both cascades start from the same number
+        # and any future third one inherits the rule for free. Bought-in rows on that drawing
+        # divide too — eighteen wood screws beside three arrangements is six each.
+        try:
+            _ctx = _bt.get("install_context") or {}
+            _main = _bt.get("main_ga")
+            if _ctx and _main:
+                _n = next(iter(set(int(v) for v in _ctx.values())), 1)
+                _fixed = 0
+                if _n > 1:
+                    for _row in ((summary.get("document_analysis") or {}).get("bom_rows")
+                                 or []):
+                        if str(_row.get("source_pdf") or "") != _main:
+                            continue
+                        try:
+                            _q = int(float(_row.get("quantity")))
+                        except (TypeError, ValueError):
+                            continue
+                        if _q and _q % _n == 0 and _q // _n != _q:
+                            # THE PRINTED READING IS KEPT. The GA really does say 3, and that
+                            # is a fact about the drawing — what changes is what it MEANS once
+                            # the tree has recognised an arrangement. Overwriting without
+                            # recording would destroy the evidence for the correction.
+                            _row["quantity_as_printed"] = _q
+                            _row["quantity_note"] = (
+                                f"the general arrangement prints {_q}; it shows {_n} "
+                                f"arrangements, so one arrangement takes {_q // _n}")
+                            # A BOM ROW IS A READING, NOT AN ARBITRATED PART RECORD.
+                            # apply_field ranks competing CLAIMS about a part; this is
+                            # arithmetic on the drawing's own row, correcting the child edge
+                            # the route graph reads. Submitting it as a ranked claim would put
+                            # it in a contest it is not part of — and the part records were
+                            # already correct, which the logs show on every one of them:
+                            # "12349-02-69-04M qty 1 KEPT (GA tree said 3) — stronger source".
+                            _row["quantity"] = _q // _n  # precedence: direct-write ok — a BOM row is a reading, not a part record
+                            _fixed += 1
+                if _fixed:
+                    print(f"   [bom_tree] {_fixed} row(s) on {_main} divided by {_n} — the "
+                          f"arrangement quantity is no longer multiplied into the graph the "
+                          f"workbook reads", flush=True)
+        except Exception as _rowfix:                                     # noqa: BLE001
+            print(f"   [bom_tree] row correction skipped: {_rowfix}", flush=True)
     except Exception as _bte:
         print(f"   [bom_tree] skipped: {_bte}", flush=True)
 
