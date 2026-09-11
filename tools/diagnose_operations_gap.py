@@ -56,6 +56,51 @@ def diagnose(path: Path, part_number: str) -> int:
     print(f"   processed_at {record.get('processed_at') or '(none)'}")
     print()
 
+    # ── STAGE 0: did the workbook stage write anything back into this record? ───
+    # This is upstream of everything below and explains three symptoms at once, so it runs
+    # first. priced_rows_for_part reads `final_estimate.labour_rows` joined to
+    # `workbook_labour.rows` — the latter is where part_numbers and decision_ids live. If
+    # neither is present then the record is a PRE-WORKBOOK artefact: it holds what the engine
+    # handed TO Excel, not what Excel produced. Then, necessarily and all from one cause:
+    #
+    #   · no final_estimate.totals  -> no unit/material/labour, so the accepted figures are
+    #                                  not in the record and cannot be checked against it
+    #   · no priced rows            -> no decision ids to read, so every part's `operations`
+    #                                  is empty however good the route is
+    #   · no link to the workbook   -> the engine's own line sums are a DIFFERENT calculator
+    #                                  from the sheet's, so a difference between them is not a
+    #                                  defect in either; they measure different things
+    print("0 · did the workbook stage write back into this record?")
+    fe = record.get("final_estimate")
+    if not isinstance(fe, dict) and isinstance(record.get("estimate_summary"), dict):
+        fe = record["estimate_summary"].get("final_estimate")
+    fe = fe if isinstance(fe, dict) else {}
+    wl = record.get("workbook_labour")
+    if not isinstance(wl, dict) and isinstance(record.get("estimate_summary"), dict):
+        wl = record["estimate_summary"].get("workbook_labour")
+    wl = wl if isinstance(wl, dict) else {}
+    labour_rows = fe.get("labour_rows") if isinstance(fe.get("labour_rows"), list) else None
+    accepted_rows = wl.get("rows") if isinstance(wl.get("rows"), list) else None
+    totals = fe.get("totals") if isinstance(fe.get("totals"), dict) else None
+    totals_note = ("present: " + ", ".join(sorted(totals))) if totals else "ABSENT"
+    labour_note = f"{len(labour_rows)} row(s)" if labour_rows is not None else "ABSENT"
+    accepted_note = f"{len(accepted_rows)} row(s)" if accepted_rows is not None else "ABSENT"
+    print(f"      final_estimate.totals      {totals_note}")
+    print(f"      final_estimate.labour_rows {labour_note}")
+    print(f"      workbook_labour.rows       {accepted_note}")
+    if not labour_rows and not accepted_rows:
+        print()
+        print("      -> STAGE 0. Neither is present, so this record is a PRE-WORKBOOK artefact:")
+        print("         it holds what the engine handed TO Excel, not what Excel produced. That")
+        print("         one fact explains three symptoms at once — no accepted totals to check")
+        print("         against, no priced rows so every part's operations is empty, and no link")
+        print("         between the saved JSON and the accepted workbook. The engine's line sums")
+        print("         and the sheet's arithmetic are DIFFERENT CALCULATORS, so a difference")
+        print("         between them is not a defect in either figure.")
+        print("         Everything below is reported for completeness, but the repair is here:")
+        print("         the read-back has to write its totals and row grouping into the record.")
+        print()
+
     # ── which route payloads exist at all ──────────────────────────────────────
     print("1 · route payloads present")
     for holder_name, holder in (("(top level)", record),
