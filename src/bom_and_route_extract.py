@@ -232,6 +232,41 @@ def _title_block_thickness_by_page(summary: Mapping[str, Any]) -> Dict[Any, Any]
     return out
 
 
+# The fields worth reporting a disagreement on. Every one of them changes a cost or an
+# identity; a reader differing on, say, a formatting artefact is noise.
+_CONTESTABLE = ("quantity", "description", "material_text", "thickness_mm")
+
+
+def _disagreements(row: Mapping[str, Any]) -> str:
+    """Where two readers read the same line differently, in their own words.
+
+    THE MOST VALUABLE FACT THE PIPELINE PRODUCES, and it used to be a sentence in a merge note
+    that nothing could act on. If the table parser read quantity 2 and the vision model read 4,
+    one of them is wrong and an estimator can settle it in seconds from the drawing — but only
+    if the sheet says so. Agreement is not reported: a column that speaks on every row is one
+    nobody reads.
+    """
+    readings = [r for r in (row.get("readings") or []) if isinstance(r, Mapping)]
+    if len(readings) < 2:
+        return ""
+    out: List[str] = []
+    for field in _CONTESTABLE:
+        seen: Dict[str, List[str]] = {}
+        for reading in readings:
+            if field not in reading:
+                continue
+            value = str(reading[field]).strip()
+            reader = str(reading.get("source") or "a reader")
+            seen.setdefault(value, [])
+            if reader not in seen[value]:
+                seen[value].append(reader)
+        if len(seen) > 1:
+            out.append(field.replace("_", " ") + ": "
+                       + "; ".join(f"{', '.join(who)} read {value!r}"
+                                   for value, who in seen.items()))
+    return " | ".join(out)
+
+
 def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Every parts-list row, with the page it was read from and the reader that read it."""
     rows: List[Dict[str, Any]] = []
@@ -279,6 +314,9 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             # parser and the vision model both saw is stronger than either alone, and until the
             # merge started keeping this, a row read twice came out looking read once.
             "also_read_by": ", ".join(str(r) for r in (row.get("also_read_by") or [])),
+            "times_read": len(row.get("readings") or []) or 1,
+            # WHERE THE READERS DISAGREE, named reader by reader. Empty where they agree.
+            "readers_disagree_on": _disagreements(row),
             "what_that_reader_is": READER_MEANING.get(reader.lower(),
                                                       "reader not named on this row"
                                                       if not reader else

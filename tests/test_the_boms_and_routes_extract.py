@@ -392,3 +392,81 @@ def test_a_pack_with_no_workbook_rows_is_still_a_pack_read():
     assert bre.source_declaration(pack)["source"] == "pack_read"
     for empty in ({}, {"rows": []}, {"rows": None}):
         assert bre.source_declaration(dict(pack, workbook_labour=empty))["source"] == "pack_read"
+
+
+# ── nothing is lost between the read and the sheet ────────────────────────────────────
+#
+# "we should retain the data in the required list that is kept in memory. we shouldn't be losing
+#  key data at any point ... we need to retain all the information that is needed start to finish
+#  to eliminate errors."
+
+
+def _merged(second: dict) -> dict:
+    """One line read by the table parser, then read again by another reader."""
+    import file_scan as fs
+    from extractor_patterns import extract_bom_rows
+    table = extract_bom_rows("1 7332-01-002 LEG 2\n", source_page=3)[0]
+    other = dict(table)
+    other.update(second)
+    winner = dict(table)
+    fs._merge_bom_rows(winner, other)
+    return winner
+
+
+def test_every_reading_survives_the_merge_whole():
+    """Not the winner plus a note. The generic record merge keeps the winner's value and turns
+    the loser's into prose, so a row read twice came out looking read once and a contradicted
+    quantity survived only as a sentence nothing could act on."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    readings = row["readings"]
+    assert len(readings) == 2
+    assert {r["source"] for r in readings} == {"bom_table", "vision"}
+    assert sorted(r["quantity"] for r in readings) == [2, 4], "both values are still there"
+    assert {r["source_page"] for r in readings} == {3, 7}
+
+
+def test_the_arbitrated_value_still_stands_on_the_row():
+    """Precedence is unchanged — every existing consumer reads the row, not the readings. The
+    readings are additional evidence, not a replacement for the decision."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    assert row["quantity"] == 2, "the winner's reading is still the row's value"
+    assert row["source"] == "bom_table"
+
+
+def test_a_disagreement_is_reported_reader_by_reader():
+    """The most valuable fact the pipeline produces: if the table read 2 and vision read 4, one
+    is wrong and an estimator settles it in seconds FROM THE DRAWING — but only if told."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert "quantity" in said["readers_disagree_on"]
+    assert "bom_table read '2'" in said["readers_disagree_on"]
+    assert "vision read '4'" in said["readers_disagree_on"]
+    assert said["times_read"] == 2
+
+
+def test_agreement_says_nothing():
+    """A column that speaks on every row is one nobody reads."""
+    row = _merged({"source": "vision", "source_page": 7})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["readers_disagree_on"] == ""
+    assert said["times_read"] == 2, "still corroborated, just not contested"
+
+
+def test_a_third_reader_joins_the_same_list_rather_than_replacing_it():
+    """Readings accumulate across successive merges — a line on three sheets is three readings,
+    not the last two."""
+    import file_scan as fs
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    fs._merge_bom_rows(row, {"part_number": "7332-01-002", "description": "LEG",
+                             "quantity": 2, "source": "solidworks_api", "source_page": 11})
+    assert len(row["readings"]) == 3
+    assert {r["source"] for r in row["readings"]} == {"bom_table", "vision", "solidworks_api"}
+
+
+def test_a_reading_never_contains_the_merge_s_own_bookkeeping():
+    """Otherwise one reader's audit trail is reported as another's, and readings nest inside
+    readings the next time the row is merged."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    for reading in row["readings"]:
+        for own in ("readings", "also_read_by", "also_on_pages", "merge_notes"):
+            assert own not in reading

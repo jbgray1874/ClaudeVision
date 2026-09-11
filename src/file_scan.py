@@ -389,22 +389,54 @@ def _merge_bom_rows(winner: Dict[str, Any], loser: Dict[str, Any]) -> None:
     disagree the winner stands and the disagreement is written onto it. `source_pdf`
     names which drawing this row was taken from and must keep naming the winner's.
     """
-    # CORROBORATION IS A FACT, AND MERGING WAS DESTROYING IT. Two readings of one line are
-    # exactly what makes a row trustworthy — the table parser and the vision model agreeing is
-    # stronger evidence than either alone. Left to the generic merge, `source` and `source_page`
-    # behave like any other field: the winner's value stands and the loser's is a disagreement.
-    # So a row read twice came out looking read once, and the 7332-01 tab showed "appears on 1
-    # row" for every line in a pack where most parts are drawn on several sheets.
+    # EVERY READING IS KEPT, NOT JUST THE WINNER AND A NOTE. Two readings of one line are what
+    # make a row trustworthy — the table parser and the vision model agreeing is stronger
+    # evidence than either alone — and where they DISAGREE that is the most valuable fact the
+    # pipeline produces, because it is the one that finds errors.
     #
-    # Accumulated here BEFORE the generic merge, then written back over whatever it decides.
-    _readers, _pages = [], []
+    # The generic merge treats every field the same way: the winner's value stands, the loser's
+    # becomes prose in a note. So a row read twice came out looking read once (7332-01's tab said
+    # "appears on 1 row" for every line in a pack where most parts are drawn on several sheets),
+    # and a vision reading of qty 4 against a table reading of qty 2 survived only as a sentence
+    # nothing could act on.
+    #
+    # So each reading is preserved WHOLE, on the row, before the merge decides anything. The
+    # arbitrated values stay on the row where every existing consumer already reads them —
+    # precedence is unchanged — and `readings` holds what each reader actually said. A BOM row is
+    # a handful of short fields and a pack has tens of them; there is no memory argument here,
+    # and there never was one good enough to justify losing a reading.
+    _merge_own = ("readings", "also_read_by", "also_on_pages", "merge_notes", "review_flags")
+
+    def _reading_of(_row: Dict[str, Any]) -> Dict[str, Any]:
+        """One reader's own account of this line, with nothing of the merge in it."""
+        return {_k: _v for _k, _v in _row.items()
+                if _k not in _merge_own and _v not in (None, "", [], {})}
+
+    _readings: List[Dict[str, Any]] = []
+
+    def _remember(_reading: Dict[str, Any]) -> None:
+        if _reading and _reading not in _readings:
+            _readings.append(_reading)
+
     for _row in (winner, loser):
-        for _r in ([_row.get("source")] + list(_row.get("also_read_by") or [])):
-            if _r and _r not in _readers:
-                _readers.append(_r)
-        for _p in ([_row.get("source_page")] + list(_row.get("also_on_pages") or [])):
-            if _p is not None and _p not in _pages:
-                _pages.append(_p)
+        _prior_readings = _row.get("readings") or []
+        for _prior in _prior_readings:
+            _remember(_prior)
+        # A ROW THAT ALREADY CARRIES READINGS IS ARBITRATION OUTPUT, NOT A READING. Its field
+        # values are what the merge decided, and every reader that contributed is already in the
+        # list. Deriving a fresh reading from it would invent a reader that never read anything
+        # — a third sheet turned two real readings into four, one of them a ghost wearing the
+        # winner's name.
+        if not _prior_readings:
+            _remember(_reading_of(_row))
+
+    _readers, _pages = [], []
+    for _reading in _readings:
+        _r, _p = _reading.get("source"), _reading.get("source_page")
+        if _r and _r not in _readers:
+            _readers.append(_r)
+        if _p is not None and _p not in _pages:
+            _pages.append(_p)
 
     try:
         from record_merge import merge_records, BOOKKEEPING_FIELDS
@@ -424,6 +456,8 @@ def _merge_bom_rows(winner: Dict[str, Any], loser: Dict[str, Any]) -> None:
     # The first of each stays the row's own; the rest are the corroboration. Kept in the order
     # they were seen rather than sorted, so "read first by the table parser, then confirmed by
     # vision" survives as an order somebody can reason about.
+    if _readings:
+        winner["readings"] = _readings
     if _readers:
         winner["source"] = _readers[0]
         winner["also_read_by"] = _readers[1:]
