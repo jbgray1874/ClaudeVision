@@ -379,3 +379,41 @@ def test_a_quantity_that_does_not_divide_is_left_alone_and_flagged():
     assert out["effective"]["PLAS"] == 5
     said = " ".join(str(f.get("detail") or "") for f in (out.get("flags") or []))
     assert "does not divide evenly" in said
+
+
+def test_the_tree_carries_no_job_number_in_its_logic():
+    """A STANDING REQUIREMENT, MADE CHECKABLE: "these are fixes that apply generically to all
+    future / other drawings. the improvements must be generic."
+
+    Every job this module has ever been fixed for is named in its prose — 1448, 3886, 12349-02 —
+    and that is right: a rule with no case behind it is a guess, and the case belongs where the
+    rule is. But a job number in EXECUTABLE code is a rule that works on one pack and silently
+    does nothing on the next.
+
+    Asserted with ast rather than by reading lines, because a docstring does not start with a #
+    and a crude filter counts it as code.
+    """
+    import ast
+    import re
+    tree = ast.parse((ROOT / "src" / "bom_tree.py").read_text(encoding="utf-8"))
+    # every docstring, so they can be excluded rather than matched
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc:
+                docstrings.add(doc)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in docstrings:
+                continue
+            if re.search(r"\b(12349|7332|1448|3886|1455|11650|10975|8352)\b", node.value):
+                offenders.append(f"line {node.lineno}: {node.value[:60]!r}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, int):
+            if node.value in (12349, 7332, 1448, 3886, 1455, 11650, 10975, 8352):
+                offenders.append(f"line {node.lineno}: {node.value}")
+    assert not offenders, (
+        "a job number in executable code is a rule that works on one pack and silently does "
+        "nothing on the next:\n    " + "\n    ".join(offenders))
