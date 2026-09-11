@@ -1,11 +1,19 @@
 """Freeze an accepted run into tests/replay/<job>/ — the right run, and provably slimmed.
 
-RUN THIS ON THE BOX:
+RUN THIS ON THE BOX. Start by asking what records exist, rather than hunting for a path:
 
-    python tools\\freeze_replay_fixture.py 7332-01 --source <archived accepted json> ^
+    python tools\\freeze_replay_fixture.py 7332-01 --find
+
+That lists every saved record for the job with the date EACH ONE SAYS it ran. Pick the accepted
+one and freeze it:
+
+    python tools\\freeze_replay_fixture.py 7332-01 --source output\\archive\\7332-01_accepted.json ^
         --accepted-run "the 14:17 pack, 7 Sep" ^
         --accepted-by "J Gray" --accepted-on 2026-09-07 ^
         --unit 80.09 --material 40.89 --labour 33.59 --quantity 6
+
+(Every example here is a real path, never a <placeholder>: PowerShell treats < as a redirect
+operator and fails to parse the line before python ever sees it.)
 
 THE FIRST THING THIS DOES IS CHECK THE RECORD IS THE RUN YOU SAY IT IS, AND IT LEADS BECAUSE IT
 IS THE MOST IMPORTANT THING HERE. The first version took --accepted-on, --accepted-run and the
@@ -80,7 +88,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -520,15 +528,88 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
     return 0
 
 
+def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
+    """List every saved record for this job with the date IT says it ran, newest first.
+
+    WHY THIS IS A MODE OF THE TOOL RATHER THAN AN INSTRUCTION TO GO LOOKING. The question "which
+    of these is the accepted run?" is answered by the records themselves — each one carries the
+    processed_at its own run stamped. Asking somebody to type a path they have to go and hunt
+    for invites exactly the mistake this tool now refuses: the nearest plausible file, labelled
+    with the date we wished it had. Run this, read the dates, then pass the one you mean.
+
+    Nothing here decides which record is accepted. It reports what exists and what each one
+    says about itself; choosing is a person's job and recording that choice is the freeze.
+    """
+    roots = [ROOT / "output" / "json", ROOT / "output", ROOT / "archive",
+             ROOT / "output" / "archive", ROOT / "tests" / "replay" / job]
+    roots.extend(Path(r) for r in extra_roots)
+    seen: Dict[Path, None] = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.json")):
+            if job.lower().replace("-", "") in path.name.lower().replace("-", ""):
+                seen.setdefault(path.resolve(), None)
+
+    if not seen:
+        print(f"   no saved record found for {job} under:")
+        for root in roots:
+            print(f"       {root}{'' if root.is_dir() else '   (does not exist)'}")
+        print("   Pass --search with another directory to look there as well.")
+        return 1
+
+    rows: List[Tuple[str, Path, int, int]] = []
+    for path in seen:
+        try:
+            raw = path.read_bytes()
+            record = json.loads(raw.decode("utf-8"))
+        except Exception as err:                                         # noqa: BLE001
+            rows.append((f"unreadable: {type(err).__name__}", path, 0, 0))
+            continue
+        if not isinstance(record, dict):
+            rows.append(("not a record (not an object)", path, len(raw), 0))
+            continue
+        parts = (record.get("estimate_summary") or {}).get("part_estimates") or []
+        rows.append((str(record.get("processed_at") or "NO processed_at"),
+                     path, len(raw), len(parts) if isinstance(parts, list) else 0))
+
+    rows.sort(key=lambda r: r[0], reverse=True)
+    print(f"   saved records for {job}, newest first by what each one says about itself:")
+    print()
+    for stamp, path, size, parts in rows:
+        print(f"   {stamp:34s} {size / 1_048_576:6.1f} MB  {parts:3d} parts")
+        print(f"   {'':34s} {path}")
+    print()
+    print("   Pick the one that was ACCEPTED and pass it with --source. A record whose date is")
+    print("   not the accepted date will be refused unless you pass --accept-new-baseline,")
+    print("   which records that run's own date rather than the one you type.")
+    overwriteable = [p for _s, p, _z, _n in rows
+                     if p.parent.name == "json" and p.parent.parent.name == "output"]
+    if overwriteable:
+        print()
+        print("   NOTE: these are rewritten by the next run of this job, so archive a copy")
+        print("   before freezing and point --source at the archive:")
+        for path in overwriteable:
+            print(f"       {path}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("job", help="the job name, matching the tests/replay/<job> directory")
+    ap.add_argument("--find", action="store_true",
+                    help="list every saved record for this job with the date it says it ran, "
+                         "and exit. Use this to choose --source instead of guessing a path")
+    ap.add_argument("--search", action="append", default=[], metavar="DIR",
+                    help="an extra directory for --find to search (repeatable)")
     ap.add_argument("--source", default="",
                     help="path to the accepted record (default output/json/<job>.json)")
-    ap.add_argument("--accepted-run", required=True,
+    # Not argparse-required, because --find needs none of them. Checked below instead, so
+    # "list what exists" never demands answers about a record you have not seen yet.
+    ap.add_argument("--accepted-run", default="",
                     help='which run this is, e.g. "the 14:17 pack, 7 Sep"')
-    ap.add_argument("--accepted-by", required=True, help="who signed it off")
-    ap.add_argument("--accepted-on", required=True, help="YYYY-MM-DD")
+    ap.add_argument("--accepted-by", default="", help="who signed it off")
+    ap.add_argument("--accepted-on", default="", help="YYYY-MM-DD")
     ap.add_argument("--unit", type=float, default=None, help="accepted unit price")
     ap.add_argument("--material", type=float, default=None, help="accepted material")
     ap.add_argument("--labour", type=float, default=None, help="accepted labour")
@@ -546,9 +627,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "making it the baseline. Its own date is recorded, not the one typed")
     args = ap.parse_args(argv)
 
+    if args.find:
+        print(f"== records found for {args.job} ==")
+        return find_candidates(args.job, [Path(d) for d in args.search])
+
+    missing = [flag for flag, value in (("--accepted-run", args.accepted_run),
+                                        ("--accepted-by", args.accepted_by),
+                                        ("--accepted-on", args.accepted_on))
+               if not str(value).strip()]
+    if missing:
+        print(f"!! {', '.join(missing)} required to freeze. To see what records exist and the "
+              f"date each one says it ran, run:\n"
+              f"       python tools/freeze_replay_fixture.py {args.job} --find")
+        return 2
+
     source = Path(args.source) if args.source else (ROOT / "output" / "json" / f"{args.job}.json")
     if not source.is_file():
-        print(f"!! {source} not found. Pass --source with the path to the accepted record.")
+        print(f"!! {source} not found. To see what records exist for this job:\n"
+              f"       python tools/freeze_replay_fixture.py {args.job} --find")
         return 2
 
     provenance: Dict[str, Any] = {

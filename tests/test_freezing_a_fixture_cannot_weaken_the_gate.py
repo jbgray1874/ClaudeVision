@@ -445,3 +445,83 @@ def test_the_record_identity_is_written_into_provenance(tmp_path, monkeypatch):
                                           "accepted_on": "2026-09-07"}) == 0
     prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
     assert prov["record_says_about_itself"]["schema"] == "v4"
+
+
+# ── choosing the source by reading the records, not by typing a path ──────────────────
+
+
+def test_find_reports_each_record_with_the_date_it_says_it_ran(tmp_path, monkeypatch, capsys):
+    """The question "which of these is the accepted run?" is answered by the records
+    themselves. Asking somebody to type a path they have to go and hunt for invites exactly the
+    mistake the identity gate now refuses: the nearest plausible file, labelled with the date we
+    wished it had."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    (out / "7332-01.json").write_text(
+        json.dumps(_dated(_record(), "2026-09-10T18:59:00+00:00")), encoding="utf-8")
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "7332-01_accepted.json").write_text(
+        json.dumps(_dated(_record(), "2026-09-07T14:17:00+00:00")), encoding="utf-8")
+
+    assert frz.find_candidates("7332-01") == 0
+    text = capsys.readouterr().out
+    assert "2026-09-10T18:59:00+00:00" in text
+    assert "2026-09-07T14:17:00+00:00" in text
+    assert "7332-01_accepted.json" in text
+    # newest first, so the two are never confused by position
+    assert text.index("2026-09-10") < text.index("2026-09-07")
+    # and the overwriteable one is called out
+    assert "rewritten by the next run" in text
+
+
+def test_find_says_so_rather_than_failing_when_there_is_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    assert frz.find_candidates("NOSUCH") == 1
+    assert "no saved record found" in capsys.readouterr().out
+
+
+def test_find_names_a_record_with_no_timestamp_instead_of_hiding_it(tmp_path, monkeypatch,
+                                                                   capsys):
+    """A record that cannot be attributed must be visible in the list — it is a candidate
+    somebody might otherwise pick by accident."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    (out / "7332-01.json").write_text(json.dumps(_record(stamp="")), encoding="utf-8")
+    assert frz.find_candidates("7332-01") == 0
+    assert "NO processed_at" in capsys.readouterr().out
+
+
+def test_find_survives_an_unreadable_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    (out / "7332-01.json").write_text("{ not json", encoding="utf-8")
+    assert frz.find_candidates("7332-01") == 0
+    assert "unreadable" in capsys.readouterr().out
+
+
+def test_find_needs_none_of_the_acceptance_flags():
+    """Listing what exists must never demand answers about a record you have not seen yet."""
+    assert frz.main(["NOSUCH-JOB", "--find"]) in (0, 1)
+
+
+def test_freezing_without_the_acceptance_flags_points_at_find(capsys):
+    rc = frz.main(["NOSUCH-JOB"])
+    assert rc == 2
+    assert "--find" in capsys.readouterr().out
+
+
+def test_no_documented_command_contains_a_powershell_redirect_placeholder():
+    """TWICE I handed over a command containing <placeholder>. PowerShell treats < as a reserved
+    redirect operator and fails to parse the line before python sees it, so the instruction was
+    simply unrunnable. Every example in the tool and the replay README is a real path."""
+    for path in (ROOT / "tools" / "freeze_replay_fixture.py",
+                 ROOT / "tests" / "replay" / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if "freeze_replay_fixture.py" not in line:
+                continue
+            assert "<" not in line, f"{path.name}: unrunnable in PowerShell -> {line.strip()}"
