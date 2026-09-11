@@ -34,6 +34,58 @@ import config
 config.validate()
 
 
+def _commit_from_git_dir(root: Path) -> str:
+    """The commit, read straight out of .git. No git executable, no PATH, no subprocess.
+
+    WHY THIS IS FIRST AND NOT A FALLBACK. The service reported "unknown" on a box that has git,
+    has a clone, and had just been pulled — because it runs as NT AUTHORITY\\SYSTEM, and a git
+    installed per-user lives under that user's AppData where SYSTEM cannot see it. Widening the
+    list of paths to guess at is a losing game: winget, scoop, a portable copy and an MSI all put
+    it somewhere different, and the next machine finds a new place.
+
+    But `git rev-parse HEAD` reads .git/HEAD and then one ref file. That is two file reads, and
+    this does them directly. It cannot be defeated by PATH, by the account the service runs
+    under, or by git not being installed at all, and on a clone it is the same truth the
+    subprocess would have returned.
+
+    Returns "" when there is nothing to read — a deployed copy with no .git — which is what the
+    stamp file below is for. Never raises: a version header must not be able to stop the service.
+    """
+    try:
+        git_dir = root / ".git"
+        # A worktree or submodule has a FILE here containing "gitdir: <path>", not a directory.
+        if git_dir.is_file():
+            pointer = git_dir.read_text(encoding="utf-8").strip()
+            if pointer.startswith("gitdir:"):
+                git_dir = (root / pointer.split(":", 1)[1].strip()).resolve()
+        if not git_dir.is_dir():
+            return ""
+        head_file = git_dir / "HEAD"
+        if not head_file.is_file():
+            return ""
+        head = head_file.read_text(encoding="utf-8").strip()
+        if not head.startswith("ref:"):
+            return head[:7]                  # a detached HEAD holds the hash itself
+        ref = head.split(":", 1)[1].strip()
+        loose = git_dir / ref
+        if loose.is_file():
+            return loose.read_text(encoding="utf-8").strip()[:7]
+        # A branch that has not moved since the last `git gc` lives in packed-refs, not in
+        # refs/heads — so a freshly cloned repo has no loose ref at all and this is the only
+        # place the hash exists.
+        packed = git_dir / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if not line.strip() or line.startswith(("#", "^")):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == ref:
+                    return parts[0][:7]
+    except Exception:                                            # noqa: BLE001
+        return ""
+    return ""
+
+
 def _resolve_commit() -> str:
     """The git commit this service is running, resolved ONCE at startup and stamped onto every
     response as X-SDI-Commit. It is the answer to 'which version is the box on?' without an SSH
@@ -46,6 +98,14 @@ def _resolve_commit() -> str:
     env = os.getenv("SDI_COMMIT", "").strip()
     if env:
         return env[:40]
+    # .git READ DIRECTLY, BEFORE ASKING AN EXECUTABLE WE MAY NOT BE ABLE TO SEE. Same truth the
+    # subprocess returns on a clone, and the one route that does not depend on PATH or on which
+    # account the service runs under. The repo root first, because the engine and the service
+    # share one clone and the root is the clone.
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        _read = _commit_from_git_dir(_where)
+        if _read:
+            return _read
     # RUN AS A WINDOWS SERVICE, git IS NOT ON THE PATH. The service starts uvicorn from its own
     # virtualenv under NT AUTHORITY\\SYSTEM, whose PATH has no git, so a bare "git" was never
     # found and the header reported "unknown" on a perfectly current service — the one question

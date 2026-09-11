@@ -403,6 +403,15 @@
         <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
         <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
            queues the job; the runner does the work and files the result.</p>
+        <!-- WHICH BUILD AM I LOOKING AT? An afternoon went on four failures that are
+             indistinguishable from this page: the change was never deployed, the service is
+             behind the page, the browser is showing a cached copy, or there are TWO services on
+             the box and this tab is on the older one. That last one was real — 8071 and 8072 were
+             both listening from the same folder, thirty-five commits apart, and the newer HTML was
+             being served over the older Python.
+             Every response already carries X-SDI-Commit for exactly this question. It was just
+             invisible to anybody actually using the page. -->
+        <p class="note" id="buildLine" style="margin-top:6px;opacity:.75"></p>
       </div>
 
       <div class="dest">
@@ -993,7 +1002,7 @@ emailSave && emailSave.addEventListener("click", async () => {
 
 loadRecipients();
 const runBtn=$("run"), stopBtn=$("stop"), destPath=$("destPath"), req=$("req");
-const runnerBox=$("runnerBox"), runnerText=$("runnerText");
+const runnerBox=$("runnerBox"), runnerText=$("runnerText"), buildLine=$("buildLine");
 const fileList=$("fileList"), fileEmpty=$("fileEmpty");
 const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
 // BOUND EXPLICITLY, not leaned on. A browser exposes elements with an id as globals, so
@@ -1153,15 +1162,46 @@ function refresh(){
    exactly like working until somebody goes looking for the estimate. So
    the page asks, says so plainly, and keeps the button disabled. */
 let runnersOnline = 0;
+
+/* WHICH SERVICE, AND WHICH BUILD OF IT. Written from the header on a reply the page was
+   making anyway, so it costs no extra request and cannot claim a version for a service that
+   did not answer.
+
+   location.origin is half the answer and the half that was missing: two instances on one box
+   serve the same document from the same folder over different Python, and nothing on screen
+   said which port the tab was on. "unknown" is printed as itself — a service whose commit
+   cannot be established must not read as a current one. */
+function showBuild(commit){
+  const where = location.origin;
+  if(!commit){
+    buildLine.innerHTML = `Service <b>${where}</b> — build not reported. `
+      + `A service that cannot say which version it is may be an old one.`;
+    return;
+  }
+  buildLine.innerHTML = commit === "unknown"
+    ? `Service <b>${where}</b> — build <b>unknown</b> (it could not read its own commit). `
+      + `Check it against the box before trusting this page is current.`
+    : `Service <b>${where}</b> — build <b>${commit}</b>.`;
+}
+
 async function checkRunners(){
   let r;
   try{
     r = await api("/api/estimate/runners");
+    // THE HEADER IS ON EVERY REPLY, a 404 and a 500 included, so the build is reported even
+    // when the route itself is missing -- which is the case that matters most: "this page is
+    // newer than the service" is exactly when somebody needs to know which service it is.
+    showBuild((r.headers && r.headers.get("X-SDI-Commit")) || "");
   }catch(e){
     // The fetch itself failed: the service is not answering at all.
     runnersOnline = 0;
     runnerBox.style.borderLeftColor = "var(--bad)";
     runnerText.innerHTML = '<span style="color:var(--bad)">Cannot reach the service</span>';
+    // AND THE BUILD LINE MUST NOT KEEP STANDING. A commit read on an earlier poll describes a
+    // service that is no longer answering; leaving it there states a version for something
+    // that is down, which is the same class of lie this line exists to stop.
+    buildLine.innerHTML = `Service <b>${location.origin}</b> — not answering, so this page `
+      + `cannot say which build is behind it.`;
     refresh(); return;
   }
   if(!r.ok){
