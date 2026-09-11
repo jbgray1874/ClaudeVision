@@ -12,6 +12,19 @@ Each subdirectory is one estimator-REVIEWED job. It holds:
 - `provenance.json` — who accepted this record, when, and where it came from. Required
   whenever `summary.json` is present; see `provenance.template.json`. A baseline nobody can
   attribute cannot be audited.
+
+**Freeze with `tools/freeze_replay_fixture.py`, not by copying by hand.** It CHECKS that the
+record is the run you say it is: `processed_at` is stamped by the run itself, so it is
+evidence, and a mismatch against `--accepted-on` stops the freeze with nothing written. A
+fixture frozen by hand was once labelled "the 14:17 pack, 7 Sep" while the record inside
+carried 10 September 18:59 — a different run wearing the accepted baseline's numbers. **Typing
+an older date does not make the input that run.** If a newer run genuinely is the new baseline,
+pass `--accept-new-baseline` and its own date is recorded.
+
+Pass `--source` pointing at an **archived** copy. `output/json/<job>.json` is rewritten by the
+next run of that job, so provenance pointing there names a path whose contents will not be what
+was frozen. Keep the full record archived: the tool records its sha256, and fingerprint equality
+proves equivalence only for the checks that exist today.
 - `accepted_facts.json` — the estimator-reviewed STRUCTURE the engine must reproduce:
   BOM identities and quantities, operations per part with the ruled-out set, decisions
   expected, names that must appear nowhere. **Structure, not money** — rates move,

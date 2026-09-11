@@ -29,9 +29,16 @@ sys.path.insert(0, str(ROOT / "tools"))
 import freeze_replay_fixture as frz                                      # noqa: E402
 
 
-def _record(page_text: str = "") -> dict:
+# The date every fixture below claims, so the identity gate has something true to verify
+# against. A record with no processed_at is REFUSED, which is why the helper carries one.
+SYN_STAMP = "2026-09-07T14:17:00+00:00"
+SYN_DATE = SYN_STAMP[:10]
+
+
+def _record(page_text: str = "", stamp: str = SYN_STAMP) -> dict:
     """A small but real-shaped record: one routed part with a blank and a material."""
     return {
+        "processed_at": stamp,
         "pages": [{"page_number": 1, "source_pdf_name": "j.pdf",
                    "text": page_text or ("LOREM IPSUM DRAWING NOTES " * 40),
                    "page_analysis": {"dimensions": {"all_dimensions_mm": [100, 50]}}}],
@@ -162,7 +169,7 @@ def test_freezing_refuses_to_invent_an_accepted_structure(tmp_path, monkeypatch)
     source = tmp_path / "rec.json"
     source.write_text(json.dumps(_record()), encoding="utf-8")
     rc = frz.freeze("NEWJOB", source, {"accepted_run": "r", "accepted_by": "b",
-                                       "accepted_on": "2026-01-01"})
+                                       "accepted_on": SYN_DATE})
     assert rc == 2
     assert not (replay / "NEWJOB" / "summary.json").exists()
     assert not (replay / "NEWJOB" / "accepted_facts.json").exists()
@@ -181,7 +188,7 @@ def test_a_freeze_writes_the_summary_the_provenance_and_the_fingerprint(tmp_path
 
     rc = frz.freeze("SYN-JOB", source,
                     {"accepted_run": "the synthetic run", "accepted_by": "a test",
-                     "accepted_on": "2026-01-01",
+                     "accepted_on": SYN_DATE,
                      "accepted_numbers": {"unit_gbp": 1.23}})
     assert rc == 0
     summary = json.loads((job_dir / "summary.json").read_text(encoding="utf-8"))
@@ -209,7 +216,7 @@ def test_a_frozen_fixture_then_satisfies_the_gate_loader(tmp_path, monkeypatch):
     source = tmp_path / "rec.json"
     source.write_text(json.dumps(_record()), encoding="utf-8")
     assert frz.freeze("SYN-JOB", source, {"accepted_run": "r", "accepted_by": "b",
-                                          "accepted_on": "2026-01-01"}) == 0
+                                          "accepted_on": SYN_DATE}) == 0
 
     sys.path.insert(0, str(ROOT / "tests" / "replay"))
     import test_frozen_replays as tfr
@@ -240,6 +247,201 @@ def test_a_provenance_naming_the_wrong_job_is_rejected(tmp_path):
     (job_dir / "summary.json").write_text(json.dumps(_record()), encoding="utf-8")
     (job_dir / "provenance.json").write_text(json.dumps({
         "job": "10975-02", "accepted_run": "r", "accepted_by": "b",
-        "accepted_on": "2026-01-01", "source_path": "x"}), encoding="utf-8")
+        "accepted_on": SYN_DATE, "source_path": "x"}), encoding="utf-8")
     with pytest.raises(AssertionError, match="provenance names job"):
         tfr._frozen_summary(job_dir)
+
+
+# ── the baseline must BE the run it says it is ─────────────────────────────────────────
+
+
+def _dated(record: dict, stamp: str) -> dict:
+    out = json.loads(json.dumps(record))
+    out["processed_at"] = stamp
+    return out
+
+
+def test_a_record_whose_own_date_contradicts_the_asserted_one_is_refused(tmp_path, monkeypatch):
+    """THE DEFECT THIS EXISTS FOR, AND IT REACHED A COMMITTED FIXTURE. The tool took
+    --accepted-on straight from the command line and wrote it into provenance without ever
+    looking at the record. The 7332-01 fixture was labelled "the 14:17 pack, 7 Sep" while the
+    record inside carried processed_at of 10 September 18:59 — a different run, wearing the
+    accepted baseline's numbers. Typing an older date does not make the input that run, and a
+    baseline whose label and content disagree is worse than no baseline: every later comparison
+    is against something other than what it claims and nobody can tell."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_dated(_record(), "2026-09-10T18:59:00+00:00")),
+                      encoding="utf-8")
+
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "the 14:17 pack, 7 Sep", "accepted_by": "J Gray",
+                     "accepted_on": "2026-09-07"})
+    assert rc == 3, "a contradicted provenance must stop the freeze"
+    assert not (job / "summary.json").exists(), "and write nothing at all"
+    assert not (job / "provenance.json").exists()
+
+
+def test_a_matching_date_freezes_normally(tmp_path, monkeypatch):
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_dated(_record(), "2026-09-07T14:17:00+00:00")),
+                      encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "the 14:17 pack", "accepted_by": "J Gray",
+                       "accepted_on": "2026-09-07"}) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["accepted_on"] == "2026-09-07"
+    assert prov["record_says_about_itself"]["processed_at"].startswith("2026-09-07")
+
+
+def test_accepting_a_newer_run_records_its_own_date_not_the_one_typed(tmp_path, monkeypatch):
+    """If 10 September IS intentionally the new baseline, that is a legitimate decision — but it
+    is recorded as 10 September. It is never labelled 7 September."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_dated(_record(), "2026-09-10T18:59:00+00:00")),
+                      encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "the v0020 run", "accepted_by": "J Gray",
+                       "accepted_on": "2026-09-07"},
+                      accept_new_baseline=True) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["accepted_on"] == "2026-09-10", "the record's own date wins"
+    assert "NEW baseline" in prov["baseline_change"]
+
+
+def test_a_record_with_no_timestamp_cannot_be_attributed_and_is_refused(tmp_path, monkeypatch):
+    """Absence of evidence is not evidence of the asserted date."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_record(stamp="")), encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "r", "accepted_by": "b",
+                       "accepted_on": "2026-09-07"}) == 3
+
+
+def test_verify_provenance_explains_itself_rather_than_just_saying_no():
+    ok, date, why = frz.verify_provenance(
+        _dated(_record(), "2026-09-10T18:59:00+00:00"), "2026-09-07")
+    assert ok is False
+    assert date == "2026-09-10"
+    assert "2026-09-10" in why and "2026-09-07" in why
+    assert "--source" in why, "and names the way out"
+
+
+# ── two identical errors are not proof ────────────────────────────────────────────────
+
+
+def test_an_errored_fingerprint_stage_refuses_every_reduction(tmp_path, monkeypatch):
+    """_fingerprint turns a stage exception into the STRING "ERROR ...". Two such strings compare
+    equal, so a stage that fails on the full record and fails identically on a reduced one reads
+    as "fingerprint identical" — and data would come out on the strength of two failures agreeing
+    with each other."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+
+    real = frz._fingerprint
+
+    def broken(summary):
+        out = real(summary)
+        out["route_decisions"] = "ERROR RuntimeError: the stage did not run"
+        return out
+
+    monkeypatch.setattr(frz, "_fingerprint", broken)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_dated(_record(page_text="X" * 200_000),
+                                        "2026-09-07T14:17:00+00:00")), encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "r", "accepted_by": "b",
+                       "accepted_on": "2026-09-07"}, reduce_content=True) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["fixture"]["dropped"] == [], "nothing may be dropped on a failed fingerprint"
+    assert "REFUSED" in prov["fixture"]["reduction"]
+    assert "route_decisions" in prov["fixture"]["fingerprint_stages_that_errored"]
+
+
+def test_the_error_detector_sees_every_stage():
+    assert frz._fingerprint_errors({"a": "ERROR X", "b": "fine", "c": "ERROR Y"}) == ["a", "c"]
+    assert frz._fingerprint_errors({"a": "fine"}) == []
+
+
+# ── content reduction is opt-in; compact is the default ───────────────────────────────
+
+
+def test_content_is_not_reduced_unless_asked(tmp_path, monkeypatch):
+    """Compact formatting is safe arithmetic. Removing content is a claim about what every
+    reader needs, now and later, and it is worth far less than a correct baseline."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    big = _dated(_record(page_text="X" * 200_000), "2026-09-07T14:17:00+00:00")
+    source.write_text(json.dumps(big), encoding="utf-8")
+
+    assert frz.freeze("SYN-JOB", source, {"accepted_run": "r", "accepted_by": "b",
+                                          "accepted_on": "2026-09-07"}) == 0
+    frozen = json.loads((job / "summary.json").read_text(encoding="utf-8"))
+    assert len(frozen["pages"][0]["text"]) == 200_000, "the page text is still there"
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["fixture"]["dropped"] == []
+    assert "--reduce" in prov["fixture"]["reduction"]
+
+
+def test_the_source_checksum_is_recorded_so_the_original_stays_verifiable(tmp_path, monkeypatch):
+    """Fingerprint equality proves equivalence for the checks that exist today, not for a future
+    reader. The full record has to stay archived, and its checksum is what ties this fixture to
+    it."""
+    import hashlib
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    payload = json.dumps(_dated(_record(), "2026-09-07T14:17:00+00:00"))
+    source.write_text(payload, encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source, {"accepted_run": "r", "accepted_by": "b",
+                                          "accepted_on": "2026-09-07"}) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["fixture"]["source_sha256"] == hashlib.sha256(
+        payload.encode("utf-8")).hexdigest()
+
+
+def test_the_record_identity_is_written_into_provenance(tmp_path, monkeypatch):
+    """So a reader can see what the record says about itself beside what a person asserted —
+    the two being compared is the whole point."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    rec = _dated(_record(), "2026-09-07T14:17:00+00:00")
+    rec["schema"] = "v4"
+    source.write_text(json.dumps(rec), encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source, {"accepted_run": "r", "accepted_by": "b",
+                                          "accepted_on": "2026-09-07"}) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["record_says_about_itself"]["schema"] == "v4"

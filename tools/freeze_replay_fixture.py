@@ -1,18 +1,41 @@
-"""Freeze an accepted run into tests/replay/<job>/ — slimmed, but only provably so.
+"""Freeze an accepted run into tests/replay/<job>/ — the right run, and provably slimmed.
 
-RUN THIS ON THE BOX. It turns an accepted output/json/<job>.json into the two files the replay
-gate needs, and it keeps the fixture small enough that committing one per pack is not a
-permanent cost to the repository:
+RUN THIS ON THE BOX:
 
-    python tools\\freeze_replay_fixture.py 7332-01 ^
+    python tools\\freeze_replay_fixture.py 7332-01 --source <archived accepted json> ^
         --accepted-run "the 14:17 pack, 7 Sep" ^
         --accepted-by "J Gray" --accepted-on 2026-09-07 ^
         --unit 80.09 --material 40.89 --labour 33.59 --quantity 6
 
-WHY A SLIMMED FIXTURE IS SAFE HERE, AND HOW THAT IS ESTABLISHED RATHER THAN ASSUMED. A fixture
-quietly missing a field the gate needs would weaken the gate while every push still reported
-green — a smaller file that has stopped gating, which is the failure mode this whole harness
-exists to prevent. So nothing is dropped because it looks unimportant.
+THE FIRST THING THIS DOES IS CHECK THE RECORD IS THE RUN YOU SAY IT IS, AND IT LEADS BECAUSE IT
+IS THE MOST IMPORTANT THING HERE. The first version took --accepted-on, --accepted-run and the
+accepted numbers from the command line and wrote them into provenance without ever opening the
+record. The 7332-01 fixture produced that way was labelled "the 14:17 pack, 7 Sep" while the
+record inside it carried processed_at of 10 September 18:59 — a different run, wearing the
+accepted baseline's numbers. Nothing lied; the tool transcribed an assertion and presented it as
+provenance.
+
+A baseline whose label and content disagree is worse than no baseline: every later comparison
+runs against something other than what it claims and nobody can tell. So the record's own
+processed_at, which json_normaliser stamps at run time and is therefore evidence rather than
+assertion, is compared against the asserted date, and a mismatch STOPS the freeze with nothing
+written. Typing an older date does not make the input that run. If a newer run genuinely is the
+new baseline that is a legitimate decision — pass --accept-new-baseline and the record's own
+date is recorded, never the one typed.
+
+Note also that output/json/<job>.json is REWRITTEN by the next run of that job. A provenance
+entry pointing there names a path whose contents will not be what was frozen, so the tool warns
+and you should pass --source pointing at an archived copy.
+
+CONTENT REDUCTION IS OPT-IN (--reduce). Compact formatting is safe arithmetic and is always
+applied; removing content is a claim about what every reader needs, now and later, and it is
+worth far less than a correct baseline. Saving megabytes comes a distant second to the fixture
+being the run it says it is.
+
+WHY A SLIMMED FIXTURE IS SAFE WHEN YOU DO ASK FOR IT. A fixture quietly missing a field the gate
+needs would weaken the gate while every push still reported green — a smaller file that has
+stopped gating, which is the failure mode this whole harness exists to prevent. So nothing is
+dropped because it looks unimportant.
 
 The tool computes a STRUCTURAL FINGERPRINT by running the same reads all three tiers run — the
 costed lines, the outstanding tally, both RENDERED deliverables, the workbook canonicalisation,
@@ -37,6 +60,13 @@ field changed. Tier 1 RENDERS both deliverables and the forbidden-names check re
 the flags ARE the audit trail it reads. Both builders were verified deterministic before being
 relied on; if one ever embeds a clock, every reduction is refused rather than wrongly taken,
 which is the right way round to fail.
+
+AND EQUALITY PROVES EQUIVALENCE FOR TODAY'S CHECKS ONLY. A reader added next month may need a
+field this fingerprint never looked at. That is why the source's sha256 and byte count go into
+provenance: the full record must stay archived, and the fixture is a convenience derived from it
+rather than a replacement for it. If any fingerprint stage ERRORS, no reduction is attempted at
+all — two identical error strings are two failures agreeing with each other, not evidence that
+removing data is safe.
 
 The fingerprint is written beside the fixture as fingerprint.json, so the next freeze of the
 same pack can show what moved.
@@ -141,6 +171,60 @@ def _blank_path(record: Any, path: str) -> Any:
     descend(out, 0)
     _ = want_list
     return out
+
+
+def _record_identity(record: Dict[str, Any]) -> Dict[str, Any]:
+    """What the RECORD says about itself: when it ran, and anything version-shaped.
+
+    `processed_at` is stamped by json_normaliser at run time, so it is evidence rather than
+    assertion — it says when this run happened whatever anybody types on the command line.
+    """
+    out: Dict[str, Any] = {"processed_at": record.get("processed_at") or "",
+                           "schema": record.get("schema") or ""}
+    for key, value in record.items():
+        if isinstance(value, (str, int, float)) and "version" in str(key).lower():
+            out[str(key)] = value
+    for holder in ("run", "meta", "metadata"):
+        block = record.get(holder)
+        if isinstance(block, dict):
+            for key, value in block.items():
+                if isinstance(value, (str, int, float)) and (
+                        "version" in str(key).lower() or "processed" in str(key).lower()
+                        or str(key).lower() in ("run_id", "started_at", "finished_at")):
+                    out[f"{holder}.{key}"] = value
+    return out
+
+
+def verify_provenance(record: Dict[str, Any], asserted_on: str) -> Tuple[bool, str, str]:
+    """(does the record's own timestamp support the asserted acceptance date, its date, why).
+
+    THE DEFECT THIS EXISTS FOR. The first version of this tool took --accepted-on, --accepted-run
+    and the accepted numbers straight from the command line and wrote them into provenance
+    without ever looking at the record. The 7332-01 fixture was therefore labelled "the 14:17
+    pack, 7 Sep" while the record it contained carried processed_at of 10 September 18:59 — a
+    different run entirely, stamped with the accepted baseline's numbers. Nothing was lying;
+    the tool simply transcribed an assertion and presented it as provenance.
+
+    A baseline whose label and content disagree is worse than no baseline: every later
+    comparison is against something other than what it claims, and nobody can tell. So the
+    record's own stamp is now compared against the asserted date, and a mismatch stops the
+    freeze. Typing an older date does not make the input that run.
+    """
+    stamp = str(record.get("processed_at") or "").strip()
+    if not stamp:
+        return False, "", ("the record carries no processed_at, so nothing here can confirm "
+                           "which run it is")
+    record_date = stamp[:10]
+    asserted = str(asserted_on or "").strip()[:10]
+    if not asserted:
+        return False, record_date, "no --accepted-on given"
+    if record_date == asserted:
+        return True, record_date, ""
+    return False, record_date, (
+        f"the record says it ran on {record_date} ({stamp}) but --accepted-on says {asserted}. "
+        f"These are different runs. Either point --source at the archived JSON of the run that "
+        f"was actually accepted, or — if this newer run IS the new baseline — review it and pass "
+        f"its own date with --accept-new-baseline")
 
 
 def _num(value: Any) -> Optional[float]:
@@ -295,8 +379,23 @@ def reduce_record(full: Dict[str, Any], base_digest: str,
     return current, dropped, refused
 
 
+def _fingerprint_errors(fingerprint: Dict[str, Any]) -> List[str]:
+    """Which stages did not actually run.
+
+    WHY THIS GATES THE REDUCTION. _fingerprint() turns a stage exception into the STRING
+    "ERROR TypeError: ...". Two such strings compare equal, so a stage that fails on the full
+    record and fails identically on a reduced one reads as "fingerprint identical" — and data
+    would be removed on the strength of two failures agreeing with each other. Two identical
+    errors are not evidence that removing data is safe. Any errored stage now stops reduction
+    outright and is recorded, so the fixture is full and the reason is on the file.
+    """
+    return sorted(key for key, value in fingerprint.items()
+                  if isinstance(value, str) and value.startswith("ERROR"))
+
+
 def freeze(job: str, source: Path, provenance: Dict[str, Any],
-           force_full: bool = False) -> int:
+           force_full: bool = False, reduce_content: bool = False,
+           accept_new_baseline: bool = False) -> int:
     target_dir = REPLAY / job
     if not target_dir.is_dir():
         print(f"!! {target_dir} does not exist — is '{job}' the right job name?")
@@ -306,10 +405,43 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
               f"estimator-reviewed file and this tool will not invent one.")
         return 2
 
-    full = json.loads(source.read_text(encoding="utf-8"))
+    source_bytes = source.read_bytes()
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    full = json.loads(source_bytes.decode("utf-8"))
     full_bytes = _size(full)
-    print(f"   source: {source}  ({source.stat().st_size / 1_048_576:.1f} MB on disk, "
+    print(f"   source: {source}  ({len(source_bytes) / 1_048_576:.1f} MB on disk, "
           f"{full_bytes / 1_048_576:.1f} MB compact)")
+    print(f"   sha256: {source_sha}")
+    # output/json/<job>.json is REWRITTEN by the next run of that job, so a provenance entry
+    # pointing at it names a path whose contents will not be what was frozen.
+    if source.parent.name == "json" and source.parent.parent.name == "output":
+        print(f"   !! this is the overwriteable run output, not an archive. The next run of "
+              f"{job} replaces it, so source_path will point at different content. Archive the "
+              f"accepted record and pass --source that copy.")
+
+    # ── IDENTITY BEFORE ANYTHING ELSE ──────────────────────────────────────────
+    identity = _record_identity(full)
+    print(f"   the record says about itself:")
+    for key in sorted(identity):
+        if identity[key] not in ("", None):
+            print(f"       {key} = {identity[key]}")
+    ok, record_date, why = verify_provenance(full, provenance.get("accepted_on", ""))
+    if not ok and not accept_new_baseline:
+        print()
+        print(f"!! REFUSING TO FREEZE — the record does not match the provenance asserted.")
+        print(f"   {why}")
+        print()
+        print(f"   A baseline whose label and content disagree is worse than no baseline: every")
+        print(f"   later comparison is against something other than what it claims, and nobody")
+        print(f"   can tell. Nothing has been written.")
+        return 3
+    if not ok and accept_new_baseline:
+        print(f"   --accept-new-baseline: recording this run's OWN date ({record_date}), not "
+              f"the one asserted")
+        provenance["accepted_on"] = record_date
+        provenance["baseline_change"] = (
+            f"Accepted as a NEW baseline. The record ran on {record_date}; it is not the "
+            f"earlier accepted run.")
 
     print("   computing the structural fingerprint of the complete record ...")
     base = _fingerprint(full)
@@ -317,17 +449,26 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
     print(f"   fingerprint {base_digest[:16]}  "
           f"({len(base.get('lines') or [])} costed lines, "
           f"{len(base.get('route_decisions') or [])} route decisions)")
-    for key in ("canonicalised", "route_decisions", "material_recosted"):
-        if isinstance(base.get(key), str) and base[key].startswith("ERROR"):
-            print(f"   !! tier reading '{key}' errored on the FULL record: {base[key]}")
-            print(f"      Freezing anyway — the fixture is honest about what the code does "
-                   "today — but expect that tier to fail until it is fixed.")
+    errors = _fingerprint_errors(base)
+    for key in errors:
+        print(f"   !! stage '{key}' ERRORED on the full record: {base[key]}")
 
     chosen, dropped_paths, refused_paths = full, [], []
+    reduction_note = "none attempted — content is reduced only with --reduce"
     if force_full:
+        reduction_note = "none attempted (--full)"
         print("   --full given: no reduction attempted")
+    elif errors:
+        reduction_note = (f"REFUSED: stage(s) {errors} errored, so fingerprint equality would "
+                          f"only mean two failures agreed")
+        print(f"   reduction REFUSED: a stage errored, so equal fingerprints would only prove "
+              f"two failures agree. Freezing the full record.")
+    elif not reduce_content:
+        print("   compact formatting only. Pass --reduce to attempt content reduction "
+              "(each dropped path is fingerprint-verified and named).")
     else:
         chosen, dropped_paths, refused_paths = reduce_record(full, base_digest)
+        reduction_note = "fingerprint-verified path removal"
 
     # COMPACT. Not cosmetics: this is the one number the tool exists to move.
     summary_path = target_dir / "summary.json"
@@ -346,15 +487,23 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
     provenance = dict(provenance)
     provenance["job"] = job
     provenance["source_path"] = str(source)
+    provenance["record_says_about_itself"] = identity
     provenance["fixture"] = {
+        "reduction": reduction_note,
         "dropped": dropped_paths,
         "kept_because_a_tier_reads_it": refused_paths,
+        "fingerprint_stages_that_errored": errors,
+        "source_sha256": source_sha,
+        "source_bytes_on_disk": len(source_bytes),
         "full_record_bytes": full_bytes,
         "fixture_bytes": final_bytes,
         "structural_fingerprint": base_digest,
-        "_note": ("The reduction was accepted only because the structural fingerprint of the "
-                  "reduced record is byte-identical to the complete record's. Nothing was "
-                  "dropped on the reasoning that it 'is not read'."),
+        "_note": ("Any path dropped was dropped only because the structural fingerprint of the "
+                  "reduced record is byte-identical to the complete record's, over all three "
+                  "tiers INCLUDING both rendered deliverables. Nothing was dropped on the "
+                  "reasoning that it 'is not read'. Fingerprint equality proves equivalence "
+                  "for the checks that exist TODAY and not for a future reader, which is why "
+                  "source_sha256 is recorded: keep the full record archived."),
     }
     (target_dir / "provenance.json").write_text(
         json.dumps(provenance, indent=2), encoding="utf-8")
@@ -385,8 +534,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--labour", type=float, default=None, help="accepted labour")
     ap.add_argument("--quantity", type=int, default=None, help="quantity it was settled at")
     ap.add_argument("--notes", default="", help="anything a reader would have to ask")
+    ap.add_argument("--reduce", action="store_true",
+                    help="attempt fingerprint-verified content reduction. OFF by default: "
+                         "compact formatting is safe arithmetic, removing content is a claim "
+                         "about what every reader needs and is worth far less than a correct "
+                         "baseline")
     ap.add_argument("--full", action="store_true",
-                    help="skip every reduction and freeze the complete record")
+                    help="never reduce, whatever else is passed")
+    ap.add_argument("--accept-new-baseline", action="store_true",
+                    help="the record is a NEWER run than --accepted-on and you are deliberately "
+                         "making it the baseline. Its own date is recorded, not the one typed")
     args = ap.parse_args(argv)
 
     source = Path(args.source) if args.source else (ROOT / "output" / "json" / f"{args.job}.json")
@@ -409,7 +566,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         provenance["accepted_numbers"] = money
 
     print(f"== freezing {args.job} ==")
-    return freeze(args.job, source, provenance, force_full=bool(args.full))
+    return freeze(args.job, source, provenance, force_full=bool(args.full),
+                  reduce_content=bool(args.reduce) and not bool(args.full),
+                  accept_new_baseline=bool(args.accept_new_baseline))
 
 
 if __name__ == "__main__":
