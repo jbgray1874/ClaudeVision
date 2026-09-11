@@ -308,8 +308,18 @@ def resolve_effective_quantities(
     # How many arrangements the GA is showing. Every install-context code carries the same
     # quantity by construction — that is one of the three conditions — so there is one number.
     _install_n = next(iter(set(install_context.values())), 1) if install_context else 1
+    # A ROW WITH NO PART NUMBER IS NOT A PART, AND IT MUST NOT BECOME A KEY. A nameless row —
+    # a wrapped line, a notes line, a table artefact — normalises to "", and every branch below
+    # would then write effective[""]. Any later record whose own part number is also missing
+    # matches that same empty key and takes a quantity belonging to nothing: the log line
+    # `None qty 4 KEPT (GA tree said 1)`, which has appeared on several jobs. Recorded as a
+    # flagged unreadable row rather than given a quantity under a name it does not have.
+    _nameless = 0
     for r in groups.get(main_ga, []):
         code = _norm(r.get("part_number"))
+        if not code:
+            _nameless += 1
+            continue
         if code in assembly_nodes:
             continue  # its leaves come from its own group, or it is the unit itself
         # EVERYTHING ON AN ARRANGEMENT IS ARRANGEMENTS' WORTH, bought-in rows included. The GA
@@ -341,6 +351,9 @@ def resolve_effective_quantities(
             continue
         for r in rows:
             code = _norm(r.get("part_number"))
+            if not code:               # see the nameless-row note on the main-GA loop above
+                _nameless += 1
+                continue
             fam = _family(code)
 
             if fam:
@@ -379,6 +392,15 @@ def resolve_effective_quantities(
                 else:
                     effective[code] = _qty(r) * parent
 
+    if _nameless:
+        flags.append({
+            "severity": "warning",
+            "code": "",
+            "detail": (f"{_nameless} parts-list row(s) carry no part number and were given no "
+                       f"effective quantity — a nameless row is an unreadable read, not a part, "
+                       f"and a quantity filed under no name is one any other nameless record "
+                       f"can pick up. Check these rows on the drawing"),
+        })
     for _code, _n in install_context.items():
         flags.append({
             "severity": "info",

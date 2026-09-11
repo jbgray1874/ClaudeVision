@@ -2983,6 +2983,12 @@ def _finalize_scan_summary(
             _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
             for _p in _parts:
                 _code = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
+                if not _code:
+                    # A RECORD WITH NO PART NUMBER MATCHES NOTHING, NOT THE EMPTY KEY. This is
+                    # the other half of `None qty 4 KEPT (GA tree said 1)`: a nameless record
+                    # looked up "" and found whatever a nameless ROW had left there. The tree no
+                    # longer files a quantity under no name, and nothing asks it for one.
+                    continue
                 _eff = _effmap.get(_code)
                 if _eff is not None and _eff != _p.get("quantity"):
                     # PRECEDENCE. This pass reads the PDF's GA table; a quantity already set

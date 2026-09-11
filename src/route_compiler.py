@@ -1683,22 +1683,100 @@ def build_part_graph(
         print(f"   [graph] dropped interleave artefact {ident} "
               f"(= {a} + {b} zipped)", flush=True)
 
+    # ONE QUANTITY, NOT TWO COPIES OF IT. The part record carries an arbitrated quantity —
+    # apply_field owns it and source_of names the reader that won. This graph used to carry a
+    # second, independent cascade, and since the Estimate sheet reads the GRAPH node, a job
+    # could be costed on a figure the precedence layer had already rejected: 12349-02 booked
+    # three lids, three front covers and three packers because the general arrangement printed
+    # three install arrangements, when the model had said one per unit and apply_field had kept
+    # it. The log said `qty 1 KEPT` and the sheet said 3.
+    #
+    # THE RULE IS ABOUT THE EDGE, NOT THE PRODUCT, AND THAT IS WHY IT IS APPLIED WHILE THE
+    # CASCADE RUNS. Per-unit quantity is
+    #
+    #     effective(child) = effective(parent) x how many of the child ONE parent takes
+    #
+    # and "how many one parent takes" is a per-parent statement that two readers can disagree
+    # about: the BOM edge says one number, the model's instance count says another. Rank settles
+    # THAT, and the product follows from it. Reconciling afterwards — comparing a per-parent cell
+    # against a finished product — can only work one edge below a root, and it leaves a corrected
+    # parent's children still carrying the multiple the parent no longer has. 12349-02 is exactly
+    # that shape: the Lid hangs under -69-100, which hangs under the GA, so it is two edges down
+    # and an after-the-fact compare never reaches it.
+    #
+    # WHAT STILL MULTIPLIES. A 2-off inside a sub-assembly the unit takes three of is six per
+    # unit, and the substitution does not touch that: 2 is what one parent takes, and it is
+    # multiplied by the parent's own effective figure exactly as before.
+    #
+    # WHERE IT DECLINES TO ACT. A part hanging under two different parents takes a different
+    # count from each, and its record holds one number that cannot be both. The edges stand and
+    # the disagreement is recorded rather than resolved by picking one arbitrarily.
     quantities: Dict[str, float] = {}
-    # HOW MANY EDGES THE CASCADE CROSSED TO REACH A NODE. A part hanging DIRECTLY off a root
-    # is reached by exactly one edge, so its per-unit quantity IS that edge's quantity: there
-    # is no nesting to multiply. Anything deeper is a product of several edges, where the
-    # part's own BOM cell is per-parent and cannot be set against the product at all.
-    depths: Dict[str, Set[int]] = {}
+    qty_own: Dict[str, float] = {}
+    qty_own_source: Dict[str, str] = {}
+    qty_notes: Dict[str, str] = {}
+    # WHICH READERS MAY REPLACE AN EDGE, AND WHY IT IS NOT SIMPLY "ANYTHING THAT OUTRANKS THE
+    # TREE". An edge is a per-parent count, and only a reader that COUNTS INSTANCES states one:
+    # the model's assembly is the instance count, and its exports follow from it. A reader that
+    # reads a CELL states whatever that cell says — and a general arrangement's cell is the
+    # context figure this whole fix exists to stop multiplying by. `bom_table` outranks the tree
+    # (70 against 60), so a rule written as "anything above the tree" would let an uncorrected
+    # GA cell of 3 REPLACE a sub-assembly edge of 1: the defect inverted, in the same field.
+    #
+    # So the threshold is the table readers, not the tree: a cell-reader that disagrees with an
+    # edge gets the note and nothing else, which is the right answer for a disagreement nothing
+    # present can settle. Derived from rank() rather than written as a number so it cannot drift
+    # away from the ranks it is about.
+    _edge_substitution_rank = rank("bom_table")
 
-    def add_descendants(identity: str, factor: float, path: Set[str], depth: int = 0) -> None:
+    def _per_parent(child_id: str, edge_qty: float, parent_id: str) -> float:
+        """How many of this child ONE of its parent takes — after precedence, not before.
+
+        The edge is the BOM table's answer. The child's own arbitrated quantity is whatever
+        reader won `quantity` on its record, which for a model-counted part is SolidWorks. Both
+        are per-parent statements about the same thing, so where they disagree rank decides and
+        the loser is recorded. Ranks are NOT changed here and the tree is not promoted: the
+        tree keeps the field where nothing stronger has spoken, which is what it is for.
+        """
+        record = records.get(child_id) or {}
+        _own = number(record.get("quantity"), None)
+        if _own is not None:
+            qty_own[child_id] = _own
+        _own_src = str(source_of(record, "quantity") or "")
+        if _own_src:
+            qty_own_source[child_id] = _own_src
+        if _own is None or abs(_own - edge_qty) < 1e-9:
+            return edge_qty
+        _label = _display_source(_own_src) if _own_src else "an unnamed reader"
+        if len(parents.get(child_id) or ()) > 1:
+            qty_notes.setdefault(child_id, (
+                f"{child_id} sits under more than one parent, which each take a different "
+                f"count of it, so its own figure of {_own:g} from {_label} cannot stand for "
+                f"all of them. The BOM edges are what is costed — confirm the split"))
+            return edge_qty
+        if rank(_own_src) <= _edge_substitution_rank:
+            qty_notes.setdefault(child_id, (
+                f"{parent_id} takes {edge_qty:g} of this part on the BOM; the part's own "
+                f"quantity is {_own:g} from {_label}, which reads a cell rather than counting "
+                f"instances, so the BOM edge is what is costed — confirm which is right"))
+            return edge_qty
+        qty_notes.setdefault(child_id, (
+            f"one {parent_id} takes {_own:g} of this part, counted by {_label}; the BOM edge "
+            f"said {edge_qty:g} and does not outrank that reader"))
+        print(f"   [graph] {child_id} qty-per-{parent_id} {_own:g} from {_label} KEPT "
+              f"(BOM edge said {edge_qty:g})", flush=True)
+        return _own
+
+    def add_descendants(identity: str, factor: float, path: Set[str]) -> None:
         if identity in path:
             return
         quantities[identity] = quantities.get(identity, 0.0) + factor
-        depths.setdefault(identity, set()).add(depth)
         next_path = set(path)
         next_path.add(identity)
         for child_id, child_qty in (children.get(identity) or {}).items():
-            add_descendants(child_id, factor * child_qty, next_path, depth + 1)
+            add_descendants(child_id,
+                            factor * _per_parent(child_id, child_qty, identity),
+                            next_path)
 
     # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
     # not two halves of one. A part under both accumulates, which is what the += above is for.
@@ -1708,56 +1786,17 @@ def build_part_graph(
         if identity not in quantities:
             quantities[identity] = number(
                 (records.get(identity) or {}).get("quantity"), 1.0) or 1.0
-
-    # ONE QUANTITY, NOT TWO COPIES OF IT. The part record carries an arbitrated quantity —
-    # apply_field owns it and source_of names the reader that won. This graph carries its own
-    # cascade. Both reach the workbook, and the Estimate sheet reads the GRAPH node, so while
-    # the two were independent a job could be costed on a figure the precedence layer had
-    # already rejected: 12349-02 booked three lids, three front covers and three packers
-    # because the general arrangement printed three install arrangements, when the model had
-    # said one per unit and apply_field had kept it. The log said `qty 1 KEPT` and the sheet
-    # said 3.
-    #
-    # Where a part hangs directly off a root, the cascade and the record are two statements
-    # about the same number, so they must agree. When they do not, rank decides — a reader
-    # that outranks the BOM tree is not overturned by a tree edge. The tree still wins where
-    # nothing stronger has spoken: it is then writing a field no better source owns, which is
-    # exactly what it is for.
-    #
-    # Deeper than one edge nothing is compared and nothing moves: the own cell is per-parent,
-    # the cascade is a product, and both are recorded side by side for the estimator instead.
-    qty_own: Dict[str, float] = {}
-    qty_own_source: Dict[str, str] = {}
-    qty_notes: Dict[str, str] = {}
-    _tree_rank = rank("bom_tree")
-    for identity in sorted(identities):
-        record = records.get(identity) or {}
-        _own = number(record.get("quantity"), None)
-        if _own is None:
+    # A root's own quantity is still recorded even though nothing cascades into it, so the
+    # BOMs & Routes columns are not blank on the one line every pack has.
+    for identity in identities:
+        if identity in qty_own:
             continue
-        qty_own[identity] = _own
-        _own_src = str(source_of(record, "quantity") or "")
-        if _own_src:
-            qty_own_source[identity] = _own_src
-        _eff = quantities.get(identity)
-        if _eff is None or abs(_eff - _own) < 1e-9:
-            continue
-        if depths.get(identity) != {1}:
-            # Genuine nesting, or a node the cascade never reached. Recorded, not touched.
-            continue
-        _src_label = _display_source(_own_src) if _own_src else "an unnamed reader"
-        if rank(_own_src) <= _tree_rank:
-            qty_notes[identity] = (
-                f"the assembly tree cascades {_eff:g} per unit from its parent edge; the "
-                f"part's own quantity is {_own:g} from {_src_label}. Nothing here outranks "
-                f"the tree, so the cascade is what is costed — confirm which is right")
-            continue
-        quantities[identity] = _own
-        qty_notes[identity] = (
-            f"costing {_own:g} per unit from {_src_label}; the assembly tree cascaded "
-            f"{_eff:g} from its parent edge and does not outrank that reader")
-        print(f"   [graph] {identity} qty {_own:g} from {_src_label} KEPT "
-              f"(parent edge cascaded {_eff:g})", flush=True)
+        _own = number((records.get(identity) or {}).get("quantity"), None)
+        if _own is not None:
+            qty_own[identity] = _own
+            _src = str(source_of(records.get(identity) or {}, "quantity") or "")
+            if _src:
+                qty_own_source[identity] = _src
 
     nodes: List[PartNode] = []
     for identity in sorted(identities):
