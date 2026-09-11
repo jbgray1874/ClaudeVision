@@ -851,7 +851,16 @@ def _calibrate_title_block_region(title_block_text: str, full_text: str) -> Dict
 
 def extract_with_pdfplumber(pdf_path: Path) -> List[Dict[str, Any]]:
     if pdfplumber is None:
-        raise RuntimeError("pdfplumber is not installed.")
+        # NAMES THE FIX, because this message is the last thing anybody sees. It used to read
+        # "pdfplumber is not installed." and arrive as a traceback after the scan had begun,
+        # leaving the reader to work out that requirements.txt lists it as core-required and
+        # that one pip command restores it. main() now preflights this, so reaching here means
+        # the preflight was bypassed or the package vanished mid-run — still worth saying
+        # properly.
+        raise RuntimeError(
+            "pdfplumber is not installed, so no PDF text can be read — every page would be "
+            "empty. It is listed in requirements.txt as core-required. Fix with: "
+            "pip install pdfplumber   (or: pip install -r requirements.txt)")
 
     pages: List[Dict[str, Any]] = []
     with pdfplumber.open(pdf_path) as pdf:

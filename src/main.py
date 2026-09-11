@@ -310,6 +310,35 @@ def main() -> None:
     args = parse_args()
     ensure_directories()
 
+    # ── CAN THIS MACHINE RUN THE ENGINE? ASKED FIRST, NOT DISCOVERED MID-SCAN ───────
+    # A box whose environment had lost two packages produced, in this order: a four-line
+    # warning that every catalogue price was missing, a timing table saying the first phase
+    # "STARTED AND NEVER FINISHED", and a traceback from inside page extraction reading
+    # "RuntimeError: pdfplumber is not installed." Three symptoms of one fact, none of them
+    # naming the command that fixes it, all of them after sixteen files had been found and one
+    # had started. requirements.txt had listed both packages as core-required all along: the
+    # file declared the contract and nothing enforced it.
+    #
+    # A fatal absence stops the run here. A degrading one lets it continue and is recorded on
+    # the estimate, because a run without pyodbc is a legitimate diagnostic and must never be
+    # mistaken for one priced from the catalogue.
+    try:
+        import dependency_preflight as _dp
+        _dp_result = _dp.check()
+        if not _dp.report(_dp_result):
+            raise SystemExit(2)
+        _ENV_DESCRIPTION = _dp.describe_environment(_dp_result)
+    except SystemExit:
+        raise
+    except Exception as _dp_exc:                                         # noqa: BLE001
+        print(f"   [preflight] could not run ({type(_dp_exc).__name__}: {_dp_exc}) — "
+              f"continuing, but nothing has verified this machine's packages", flush=True)
+        _ENV_DESCRIPTION = {"schema": "environment.v1", "complete": False,
+                            "missing": [], "unverified": ["preflight did not run"],
+                            "why_it_matters": "the preflight itself failed, so the "
+                                              "completeness of this environment is unknown"}
+    os.environ["SDI_ENVIRONMENT_DESCRIPTION"] = json.dumps(_ENV_DESCRIPTION)
+
     # THE ORDER QUANTITY HAS TO ARRIVE BEFORE THE COSTING, NOT AFTER IT.
     #
     # --order-qty was stamped onto the summary once scan_file had already returned, and by
@@ -1293,6 +1322,14 @@ def main() -> None:
                 with open(_mp_json, encoding="utf-8") as _fh_mp:
                     _mp_doc = json.load(_fh_mp)
                 _mp_verdict = _mp.stamp(_mp_doc, skip_reason=_mp_skip)
+                # WHAT THIS MACHINE COULD NOT DO, ON THE RECORD. Same principle: a console
+                # warning nobody kept is not a record. An estimate produced without pyodbc is
+                # costed from fallbacks, and a reader months later has no other way to know.
+                try:
+                    _mp_doc["environment"] = json.loads(
+                        os.environ.get("SDI_ENVIRONMENT_DESCRIPTION") or "{}")
+                except Exception:                                        # noqa: BLE001
+                    pass
                 with open(_mp_json, "w", encoding="utf-8") as _fh_mpw:
                     json.dump(_mp_doc, _fh_mpw, indent=2, ensure_ascii=False, default=str)
                 summary["money_provenance"] = _mp_verdict

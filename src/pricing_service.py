@@ -135,7 +135,11 @@ class PricingService:
 
     def _get_db_connection(self):
         if pyodbc is None:
-            raise RuntimeError("pyodbc is required for PricingService")
+            raise RuntimeError(
+                "pyodbc is required for PricingService, so SDILive/UDEF cannot be reached "
+                "and every catalogue and history price is MISSING, not zero. It is listed in "
+                "requirements.txt as core-required. Fix with: pip install pyodbc   (the "
+                "ODBC Driver 18 for SQL Server must also be installed on the machine)")
         c = config.PRICE_SOURCE_CONFIG.get("sqlserver", {})
         conn_str = (
             f"DRIVER={{{c.get('driver', 'ODBC Driver 18 for SQL Server')}}};"
